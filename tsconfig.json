@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "esModuleInterop": true,
+    "preserveConstEnums": true,
+    "removeComments": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "sourceMap": true,
+  },
+  "include": [
+    "./src/**/*"
+  ],
+  "exclude": [
+    "node_modules"
+  ],
+  "parserOptions":  {
+    "ecmaVersion":  "2020",  // Allows for the parsing of modern ECMAScript features
+    "sourceType":  "module"  // Allows for the use of imports
+  }
+}

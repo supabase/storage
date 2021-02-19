@@ -5,6 +5,13 @@ import dotenv from 'dotenv'
 
 dotenv.config()
 
+const {
+  REGION: region,
+  PROJECT_REF: projectRef,
+  BUCKET_NAME: globalS3Bucket,
+  SUPABASE_DOMAIN: supabaseDomain,
+} = process.env
+
 interface requestGeneric extends RequestGenericInterface {
   Params: {
     bucketName: string
@@ -41,10 +48,9 @@ export default async function routes(fastify: FastifyInstance) {
       return response.status(403).send('Go away')
     }
     const jwt = authHeader.substring('Bearer '.length)
-    console.log(jwt)
 
     // @todo in kps, can we just ping localhost?
-    const url = 'https://bjhaohmqunupljrqypxz.supabase.co/rest/v1'
+    const url = `https://${projectRef}.${supabaseDomain}/rest/v1`
     const postgrest = new PostgrestClient(url)
     postgrest.headers = {
       apiKey: anonKey,
@@ -75,18 +81,20 @@ export default async function routes(fastify: FastifyInstance) {
     }
 
     // send the object from s3
-    const projectName = 'bjhaohmqunupljrqypxz'
-    const s3Key = `${projectName}/${bucketName}/${objectName}`
+    const s3Key = `${projectRef}/${bucketName}/${objectName}`
     console.log(s3Key)
-    const client = new S3Client({ region: 'us-east-1' })
+    const client = new S3Client({ region })
     const command = new GetObjectCommand({
-      Bucket: 'supa-storage-testing',
+      Bucket: globalS3Bucket,
       Key: s3Key,
     })
     const data = await client.send(command)
     console.log(data)
 
-    return response.status(200).header('content-type', data.ContentType).send(data.Body)
+    return response
+      .status(data.$metadata.httpStatusCode ?? 200)
+      .header('content-type', data.ContentType)
+      .send(data.Body)
   })
   fastify.post('/object/:bucketId/:objectId', async (request, reply) => {})
   fastify.delete('/object/:bucketId/:objectId', async (request, reply) => {})

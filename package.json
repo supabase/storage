@@ -12,6 +12,7 @@
   "author": "Supabase",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.5.0",
     "@supabase/postgrest-js": "^0.24.3",
     "dotenv": "^8.2.0",
     "fastify": "^3.12.0",

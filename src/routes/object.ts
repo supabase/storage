@@ -1,5 +1,6 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { PostgrestClient } from '@supabase/postgrest-js'
+import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import dotenv from 'dotenv'
 
 dotenv.config()
@@ -42,7 +43,7 @@ export default async function routes(fastify: FastifyInstance) {
     const jwt = authHeader.substring('Bearer '.length)
     console.log(jwt)
 
-    // in kps, can we just ping localhost?
+    // @todo in kps, can we just ping localhost?
     const url = 'https://bjhaohmqunupljrqypxz.supabase.co/rest/v1'
     const postgrest = new PostgrestClient(url)
     postgrest.headers = {
@@ -59,8 +60,6 @@ export default async function routes(fastify: FastifyInstance) {
       .from<Object>('objects')
       .select('*, buckets(*)')
       .match({
-        // name: 'public/stripe.jpg',
-        // 'buckets.id': '7078bc23-9dd6-460d-8b93-082254fee63a',
         name: objectName,
         'buckets.name': bucketName,
       })
@@ -69,14 +68,25 @@ export default async function routes(fastify: FastifyInstance) {
     console.log(error)
     console.log(results)
     if (!results?.buckets) {
-      // why is this check necessary?
+      // @todo why is this check necessary?
       // if corresponding bucket is not found, i want the object also to not be returned
       // is it cos of https://github.com/PostgREST/postgrest/issues/1075 ?
       return response.status(404).send('not found')
     }
 
     // send the object from s3
-    return response.status(200).send(results)
+    const projectName = 'bjhaohmqunupljrqypxz'
+    const s3Key = `${projectName}/${bucketName}/${objectName}`
+    console.log(s3Key)
+    const client = new S3Client({ region: 'us-east-1' })
+    const command = new GetObjectCommand({
+      Bucket: 'supa-storage-testing',
+      Key: s3Key,
+    })
+    const data = await client.send(command)
+    console.log(data)
+
+    return response.status(200).header('content-type', data.ContentType).send(data.Body)
   })
   fastify.post('/object/:bucketId/:objectId', async (request, reply) => {})
   fastify.delete('/object/:bucketId/:objectId', async (request, reply) => {})

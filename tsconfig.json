@@ -8,6 +8,7 @@
     "rootDir": "src",
     "outDir": "dist",
     "sourceMap": true,
+    "strict": true
   },
   "include": [
     "./src/**/*"

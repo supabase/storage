@@ -11,15 +11,21 @@
   },
   "author": "Supabase",
   "license": "ISC",
+  "engines": {
+    "node": ">= 12.0.0"
+  },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.5.0",
+    "@aws-sdk/client-s3": "^3.6.0",
+    "@aws-sdk/lib-storage": "^3.6.0",
     "@supabase/postgrest-js": "^0.24.3",
     "dotenv": "^8.2.0",
     "fastify": "^3.12.0",
     "fastify-autoload": "^3.4.2",
+    "fastify-multipart": "^4.0.0",
     "jsonwebtoken": "^8.5.1"
   },
   "devDependencies": {
+    "@types/busboy": "^0.2.3",
     "@types/jsonwebtoken": "^8.5.0",
     "@types/node": "^14.14.28",
     "ts-node-dev": "^1.1.1",

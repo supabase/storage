@@ -173,6 +173,9 @@ export default async function routes(fastify: FastifyInstance) {
       ])
       .single()
     console.log(results, error)
+    if (error) {
+      return response.status(403).send('Go away')
+    }
 
     // if successfully inserted, upload to s3
     const s3Key = `${projectRef}/${bucketName}/${objectName}`

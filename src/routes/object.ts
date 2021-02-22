@@ -1,6 +1,6 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { PostgrestClient } from '@supabase/postgrest-js'
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { DeleteObjectCommand, GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import dotenv from 'dotenv'
 import jwt from 'jsonwebtoken'
@@ -196,5 +196,49 @@ export default async function routes(fastify: FastifyInstance) {
     return response.status(200).send('Uploaded')
   })
 
-  fastify.delete('/object/:bucketId/:objectId', async (request, reply) => {})
+  fastify.delete<requestGeneric>('/object/:bucketName/*', async (request, response) => {
+    // check if the user is able to insert that row
+    const authHeader = request.headers.authorization
+    if (!authHeader || !anonKey) {
+      return response.status(403).send('Go away')
+    }
+    const jwt = authHeader.substring('Bearer '.length)
+
+    const { bucketName } = request.params
+    const objectName = request.params['*']
+
+    const postgrest = getPostgrestClient(jwt)
+    // @todo how to merge these into one query?
+    // i can create a view and add INSTEAD OF triggers..is that the way to do it?
+    // @todo add unique constraint for just bucket names
+    const { data: bucket, error: bucketError } = await postgrest
+      .from('buckets')
+      .select('id')
+      .eq('name', bucketName)
+      .single()
+    if (bucketError) throw bucketError
+    console.log(bucket)
+
+    const { data: results, error } = await postgrest.from<Object>('objects').delete().match({
+      name: objectName,
+      bucketId: bucket.id,
+    })
+
+    console.log(results, error)
+    if (error || (results && results.length === 0)) {
+      return response.status(403).send('Go away')
+    }
+
+    // if successfully deleted, delete from s3 too
+    const s3Key = `${projectRef}/${bucketName}/${objectName}`
+
+    const command = new DeleteObjectCommand({
+      Bucket: globalS3Bucket,
+      Key: s3Key,
+    })
+    const data = await client.send(command)
+    console.log('done s3')
+
+    return response.status(200).send('Deleted')
+  })
 }

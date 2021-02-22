@@ -16,9 +16,11 @@
     "@supabase/postgrest-js": "^0.24.3",
     "dotenv": "^8.2.0",
     "fastify": "^3.12.0",
-    "fastify-autoload": "^3.4.2"
+    "fastify-autoload": "^3.4.2",
+    "jsonwebtoken": "^8.5.1"
   },
   "devDependencies": {
+    "@types/jsonwebtoken": "^8.5.0",
     "@types/node": "^14.14.28",
     "ts-node-dev": "^1.1.1",
     "typescript": "^4.1.5"

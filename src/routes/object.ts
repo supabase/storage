@@ -53,7 +53,7 @@ type Object = {
   createdAt: string
   updatedAt: string
   lastAccessedAt: string
-  metadata?: string
+  metadata?: object
   buckets?: Bucket
 }
 
@@ -145,6 +145,7 @@ export default async function routes(fastify: FastifyInstance) {
       return response.status(403).send('Go away')
     }
     const jwt = authHeader.substring('Bearer '.length)
+    const data = await request.file()
 
     const { bucketName } = request.params
     const objectName = request.params['*']
@@ -169,6 +170,9 @@ export default async function routes(fastify: FastifyInstance) {
           name: objectName,
           owner: owner,
           bucketId: bucket.id,
+          metadata: {
+            mimetype: data.mimetype,
+          },
         },
       ])
       .single()
@@ -179,7 +183,6 @@ export default async function routes(fastify: FastifyInstance) {
 
     // if successfully inserted, upload to s3
     const s3Key = `${projectRef}/${bucketName}/${objectName}`
-    const data = await request.file()
 
     const paralellUploads3 = new Upload({
       client,
@@ -198,8 +201,6 @@ export default async function routes(fastify: FastifyInstance) {
     })
   })
 
-  // @todo add content-type metadata properly on upload and put
-  // so that getobject sends the content-type header correctly
   // @todo should we use postgrest with representation minimal so that permissions can be more granular?
   fastify.put<requestGeneric>('/object/:bucketName/*', async (request, response) => {
     // check if the user is able to update the row
@@ -208,6 +209,7 @@ export default async function routes(fastify: FastifyInstance) {
       return response.status(403).send('Go away')
     }
     const jwt = authHeader.substring('Bearer '.length)
+    const data = await request.file()
 
     const { bucketName } = request.params
     const objectName = request.params['*']
@@ -229,6 +231,9 @@ export default async function routes(fastify: FastifyInstance) {
       .from<Object>('objects')
       .update({
         lastAccessedAt: new Date().toISOString(),
+        metadata: {
+          mimetype: data.mimetype,
+        },
       })
       .match({ bucketId: bucket.id, name: objectName })
       .limit(1)
@@ -241,8 +246,8 @@ export default async function routes(fastify: FastifyInstance) {
 
     // if successfully inserted, upload to s3
     const s3Key = `${projectRef}/${bucketName}/${objectName}`
-    const data = await request.file()
 
+    // @todo adding contentlength metadata will be harder since everything is streams
     const paralellUploads3 = new Upload({
       client,
       params: {

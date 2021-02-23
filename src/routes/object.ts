@@ -190,14 +190,16 @@ export default async function routes(fastify: FastifyInstance) {
       },
     })
 
-    await paralellUploads3.done()
+    const uploadResult = await paralellUploads3.done()
 
-    // @todo return metadata of the uploaded object
-    return response.status(200).send('Uploaded')
+    return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
+      Key: s3Key,
+    })
   })
 
   // @todo add content-type metadata properly on upload and put
   // so that getobject sends the content-type header correctly
+  // @todo should we use postgrest with representation minimal so that permissions can be more granular?
   fastify.put<requestGeneric>('/object/:bucketName/*', async (request, response) => {
     // check if the user is able to update the row
     const authHeader = request.headers.authorization
@@ -251,8 +253,11 @@ export default async function routes(fastify: FastifyInstance) {
 
     await paralellUploads3.done()
 
-    // @todo return metadata of the uploaded object
-    return response.status(200).send('Uploaded')
+    const uploadResult = await paralellUploads3.done()
+
+    return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
+      Key: s3Key,
+    })
   })
 
   fastify.delete<requestGeneric>('/object/:bucketName/*', async (request, response) => {
@@ -295,7 +300,7 @@ export default async function routes(fastify: FastifyInstance) {
       Bucket: globalS3Bucket,
       Key: s3Key,
     })
-    const data = await client.send(command)
+    await client.send(command)
     console.log('done s3')
 
     return response.status(200).send('Deleted')

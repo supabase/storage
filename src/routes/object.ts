@@ -258,8 +258,6 @@ export default async function routes(fastify: FastifyInstance) {
       },
     })
 
-    await paralellUploads3.done()
-
     const uploadResult = await paralellUploads3.done()
 
     return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({

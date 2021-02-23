@@ -187,6 +187,7 @@ export default async function routes(fastify: FastifyInstance) {
         Bucket: globalS3Bucket,
         Key: s3Key,
         Body: data.file,
+        ContentType: data.mimetype,
       },
     })
 
@@ -248,6 +249,7 @@ export default async function routes(fastify: FastifyInstance) {
         Bucket: globalS3Bucket,
         Key: s3Key,
         Body: data.file,
+        ContentType: data.mimetype,
       },
     })
 

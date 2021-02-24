@@ -89,6 +89,7 @@ async function getOwner(token: string) {
   return (decodedJWT as jwtType)?.sub
 }
 
+// @todo better error handling everywhere
 export default async function routes(fastify: FastifyInstance) {
   fastify.get<requestGeneric>('/object/:bucketName/*', async (request, response) => {
     const authHeader = request.headers.authorization
@@ -231,6 +232,7 @@ export default async function routes(fastify: FastifyInstance) {
       .from<Object>('objects')
       .update({
         lastAccessedAt: new Date().toISOString(),
+        owner,
         metadata: {
           mimetype: data.mimetype,
         },

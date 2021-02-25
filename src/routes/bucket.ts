@@ -36,7 +36,7 @@ type Obj = {
   buckets?: Bucket
 }
 
-const { ANON_KEY: anonKey, JWT_SECRET: jwtSecret } = process.env
+const { ANON_KEY: anonKey, SERVICE_KEY: serviceKey } = process.env
 
 export default async function routes(fastify: FastifyInstance) {
   // @todo I have enabled RLS only for objects table
@@ -81,17 +81,16 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.delete<requestGeneric>('/bucket/:bucketId', async (request, response) => {
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey) {
+    if (!authHeader || !anonKey || !serviceKey) {
       return response.status(403).send('Go away')
     }
 
     const jwt = authHeader.substring('Bearer '.length)
     const { bucketId } = request.params
-    // @todo we need to get a postgrest client with service token to check if bucket is empty
-    // if not we may end up deleting a bucket where the user is not able to read any objects from the bucket
-    const postgrest = getPostgrestClient(jwt)
+    const userPostgrest = getPostgrestClient(jwt)
+    const superUserPostgrest = getPostgrestClient(serviceKey)
 
-    const { count: objectCount, error: objectError } = await postgrest
+    const { count: objectCount, error: objectError } = await superUserPostgrest
       .from<Obj>('objects')
       .select('id', { count: 'exact' })
       .eq('bucketId', bucketId)
@@ -101,7 +100,7 @@ export default async function routes(fastify: FastifyInstance) {
       return response.status(400).send('Bucket not empty')
     }
 
-    const { data: results, error } = await postgrest
+    const { data: results, error } = await userPostgrest
       .from<Bucket>('buckets')
       .delete()
       .eq('id', bucketId)

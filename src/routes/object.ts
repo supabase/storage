@@ -119,16 +119,21 @@ export default async function routes(fastify: FastifyInstance) {
 
     const { data: results, error } = await postgrest
       .from<Obj>('objects')
-      .insert([
-        {
-          name: objectName,
-          owner: owner,
-          bucketId: bucket.id,
-          metadata: {
-            mimetype: data.mimetype,
+      .insert(
+        [
+          {
+            name: objectName,
+            owner: owner,
+            bucketId: bucket.id,
+            metadata: {
+              mimetype: data.mimetype,
+            },
           },
-        },
-      ])
+        ],
+        {
+          returning: 'minimal',
+        }
+      )
       .single()
     console.log(results, error)
     if (error) {
@@ -156,7 +161,6 @@ export default async function routes(fastify: FastifyInstance) {
     })
   })
 
-  // @todo should we use postgrest with representation minimal so that permissions can be more granular?
   fastify.put<requestGeneric>('/object/:bucketName/*', async (request, response) => {
     // check if the user is able to update the row
     const authHeader = request.headers.authorization
@@ -184,13 +188,16 @@ export default async function routes(fastify: FastifyInstance) {
 
     const { data: results, error } = await postgrest
       .from<Obj>('objects')
-      .update({
-        lastAccessedAt: new Date().toISOString(),
-        owner,
-        metadata: {
-          mimetype: data.mimetype,
+      .update(
+        {
+          lastAccessedAt: new Date().toISOString(),
+          owner,
+          metadata: {
+            mimetype: data.mimetype,
+          },
         },
-      })
+        { returning: 'minimal' }
+      )
       .match({ bucketId: bucket.id, name: objectName })
       .limit(1)
 

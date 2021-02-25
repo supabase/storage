@@ -16,7 +16,7 @@ app.register(autoload, {
   dir: path.join(__dirname, 'routes'),
 })
 
-app.listen(8080, (err, address) => {
+app.listen(8080, '0.0.0.0', (err, address) => {
   if (err) {
     console.error(err)
     process.exit(1)

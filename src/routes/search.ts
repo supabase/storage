@@ -12,24 +12,7 @@ interface requestGeneric extends RequestGenericInterface {
   }
 }
 
-const {
-  REGION: region,
-  PROJECT_REF: projectRef,
-  BUCKET_NAME: globalS3Bucket,
-  SUPABASE_DOMAIN: supabaseDomain,
-  ANON_KEY: anonKey,
-} = process.env
-
-type Object = {
-  id: string
-  bucketId: string
-  name: string
-  owner: string
-  createdAt: string
-  updatedAt: string
-  lastAccessedAt: string
-  metadata?: object
-}
+const { PROJECT_REF: projectRef, SUPABASE_DOMAIN: supabaseDomain, ANON_KEY: anonKey } = process.env
 
 function getPostgrestClient(jwt: string) {
   if (!anonKey) {
@@ -56,7 +39,8 @@ export default async function routes(fastify: FastifyInstance) {
 
     const postgrest = getPostgrestClient(jwt)
     const { bucketName } = request.params
-    let { prefix, limit, offset } = request.body
+    const { limit, offset } = request.body
+    let { prefix } = request.body
     if (!prefix.endsWith('/')) {
       // assuming prefix is always a folder
       prefix = `${prefix}/`

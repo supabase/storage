@@ -30,7 +30,7 @@ type Bucket = {
   updatedAt: string
 }
 
-type Object = {
+type Obj = {
   id: string
   bucketId: string
   name: string
@@ -38,7 +38,7 @@ type Object = {
   createdAt: string
   updatedAt: string
   lastAccessedAt: string
-  metadata?: object
+  metadata?: Record<string, unknown>
   buckets?: Bucket
 }
 
@@ -57,7 +57,7 @@ export default async function routes(fastify: FastifyInstance) {
     const objectName = request.params['*']
 
     const { data: results, error } = await postgrest
-      .from<Object>('objects')
+      .from<Obj>('objects')
       .select('*, buckets(*)')
       .match({
         name: objectName,
@@ -118,7 +118,7 @@ export default async function routes(fastify: FastifyInstance) {
     console.log(bucket)
 
     const { data: results, error } = await postgrest
-      .from<Object>('objects')
+      .from<Obj>('objects')
       .insert([
         {
           name: objectName,
@@ -183,7 +183,7 @@ export default async function routes(fastify: FastifyInstance) {
     console.log(bucket)
 
     const { data: results, error } = await postgrest
-      .from<Object>('objects')
+      .from<Obj>('objects')
       .update({
         lastAccessedAt: new Date().toISOString(),
         owner,
@@ -245,7 +245,7 @@ export default async function routes(fastify: FastifyInstance) {
     if (bucketError) throw bucketError
     console.log(bucket)
 
-    const { data: results, error } = await postgrest.from<Object>('objects').delete().match({
+    const { data: results, error } = await postgrest.from<Obj>('objects').delete().match({
       name: objectName,
       bucketId: bucket.id,
     })

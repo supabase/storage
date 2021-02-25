@@ -8,13 +8,13 @@ type jwtType =
       exp: number
       sub: string
       email: string
-      app_metadata: object
-      user_metadata: object
+      app_metadata: Record<string, unknown>
+      user_metadata: Record<string, unknown>
       role: string
     }
   | undefined
 
-export function getPostgrestClient(jwt: string) {
+export function getPostgrestClient(jwt: string): PostgrestClient {
   const {
     PROJECT_REF: projectRef,
     SUPABASE_DOMAIN: supabaseDomain,
@@ -34,8 +34,9 @@ export function getPostgrestClient(jwt: string) {
   return postgrest
 }
 
+// eslint-disable-next-line @typescript-eslint/ban-types
 export function verifyJWT(token: string): Promise<object | undefined> {
-  const { ANON_KEY: anonKey, JWT_SECRET: jwtSecret } = process.env
+  const { JWT_SECRET: jwtSecret } = process.env
   if (!jwtSecret) {
     throw new Error('no jwtsecret')
   }
@@ -47,7 +48,7 @@ export function verifyJWT(token: string): Promise<object | undefined> {
   })
 }
 
-export async function getOwner(token: string) {
+export async function getOwner(token: string): Promise<string | undefined> {
   const decodedJWT = await verifyJWT(token)
   return (decodedJWT as jwtType)?.sub
 }

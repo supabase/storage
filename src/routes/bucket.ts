@@ -24,7 +24,7 @@ type Bucket = {
   updatedAt: string
 }
 
-type Object = {
+type Obj = {
   id: string
   bucketId: string
   name: string
@@ -32,7 +32,7 @@ type Object = {
   createdAt: string
   updatedAt: string
   lastAccessedAt: string
-  metadata?: object
+  metadata?: Record<string, unknown>
   buckets?: Bucket
 }
 
@@ -92,7 +92,7 @@ export default async function routes(fastify: FastifyInstance) {
     const postgrest = getPostgrestClient(jwt)
 
     const { count: objectCount, error: objectError } = await postgrest
-      .from<Object>('objects')
+      .from<Obj>('objects')
       .select('id', { count: 'exact' })
       .eq('bucketId', bucketId)
 

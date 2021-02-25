@@ -1,9 +1,9 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
-import { PostgrestClient } from '@supabase/postgrest-js'
 import { DeleteObjectCommand, GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import dotenv from 'dotenv'
-import jwt from 'jsonwebtoken'
+
+import { getOwner, getPostgrestClient } from '../utils'
 
 dotenv.config()
 
@@ -11,23 +11,8 @@ const {
   REGION: region,
   PROJECT_REF: projectRef,
   BUCKET_NAME: globalS3Bucket,
-  SUPABASE_DOMAIN: supabaseDomain,
   ANON_KEY: anonKey,
-  JWT_SECRET: jwtSecret,
 } = process.env
-
-// @todo define as an interface expecting sub instead
-type jwtType =
-  | {
-      aud: string
-      exp: number
-      sub: string
-      email: string
-      app_metadata: object
-      user_metadata: object
-      role: string
-    }
-  | undefined
 
 const client = new S3Client({ region, runtime: 'node' })
 interface requestGeneric extends RequestGenericInterface {
@@ -55,38 +40,6 @@ type Object = {
   lastAccessedAt: string
   metadata?: object
   buckets?: Bucket
-}
-
-function getPostgrestClient(jwt: string) {
-  if (!anonKey) {
-    throw new Error('anonKey not found')
-  }
-  // @todo in kps, can we just ping localhost?
-  const url = `https://${projectRef}.${supabaseDomain}/rest/v1`
-  const postgrest = new PostgrestClient(url, {
-    headers: {
-      apiKey: anonKey,
-      Authorization: `Bearer ${jwt}`,
-    },
-  })
-  return postgrest
-}
-
-function verifyJWT(token: string): Promise<object | undefined> {
-  if (!jwtSecret) {
-    throw new Error('no jwtsecret')
-  }
-  return new Promise((resolve, reject) => {
-    jwt.verify(token, jwtSecret, (err, decoded) => {
-      if (err) return reject(err)
-      resolve(decoded)
-    })
-  })
-}
-
-async function getOwner(token: string) {
-  const decodedJWT = await verifyJWT(token)
-  return (decodedJWT as jwtType)?.sub
 }
 
 // @todo better error handling everywhere

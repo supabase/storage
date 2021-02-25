@@ -56,7 +56,11 @@ export default async function routes(fastify: FastifyInstance) {
 
     const postgrest = getPostgrestClient(jwt)
     const { bucketName } = request.params
-    const { prefix, limit, offset } = request.body
+    let { prefix, limit, offset } = request.body
+    if (!prefix.endsWith('/')) {
+      // assuming prefix is always a folder
+      prefix = `${prefix}/`
+    }
     console.log(request.body)
     console.log(`searching for `, prefix)
     const { data: results, error } = await postgrest.rpc('search', {

@@ -1,3 +1,4 @@
+-- @todo add sql for indexes
 DROP TABLE IF EXISTS "public"."buckets";
 CREATE TABLE "public"."buckets" (
     "id" uuid NOT NULL,
@@ -24,6 +25,7 @@ CREATE TABLE "public"."objects" (
     PRIMARY KEY ("id")
 );
 
+ALTER TABLE objects ENABLE ROW LEVEL SECURITY;
 
 CREATE OR REPLACE FUNCTION public.foldername(name varchar)
  RETURNS varchar[]
@@ -64,6 +66,7 @@ BEGIN
 END
 $function$;
 
+-- @todo can this query be optimised further?
 CREATE OR REPLACE FUNCTION public.search(prefix text, bucketname text, limits int DEFAULT 100, levels int DEFAULT 1, offsets int DEFAULT 0)
  RETURNS TABLE (
     folder text,
@@ -76,7 +79,7 @@ BEGIN
 	return query 
 		with files_folders as (
 			select ((string_to_array(name, '/'))[levels]) as folder
-			from objects_clone
+			from objects
 			where name like prefix || '%'
 			and "bucketId" in (select buckets."id" from buckets where "name"=bucketname limit 1)
 			GROUP by folder
@@ -84,8 +87,8 @@ BEGIN
 			limit limits
 			offset offsets
 		) 
-		select files_folders.folder as name, objects_clone.id from files_folders
-		left join objects_clone
-		on prefix || files_folders.folder = objects_clone.name;
+		select files_folders.folder as name, objects.id from files_folders
+		left join objects
+		on prefix || files_folders.folder = objects.name;
 END
 $function$;

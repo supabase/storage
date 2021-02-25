@@ -190,6 +190,7 @@ export default async function routes(fastify: FastifyInstance) {
       params: {
         Bucket: globalS3Bucket,
         Key: s3Key,
+        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
         Body: data.file,
         ContentType: data.mimetype,
       },
@@ -255,6 +256,7 @@ export default async function routes(fastify: FastifyInstance) {
       params: {
         Bucket: globalS3Bucket,
         Key: s3Key,
+        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
         Body: data.file,
         ContentType: data.mimetype,
       },

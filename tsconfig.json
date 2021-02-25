@@ -9,13 +9,14 @@
     "outDir": "dist",
     "sourceMap": true,
     "strict": true,
-    "lib": ["ES6"]
+    "lib": ["ES6", "DOM"]
   },
   "include": [
     "./src/**/*"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "dist"
   ],
   "parserOptions":  {
     "ecmaVersion":  "2020",  // Allows for the parsing of modern ECMAScript features

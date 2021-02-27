@@ -41,7 +41,7 @@ export default async function routes(fastify: FastifyInstance) {
     const { bucketName } = request.params
     const { limit, offset } = request.body
     let { prefix } = request.body
-    if (!prefix.endsWith('/')) {
+    if (prefix.length > 0 && !prefix.endsWith('/')) {
       // assuming prefix is always a folder
       prefix = `${prefix}/`
     }

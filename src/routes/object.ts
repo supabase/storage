@@ -91,6 +91,7 @@ export default async function routes(fastify: FastifyInstance) {
       .send(data.Body)
   })
 
+  // @todo support multiple uploads
   fastify.post<requestGeneric>('/object/:bucketName/*', async (request, response) => {
     // @todo should upsert work?
     // check if the user is able to insert that row
@@ -229,6 +230,7 @@ export default async function routes(fastify: FastifyInstance) {
     })
   })
 
+  // @todo support multiple deletes
   fastify.delete<requestGeneric>('/object/:bucketName/*', async (request, response) => {
     // check if the user is able to insert that row
     const authHeader = request.headers.authorization

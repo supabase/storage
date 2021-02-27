@@ -7,8 +7,13 @@ interface requestGeneric extends RequestGenericInterface {
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.get<requestGeneric>('/metadata/:objectId', async (request, reply) => {
+    // @todo
     return `metadata ${request.params.objectId}`
   })
-  fastify.delete('/metadata/:objectId', async (request, reply) => {})
-  fastify.post('/metadata/:objectId', async (request, reply) => {})
+  fastify.delete('/metadata/:objectId', async (request, reply) => {
+    // @todo
+  })
+  fastify.post('/metadata/:objectId', async (request, reply) => {
+    // @todo
+  })
 }

@@ -70,7 +70,10 @@ $function$;
 CREATE OR REPLACE FUNCTION public.search(prefix text, bucketname text, limits int DEFAULT 100, levels int DEFAULT 1, offsets int DEFAULT 0)
  RETURNS TABLE (
     folder text,
-    id uuid
+    id uuid,
+    "updatedAt" TIMESTAMPTZ,
+    "createdAt" TIMESTAMPTZ,
+    "lastAccessedAt" TIMESTAMPTZ
   )
  LANGUAGE plpgsql
 AS $function$
@@ -87,7 +90,7 @@ BEGIN
 			limit limits
 			offset offsets
 		) 
-		select files_folders.folder as name, objects.id from files_folders
+		select files_folders.folder as name, objects.id, objects."updatedAt", objects."createdAt", objects."lastAccessedAt" from files_folders 
 		left join objects
 		on prefix || files_folders.folder = objects.name;
 END

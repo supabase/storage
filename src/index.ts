@@ -12,6 +12,9 @@ const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = fastify({
 // https://github.com/fastify/fastify-multipart#handle-file-size-limitation
 app.register(fastifyMultipart)
 
+// @todo - restrict origin here
+app.register(require('fastify-cors'))
+
 app.register(autoload, {
   dir: path.join(__dirname, 'routes'),
 })

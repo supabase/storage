@@ -23,6 +23,7 @@
     "dotenv": "^8.2.0",
     "fastify": "^3.12.0",
     "fastify-autoload": "^3.4.2",
+    "fastify-cors": "^5.2.0",
     "fastify-multipart": "^4.0.0",
     "jsonwebtoken": "^8.5.1"
   },

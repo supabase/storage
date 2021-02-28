@@ -61,7 +61,7 @@ _filename varchar;
 BEGIN
 	select string_to_array(name, '/') into _parts;
 	select _parts[array_length(_parts,1)] into _filename;
-	-- return the last part instead of 2
+	-- @todo return the last part instead of 2
 	return split_part(_filename, '.', 2);
 END
 $function$;

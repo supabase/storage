@@ -4,9 +4,9 @@
   "description": "Supabase storage middleend",
   "main": "index.js",
   "scripts": {
-    "dev": "ts-node-dev --log-error --files ./src/index.ts",
+    "dev": "ts-node-dev --log-error --files ./src/server.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "start": "node dist/server.js",
     "deploy": "flyctl deploy",
     "logs": "flyctl logs",
     "test": "echo \"Error: no test specified\" && exit 1"

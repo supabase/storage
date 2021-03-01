@@ -1,6 +1,5 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import {
-  Bucket,
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
@@ -58,6 +57,7 @@ type Obj = {
 }
 
 // @todo better error handling everywhere
+// @todo add console.error
 export default async function routes(fastify: FastifyInstance) {
   fastify.get<requestGeneric>('/object/:bucketName/*', async (request, response) => {
     const authHeader = request.headers.authorization
@@ -71,7 +71,7 @@ export default async function routes(fastify: FastifyInstance) {
     const { bucketName } = request.params
     const objectName = request.params['*']
 
-    const { data: results, error, status } = await postgrest
+    const objectResponse = await postgrest
       .from<Obj>('objects')
       .select('*, buckets(*)')
       .match({
@@ -80,11 +80,15 @@ export default async function routes(fastify: FastifyInstance) {
       })
       .single()
 
-    console.log(error, results)
-    if (error) {
+    if (objectResponse.error) {
+      const { status, error } = objectResponse
+      console.log(error)
       return response.status(status).send(error.message)
     }
-    if (!results?.buckets) {
+    const { data: results } = objectResponse
+    console.log(results)
+
+    if (!results.buckets) {
       // @todo why is this check necessary?
       // if corresponding bucket is not found, i want the object also to not be returned
       // is it cos of https://github.com/PostgREST/postgrest/issues/1075 ?
@@ -125,16 +129,19 @@ export default async function routes(fastify: FastifyInstance) {
     // @todo how to merge these into one query?
     // i can create a view and add INSTEAD OF triggers..is that the way to do it?
     // @todo add unique constraint for just bucket names
-    const { data: bucket, error: bucketError, status: bucketStatus } = await postgrest
-      .from('buckets')
+    const bucketResponse = await postgrest
+      .from<Bucket>('buckets')
       .select('id')
       .eq('name', bucketName)
       .single()
 
-    console.log(bucket, bucketError)
-    if (bucketError) {
-      return response.status(bucketStatus).send(bucketError.message)
+    if (bucketResponse.error) {
+      const { status, error } = bucketResponse
+      console.log(error)
+      return response.status(status).send(error.message)
     }
+
+    const { data: bucket } = bucketResponse
 
     const { data: results, error, status } = await postgrest
       .from<Obj>('objects')
@@ -154,6 +161,7 @@ export default async function routes(fastify: FastifyInstance) {
         }
       )
       .single()
+
     console.log(results, error)
     if (error) {
       return response.status(status).send(error.message)
@@ -198,18 +206,22 @@ export default async function routes(fastify: FastifyInstance) {
     // i can create a view and add INSTEAD OF triggers..is that the way to do it?
     // @todo add unique constraint for just bucket names
     // @todo add types for all all postgrest select calls
-    const { data: bucket, error: bucketError, status: bucketStatus } = await postgrest
-      .from('buckets')
+    const bucketResponse = await postgrest
+      .from<Bucket>('buckets')
       .select('id')
       .eq('name', bucketName)
       .single()
 
-    console.log(bucket, bucketError)
-    if (bucketError) {
-      return response.status(bucketStatus).send(bucketError.message)
+    if (bucketResponse.error) {
+      const { error, status } = bucketResponse
+      console.log(error)
+      return response.status(status).send(error.message)
     }
 
-    const { data: results, error, status, statusText } = await postgrest
+    const { data: bucket } = bucketResponse
+    console.log(bucket)
+
+    const objectResponse = await postgrest
       .from<Obj>('objects')
       .update({
         lastAccessedAt: new Date().toISOString(),
@@ -220,13 +232,9 @@ export default async function routes(fastify: FastifyInstance) {
       })
       .match({ bucketId: bucket.id, name: objectName })
 
-    console.log(error, results)
-
-    if (error) {
+    if (objectResponse.error) {
+      const { status, error } = objectResponse
       return response.status(status).send(error.message)
-    }
-    if (results && results.length === 0) {
-      return response.status(status).send(statusText)
     }
 
     // if successfully inserted, upload to s3
@@ -267,24 +275,34 @@ export default async function routes(fastify: FastifyInstance) {
     // @todo how to merge these into one query?
     // i can create a view and add INSTEAD OF triggers..is that the way to do it?
     // @todo add unique constraint for just bucket names
-    const { data: bucket, error: bucketError } = await postgrest
-      .from('buckets')
+    const bucketResponse = await postgrest
+      .from<Bucket>('buckets')
       .select('id')
       .eq('name', bucketName)
       .single()
-    if (bucketError) throw bucketError
-    console.log(bucket)
 
-    const { data: results, error, status } = await postgrest.from<Obj>('objects').delete().match({
+    if (bucketResponse.error) {
+      const { error, status } = bucketResponse
+      console.log(error)
+      return response.status(status).send(error.message)
+    }
+    console.log(bucketResponse.body)
+    const { data: bucket } = bucketResponse
+
+    const objectResponse = await postgrest.from<Obj>('objects').delete().match({
       name: objectName,
       bucketId: bucket.id,
     })
 
-    console.log(results, error)
-    if (error) {
+    if (objectResponse.error) {
+      const { error, status } = objectResponse
+      console.log(error)
       return response.status(status).send(error.message)
     }
-    if (results && results.length === 0) {
+    const { data: results } = objectResponse
+    console.log(results)
+
+    if (results.length === 0) {
       // no rows returned, user doesn't have access to delete rows
       return response.status(403).send('Forbidden')
     }
@@ -332,18 +350,20 @@ export default async function routes(fastify: FastifyInstance) {
       return response.status(bucketStatus).send(bucketError.message)
     }
 
-    const { data: results, error, status } = await postgrest
+    const objectResponse = await postgrest
       .from<Obj>('objects')
       .delete()
       .eq('bucketId', bucket.id)
       .in('name', prefixes)
 
-    console.log(results, error)
-    if (error) {
+    if (objectResponse.error) {
+      const { error, status } = objectResponse
+      console.log(error)
       return response.status(status).send(error.message)
     }
 
-    if (results && results.length > 0) {
+    const { data: results } = objectResponse
+    if (results.length > 0) {
       // if successfully deleted, delete from s3 too
       const prefixesToDelete = results.map((ele) => {
         return { Key: `${projectRef}/${bucketName}/${ele.name}` }

@@ -6,7 +6,9 @@ import fastifyMultipart from 'fastify-multipart'
 import fastifyCors from 'fastify-cors'
 
 const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = fastify({
-  logger: true,
+  logger: {
+    prettyPrint: true,
+  },
 })
 
 // @todo - should we set upload limits here?

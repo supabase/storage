@@ -3,6 +3,7 @@ import { Server, IncomingMessage, ServerResponse } from 'http'
 import autoload from 'fastify-autoload'
 import path from 'path'
 import fastifyMultipart from 'fastify-multipart'
+import fastifyCors from 'fastify-cors'
 
 const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = fastify({
   logger: true,
@@ -13,7 +14,7 @@ const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = fastify({
 app.register(fastifyMultipart)
 
 // @todo - restrict origin here
-app.register(require('fastify-cors'))
+app.register(fastifyCors)
 
 app.register(autoload, {
   dir: path.join(__dirname, 'routes'),

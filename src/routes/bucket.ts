@@ -62,8 +62,13 @@ export default async function routes(fastify: FastifyInstance) {
     const jwt = authHeader.substring('Bearer '.length)
 
     const postgrest = getPostgrestClient(jwt)
-    const { data: results, error } = await postgrest.from<Bucket>('buckets').select('*')
+    const { data: results, error, status } = await postgrest.from<Bucket>('buckets').select('*')
     console.log(results, error)
+
+    if (error) {
+      return response.status(status).send(error.message)
+    }
+
     response.send(results)
   })
 
@@ -75,12 +80,18 @@ export default async function routes(fastify: FastifyInstance) {
     const jwt = authHeader.substring('Bearer '.length)
     const { bucketId } = request.params
     const postgrest = getPostgrestClient(jwt)
-    const { data: results, error } = await postgrest
+    const { data: results, error, status } = await postgrest
       .from<Bucket>('buckets')
       .select('*')
       .eq('id', bucketId)
       .single()
+
     console.log(results, error)
+
+    if (error) {
+      return response.status(status).send(error.message)
+    }
+
     response.send(results)
   })
 
@@ -94,14 +105,18 @@ export default async function routes(fastify: FastifyInstance) {
     const { bucketId } = request.params
     const postgrest = getPostgrestClient(jwt)
 
-    const { data: bucket, error: bucketError } = await postgrest
+    const { data: bucket, error: bucketError, status: bucketStatus } = await postgrest
       .from<Bucket>('buckets')
       .select('name')
       .eq('id', bucketId)
       .single()
+
     console.log(bucket, bucketError)
+    if (bucketError) {
+      return response.status(bucketStatus).send(bucketError.message)
+    }
     if (!bucket) {
-      return response.status(400).send('Bucket not found')
+      throw 'Should never happen'
     }
     const bucketName = bucket.name
 

@@ -70,7 +70,7 @@ export default async function routes(fastify: FastifyInstance) {
     const { bucketName } = request.params
     const objectName = request.params['*']
 
-    const { data: results, error } = await postgrest
+    const { data: results, error, status, statusText } = await postgrest
       .from<Obj>('objects')
       .select('*, buckets(*)')
       .match({
@@ -79,8 +79,10 @@ export default async function routes(fastify: FastifyInstance) {
       })
       .single()
 
-    console.log(error)
-    // console.log(results)
+    console.log(error, results)
+    if (error) {
+      return response.status(status).send(statusText)
+    }
     if (!results?.buckets) {
       // @todo why is this check necessary?
       // if corresponding bucket is not found, i want the object also to not be returned
@@ -98,14 +100,12 @@ export default async function routes(fastify: FastifyInstance) {
     const data = await client.send(command)
     console.log('done s3')
 
-    // @todo stream the response back instead of awaiting from s3 and sending back
     return response
       .status(data.$metadata.httpStatusCode ?? 200)
       .header('content-type', data.ContentType)
       .send(data.Body)
   })
 
-  // @todo support multiple uploads
   fastify.post<requestGeneric>('/object/:bucketName/*', async (request, response) => {
     // @todo should upsert work?
     // check if the user is able to insert that row
@@ -124,15 +124,19 @@ export default async function routes(fastify: FastifyInstance) {
     // @todo how to merge these into one query?
     // i can create a view and add INSTEAD OF triggers..is that the way to do it?
     // @todo add unique constraint for just bucket names
-    const { data: bucket, error: bucketError } = await postgrest
-      .from('buckets')
-      .select('id')
-      .eq('name', bucketName)
-      .single()
-    if (bucketError) throw bucketError
-    console.log(bucket)
+    const {
+      data: bucket,
+      error: bucketError,
+      status: bucketStatus,
+      statusText: bucketStatusText,
+    } = await postgrest.from('buckets').select('id').eq('name', bucketName).single()
 
-    const { data: results, error } = await postgrest
+    console.log(bucket, bucketError)
+    if (bucketError) {
+      return response.status(bucketStatus).send(bucketStatusText)
+    }
+
+    const { data: results, error, status, statusText } = await postgrest
       .from<Obj>('objects')
       .insert(
         [
@@ -152,13 +156,13 @@ export default async function routes(fastify: FastifyInstance) {
       .single()
     console.log(results, error)
     if (error) {
-      return response.status(403).send('Go away')
+      return response.status(status).send(statusText)
     }
 
     // if successfully inserted, upload to s3
     const s3Key = `${projectRef}/${bucketName}/${objectName}`
 
-    const paralellUploads3 = new Upload({
+    const paralellUploadS3 = new Upload({
       client,
       params: {
         Bucket: globalS3Bucket,
@@ -169,7 +173,7 @@ export default async function routes(fastify: FastifyInstance) {
       },
     })
 
-    const uploadResult = await paralellUploads3.done()
+    const uploadResult = await paralellUploadS3.done()
 
     return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
       Key: s3Key,
@@ -193,15 +197,19 @@ export default async function routes(fastify: FastifyInstance) {
     // @todo how to merge these into one query?
     // i can create a view and add INSTEAD OF triggers..is that the way to do it?
     // @todo add unique constraint for just bucket names
-    const { data: bucket, error: bucketError } = await postgrest
-      .from('buckets')
-      .select('id')
-      .eq('name', bucketName)
-      .single()
-    if (bucketError) throw bucketError
-    console.log(bucket)
+    const {
+      data: bucket,
+      error: bucketError,
+      status: bucketStatus,
+      statusText: bucketStatusText,
+    } = await postgrest.from('buckets').select('id').eq('name', bucketName).single()
 
-    const { data: results, error } = await postgrest
+    console.log(bucket, bucketError)
+    if (bucketError) {
+      return response.status(bucketStatus).send(bucketStatusText)
+    }
+
+    const { data: results, error, status, statusText } = await postgrest
       .from<Obj>('objects')
       .update(
         {
@@ -216,17 +224,17 @@ export default async function routes(fastify: FastifyInstance) {
       .match({ bucketId: bucket.id, name: objectName })
       .limit(1)
 
-    console.log('results: ', results)
-    console.log('error: ', error)
+    console.log(error, results)
+
     if (error || (results && results.length === 0)) {
-      return response.status(403).send('Go away')
+      return response.status(status).send(statusText)
     }
 
     // if successfully inserted, upload to s3
     const s3Key = `${projectRef}/${bucketName}/${objectName}`
 
     // @todo adding contentlength metadata will be harder since everything is streams
-    const paralellUploads3 = new Upload({
+    const paralellUploadS3 = new Upload({
       client,
       params: {
         Bucket: globalS3Bucket,
@@ -237,7 +245,7 @@ export default async function routes(fastify: FastifyInstance) {
       },
     })
 
-    const uploadResult = await paralellUploads3.done()
+    const uploadResult = await paralellUploadS3.done()
 
     return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
       Key: s3Key,
@@ -269,14 +277,21 @@ export default async function routes(fastify: FastifyInstance) {
     if (bucketError) throw bucketError
     console.log(bucket)
 
-    const { data: results, error } = await postgrest.from<Obj>('objects').delete().match({
-      name: objectName,
-      bucketId: bucket.id,
-    })
+    const { data: results, error, status, statusText } = await postgrest
+      .from<Obj>('objects')
+      .delete()
+      .match({
+        name: objectName,
+        bucketId: bucket.id,
+      })
 
     console.log(results, error)
-    if (error || (results && results.length === 0)) {
-      return response.status(403).send('Go away')
+    if (error) {
+      return response.status(status).send(statusText)
+    }
+    if (results && results.length === 0) {
+      // no rows returned, user doesn't have access to delete rows
+      return response.status(403).send('Forbidden')
     }
 
     // if successfully deleted, delete from s3 too
@@ -311,38 +326,44 @@ export default async function routes(fastify: FastifyInstance) {
     // @todo how to merge these into one query?
     // i can create a view and add INSTEAD OF triggers..is that the way to do it?
     // @todo add unique constraint for just bucket names
-    const { data: bucket, error: bucketError } = await postgrest
-      .from('buckets')
-      .select('id')
-      .eq('name', bucketName)
-      .single()
-    if (bucketError) throw bucketError
-    console.log(bucket)
+    const {
+      data: bucket,
+      error: bucketError,
+      status: bucketStatus,
+      statusText: bucketStatusText,
+    } = await postgrest.from('buckets').select('id').eq('name', bucketName).single()
 
-    const { data: results, error } = await postgrest
+    console.log(bucket, bucketError)
+    if (bucketError) {
+      return response.status(bucketStatus).send(bucketStatusText)
+    }
+
+    const { data: results, error, status, statusText } = await postgrest
       .from<Obj>('objects')
       .delete()
       .eq('bucketId', bucket.id)
       .in('name', prefixes)
 
     console.log(results, error)
-    if (error || !results || results.length === 0) {
-      return response.status(403).send('Go away')
+    if (error) {
+      return response.status(status).send(statusText)
     }
 
-    // if successfully deleted, delete from s3 too
-    const prefixesToDelete = results.map((ele) => {
-      return { Key: `${projectRef}/${bucketName}/${ele.name}` }
-    })
+    if (results && results.length > 0) {
+      // if successfully deleted, delete from s3 too
+      const prefixesToDelete = results.map((ele) => {
+        return { Key: `${projectRef}/${bucketName}/${ele.name}` }
+      })
 
-    const command = new DeleteObjectsCommand({
-      Bucket: globalS3Bucket,
-      Delete: {
-        Objects: prefixesToDelete,
-      },
-    })
-    await client.send(command)
-    console.log('done s3')
+      const command = new DeleteObjectsCommand({
+        Bucket: globalS3Bucket,
+        Delete: {
+          Objects: prefixesToDelete,
+        },
+      })
+      await client.send(command)
+      console.log('done s3')
+    }
 
     return response.status(200).send(results)
   })

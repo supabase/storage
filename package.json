@@ -4,7 +4,7 @@
   "description": "Supabase storage middleend",
   "main": "index.js",
   "scripts": {
-    "dev": "ts-node-dev --files ./src/index.ts",
+    "dev": "ts-node-dev --log-error --files ./src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "deploy": "flyctl deploy",

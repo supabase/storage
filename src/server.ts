@@ -2,10 +2,14 @@ import { FastifyInstance } from 'fastify'
 import { Server, IncomingMessage, ServerResponse } from 'http'
 import build from './app'
 
+const loggerConfig = {
+  prettyPrint: true,
+}
+if (process.env.NODE_ENV === 'production') {
+  loggerConfig.prettyPrint = false
+}
 const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
-  logger: {
-    prettyPrint: true,
-  },
+  logger: loggerConfig,
 })
 
 app.listen(8080, '0.0.0.0', (err, address) => {

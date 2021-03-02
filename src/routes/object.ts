@@ -1,14 +1,8 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
-import {
-  DeleteObjectCommand,
-  DeleteObjectsCommand,
-  GetObjectCommand,
-  S3Client,
-} from '@aws-sdk/client-s3'
-import { Upload } from '@aws-sdk/lib-storage'
 import dotenv from 'dotenv'
 
 import { getOwner, getPostgrestClient } from '../utils'
+import { initClient, getObject, uploadObject, deleteObject, deleteObjects } from '../utils/s3'
 
 dotenv.config()
 
@@ -19,7 +13,10 @@ const {
   ANON_KEY: anonKey,
 } = process.env
 
-const client = new S3Client({ region, runtime: 'node' })
+if (!region) {
+  throw new Error('config not valid')
+}
+const client = initClient(region)
 interface requestGeneric extends RequestGenericInterface {
   Params: {
     bucketName: string
@@ -64,6 +61,10 @@ export default async function routes(fastify: FastifyInstance) {
     if (!authHeader || !anonKey) {
       return response.status(403).send('Go away')
     }
+    if (!globalS3Bucket) {
+      // @todo remove
+      throw new Error('no s3 bucket')
+    }
     const jwt = authHeader.substring('Bearer '.length)
 
     const postgrest = getPostgrestClient(jwt)
@@ -98,12 +99,7 @@ export default async function routes(fastify: FastifyInstance) {
     // send the object from s3
     const s3Key = `${projectRef}/${bucketName}/${objectName}`
     console.log(s3Key)
-    const command = new GetObjectCommand({
-      Bucket: globalS3Bucket,
-      Key: s3Key,
-    })
-    const data = await client.send(command)
-    console.log('done s3')
+    const data = await getObject(client, globalS3Bucket, s3Key)
 
     return response
       .status(data.$metadata.httpStatusCode ?? 200)
@@ -117,6 +113,10 @@ export default async function routes(fastify: FastifyInstance) {
     const authHeader = request.headers.authorization
     if (!authHeader || !anonKey) {
       return response.status(403).send('Go away')
+    }
+    if (!globalS3Bucket) {
+      // @todo remove
+      throw new Error('no s3 bucket')
     }
     const jwt = authHeader.substring('Bearer '.length)
     const data = await request.file()
@@ -169,19 +169,7 @@ export default async function routes(fastify: FastifyInstance) {
 
     // if successfully inserted, upload to s3
     const s3Key = `${projectRef}/${bucketName}/${objectName}`
-
-    const paralellUploadS3 = new Upload({
-      client,
-      params: {
-        Bucket: globalS3Bucket,
-        Key: s3Key,
-        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-        Body: data.file,
-        ContentType: data.mimetype,
-      },
-    })
-
-    const uploadResult = await paralellUploadS3.done()
+    const uploadResult = await uploadObject(client, globalS3Bucket, s3Key, data.file, data.mimetype)
 
     return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
       Key: s3Key,
@@ -193,6 +181,10 @@ export default async function routes(fastify: FastifyInstance) {
     const authHeader = request.headers.authorization
     if (!authHeader || !anonKey) {
       return response.status(403).send('Go away')
+    }
+    if (!globalS3Bucket) {
+      // @todo remove
+      throw new Error('no s3 bucket')
     }
     const jwt = authHeader.substring('Bearer '.length)
     const data = await request.file()
@@ -241,18 +233,7 @@ export default async function routes(fastify: FastifyInstance) {
     const s3Key = `${projectRef}/${bucketName}/${objectName}`
 
     // @todo adding contentlength metadata will be harder since everything is streams
-    const paralellUploadS3 = new Upload({
-      client,
-      params: {
-        Bucket: globalS3Bucket,
-        Key: s3Key,
-        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-        Body: data.file,
-        ContentType: data.mimetype,
-      },
-    })
-
-    const uploadResult = await paralellUploadS3.done()
+    const uploadResult = await uploadObject(client, globalS3Bucket, s3Key, data.file, data.mimetype)
 
     return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
       Key: s3Key,
@@ -265,6 +246,10 @@ export default async function routes(fastify: FastifyInstance) {
     const authHeader = request.headers.authorization
     if (!authHeader || !anonKey) {
       return response.status(403).send('Go away')
+    }
+    if (!globalS3Bucket) {
+      // @todo remove
+      throw new Error('no s3 bucket')
     }
     const jwt = authHeader.substring('Bearer '.length)
 
@@ -309,13 +294,7 @@ export default async function routes(fastify: FastifyInstance) {
 
     // if successfully deleted, delete from s3 too
     const s3Key = `${projectRef}/${bucketName}/${objectName}`
-
-    const command = new DeleteObjectCommand({
-      Bucket: globalS3Bucket,
-      Key: s3Key,
-    })
-    await client.send(command)
-    console.log('done s3')
+    await deleteObject(client, globalS3Bucket, s3Key)
 
     return response.status(200).send('Deleted')
   })
@@ -326,6 +305,10 @@ export default async function routes(fastify: FastifyInstance) {
     const authHeader = request.headers.authorization
     if (!authHeader || !anonKey) {
       return response.status(403).send('Go away')
+    }
+    if (!globalS3Bucket) {
+      // @todo remove
+      throw new Error('no s3 bucket')
     }
     const jwt = authHeader.substring('Bearer '.length)
 
@@ -369,14 +352,7 @@ export default async function routes(fastify: FastifyInstance) {
         return { Key: `${projectRef}/${bucketName}/${ele.name}` }
       })
 
-      const command = new DeleteObjectsCommand({
-        Bucket: globalS3Bucket,
-        Delete: {
-          Objects: prefixesToDelete,
-        },
-      })
-      await client.send(command)
-      console.log('done s3')
+      await deleteObjects(client, globalS3Bucket, prefixesToDelete)
     }
 
     return response.status(200).send(results)

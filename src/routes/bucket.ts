@@ -1,7 +1,7 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import dotenv from 'dotenv'
 import { getPostgrestClient, getOwner } from '../utils'
-import { DeleteObjectsCommand, S3Client } from '@aws-sdk/client-s3'
+import { deleteObjects, initClient } from '../utils/s3'
 
 dotenv.config()
 interface requestGeneric extends RequestGenericInterface {
@@ -45,7 +45,10 @@ const {
   REGION: region,
 } = process.env
 
-const client = new S3Client({ region, runtime: 'node' })
+if (!region) {
+  throw new Error('config not valid')
+}
+const client = initClient(region)
 
 export default async function routes(fastify: FastifyInstance) {
   // @todo I have enabled RLS only for objects table
@@ -100,6 +103,10 @@ export default async function routes(fastify: FastifyInstance) {
     if (!authHeader || !anonKey || !serviceKey) {
       return response.status(403).send('Go away')
     }
+    if (!globalS3Bucket) {
+      // @todo remove
+      throw new Error('no s3 bucket')
+    }
 
     const jwt = authHeader.substring('Bearer '.length)
     const { bucketId } = request.params
@@ -135,13 +142,7 @@ export default async function routes(fastify: FastifyInstance) {
         }
       })
       console.log(params)
-      const command = new DeleteObjectsCommand({
-        Bucket: globalS3Bucket,
-        Delete: {
-          Objects: params,
-        },
-      })
-      await client.send(command)
+      await deleteObjects(client, globalS3Bucket, params)
 
       const { error: deleteError } = await postgrest
         .from<Obj>('objects')

@@ -127,7 +127,10 @@ export default async function routes(fastify: FastifyInstance) {
 
     return response
       .status(data.$metadata.httpStatusCode ?? 200)
-      .header('content-type', data.ContentType)
+      .header('Content-Type', data.ContentType)
+      .header('Cache-Control', data.CacheControl)
+      .header('ETag', data.ETag)
+      .header('Last-Modified', data.LastModified)
       .send(data.Body)
   })
 
@@ -201,7 +204,10 @@ export default async function routes(fastify: FastifyInstance) {
 
       return response
         .status(data.$metadata.httpStatusCode ?? 200)
-        .header('content-type', data.ContentType)
+        .header('Content-Type', data.ContentType)
+        .header('Cache-Control', data.CacheControl ?? 'no-cache')
+        .header('ETag', data.ETag)
+        .header('Last-Modified', data.LastModified)
         .send(data.Body)
     } catch (err) {
       console.log(err)
@@ -222,6 +228,11 @@ export default async function routes(fastify: FastifyInstance) {
     }
     const jwt = authHeader.substring('Bearer '.length)
     const data = await request.file()
+
+    // Can't seem to get the typing to work properly
+    // https://github.com/fastify/fastify-multipart/issues/162
+    /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+    const cacheControl: string = `max-age=${data.fields.cacheControl.value}` ?? 'no-cache'
 
     const { bucketName } = request.params
     const objectName = request.params['*']
@@ -255,6 +266,7 @@ export default async function routes(fastify: FastifyInstance) {
             bucketId: bucket.id,
             metadata: {
               mimetype: data.mimetype,
+              cacheControl,
             },
           },
         ],
@@ -271,7 +283,14 @@ export default async function routes(fastify: FastifyInstance) {
 
     // if successfully inserted, upload to s3
     const s3Key = `${projectRef}/${bucketName}/${objectName}`
-    const uploadResult = await uploadObject(client, globalS3Bucket, s3Key, data.file, data.mimetype)
+    const uploadResult = await uploadObject(
+      client,
+      globalS3Bucket,
+      s3Key,
+      data.file,
+      data.mimetype,
+      cacheControl
+    )
 
     return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
       Key: s3Key,
@@ -290,6 +309,8 @@ export default async function routes(fastify: FastifyInstance) {
     }
     const jwt = authHeader.substring('Bearer '.length)
     const data = await request.file()
+    /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+    const cacheControl: string = `max-age=${data.fields.cacheControl.value}` ?? 'no-cache'
 
     const { bucketName } = request.params
     const objectName = request.params['*']
@@ -322,6 +343,7 @@ export default async function routes(fastify: FastifyInstance) {
         owner,
         metadata: {
           mimetype: data.mimetype,
+          cacheControl,
         },
       })
       .match({ bucketId: bucket.id, name: objectName })
@@ -335,7 +357,14 @@ export default async function routes(fastify: FastifyInstance) {
     const s3Key = `${projectRef}/${bucketName}/${objectName}`
 
     // @todo adding contentlength metadata will be harder since everything is streams
-    const uploadResult = await uploadObject(client, globalS3Bucket, s3Key, data.file, data.mimetype)
+    const uploadResult = await uploadObject(
+      client,
+      globalS3Bucket,
+      s3Key,
+      data.file,
+      data.mimetype,
+      cacheControl
+    )
 
     return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
       Key: s3Key,

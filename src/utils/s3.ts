@@ -34,7 +34,8 @@ export async function uploadObject(
   bucketName: string,
   key: string,
   body: NodeJS.ReadableStream,
-  contentType: string
+  contentType: string,
+  cacheControl: string
 ): Promise<ServiceOutputTypes> {
   const paralellUploadS3 = new Upload({
     client,
@@ -44,6 +45,7 @@ export async function uploadObject(
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
       Body: body,
       ContentType: contentType,
+      CacheControl: cacheControl,
     },
   })
 

@@ -180,7 +180,7 @@ export default async function routes(fastify: FastifyInstance) {
     // @todo parse the url properly
     const signedURL = `/signedobject/${urlToSign}?token=${token}`
 
-    return response.status(200).send(signedURL)
+    return response.status(200).send({ signedURL })
   })
 
   fastify.get<getSignedObjectRequest>('/signedobject/:bucketName/*', async (request, response) => {

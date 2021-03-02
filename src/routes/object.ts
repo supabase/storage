@@ -1,7 +1,7 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import dotenv from 'dotenv'
 
-import { getOwner, getPostgrestClient, signJWT } from '../utils'
+import { getOwner, getPostgrestClient, signJWT, verifyJWT } from '../utils'
 import { initClient, getObject, uploadObject, deleteObject, deleteObjects } from '../utils/s3'
 
 dotenv.config()
@@ -34,6 +34,16 @@ interface signRequest extends RequestGenericInterface {
   }
 }
 
+interface getSignedObjectRequest extends RequestGenericInterface {
+  Params: {
+    bucketName: string
+    '*': string
+  }
+  Querystring: {
+    token: string
+  }
+}
+
 interface deleteObjectsRequest extends RequestGenericInterface {
   Params: {
     bucketName: string
@@ -61,6 +71,10 @@ type Obj = {
   lastAccessedAt: string
   metadata?: Record<string, unknown>
   buckets?: Bucket
+}
+
+type signedToken = {
+  url: string
 }
 
 // @todo better error handling everywhere
@@ -159,13 +173,40 @@ export default async function routes(fastify: FastifyInstance) {
     }
 
     console.log(`going to sign ${request.url}`)
-    const token = await signJWT({ url: request.url }, expiresIn)
     const urlParts = request.url.split('/')
-    urlParts[1] = 'signedobject'
+    const urlToSign = urlParts.splice(2).join('/')
+    const token = await signJWT({ url: urlToSign }, expiresIn)
+
     // @todo parse the url properly
-    const signedURL = `${urlParts.join('/')}?token=${token}`
+    const signedURL = `/signedobject/${urlToSign}?token=${token}`
 
     return response.status(200).send(signedURL)
+  })
+
+  fastify.get<getSignedObjectRequest>('/signedobject/:bucketName/*', async (request, response) => {
+    const { token } = request.query
+    if (!token) {
+      return response.status(403).send('Go away')
+    }
+    if (!globalS3Bucket) {
+      // @todo remove
+      throw new Error('no s3 bucket')
+    }
+    try {
+      const payload = await verifyJWT(token)
+      const { url } = payload as signedToken
+      const s3Key = `${projectRef}/${url}`
+      console.log(s3Key)
+      const data = await getObject(client, globalS3Bucket, s3Key)
+
+      return response
+        .status(data.$metadata.httpStatusCode ?? 200)
+        .header('content-type', data.ContentType)
+        .send(data.Body)
+    } catch (err) {
+      console.log(err)
+      return response.send(400).send('Invalid token')
+    }
   })
 
   fastify.post<requestGeneric>('/object/:bucketName/*', async (request, response) => {

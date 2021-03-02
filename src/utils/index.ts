@@ -48,6 +48,23 @@ export function verifyJWT(token: string): Promise<object | undefined> {
   })
 }
 
+export function signJWT(
+  // eslint-disable-next-line @typescript-eslint/ban-types
+  payload: string | object | Buffer,
+  expiresIn: string | number
+): Promise<string | undefined> {
+  const { JWT_SECRET: jwtSecret } = process.env
+  if (!jwtSecret) {
+    throw new Error('no jwtsecret')
+  }
+  return new Promise((resolve, reject) => {
+    jwt.sign(payload, jwtSecret, { expiresIn }, (err, token) => {
+      if (err) return reject(err)
+      resolve(token)
+    })
+  })
+}
+
 export async function getOwner(token: string): Promise<string | undefined> {
   const decodedJWT = await verifyJWT(token)
   return (decodedJWT as jwtType)?.sub

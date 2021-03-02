@@ -1,7 +1,7 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import dotenv from 'dotenv'
 
-import { getOwner, getPostgrestClient } from '../utils'
+import { getOwner, getPostgrestClient, signJWT } from '../utils'
 import { initClient, getObject, uploadObject, deleteObject, deleteObjects } from '../utils/s3'
 
 dotenv.config()
@@ -21,6 +21,16 @@ interface requestGeneric extends RequestGenericInterface {
   Params: {
     bucketName: string
     '*': string
+  }
+}
+
+interface signRequest extends RequestGenericInterface {
+  Params: {
+    bucketName: string
+    '*': string
+  }
+  Body: {
+    expiresIn: number
   }
 }
 
@@ -105,6 +115,57 @@ export default async function routes(fastify: FastifyInstance) {
       .status(data.$metadata.httpStatusCode ?? 200)
       .header('content-type', data.ContentType)
       .send(data.Body)
+  })
+
+  fastify.post<signRequest>('/sign/:bucketName/*', async (request, response) => {
+    const authHeader = request.headers.authorization
+    if (!authHeader || !anonKey) {
+      return response.status(403).send('Go away')
+    }
+    if (!globalS3Bucket) {
+      // @todo remove
+      throw new Error('no s3 bucket')
+    }
+    const jwt = authHeader.substring('Bearer '.length)
+
+    const postgrest = getPostgrestClient(jwt)
+
+    const { bucketName } = request.params
+    const objectName = request.params['*']
+    const { expiresIn } = request.body
+
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .select('*, buckets(*)')
+      .match({
+        name: objectName,
+        'buckets.name': bucketName,
+      })
+      .single()
+
+    if (objectResponse.error) {
+      const { status, error } = objectResponse
+      console.log(error)
+      return response.status(status).send(error.message)
+    }
+    const { data: results } = objectResponse
+    console.log(results)
+
+    if (!results.buckets) {
+      // @todo why is this check necessary?
+      // if corresponding bucket is not found, i want the object also to not be returned
+      // is it cos of https://github.com/PostgREST/postgrest/issues/1075 ?
+      return response.status(404).send('not found')
+    }
+
+    console.log(`going to sign ${request.url}`)
+    const token = await signJWT({ url: request.url }, expiresIn)
+    const urlParts = request.url.split('/')
+    urlParts[1] = 'signedobject'
+    // @todo parse the url properly
+    const signedURL = `${urlParts.join('/')}?token=${token}`
+
+    return response.status(200).send(signedURL)
   })
 
   fastify.post<requestGeneric>('/object/:bucketName/*', async (request, response) => {

@@ -1,6 +1,5 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
-import { PostgrestClient } from '@supabase/postgrest-js'
-import { getConfig } from '../utils/config'
+import { getPostgrestClient } from '../utils/'
 interface requestGeneric extends RequestGenericInterface {
   Params: {
     bucketName: string
@@ -10,20 +9,6 @@ interface requestGeneric extends RequestGenericInterface {
     limit: number
     offset: number
   }
-}
-
-const { projectRef, supabaseDomain, anonKey } = getConfig()
-
-function getPostgrestClient(jwt: string) {
-  // @todo in kps, can we just ping localhost?
-  const url = `https://${projectRef}.${supabaseDomain}/rest/v1`
-  const postgrest = new PostgrestClient(url, {
-    headers: {
-      apiKey: anonKey,
-      Authorization: `Bearer ${jwt}`,
-    },
-  })
-  return postgrest
 }
 
 export default async function routes(fastify: FastifyInstance) {

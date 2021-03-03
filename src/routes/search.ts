@@ -1,6 +1,6 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { PostgrestClient } from '@supabase/postgrest-js'
-
+import { getConfig } from '../utils/config'
 interface requestGeneric extends RequestGenericInterface {
   Params: {
     bucketName: string
@@ -12,12 +12,9 @@ interface requestGeneric extends RequestGenericInterface {
   }
 }
 
-const { PROJECT_REF: projectRef, SUPABASE_DOMAIN: supabaseDomain, ANON_KEY: anonKey } = process.env
+const { projectRef, supabaseDomain, anonKey } = getConfig()
 
 function getPostgrestClient(jwt: string) {
-  if (!anonKey) {
-    throw new Error('anonKey not found')
-  }
   // @todo in kps, can we just ping localhost?
   const url = `https://${projectRef}.${supabaseDomain}/rest/v1`
   const postgrest = new PostgrestClient(url, {
@@ -32,7 +29,7 @@ function getPostgrestClient(jwt: string) {
 export default async function routes(fastify: FastifyInstance) {
   fastify.post<requestGeneric>('/search/:bucketName', async (request, response) => {
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey) {
+    if (!authHeader) {
       return response.status(403).send('Go away')
     }
     const jwt = authHeader.substring('Bearer '.length)

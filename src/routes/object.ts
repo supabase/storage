@@ -1,21 +1,10 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
-import dotenv from 'dotenv'
-
 import { getOwner, getPostgrestClient, signJWT, verifyJWT } from '../utils'
 import { initClient, getObject, uploadObject, deleteObject, deleteObjects } from '../utils/s3'
+import { getConfig } from '../utils/config'
 
-dotenv.config()
+const { region, projectRef, globalS3Bucket } = getConfig()
 
-const {
-  REGION: region,
-  PROJECT_REF: projectRef,
-  BUCKET_NAME: globalS3Bucket,
-  ANON_KEY: anonKey,
-} = process.env
-
-if (!region) {
-  throw new Error('config not valid')
-}
 const client = initClient(region)
 interface requestGeneric extends RequestGenericInterface {
   Params: {
@@ -82,12 +71,8 @@ type signedToken = {
 export default async function routes(fastify: FastifyInstance) {
   fastify.get<requestGeneric>('/object/:bucketName/*', async (request, response) => {
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey) {
+    if (!authHeader) {
       return response.status(403).send('Go away')
-    }
-    if (!globalS3Bucket) {
-      // @todo remove
-      throw new Error('no s3 bucket')
     }
     const jwt = authHeader.substring('Bearer '.length)
 
@@ -136,12 +121,8 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.post<signRequest>('/sign/:bucketName/*', async (request, response) => {
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey) {
+    if (!authHeader) {
       return response.status(403).send('Go away')
-    }
-    if (!globalS3Bucket) {
-      // @todo remove
-      throw new Error('no s3 bucket')
     }
     const jwt = authHeader.substring('Bearer '.length)
 
@@ -191,10 +172,6 @@ export default async function routes(fastify: FastifyInstance) {
     if (!token) {
       return response.status(403).send('Go away')
     }
-    if (!globalS3Bucket) {
-      // @todo remove
-      throw new Error('no s3 bucket')
-    }
     try {
       const payload = await verifyJWT(token)
       const { url } = payload as signedToken
@@ -219,12 +196,8 @@ export default async function routes(fastify: FastifyInstance) {
     // @todo should upsert work?
     // check if the user is able to insert that row
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey) {
+    if (!authHeader) {
       return response.status(403).send('Go away')
-    }
-    if (!globalS3Bucket) {
-      // @todo remove
-      throw new Error('no s3 bucket')
     }
     const jwt = authHeader.substring('Bearer '.length)
     const data = await request.file()
@@ -300,12 +273,8 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.put<requestGeneric>('/object/:bucketName/*', async (request, response) => {
     // check if the user is able to update the row
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey) {
+    if (!authHeader) {
       return response.status(403).send('Go away')
-    }
-    if (!globalS3Bucket) {
-      // @todo remove
-      throw new Error('no s3 bucket')
     }
     const jwt = authHeader.substring('Bearer '.length)
     const data = await request.file()
@@ -375,12 +344,8 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.delete<requestGeneric>('/object/:bucketName/*', async (request, response) => {
     // check if the user is able to insert that row
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey) {
+    if (!authHeader) {
       return response.status(403).send('Go away')
-    }
-    if (!globalS3Bucket) {
-      // @todo remove
-      throw new Error('no s3 bucket')
     }
     const jwt = authHeader.substring('Bearer '.length)
 
@@ -434,12 +399,8 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.delete<deleteObjectsRequest>('/:bucketName', async (request, response) => {
     // check if the user is able to insert that row
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey) {
+    if (!authHeader) {
       return response.status(403).send('Go away')
-    }
-    if (!globalS3Bucket) {
-      // @todo remove
-      throw new Error('no s3 bucket')
     }
     const jwt = authHeader.substring('Bearer '.length)
 

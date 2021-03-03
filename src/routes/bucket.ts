@@ -1,9 +1,7 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
-import dotenv from 'dotenv'
 import { getPostgrestClient, getOwner } from '../utils'
 import { deleteObjects, initClient } from '../utils/s3'
-
-dotenv.config()
+import { getConfig } from '../utils/config'
 interface requestGeneric extends RequestGenericInterface {
   Params: {
     bucketId: string
@@ -37,17 +35,8 @@ type Obj = {
   buckets?: Bucket
 }
 
-const {
-  ANON_KEY: anonKey,
-  SERVICE_KEY: serviceKey,
-  BUCKET_NAME: globalS3Bucket,
-  PROJECT_REF: projectRef,
-  REGION: region,
-} = process.env
+const { serviceKey, globalS3Bucket, projectRef, region } = getConfig()
 
-if (!region) {
-  throw new Error('config not valid')
-}
 const client = initClient(region)
 
 export default async function routes(fastify: FastifyInstance) {
@@ -59,7 +48,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get('/bucket', async (request, response) => {
     // get list of all buckets
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey) {
+    if (!authHeader) {
       return response.status(403).send('Go away')
     }
     const jwt = authHeader.substring('Bearer '.length)
@@ -77,7 +66,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.get<requestGeneric>('/bucket/:bucketId', async (request, response) => {
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey) {
+    if (!authHeader) {
       return response.status(403).send('Go away')
     }
     const jwt = authHeader.substring('Bearer '.length)
@@ -100,12 +89,8 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.post<requestGeneric>('/bucket/:bucketId/empty', async (request, response) => {
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey || !serviceKey) {
+    if (!authHeader) {
       return response.status(403).send('Go away')
-    }
-    if (!globalS3Bucket) {
-      // @todo remove
-      throw new Error('no s3 bucket')
     }
 
     const jwt = authHeader.substring('Bearer '.length)
@@ -159,7 +144,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.delete<requestGeneric>('/bucket/:bucketId', async (request, response) => {
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey || !serviceKey) {
+    if (!authHeader) {
       return response.status(403).send('Go away')
     }
 
@@ -188,7 +173,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.post<bucketCreateRequest>('/bucket', async (request, response) => {
     const authHeader = request.headers.authorization
-    if (!authHeader || !anonKey) {
+    if (!authHeader) {
       return response.status(403).send('Go away')
     }
 

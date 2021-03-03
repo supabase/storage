@@ -1,5 +1,7 @@
 import { PostgrestClient } from '@supabase/postgrest-js'
 import jwt from 'jsonwebtoken'
+import { getConfig } from '../utils/config'
+const { projectRef, supabaseDomain, anonKey, jwtSecret } = getConfig()
 
 // @todo define as an interface expecting sub instead
 type jwtType =
@@ -15,14 +17,6 @@ type jwtType =
   | undefined
 
 export function getPostgrestClient(jwt: string): PostgrestClient {
-  const {
-    PROJECT_REF: projectRef,
-    SUPABASE_DOMAIN: supabaseDomain,
-    ANON_KEY: anonKey,
-  } = process.env
-  if (!anonKey) {
-    throw new Error('anonKey not found')
-  }
   // @todo in kps, can we just ping localhost?
   const url = `https://${projectRef}.${supabaseDomain}/rest/v1`
   const postgrest = new PostgrestClient(url, {
@@ -36,10 +30,6 @@ export function getPostgrestClient(jwt: string): PostgrestClient {
 
 // eslint-disable-next-line @typescript-eslint/ban-types
 export function verifyJWT(token: string): Promise<object | undefined> {
-  const { JWT_SECRET: jwtSecret } = process.env
-  if (!jwtSecret) {
-    throw new Error('no jwtsecret')
-  }
   return new Promise((resolve, reject) => {
     jwt.verify(token, jwtSecret, (err, decoded) => {
       if (err) return reject(err)
@@ -53,10 +43,6 @@ export function signJWT(
   payload: string | object | Buffer,
   expiresIn: string | number
 ): Promise<string | undefined> {
-  const { JWT_SECRET: jwtSecret } = process.env
-  if (!jwtSecret) {
-    throw new Error('no jwtsecret')
-  }
   return new Promise((resolve, reject) => {
     jwt.sign(payload, jwtSecret, { expiresIn }, (err, token) => {
       if (err) return reject(err)

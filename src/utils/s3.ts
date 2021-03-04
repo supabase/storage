@@ -9,12 +9,20 @@ import {
   GetObjectCommandOutput,
   ObjectIdentifier,
   S3Client,
+  S3ClientConfig,
   ServiceOutputTypes,
 } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 
-export function initClient(region: string): S3Client {
-  return new S3Client({ region, runtime: 'node' })
+export function initClient(region: string, endpoint?: string | undefined): S3Client {
+  const params: S3ClientConfig = {
+    region,
+    runtime: 'node',
+  }
+  if (endpoint) {
+    params.endpoint = endpoint
+  }
+  return new S3Client(params)
 }
 
 export async function getObject(

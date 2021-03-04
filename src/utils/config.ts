@@ -7,6 +7,7 @@ type storageConfigType = {
   region: string
   supabaseDomain: string
   globalS3Bucket: string
+  globalS3Endpoint?: string
   jwtSecret: string
 }
 
@@ -16,6 +17,10 @@ function getConfigFromEnv(key: string): string {
     throw new Error(`${key} is undefined`)
   }
   return value
+}
+
+function getOptionalConfigFromEnv(key: string): string | undefined {
+  return process.env[key]
 }
 
 export function getConfig(): storageConfigType {
@@ -28,6 +33,7 @@ export function getConfig(): storageConfigType {
     region: getConfigFromEnv('REGION'),
     supabaseDomain: getConfigFromEnv('SUPABASE_DOMAIN'),
     globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
+    globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
     jwtSecret: getConfigFromEnv('JWT_SECRET'),
   }
 }

@@ -10,9 +10,9 @@ import {
 } from '../utils/s3'
 import { getConfig } from '../utils/config'
 
-const { region, projectRef, globalS3Bucket } = getConfig()
+const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 
-const client = initClient(region)
+const client = initClient(region, globalS3Endpoint)
 interface requestGeneric extends RequestGenericInterface {
   Params: {
     bucketName: string

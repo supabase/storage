@@ -35,9 +35,9 @@ type Obj = {
   buckets?: Bucket
 }
 
-const { serviceKey, globalS3Bucket, projectRef, region } = getConfig()
+const { serviceKey, globalS3Bucket, projectRef, region, globalS3Endpoint } = getConfig()
 
-const client = initClient(region)
+const client = initClient(region, globalS3Endpoint)
 
 export default async function routes(fastify: FastifyInstance) {
   // @todo I have enabled RLS only for objects table

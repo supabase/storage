@@ -1,4 +1,6 @@
 import {
+  CopyObjectCommand,
+  CopyObjectCommandOutput,
   DeleteObjectCommand,
   DeleteObjectCommandOutput,
   DeleteObjectsCommand,
@@ -60,6 +62,20 @@ export async function deleteObject(
   const command = new DeleteObjectCommand({
     Bucket: bucket,
     Key: key,
+  })
+  return await client.send(command)
+}
+
+export async function copyObject(
+  client: S3Client,
+  bucket: string,
+  source: string,
+  destination: string
+): Promise<CopyObjectCommandOutput> {
+  const command = new CopyObjectCommand({
+    Bucket: bucket,
+    CopySource: `/${bucket}/${source}`,
+    Key: destination,
   })
   return await client.send(command)
 }

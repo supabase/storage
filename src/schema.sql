@@ -1,7 +1,7 @@
 -- @todo add sql for indexes
 DROP TABLE IF EXISTS "public"."buckets";
 CREATE TABLE "public"."buckets" (
-    "id" uuid NOT NULL,
+    "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
     "name" varchar,
     "owner" uuid,
     "createdAt" timestamptz DEFAULT now(),

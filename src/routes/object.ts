@@ -220,7 +220,8 @@ export default async function routes(fastify: FastifyInstance) {
     // Can't seem to get the typing to work properly
     // https://github.com/fastify/fastify-multipart/issues/162
     /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-    const cacheControl: string = `max-age=${data.fields.cacheControl.value}` ?? 'no-cache'
+    const cacheTime = data.fields.cacheControl?.value
+    const cacheControl: string = `max-age=${cacheTime}` ?? 'no-cache'
 
     const { bucketName } = request.params
     const objectName = request.params['*']

@@ -1,7 +1,7 @@
 -- @todo add sql for indexes
 DROP TABLE IF EXISTS "public"."buckets";
 CREATE TABLE "public"."buckets" (
-    "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+    "id" uuid NOT NULL DEFAULT extensions.uuid_generate_v4(),
     "name" varchar,
     "owner" uuid,
     "createdAt" timestamptz DEFAULT now(),
@@ -12,7 +12,7 @@ CREATE TABLE "public"."buckets" (
 
 DROP TABLE IF EXISTS "public"."objects";
 CREATE TABLE "public"."objects" (
-    "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+    "id" uuid NOT NULL DEFAULT extensions.uuid_generate_v4(),
     "bucketId" uuid,
     "name" varchar,
     "owner" uuid,

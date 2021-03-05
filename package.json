@@ -9,7 +9,9 @@
     "start": "NODE_ENV=production node dist/server.js",
     "deploy": "flyctl deploy",
     "logs": "flyctl logs",
-    "test": "jest"
+    "test": "npm run test:db && jest --runInBand",
+    "test:clean": "cd src/test/db && docker-compose down",
+    "test:db": "cd src/test/db && docker-compose down && docker-compose up -d && sleep 5"
   },
   "author": "Supabase",
   "license": "ISC",

@@ -1,7 +1,7 @@
 import { PostgrestClient } from '@supabase/postgrest-js'
 import jwt from 'jsonwebtoken'
 import { getConfig } from '../utils/config'
-const { projectRef, supabaseDomain, anonKey, jwtSecret } = getConfig()
+const { projectRef, postgrestURL, anonKey, jwtSecret } = getConfig()
 
 // @todo define as an interface expecting sub instead
 type jwtType =
@@ -18,8 +18,7 @@ type jwtType =
 
 export function getPostgrestClient(jwt: string): PostgrestClient {
   // @todo in kps, can we just ping localhost?
-  const url = `https://${projectRef}.${supabaseDomain}/rest/v1`
-  const postgrest = new PostgrestClient(url, {
+  const postgrest = new PostgrestClient(postgrestURL, {
     headers: {
       apiKey: anonKey,
       Authorization: `Bearer ${jwt}`,

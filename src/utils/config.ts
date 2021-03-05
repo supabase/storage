@@ -5,7 +5,7 @@ type storageConfigType = {
   serviceKey: string
   projectRef: string
   region: string
-  supabaseDomain: string
+  postgrestURL: string
   globalS3Bucket: string
   globalS3Endpoint?: string
   jwtSecret: string
@@ -31,7 +31,7 @@ export function getConfig(): storageConfigType {
     serviceKey: getConfigFromEnv('SERVICE_KEY'),
     projectRef: getConfigFromEnv('PROJECT_REF'),
     region: getConfigFromEnv('REGION'),
-    supabaseDomain: getConfigFromEnv('SUPABASE_DOMAIN'),
+    postgrestURL: getConfigFromEnv('POSTGREST_URL'),
     globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
     globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
     jwtSecret: getConfigFromEnv('JWT_SECRET'),

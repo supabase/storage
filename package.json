@@ -7,6 +7,7 @@
     "dev": "ts-node-dev --log-error --files ./src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "NODE_ENV=production node dist/server.js",
+    "start:fly": "NODE_ENV=production node -r dotenv/config dist/server.js dotenv_config_path=.env.s3",
     "deploy": "flyctl deploy --remote-only",
     "logs": "flyctl logs",
     "test": "npm run test:db && jest --runInBand",

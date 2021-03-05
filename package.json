@@ -7,7 +7,7 @@
     "dev": "ts-node-dev --log-error --files ./src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "NODE_ENV=production node dist/server.js",
-    "deploy": "flyctl deploy",
+    "deploy": "flyctl deploy --remote-only",
     "logs": "flyctl logs",
     "test": "npm run test:db && jest --runInBand",
     "test:clean": "cd src/test/db && docker-compose down",

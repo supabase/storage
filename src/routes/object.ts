@@ -111,7 +111,6 @@ export default async function routes(fastify: FastifyInstance) {
       return response.status(status).send(error.message)
     }
     const { data: results } = objectResponse
-    console.log(results)
 
     if (!results.buckets) {
       // @todo why is this check necessary?

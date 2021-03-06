@@ -9,7 +9,11 @@ import fs from 'fs'
 dotenv.config({ path: '.env.test' })
 const { anonKey } = getConfig()
 
-let mockGetObject: any, mockUploadObject: any, mockCopyObject: any, mockDeleteObject: any
+let mockGetObject: any,
+  mockUploadObject: any,
+  mockCopyObject: any,
+  mockDeleteObject: any,
+  mockDeleteObjects: any
 
 beforeAll(() => {
   mockGetObject = jest.spyOn(utils, 'getObject')
@@ -51,6 +55,15 @@ beforeAll(() => {
 
   mockDeleteObject = jest.spyOn(utils, 'deleteObject')
   mockDeleteObject.mockImplementation(() =>
+    Promise.resolve({
+      $metadata: {
+        httpStatusCode: 204,
+      },
+    })
+  )
+
+  mockDeleteObjects = jest.spyOn(utils, 'deleteObjects')
+  mockDeleteObjects.mockImplementation(() =>
     Promise.resolve({
       $metadata: {
         httpStatusCode: 204,
@@ -174,7 +187,7 @@ describe('testing POST object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(403)
-    expect(mockGetObject).not.toHaveBeenCalled()
+    expect(mockUploadObject).not.toHaveBeenCalled()
   })
 
   test('return 406 when uploading to a non existent bucket', async () => {
@@ -191,7 +204,7 @@ describe('testing POST object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(406)
-    expect(mockGetObject).not.toHaveBeenCalled()
+    expect(mockUploadObject).not.toHaveBeenCalled()
   })
 
   test('return 409 when uploading to duplicate object', async () => {
@@ -208,7 +221,7 @@ describe('testing POST object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(409)
-    expect(mockGetObject).not.toHaveBeenCalled()
+    expect(mockUploadObject).not.toHaveBeenCalled()
   })
 })
 
@@ -263,7 +276,7 @@ describe('testing PUT object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(403)
-    expect(mockGetObject).not.toHaveBeenCalled()
+    expect(mockUploadObject).not.toHaveBeenCalled()
   })
 
   test('return 406 when update to a non existent bucket', async () => {
@@ -280,7 +293,7 @@ describe('testing PUT object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(406)
-    expect(mockGetObject).not.toHaveBeenCalled()
+    expect(mockUploadObject).not.toHaveBeenCalled()
   })
 
   test('return 406 when updating a non existent key', async () => {
@@ -297,7 +310,7 @@ describe('testing PUT object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(406)
-    expect(mockGetObject).not.toHaveBeenCalled()
+    expect(mockUploadObject).not.toHaveBeenCalled()
   })
 })
 
@@ -414,7 +427,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(403)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 
   test('user is not able to delete a resource without Auth header', async () => {
@@ -430,8 +443,11 @@ describe('testing delete object', () => {
     const response = await app().inject({
       method: 'DELETE',
       url: '/object/notfound/authenticated/delete1.png',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
     })
-    expect(response.statusCode).toBe(403)
+    expect(response.statusCode).toBe(406)
     expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 
@@ -439,8 +455,114 @@ describe('testing delete object', () => {
     const response = await app().inject({
       method: 'DELETE',
       url: '/object/notfound/authenticated/notfound.jpg',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(406)
+    expect(mockDeleteObject).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * DELETE /objects
+ * */
+describe('testing deleting multiple objects', () => {
+  test('authenticated user is able to delete authenticated resource', async () => {
+    const response = await app().inject({
+      method: 'DELETE',
+      url: '/bucket2',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        prefixes: ['authenticated/delete-multiple1.png', 'authenticated/delete-multiple2.png'],
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockDeleteObjects).toBeCalled()
+
+    const result = JSON.parse(response.body)
+    expect(result[0].name).toBe('authenticated/delete-multiple1.png')
+    expect(result[1].name).toBe('authenticated/delete-multiple2.png')
+  })
+
+  test('anon user is not able to delete authenticated resource', async () => {
+    const response = await app().inject({
+      method: 'DELETE',
+      url: '/bucket2',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+      payload: {
+        prefixes: ['authenticated/delete-multiple3.png', 'authenticated/delete-multiple4.png'],
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockDeleteObjects).not.toHaveBeenCalled()
+    const results = JSON.parse(response.body)
+    expect(results.length).toBe(0)
+  })
+
+  test('user is not able to delete a resource without Auth header', async () => {
+    const response = await app().inject({
+      method: 'DELETE',
+      url: '/bucket2',
+      payload: {
+        prefixes: ['authenticated/delete-multiple3.png', 'authenticated/delete-multiple4.png'],
+      },
     })
     expect(response.statusCode).toBe(403)
-    expect(mockDeleteObject).not.toHaveBeenCalled()
+    expect(mockDeleteObjects).not.toHaveBeenCalled()
+  })
+
+  test('return 406 when delete from a non existent bucket', async () => {
+    const response = await app().inject({
+      method: 'DELETE',
+      url: '/notfound',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+      payload: {
+        prefixes: ['authenticated/delete-multiple3.png', 'authenticated/delete-multiple4.png'],
+      },
+    })
+    expect(response.statusCode).toBe(406)
+    expect(mockDeleteObjects).not.toHaveBeenCalled()
+  })
+
+  test('deleting a non existent key', async () => {
+    const response = await app().inject({
+      method: 'DELETE',
+      url: '/bucket2',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+      payload: {
+        prefixes: ['authenticated/delete-multiple5.png', 'authenticated/delete-multiple6.png'],
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockDeleteObjects).not.toHaveBeenCalled()
+    const results = JSON.parse(response.body)
+    expect(results.length).toBe(0)
+  })
+
+  test('user has permission to delete only one of the objects', async () => {
+    const response = await app().inject({
+      method: 'DELETE',
+      url: '/bucket2',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        prefixes: ['authenticated/delete-multiple7.png', 'private/sadcat-upload3.png'],
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockDeleteObjects).toBeCalled()
+    const results = JSON.parse(response.body)
+    expect(results.length).toBe(1)
+    expect(results[0].name).toBe('authenticated/delete-multiple7.png')
   })
 })

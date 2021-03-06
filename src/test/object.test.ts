@@ -39,7 +39,7 @@ beforeAll(() => {
   )
 })
 
-afterEach(() => {
+beforeEach(() => {
   jest.clearAllMocks()
 })
 
@@ -153,7 +153,7 @@ test('user is not able to upload a resource without Auth header', async () => {
   expect(mockGetObject).not.toHaveBeenCalled()
 })
 
-test('return 404 when uploading to a non existent bucket', async () => {
+test('return 406 when uploading to a non existent bucket', async () => {
   const form = new FormData()
   form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
   const headers = Object.assign({}, form.getHeaders(), {
@@ -163,6 +163,79 @@ test('return 404 when uploading to a non existent bucket', async () => {
   const response = await app().inject({
     method: 'POST',
     url: '/object/notfound/authenticated/casestudy.png',
+    headers,
+    payload: form,
+  })
+  expect(response.statusCode).toBe(406)
+  expect(mockGetObject).not.toHaveBeenCalled()
+})
+
+/**
+ * PUT /object/:id
+ */
+test('authenticated user is able to update authenticated resource', async () => {
+  const form = new FormData()
+  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+  const headers = Object.assign({}, form.getHeaders(), {
+    authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+  })
+
+  const response = await app().inject({
+    method: 'PUT',
+    url: '/object/bucket2/authenticated/cat.jpg',
+    headers,
+    payload: form,
+  })
+  expect(response.statusCode).toBe(200)
+  expect(mockUploadObject).toBeCalled()
+  expect(response.body).toBe(`{"Key":"bjhaohmqunupljrqypxz/bucket2/authenticated/cat.jpg"}`)
+})
+
+test('anon user is not able to update authenticated resource', async () => {
+  const form = new FormData()
+  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+  const headers = Object.assign({}, form.getHeaders(), {
+    authorization: `Bearer ${anonKey}`,
+  })
+
+  const response = await app().inject({
+    method: 'PUT',
+    url: '/object/bucket2/authenticated/cat.jpg',
+    headers,
+    payload: form,
+  })
+  expect(response.statusCode).toBe(404)
+  expect(mockUploadObject).not.toHaveBeenCalled()
+  // expect(response.body).toBe(`new row violates row-level security policy for table "objects"`)
+})
+
+test('user is not able to update a resource without Auth header', async () => {
+  const form = new FormData()
+  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+  const headers = Object.assign({}, form.getHeaders(), {
+    authorization: `Bearer ${anonKey}`,
+  })
+
+  const response = await app().inject({
+    method: 'PUT',
+    url: '/object/bucket2/authenticated/cat.jpg',
+    headers,
+    payload: form,
+  })
+  expect(response.statusCode).toBe(404)
+  expect(mockGetObject).not.toHaveBeenCalled()
+})
+
+test('return 406 when update to a non existent bucket', async () => {
+  const form = new FormData()
+  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+  const headers = Object.assign({}, form.getHeaders(), {
+    authorization: `Bearer ${anonKey}`,
+  })
+
+  const response = await app().inject({
+    method: 'PUT',
+    url: '/object/notfound/authenticated/cat.jpg',
     headers,
     payload: form,
   })

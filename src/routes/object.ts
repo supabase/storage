@@ -294,7 +294,8 @@ export default async function routes(fastify: FastifyInstance) {
     const jwt = authHeader.substring('Bearer '.length)
     const data = await request.file()
     /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-    const cacheControl: string = `max-age=${data.fields.cacheControl.value}` ?? 'no-cache'
+    const cacheTime = data.fields.cacheControl?.value
+    const cacheControl: string = `max-age=${cacheTime}` ?? 'no-cache'
 
     const { bucketName } = request.params
     const objectName = request.params['*']

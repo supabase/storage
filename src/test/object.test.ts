@@ -9,7 +9,7 @@ import fs from 'fs'
 dotenv.config({ path: '.env.test' })
 const { anonKey } = getConfig()
 
-let mockGetObject: any, mockUploadObject: any, mockCopyObject: any
+let mockGetObject: any, mockUploadObject: any, mockCopyObject: any, mockDeleteObject: any
 
 beforeAll(() => {
   mockGetObject = jest.spyOn(utils, 'getObject')
@@ -46,6 +46,15 @@ beforeAll(() => {
       },
       Bucket: 'xxx',
       Key: 'authenticated/casestudy11.png',
+    })
+  )
+
+  mockDeleteObject = jest.spyOn(utils, 'deleteObject')
+  mockDeleteObject.mockImplementation(() =>
+    Promise.resolve({
+      $metadata: {
+        httpStatusCode: 204,
+      },
     })
   )
 })
@@ -194,7 +203,7 @@ describe('testing POST object', () => {
 
     const response = await app().inject({
       method: 'POST',
-      url: '/object/bucket2/public/sadcat-upload38.png',
+      url: '/object/bucket2/public/sadcat-upload23.png',
       headers,
       payload: form,
     })
@@ -377,5 +386,61 @@ describe('testing copy object', () => {
     })
     expect(response.statusCode).toBe(406)
     expect(mockCopyObject).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * DELETE /object
+ * */
+describe('testing delete object', () => {
+  test('authenticated user is able to delete authenticated resource', async () => {
+    const response = await app().inject({
+      method: 'DELETE',
+      url: '/object/bucket2/authenticated/delete.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockDeleteObject).toBeCalled()
+  })
+
+  test('anon user is not able to delete authenticated resource', async () => {
+    const response = await app().inject({
+      method: 'DELETE',
+      url: '/object/bucket2/authenticated/delete1.png',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(403)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+  })
+
+  test('user is not able to delete a resource without Auth header', async () => {
+    const response = await app().inject({
+      method: 'DELETE',
+      url: '/object/bucket2/authenticated/delete1.png',
+    })
+    expect(response.statusCode).toBe(403)
+    expect(mockDeleteObject).not.toHaveBeenCalled()
+  })
+
+  test('return 406 when delete from a non existent bucket', async () => {
+    const response = await app().inject({
+      method: 'DELETE',
+      url: '/object/notfound/authenticated/delete1.png',
+    })
+    expect(response.statusCode).toBe(403)
+    expect(mockDeleteObject).not.toHaveBeenCalled()
+  })
+
+  test('return 406 when deleting a non existent key', async () => {
+    const response = await app().inject({
+      method: 'DELETE',
+      url: '/object/notfound/authenticated/notfound.jpg',
+    })
+    expect(response.statusCode).toBe(403)
+    expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 })

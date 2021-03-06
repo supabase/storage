@@ -170,6 +170,23 @@ test('return 406 when uploading to a non existent bucket', async () => {
   expect(mockGetObject).not.toHaveBeenCalled()
 })
 
+test('return 409 when uploading to duplicate object', async () => {
+  const form = new FormData()
+  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+  const headers = Object.assign({}, form.getHeaders(), {
+    authorization: `Bearer ${anonKey}`,
+  })
+
+  const response = await app().inject({
+    method: 'POST',
+    url: '/object/bucket2/public/sadcat-upload38.png',
+    headers,
+    payload: form,
+  })
+  expect(response.statusCode).toBe(409)
+  expect(mockGetObject).not.toHaveBeenCalled()
+})
+
 /**
  * PUT /object/:id
  */

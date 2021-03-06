@@ -207,7 +207,6 @@ export default async function routes(fastify: FastifyInstance) {
   })
 
   fastify.post<requestGeneric>('/object/:bucketName/*', async (request, response) => {
-    // @todo should upsert work?
     // check if the user is able to insert that row
     const authHeader = request.headers.authorization
     if (!authHeader) {

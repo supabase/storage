@@ -331,9 +331,11 @@ export default async function routes(fastify: FastifyInstance) {
         },
       })
       .match({ bucketId: bucket.id, name: objectName })
+      .single()
 
     if (objectResponse.error) {
       const { status, error } = objectResponse
+      console.log(error)
       return response.status(status).send(error.message)
     }
 
@@ -449,6 +451,7 @@ export default async function routes(fastify: FastifyInstance) {
     console.log(bucketResponse.body)
     const { data: bucket } = bucketResponse
 
+    // todo what if objectName is * or something
     const objectResponse = await postgrest.from<Obj>('objects').delete().match({
       name: objectName,
       bucketId: bucket.id,

@@ -9,7 +9,7 @@ import fs from 'fs'
 dotenv.config({ path: '.env.test' })
 const { anonKey } = getConfig()
 
-let mockGetObject: any, mockUploadObject: any
+let mockGetObject: any, mockUploadObject: any, mockCopyObject: any
 
 beforeAll(() => {
   mockGetObject = jest.spyOn(utils, 'getObject')
@@ -37,6 +37,17 @@ beforeAll(() => {
       Key: 'bjhaohmqunupljrqypxz/bucket2/authenticated/sadcat-upload41.png',
     })
   )
+
+  mockCopyObject = jest.spyOn(utils, 'copyObject')
+  mockCopyObject.mockImplementation(() =>
+    Promise.resolve({
+      $metadata: {
+        httpStatusCode: 200,
+      },
+      Bucket: 'xxx',
+      Key: 'authenticated/casestudy11.png',
+    })
+  )
 })
 
 beforeEach(() => {
@@ -46,216 +57,325 @@ beforeEach(() => {
 /*
  * GET /object/:id
  */
-test('authenticated user is able to read authenticated resource', async () => {
-  const response = await app().inject({
-    method: 'GET',
-    url: '/object/bucket2/authenticated/casestudy.png',
-    headers: {
-      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
-    },
+describe('testing GET object', () => {
+  test('authenticated user is able to read authenticated resource', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/bucket2/authenticated/casestudy.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockGetObject).toBeCalled()
   })
-  expect(response.statusCode).toBe(200)
-  expect(mockGetObject).toBeCalled()
-})
 
-test('anon user is not able to read authenticated resource', async () => {
-  const response = await app().inject({
-    method: 'GET',
-    url: '/object/bucket2/authenticated/casestudy.png',
-    headers: {
-      authorization: `Bearer ${anonKey}`,
-    },
+  test('anon user is not able to read authenticated resource', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/bucket2/authenticated/casestudy.png',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(406)
+    expect(mockGetObject).not.toHaveBeenCalled()
   })
-  expect(response.statusCode).toBe(406)
-  expect(mockGetObject).not.toHaveBeenCalled()
-})
 
-test('user is not able to read a resource without Auth header', async () => {
-  const response = await app().inject({
-    method: 'GET',
-    url: '/object/bucket2/authenticated/casestudy.png',
+  test('user is not able to read a resource without Auth header', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/bucket2/authenticated/casestudy.png',
+    })
+    expect(response.statusCode).toBe(403)
+    expect(mockGetObject).not.toHaveBeenCalled()
   })
-  expect(response.statusCode).toBe(403)
-  expect(mockGetObject).not.toHaveBeenCalled()
-})
 
-test('return 403 when reading a non existent object', async () => {
-  const response = await app().inject({
-    method: 'GET',
-    url: '/object/bucket2/authenticated/notfound',
+  test('return 403 when reading a non existent object', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/bucket2/authenticated/notfound',
+    })
+    expect(response.statusCode).toBe(403)
+    expect(mockGetObject).not.toHaveBeenCalled()
   })
-  expect(response.statusCode).toBe(403)
-  expect(mockGetObject).not.toHaveBeenCalled()
-})
 
-test('return 404 when reading a non existent bucket', async () => {
-  const response = await app().inject({
-    method: 'GET',
-    url: '/object/notfound/authenticated/casestudy.png',
+  test('return 404 when reading a non existent bucket', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/notfound/authenticated/casestudy.png',
+    })
+    expect(response.statusCode).toBe(403)
+    expect(mockGetObject).not.toHaveBeenCalled()
   })
-  expect(response.statusCode).toBe(403)
-  expect(mockGetObject).not.toHaveBeenCalled()
 })
-
 /*
  * POST /object/:id
  */
-test('authenticated user is able to upload authenticated resource', async () => {
-  const form = new FormData()
-  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
-  const headers = Object.assign({}, form.getHeaders(), {
-    authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+describe('testing POST object', () => {
+  test('authenticated user is able to upload authenticated resource', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/authenticated/casestudy1.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockUploadObject).toBeCalled()
+    expect(response.body).toBe(
+      `{"Key":"bjhaohmqunupljrqypxz/bucket2/authenticated/casestudy1.png"}`
+    )
   })
 
-  const response = await app().inject({
-    method: 'POST',
-    url: '/object/bucket2/authenticated/casestudy1.png',
-    headers,
-    payload: form,
-  })
-  expect(response.statusCode).toBe(200)
-  expect(mockUploadObject).toBeCalled()
-  expect(response.body).toBe(`{"Key":"bjhaohmqunupljrqypxz/bucket2/authenticated/casestudy1.png"}`)
-})
+  test('anon user is not able to upload authenticated resource', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
 
-test('anon user is not able to upload authenticated resource', async () => {
-  const form = new FormData()
-  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
-  const headers = Object.assign({}, form.getHeaders(), {
-    authorization: `Bearer ${anonKey}`,
-  })
-
-  const response = await app().inject({
-    method: 'POST',
-    url: '/object/bucket2/authenticated/casestudy.png',
-    headers,
-    payload: form,
-  })
-  expect(response.statusCode).toBe(403)
-  expect(mockUploadObject).not.toHaveBeenCalled()
-  expect(response.body).toBe(`new row violates row-level security policy for table "objects"`)
-})
-
-test('user is not able to upload a resource without Auth header', async () => {
-  const form = new FormData()
-  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
-  const headers = Object.assign({}, form.getHeaders(), {
-    authorization: `Bearer ${anonKey}`,
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/authenticated/casestudy.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(403)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(response.body).toBe(`new row violates row-level security policy for table "objects"`)
   })
 
-  const response = await app().inject({
-    method: 'POST',
-    url: '/object/bucket2/authenticated/casestudy.png',
-    headers,
-    payload: form,
-  })
-  expect(response.statusCode).toBe(403)
-  expect(mockGetObject).not.toHaveBeenCalled()
-})
+  test('user is not able to upload a resource without Auth header', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
 
-test('return 406 when uploading to a non existent bucket', async () => {
-  const form = new FormData()
-  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
-  const headers = Object.assign({}, form.getHeaders(), {
-    authorization: `Bearer ${anonKey}`,
-  })
-
-  const response = await app().inject({
-    method: 'POST',
-    url: '/object/notfound/authenticated/casestudy.png',
-    headers,
-    payload: form,
-  })
-  expect(response.statusCode).toBe(406)
-  expect(mockGetObject).not.toHaveBeenCalled()
-})
-
-test('return 409 when uploading to duplicate object', async () => {
-  const form = new FormData()
-  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
-  const headers = Object.assign({}, form.getHeaders(), {
-    authorization: `Bearer ${anonKey}`,
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/authenticated/casestudy.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(403)
+    expect(mockGetObject).not.toHaveBeenCalled()
   })
 
-  const response = await app().inject({
-    method: 'POST',
-    url: '/object/bucket2/public/sadcat-upload38.png',
-    headers,
-    payload: form,
+  test('return 406 when uploading to a non existent bucket', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/notfound/authenticated/casestudy.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(406)
+    expect(mockGetObject).not.toHaveBeenCalled()
   })
-  expect(response.statusCode).toBe(409)
-  expect(mockGetObject).not.toHaveBeenCalled()
+
+  test('return 409 when uploading to duplicate object', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/public/sadcat-upload38.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(409)
+    expect(mockGetObject).not.toHaveBeenCalled()
+  })
 })
 
 /**
  * PUT /object/:id
  */
-test('authenticated user is able to update authenticated resource', async () => {
-  const form = new FormData()
-  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
-  const headers = Object.assign({}, form.getHeaders(), {
-    authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+describe('testing PUT object', () => {
+  test('authenticated user is able to update authenticated resource', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+    })
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/bucket2/authenticated/cat.jpg',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockUploadObject).toBeCalled()
+    expect(response.body).toBe(`{"Key":"bjhaohmqunupljrqypxz/bucket2/authenticated/cat.jpg"}`)
   })
 
-  const response = await app().inject({
-    method: 'PUT',
-    url: '/object/bucket2/authenticated/cat.jpg',
-    headers,
-    payload: form,
+  test('anon user is not able to update authenticated resource', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/bucket2/authenticated/cat.jpg',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(406)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+    // expect(response.body).toBe(`new row violates row-level security policy for table "objects"`)
   })
-  expect(response.statusCode).toBe(200)
-  expect(mockUploadObject).toBeCalled()
-  expect(response.body).toBe(`{"Key":"bjhaohmqunupljrqypxz/bucket2/authenticated/cat.jpg"}`)
+
+  test('user is not able to update a resource without Auth header', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/bucket2/authenticated/cat.jpg',
+      headers: form.getHeaders(),
+      payload: form,
+    })
+    expect(response.statusCode).toBe(403)
+    expect(mockGetObject).not.toHaveBeenCalled()
+  })
+
+  test('return 406 when update to a non existent bucket', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/notfound/authenticated/cat.jpg',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(406)
+    expect(mockGetObject).not.toHaveBeenCalled()
+  })
+
+  test('return 406 when updating a non existent key', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/notfound/authenticated/notfound.jpg',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(406)
+    expect(mockGetObject).not.toHaveBeenCalled()
+  })
 })
 
-test('anon user is not able to update authenticated resource', async () => {
-  const form = new FormData()
-  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
-  const headers = Object.assign({}, form.getHeaders(), {
-    authorization: `Bearer ${anonKey}`,
+/**
+ * POST /copy
+ */
+describe('testing copy object', () => {
+  test('authenticated user is able to copy authenticated resource', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/copy',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        bucketName: 'bucket2',
+        sourceKey: 'authenticated/casestudy.png',
+        destinationKey: 'authenticated/casestudy11.png',
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockCopyObject).toBeCalled()
+    expect(response.body).toBe(`{"Key":"authenticated/casestudy11.png"}`)
   })
 
-  const response = await app().inject({
-    method: 'PUT',
-    url: '/object/bucket2/authenticated/cat.jpg',
-    headers,
-    payload: form,
-  })
-  expect(response.statusCode).toBe(404)
-  expect(mockUploadObject).not.toHaveBeenCalled()
-  // expect(response.body).toBe(`new row violates row-level security policy for table "objects"`)
-})
-
-test('user is not able to update a resource without Auth header', async () => {
-  const form = new FormData()
-  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
-  const headers = Object.assign({}, form.getHeaders(), {
-    authorization: `Bearer ${anonKey}`,
-  })
-
-  const response = await app().inject({
-    method: 'PUT',
-    url: '/object/bucket2/authenticated/cat.jpg',
-    headers,
-    payload: form,
-  })
-  expect(response.statusCode).toBe(404)
-  expect(mockGetObject).not.toHaveBeenCalled()
-})
-
-test('return 406 when update to a non existent bucket', async () => {
-  const form = new FormData()
-  form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
-  const headers = Object.assign({}, form.getHeaders(), {
-    authorization: `Bearer ${anonKey}`,
+  test('anon user is not able to update authenticated resource', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/copy',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+      payload: {
+        bucketName: 'bucket2',
+        sourceKey: 'authenticated/casestudy.png',
+        destinationKey: 'authenticated/casestudy11.png',
+      },
+    })
+    expect(response.statusCode).toBe(406)
+    expect(mockCopyObject).not.toHaveBeenCalled()
   })
 
-  const response = await app().inject({
-    method: 'PUT',
-    url: '/object/notfound/authenticated/cat.jpg',
-    headers,
-    payload: form,
+  test('user is not able to copy a resource without Auth header', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/copy',
+      payload: {
+        bucketName: 'bucket2',
+        sourceKey: 'authenticated/casestudy.png',
+        destinationKey: 'authenticated/casestudy11.png',
+      },
+    })
+    expect(response.statusCode).toBe(403)
+    expect(mockCopyObject).not.toHaveBeenCalled()
   })
-  expect(response.statusCode).toBe(406)
-  expect(mockGetObject).not.toHaveBeenCalled()
+
+  test('return 406 when copy from a non existent bucket', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/copy',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+      payload: {
+        bucketName: 'notfound',
+        sourceKey: 'authenticated/casestudy.png',
+        destinationKey: 'authenticated/casestudy11.png',
+      },
+    })
+    expect(response.statusCode).toBe(406)
+    expect(mockCopyObject).not.toHaveBeenCalled()
+  })
+
+  test('return 406 when copying a non existent key', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/copy',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+      payload: {
+        bucketName: 'bucket2',
+        sourceKey: 'authenticated/notfound.png',
+        destinationKey: 'authenticated/casestudy11.png',
+      },
+    })
+    expect(response.statusCode).toBe(406)
+    expect(mockCopyObject).not.toHaveBeenCalled()
+  })
 })

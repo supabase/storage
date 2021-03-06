@@ -9,6 +9,7 @@ CREATE TABLE "public"."buckets" (
     CONSTRAINT "buckets_owner_fkey" FOREIGN KEY ("owner") REFERENCES "auth"."users"("id"),
     PRIMARY KEY ("id")
 );
+CREATE UNIQUE INDEX "bname" ON "public"."buckets" USING BTREE ("name");
 
 DROP TABLE IF EXISTS "public"."objects";
 CREATE TABLE "public"."objects" (
@@ -24,6 +25,7 @@ CREATE TABLE "public"."objects" (
     CONSTRAINT "objects_owner_fkey" FOREIGN KEY ("owner") REFERENCES "auth"."users"("id"),
     PRIMARY KEY ("id")
 );
+CREATE UNIQUE INDEX "bucketid_objname" ON "public"."objects" USING BTREE ("bucketId","name");
 
 ALTER TABLE objects ENABLE ROW LEVEL SECURITY;
 

@@ -18,7 +18,7 @@ const deleteObjectsParamsSchema = {
 const deleteObjectsBodySchema = {
   type: 'object',
   properties: {
-    prefixes: { type: 'array', items: { type: 'string' } },
+    prefixes: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 1000 },
   },
   required: ['prefixes'],
 } as const

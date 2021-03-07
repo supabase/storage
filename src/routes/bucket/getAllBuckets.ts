@@ -1,4 +1,4 @@
-import { FastifyInstance, RequestGenericInterface } from 'fastify'
+import { FastifyInstance } from 'fastify'
 import { getPostgrestClient } from '../../utils'
 import { AuthenticatedRequest, Bucket } from '../../types/types'
 

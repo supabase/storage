@@ -15,6 +15,7 @@ interface getBucketRequestInterface {
   Params: FromSchema<typeof getBucketParamsSchema>
 }
 
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   fastify.get<getBucketRequestInterface>(
     '/:bucketId',

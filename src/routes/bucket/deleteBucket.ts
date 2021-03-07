@@ -18,6 +18,7 @@ interface deleteBucketRequestInterface extends RequestGenericInterface {
   Params: FromSchema<typeof deleteBucketParamsSchema>
 }
 
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   fastify.delete<deleteBucketRequestInterface>(
     '/:bucketId',

@@ -20,6 +20,7 @@ interface createObjectRequestInterface {
   Params: FromSchema<typeof createObjectParamsSchema>
 }
 
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   fastify.post<createObjectRequestInterface>(
     '/:bucketName/*',

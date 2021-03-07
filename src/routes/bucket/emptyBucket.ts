@@ -20,6 +20,7 @@ interface emptyBucketRequestInterface {
   Params: FromSchema<typeof emptyBucketParamsSchema>
 }
 
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   fastify.post<emptyBucketRequestInterface>(
     '/:bucketId/empty',

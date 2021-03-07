@@ -21,6 +21,7 @@ interface copyRequestInterface {
   Body: FromSchema<typeof copyRequestBodySchema>
 }
 
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   fastify.post<copyRequestInterface>(
     '/copy',

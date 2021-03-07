@@ -22,6 +22,7 @@ interface searchRequestInterface {
   Body: FromSchema<typeof searchRequestBodySchema>
   Params: FromSchema<typeof searchRequestParamsSchema>
 }
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   fastify.post<searchRequestInterface>(
     '/:bucketName',

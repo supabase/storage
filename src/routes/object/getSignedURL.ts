@@ -23,6 +23,7 @@ interface getSignedURLRequestInterface {
   Body: FromSchema<typeof getSignedURLBodySchema>
 }
 
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   fastify.post<getSignedURLRequestInterface>(
     '/sign/:bucketName/*',

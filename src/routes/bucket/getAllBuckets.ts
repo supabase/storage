@@ -2,6 +2,7 @@ import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { getPostgrestClient } from '../../utils'
 import { Bucket } from '../../types/types'
 
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   // @todo I have enabled RLS only for objects table
   // makes writing the access policies a bit easier

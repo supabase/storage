@@ -27,6 +27,7 @@ interface deleteObjectsInterface {
   Body: FromSchema<typeof deleteObjectsBodySchema>
 }
 
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   fastify.delete<deleteObjectsInterface>(
     '/:bucketName',

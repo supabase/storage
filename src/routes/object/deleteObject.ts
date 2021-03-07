@@ -20,6 +20,7 @@ interface deleteObjectRequestInterface {
   Params: FromSchema<typeof deleteObjectParamsSchema>
 }
 
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   // @todo I think we need select permission here also since the return key is used to check if delete happened successfully and to delete it from s3
   fastify.delete<deleteObjectRequestInterface>(

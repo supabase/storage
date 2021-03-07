@@ -28,6 +28,7 @@ interface getSignedObjectRequestInterface {
   Querystring: FromSchema<typeof getSignedObjectQSSchema>
 }
 
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   fastify.get<getSignedObjectRequestInterface>(
     '/signed/:bucketName/*',

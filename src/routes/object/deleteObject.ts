@@ -16,16 +16,26 @@ const deleteObjectParamsSchema = {
   },
   required: ['bucketName', '*'],
 } as const
+const successResponseSchema = {
+  type: 'string',
+}
 interface deleteObjectRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof deleteObjectParamsSchema>
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
-  // @todo I think we need select permission here also since the return key is used to check if delete happened successfully and to delete it from s3
+  const summary = 'Delete an object'
   fastify.delete<deleteObjectRequestInterface>(
     '/:bucketName/*',
-    { schema: { params: deleteObjectParamsSchema, headers: { $ref: 'authSchema#' } } },
+    {
+      schema: {
+        params: deleteObjectParamsSchema,
+        headers: { $ref: 'authSchema#' },
+        summary,
+        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
+      },
+    },
     async (request, response) => {
       // check if the user is able to insert that row
       const authHeader = request.headers.authorization
@@ -47,29 +57,36 @@ export default async function routes(fastify: FastifyInstance) {
       if (bucketResponse.error) {
         const { error, status } = bucketResponse
         console.log(error)
-        return response.status(status).send(error.message)
+        return response.status(status).send({
+          statusCode: 404,
+          error: 'Not found',
+          message: 'The requested bucket was not found',
+        })
       }
       console.log(bucketResponse.body)
       const { data: bucket } = bucketResponse
 
       // todo what if objectName is * or something
-      const objectResponse = await postgrest.from<Obj>('objects').delete().match({
-        name: objectName,
-        bucketId: bucket.id,
-      })
+      const objectResponse = await postgrest
+        .from<Obj>('objects')
+        .delete()
+        .match({
+          name: objectName,
+          bucketId: bucket.id,
+        })
+        .single()
 
       if (objectResponse.error) {
         const { error, status } = objectResponse
         console.log(error)
-        return response.status(status).send(error.message)
+        return response.status(status).send({
+          statusCode: error.code,
+          error: error.details,
+          message: error.message,
+        })
       }
       const { data: results } = objectResponse
       console.log(results)
-
-      if (results.length === 0) {
-        // no rows returned, user doesn't have access to delete rows
-        return response.status(403).send('Forbidden')
-      }
 
       // if successfully deleted, delete from s3 too
       const s3Key = `${projectRef}/${bucketName}/${objectName}`

@@ -16,15 +16,30 @@ const updateObjectParamsSchema = {
   },
   required: ['bucketName', '*'],
 } as const
+const successResponseSchema = {
+  type: 'object',
+  properties: {
+    Key: { type: 'string' },
+  },
+  required: ['Key'],
+}
 interface updateObjectRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof updateObjectParamsSchema>
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
+  const summary = 'Update the object at an existing key'
   fastify.put<updateObjectRequestInterface>(
     '/:bucketName/*',
-    { schema: { params: updateObjectParamsSchema, headers: { $ref: 'authSchema#' } } },
+    {
+      schema: {
+        params: updateObjectParamsSchema,
+        headers: { $ref: 'authSchema#' },
+        summary,
+        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
+      },
+    },
     async (request, response) => {
       // check if the user is able to update the row
       const authHeader = request.headers.authorization
@@ -52,7 +67,11 @@ export default async function routes(fastify: FastifyInstance) {
       if (bucketResponse.error) {
         const { error, status } = bucketResponse
         console.log(error)
-        return response.status(status).send(error.message)
+        return response.status(status).send({
+          statusCode: 404,
+          error: 'Not found',
+          message: 'The requested bucket was not found',
+        })
       }
 
       const { data: bucket } = bucketResponse
@@ -74,7 +93,11 @@ export default async function routes(fastify: FastifyInstance) {
       if (objectResponse.error) {
         const { status, error } = objectResponse
         console.log(error)
-        return response.status(status).send(error.message)
+        return response.status(status).send({
+          statusCode: error.code,
+          error: error.details,
+          message: error.message,
+        })
       }
 
       // if successfully inserted, upload to s3

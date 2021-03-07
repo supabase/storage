@@ -17,6 +17,13 @@ const copyRequestBodySchema = {
   },
   required: ['sourceKey', 'bucketName', 'destinationKey'],
 } as const
+const successResponseSchema = {
+  type: 'object',
+  properties: {
+    Key: { type: 'string' },
+  },
+  required: ['Key'],
+}
 interface copyRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof copyRequestBodySchema>
 }
@@ -26,7 +33,14 @@ export default async function routes(fastify: FastifyInstance) {
   const summary = 'Copies an object'
   fastify.post<copyRequestInterface>(
     '/copy',
-    { schema: { body: copyRequestBodySchema, headers: { $ref: 'authSchema#' }, summary } },
+    {
+      schema: {
+        body: copyRequestBodySchema,
+        headers: { $ref: 'authSchema#' },
+        summary,
+        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
+      },
+    },
     async (request, response) => {
       const authHeader = request.headers.authorization
       const jwt = authHeader.substring('Bearer '.length)
@@ -47,7 +61,11 @@ export default async function routes(fastify: FastifyInstance) {
       if (objectResponse.error) {
         const { status, error } = objectResponse
         console.log(error)
-        return response.status(status).send(error.message)
+        return response.status(status).send({
+          statusCode: error.code,
+          error: error.details,
+          message: error.message,
+        })
       }
       const { data: origObject } = objectResponse
       console.log('origObject', origObject)
@@ -56,7 +74,11 @@ export default async function routes(fastify: FastifyInstance) {
         // @todo why is this check necessary?
         // if corresponding bucket is not found, i want the object also to not be returned
         // is it cos of https://github.com/PostgREST/postgrest/issues/1075 ?
-        return response.status(404).send('not found')
+        return response.status(400).send({
+          statusCode: '404',
+          error: 'Not found',
+          message: 'The requested bucket was not found',
+        })
       }
 
       const newObject = Object.assign({}, origObject, {
@@ -77,7 +99,11 @@ export default async function routes(fastify: FastifyInstance) {
 
       console.log(results, error)
       if (error) {
-        return response.status(status).send(error.message)
+        return response.status(status).send({
+          statusCode: error.code,
+          error: error.details,
+          message: error.message,
+        })
       }
 
       const s3SourceKey = `${projectRef}/${bucketName}/${sourceKey}`

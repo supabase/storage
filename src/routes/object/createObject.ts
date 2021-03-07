@@ -16,15 +16,30 @@ const createObjectParamsSchema = {
   },
   required: ['bucketName', '*'],
 } as const
+const successResponseSchema = {
+  type: 'object',
+  properties: {
+    Key: { type: 'string' },
+  },
+  required: ['Key'],
+}
 interface createObjectRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof createObjectParamsSchema>
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
+  const summary = 'Upload a new object'
   fastify.post<createObjectRequestInterface>(
     '/:bucketName/*',
-    { schema: { params: createObjectParamsSchema, headers: { $ref: 'authSchema#' } } },
+    {
+      schema: {
+        params: createObjectParamsSchema,
+        headers: { $ref: 'authSchema#' },
+        summary,
+        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
+      },
+    },
     async (request, response) => {
       // check if the user is able to insert that row
       const authHeader = request.headers.authorization
@@ -54,7 +69,11 @@ export default async function routes(fastify: FastifyInstance) {
       if (bucketResponse.error) {
         const { status, error } = bucketResponse
         console.log(error)
-        return response.status(status).send(error.message)
+        return response.status(status).send({
+          statusCode: 404,
+          error: 'Not found',
+          message: 'The requested bucket was not found',
+        })
       }
 
       const { data: bucket } = bucketResponse
@@ -81,7 +100,11 @@ export default async function routes(fastify: FastifyInstance) {
 
       console.log(results, error)
       if (error) {
-        return response.status(status).send(error.message)
+        return response.status(status).send({
+          statusCode: error.code,
+          error: error.details,
+          message: error.message,
+        })
       }
 
       // if successfully inserted, upload to s3

@@ -30,9 +30,17 @@ interface getSignedObjectRequestInterface {
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
+  const summary = 'Retrieve an object via a presigned URL'
   fastify.get<getSignedObjectRequestInterface>(
     '/signed/:bucketName/*',
-    { schema: { params: getSignedObjectParamsSchema, querystring: getSignedObjectQSSchema } },
+    {
+      schema: {
+        params: getSignedObjectParamsSchema,
+        querystring: getSignedObjectQSSchema,
+        summary,
+        response: { '4xx': { $ref: 'errorSchema#' } },
+      },
+    },
     async (request, response) => {
       const { token } = request.query
       try {

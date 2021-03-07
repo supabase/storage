@@ -40,6 +40,16 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
     },
     required: ['authorization'],
   })
+  app.addSchema({
+    $id: 'errorSchema',
+    type: 'object',
+    properties: {
+      statusCode: { type: 'string' },
+      error: { type: 'string' },
+      message: { type: 'string' },
+    },
+    required: ['statusCode', 'error', 'message'],
+  })
 
   app.register(autoload, {
     dir: path.join(__dirname, 'routes'),

@@ -176,7 +176,13 @@ describe('testing POST object', () => {
     })
     expect(response.statusCode).toBe(403)
     expect(mockUploadObject).not.toHaveBeenCalled()
-    expect(response.body).toBe(`new row violates row-level security policy for table "objects"`)
+    expect(response.body).toBe(
+      JSON.stringify({
+        statusCode: '42501',
+        error: '',
+        message: 'new row violates row-level security policy for table "objects"',
+      })
+    )
   })
 
   test('user is not able to upload a resource without Auth header', async () => {
@@ -429,7 +435,7 @@ describe('testing delete object', () => {
         authorization: `Bearer ${anonKey}`,
       },
     })
-    expect(response.statusCode).toBe(403)
+    expect(response.statusCode).toBe(406)
     expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 
@@ -486,6 +492,7 @@ describe('testing deleting multiple objects', () => {
     expect(mockDeleteObjects).toBeCalled()
 
     const result = JSON.parse(response.body)
+    console.log(response.body)
     expect(result[0].name).toBe('authenticated/delete-multiple1.png')
     expect(result[1].name).toBe('authenticated/delete-multiple2.png')
   })

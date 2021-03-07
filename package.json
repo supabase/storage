@@ -28,6 +28,7 @@
     "fastify-autoload": "^3.4.2",
     "fastify-cors": "^5.2.0",
     "fastify-multipart": "^4.0.0",
+    "fastify-swagger": "^4.4.0",
     "jsonwebtoken": "^8.5.1"
   },
   "devDependencies": {

@@ -23,9 +23,10 @@ interface copyRequestInterface {
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
+  const summary = 'Copies an object'
   fastify.post<copyRequestInterface>(
     '/copy',
-    { schema: { body: copyRequestBodySchema } },
+    { schema: { body: copyRequestBodySchema, summary } },
     async (request, response) => {
       const authHeader = request.headers.authorization
       if (!authHeader) {

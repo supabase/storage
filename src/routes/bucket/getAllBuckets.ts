@@ -1,4 +1,4 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { getPostgrestClient } from '../../utils'
 import { Bucket } from '../../types/types'
 
@@ -8,7 +8,7 @@ export default async function routes(fastify: FastifyInstance) {
   // tradeoff is that everyone can see what buckets there are
   // ahh looks like we do need RLS since users would be able to delete and empty buckets then
   // probably a RLS policy with just read permissions?
-  fastify.get('/', async (request, response) => {
+  fastify.get<RequestGenericInterface>('/', async (request, response) => {
     // get list of all buckets
     const authHeader = request.headers.authorization
     if (!authHeader) {

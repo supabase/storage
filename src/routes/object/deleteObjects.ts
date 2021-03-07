@@ -1,0 +1,64 @@
+import { FastifyInstance } from 'fastify'
+import { getPostgrestClient } from '../../utils'
+import { deleteObjects, initClient } from '../../utils/s3'
+import { getConfig } from '../../utils/config'
+import { deleteObjectsRequest, Obj } from '../../types/types'
+
+const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
+const client = initClient(region, globalS3Endpoint)
+
+export default async function routes(fastify: FastifyInstance) {
+  fastify.delete<deleteObjectsRequest>('/:bucketName', async (request, response) => {
+    // check if the user is able to insert that row
+    const authHeader = request.headers.authorization
+    if (!authHeader) {
+      return response.status(403).send('Go away')
+    }
+    const jwt = authHeader.substring('Bearer '.length)
+
+    const { bucketName } = request.params
+    const prefixes = request.body['prefixes']
+    if (!prefixes) {
+      return response.status(400).send('prefixes is required')
+    }
+
+    const postgrest = getPostgrestClient(jwt)
+    // @todo how to merge these into one query?
+    // i can create a view and add INSTEAD OF triggers..is that the way to do it?
+    // @todo add unique constraint for just bucket names
+    const { data: bucket, error: bucketError, status: bucketStatus } = await postgrest
+      .from('buckets')
+      .select('id')
+      .eq('name', bucketName)
+      .single()
+
+    console.log(bucket, bucketError)
+    if (bucketError) {
+      return response.status(bucketStatus).send(bucketError.message)
+    }
+
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .delete()
+      .eq('bucketId', bucket.id)
+      .in('name', prefixes)
+
+    if (objectResponse.error) {
+      const { error, status } = objectResponse
+      console.log(error)
+      return response.status(status).send(error.message)
+    }
+
+    const { data: results } = objectResponse
+    if (results.length > 0) {
+      // if successfully deleted, delete from s3 too
+      const prefixesToDelete = results.map((ele) => {
+        return { Key: `${projectRef}/${bucketName}/${ele.name}` }
+      })
+
+      await deleteObjects(client, globalS3Bucket, prefixesToDelete)
+    }
+
+    return response.status(200).send(results)
+  })
+}

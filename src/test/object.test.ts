@@ -321,7 +321,7 @@ describe('testing copy object', () => {
   test('authenticated user is able to copy authenticated resource', async () => {
     const response = await app().inject({
       method: 'POST',
-      url: '/copy',
+      url: '/object/copy',
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
@@ -339,7 +339,7 @@ describe('testing copy object', () => {
   test('anon user is not able to update authenticated resource', async () => {
     const response = await app().inject({
       method: 'POST',
-      url: '/copy',
+      url: '/object/copy',
       headers: {
         authorization: `Bearer ${anonKey}`,
       },
@@ -356,7 +356,7 @@ describe('testing copy object', () => {
   test('user is not able to copy a resource without Auth header', async () => {
     const response = await app().inject({
       method: 'POST',
-      url: '/copy',
+      url: '/object/copy',
       payload: {
         bucketName: 'bucket2',
         sourceKey: 'authenticated/casestudy.png',
@@ -370,7 +370,7 @@ describe('testing copy object', () => {
   test('return 406 when copy from a non existent bucket', async () => {
     const response = await app().inject({
       method: 'POST',
-      url: '/copy',
+      url: '/object/copy',
       headers: {
         authorization: `Bearer ${anonKey}`,
       },
@@ -387,7 +387,7 @@ describe('testing copy object', () => {
   test('return 406 when copying a non existent key', async () => {
     const response = await app().inject({
       method: 'POST',
-      url: '/copy',
+      url: '/object/copy',
       headers: {
         authorization: `Bearer ${anonKey}`,
       },
@@ -471,7 +471,7 @@ describe('testing deleting multiple objects', () => {
   test('authenticated user is able to delete authenticated resource', async () => {
     const response = await app().inject({
       method: 'DELETE',
-      url: '/bucket2',
+      url: '/object/bucket2',
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
@@ -490,7 +490,7 @@ describe('testing deleting multiple objects', () => {
   test('anon user is not able to delete authenticated resource', async () => {
     const response = await app().inject({
       method: 'DELETE',
-      url: '/bucket2',
+      url: '/object/bucket2',
       headers: {
         authorization: `Bearer ${anonKey}`,
       },
@@ -507,7 +507,7 @@ describe('testing deleting multiple objects', () => {
   test('user is not able to delete a resource without Auth header', async () => {
     const response = await app().inject({
       method: 'DELETE',
-      url: '/bucket2',
+      url: '/object/bucket2',
       payload: {
         prefixes: ['authenticated/delete-multiple3.png', 'authenticated/delete-multiple4.png'],
       },
@@ -519,7 +519,7 @@ describe('testing deleting multiple objects', () => {
   test('return 406 when delete from a non existent bucket', async () => {
     const response = await app().inject({
       method: 'DELETE',
-      url: '/notfound',
+      url: '/object/notfound',
       headers: {
         authorization: `Bearer ${anonKey}`,
       },
@@ -534,7 +534,7 @@ describe('testing deleting multiple objects', () => {
   test('deleting a non existent key', async () => {
     const response = await app().inject({
       method: 'DELETE',
-      url: '/bucket2',
+      url: '/object/bucket2',
       headers: {
         authorization: `Bearer ${anonKey}`,
       },
@@ -551,7 +551,7 @@ describe('testing deleting multiple objects', () => {
   test('user has permission to delete only one of the objects', async () => {
     const response = await app().inject({
       method: 'DELETE',
-      url: '/bucket2',
+      url: '/object/bucket2',
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },

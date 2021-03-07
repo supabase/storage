@@ -1,18 +1,9 @@
-import { FastifyInstance, RequestGenericInterface } from 'fastify'
-import { getPostgrestClient } from '../utils/'
-interface requestGeneric extends RequestGenericInterface {
-  Params: {
-    bucketName: string
-  }
-  Body: {
-    prefix: string
-    limit: number
-    offset: number
-  }
-}
+import { FastifyInstance } from 'fastify'
+import { getPostgrestClient } from '../../utils'
+import { searchRequest } from '../../types/types'
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.post<requestGeneric>('/search/:bucketName', async (request, response) => {
+  fastify.post<searchRequest>('/:bucketName', async (request, response) => {
     const authHeader = request.headers.authorization
     if (!authHeader) {
       return response.status(403).send('Go away')

@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner } from '../../utils'
 import { uploadObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
-import { Obj, Bucket } from '../../types/types'
+import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
@@ -16,7 +16,7 @@ const createObjectParamsSchema = {
   },
   required: ['bucketName', '*'],
 } as const
-interface createObjectRequestInterface {
+interface createObjectRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof createObjectParamsSchema>
 }
 
@@ -24,13 +24,10 @@ interface createObjectRequestInterface {
 export default async function routes(fastify: FastifyInstance) {
   fastify.post<createObjectRequestInterface>(
     '/:bucketName/*',
-    { schema: { params: createObjectParamsSchema } },
+    { schema: { params: createObjectParamsSchema, headers: { $ref: 'authSchema#' } } },
     async (request, response) => {
       // check if the user is able to insert that row
       const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return response.status(403).send('Go away')
-      }
       const jwt = authHeader.substring('Bearer '.length)
       const data = await request.file()
 

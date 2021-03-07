@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner } from '../../utils'
-import { Bucket } from '../../types/types'
+import { AuthenticatedRequest, Bucket } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const createBucketBodySchema = {
@@ -10,7 +10,7 @@ const createBucketBodySchema = {
   },
   required: ['bucketName'],
 } as const
-interface createBucketRequestInterface {
+interface createBucketRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof createBucketBodySchema>
 }
 
@@ -18,13 +18,9 @@ interface createBucketRequestInterface {
 export default async function routes(fastify: FastifyInstance) {
   fastify.post<createBucketRequestInterface>(
     '/',
-    { schema: { body: createBucketBodySchema } },
+    { schema: { body: createBucketBodySchema, headers: { $ref: 'authSchema#' } } },
     async (request, response) => {
       const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return response.status(403).send('Go away')
-      }
-
       const jwt = authHeader.substring('Bearer '.length)
       const postgrest = getPostgrestClient(jwt)
       const owner = await getOwner(jwt)

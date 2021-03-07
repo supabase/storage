@@ -109,7 +109,7 @@ describe('testing GET object', () => {
       method: 'GET',
       url: '/object/bucket2/authenticated/casestudy.png',
     })
-    expect(response.statusCode).toBe(403)
+    expect(response.statusCode).toBe(400)
     expect(mockGetObject).not.toHaveBeenCalled()
   })
 
@@ -117,8 +117,11 @@ describe('testing GET object', () => {
     const response = await app().inject({
       method: 'GET',
       url: '/object/bucket2/authenticated/notfound',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
     })
-    expect(response.statusCode).toBe(403)
+    expect(response.statusCode).toBe(406)
     expect(mockGetObject).not.toHaveBeenCalled()
   })
 
@@ -126,8 +129,11 @@ describe('testing GET object', () => {
     const response = await app().inject({
       method: 'GET',
       url: '/object/notfound/authenticated/casestudy.png',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
     })
-    expect(response.statusCode).toBe(403)
+    expect(response.statusCode).toBe(406)
     expect(mockGetObject).not.toHaveBeenCalled()
   })
 })
@@ -176,17 +182,14 @@ describe('testing POST object', () => {
   test('user is not able to upload a resource without Auth header', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
-    const headers = Object.assign({}, form.getHeaders(), {
-      authorization: `Bearer ${anonKey}`,
-    })
 
     const response = await app().inject({
       method: 'POST',
       url: '/object/bucket2/authenticated/casestudy.png',
-      headers,
+      headers: form.getHeaders(),
       payload: form,
     })
-    expect(response.statusCode).toBe(403)
+    expect(response.statusCode).toBe(400)
     expect(mockUploadObject).not.toHaveBeenCalled()
   })
 
@@ -275,7 +278,7 @@ describe('testing PUT object', () => {
       headers: form.getHeaders(),
       payload: form,
     })
-    expect(response.statusCode).toBe(403)
+    expect(response.statusCode).toBe(400)
     expect(mockUploadObject).not.toHaveBeenCalled()
   })
 
@@ -363,7 +366,7 @@ describe('testing copy object', () => {
         destinationKey: 'authenticated/casestudy11.png',
       },
     })
-    expect(response.statusCode).toBe(403)
+    expect(response.statusCode).toBe(400)
     expect(mockCopyObject).not.toHaveBeenCalled()
   })
 
@@ -435,7 +438,7 @@ describe('testing delete object', () => {
       method: 'DELETE',
       url: '/object/bucket2/authenticated/delete1.png',
     })
-    expect(response.statusCode).toBe(403)
+    expect(response.statusCode).toBe(400)
     expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 
@@ -512,7 +515,7 @@ describe('testing deleting multiple objects', () => {
         prefixes: ['authenticated/delete-multiple3.png', 'authenticated/delete-multiple4.png'],
       },
     })
-    expect(response.statusCode).toBe(403)
+    expect(response.statusCode).toBe(400)
     expect(mockDeleteObjects).not.toHaveBeenCalled()
   })
 

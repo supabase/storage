@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient } from '../../utils'
 import { deleteObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
-import { Obj, Bucket } from '../../types/types'
+import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
@@ -16,7 +16,7 @@ const deleteObjectParamsSchema = {
   },
   required: ['bucketName', '*'],
 } as const
-interface deleteObjectRequestInterface {
+interface deleteObjectRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof deleteObjectParamsSchema>
 }
 
@@ -25,13 +25,10 @@ export default async function routes(fastify: FastifyInstance) {
   // @todo I think we need select permission here also since the return key is used to check if delete happened successfully and to delete it from s3
   fastify.delete<deleteObjectRequestInterface>(
     '/:bucketName/*',
-    { schema: { params: deleteObjectParamsSchema } },
+    { schema: { params: deleteObjectParamsSchema, headers: { $ref: 'authSchema#' } } },
     async (request, response) => {
       // check if the user is able to insert that row
       const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return response.status(403).send('Go away')
-      }
       const jwt = authHeader.substring('Bearer '.length)
 
       const { bucketName } = request.params

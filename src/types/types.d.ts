@@ -1,3 +1,4 @@
+import { RequestGenericInterface } from 'fastify'
 export type Bucket = {
   id: string
   name: string
@@ -20,4 +21,10 @@ export type Obj = {
 
 export type signedToken = {
   url: string
+}
+
+export interface AuthenticatedRequest extends RequestGenericInterface {
+  Headers: {
+    authorization: string
+  }
 }

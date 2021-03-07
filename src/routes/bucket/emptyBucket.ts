@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient } from '../../utils'
 import { deleteObjects, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
-import { Obj, Bucket } from '../../types/types'
+import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
@@ -16,7 +16,7 @@ const emptyBucketParamsSchema = {
   },
   required: ['bucketId', '*'],
 } as const
-interface emptyBucketRequestInterface {
+interface emptyBucketRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof emptyBucketParamsSchema>
 }
 
@@ -24,13 +24,9 @@ interface emptyBucketRequestInterface {
 export default async function routes(fastify: FastifyInstance) {
   fastify.post<emptyBucketRequestInterface>(
     '/:bucketId/empty',
-    { schema: { params: emptyBucketParamsSchema } },
+    { schema: { params: emptyBucketParamsSchema, headers: { $ref: 'authSchema#' } } },
     async (request, response) => {
       const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return response.status(403).send('Go away')
-      }
-
       const jwt = authHeader.substring('Bearer '.length)
       const { bucketId } = request.params
       const postgrest = getPostgrestClient(jwt)

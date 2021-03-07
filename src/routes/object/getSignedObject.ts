@@ -35,9 +35,6 @@ export default async function routes(fastify: FastifyInstance) {
     { schema: { params: getSignedObjectParamsSchema, querystring: getSignedObjectQSSchema } },
     async (request, response) => {
       const { token } = request.query
-      if (!token) {
-        return response.status(403).send('Go away')
-      }
       try {
         const payload = await verifyJWT(token)
         const { url } = payload as signedToken

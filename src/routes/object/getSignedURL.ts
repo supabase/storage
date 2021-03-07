@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, signJWT } from '../../utils'
-import { Obj } from '../../types/types'
+import { AuthenticatedRequest, Obj } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const getSignedURLParamsSchema = {
@@ -18,7 +18,7 @@ const getSignedURLBodySchema = {
   },
   required: ['expiresIn'],
 } as const
-interface getSignedURLRequestInterface {
+interface getSignedURLRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof getSignedURLParamsSchema>
   Body: FromSchema<typeof getSignedURLBodySchema>
 }
@@ -27,12 +27,15 @@ interface getSignedURLRequestInterface {
 export default async function routes(fastify: FastifyInstance) {
   fastify.post<getSignedURLRequestInterface>(
     '/sign/:bucketName/*',
-    { schema: { body: getSignedURLBodySchema, params: getSignedURLParamsSchema } },
+    {
+      schema: {
+        body: getSignedURLBodySchema,
+        params: getSignedURLParamsSchema,
+        headers: { $ref: 'authSchema#' },
+      },
+    },
     async (request, response) => {
       const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return response.status(403).send('Go away')
-      }
       const jwt = authHeader.substring('Bearer '.length)
 
       const postgrest = getPostgrestClient(jwt)

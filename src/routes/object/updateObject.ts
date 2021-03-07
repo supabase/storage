@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner } from '../../utils'
 import { uploadObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
-import { Obj, Bucket } from '../../types/types'
+import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
@@ -16,7 +16,7 @@ const updateObjectParamsSchema = {
   },
   required: ['bucketName', '*'],
 } as const
-interface updateObjectRequestInterface {
+interface updateObjectRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof updateObjectParamsSchema>
 }
 
@@ -24,13 +24,10 @@ interface updateObjectRequestInterface {
 export default async function routes(fastify: FastifyInstance) {
   fastify.put<updateObjectRequestInterface>(
     '/:bucketName/*',
-    { schema: { params: updateObjectParamsSchema } },
+    { schema: { params: updateObjectParamsSchema, headers: { $ref: 'authSchema#' } } },
     async (request, response) => {
       // check if the user is able to update the row
       const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return response.status(403).send('Go away')
-      }
       const jwt = authHeader.substring('Bearer '.length)
       const data = await request.file()
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */

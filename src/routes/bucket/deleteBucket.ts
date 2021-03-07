@@ -1,7 +1,7 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { getPostgrestClient } from '../../utils'
 import { getConfig } from '../../utils/config'
-import { Obj, Bucket } from '../../types/types'
+import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const { serviceKey } = getConfig()
@@ -14,7 +14,7 @@ const deleteBucketParamsSchema = {
   },
   required: ['bucketId', '*'],
 } as const
-interface deleteBucketRequestInterface extends RequestGenericInterface {
+interface deleteBucketRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof deleteBucketParamsSchema>
 }
 
@@ -22,13 +22,9 @@ interface deleteBucketRequestInterface extends RequestGenericInterface {
 export default async function routes(fastify: FastifyInstance) {
   fastify.delete<deleteBucketRequestInterface>(
     '/:bucketId',
-    { schema: { params: deleteBucketParamsSchema } },
+    { schema: { params: deleteBucketParamsSchema, headers: { $ref: 'authSchema#' } } },
     async (request, response) => {
       const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return response.status(403).send('Go away')
-      }
-
       const jwt = authHeader.substring('Bearer '.length)
       const { bucketId } = request.params
       const userPostgrest = getPostgrestClient(jwt)

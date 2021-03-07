@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient } from '../../utils'
 import { deleteObjects, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
-import { Obj } from '../../types/types'
+import { AuthenticatedRequest, Obj } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
@@ -22,7 +22,7 @@ const deleteObjectsBodySchema = {
   },
   required: ['prefixes'],
 } as const
-interface deleteObjectsInterface {
+interface deleteObjectsInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof deleteObjectsParamsSchema>
   Body: FromSchema<typeof deleteObjectsBodySchema>
 }
@@ -31,13 +31,16 @@ interface deleteObjectsInterface {
 export default async function routes(fastify: FastifyInstance) {
   fastify.delete<deleteObjectsInterface>(
     '/:bucketName',
-    { schema: { body: deleteObjectsBodySchema, params: deleteObjectsParamsSchema } },
+    {
+      schema: {
+        body: deleteObjectsBodySchema,
+        params: deleteObjectsParamsSchema,
+        headers: { $ref: 'authSchema#' },
+      },
+    },
     async (request, response) => {
       // check if the user is able to insert that row
       const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return response.status(403).send('Go away')
-      }
       const jwt = authHeader.substring('Bearer '.length)
 
       const { bucketName } = request.params

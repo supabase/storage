@@ -3,7 +3,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import { getPostgrestClient } from '../../utils'
 import { getObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
-import { Obj } from '../../types/types'
+import { AuthenticatedRequest, Obj } from '../../types/types'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -16,7 +16,7 @@ const getObjectParamsSchema = {
   },
   required: ['bucketName', '*'],
 } as const
-interface getObjectRequestInterface {
+interface getObjectRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof getObjectParamsSchema>
 }
 
@@ -24,12 +24,9 @@ interface getObjectRequestInterface {
 export default async function routes(fastify: FastifyInstance) {
   fastify.get<getObjectRequestInterface>(
     '/:bucketName/*',
-    { schema: { params: getObjectParamsSchema } },
+    { schema: { params: getObjectParamsSchema, headers: { $ref: 'authSchema#' } } },
     async (request, response) => {
       const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return response.status(403).send('Go away')
-      }
       const jwt = authHeader.substring('Bearer '.length)
 
       const postgrest = getPostgrestClient(jwt)

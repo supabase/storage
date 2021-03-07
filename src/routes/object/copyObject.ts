@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient } from '../../utils'
 import { copyObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
-import { Obj } from '../../types/types'
+import { Obj, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
@@ -17,7 +17,7 @@ const copyRequestBodySchema = {
   },
   required: ['sourceKey', 'bucketName', 'destinationKey'],
 } as const
-interface copyRequestInterface {
+interface copyRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof copyRequestBodySchema>
 }
 
@@ -26,12 +26,9 @@ export default async function routes(fastify: FastifyInstance) {
   const summary = 'Copies an object'
   fastify.post<copyRequestInterface>(
     '/copy',
-    { schema: { body: copyRequestBodySchema, summary } },
+    { schema: { body: copyRequestBodySchema, headers: { $ref: 'authSchema#' }, summary } },
     async (request, response) => {
       const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return response.status(403).send('Go away')
-      }
       const jwt = authHeader.substring('Bearer '.length)
 
       const { sourceKey, destinationKey, bucketName } = request.body

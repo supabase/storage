@@ -31,6 +31,16 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
     })
   }
 
+  // add in common schemas
+  app.addSchema({
+    $id: 'authSchema',
+    type: 'object',
+    properties: {
+      authorization: { type: 'string' },
+    },
+    required: ['authorization'],
+  })
+
   app.register(autoload, {
     dir: path.join(__dirname, 'routes'),
   })

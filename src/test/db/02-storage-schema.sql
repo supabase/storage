@@ -81,13 +81,15 @@ CREATE OR REPLACE FUNCTION public.search(prefix text, bucketname text, limits in
  LANGUAGE plpgsql
 AS $function$
 DECLARE
+_bucketId uuid;
 BEGIN
+    select buckets."id" from buckets where "name"=bucketname limit 1 into _bucketId;
 	return query 
 		with files_folders as (
 			select ((string_to_array(name, '/'))[levels]) as folder
 			from objects
 			where name like prefix || '%'
-			and "bucketId" in (select buckets."id" from buckets where "name"=bucketname limit 1)
+			and "bucketId" = _bucketId
 			GROUP by folder
 			order by folder
 			limit limits
@@ -95,6 +97,7 @@ BEGIN
 		) 
 		select files_folders.folder as name, objects.id, objects."updatedAt", objects."createdAt", objects."lastAccessedAt", objects.metadata from files_folders 
 		left join objects
-		on prefix || files_folders.folder = objects.name;
+		on prefix || files_folders.folder = objects.name
+        where objects."bucketId"=_bucketId;
 END
 $function$;

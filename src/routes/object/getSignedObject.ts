@@ -59,7 +59,11 @@ export default async function routes(fastify: FastifyInstance) {
           .send(data.Body)
       } catch (err) {
         console.log(err)
-        return response.send(400).send('Invalid token')
+        return response.status(400).send({
+          statusCode: 400,
+          error: err.name,
+          message: err.message,
+        })
       }
     }
   )

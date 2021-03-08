@@ -26,13 +26,12 @@ const successResponseSchema = {
     type: 'object',
     properties: {
       folder: { type: 'string' },
-      id: { type: 'string' },
-      updatedAt: { type: 'string' },
-      createdAt: { type: 'string' },
-      lastAccessedAt: { type: 'string' },
-      metadata: { type: 'object', additionalProperties: true },
+      id: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+      updatedAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+      createdAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+      lastAccessedAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+      metadata: { anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
     },
-    required: ['folder', 'id', 'updatedAt', 'createdAt', 'lastAccessedAt'],
   },
 }
 interface searchRequestInterface extends AuthenticatedRequest {

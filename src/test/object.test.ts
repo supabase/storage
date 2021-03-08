@@ -2,6 +2,7 @@
 import app from '../app'
 import * as utils from '../utils/s3'
 import { getConfig } from '../utils/config'
+import { signJWT } from '../utils/index'
 import dotenv from 'dotenv'
 import FormData from 'form-data'
 import fs from 'fs'
@@ -574,5 +575,123 @@ describe('testing deleting multiple objects', () => {
     const results = JSON.parse(response.body)
     expect(results.length).toBe(1)
     expect(results[0].name).toBe('authenticated/delete-multiple7.png')
+  })
+})
+
+/**
+ * POST /sign/
+ */
+describe('testing generating signed URL', () => {
+  test('authenticated user is able to sign URL for an authenticated resource', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/sign/bucket2/authenticated/cat.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const result = JSON.parse(response.body)
+    console.log(response.body)
+    expect(result.signedURL).toBeTruthy()
+  })
+
+  test('anon user is not able to generate signedURL for authenticated resource', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/sign/bucket2/authenticated/cat.jpg',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+      payload: {
+        expiresIn: 1000,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('user is not able to generate signedURLs without Auth header', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/sign/bucket2/authenticated/cat.jpg',
+      payload: {
+        expiresIn: 1000,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('return 406 when generate signed urls from a non existent bucket', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/sign/notfound/authenticated/cat.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+      },
+    })
+    expect(response.statusCode).toBe(406)
+  })
+
+  test('signing url of a non existent key', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/sign/bucket2/authenticated/notfound.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+})
+
+/**
+ * GET /sign/
+ */
+describe('testing retrieving signed URL', () => {
+  test('get object with a token', async () => {
+    const urlToSign = 'bucket2/public/sadcat-upload.png'
+    const jwtToken = await signJWT({ url: urlToSign }, 100)
+    const response = await app().inject({
+      method: 'GET',
+      url: `/object/sign/${urlToSign}?token=${jwtToken}`,
+    })
+    expect(response.statusCode).toBe(200)
+  })
+
+  test('get object without a token', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/sign/bucket2/public/sadcat-upload.png',
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('get object with a malformed JWT', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/sign/bucket2/public/sadcat-upload.png?token=xxx',
+    })
+    console.log(response.body)
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('get object with an expired JWT', async () => {
+    const urlToSign = 'bucket2/public/sadcat-upload.png'
+    const expiredJWT = await signJWT({ url: urlToSign }, -1)
+    const response = await app().inject({
+      method: 'GET',
+      url: `/object/sign/${urlToSign}?token=${expiredJWT}`,
+    })
+    console.log(response.body)
+    expect(response.statusCode).toBe(400)
   })
 })

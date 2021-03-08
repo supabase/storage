@@ -16,34 +16,47 @@ const emptyBucketParamsSchema = {
   },
   required: ['bucketId', '*'],
 } as const
+const successResponseSchema = {
+  type: 'string',
+}
 interface emptyBucketRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof emptyBucketParamsSchema>
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
+  const summary = 'Empty a bucket'
   fastify.post<emptyBucketRequestInterface>(
     '/:bucketId/empty',
-    { schema: { params: emptyBucketParamsSchema, headers: { $ref: 'authSchema#' } } },
+    {
+      schema: {
+        params: emptyBucketParamsSchema,
+        headers: { $ref: 'authSchema#' },
+        summary,
+        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
+      },
+    },
     async (request, response) => {
       const authHeader = request.headers.authorization
       const jwt = authHeader.substring('Bearer '.length)
       const { bucketId } = request.params
       const postgrest = getPostgrestClient(jwt)
 
-      const {
-        data: bucket,
-        error: bucketError,
-        status: bucketStatus,
-      } = await postgrest.from<Bucket>('buckets').select('name').eq('id', bucketId).single()
+      const bucketResponse = await postgrest
+        .from<Bucket>('buckets')
+        .select('name')
+        .eq('id', bucketId)
+        .single()
 
-      console.log(bucket, bucketError)
-      if (bucketError) {
-        return response.status(bucketStatus).send(bucketError.message)
+      if (bucketResponse.error) {
+        const { status, error } = bucketResponse
+        return response.status(status).send({
+          statusCode: error.code,
+          error: error.details,
+          message: error.message,
+        })
       }
-      if (!bucket) {
-        throw 'Should never happen'
-      }
+      const { data: bucket } = bucketResponse
       const bucketName = bucket.name
 
       // @todo add pagination

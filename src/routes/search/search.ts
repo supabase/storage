@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { getPostgrestClient } from '../../utils'
 import { FromSchema } from 'json-schema-to-ts'
+import { AuthenticatedRequest } from '../../types/types'
 
 const searchRequestParamsSchema = {
   type: 'object',
@@ -18,20 +19,42 @@ const searchRequestBodySchema = {
   },
   required: ['prefix'],
 } as const
-interface searchRequestInterface {
+// @todo make better
+const successResponseSchema = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      folder: { type: 'string' },
+      id: { type: 'string' },
+      updatedAt: { type: 'string' },
+      createdAt: { type: 'string' },
+      lastAccessedAt: { type: 'string' },
+      metadata: { type: 'object', additionalProperties: true },
+    },
+    required: ['folder', 'id', 'updatedAt', 'createdAt', 'lastAccessedAt'],
+  },
+}
+interface searchRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof searchRequestBodySchema>
   Params: FromSchema<typeof searchRequestParamsSchema>
 }
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
+  const summary = 'Search for objects under a prefix'
   fastify.post<searchRequestInterface>(
     '/:bucketName',
-    { schema: { body: searchRequestBodySchema, params: searchRequestParamsSchema } },
+    {
+      schema: {
+        body: searchRequestBodySchema,
+        params: searchRequestParamsSchema,
+        headers: { $ref: 'authSchema#' },
+        summary,
+        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
+      },
+    },
     async (request, response) => {
       const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return response.status(403).send('Go away')
-      }
       const jwt = authHeader.substring('Bearer '.length)
 
       const postgrest = getPostgrestClient(jwt)
@@ -44,7 +67,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
       console.log(request.body)
       console.log(`searching for `, prefix)
-      const { data: results, error } = await postgrest.rpc('search', {
+      const { data: results, error, status } = await postgrest.rpc('search', {
         prefix,
         bucketname: bucketName,
         limits: limit,
@@ -52,6 +75,13 @@ export default async function routes(fastify: FastifyInstance) {
         levels: prefix.split('/').length,
       })
       console.log(results, error)
+      if (error) {
+        return response.status(status).send({
+          statusCode: error.code,
+          error: error.details,
+          message: error.message,
+        })
+      }
 
       response.status(200).send(results)
     }

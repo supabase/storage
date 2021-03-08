@@ -11,15 +11,35 @@ const getBucketParamsSchema = {
   },
   required: ['bucketId', '*'],
 } as const
+// @todo change later
+const successResponseSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    owner: { type: 'string' },
+    createdAt: { type: 'string' },
+    updatedAt: { type: 'string' },
+  },
+  required: ['id', 'name'],
+}
 interface getBucketRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof getBucketParamsSchema>
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
+  const summary = 'Get details of a bucket'
   fastify.get<getBucketRequestInterface>(
     '/:bucketId',
-    { schema: { params: getBucketParamsSchema, headers: { $ref: 'authSchema#' } } },
+    {
+      schema: {
+        params: getBucketParamsSchema,
+        headers: { $ref: 'authSchema#' },
+        summary,
+        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
+      },
+    },
     async (request, response) => {
       const authHeader = request.headers.authorization
       const jwt = authHeader.substring('Bearer '.length)
@@ -34,7 +54,9 @@ export default async function routes(fastify: FastifyInstance) {
       console.log(results, error)
 
       if (error) {
-        return response.status(status).send(error.message)
+        return response
+          .status(status)
+          .send({ statusCode: error.code, error: error.details, message: error.message })
       }
 
       response.send(results)

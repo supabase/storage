@@ -5,6 +5,7 @@ interface requestGeneric extends RequestGenericInterface {
   }
 }
 
+// @todo prevent editing of system metadata like contenttype
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   fastify.get<requestGeneric>('/:objectId', async (request, reply) => {

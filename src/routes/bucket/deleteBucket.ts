@@ -10,9 +10,8 @@ const deleteBucketParamsSchema = {
   type: 'object',
   properties: {
     bucketId: { type: 'string' },
-    '*': { type: 'string' },
   },
-  required: ['bucketId', '*'],
+  required: ['bucketId'],
 } as const
 const successResponseSchema = {
   type: 'string',

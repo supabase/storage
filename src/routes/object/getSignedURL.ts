@@ -88,7 +88,7 @@ export default async function routes(fastify: FastifyInstance) {
       const token = await signJWT({ url: urlToSign }, expiresIn)
 
       // @todo parse the url properly
-      const signedURL = `/object/signed/${urlToSign}?token=${token}`
+      const signedURL = `/object/sign/${urlToSign}?token=${token}`
 
       return response.status(200).send({ signedURL })
     }

@@ -32,7 +32,7 @@ interface getSignedObjectRequestInterface {
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Retrieve an object via a presigned URL'
   fastify.get<getSignedObjectRequestInterface>(
-    '/signed/:bucketName/*',
+    '/sign/:bucketName/*',
     {
       schema: {
         params: getSignedObjectParamsSchema,

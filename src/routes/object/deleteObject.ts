@@ -17,7 +17,10 @@ const deleteObjectParamsSchema = {
   required: ['bucketName', '*'],
 } as const
 const successResponseSchema = {
-  type: 'string',
+  type: 'object',
+  properties: {
+    message: { type: 'string' },
+  },
 }
 interface deleteObjectRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof deleteObjectParamsSchema>
@@ -88,7 +91,7 @@ export default async function routes(fastify: FastifyInstance) {
       const s3Key = `${projectRef}/${bucketName}/${objectName}`
       await deleteObject(client, globalS3Bucket, s3Key)
 
-      return response.status(200).send('Deleted')
+      return response.status(200).send({ message: 'Deleted' })
     }
   )
 }

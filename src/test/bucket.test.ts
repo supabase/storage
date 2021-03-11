@@ -77,7 +77,7 @@ describe('testing GET all buckets', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.length).toBe(3)
+    expect(responseJSON.length).toBe(4)
   })
 
   test('user is not able to all buckets details without Auth header', async () => {

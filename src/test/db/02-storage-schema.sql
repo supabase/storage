@@ -98,6 +98,6 @@ BEGIN
 		select files_folders.folder as name, objects.id, objects."updatedAt", objects."createdAt", objects."lastAccessedAt", objects.metadata from files_folders 
 		left join objects
 		on prefix || files_folders.folder = objects.name
-        where objects."bucketId"=_bucketId;
+        where objects.id is null or objects."bucketId"=_bucketId;
 END
 $function$;

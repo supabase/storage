@@ -14,7 +14,10 @@ const deleteBucketParamsSchema = {
   required: ['bucketId'],
 } as const
 const successResponseSchema = {
-  type: 'string',
+  type: 'object',
+  properties: {
+    message: { type: 'string' },
+  },
 }
 interface deleteBucketRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof deleteBucketParamsSchema>
@@ -40,10 +43,27 @@ export default async function routes(fastify: FastifyInstance) {
       const userPostgrest = getPostgrestClient(jwt)
       const superUserPostgrest = getPostgrestClient(serviceKey)
 
+      const {
+        data: bucketResults,
+        error: bucketError,
+        status: bucketStatus,
+      } = await userPostgrest.from<Bucket>('buckets').select('*').eq('id', bucketId).single()
+
+      console.log(bucketResults, bucketError)
+
+      if (bucketError) {
+        return response.status(400).send({
+          statusCode: bucketStatus,
+          error: bucketError.details,
+          message: bucketError.message,
+        })
+      }
+
       const { count: objectCount, error: objectError } = await superUserPostgrest
         .from<Obj>('objects')
         .select('id', { count: 'exact' })
         .eq('bucketId', bucketId)
+        .limit(10)
 
       console.log(objectCount, objectError)
       if (objectCount && objectCount > 0) {
@@ -59,7 +79,14 @@ export default async function routes(fastify: FastifyInstance) {
         .delete()
         .eq('id', bucketId)
       console.log(results, error)
-      return response.status(200).send('Deleted')
+      if (error) {
+        return response.status(400).send({
+          statusCode: error.code,
+          error: error.details,
+          message: error.message,
+        })
+      }
+      return response.status(200).send({ message: 'Deleted' })
     }
   )
 }

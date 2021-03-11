@@ -16,7 +16,10 @@ const emptyBucketParamsSchema = {
   required: ['bucketId'],
 } as const
 const successResponseSchema = {
-  type: 'string',
+  type: 'object',
+  properties: {
+    message: { type: 'string' },
+  },
 }
 interface emptyBucketRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof emptyBucketParamsSchema>
@@ -85,7 +88,7 @@ export default async function routes(fastify: FastifyInstance) {
         console.log(deleteError)
       }
 
-      return response.status(200).send('Emptied')
+      return response.status(200).send({ message: 'Emptied' })
     }
   )
 }

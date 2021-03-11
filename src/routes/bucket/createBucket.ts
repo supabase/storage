@@ -47,7 +47,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       const { name: bucketName } = request.body
 
-      const { data: results, error } = await postgrest
+      const { data: results, error, status } = await postgrest
         .from<Bucket>('buckets')
         .insert([
           {
@@ -57,6 +57,14 @@ export default async function routes(fastify: FastifyInstance) {
         ])
         .single()
       console.log(results, error)
+
+      if (error) {
+        return response.status(400).send({
+          statusCode: error.code,
+          error: error.details,
+          message: error.message,
+        })
+      }
       return response.status(200).send(results)
     }
   )

@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient } from '../../utils'
+import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { copyObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, AuthenticatedRequest } from '../../types/types'
@@ -61,11 +61,7 @@ export default async function routes(fastify: FastifyInstance) {
       if (objectResponse.error) {
         const { status, error } = objectResponse
         console.log(error)
-        return response.status(status).send({
-          statusCode: error.code,
-          error: error.details,
-          message: error.message,
-        })
+        return response.status(400).send(transformPostgrestError(error, status))
       }
       const { data: origObject } = objectResponse
       console.log('origObject', origObject)
@@ -99,11 +95,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       console.log(results, error)
       if (error) {
-        return response.status(status).send({
-          statusCode: error.code,
-          error: error.details,
-          message: error.message,
-        })
+        return response.status(400).send(transformPostgrestError(error, status))
       }
 
       const s3SourceKey = `${projectRef}/${bucketName}/${sourceKey}`

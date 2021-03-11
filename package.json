@@ -10,7 +10,7 @@
     "start:fly": "NODE_ENV=production node -r dotenv/config dist/server.js dotenv_config_path=.env.s3",
     "deploy": "flyctl deploy --remote-only",
     "logs": "flyctl logs",
-    "test": "npm run test:db && jest",
+    "test": "npm run test:db && jest --runInBand",
     "test:clean": "cd src/test/db && docker-compose down",
     "test:db": "cd src/test/db && docker-compose down && docker-compose up -d"
   },

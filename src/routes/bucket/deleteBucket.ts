@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient } from '../../utils'
+import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
@@ -52,11 +52,7 @@ export default async function routes(fastify: FastifyInstance) {
       console.log(bucketResults, bucketError)
 
       if (bucketError) {
-        return response.status(400).send({
-          statusCode: bucketStatus,
-          error: bucketError.details,
-          message: bucketError.message,
-        })
+        return response.status(400).send(transformPostgrestError(bucketError, bucketStatus))
       }
 
       const { count: objectCount, error: objectError } = await superUserPostgrest
@@ -69,22 +65,18 @@ export default async function routes(fastify: FastifyInstance) {
       if (objectCount && objectCount > 0) {
         return response.status(400).send({
           statusCode: '400',
-          error: 'Bucket must be empty before you can delete it',
-          message: 'Bucket not empty',
+          message: 'Bucket must be empty before you can delete it',
+          error: 'Bucket not empty',
         })
       }
 
-      const { data: results, error } = await userPostgrest
+      const { data: results, error, status } = await userPostgrest
         .from<Bucket>('buckets')
         .delete()
         .eq('id', bucketId)
       console.log(results, error)
       if (error) {
-        return response.status(400).send({
-          statusCode: error.code,
-          error: error.details,
-          message: error.message,
-        })
+        return response.status(400).send(transformPostgrestError(error, status))
       }
       return response.status(200).send({ message: 'Deleted' })
     }

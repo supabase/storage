@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient } from '../../utils'
+import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { AuthenticatedRequest, Bucket } from '../../types/types'
 // @todo change later
 const successResponseSchema = {
@@ -37,9 +37,6 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       // get list of all buckets
       const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return response.status(403).send('Go away')
-      }
       const jwt = authHeader.substring('Bearer '.length)
 
       const postgrest = getPostgrestClient(jwt)
@@ -47,9 +44,7 @@ export default async function routes(fastify: FastifyInstance) {
       console.log(results, error)
 
       if (error) {
-        return response
-          .status(status)
-          .send({ statusCode: error.code, error: error.details, message: error.message })
+        return response.status(400).send(transformPostgrestError(error, status))
       }
 
       response.send(results)

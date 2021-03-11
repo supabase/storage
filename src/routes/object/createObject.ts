@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient, getOwner } from '../../utils'
+import { getPostgrestClient, getOwner, transformPostgrestError } from '../../utils'
 import { uploadObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
@@ -67,10 +67,10 @@ export default async function routes(fastify: FastifyInstance) {
         .single()
 
       if (bucketResponse.error) {
-        const { status, error } = bucketResponse
+        const { error } = bucketResponse
         console.log(error)
-        return response.status(status).send({
-          statusCode: 404,
+        return response.status(400).send({
+          statusCode: '404',
           error: 'Not found',
           message: 'The requested bucket was not found',
         })
@@ -100,11 +100,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       console.log(results, error)
       if (error) {
-        return response.status(status).send({
-          statusCode: error.code,
-          error: error.details,
-          message: error.message,
-        })
+        return response.status(status).send(transformPostgrestError(error, status))
       }
 
       // if successfully inserted, upload to s3

@@ -28,3 +28,15 @@ export interface AuthenticatedRequest extends RequestGenericInterface {
     authorization: string
   }
 }
+type PostgrestError = {
+  message: string
+  details: string
+  hint: string
+  code: string
+}
+
+type StorageError = {
+  statusCode: string
+  error: string
+  message: string
+}

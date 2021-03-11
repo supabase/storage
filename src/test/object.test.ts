@@ -101,7 +101,7 @@ describe('testing GET object', () => {
         authorization: `Bearer ${anonKey}`,
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockGetObject).not.toHaveBeenCalled()
   })
 
@@ -122,7 +122,7 @@ describe('testing GET object', () => {
         authorization: `Bearer ${anonKey}`,
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockGetObject).not.toHaveBeenCalled()
   })
 
@@ -134,7 +134,7 @@ describe('testing GET object', () => {
         authorization: `Bearer ${anonKey}`,
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockGetObject).not.toHaveBeenCalled()
   })
 })
@@ -213,7 +213,7 @@ describe('testing POST object', () => {
       headers,
       payload: form,
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockUploadObject).not.toHaveBeenCalled()
   })
 
@@ -302,7 +302,7 @@ describe('testing PUT object', () => {
       headers,
       payload: form,
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockUploadObject).not.toHaveBeenCalled()
   })
 
@@ -319,7 +319,7 @@ describe('testing PUT object', () => {
       headers,
       payload: form,
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockUploadObject).not.toHaveBeenCalled()
   })
 })
@@ -359,7 +359,7 @@ describe('testing copy object', () => {
         destinationKey: 'authenticated/casestudy11.png',
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockCopyObject).not.toHaveBeenCalled()
   })
 
@@ -390,7 +390,7 @@ describe('testing copy object', () => {
         destinationKey: 'authenticated/casestudy11.png',
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockCopyObject).not.toHaveBeenCalled()
   })
 
@@ -407,7 +407,7 @@ describe('testing copy object', () => {
         destinationKey: 'authenticated/casestudy11.png',
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockCopyObject).not.toHaveBeenCalled()
   })
 })
@@ -436,7 +436,7 @@ describe('testing delete object', () => {
         authorization: `Bearer ${anonKey}`,
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 
@@ -538,7 +538,7 @@ describe('testing deleting multiple objects', () => {
         prefixes: ['authenticated/delete-multiple3.png', 'authenticated/delete-multiple4.png'],
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockDeleteObjects).not.toHaveBeenCalled()
   })
 
@@ -610,7 +610,7 @@ describe('testing generating signed URL', () => {
         expiresIn: 1000,
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
   })
 
   test('user is not able to generate signedURLs without Auth header', async () => {
@@ -635,7 +635,7 @@ describe('testing generating signed URL', () => {
         expiresIn: 1000,
       },
     })
-    expect(response.statusCode).toBe(404)
+    expect(response.statusCode).toBe(400)
   })
 
   test('signing url of a non existent key', async () => {
@@ -649,7 +649,7 @@ describe('testing generating signed URL', () => {
         expiresIn: 1000,
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
   })
 })
 

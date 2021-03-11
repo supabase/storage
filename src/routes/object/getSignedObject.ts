@@ -60,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
       } catch (err) {
         console.log(err)
         return response.status(400).send({
-          statusCode: 400,
+          statusCode: '400',
           error: err.name,
           message: err.message,
         })

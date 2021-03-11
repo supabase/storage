@@ -1,5 +1,7 @@
 import { PostgrestClient } from '@supabase/postgrest-js'
+import { PostgrestResponse } from '@supabase/postgrest-js/dist/main/lib/types'
 import jwt from 'jsonwebtoken'
+import { PostgrestError, StorageError } from '../types/types'
 import { getConfig } from '../utils/config'
 const { projectRef, postgrestURL, anonKey, jwtSecret } = getConfig()
 
@@ -53,4 +55,23 @@ export function signJWT(
 export async function getOwner(token: string): Promise<string | undefined> {
   const decodedJWT = await verifyJWT(token)
   return (decodedJWT as jwtType)?.sub
+}
+
+export function transformPostgrestError(
+  error: PostgrestError,
+  responseStatus: number
+): StorageError {
+  let { message, details: type, code } = error
+  if (responseStatus === 406) {
+    code = '404'
+    message = 'The resource was not found'
+    type = 'Not found'
+  } else {
+    console.log(error, responseStatus)
+  }
+  return {
+    statusCode: code,
+    error: type,
+    message,
+  }
 }

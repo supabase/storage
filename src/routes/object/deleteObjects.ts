@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient } from '../../utils'
+import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { deleteObjects, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { AuthenticatedRequest, Obj } from '../../types/types'
@@ -63,7 +63,7 @@ export default async function routes(fastify: FastifyInstance) {
       // @todo how to merge these into one query?
       // i can create a view and add INSTEAD OF triggers..is that the way to do it?
       // @todo add unique constraint for just bucket names
-      const { data: bucket, error: bucketError, status: bucketStatus } = await postgrest
+      const { data: bucket, error: bucketError } = await postgrest
         .from('buckets')
         .select('id')
         .eq('name', bucketName)
@@ -71,8 +71,8 @@ export default async function routes(fastify: FastifyInstance) {
 
       console.log(bucket, bucketError)
       if (bucketError) {
-        return response.status(bucketStatus).send({
-          statusCode: 404,
+        return response.status(400).send({
+          statusCode: '404',
           error: 'Not found',
           message: 'The requested bucket was not found',
         })
@@ -87,11 +87,7 @@ export default async function routes(fastify: FastifyInstance) {
       if (objectResponse.error) {
         const { error, status } = objectResponse
         console.log(error)
-        return response.status(status).send({
-          statusCode: error.code,
-          error: error.details,
-          message: error.message,
-        })
+        return response.status(status).send(transformPostgrestError(error, status))
       }
 
       const { data: results } = objectResponse

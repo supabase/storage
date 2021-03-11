@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient } from '../../utils'
+import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types/types'
 
@@ -75,11 +75,7 @@ export default async function routes(fastify: FastifyInstance) {
       })
       console.log(results, error)
       if (error) {
-        return response.status(status).send({
-          statusCode: error.code,
-          error: error.details,
-          message: error.message,
-        })
+        return response.status(status).send(transformPostgrestError(error, status))
       }
 
       response.status(200).send(results)

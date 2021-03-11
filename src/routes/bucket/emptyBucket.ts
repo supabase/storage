@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient } from '../../utils'
+import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { deleteObjects, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
@@ -52,11 +52,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (bucketResponse.error) {
         const { status, error } = bucketResponse
-        return response.status(status).send({
-          statusCode: error.code,
-          error: error.details,
-          message: error.message,
-        })
+        return response.status(status).send(transformPostgrestError(error, status))
       }
       const { data: bucket } = bucketResponse
       const bucketName = bucket.name

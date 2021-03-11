@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient } from '../../utils'
+import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { deleteObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
@@ -58,7 +58,7 @@ export default async function routes(fastify: FastifyInstance) {
         const { error, status } = bucketResponse
         console.log(error)
         return response.status(status).send({
-          statusCode: 404,
+          statusCode: '404',
           error: 'Not found',
           message: 'The requested bucket was not found',
         })
@@ -79,11 +79,7 @@ export default async function routes(fastify: FastifyInstance) {
       if (objectResponse.error) {
         const { error, status } = objectResponse
         console.log(error)
-        return response.status(status).send({
-          statusCode: error.code,
-          error: error.details,
-          message: error.message,
-        })
+        return response.status(400).send(transformPostgrestError(error, status))
       }
       const { data: results } = objectResponse
       console.log(results)

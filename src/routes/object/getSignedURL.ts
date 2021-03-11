@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient, signJWT } from '../../utils'
+import { getPostgrestClient, signJWT, transformPostgrestError } from '../../utils'
 import { AuthenticatedRequest, Obj } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
@@ -66,7 +66,7 @@ export default async function routes(fastify: FastifyInstance) {
       if (objectResponse.error) {
         const { status, error } = objectResponse
         console.log(error)
-        return response.status(status).send(error.message)
+        return response.status(400).send(transformPostgrestError(error, status))
       }
       const { data: results } = objectResponse
       console.log(results)
@@ -75,8 +75,8 @@ export default async function routes(fastify: FastifyInstance) {
         // @todo why is this check necessary?
         // if corresponding bucket is not found, i want the object also to not be returned
         // is it cos of https://github.com/PostgREST/postgrest/issues/1075 ?
-        return response.status(404).send({
-          statusCode: 404,
+        return response.status(400).send({
+          statusCode: '404',
           error: 'Not found',
           message: 'The requested bucket was not found',
         })

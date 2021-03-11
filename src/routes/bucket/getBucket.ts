@@ -7,9 +7,8 @@ const getBucketParamsSchema = {
   type: 'object',
   properties: {
     bucketId: { type: 'string' },
-    '*': { type: 'string' },
   },
-  required: ['bucketId', '*'],
+  required: ['bucketId'],
 } as const
 // @todo change later
 const successResponseSchema = {

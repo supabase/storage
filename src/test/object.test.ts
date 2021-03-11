@@ -81,7 +81,7 @@ beforeEach(() => {
  * GET /object/:id
  */
 describe('testing GET object', () => {
-  test('authenticated user is able to read authenticated resource', async () => {
+  test('check if RLS policies are respected: authenticated user is able to read authenticated resource', async () => {
     const response = await app().inject({
       method: 'GET',
       url: '/object/bucket2/authenticated/casestudy.png',
@@ -93,7 +93,7 @@ describe('testing GET object', () => {
     expect(mockGetObject).toBeCalled()
   })
 
-  test('anon user is not able to read authenticated resource', async () => {
+  test('check if RLS policies are respected: anon user is not able to read authenticated resource', async () => {
     const response = await app().inject({
       method: 'GET',
       url: '/object/bucket2/authenticated/casestudy.png',
@@ -142,7 +142,7 @@ describe('testing GET object', () => {
  * POST /object/:id
  */
 describe('testing POST object', () => {
-  test('authenticated user is able to upload authenticated resource', async () => {
+  test('check if RLS policies are respected: authenticated user is able to upload authenticated resource', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
@@ -162,7 +162,7 @@ describe('testing POST object', () => {
     )
   })
 
-  test('anon user is not able to upload authenticated resource', async () => {
+  test('check if RLS policies are respected: anon user is not able to upload authenticated resource', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
@@ -186,7 +186,7 @@ describe('testing POST object', () => {
     )
   })
 
-  test('user is not able to upload a resource without Auth header', async () => {
+  test('check if RLS policies are respected: user is not able to upload a resource without Auth header', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
 
@@ -239,7 +239,7 @@ describe('testing POST object', () => {
  * PUT /object/:id
  */
 describe('testing PUT object', () => {
-  test('authenticated user is able to update authenticated resource', async () => {
+  test('check if RLS policies are respected: authenticated user is able to update authenticated resource', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
@@ -257,7 +257,7 @@ describe('testing PUT object', () => {
     expect(response.body).toBe(`{"Key":"bjhaohmqunupljrqypxz/bucket2/authenticated/cat.jpg"}`)
   })
 
-  test('anon user is not able to update authenticated resource', async () => {
+  test('check if RLS policies are respected: anon user is not able to update authenticated resource', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
@@ -328,7 +328,7 @@ describe('testing PUT object', () => {
  * POST /copy
  */
 describe('testing copy object', () => {
-  test('authenticated user is able to copy authenticated resource', async () => {
+  test('check if RLS policies are respected: authenticated user is able to copy authenticated resource', async () => {
     const response = await app().inject({
       method: 'POST',
       url: '/object/copy',
@@ -346,7 +346,7 @@ describe('testing copy object', () => {
     expect(response.body).toBe(`{"Key":"authenticated/casestudy11.png"}`)
   })
 
-  test('anon user is not able to update authenticated resource', async () => {
+  test('check if RLS policies are respected: anon user is not able to update authenticated resource', async () => {
     const response = await app().inject({
       method: 'POST',
       url: '/object/copy',
@@ -416,7 +416,7 @@ describe('testing copy object', () => {
  * DELETE /object
  * */
 describe('testing delete object', () => {
-  test('authenticated user is able to delete authenticated resource', async () => {
+  test('check if RLS policies are respected: authenticated user is able to delete authenticated resource', async () => {
     const response = await app().inject({
       method: 'DELETE',
       url: '/object/bucket2/authenticated/delete.png',
@@ -428,7 +428,7 @@ describe('testing delete object', () => {
     expect(mockDeleteObject).toBeCalled()
   })
 
-  test('anon user is not able to delete authenticated resource', async () => {
+  test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {
     const response = await app().inject({
       method: 'DELETE',
       url: '/object/bucket2/authenticated/delete1.png',
@@ -478,7 +478,7 @@ describe('testing delete object', () => {
  * DELETE /objects
  * */
 describe('testing deleting multiple objects', () => {
-  test('authenticated user is able to delete authenticated resource', async () => {
+  test('check if RLS policies are respected: authenticated user is able to delete authenticated resource', async () => {
     const response = await app().inject({
       method: 'DELETE',
       url: '/object/bucket2',
@@ -498,7 +498,7 @@ describe('testing deleting multiple objects', () => {
     expect(result[1].name).toBe('authenticated/delete-multiple2.png')
   })
 
-  test('anon user is not able to delete authenticated resource', async () => {
+  test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {
     const response = await app().inject({
       method: 'DELETE',
       url: '/object/bucket2',
@@ -559,7 +559,7 @@ describe('testing deleting multiple objects', () => {
     expect(results.length).toBe(0)
   })
 
-  test('user has permission to delete only one of the objects', async () => {
+  test('check if RLS policies are respected: user has permission to delete only one of the objects', async () => {
     const response = await app().inject({
       method: 'DELETE',
       url: '/object/bucket2',
@@ -582,7 +582,7 @@ describe('testing deleting multiple objects', () => {
  * POST /sign/
  */
 describe('testing generating signed URL', () => {
-  test('authenticated user is able to sign URL for an authenticated resource', async () => {
+  test('check if RLS policies are respected: authenticated user is able to sign URL for an authenticated resource', async () => {
     const response = await app().inject({
       method: 'POST',
       url: '/object/sign/bucket2/authenticated/cat.jpg',
@@ -599,7 +599,7 @@ describe('testing generating signed URL', () => {
     expect(result.signedURL).toBeTruthy()
   })
 
-  test('anon user is not able to generate signedURL for authenticated resource', async () => {
+  test('check if RLS policies are respected: anon user is not able to generate signedURL for authenticated resource', async () => {
     const response = await app().inject({
       method: 'POST',
       url: '/object/sign/bucket2/authenticated/cat.jpg',

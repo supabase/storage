@@ -7,8 +7,9 @@ INSERT INTO "auth"."users" ("instance_id", "id", "aud", "role", "email", "encryp
 -- insert buckets
 INSERT INTO "public"."buckets" ("id", "name", "owner", "createdAt", "updatedAt") VALUES
 ('7078bc23-9dd6-460d-8b93-082254fee63a', 'bucket2', '4d56e902-f0a0-4662-8448-a4d9e643c142', '2021-02-17 04:43:32.770206+00', '2021-02-17 04:43:32.770206+00'),
-('7206ba57-513a-4181-971a-feca9ef45862', 'temp1', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-27 03:04:25.6386+00', '2021-02-27 03:04:25.6386+00'),
-('e29843e6-047e-4b1f-9906-20cc06f4aad4', 'bucket4', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-25 09:23:01.58385+00', '2021-02-25 09:23:01.58385+00');
+('A916B415-3639-4885-A3D7-256593098BA5', 'bucket3', '4d56e902-f0a0-4662-8448-a4d9e643c142', '2021-02-17 04:43:32.770206+00', '2021-02-17 04:43:32.770206+00'),
+('e29843e6-047e-4b1f-9906-20cc06f4aad4', 'bucket4', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-25 09:23:01.58385+00', '2021-02-25 09:23:01.58385+00'),
+('7206ba57-513a-4181-971a-feca9ef45862', 'bucket5', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-27 03:04:25.6386+00', '2021-02-27 03:04:25.6386+00');
 
 
 -- insert objects
@@ -27,8 +28,9 @@ INSERT INTO "public"."objects" ("id", "bucketId", "name", "owner", "createdAt", 
 ('469b0216-5419-41f6-9a37-2abfd7fad29c', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/delete-multiple4.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
 ('55930619-a668-4dbc-aea3-b93dfe101e7f', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/delete-multiple7.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
 ('8377527d-3518-4dc8-8290-c6926470e795', '7078bc23-9dd6-460d-8b93-082254fee63a', 'folder/subfolder/public-all-permissions.png', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-17 10:26:42.791214+00', '2021-02-17 11:03:30.025116+00', '2021-02-17 10:26:42.791214+00', NULL),
-('b39ae4ab-802b-4c42-9271-3f908c34363c', '7078bc23-9dd6-460d-8b93-082254fee63a', 'private/sadcat-upload3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml"}');
-
+('b39ae4ab-802b-4c42-9271-3f908c34363c', '7078bc23-9dd6-460d-8b93-082254fee63a', 'private/sadcat-upload3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml"}'),
+('8098E1AC-C744-4368-86DF-71B60CCDE221', 'A916B415-3639-4885-A3D7-256593098BA5', 'sadcat-upload3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml"}'),
+('D3EB488E-94F4-46CD-86D3-242C13B95BAC', 'A916B415-3639-4885-A3D7-256593098BA5', 'sadcat-upload2.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml"}');
 
 -- add policies
 CREATE POLICY crud_public_folder ON objects for all USING ("bucketId"='7078bc23-9dd6-460d-8b93-082254fee63a' and (foldername(name))[1] = 'public');

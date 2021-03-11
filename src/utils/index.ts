@@ -1,9 +1,8 @@
 import { PostgrestClient } from '@supabase/postgrest-js'
-import { PostgrestResponse } from '@supabase/postgrest-js/dist/main/lib/types'
 import jwt from 'jsonwebtoken'
 import { PostgrestError, StorageError } from '../types/types'
 import { getConfig } from '../utils/config'
-const { projectRef, postgrestURL, anonKey, jwtSecret } = getConfig()
+const { postgrestURL, anonKey, jwtSecret } = getConfig()
 
 // @todo define as an interface expecting sub instead
 type jwtType =

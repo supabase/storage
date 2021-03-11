@@ -12,7 +12,7 @@
     "logs": "flyctl logs",
     "test": "npm run test:db && jest --runInBand",
     "test:clean": "cd src/test/db && docker-compose down",
-    "test:db": "cd src/test/db && docker-compose down && docker-compose up -d"
+    "test:db": "cd src/test/db && docker-compose down && docker-compose up -d && sleep 1"
   },
   "author": "Supabase",
   "license": "ISC",

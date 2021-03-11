@@ -71,7 +71,7 @@ $function$;
 -- @todo can this query be optimised further?
 CREATE OR REPLACE FUNCTION public.search(prefix text, bucketname text, limits int DEFAULT 100, levels int DEFAULT 1, offsets int DEFAULT 0)
  RETURNS TABLE (
-    folder text,
+    name text,
     id uuid,
     "updatedAt" TIMESTAMPTZ,
     "createdAt" TIMESTAMPTZ,
@@ -83,12 +83,12 @@ AS $function$
 DECLARE
 _bucketId uuid;
 BEGIN
-    select buckets."id" from buckets where "name"=bucketname limit 1 into _bucketId;
+    select buckets."id" from buckets where buckets.name=bucketname limit 1 into _bucketId;
 	return query 
 		with files_folders as (
-			select ((string_to_array(name, '/'))[levels]) as folder
+			select ((string_to_array(objects.name, '/'))[levels]) as folder
 			from objects
-			where name like prefix || '%'
+			where objects.name like prefix || '%'
 			and "bucketId" = _bucketId
 			GROUP by folder
 			order by folder

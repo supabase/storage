@@ -25,7 +25,7 @@ const successResponseSchema = {
   items: {
     type: 'object',
     properties: {
-      folder: { type: 'string' },
+      name: { type: 'string' },
       id: { anyOf: [{ type: 'string' }, { type: 'null' }] },
       updatedAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
       createdAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },

@@ -610,7 +610,7 @@ describe('testing generating signed URL', () => {
         expiresIn: 1000,
       },
     })
-    expect(response.statusCode).toBe(400)
+    expect(response.statusCode).toBe(406)
   })
 
   test('user is not able to generate signedURLs without Auth header', async () => {
@@ -635,7 +635,7 @@ describe('testing generating signed URL', () => {
         expiresIn: 1000,
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(404)
   })
 
   test('signing url of a non existent key', async () => {
@@ -649,7 +649,7 @@ describe('testing generating signed URL', () => {
         expiresIn: 1000,
       },
     })
-    expect(response.statusCode).toBe(400)
+    expect(response.statusCode).toBe(406)
   })
 })
 

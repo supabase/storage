@@ -69,7 +69,7 @@ export default async function routes(fastify: FastifyInstance) {
         .limit(1000)
 
       console.log(objects, objectError)
-      if (objects) {
+      if (objects && objects.length > 0) {
         const params = objects.map((ele) => {
           return {
             Key: `${projectRef}/${bucketName}/${ele.name}`,

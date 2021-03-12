@@ -84,7 +84,7 @@ export default async function routes(fastify: FastifyInstance) {
       if (objectResponse.error) {
         const { status, error } = objectResponse
         console.log(error)
-        return response.status(status).send(transformPostgrestError(error, status))
+        return response.status(400).send(transformPostgrestError(error, status))
       }
 
       // if successfully updated, copy and delete object from s3

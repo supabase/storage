@@ -114,7 +114,7 @@ describe('testing GET object', () => {
     expect(mockGetObject).not.toHaveBeenCalled()
   })
 
-  test('return 403 when reading a non existent object', async () => {
+  test('return 400 when reading a non existent object', async () => {
     const response = await app().inject({
       method: 'GET',
       url: '/object/bucket2/authenticated/notfound',
@@ -126,7 +126,7 @@ describe('testing GET object', () => {
     expect(mockGetObject).not.toHaveBeenCalled()
   })
 
-  test('return 404 when reading a non existent bucket', async () => {
+  test('return 400 when reading a non existent bucket', async () => {
     const response = await app().inject({
       method: 'GET',
       url: '/object/notfound/authenticated/casestudy.png',
@@ -175,7 +175,7 @@ describe('testing POST object', () => {
       headers,
       payload: form,
     })
-    expect(response.statusCode).toBe(403)
+    expect(response.statusCode).toBe(400)
     expect(mockUploadObject).not.toHaveBeenCalled()
     expect(response.body).toBe(
       JSON.stringify({
@@ -200,7 +200,7 @@ describe('testing POST object', () => {
     expect(mockUploadObject).not.toHaveBeenCalled()
   })
 
-  test('return 406 when uploading to a non existent bucket', async () => {
+  test('return 400 when uploading to a non existent bucket', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
@@ -217,7 +217,7 @@ describe('testing POST object', () => {
     expect(mockUploadObject).not.toHaveBeenCalled()
   })
 
-  test('return 409 when uploading to duplicate object', async () => {
+  test('return 400 when uploading to duplicate object', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
@@ -230,7 +230,7 @@ describe('testing POST object', () => {
       headers,
       payload: form,
     })
-    expect(response.statusCode).toBe(409)
+    expect(response.statusCode).toBe(400)
     expect(mockUploadObject).not.toHaveBeenCalled()
   })
 })
@@ -270,7 +270,7 @@ describe('testing PUT object', () => {
       headers,
       payload: form,
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockUploadObject).not.toHaveBeenCalled()
     // expect(response.body).toBe(`new row violates row-level security policy for table "objects"`)
   })
@@ -289,7 +289,7 @@ describe('testing PUT object', () => {
     expect(mockUploadObject).not.toHaveBeenCalled()
   })
 
-  test('return 406 when update to a non existent bucket', async () => {
+  test('return 400 when update to a non existent bucket', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
@@ -306,7 +306,7 @@ describe('testing PUT object', () => {
     expect(mockUploadObject).not.toHaveBeenCalled()
   })
 
-  test('return 406 when updating a non existent key', async () => {
+  test('return 400 when updating a non existent key', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
@@ -377,7 +377,7 @@ describe('testing copy object', () => {
     expect(mockCopyObject).not.toHaveBeenCalled()
   })
 
-  test('return 406 when copy from a non existent bucket', async () => {
+  test('return 400 when copy from a non existent bucket', async () => {
     const response = await app().inject({
       method: 'POST',
       url: '/object/copy',
@@ -394,7 +394,7 @@ describe('testing copy object', () => {
     expect(mockCopyObject).not.toHaveBeenCalled()
   })
 
-  test('return 406 when copying a non existent key', async () => {
+  test('return 400 when copying a non existent key', async () => {
     const response = await app().inject({
       method: 'POST',
       url: '/object/copy',
@@ -449,7 +449,7 @@ describe('testing delete object', () => {
     expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 
-  test('return 406 when delete from a non existent bucket', async () => {
+  test('return 400 when delete from a non existent bucket', async () => {
     const response = await app().inject({
       method: 'DELETE',
       url: '/object/notfound/authenticated/delete1.png',
@@ -457,11 +457,11 @@ describe('testing delete object', () => {
         authorization: `Bearer ${anonKey}`,
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 
-  test('return 406 when deleting a non existent key', async () => {
+  test('return 400 when deleting a non existent key', async () => {
     const response = await app().inject({
       method: 'DELETE',
       url: '/object/notfound/authenticated/notfound.jpg',
@@ -469,7 +469,7 @@ describe('testing delete object', () => {
         authorization: `Bearer ${anonKey}`,
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
     expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 })
@@ -527,7 +527,7 @@ describe('testing deleting multiple objects', () => {
     expect(mockDeleteObjects).not.toHaveBeenCalled()
   })
 
-  test('return 406 when delete from a non existent bucket', async () => {
+  test('return 400 when delete from a non existent bucket', async () => {
     const response = await app().inject({
       method: 'DELETE',
       url: '/object/notfound',
@@ -624,7 +624,7 @@ describe('testing generating signed URL', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  test('return 406 when generate signed urls from a non existent bucket', async () => {
+  test('return 400 when generate signed urls from a non existent bucket', async () => {
     const response = await app().inject({
       method: 'POST',
       url: '/object/sign/notfound/authenticated/cat.jpg',
@@ -693,5 +693,112 @@ describe('testing retrieving signed URL', () => {
     })
     console.log(response.body)
     expect(response.statusCode).toBe(400)
+  })
+})
+
+describe('testing rename object', () => {
+  test('check if RLS policies are respected: authenticated user is able to rename an authenticated object', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: `/object/rename`,
+      payload: {
+        sourceKey: 'authenticated/rename-orig.png',
+        destinationKey: 'authenticated/rename-new.png',
+        bucketName: 'bucket2',
+      },
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockCopyObject).toHaveBeenCalled()
+    expect(mockDeleteObject).toHaveBeenCalled()
+  })
+
+  test('check if RLS policies are respected: anon user is not able to rename an authenticated object', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: `/object/rename`,
+      payload: {
+        sourceKey: 'authenticated/rename-orig-2.png',
+        destinationKey: 'authenticated/rename-new-2.png',
+        bucketName: 'bucket2',
+      },
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockCopyObject).not.toHaveBeenCalled()
+    expect(mockDeleteObject).not.toHaveBeenCalled()
+  })
+
+  test('user is not able to rename an object without auth header', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: `/object/rename`,
+      payload: {
+        sourceKey: 'authenticated/rename-orig-3.png',
+        destinationKey: 'authenticated/rename-orig-new-3.png',
+        bucketName: 'bucket2',
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockCopyObject).not.toHaveBeenCalled()
+    expect(mockDeleteObject).not.toHaveBeenCalled()
+  })
+
+  test('user is not able to rename an object in a non existent bucket', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: `/object/rename`,
+      payload: {
+        sourceKey: 'authenticated/rename-orig-3.png',
+        destinationKey: 'authenticated/rename-orig-new-3.png',
+        bucketName: 'notfound',
+      },
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockCopyObject).not.toHaveBeenCalled()
+    expect(mockDeleteObject).not.toHaveBeenCalled()
+  })
+
+  test('user is not able to rename an non existent object', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: `/object/rename`,
+      payload: {
+        sourceKey: 'authenticated/notfound',
+        destinationKey: 'authenticated/rename-orig-new-3.png',
+        bucketName: 'bucket2',
+      },
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockCopyObject).not.toHaveBeenCalled()
+    expect(mockDeleteObject).not.toHaveBeenCalled()
+  })
+
+  test('user is not able to rename to an existing key', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: `/object/rename`,
+      payload: {
+        sourceKey: 'authenticated/rename-orig-2.png',
+        destinationKey: 'authenticated/rename-orig-3.png',
+        bucketName: 'bucket2',
+      },
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockCopyObject).not.toHaveBeenCalled()
+    expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 })

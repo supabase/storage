@@ -4,18 +4,9 @@ import { PostgrestError, StorageError } from '../types/types'
 import { getConfig } from '../utils/config'
 const { postgrestURL, anonKey, jwtSecret } = getConfig()
 
-// @todo define as an interface expecting sub instead
-type jwtType =
-  | {
-      aud: string
-      exp: number
-      sub: string
-      email: string
-      app_metadata: Record<string, unknown>
-      user_metadata: Record<string, unknown>
-      role: string
-    }
-  | undefined
+interface jwtInterface {
+  sub: string
+}
 
 export function getPostgrestClient(jwt: string): PostgrestClient {
   // @todo in kps, can we just ping localhost?
@@ -53,7 +44,7 @@ export function signJWT(
 
 export async function getOwner(token: string): Promise<string | undefined> {
   const decodedJWT = await verifyJWT(token)
-  return (decodedJWT as jwtType)?.sub
+  return (decodedJWT as jwtInterface)?.sub
 }
 
 export function transformPostgrestError(

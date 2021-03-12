@@ -122,4 +122,66 @@ describe('testing search', () => {
     })
     expect(response.statusCode).toBe(400)
   })
+
+  test('case insensitive search should work', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/search/bucket2',
+      payload: {
+        prefix: 'PUBLIC/',
+        limit: 10,
+        offset: 0,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const responseJSON = JSON.parse(response.body)
+    expect(responseJSON).toHaveLength(2)
+  })
+
+  test('test ascending search sorting', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/search/bucket2',
+      payload: {
+        prefix: 'public/',
+        sortBy: {
+          column: 'name',
+          order: 'asc',
+        },
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const responseJSON = JSON.parse(response.body)
+    expect(responseJSON).toHaveLength(2)
+    expect(responseJSON[0].name).toBe('sadcat-upload23.png')
+    expect(responseJSON[1].name).toBe('sadcat-upload.png')
+  })
+
+  test('test descending search sorting', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/search/bucket2',
+      payload: {
+        prefix: 'public/',
+        sortBy: {
+          column: 'name',
+          order: 'desc',
+        },
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const responseJSON = JSON.parse(response.body)
+    expect(responseJSON).toHaveLength(2)
+    expect(responseJSON[0].name).toBe('sadcat-upload.png')
+    expect(responseJSON[1].name).toBe('sadcat-upload23.png')
+  })
 })

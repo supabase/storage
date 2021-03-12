@@ -1,7 +1,7 @@
 DROP TABLE IF EXISTS "public"."buckets";
 CREATE TABLE "public"."buckets" (
     "id" uuid NOT NULL DEFAULT extensions.uuid_generate_v4(),
-    "name" varchar,
+    "name" text,
     "owner" uuid,
     "created_at" timestamptz DEFAULT now(),
     "updated_at" timestamptz DEFAULT now(),
@@ -14,7 +14,7 @@ DROP TABLE IF EXISTS "public"."objects";
 CREATE TABLE "public"."objects" (
     "id" uuid NOT NULL DEFAULT extensions.uuid_generate_v4(),
     "bucket_id" uuid,
-    "name" varchar,
+    "name" text,
     "owner" uuid,
     "created_at" timestamptz DEFAULT now(),
     "updated_at" timestamptz DEFAULT now(),
@@ -30,37 +30,37 @@ CREATE INDEX name_prefix_search ON objects(name text_pattern_ops);
 ALTER TABLE objects ENABLE ROW LEVEL SECURITY;
 -- @todo enable RLS only for buckets table
 
-CREATE OR REPLACE FUNCTION public.foldername(name varchar)
- RETURNS varchar[]
+CREATE OR REPLACE FUNCTION public.foldername(name text)
+ RETURNS text[]
  LANGUAGE plpgsql
 AS $function$
 DECLARE
-_parts varchar[];
+_parts text[];
 BEGIN
 	select string_to_array(name, '/') into _parts;
 	return _parts[1:array_length(_parts,1)-1];
 END
 $function$;
 
-CREATE OR REPLACE FUNCTION public.filename(name varchar)
- RETURNS varchar
+CREATE OR REPLACE FUNCTION public.filename(name text)
+ RETURNS text
  LANGUAGE plpgsql
 AS $function$
 DECLARE
-_parts varchar[];
+_parts text[];
 BEGIN
 	select string_to_array(name, '/') into _parts;
 	return _parts[array_length(_parts,1)];
 END
 $function$;
 
-CREATE OR REPLACE FUNCTION public.extension(name varchar)
- RETURNS varchar
+CREATE OR REPLACE FUNCTION public.extension(name text)
+ RETURNS text
  LANGUAGE plpgsql
 AS $function$
 DECLARE
-_parts varchar[];
-_filename varchar;
+_parts text[];
+_filename text;
 BEGIN
 	select string_to_array(name, '/') into _parts;
 	select _parts[array_length(_parts,1)] into _filename;

@@ -1,4 +1,3 @@
--- @todo add sql for indexes
 DROP TABLE IF EXISTS "public"."buckets";
 CREATE TABLE "public"."buckets" (
     "id" uuid NOT NULL DEFAULT extensions.uuid_generate_v4(),
@@ -26,6 +25,7 @@ CREATE TABLE "public"."objects" (
     PRIMARY KEY ("id")
 );
 CREATE UNIQUE INDEX "bucketid_objname" ON "public"."objects" USING BTREE ("bucketId","name");
+CREATE INDEX name_prefix_search ON objects(name text_pattern_ops);
 
 ALTER TABLE objects ENABLE ROW LEVEL SECURITY;
 

@@ -11,11 +11,6 @@ const successResponseSchema = {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Gets all buckets'
-  // @todo I have enabled RLS only for objects table
-  // makes writing the access policies a bit easier
-  // tradeoff is that everyone can see what buckets there are
-  // ahh looks like we do need RLS since users would be able to delete and empty buckets then
-  // probably a RLS policy with just read permissions?
   fastify.get<AuthenticatedRequest>(
     '/',
     {

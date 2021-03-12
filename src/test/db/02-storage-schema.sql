@@ -28,6 +28,7 @@ CREATE UNIQUE INDEX "bucketid_objname" ON "public"."objects" USING BTREE ("bucke
 CREATE INDEX name_prefix_search ON objects(name text_pattern_ops);
 
 ALTER TABLE objects ENABLE ROW LEVEL SECURITY;
+-- @todo enable RLS only for buckets table
 
 CREATE OR REPLACE FUNCTION public.foldername(name varchar)
  RETURNS varchar[]

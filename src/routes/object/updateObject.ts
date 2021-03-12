@@ -55,9 +55,6 @@ export default async function routes(fastify: FastifyInstance) {
       const postgrest = getPostgrestClient(jwt)
       const owner = await getOwner(jwt)
       // @todo how to merge these into one query?
-      // i can create a view and add INSTEAD OF triggers..is that the way to do it?
-      // @todo add unique constraint for just bucket names
-      // @todo add types for all all postgrest select calls
       const bucketResponse = await postgrest
         .from<Bucket>('buckets')
         .select('id')

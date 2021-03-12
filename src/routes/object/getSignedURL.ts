@@ -73,8 +73,6 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (!results.buckets) {
         // @todo why is this check necessary?
-        // if corresponding bucket is not found, i want the object also to not be returned
-        // is it cos of https://github.com/PostgREST/postgrest/issues/1075 ?
         return response.status(400).send({
           statusCode: '404',
           error: 'Not found',

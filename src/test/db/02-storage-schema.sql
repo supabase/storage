@@ -90,7 +90,7 @@ BEGIN
 		with files_folders as (
 			select ((string_to_array(objects.name, '/'))[levels]) as folder
 			from objects
-			where objects.name like prefix || '%'
+			where objects.name ilike prefix || '%'
 			and bucket_id = _bucketId
 			GROUP by folder
 			order by folder

@@ -17,6 +17,14 @@ const searchRequestBodySchema = {
     prefix: { type: 'string' },
     limit: { type: 'number' },
     offset: { type: 'number' },
+    sortBy: {
+      type: 'object',
+      properties: {
+        column: { type: 'string', enum: ['name', 'updated_at', 'created_at', 'last_accessed_at'] },
+        order: { type: 'string', enum: ['asc', 'desc'] },
+      },
+      required: ['column'],
+    },
   },
   required: ['prefix'],
 } as const
@@ -48,7 +56,15 @@ export default async function routes(fastify: FastifyInstance) {
 
       const postgrest = getPostgrestClient(jwt)
       const { bucketName } = request.params
-      const { limit, offset } = request.body
+      const { limit, offset, sortBy } = request.body
+      let sortColumn, sortOrder
+      if (sortBy?.column) {
+        sortColumn = sortBy.column
+        sortOrder = sortBy.order ?? 'asc'
+      } else {
+        sortColumn = 'name'
+        sortOrder = 'asc'
+      }
       let { prefix } = request.body
       if (prefix.length > 0 && !prefix.endsWith('/')) {
         // assuming prefix is always a folder
@@ -56,13 +72,17 @@ export default async function routes(fastify: FastifyInstance) {
       }
       console.log(request.body)
       console.log(`searching for `, prefix)
-      const { data: results, error, status } = await postgrest.rpc('search', {
-        prefix,
-        bucketname: bucketName,
-        limits: limit,
-        offsets: offset,
-        levels: prefix.split('/').length,
-      })
+      const { data: results, error, status } = await postgrest
+        .rpc('search', {
+          prefix,
+          bucketname: bucketName,
+          limits: limit,
+          offsets: offset,
+          levels: prefix.split('/').length,
+        })
+        .order(sortColumn, {
+          ascending: sortOrder === 'asc',
+        })
       console.log(results, error)
       if (error) {
         return response.status(status).send(transformPostgrestError(error, status))

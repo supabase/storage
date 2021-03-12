@@ -93,14 +93,12 @@ BEGIN
 			where objects.name ilike prefix || '%'
 			and bucket_id = _bucketId
 			GROUP by folder
-			order by folder
 			limit limits
 			offset offsets
 		) 
 		select files_folders.folder as name, objects.id, objects.updated_at, objects.created_at, objects.last_accessed_at, objects.metadata from files_folders 
 		left join objects
 		on prefix || files_folders.folder = objects.name
-        where objects.id is null or objects.bucket_id=_bucketId
-        order by name asc;
+        where objects.id is null or objects.bucket_id=_bucketId;
 END
 $function$;

@@ -84,7 +84,7 @@ export default async function routes(fastify: FastifyInstance) {
             {
               name: objectName,
               owner: owner,
-              bucketId: bucket.id,
+              bucket_id: bucket.id,
               metadata: {
                 mimetype: data.mimetype,
                 cacheControl,

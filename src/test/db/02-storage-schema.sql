@@ -3,8 +3,8 @@ CREATE TABLE "public"."buckets" (
     "id" uuid NOT NULL DEFAULT extensions.uuid_generate_v4(),
     "name" varchar,
     "owner" uuid,
-    "createdAt" timestamptz DEFAULT now(),
-    "updatedAt" timestamptz DEFAULT now(),
+    "created_at" timestamptz DEFAULT now(),
+    "updated_at" timestamptz DEFAULT now(),
     CONSTRAINT "buckets_owner_fkey" FOREIGN KEY ("owner") REFERENCES "auth"."users"("id"),
     PRIMARY KEY ("id")
 );
@@ -13,18 +13,18 @@ CREATE UNIQUE INDEX "bname" ON "public"."buckets" USING BTREE ("name");
 DROP TABLE IF EXISTS "public"."objects";
 CREATE TABLE "public"."objects" (
     "id" uuid NOT NULL DEFAULT extensions.uuid_generate_v4(),
-    "bucketId" uuid,
+    "bucket_id" uuid,
     "name" varchar,
     "owner" uuid,
-    "createdAt" timestamptz DEFAULT now(),
-    "updatedAt" timestamptz DEFAULT now(),
-    "lastAccessedAt" timestamptz DEFAULT now(),
+    "created_at" timestamptz DEFAULT now(),
+    "updated_at" timestamptz DEFAULT now(),
+    "last_accessed_at" timestamptz DEFAULT now(),
     "metadata" jsonb,
-    CONSTRAINT "objects_bucketId_fkey" FOREIGN KEY ("bucketId") REFERENCES "public"."buckets"("id"),
+    CONSTRAINT "objects_bucketId_fkey" FOREIGN KEY ("bucket_id") REFERENCES "public"."buckets"("id"),
     CONSTRAINT "objects_owner_fkey" FOREIGN KEY ("owner") REFERENCES "auth"."users"("id"),
     PRIMARY KEY ("id")
 );
-CREATE UNIQUE INDEX "bucketid_objname" ON "public"."objects" USING BTREE ("bucketId","name");
+CREATE UNIQUE INDEX "bucketid_objname" ON "public"."objects" USING BTREE ("bucket_id","name");
 CREATE INDEX name_prefix_search ON objects(name text_pattern_ops);
 
 ALTER TABLE objects ENABLE ROW LEVEL SECURITY;
@@ -70,13 +70,14 @@ END
 $function$;
 
 -- @todo can this query be optimised further?
+-- @todo is this vulnerable to sqli
 CREATE OR REPLACE FUNCTION public.search(prefix text, bucketname text, limits int DEFAULT 100, levels int DEFAULT 1, offsets int DEFAULT 0)
  RETURNS TABLE (
     name text,
     id uuid,
-    "updatedAt" TIMESTAMPTZ,
-    "createdAt" TIMESTAMPTZ,
-    "lastAccessedAt" TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ,
+    last_accessed_at TIMESTAMPTZ,
     metadata jsonb
   )
  LANGUAGE plpgsql
@@ -90,16 +91,16 @@ BEGIN
 			select ((string_to_array(objects.name, '/'))[levels]) as folder
 			from objects
 			where objects.name like prefix || '%'
-			and "bucketId" = _bucketId
+			and bucket_id = _bucketId
 			GROUP by folder
 			order by folder
 			limit limits
 			offset offsets
 		) 
-		select files_folders.folder as name, objects.id, objects."updatedAt", objects."createdAt", objects."lastAccessedAt", objects.metadata from files_folders 
+		select files_folders.folder as name, objects.id, objects.updated_at, objects.created_at, objects.last_accessed_at, objects.metadata from files_folders 
 		left join objects
 		on prefix || files_folders.folder = objects.name
-        where objects.id is null or objects."bucketId"=_bucketId
+        where objects.id is null or objects.bucket_id=_bucketId
         order by name asc;
 END
 $function$;

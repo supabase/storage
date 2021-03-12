@@ -58,7 +58,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { count: objectCount, error: objectError } = await superUserPostgrest
         .from<Obj>('objects')
         .select('id', { count: 'exact' })
-        .eq('bucketId', bucketId)
+        .eq('bucket_id', bucketId)
         .limit(10)
 
       console.log(objectCount, objectError)

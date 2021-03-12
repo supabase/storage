@@ -56,7 +56,7 @@ export default async function routes(fastify: FastifyInstance) {
         .single()
 
       if (bucketResponse.error) {
-        const { error, status } = bucketResponse
+        const { error } = bucketResponse
         console.log(error)
         return response.status(400).send({
           statusCode: '404',
@@ -73,7 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
         .delete()
         .match({
           name: objectName,
-          bucketId: bucket.id,
+          bucket_id: bucket.id,
         })
         .single()
 

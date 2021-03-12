@@ -61,7 +61,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { data: objects, error: objectError } = await postgrest
         .from<Obj>('objects')
         .select('name, id')
-        .eq('bucketId', bucketId)
+        .eq('bucket_id', bucketId)
         .limit(1000)
 
       console.log(objects, objectError)

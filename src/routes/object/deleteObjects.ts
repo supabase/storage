@@ -74,7 +74,7 @@ export default async function routes(fastify: FastifyInstance) {
       const objectResponse = await postgrest
         .from<Obj>('objects')
         .delete()
-        .eq('bucketId', bucket.id)
+        .eq('bucket_id', bucket.id)
         .in('name', prefixes)
 
       if (objectResponse.error) {

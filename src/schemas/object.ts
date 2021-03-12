@@ -5,12 +5,12 @@ export const objectSchema = {
   type: 'object',
   properties: {
     name: { type: 'string' },
-    bucketId: { type: 'string' },
+    bucket_id: { type: 'string' },
     owner: { type: 'string' },
     id: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-    updatedAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-    createdAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-    lastAccessedAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    updated_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    created_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    last_accessed_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
     metadata: {
       anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }],
     },

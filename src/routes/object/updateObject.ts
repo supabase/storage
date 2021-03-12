@@ -77,14 +77,14 @@ export default async function routes(fastify: FastifyInstance) {
       const objectResponse = await postgrest
         .from<Obj>('objects')
         .update({
-          lastAccessedAt: new Date().toISOString(),
+          last_accessed_at: new Date().toISOString(),
           owner,
           metadata: {
             mimetype: data.mimetype,
             cacheControl,
           },
         })
-        .match({ bucketId: bucket.id, name: objectName })
+        .match({ bucket_id: bucket.id, name: objectName })
         .single()
 
       if (objectResponse.error) {

@@ -1,23 +1,10 @@
 import { RequestGenericInterface } from 'fastify'
-export type Bucket = {
-  id: string
-  name: string
-  owner: string
-  createdAt: string
-  updatedAt: string
-}
+import { FromSchema } from 'json-schema-to-ts'
+import { objectSchema } from '../schemas/object'
+import { bucketSchema } from '../schemas/bucket'
 
-export type Obj = {
-  id: string
-  bucketId: string
-  name: string
-  owner: string
-  createdAt: string
-  updatedAt: string
-  lastAccessedAt: string
-  metadata?: Record<string, unknown>
-  buckets?: Bucket
-}
+export type Bucket = FromSchema<typeof bucketSchema>
+export type Obj = FromSchema<typeof objectSchema>
 
 export type signedToken = {
   url: string

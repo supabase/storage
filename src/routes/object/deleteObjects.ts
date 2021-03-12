@@ -4,6 +4,7 @@ import { deleteObjects, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { AuthenticatedRequest, Obj } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { objectSchema } from '../../schemas/object'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -22,15 +23,9 @@ const deleteObjectsBodySchema = {
   },
   required: ['prefixes'],
 } as const
-// @todo make items better
 const successResponseSchema = {
   type: 'array',
-  items: {
-    type: 'object',
-    properties: {
-      name: { type: 'string' },
-    },
-  },
+  items: objectSchema,
 }
 interface deleteObjectsInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof deleteObjectsParamsSchema>

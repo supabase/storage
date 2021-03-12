@@ -1,20 +1,11 @@
 import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { AuthenticatedRequest, Bucket } from '../../types/types'
-// @todo change later
+import { bucketSchema } from '../../schemas/bucket'
+
 const successResponseSchema = {
   type: 'array',
-  items: {
-    type: 'object',
-    properties: {
-      id: { type: 'string' },
-      name: { type: 'string' },
-      owner: { type: 'string' },
-      createdAt: { type: 'string' },
-      updatedAt: { type: 'string' },
-    },
-    required: ['id', 'name'],
-  },
+  items: bucketSchema,
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types

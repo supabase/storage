@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner, transformPostgrestError } from '../../utils'
 import { AuthenticatedRequest, Bucket } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { bucketSchema } from '../../schemas/bucket'
 
 const createBucketBodySchema = {
   type: 'object',
@@ -10,18 +11,8 @@ const createBucketBodySchema = {
   },
   required: ['name'],
 } as const
-// @todo change later
-const successResponseSchema = {
-  type: 'object',
-  properties: {
-    id: { type: 'string' },
-    name: { type: 'string' },
-    owner: { type: 'string' },
-    createdAt: { type: 'string' },
-    updatedAt: { type: 'string' },
-  },
-  required: ['id', 'name'],
-}
+
+const successResponseSchema = bucketSchema
 interface createBucketRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof createBucketBodySchema>
 }

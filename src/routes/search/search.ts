@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types/types'
+import { objectSchema } from '../../schemas/object'
 
 const searchRequestParamsSchema = {
   type: 'object',
@@ -19,20 +20,9 @@ const searchRequestBodySchema = {
   },
   required: ['prefix'],
 } as const
-// @todo make better
 const successResponseSchema = {
   type: 'array',
-  items: {
-    type: 'object',
-    properties: {
-      name: { type: 'string' },
-      id: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-      updatedAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-      createdAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-      lastAccessedAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-      metadata: { anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
-    },
-  },
+  items: objectSchema,
 }
 interface searchRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof searchRequestBodySchema>

@@ -4,6 +4,8 @@ import path from 'path'
 import fastifyMultipart from 'fastify-multipart'
 import fastifyCors from 'fastify-cors'
 import fastifySwagger from 'fastify-swagger'
+import { errorSchema } from './schemas/error'
+import { authSchema } from './schemas/auth'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -32,24 +34,8 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   }
 
   // add in common schemas
-  app.addSchema({
-    $id: 'authSchema',
-    type: 'object',
-    properties: {
-      authorization: { type: 'string' },
-    },
-    required: ['authorization'],
-  })
-  app.addSchema({
-    $id: 'errorSchema',
-    type: 'object',
-    properties: {
-      statusCode: { type: 'string' },
-      error: { type: 'string' },
-      message: { type: 'string' },
-    },
-    required: ['statusCode', 'error', 'message'],
-  })
+  app.addSchema(authSchema)
+  app.addSchema(errorSchema)
 
   app.register(autoload, {
     dir: path.join(__dirname, 'routes'),

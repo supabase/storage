@@ -100,7 +100,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       console.log(results, error)
       if (error) {
-        return response.status(status).send(transformPostgrestError(error, status))
+        return response.status(400).send(transformPostgrestError(error, status))
       }
 
       // if successfully inserted, upload to s3

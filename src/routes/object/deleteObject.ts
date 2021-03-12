@@ -60,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
       if (bucketResponse.error) {
         const { error, status } = bucketResponse
         console.log(error)
-        return response.status(status).send({
+        return response.status(400).send({
           statusCode: '404',
           error: 'Not found',
           message: 'The requested bucket was not found',

@@ -24,7 +24,7 @@ jobs:
       REGION: ${{ secrets.REGION }}
       POSTGREST_URL: ${{ secrets.POSTGREST_URL }}
       GLOBAL_S3_BUCKET: ${{ secrets.GLOBAL_S3_BUCKET }}
-      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
       AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
 
     steps:

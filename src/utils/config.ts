@@ -34,6 +34,6 @@ export function getConfig(): storageConfigType {
     postgrestURL: getConfigFromEnv('POSTGREST_URL'),
     globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
     globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
-    jwtSecret: getConfigFromEnv('JWT_SECRET'),
+    jwtSecret: getConfigFromEnv('PGRST_JWT_SECRET'),
   }
 }

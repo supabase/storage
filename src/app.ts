@@ -1,11 +1,13 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
-import autoload from 'fastify-autoload'
-import path from 'path'
 import fastifyMultipart from 'fastify-multipart'
 import fastifyCors from 'fastify-cors'
 import fastifySwagger from 'fastify-swagger'
 import { errorSchema } from './schemas/error'
 import { authSchema } from './schemas/auth'
+
+import bucketRoutes from './routes/bucket/'
+import objectRoutes from './routes/object'
+import searchRoutes from './routes/search'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -37,9 +39,10 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.addSchema(authSchema)
   app.addSchema(errorSchema)
 
-  app.register(autoload, {
-    dir: path.join(__dirname, 'routes'),
-  })
+  app.register(bucketRoutes, { prefix: 'bucket' })
+  app.register(objectRoutes, { prefix: 'object' })
+  app.register(searchRoutes, { prefix: 'search' })
+
   return app
 }
 

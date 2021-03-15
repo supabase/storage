@@ -25,7 +25,6 @@
     "@supabase/postgrest-js": "^0.26.1",
     "dotenv": "^8.2.0",
     "fastify": "^3.14.0",
-    "fastify-autoload": "^3.5.2",
     "fastify-cors": "^5.2.0",
     "fastify-multipart": "^4.0.1",
     "fastify-swagger": "^4.4.1",

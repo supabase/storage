@@ -34,10 +34,12 @@ jobs:
           npm run build
           npm run pkg -- --targets node12-linux-arm64 --output storage-api-arm64
           cp storage-api-arm64 /artifacts/storage-api-arm64
+          ls -la
+          ls -la /artifacts
     - name: Release
       uses: softprops/action-gh-release@v1
       with:
-        files: /artifacts/storage-api-arm64
+        files: artifacts/storage-api-arm64
         tag_name: 0.0.1
         name: test-release
       env:

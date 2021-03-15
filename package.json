@@ -11,8 +11,8 @@
     "deploy": "flyctl deploy --remote-only",
     "logs": "flyctl logs",
     "test": "npm run test:db && jest --runInBand",
-    "test:clean": "cd src/test/db && docker-compose down",
-    "test:db": "cd src/test/db && docker-compose down && docker-compose up -d && sleep 1"
+    "test:clean": "docker-compose -f src/test/db/docker-compose.yml down",
+    "test:db": "docker-compose -f src/test/db/docker-compose.yml down && docker-compose -f src/test/db/docker-compose.yml up -d && sleep 1"
   },
   "author": "Supabase",
   "license": "ISC",

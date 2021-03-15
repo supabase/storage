@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  # push:
+  #   branches:
+  #     - master
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test / OS ${{ matrix.platform }} / Node ${{ matrix.node }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-18.04]
+        node: ["12"]
+
+    runs-on: ${{ matrix.platform }}
+    env:
+      ANON_KEY: ${{ secrets.ANON_KEY }}
+      SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
+      PROJECT_REF: ${{ secrets.PROJECT_REF }}
+      REGION: ${{ secrets.REGION }}
+      POSTGREST_URL: ${{ secrets.POSTGREST_URL }}
+      GLOBAL_S3_BUCKET: ${{ secrets.GLOBAL_S3_BUCKET }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v1
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      - name: Set up Node
+        uses: actions/setup-node@v1
+        with:
+          node-version: ${{ matrix.node }}
+
+      - run: |
+          npm ci
+          npm test

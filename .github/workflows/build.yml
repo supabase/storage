@@ -38,6 +38,8 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: /artifacts/storage-api-arm64
+        tag_name: 0.0.1
+        name: test-release
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       

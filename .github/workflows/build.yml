@@ -35,9 +35,9 @@ jobs:
           npm run pkg -- --targets node12-linux-arm64 --output storage-api-arm64
           cp storage-api-arm64 /artifacts/storage-api-arm64
     - name: Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: /artifacts/storage-api-arm64
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
+      with:
+        files: /artifacts/storage-api-arm64
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       

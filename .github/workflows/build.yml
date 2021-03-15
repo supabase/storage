@@ -28,11 +28,16 @@ jobs:
           . ~/.nvm/nvm.sh
           nvm install 12.18.1
           npm ci
-          npm ls pkg-fetch
           mkdir -p ~/.pkg-cache/v2.6
           wget https://github.com/robertsLando/pkg-binaries/releases/download/v1.0.0/fetched-v12.18.1-linux-arm64 -O fetched-v12.18.1-linux-arm64
           mv fetched-v12.18.1-linux-arm64 ~/.pkg-cache/v2.6
           npm run build
           npm run pkg -- --targets node12-linux-arm64 --output storage-api-arm64
           cp storage-api-arm64 /artifacts/storage-api-arm64
+    - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: /artifacts/storage-api-arm64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       

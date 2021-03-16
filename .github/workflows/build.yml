@@ -6,52 +6,65 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: build the binary
+  build-x86:
+    name: Build x64 binary
     runs-on: ubuntu-18.04
     steps:
     - uses: actions/checkout@v2
-    - name: Build x86 artifact
-      id: build-x86
+    - name: Set up Node
+      uses: actions/setup-node@v2
+      with:
+        node-version: '12.18.1'
+    - uses: actions/cache@v2
+      with:
+        path: ~/.npm
+        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-node-
+    - name: Build x64 artifact
+      id: build-x64
       run: |
         npm ci
         npm run build
-        npm pkg -- --targets node12-linux-x86 --output storage-api-x86
-        tar -czvf storage-api-x86.tar.gz storage-api-x86
-    - uses: uraimo/run-on-arch-action@v2.0.5
-      name: Build ARM64 artifact
-      id: build-arm64
-      with:
-        arch: aarch64
-        distro: ubuntu18.04
-        setup: |
-            mkdir -p "${PWD}/artifacts"
-        dockerRunArgs: |
-          --volume "${PWD}/artifacts:/artifacts"
-        run: |
-          apt update
-          apt -y install --no-install-recommends curl wget ca-certificates
-          curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.37.2/install.sh | bash
-          . ~/.nvm/nvm.sh
-          nvm install 12.18.1
-          npm ci
-          mkdir -p ~/.pkg-cache/v2.6
-          wget https://github.com/robertsLando/pkg-binaries/releases/download/v1.0.0/fetched-v12.18.1-linux-arm64 -O fetched-v12.18.1-linux-arm64
-          mv fetched-v12.18.1-linux-arm64 ~/.pkg-cache/v2.6
-          npm run build
-          npm run pkg -- --targets node12-linux-arm64 --output storage-api-arm64
-          tar -czvf storage-api-arm64.tar.gz storage-api-arm64
-          cp storage-api-arm64.tar.gz /artifacts/storage-api-arm64.tar.gz
-          ls -la
-          ls -la /artifacts
-    - name: Release on github
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          artifacts/storage-api-arm64.tar.gz
-          storage-api-x86.tar.gz
-        tag_name: 0.0.1
-        name: test-release
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        npm run pkg -- --targets node12-linux-x64 --output storage-api-x64
+        tar -czvf storage-api-x64.tar.gz storage-api-x64
+  build-arm:
+    name: Build ARM64 artifact
+    runs-on: ubuntu-18.04
+    steps:
+      - uses: actions/checkout@v2
+      # - name: Setup cache
+      #   uses: actions/cache@v2
+      #   with:
+      #     path: |
+      #       ~/.ccache
+      #     key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}-aarch64
+      - uses: uraimo/run-on-arch-action@v2.0.5
+        id: build-arm64
+        with:
+          arch: aarch64
+          distro: ubuntu18.04
+          githubToken: ${{ github.token }}
+          setup: |
+              mkdir -p "${PWD}/artifacts"
+              mkdir -p "${PWD}/ccache"
+          dockerRunArgs: |
+            --volume "${PWD}/artifacts:/artifacts"
+          # --volume "${PWD}/.ccache:/root/.npm"
+          install: |
+            apt-get update -y
+            apt-get -y install --no-install-recommends curl wget ca-certificates
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.37.2/install.sh | bash
+            . ~/.nvm/nvm.sh
+            nvm install 12.18.1
+            mkdir -p ~/.pkg-cache/v2.6
+            wget https://github.com/robertsLando/pkg-binaries/releases/download/v1.0.0/fetched-v12.18.1-linux-arm64 -O fetched-v12.18.1-linux-arm64
+            mv fetched-v12.18.1-linux-arm64 ~/.pkg-cache/v2.6
+          run: |
+            . ~/.nvm/nvm.sh
+            npm ci
+            npm run build
+            npm run pkg -- --targets node12-linux-arm64 --output storage-api-arm64
+            tar -czvf storage-api-arm64.tar.gz storage-api-arm64
+            cp storage-api-arm64.tar.gz /artifacts/storage-api-arm64.tar.gz
       

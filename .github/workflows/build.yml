@@ -119,7 +119,7 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: /artifacts/storage-api-arm64.tar.gz
+          file: artifacts/storage-api-arm64.tar.gz
           tag: 0.0.1
           overwrite: true
       

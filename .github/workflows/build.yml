@@ -33,13 +33,14 @@ jobs:
           mv fetched-v12.18.1-linux-arm64 ~/.pkg-cache/v2.6
           npm run build
           npm run pkg -- --targets node12-linux-arm64 --output storage-api-arm64
-          cp storage-api-arm64 /artifacts/storage-api-arm64
+          tar -czvf storage-api-arm64.tar.gz storage-api-arm64
+          cp storage-api-arm64.tar.gz /artifacts/storage-api-arm64.tar.gz
           ls -la
           ls -la /artifacts
-    - name: Release
+    - name: Release on github
       uses: softprops/action-gh-release@v1
       with:
-        files: artifacts/storage-api-arm64
+        files: artifacts/storage-api-arm64.tar.gz
         tag_name: 0.0.1
         name: test-release
       env:

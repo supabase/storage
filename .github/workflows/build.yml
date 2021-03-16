@@ -51,6 +51,7 @@ jobs:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
         file: storage-api-linux-x64.tar.gz
         tag: 0.0.1
+        asset_name: storage-api-linux-x86_64.tar.gz
         overwrite: true
     - name: Upload macos binary to release
       uses: svenstaro/upload-release-action@v2
@@ -58,6 +59,7 @@ jobs:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
         file: storage-api-macos-x64.tar.gz
         tag: 0.0.1
+        asset_name: storage-api-macos-x86_64.tar.gz
         overwrite: true
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v1
@@ -120,6 +122,7 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: artifacts/storage-api-arm64.tar.gz
+          asset_name: storage-api-linux-aarch64.tar.gz
           tag: 0.0.1
           overwrite: true
       

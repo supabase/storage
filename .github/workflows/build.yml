@@ -11,6 +11,13 @@ jobs:
     runs-on: ubuntu-18.04
     steps:
     - uses: actions/checkout@v2
+    - name: Build x86 artifact
+      id: build-x86
+      run: |
+        npm ci
+        npm run build
+        npm pkg -- --targets node12-linux-x86 --output storage-api-x86
+        tar -czvf storage-api-x86.tar.gz storage-api-x86
     - uses: uraimo/run-on-arch-action@v2.0.5
       name: Build ARM64 artifact
       id: build-arm64
@@ -37,13 +44,6 @@ jobs:
           cp storage-api-arm64.tar.gz /artifacts/storage-api-arm64.tar.gz
           ls -la
           ls -la /artifacts
-    - name: Build x86 artifact
-      id: build-x86
-      run: |
-        npm ci
-        npm run build
-        npm pkg -- --targets node12-linux-x86 --output storage-api-x86
-        tar -czvf storage-api-x86.tar.gz storage-api-x86
     - name: Release on github
       uses: softprops/action-gh-release@v1
       with:

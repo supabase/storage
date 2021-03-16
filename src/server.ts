@@ -15,7 +15,7 @@ const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
   exposeDocs,
 })
 
-app.listen(8080, '0.0.0.0', (err, address) => {
+app.listen(5000, '0.0.0.0', (err, address) => {
   if (err) {
     console.error(err)
     process.exit(1)

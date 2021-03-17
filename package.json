@@ -11,9 +11,9 @@
     "start:fly": "NODE_ENV=production node -r dotenv/config dist/server.js dotenv_config_path=.env.s3",
     "deploy": "flyctl deploy --remote-only",
     "logs": "flyctl logs",
-    "test": "npm run test:db && jest --runInBand",
-    "test:clean": "docker-compose -f src/test/db/docker-compose.yml down",
-    "test:db": "docker-compose -f src/test/db/docker-compose.yml down && docker-compose -f src/test/db/docker-compose.yml up -d && sleep 1"
+    "test": "npm run restart:db && jest --runInBand",
+    "stop:db": "docker-compose -f src/test/db/docker-compose.yml down",
+    "restart:db": "docker-compose -f src/test/db/docker-compose.yml down && docker-compose -f src/test/db/docker-compose.yml up -d && sleep 1"
   },
   "author": "Supabase",
   "license": "ISC",

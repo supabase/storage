@@ -40,10 +40,10 @@ jobs:
         npm ci
         npm run build
         npm run pkg -- --targets node12-linux-x64,node12-macos-x64 --out-path bin
-        mv bin/server-macos bin/storage-api-macos
-        mv bin/server-linux bin/storage-api-linux
-        tar -czvf storage-api-linux-x64.tar.gz -C ./bin storage-api-linux
-        tar -czvf storage-api-macos-x64.tar.gz -C ./bin storage-api-macos
+        mv bin/server-macos bin/storage-api-macos-x86_64
+        mv bin/server-linux bin/storage-api-x86_64
+        tar -czvf storage-api-linux-x64.tar.gz -C ./bin storage-api-x86_64
+        tar -czvf storage-api-macos-x64.tar.gz -C ./bin storage-api-macos-x86_64
 
     - name: Upload x64 binary to release
       uses: svenstaro/upload-release-action@v2

@@ -17,7 +17,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   const app = fastify(opts)
   app.register(fastifyMultipart, {
     limits: {
-      fields: 0,
+      fields: 10,
       fileSize: 50 * 1024 * 1024,
       files: 1,
     },

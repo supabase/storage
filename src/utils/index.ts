@@ -9,7 +9,6 @@ interface jwtInterface {
 }
 
 export function getPostgrestClient(jwt: string): PostgrestClient {
-  // @todo in kps, can we just ping localhost?
   const postgrest = new PostgrestClient(postgrestURL, {
     headers: {
       apiKey: anonKey,

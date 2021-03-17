@@ -1,11 +1,11 @@
 import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner, transformPostgrestError } from '../../utils'
-import { uploadObject, initClient } from '../../utils/s3'
+import { uploadObject, initClient, deleteObject } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
+const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
 const client = initClient(region, globalS3Endpoint)
 
 const createObjectParamsSchema = {
@@ -112,6 +112,32 @@ export default async function routes(fastify: FastifyInstance) {
         data.mimetype,
         cacheControl
       )
+
+      // since we are using streams, fastify can't throw the error reliably
+      // busboy sets the truncated property on streams if limit was exceeded
+      // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
+      /* @ts-expect-error: busboy doesn't export proper types */
+      const isTruncated = data.file.truncated
+      if (isTruncated) {
+        // undo operations as super user
+        const superUserPostgrest = getPostgrestClient(serviceKey)
+        await superUserPostgrest
+          .from<Obj>('objects')
+          .delete()
+          .match({
+            name: objectName,
+            bucket_id: bucket.id,
+          })
+          .single()
+        await deleteObject(client, globalS3Bucket, s3Key)
+
+        // return an error response
+        return response.status(400).send({
+          statusCode: '413',
+          error: 'Payload too large',
+          message: 'The object exceeded the maximum allowed size',
+        })
+      }
 
       return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
         Key: s3Key,

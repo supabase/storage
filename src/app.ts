@@ -15,9 +15,13 @@ interface buildOpts extends FastifyServerOptions {
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
   const app = fastify(opts)
-  // @todo - should we set upload limits here?
-  // https://github.com/fastify/fastify-multipart#handle-file-size-limitation
-  app.register(fastifyMultipart)
+  app.register(fastifyMultipart, {
+    limits: {
+      fields: 0,
+      fileSize: 50 * 1024 * 1024,
+      files: 1,
+    },
+  })
 
   // @todo - restrict origin here
   app.register(fastifyCors)

@@ -7,15 +7,21 @@ on:
 
 jobs:
   release:
-    name: Release
     runs-on: ubuntu-18.04
+    outputs:
+      version: ${{ steps.semantic.outputs.new_release_version }}
     steps:
-    - uses: softprops/action-gh-release@v1
+    - uses: actions/checkout@v2
+    - name: Semantic Release
+      id: semantic
+      uses: cycjimmy/semantic-release-action@v2
+      with:
+        extra_plugins: |
+          @semantic-release/commit-analyzer
+          @semantic-release/release-notes-generator
+          @semantic-release/github
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        name: test-release
-        tag_name: 0.0.1
 
   build-x86:
     name: Build x64 binary
@@ -44,13 +50,12 @@ jobs:
         mv bin/server-linux bin/storage-api-x86_64
         tar -czvf storage-api-linux-x64.tar.gz -C ./bin storage-api-x86_64
         tar -czvf storage-api-macos-x64.tar.gz -C ./bin storage-api-macos-x86_64
-
     - name: Upload x64 binary to release
       uses: svenstaro/upload-release-action@v2
       with:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
         file: storage-api-linux-x64.tar.gz
-        tag: 0.0.1
+        tag: v${{ needs.release.outputs.version }}
         asset_name: storage-api-linux-x86_64.tar.gz
         overwrite: true
     - name: Upload macos binary to release
@@ -58,23 +63,23 @@ jobs:
       with:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
         file: storage-api-macos-x64.tar.gz
-        tag: 0.0.1
+        tag: v${{ needs.release.outputs.version }}
         asset_name: storage-api-macos-x86_64.tar.gz
         overwrite: true
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v1
-    - name: Login to DockerHub
-      uses: docker/login-action@v1
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-    - name: Build and push
-      uses: docker/build-push-action@v2
-      with:
-        context: .
-        file: gh-Dockerfile
-        push: true
-        tags: supabase/storage-api:latest,supabase/storage-api:0.0.1
+    # - name: Set up Docker Buildx
+    #   uses: docker/setup-buildx-action@v1
+    # - name: Login to DockerHub
+    #   uses: docker/login-action@v1
+    #   with:
+    #     username: ${{ secrets.DOCKER_USERNAME }}
+    #     password: ${{ secrets.DOCKER_PASSWORD }}
+    # - name: Build and push
+    #   uses: docker/build-push-action@v2
+    #   with:
+    #     context: .
+    #     file: gh-Dockerfile
+    #     push: true
+    #     tags: supabase/storage-api:latest,supabase/storage-api:0.0.1
 
   build-arm:
     name: Build ARM64 artifact
@@ -123,6 +128,6 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: artifacts/storage-api-aarch64.tar.gz
           asset_name: storage-api-linux-aarch64.tar.gz
-          tag: 0.0.1
+          tag: v${{ needs.release.outputs.version }}
           overwrite: true
       

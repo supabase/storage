@@ -82,7 +82,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       console.log(`going to sign ${request.url}`)
       const urlParts = request.url.split('/')
-      const urlToSign = urlParts.splice(3).join('/')
+      const urlToSign = decodeURI(urlParts.splice(3).join('/'))
       const token = await signJWT({ url: urlToSign }, expiresIn)
 
       // @todo parse the url properly

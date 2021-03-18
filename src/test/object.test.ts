@@ -14,7 +14,8 @@ let mockGetObject: any,
   mockUploadObject: any,
   mockCopyObject: any,
   mockDeleteObject: any,
-  mockDeleteObjects: any
+  mockDeleteObjects: any,
+  mockHeadObject: any
 
 beforeAll(() => {
   mockGetObject = jest.spyOn(utils, 'getObject')
@@ -68,6 +69,15 @@ beforeAll(() => {
     Promise.resolve({
       $metadata: {
         httpStatusCode: 204,
+      },
+    })
+  )
+
+  mockHeadObject = jest.spyOn(utils, 'headObject')
+  mockHeadObject.mockImplementation(() =>
+    Promise.resolve({
+      $metadata: {
+        ContentLength: 1000,
       },
     })
   )
@@ -155,6 +165,7 @@ describe('testing POST object', () => {
       headers,
       payload: form,
     })
+    console.log(response)
     expect(response.statusCode).toBe(200)
     expect(mockUploadObject).toBeCalled()
     expect(response.body).toBe(

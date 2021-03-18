@@ -7,6 +7,8 @@ import {
   DeleteObjectsOutput,
   GetObjectCommand,
   GetObjectCommandOutput,
+  HeadObjectCommand,
+  HeadObjectOutput,
   ObjectIdentifier,
   S3Client,
   S3ClientConfig,
@@ -98,6 +100,18 @@ export async function deleteObjects(
     Delete: {
       Objects: prefixes,
     },
+  })
+  return await client.send(command)
+}
+
+export async function headObject(
+  client: S3Client,
+  bucket: string,
+  key: string
+): Promise<HeadObjectOutput> {
+  const command = new HeadObjectCommand({
+    Bucket: bucket,
+    Key: key,
   })
   return await client.send(command)
 }

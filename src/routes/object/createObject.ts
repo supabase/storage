@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner, transformPostgrestError, isValidKey } from '../../utils'
-import { uploadObject, initClient, deleteObject } from '../../utils/s3'
+import { uploadObject, initClient, deleteObject, headObject } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
@@ -84,10 +84,6 @@ export default async function routes(fastify: FastifyInstance) {
               name: objectName,
               owner: owner,
               bucket_id: bucketName,
-              metadata: {
-                mimetype: data.mimetype,
-                cacheControl,
-              },
             },
           ],
           {
@@ -137,6 +133,22 @@ export default async function routes(fastify: FastifyInstance) {
           message: 'The object exceeded the maximum allowed size',
         })
       }
+
+      const objectMetadata = await headObject(client, globalS3Bucket, s3Key)
+      // update content-length as super user since user may not have update permissions
+      const { error: updateError } = await getPostgrestClient(serviceKey)
+        .from<Obj>('objects')
+        .update({
+          metadata: {
+            mimetype: data.mimetype,
+            cacheControl,
+            size: objectMetadata.ContentLength,
+          },
+        })
+        .match({ bucket_id: bucketName, name: objectName })
+        .single()
+
+      console.log(updateError)
 
       return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
         Key: s3Key,

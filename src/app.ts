@@ -23,8 +23,8 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
     },
   })
 
-  // @todo - restrict origin here
-  app.register(fastifyCors)
+  // kong should take care of cors
+  // app.register(fastifyCors)
 
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {

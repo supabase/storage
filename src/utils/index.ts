@@ -14,6 +14,7 @@ export function getPostgrestClient(jwt: string): PostgrestClient {
       apiKey: anonKey,
       Authorization: `Bearer ${jwt}`,
     },
+    schema: 'storage',
   })
   return postgrest
 }

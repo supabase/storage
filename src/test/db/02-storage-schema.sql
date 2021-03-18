@@ -1,5 +1,12 @@
-DROP TABLE IF EXISTS "public"."buckets";
-CREATE TABLE "public"."buckets" (
+CREATE SCHEMA IF NOT EXISTS storage AUTHORIZATION supabase_admin;
+
+grant usage on schema storage to postgres, anon, authenticated, service_role;
+alter default privileges in schema storage grant all on tables to postgres, anon, authenticated, service_role;
+alter default privileges in schema storage grant all on functions to postgres, anon, authenticated, service_role;
+alter default privileges in schema storage grant all on sequences to postgres, anon, authenticated, service_role;
+
+DROP TABLE IF EXISTS "storage"."buckets";
+CREATE TABLE "storage"."buckets" (
     "id" text not NULL,
     "name" text NOT NULL,
     "owner" uuid,
@@ -8,10 +15,10 @@ CREATE TABLE "public"."buckets" (
     CONSTRAINT "buckets_owner_fkey" FOREIGN KEY ("owner") REFERENCES "auth"."users"("id"),
     PRIMARY KEY ("id")
 );
-CREATE UNIQUE INDEX "bname" ON "public"."buckets" USING BTREE ("name");
+CREATE UNIQUE INDEX "bname" ON "storage"."buckets" USING BTREE ("name");
 
-DROP TABLE IF EXISTS "public"."objects";
-CREATE TABLE "public"."objects" (
+DROP TABLE IF EXISTS "storage"."objects";
+CREATE TABLE "storage"."objects" (
     "id" uuid NOT NULL DEFAULT extensions.uuid_generate_v4(),
     "bucket_id" text,
     "name" text,
@@ -20,17 +27,17 @@ CREATE TABLE "public"."objects" (
     "updated_at" timestamptz DEFAULT now(),
     "last_accessed_at" timestamptz DEFAULT now(),
     "metadata" jsonb,
-    CONSTRAINT "objects_bucketId_fkey" FOREIGN KEY ("bucket_id") REFERENCES "public"."buckets"("id"),
+    CONSTRAINT "objects_bucketId_fkey" FOREIGN KEY ("bucket_id") REFERENCES "storage"."buckets"("id"),
     CONSTRAINT "objects_owner_fkey" FOREIGN KEY ("owner") REFERENCES "auth"."users"("id"),
     PRIMARY KEY ("id")
 );
-CREATE UNIQUE INDEX "bucketid_objname" ON "public"."objects" USING BTREE ("bucket_id","name");
-CREATE INDEX name_prefix_search ON objects(name text_pattern_ops);
+CREATE UNIQUE INDEX "bucketid_objname" ON "storage"."objects" USING BTREE ("bucket_id","name");
+CREATE INDEX name_prefix_search ON storage.objects(name text_pattern_ops);
 
-ALTER TABLE objects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 -- @todo enable RLS only for buckets table
 
-CREATE OR REPLACE FUNCTION public.foldername(name text)
+CREATE OR REPLACE FUNCTION storage.foldername(name text)
  RETURNS text[]
  LANGUAGE plpgsql
 AS $function$
@@ -42,7 +49,7 @@ BEGIN
 END
 $function$;
 
-CREATE OR REPLACE FUNCTION public.filename(name text)
+CREATE OR REPLACE FUNCTION storage.filename(name text)
  RETURNS text
  LANGUAGE plpgsql
 AS $function$
@@ -54,7 +61,7 @@ BEGIN
 END
 $function$;
 
-CREATE OR REPLACE FUNCTION public.extension(name text)
+CREATE OR REPLACE FUNCTION storage.extension(name text)
  RETURNS text
  LANGUAGE plpgsql
 AS $function$
@@ -71,7 +78,7 @@ $function$;
 
 -- @todo can this query be optimised further?
 -- @todo is this vulnerable to sqli
-CREATE OR REPLACE FUNCTION public.search(prefix text, bucketname text, limits int DEFAULT 100, levels int DEFAULT 1, offsets int DEFAULT 0)
+CREATE OR REPLACE FUNCTION storage.search(prefix text, bucketname text, limits int DEFAULT 100, levels int DEFAULT 1, offsets int DEFAULT 0)
  RETURNS TABLE (
     name text,
     id uuid,

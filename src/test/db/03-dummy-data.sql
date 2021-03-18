@@ -5,7 +5,7 @@ INSERT INTO "auth"."users" ("instance_id", "id", "aud", "role", "email", "encryp
 ('00000000-0000-0000-0000-000000000000', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', 'authenticated', 'authenticated', 'inian+admin@supabase.io', '', NULL, '2021-02-17 04:40:42.901743+00', '3EG99GjT_e3NC4eGEBXOjw', '2021-02-17 04:40:42.901743+00', '', NULL, '', '', NULL, NULL, '{"provider": "email"}', 'null', 'f', '2021-02-17 04:40:42.890632+00', '2021-02-17 04:40:42.890637+00');
 
 -- insert buckets
-INSERT INTO "public"."buckets" ("id", "name", "owner", "created_at", "updated_at") VALUES
+INSERT INTO "storage"."buckets" ("id", "name", "owner", "created_at", "updated_at") VALUES
 ('bucket2', 'bucket2', '4d56e902-f0a0-4662-8448-a4d9e643c142', '2021-02-17 04:43:32.770206+00', '2021-02-17 04:43:32.770206+00'),
 ('bucket3', 'bucket3', '4d56e902-f0a0-4662-8448-a4d9e643c142', '2021-02-17 04:43:32.770206+00', '2021-02-17 04:43:32.770206+00'),
 ('bucket4', 'bucket4', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-25 09:23:01.58385+00', '2021-02-25 09:23:01.58385+00'),
@@ -13,7 +13,7 @@ INSERT INTO "public"."buckets" ("id", "name", "owner", "created_at", "updated_at
 
 
 -- insert objects
-INSERT INTO "public"."objects" ("id", "bucket_id", "name", "owner", "created_at", "updated_at", "last_accessed_at", "metadata") VALUES
+INSERT INTO "storage"."objects" ("id", "bucket_id", "name", "owner", "created_at", "updated_at", "last_accessed_at", "metadata") VALUES
 ('03e458f9-892f-4db2-8cb9-d3401a689e25', 'bucket2', 'public/sadcat-upload23.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-04 08:26:08.553748+00', '2021-03-04 08:26:08.553748+00', '2021-03-04 08:26:08.553748+00', '{"mimetype": "image/svg+xml"}'),
 ('070825af-a11d-44fe-9f1d-abdc76f686f2', 'bucket2', 'public/sadcat-upload.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-02 16:31:11.115996+00', '2021-03-02 16:31:11.115996+00', '2021-03-02 16:31:11.115996+00', '{"mimetype": "image/png"}'),
 ('0cac5609-11e1-4f21-b486-d0eeb60909f6', 'bucket2', 'curlimage.jpg', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-23 11:05:16.625075+00', '2021-02-23 11:05:16.625075+00', '2021-02-23 11:05:16.625075+00', NULL),
@@ -36,11 +36,11 @@ INSERT INTO "public"."objects" ("id", "bucket_id", "name", "owner", "created_at"
 ('D3EB488E-94F4-46CD-86D3-242C13B95BAC', 'bucket3', 'sadcat-upload2.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml"}');
 
 -- add policies
-CREATE POLICY crud_public_folder ON objects for all USING (bucket_id='bucket2' and (foldername(name))[1] = 'public');
-CREATE POLICY crud_public_file ON objects for all USING (bucket_id='bucket2' and name = 'folder/subfolder/public-all-permissions.png');
-CREATE POLICY crud_uid_folder ON objects for all USING (bucket_id='bucket2' and (foldername(name))[1] = 'only_uid' and auth.uid() = 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2');
-CREATE POLICY crud_uid_file ON objects for all USING (bucket_id='bucket2' and name = 'folder/only_uid.jpg' and auth.uid() = 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2');
-CREATE POLICY authenticated_folder ON objects for all USING (bucket_id='bucket2' and (foldername(name))[1] = 'authenticated' and auth.role() = 'authenticated');
-CREATE POLICY crud_owner_only ON objects for all USING (bucket_id='bucket2' and (foldername(name))[1] = 'only_owner' and owner = auth.uid());
-CREATE POLICY delete_owner_only ON objects for all USING (bucket_id='bucket2' and (foldername(name))[1] = 'only_owner' and owner = auth.uid());
-CREATE POLICY open_all_update ON objects for all WITH CHECK (bucket_id='bucket4');
+CREATE POLICY crud_public_folder ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'public');
+CREATE POLICY crud_public_file ON storage.objects for all USING (bucket_id='bucket2' and name = 'folder/subfolder/public-all-permissions.png');
+CREATE POLICY crud_uid_folder ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'only_uid' and auth.uid() = 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2');
+CREATE POLICY crud_uid_file ON storage.objects for all USING (bucket_id='bucket2' and name = 'folder/only_uid.jpg' and auth.uid() = 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2');
+CREATE POLICY authenticated_folder ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'authenticated' and auth.role() = 'authenticated');
+CREATE POLICY crud_owner_only ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'only_owner' and owner = auth.uid());
+CREATE POLICY delete_owner_only ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'only_owner' and owner = auth.uid());
+CREATE POLICY open_all_update ON storage.objects for all WITH CHECK (bucket_id='bucket4');

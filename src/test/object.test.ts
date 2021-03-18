@@ -527,7 +527,7 @@ describe('testing deleting multiple objects', () => {
     expect(mockDeleteObjects).not.toHaveBeenCalled()
   })
 
-  test('return 400 when delete from a non existent bucket', async () => {
+  test('deleting from a non existent bucket', async () => {
     const response = await app().inject({
       method: 'DELETE',
       url: '/object/notfound',
@@ -538,7 +538,7 @@ describe('testing deleting multiple objects', () => {
         prefixes: ['authenticated/delete-multiple3.png', 'authenticated/delete-multiple4.png'],
       },
     })
-    expect(response.statusCode).toBe(400)
+    expect(response.statusCode).toBe(200)
     expect(mockDeleteObjects).not.toHaveBeenCalled()
   })
 

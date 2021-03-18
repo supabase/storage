@@ -56,7 +56,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       const objectResponse = await postgrest
         .from<Obj>('objects')
-        .select('*, buckets(*)')
+        .select('*')
         .match({
           name: objectName,
           bucket_id: bucketName,

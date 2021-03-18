@@ -1,7 +1,7 @@
 DROP TABLE IF EXISTS "public"."buckets";
 CREATE TABLE "public"."buckets" (
-    "id" uuid NOT NULL DEFAULT extensions.uuid_generate_v4(),
-    "name" text,
+    "id" text not NULL,
+    "name" text NOT NULL,
     "owner" uuid,
     "created_at" timestamptz DEFAULT now(),
     "updated_at" timestamptz DEFAULT now(),
@@ -13,7 +13,7 @@ CREATE UNIQUE INDEX "bname" ON "public"."buckets" USING BTREE ("name");
 DROP TABLE IF EXISTS "public"."objects";
 CREATE TABLE "public"."objects" (
     "id" uuid NOT NULL DEFAULT extensions.uuid_generate_v4(),
-    "bucket_id" uuid,
+    "bucket_id" text,
     "name" text,
     "owner" uuid,
     "created_at" timestamptz DEFAULT now(),
@@ -83,7 +83,7 @@ CREATE OR REPLACE FUNCTION public.search(prefix text, bucketname text, limits in
  LANGUAGE plpgsql
 AS $function$
 DECLARE
-_bucketId uuid;
+_bucketId text;
 BEGIN
     select buckets."id" from buckets where buckets.name=bucketname limit 1 into _bucketId;
 	return query 

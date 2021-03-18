@@ -30,7 +30,7 @@ beforeEach(() => {
 // @todo add RLS tests for buckets
 describe('testing GET bucket', () => {
   test('user is able to get bucket details', async () => {
-    const bucketId = '7078bc23-9dd6-460d-8b93-082254fee63a'
+    const bucketId = 'bucket2'
     const response = await app().inject({
       method: 'GET',
       url: `/bucket/${bucketId}`,
@@ -46,7 +46,7 @@ describe('testing GET bucket', () => {
   test('user is not able to get bucket details without Auth header', async () => {
     const response = await app().inject({
       method: 'GET',
-      url: '/bucket/7078bc23-9dd6-460d-8b93-082254fee63a',
+      url: '/bucket/bucket2',
     })
     expect(response.statusCode).toBe(400)
   })
@@ -136,7 +136,7 @@ describe('testing POST bucket', () => {
 
 describe('testing DELETE bucket', () => {
   test('user is able to delete a bucket', async () => {
-    const bucketId = 'e29843e6-047e-4b1f-9906-20cc06f4aad4'
+    const bucketId = 'bucket4'
     const response = await app().inject({
       method: 'DELETE',
       url: `/bucket/${bucketId}`,
@@ -150,7 +150,7 @@ describe('testing DELETE bucket', () => {
   })
 
   test('user is not able to delete bucket without Auth header', async () => {
-    const bucketId = '7206ba57-513a-4181-971a-feca9ef45862'
+    const bucketId = 'bucket5'
     const response = await app().inject({
       method: 'DELETE',
       url: `/bucket/${bucketId}`,
@@ -159,7 +159,7 @@ describe('testing DELETE bucket', () => {
   })
 
   test('user is not able to delete bucket a non empty bucket', async () => {
-    const bucketId = '7078bc23-9dd6-460d-8b93-082254fee63a'
+    const bucketId = 'bucket2'
     const response = await app().inject({
       method: 'DELETE',
       url: `/bucket/${bucketId}`,
@@ -171,7 +171,7 @@ describe('testing DELETE bucket', () => {
   })
 
   test('user is not able to delete a non-existent bucket', async () => {
-    const bucketId = '45EF6716-AAB9-48B8-8FF0-204CBB44F1A2'
+    const bucketId = 'notfound'
     const response = await app().inject({
       method: 'DELETE',
       url: `/bucket/${bucketId}`,
@@ -185,7 +185,7 @@ describe('testing DELETE bucket', () => {
 
 describe('testing EMPTY bucket', () => {
   test('user is able to empty a bucket', async () => {
-    const bucketId = 'a916b415-3639-4885-a3d7-256593098ba5'
+    const bucketId = 'bucket3'
     const response = await app().inject({
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
@@ -199,7 +199,7 @@ describe('testing EMPTY bucket', () => {
   })
 
   test('user is not able to empty a bucket without Auth Header', async () => {
-    const bucketId = 'a916b415-3639-4885-a3d7-256593098ba5'
+    const bucketId = 'bucket3'
     const response = await app().inject({
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
@@ -208,7 +208,7 @@ describe('testing EMPTY bucket', () => {
   })
 
   test('user is not able to empty a non existent bucket', async () => {
-    const bucketId = '7D154487-EF3B-4F6B-A259-F652B98F29D8'
+    const bucketId = 'notfound'
     const response = await app().inject({
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
@@ -220,7 +220,7 @@ describe('testing EMPTY bucket', () => {
   })
 
   test('user is able to empty an already empty bucket', async () => {
-    const bucketId = '7206ba57-513a-4181-971a-feca9ef45862'
+    const bucketId = 'bucket5'
     const response = await app().inject({
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,

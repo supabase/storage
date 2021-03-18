@@ -55,26 +55,11 @@ export default async function routes(fastify: FastifyInstance) {
       const prefixes = request.body['prefixes']
 
       const postgrest = getPostgrestClient(jwt)
-      // @todo how to merge these into one query?
-      const { data: bucket, error: bucketError } = await postgrest
-        .from('buckets')
-        .select('id')
-        .eq('name', bucketName)
-        .single()
-
-      console.log(bucket, bucketError)
-      if (bucketError) {
-        return response.status(400).send({
-          statusCode: '404',
-          error: 'Not found',
-          message: 'The requested bucket was not found',
-        })
-      }
 
       const objectResponse = await postgrest
         .from<Obj>('objects')
         .delete()
-        .eq('bucket_id', bucket.id)
+        .eq('bucket_id', bucketName)
         .in('name', prefixes)
 
       if (objectResponse.error) {

@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner, transformPostgrestError } from '../../utils'
 import { uploadObject, initClient, deleteObject } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
-import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
+import { Obj, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
@@ -67,25 +67,6 @@ export default async function routes(fastify: FastifyInstance) {
           message: err.message,
         })
       }
-      // @todo how to merge these into one query?
-      // i can create a view and add INSTEAD OF triggers..is that the way to do it?
-      const bucketResponse = await postgrest
-        .from<Bucket>('buckets')
-        .select('id')
-        .eq('name', bucketName)
-        .single()
-
-      if (bucketResponse.error) {
-        const { error } = bucketResponse
-        console.log(error)
-        return response.status(400).send({
-          statusCode: '404',
-          error: 'Not found',
-          message: 'The requested bucket was not found',
-        })
-      }
-
-      const { data: bucket } = bucketResponse
 
       const { data: results, error, status } = await postgrest
         .from<Obj>('objects')
@@ -94,7 +75,7 @@ export default async function routes(fastify: FastifyInstance) {
             {
               name: objectName,
               owner: owner,
-              bucket_id: bucket.id,
+              bucket_id: bucketName,
               metadata: {
                 mimetype: data.mimetype,
                 cacheControl,
@@ -136,7 +117,7 @@ export default async function routes(fastify: FastifyInstance) {
           .delete()
           .match({
             name: objectName,
-            bucket_id: bucket.id,
+            bucket_id: bucketName,
           })
           .single()
         await deleteObject(client, globalS3Bucket, s3Key)

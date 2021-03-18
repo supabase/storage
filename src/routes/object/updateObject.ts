@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner, transformPostgrestError } from '../../utils'
 import { uploadObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
-import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
+import { Obj, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
@@ -47,32 +47,14 @@ export default async function routes(fastify: FastifyInstance) {
       const data = await request.file()
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
       const cacheTime = data.fields.cacheControl?.value
-      const cacheControl: string = `max-age=${cacheTime}` ?? 'no-cache'
+      // @todo maintain the old cache time if nothing is provided here
+      const cacheControl: string = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
 
       const { bucketName } = request.params
       const objectName = request.params['*']
 
       const postgrest = getPostgrestClient(jwt)
       const owner = await getOwner(jwt)
-      // @todo how to merge these into one query?
-      const bucketResponse = await postgrest
-        .from<Bucket>('buckets')
-        .select('id')
-        .eq('name', bucketName)
-        .single()
-
-      if (bucketResponse.error) {
-        const { error } = bucketResponse
-        console.log(error)
-        return response.status(400).send({
-          statusCode: '404',
-          error: 'Not found',
-          message: 'The requested bucket was not found',
-        })
-      }
-
-      const { data: bucket } = bucketResponse
-      console.log(bucket)
 
       const objectResponse = await postgrest
         .from<Obj>('objects')
@@ -84,7 +66,7 @@ export default async function routes(fastify: FastifyInstance) {
             cacheControl,
           },
         })
-        .match({ bucket_id: bucket.id, name: objectName })
+        .match({ bucket_id: bucketName, name: objectName })
         .single()
 
       if (objectResponse.error) {

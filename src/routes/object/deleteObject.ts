@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { deleteObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
-import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
+import { Obj, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
@@ -48,24 +48,6 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
 
       const postgrest = getPostgrestClient(jwt)
-      // @todo how to merge these into one query?
-      const bucketResponse = await postgrest
-        .from<Bucket>('buckets')
-        .select('id')
-        .eq('name', bucketName)
-        .single()
-
-      if (bucketResponse.error) {
-        const { error } = bucketResponse
-        console.log(error)
-        return response.status(400).send({
-          statusCode: '404',
-          error: 'Not found',
-          message: 'The requested bucket was not found',
-        })
-      }
-      console.log(bucketResponse.body)
-      const { data: bucket } = bucketResponse
 
       // todo what if objectName is * or something
       const objectResponse = await postgrest
@@ -73,7 +55,7 @@ export default async function routes(fastify: FastifyInstance) {
         .delete()
         .match({
           name: objectName,
-          bucket_id: bucket.id,
+          bucket_id: bucketName,
         })
         .single()
 

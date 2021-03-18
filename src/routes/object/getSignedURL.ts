@@ -59,7 +59,7 @@ export default async function routes(fastify: FastifyInstance) {
         .select('*, buckets(*)')
         .match({
           name: objectName,
-          'buckets.name': bucketName,
+          bucket_id: bucketName,
         })
         .single()
 
@@ -70,15 +70,6 @@ export default async function routes(fastify: FastifyInstance) {
       }
       const { data: results } = objectResponse
       console.log(results)
-
-      if (!results.buckets) {
-        // @todo why is this check necessary?
-        return response.status(400).send({
-          statusCode: '404',
-          error: 'Not found',
-          message: 'The requested bucket was not found',
-        })
-      }
 
       console.log(`going to sign ${request.url}`)
       const urlParts = request.url.split('/')

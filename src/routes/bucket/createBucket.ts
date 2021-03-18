@@ -8,6 +8,7 @@ const createBucketBodySchema = {
   type: 'object',
   properties: {
     name: { type: 'string' },
+    id: { type: 'string' },
   },
   required: ['name'],
 } as const
@@ -37,11 +38,17 @@ export default async function routes(fastify: FastifyInstance) {
       const owner = await getOwner(jwt)
 
       const { name: bucketName } = request.body
+      let id = request.body.id
+      if (!id) {
+        //by default set the id as the name of the bucket
+        id = bucketName
+      }
 
       const { data: results, error, status } = await postgrest
         .from<Bucket>('buckets')
         .insert([
           {
+            id,
             name: bucketName,
             owner,
           },

@@ -6,41 +6,41 @@ INSERT INTO "auth"."users" ("instance_id", "id", "aud", "role", "email", "encryp
 
 -- insert buckets
 INSERT INTO "public"."buckets" ("id", "name", "owner", "created_at", "updated_at") VALUES
-('7078bc23-9dd6-460d-8b93-082254fee63a', 'bucket2', '4d56e902-f0a0-4662-8448-a4d9e643c142', '2021-02-17 04:43:32.770206+00', '2021-02-17 04:43:32.770206+00'),
-('A916B415-3639-4885-A3D7-256593098BA5', 'bucket3', '4d56e902-f0a0-4662-8448-a4d9e643c142', '2021-02-17 04:43:32.770206+00', '2021-02-17 04:43:32.770206+00'),
-('e29843e6-047e-4b1f-9906-20cc06f4aad4', 'bucket4', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-25 09:23:01.58385+00', '2021-02-25 09:23:01.58385+00'),
-('7206ba57-513a-4181-971a-feca9ef45862', 'bucket5', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-27 03:04:25.6386+00', '2021-02-27 03:04:25.6386+00');
+('bucket2', 'bucket2', '4d56e902-f0a0-4662-8448-a4d9e643c142', '2021-02-17 04:43:32.770206+00', '2021-02-17 04:43:32.770206+00'),
+('bucket3', 'bucket3', '4d56e902-f0a0-4662-8448-a4d9e643c142', '2021-02-17 04:43:32.770206+00', '2021-02-17 04:43:32.770206+00'),
+('bucket4', 'bucket4', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-25 09:23:01.58385+00', '2021-02-25 09:23:01.58385+00'),
+('bucket5', 'bucket5', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-27 03:04:25.6386+00', '2021-02-27 03:04:25.6386+00');
 
 
 -- insert objects
 INSERT INTO "public"."objects" ("id", "bucket_id", "name", "owner", "created_at", "updated_at", "last_accessed_at", "metadata") VALUES
-('03e458f9-892f-4db2-8cb9-d3401a689e25', '7078bc23-9dd6-460d-8b93-082254fee63a', 'public/sadcat-upload23.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-04 08:26:08.553748+00', '2021-03-04 08:26:08.553748+00', '2021-03-04 08:26:08.553748+00', '{"mimetype": "image/svg+xml"}'),
-('070825af-a11d-44fe-9f1d-abdc76f686f2', '7078bc23-9dd6-460d-8b93-082254fee63a', 'public/sadcat-upload.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-02 16:31:11.115996+00', '2021-03-02 16:31:11.115996+00', '2021-03-02 16:31:11.115996+00', '{"mimetype": "image/png"}'),
-('0cac5609-11e1-4f21-b486-d0eeb60909f6', '7078bc23-9dd6-460d-8b93-082254fee63a', 'curlimage.jpg', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-23 11:05:16.625075+00', '2021-02-23 11:05:16.625075+00', '2021-02-23 11:05:16.625075+00', NULL),
-('147c6795-94d5-4008-9d81-f7ba3b4f8a9f', '7078bc23-9dd6-460d-8b93-082254fee63a', 'folder/only_uid.jpg', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-17 10:36:01.504227+00', '2021-02-17 11:03:03.049618+00', '2021-02-17 10:36:01.504227+00', NULL),
-('65a3aa9c-0ff2-4adc-85d0-eab673c27443', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/casestudy.png', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-17 10:42:19.366559+00', '2021-02-17 11:03:30.025116+00', '2021-02-17 10:42:19.366559+00', NULL),
-('10ABE273-D77A-4BDA-B410-6FC0CA3E6ADC', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/cat.jpg', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-17 10:42:19.366559+00', '2021-02-17 11:03:30.025116+00', '2021-02-17 10:42:19.366559+00', NULL),
-('1edccac7-0876-4e9f-89da-a08d2a5f654b', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/delete.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-02 16:31:11.115996+00', '2021-03-02 16:31:11.115996+00', '2021-03-02 16:31:11.115996+00', '{"mimetype": "image/png"}'),
-('1a911f3c-8c1d-4661-93c1-8e065e4d757e', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/delete1.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
-('372d5d74-e24d-49dc-abe8-47d7eb226a2e', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/delete-multiple1.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
-('34811c1b-85e5-4eb6-a5e3-d607b2f6986e', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/delete-multiple2.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
-('45950ff2-d3a8-4add-8e49-bafc01198340', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/delete-multiple3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
-('469b0216-5419-41f6-9a37-2abfd7fad29c', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/delete-multiple4.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
-('55930619-a668-4dbc-aea3-b93dfe101e7f', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/delete-multiple7.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
-('D1CE4E4F-03E2-473D-858B-301D7989B581', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/rename-orig.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
-('222b3d1e-bc17-414c-b336-47894aa4d697', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/rename-orig-2.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
-('8f7d643d-1e82-4d39-ae39-d9bd6b0cfe9c', '7078bc23-9dd6-460d-8b93-082254fee63a', 'authenticated/rename-orig-3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
-('8377527d-3518-4dc8-8290-c6926470e795', '7078bc23-9dd6-460d-8b93-082254fee63a', 'folder/subfolder/public-all-permissions.png', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-17 10:26:42.791214+00', '2021-02-17 11:03:30.025116+00', '2021-02-17 10:26:42.791214+00', NULL),
-('b39ae4ab-802b-4c42-9271-3f908c34363c', '7078bc23-9dd6-460d-8b93-082254fee63a', 'private/sadcat-upload3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml"}'),
-('8098E1AC-C744-4368-86DF-71B60CCDE221', 'A916B415-3639-4885-A3D7-256593098BA5', 'sadcat-upload3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml"}'),
-('D3EB488E-94F4-46CD-86D3-242C13B95BAC', 'A916B415-3639-4885-A3D7-256593098BA5', 'sadcat-upload2.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml"}');
+('03e458f9-892f-4db2-8cb9-d3401a689e25', 'bucket2', 'public/sadcat-upload23.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-04 08:26:08.553748+00', '2021-03-04 08:26:08.553748+00', '2021-03-04 08:26:08.553748+00', '{"mimetype": "image/svg+xml"}'),
+('070825af-a11d-44fe-9f1d-abdc76f686f2', 'bucket2', 'public/sadcat-upload.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-02 16:31:11.115996+00', '2021-03-02 16:31:11.115996+00', '2021-03-02 16:31:11.115996+00', '{"mimetype": "image/png"}'),
+('0cac5609-11e1-4f21-b486-d0eeb60909f6', 'bucket2', 'curlimage.jpg', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-23 11:05:16.625075+00', '2021-02-23 11:05:16.625075+00', '2021-02-23 11:05:16.625075+00', NULL),
+('147c6795-94d5-4008-9d81-f7ba3b4f8a9f', 'bucket2', 'folder/only_uid.jpg', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-17 10:36:01.504227+00', '2021-02-17 11:03:03.049618+00', '2021-02-17 10:36:01.504227+00', NULL),
+('65a3aa9c-0ff2-4adc-85d0-eab673c27443', 'bucket2', 'authenticated/casestudy.png', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-17 10:42:19.366559+00', '2021-02-17 11:03:30.025116+00', '2021-02-17 10:42:19.366559+00', NULL),
+('10ABE273-D77A-4BDA-B410-6FC0CA3E6ADC', 'bucket2', 'authenticated/cat.jpg', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-17 10:42:19.366559+00', '2021-02-17 11:03:30.025116+00', '2021-02-17 10:42:19.366559+00', NULL),
+('1edccac7-0876-4e9f-89da-a08d2a5f654b', 'bucket2', 'authenticated/delete.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-02 16:31:11.115996+00', '2021-03-02 16:31:11.115996+00', '2021-03-02 16:31:11.115996+00', '{"mimetype": "image/png"}'),
+('1a911f3c-8c1d-4661-93c1-8e065e4d757e', 'bucket2', 'authenticated/delete1.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
+('372d5d74-e24d-49dc-abe8-47d7eb226a2e', 'bucket2', 'authenticated/delete-multiple1.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
+('34811c1b-85e5-4eb6-a5e3-d607b2f6986e', 'bucket2', 'authenticated/delete-multiple2.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
+('45950ff2-d3a8-4add-8e49-bafc01198340', 'bucket2', 'authenticated/delete-multiple3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
+('469b0216-5419-41f6-9a37-2abfd7fad29c', 'bucket2', 'authenticated/delete-multiple4.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
+('55930619-a668-4dbc-aea3-b93dfe101e7f', 'bucket2', 'authenticated/delete-multiple7.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
+('D1CE4E4F-03E2-473D-858B-301D7989B581', 'bucket2', 'authenticated/rename-orig.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
+('222b3d1e-bc17-414c-b336-47894aa4d697', 'bucket2', 'authenticated/rename-orig-2.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
+('8f7d643d-1e82-4d39-ae39-d9bd6b0cfe9c', 'bucket2', 'authenticated/rename-orig-3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png"}'),
+('8377527d-3518-4dc8-8290-c6926470e795', 'bucket2', 'folder/subfolder/public-all-permissions.png', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-17 10:26:42.791214+00', '2021-02-17 11:03:30.025116+00', '2021-02-17 10:26:42.791214+00', NULL),
+('b39ae4ab-802b-4c42-9271-3f908c34363c', 'bucket2', 'private/sadcat-upload3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml"}'),
+('8098E1AC-C744-4368-86DF-71B60CCDE221', 'bucket3', 'sadcat-upload3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml"}'),
+('D3EB488E-94F4-46CD-86D3-242C13B95BAC', 'bucket3', 'sadcat-upload2.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml"}');
 
 -- add policies
-CREATE POLICY crud_public_folder ON objects for all USING (bucket_id='7078bc23-9dd6-460d-8b93-082254fee63a' and (foldername(name))[1] = 'public');
-CREATE POLICY crud_public_file ON objects for all USING (bucket_id='7078bc23-9dd6-460d-8b93-082254fee63a' and name = 'folder/subfolder/public-all-permissions.png');
-CREATE POLICY crud_uid_folder ON objects for all USING (bucket_id='7078bc23-9dd6-460d-8b93-082254fee63a' and (foldername(name))[1] = 'only_uid' and auth.uid() = 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2');
-CREATE POLICY crud_uid_file ON objects for all USING (bucket_id='7078bc23-9dd6-460d-8b93-082254fee63a' and name = 'folder/only_uid.jpg' and auth.uid() = 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2');
-CREATE POLICY authenticated_folder ON objects for all USING (bucket_id='7078bc23-9dd6-460d-8b93-082254fee63a' and (foldername(name))[1] = 'authenticated' and auth.role() = 'authenticated');
-CREATE POLICY crud_owner_only ON objects for all USING (bucket_id='7078bc23-9dd6-460d-8b93-082254fee63a' and (foldername(name))[1] = 'only_owner' and owner = auth.uid());
-CREATE POLICY delete_owner_only ON objects for all USING (bucket_id='7078bc23-9dd6-460d-8b93-082254fee63a' and (foldername(name))[1] = 'only_owner' and owner = auth.uid());
-CREATE POLICY open_all_update ON objects for all WITH CHECK (bucket_id='e29843e6-047e-4b1f-9906-20cc06f4aad4');
+CREATE POLICY crud_public_folder ON objects for all USING (bucket_id='bucket2' and (foldername(name))[1] = 'public');
+CREATE POLICY crud_public_file ON objects for all USING (bucket_id='bucket2' and name = 'folder/subfolder/public-all-permissions.png');
+CREATE POLICY crud_uid_folder ON objects for all USING (bucket_id='bucket2' and (foldername(name))[1] = 'only_uid' and auth.uid() = 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2');
+CREATE POLICY crud_uid_file ON objects for all USING (bucket_id='bucket2' and name = 'folder/only_uid.jpg' and auth.uid() = 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2');
+CREATE POLICY authenticated_folder ON objects for all USING (bucket_id='bucket2' and (foldername(name))[1] = 'authenticated' and auth.role() = 'authenticated');
+CREATE POLICY crud_owner_only ON objects for all USING (bucket_id='bucket2' and (foldername(name))[1] = 'only_owner' and owner = auth.uid());
+CREATE POLICY delete_owner_only ON objects for all USING (bucket_id='bucket2' and (foldername(name))[1] = 'only_owner' and owner = auth.uid());
+CREATE POLICY open_all_update ON objects for all WITH CHECK (bucket_id='bucket4');

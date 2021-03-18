@@ -44,10 +44,10 @@ export default async function routes(fastify: FastifyInstance) {
 
       const objectResponse = await postgrest
         .from<Obj>('objects')
-        .select('*, buckets(*)')
+        .select('*')
         .match({
           name: objectName,
-          'buckets.name': bucketName,
+          bucket_id: bucketName,
         })
         .single()
 
@@ -55,16 +55,6 @@ export default async function routes(fastify: FastifyInstance) {
         const { status, error } = objectResponse
         console.log(error)
         return response.status(400).send(transformPostgrestError(error, status))
-      }
-      const { data: results } = objectResponse
-
-      if (!results.buckets) {
-        // @todo why is this check necessary?
-        return response.status(400).send({
-          statusCode: 404,
-          error: 'Not found',
-          message: 'The requested bucket was not found',
-        })
       }
 
       // send the object from s3

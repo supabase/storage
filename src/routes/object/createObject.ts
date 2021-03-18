@@ -56,7 +56,17 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
 
       const postgrest = getPostgrestClient(jwt)
-      const owner = await getOwner(jwt)
+      let owner
+      try {
+        owner = await getOwner(jwt)
+      } catch (err) {
+        console.log(err)
+        return response.status(400).send({
+          statusCode: '400',
+          error: err.message,
+          message: err.message,
+        })
+      }
       // @todo how to merge these into one query?
       // i can create a view and add INSTEAD OF triggers..is that the way to do it?
       const bucketResponse = await postgrest

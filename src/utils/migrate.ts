@@ -1,5 +1,5 @@
 import { Client } from 'pg'
-import { createDb, migrate } from 'postgres-migrations'
+import { migrate } from 'postgres-migrations'
 
 export async function runMigrations(): Promise<void> {
   console.log('running migrations')
@@ -10,7 +10,6 @@ export async function runMigrations(): Promise<void> {
   const client = new Client(dbConfig)
   await client.connect()
   try {
-    await createDb('postgres', { client })
     await migrate({ client }, './migrations')
   } finally {
     await client.end()

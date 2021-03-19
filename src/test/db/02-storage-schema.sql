@@ -109,3 +109,10 @@ BEGIN
         where objects.id is null or objects.bucket_id=_bucketId;
 END
 $function$;
+
+-- Supabase super admin
+CREATE USER supabase_storage_admin NOINHERIT CREATEROLE LOGIN NOREPLICATION;
+GRANT ALL PRIVILEGES ON SCHEMA storage TO supabase_storage_admin;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA storage TO supabase_storage_admin;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA storage TO supabase_storage_admin;
+ALTER USER supabase_storage_admin SET search_path = "storage";

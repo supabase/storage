@@ -1,6 +1,5 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import fastifyMultipart from 'fastify-multipart'
-import fastifyCors from 'fastify-cors'
 import fastifySwagger from 'fastify-swagger'
 import { errorSchema } from './schemas/error'
 import { authSchema } from './schemas/auth'

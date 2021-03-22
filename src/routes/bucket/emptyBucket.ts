@@ -57,32 +57,33 @@ export default async function routes(fastify: FastifyInstance) {
       const { data: bucket } = bucketResponse
       const bucketName = bucket.name
 
-      // @todo add pagination
-      const { data: objects, error: objectError } = await postgrest
-        .from<Obj>('objects')
-        .select('name, id')
-        .eq('bucket_id', bucketId)
-        .limit(1000)
-
-      console.log(objects, objectError)
-      if (objects && objects.length > 0) {
-        const params = objects.map((ele) => {
-          return {
-            Key: `${projectRef}/${bucketName}/${ele.name}`,
-          }
-        })
-        console.log(params)
-        await deleteObjects(client, globalS3Bucket, params)
-
-        const { error: deleteError } = await postgrest
+      let deleteError, objectError, objects
+      do {
+        ;({ data: objects, error: objectError } = await postgrest
           .from<Obj>('objects')
-          .delete()
-          .in(
-            'id',
-            objects.map((ele) => ele.id)
-          )
-        console.log(deleteError)
-      }
+          .select('name, id')
+          .eq('bucket_id', bucketId)
+          .limit(500))
+
+        console.log(objects, objectError)
+        if (objects && objects.length > 0) {
+          const params = objects.map((ele) => {
+            return {
+              Key: `${projectRef}/${bucketName}/${ele.name}`,
+            }
+          })
+          await deleteObjects(client, globalS3Bucket, params)
+          ;({ error: deleteError } = await postgrest
+            .from<Obj>('objects')
+            .delete()
+            .in(
+              'id',
+              objects.map((ele) => ele.id)
+            ))
+
+          console.log(deleteError)
+        }
+      } while (!deleteError && !objectError && objects && objects.length > 0)
 
       return response.status(200).send({ message: 'Emptied' })
     }

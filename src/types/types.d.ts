@@ -27,3 +27,9 @@ type StorageError = {
   error: string
   message: string
 }
+
+type ObjectMetadata = {
+  cacheControl?: string
+  size?: string
+  mimetype?: string
+}

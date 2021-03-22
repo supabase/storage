@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner, transformPostgrestError, isValidKey } from '../../utils'
 import { uploadObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
-import { Obj, AuthenticatedRequest } from '../../types/types'
+import { Obj, AuthenticatedRequest, ObjectMetadata } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
@@ -47,8 +47,13 @@ export default async function routes(fastify: FastifyInstance) {
       const data = await request.file()
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
       const cacheTime = data.fields.cacheControl?.value
-      // @todo maintain the old cache time if nothing is provided here
       const cacheControl: string = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
+      const metadata: ObjectMetadata = {
+        mimetype: data.mimetype,
+      }
+      if (cacheTime) {
+        metadata.cacheControl = `max-age=${cacheTime}`
+      }
 
       const { bucketName } = request.params
       const objectName = request.params['*']
@@ -69,10 +74,7 @@ export default async function routes(fastify: FastifyInstance) {
         .update({
           last_accessed_at: new Date().toISOString(),
           owner,
-          metadata: {
-            mimetype: data.mimetype,
-            cacheControl,
-          },
+          metadata,
         })
         .match({ bucket_id: bucketName, name: objectName })
         .single()

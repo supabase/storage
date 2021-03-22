@@ -30,6 +30,6 @@ type StorageError = {
 
 type ObjectMetadata = {
   cacheControl?: string
-  size?: string
+  size?: number
   mimetype?: string
 }

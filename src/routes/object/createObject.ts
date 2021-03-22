@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner, transformPostgrestError, isValidKey } from '../../utils'
 import { uploadObject, initClient, deleteObject, headObject } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
-import { Obj, AuthenticatedRequest } from '../../types/types'
+import { Obj, AuthenticatedRequest, ObjectMetadata } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
@@ -136,14 +136,15 @@ export default async function routes(fastify: FastifyInstance) {
 
       const objectMetadata = await headObject(client, globalS3Bucket, s3Key)
       // update content-length as super user since user may not have update permissions
+      const metadata: ObjectMetadata = {
+        mimetype: data.mimetype,
+        cacheControl,
+        size: objectMetadata.ContentLength,
+      }
       const { error: updateError } = await getPostgrestClient(serviceKey)
         .from<Obj>('objects')
         .update({
-          metadata: {
-            mimetype: data.mimetype,
-            cacheControl,
-            size: objectMetadata.ContentLength,
-          },
+          metadata,
         })
         .match({ bucket_id: bucketName, name: objectName })
         .single()

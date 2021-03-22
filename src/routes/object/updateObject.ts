@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner, transformPostgrestError, isValidKey } from '../../utils'
-import { uploadObject, initClient } from '../../utils/s3'
+import { uploadObject, initClient, headObject } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, AuthenticatedRequest, ObjectMetadata } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
@@ -74,7 +74,6 @@ export default async function routes(fastify: FastifyInstance) {
         .update({
           last_accessed_at: new Date().toISOString(),
           owner,
-          metadata,
         })
         .match({ bucket_id: bucketName, name: objectName })
         .single()
@@ -97,6 +96,28 @@ export default async function routes(fastify: FastifyInstance) {
         data.mimetype,
         cacheControl
       )
+
+      // since we are using streams, fastify can't throw the error reliably
+      // busboy sets the truncated property on streams if limit was exceeded
+      // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
+      /* @ts-expect-error: busboy doesn't export proper types */
+      const isTruncated = data.file.truncated
+      if (isTruncated) {
+        // @todo tricky to handle since we need to undo the s3 upload
+      }
+
+      const objectMetadata = await headObject(client, globalS3Bucket, s3Key)
+      // update content-length as super user since user may not have update permissions
+      metadata.size = objectMetadata.ContentLength
+      const { error: updateError } = await postgrest
+        .from<Obj>('objects')
+        .update({
+          metadata,
+        })
+        .match({ bucket_id: bucketName, name: objectName })
+        .single()
+
+      console.log(updateError)
 
       return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
         Key: s3Key,

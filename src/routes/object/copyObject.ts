@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
+import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
 import { copyObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, AuthenticatedRequest } from '../../types/types'
@@ -57,9 +57,10 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const postgrest = getPostgrestClient(jwt)
+      const owner = await getOwner(jwt)
       const objectResponse = await postgrest
         .from<Obj>('objects')
-        .select('*')
+        .select('bucket_id, metadata')
         .match({
           name: sourceKey,
           bucket_id: bucketName,
@@ -76,11 +77,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       const newObject = Object.assign({}, origObject, {
         name: destinationKey,
-        id: undefined,
-        lastAccessedAt: undefined,
-        createdAt: undefined,
-        updatedAt: undefined,
-        buckets: undefined,
+        owner,
       })
       console.log(newObject)
       const { data: results, error, status } = await postgrest

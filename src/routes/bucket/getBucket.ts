@@ -37,7 +37,7 @@ export default async function routes(fastify: FastifyInstance) {
       const postgrest = getPostgrestClient(jwt)
       const { data: results, error, status } = await postgrest
         .from<Bucket>('buckets')
-        .select('*')
+        .select('id, name, owner, created_at, updated_at')
         .eq('id', bucketId)
         .single()
 

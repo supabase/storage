@@ -13,8 +13,8 @@
     "logs": "flyctl logs",
     "migrate": "ts-node-dev ./src/utils/migrate-call.ts",
     "test": "npm run restart:db && jest --runInBand",
-    "stop:db": "docker-compose -f src/test/db/docker-compose.yml down",
-    "restart:db": "docker-compose -f src/test/db/docker-compose.yml down && docker-compose -f src/test/db/docker-compose.yml up -d && sleep 1 && npm run migrate"
+    "stop:db": "docker-compose --project-dir . -f src/test/db/docker-compose.yml down",
+    "restart:db": "docker-compose --project-dir . -f src/test/db/docker-compose.yml down && docker-compose --project-dir . -f src/test/db/docker-compose.yml up -d && sleep 1 && npm run migrate"
   },
   "author": "Supabase",
   "license": "ISC",

@@ -19,7 +19,7 @@ services:
     ports:
       - '5432:5432'
     volumes:
-      - .:/docker-entrypoint-initdb.d/
+      - ./src/test/db:/docker-entrypoint-initdb.d/
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres

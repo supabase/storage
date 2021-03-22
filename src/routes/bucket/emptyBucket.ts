@@ -72,7 +72,8 @@ export default async function routes(fastify: FastifyInstance) {
               Key: `${projectRef}/${bucketName}/${ele.name}`,
             }
           })
-          await deleteObjects(client, globalS3Bucket, params)
+          // delete files from s3 asynchronously
+          deleteObjects(client, globalS3Bucket, params)
           ;({ error: deleteError } = await postgrest
             .from<Obj>('objects')
             .delete()

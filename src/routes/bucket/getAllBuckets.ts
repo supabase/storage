@@ -26,7 +26,9 @@ export default async function routes(fastify: FastifyInstance) {
       const jwt = authHeader.substring('Bearer '.length)
 
       const postgrest = getPostgrestClient(jwt)
-      const { data: results, error, status } = await postgrest.from<Bucket>('buckets').select('*')
+      const { data: results, error, status } = await postgrest
+        .from<Bucket>('buckets')
+        .select('id, name, owner, created_at, updated_at')
       console.log(results, error)
 
       if (error) {

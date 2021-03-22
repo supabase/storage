@@ -47,7 +47,7 @@ export default async function routes(fastify: FastifyInstance) {
         data: bucketResults,
         error: bucketError,
         status: bucketStatus,
-      } = await userPostgrest.from<Bucket>('buckets').select('*').eq('id', bucketId).single()
+      } = await userPostgrest.from<Bucket>('buckets').select('id').eq('id', bucketId).single()
 
       console.log(bucketResults, bucketError)
 

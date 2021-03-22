@@ -87,7 +87,6 @@ export default async function routes(fastify: FastifyInstance) {
       // if successfully inserted, upload to s3
       const s3Key = `${projectRef}/${bucketName}/${objectName}`
 
-      // @todo adding contentlength metadata will be harder since everything is streams
       const uploadResult = await uploadObject(
         client,
         globalS3Bucket,

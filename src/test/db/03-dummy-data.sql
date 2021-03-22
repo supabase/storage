@@ -36,11 +36,17 @@ INSERT INTO "storage"."objects" ("id", "bucket_id", "name", "owner", "created_at
 ('D3EB488E-94F4-46CD-86D3-242C13B95BAC', 'bucket3', 'sadcat-upload2.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml"}');
 
 -- add policies
+-- allow public CRUD acccess to the public folder in bucket2
 CREATE POLICY crud_public_folder ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'public');
+-- allow public CRUD acccess to a particular file in bucket2
 CREATE POLICY crud_public_file ON storage.objects for all USING (bucket_id='bucket2' and name = 'folder/subfolder/public-all-permissions.png');
+-- allow public CRUD acccess to a folder in bucket2 to a user with a given id
 CREATE POLICY crud_uid_folder ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'only_uid' and auth.uid() = 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2');
+-- allow public CRUD acccess to a file in bucket2 to a user with a given id
 CREATE POLICY crud_uid_file ON storage.objects for all USING (bucket_id='bucket2' and name = 'folder/only_uid.jpg' and auth.uid() = 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2');
+-- allow CRUD acccess to a folder in bucket2 to all authenticated users
 CREATE POLICY authenticated_folder ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'authenticated' and auth.role() = 'authenticated');
+-- allow CRUD access to a folder in bucket2 to its owners
 CREATE POLICY crud_owner_only ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'only_owner' and owner = auth.uid());
-CREATE POLICY delete_owner_only ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'only_owner' and owner = auth.uid());
+-- allow CRUD access to bucket4
 CREATE POLICY open_all_update ON storage.objects for all WITH CHECK (bucket_id='bucket4');

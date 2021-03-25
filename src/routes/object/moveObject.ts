@@ -8,7 +8,7 @@ import { FromSchema } from 'json-schema-to-ts'
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
 
-const renameObjectsBodySchema = {
+const moveObjectsBodySchema = {
   type: 'object',
   properties: {
     bucketName: { type: 'string' },
@@ -24,18 +24,18 @@ const successResponseSchema = {
   },
   required: ['message'],
 }
-interface renameObjectRequestInterface extends AuthenticatedRequest {
-  Body: FromSchema<typeof renameObjectsBodySchema>
+interface moveObjectRequestInterface extends AuthenticatedRequest {
+  Body: FromSchema<typeof moveObjectsBodySchema>
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
-  const summary = 'Rename an object'
-  fastify.post<renameObjectRequestInterface>(
-    '/rename',
+  const summary = 'Moves an object'
+  fastify.post<moveObjectRequestInterface>(
+    '/move',
     {
       schema: {
-        body: renameObjectsBodySchema,
+        body: moveObjectsBodySchema,
         headers: { $ref: 'authSchema#' },
         summary,
         response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
@@ -82,7 +82,7 @@ export default async function routes(fastify: FastifyInstance) {
       await deleteObject(client, globalS3Bucket, oldS3Key)
 
       return response.status(200).send({
-        message: 'Renamed',
+        message: 'Move',
       })
     }
   )

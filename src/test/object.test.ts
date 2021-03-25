@@ -707,14 +707,14 @@ describe('testing retrieving signed URL', () => {
   })
 })
 
-describe('testing rename object', () => {
-  test('check if RLS policies are respected: authenticated user is able to rename an authenticated object', async () => {
+describe('testing move object', () => {
+  test('check if RLS policies are respected: authenticated user is able to move an authenticated object', async () => {
     const response = await app().inject({
       method: 'POST',
-      url: `/object/rename`,
+      url: `/object/move`,
       payload: {
-        sourceKey: 'authenticated/rename-orig.png',
-        destinationKey: 'authenticated/rename-new.png',
+        sourceKey: 'authenticated/move-orig.png',
+        destinationKey: 'authenticated/move-new.png',
         bucketName: 'bucket2',
       },
       headers: {
@@ -726,13 +726,13 @@ describe('testing rename object', () => {
     expect(mockDeleteObject).toHaveBeenCalled()
   })
 
-  test('check if RLS policies are respected: anon user is not able to rename an authenticated object', async () => {
+  test('check if RLS policies are respected: anon user is not able to move an authenticated object', async () => {
     const response = await app().inject({
       method: 'POST',
-      url: `/object/rename`,
+      url: `/object/move`,
       payload: {
-        sourceKey: 'authenticated/rename-orig-2.png',
-        destinationKey: 'authenticated/rename-new-2.png',
+        sourceKey: 'authenticated/move-orig-2.png',
+        destinationKey: 'authenticated/move-new-2.png',
         bucketName: 'bucket2',
       },
       headers: {
@@ -744,13 +744,13 @@ describe('testing rename object', () => {
     expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 
-  test('user is not able to rename an object without auth header', async () => {
+  test('user is not able to move an object without auth header', async () => {
     const response = await app().inject({
       method: 'POST',
-      url: `/object/rename`,
+      url: `/object/move`,
       payload: {
-        sourceKey: 'authenticated/rename-orig-3.png',
-        destinationKey: 'authenticated/rename-orig-new-3.png',
+        sourceKey: 'authenticated/move-orig-3.png',
+        destinationKey: 'authenticated/move-orig-new-3.png',
         bucketName: 'bucket2',
       },
     })
@@ -759,13 +759,13 @@ describe('testing rename object', () => {
     expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 
-  test('user is not able to rename an object in a non existent bucket', async () => {
+  test('user is not able to move an object in a non existent bucket', async () => {
     const response = await app().inject({
       method: 'POST',
-      url: `/object/rename`,
+      url: `/object/move`,
       payload: {
-        sourceKey: 'authenticated/rename-orig-3.png',
-        destinationKey: 'authenticated/rename-orig-new-3.png',
+        sourceKey: 'authenticated/move-orig-3.png',
+        destinationKey: 'authenticated/move-orig-new-3.png',
         bucketName: 'notfound',
       },
       headers: {
@@ -777,13 +777,13 @@ describe('testing rename object', () => {
     expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 
-  test('user is not able to rename an non existent object', async () => {
+  test('user is not able to move an non existent object', async () => {
     const response = await app().inject({
       method: 'POST',
-      url: `/object/rename`,
+      url: `/object/move`,
       payload: {
         sourceKey: 'authenticated/notfound',
-        destinationKey: 'authenticated/rename-orig-new-3.png',
+        destinationKey: 'authenticated/move-orig-new-3.png',
         bucketName: 'bucket2',
       },
       headers: {
@@ -795,13 +795,13 @@ describe('testing rename object', () => {
     expect(mockDeleteObject).not.toHaveBeenCalled()
   })
 
-  test('user is not able to rename to an existing key', async () => {
+  test('user is not able to move to an existing key', async () => {
     const response = await app().inject({
       method: 'POST',
-      url: `/object/rename`,
+      url: `/object/move`,
       payload: {
-        sourceKey: 'authenticated/rename-orig-2.png',
-        destinationKey: 'authenticated/rename-orig-3.png',
+        sourceKey: 'authenticated/move-orig-2.png',
+        destinationKey: 'authenticated/move-orig-3.png',
         bucketName: 'bucket2',
       },
       headers: {

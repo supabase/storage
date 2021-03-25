@@ -40,7 +40,7 @@ interface searchRequestInterface extends AuthenticatedRequest {
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Search for objects under a prefix'
   fastify.post<searchRequestInterface>(
-    '/:bucketName',
+    '/list/:bucketName',
     {
       schema: {
         body: searchRequestBodySchema,

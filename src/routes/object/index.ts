@@ -8,6 +8,7 @@ import getSignedObject from './getSignedObject'
 import getSignedURL from './getSignedURL'
 import renameObject from './renameObject'
 import updateObject from './updateObject'
+import listObjects from './listObjects'
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
@@ -20,4 +21,5 @@ export default async function routes(fastify: FastifyInstance) {
   getSignedURL(fastify)
   renameObject(fastify)
   updateObject(fastify)
+  listObjects(fastify)
 }

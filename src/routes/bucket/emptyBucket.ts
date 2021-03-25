@@ -52,7 +52,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (bucketResponse.error) {
         const { status, error } = bucketResponse
-        return response.status(status).send(transformPostgrestError(error, status))
+        return response.status(400).send(transformPostgrestError(error, status))
       }
       const { data: bucket } = bucketResponse
       const bucketName = bucket.name

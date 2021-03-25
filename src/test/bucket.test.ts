@@ -43,6 +43,18 @@ describe('testing GET bucket', () => {
     expect(responseJSON.id).toBe(bucketId)
   })
 
+  test('checking RLS: anon user is not able to get bucket details', async () => {
+    const bucketId = 'bucket2'
+    const response = await app().inject({
+      method: 'GET',
+      url: `/bucket/${bucketId}`,
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
   test('user is not able to get bucket details without Auth header', async () => {
     const response = await app().inject({
       method: 'GET',
@@ -80,6 +92,19 @@ describe('testing GET all buckets', () => {
     expect(responseJSON.length).toBe(4)
   })
 
+  test('checking RLS: anon user is not able to get all buckets', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: `/bucket`,
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const responseJSON = JSON.parse(response.body)
+    expect(responseJSON.length).toBe(0)
+  })
+
   test('user is not able to all buckets details without Auth header', async () => {
     const response = await app().inject({
       method: 'GET',
@@ -106,6 +131,20 @@ describe('testing POST bucket', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON.name).toBe('newbucket')
+  })
+
+  test('checking RLS: anon user is not able to create a bucket', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+      payload: {
+        name: 'newbucket1',
+      },
+    })
+    expect(response.statusCode).toBe(400)
   })
 
   test('user is not able to create a bucket without Auth header', async () => {
@@ -147,6 +186,18 @@ describe('testing DELETE bucket', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON.message).toBe('Deleted')
+  })
+
+  test('checking RLS: anon user is not able to delete a bucket', async () => {
+    const bucketId = 'bucket5'
+    const response = await app().inject({
+      method: 'DELETE',
+      url: `/bucket/${bucketId}`,
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
   })
 
   test('user is not able to delete bucket without Auth header', async () => {
@@ -198,6 +249,18 @@ describe('testing EMPTY bucket', () => {
     expect(responseJSON.message).toBe('Emptied')
   })
 
+  test('user is able to delete a bucket', async () => {
+    const bucketId = 'bucket3'
+    const response = await app().inject({
+      method: 'POST',
+      url: `/bucket/${bucketId}/empty`,
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
   test('user is not able to empty a bucket without Auth Header', async () => {
     const bucketId = 'bucket3'
     const response = await app().inject({
@@ -216,7 +279,7 @@ describe('testing EMPTY bucket', () => {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
     })
-    expect(response.statusCode).toBe(406)
+    expect(response.statusCode).toBe(400)
   })
 
   test('user is able to empty an already empty bucket', async () => {

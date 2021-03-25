@@ -36,6 +36,8 @@ INSERT INTO "storage"."objects" ("id", "bucket_id", "name", "owner", "created_at
 ('D3EB488E-94F4-46CD-86D3-242C13B95BAC', 'bucket3', 'sadcat-upload2.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml", "size": 1234}');
 
 -- add policies
+-- allows user to CRUD all buckets
+CREATE POLICY crud_buckets ON storage.buckets for all USING (auth.uid() = '317eadce-631a-4429-a0bb-f19a7a517b4a');
 -- allow public CRUD acccess to the public folder in bucket2
 CREATE POLICY crud_public_folder ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'public');
 -- allow public CRUD acccess to a particular file in bucket2

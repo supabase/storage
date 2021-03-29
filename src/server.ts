@@ -5,10 +5,12 @@ import { runMigrations } from './utils/migrate'
 
 const loggerConfig = {
   prettyPrint: true,
+  level: 'info',
 }
 let exposeDocs = true
-if (process.env.NODE_ENV === 'production') {
+if (process.env.NODE_ENV !== 'production') {
   loggerConfig.prettyPrint = false
+  loggerConfig.level = 'error'
   exposeDocs = true // @todo change
 }
 

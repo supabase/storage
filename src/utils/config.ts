@@ -9,6 +9,7 @@ type storageConfigType = {
   globalS3Bucket: string
   globalS3Endpoint?: string
   jwtSecret: string
+  fileSizeLimit: number
 }
 
 function getConfigFromEnv(key: string): string {
@@ -35,5 +36,6 @@ export function getConfig(): storageConfigType {
     globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
     globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
     jwtSecret: getConfigFromEnv('PGRST_JWT_SECRET'),
+    fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
   }
 }

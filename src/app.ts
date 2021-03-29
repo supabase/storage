@@ -6,6 +6,7 @@ import { authSchema } from './schemas/auth'
 
 import bucketRoutes from './routes/bucket/'
 import objectRoutes from './routes/object'
+import { getConfig } from './utils/config'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -13,10 +14,11 @@ interface buildOpts extends FastifyServerOptions {
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
   const app = fastify(opts)
+  const { fileSizeLimit } = getConfig()
   app.register(fastifyMultipart, {
     limits: {
       fields: 10,
-      fileSize: 50 * 1024 * 1024,
+      fileSize: fileSizeLimit,
       files: 1,
     },
   })
@@ -26,7 +28,8 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
 
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {
-      exposeRoute: true,
+      exposeRoute: false,
+      routePrefix: '/',
       swagger: {
         info: {
           title: 'Supabase Storage API',

@@ -67,7 +67,17 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const postgrest = getPostgrestClient(jwt)
-      const owner = await getOwner(jwt)
+      let owner
+      try {
+        owner = await getOwner(jwt)
+      } catch (err) {
+        console.log(err)
+        return response.status(400).send({
+          statusCode: '400',
+          error: err.message,
+          message: err.message,
+        })
+      }
 
       const objectResponse = await postgrest
         .from<Obj>('objects')

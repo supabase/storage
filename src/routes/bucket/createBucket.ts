@@ -35,7 +35,17 @@ export default async function routes(fastify: FastifyInstance) {
       const authHeader = request.headers.authorization
       const jwt = authHeader.substring('Bearer '.length)
       const postgrest = getPostgrestClient(jwt)
-      const owner = await getOwner(jwt)
+      let owner
+      try {
+        owner = await getOwner(jwt)
+      } catch (err) {
+        console.log(err)
+        return response.status(400).send({
+          statusCode: '400',
+          error: err.message,
+          message: err.message,
+        })
+      }
 
       const { name: bucketName } = request.body
       let id = request.body.id

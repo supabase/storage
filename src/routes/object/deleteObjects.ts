@@ -64,7 +64,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (objectResponse.error) {
         const { error, status } = objectResponse
-        console.log(error)
+        request.log.error({ error }, 'error object')
         return response.status(status).send(transformPostgrestError(error, status))
       }
 

@@ -61,13 +61,13 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (objectResponse.error) {
         const { status, error } = objectResponse
-        console.log(error)
+        request.log.error({ error }, 'error object')
         return response.status(400).send(transformPostgrestError(error, status))
       }
 
       // send the object from s3
       const s3Key = `${projectRef}/${bucketName}/${objectName}`
-      console.log(s3Key)
+      request.log.info(s3Key)
       const data = await getObject(client, globalS3Bucket, s3Key)
 
       return response

@@ -70,8 +70,9 @@ export default async function routes(fastify: FastifyInstance) {
         // assuming prefix is always a folder
         prefix = `${prefix}/`
       }
-      console.log(request.body)
-      console.log(`searching for `, prefix)
+      request.log.info(request.body)
+      request.log.info(`searching for %s`, prefix)
+
       const { data: results, error, status } = await postgrest
         .rpc('search', {
           prefix,
@@ -83,10 +84,12 @@ export default async function routes(fastify: FastifyInstance) {
         .order(sortColumn, {
           ascending: sortOrder === 'asc',
         })
-      console.log(results, error)
+
       if (error) {
+        request.log.error({ error }, 'search rpc')
         return response.status(status).send(transformPostgrestError(error, status))
       }
+      request.log.info({ results }, 'results')
 
       response.status(200).send(results)
     }

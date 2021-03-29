@@ -29,11 +29,12 @@ export default async function routes(fastify: FastifyInstance) {
       const { data: results, error, status } = await postgrest
         .from<Bucket>('buckets')
         .select('id, name, owner, created_at, updated_at')
-      console.log(results, error)
 
       if (error) {
+        request.log.error({ error }, 'error bucket')
         return response.status(400).send(transformPostgrestError(error, status))
       }
+      request.log.info({ results }, 'results')
 
       response.send(results)
     }

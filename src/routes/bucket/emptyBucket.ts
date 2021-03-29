@@ -57,15 +57,20 @@ export default async function routes(fastify: FastifyInstance) {
       const { data: bucket } = bucketResponse
       const bucketName = bucket.name
 
-      let deleteError, objectError, objects
+      let deleteError, objectError, objects, objectStatus
       do {
-        ;({ data: objects, error: objectError } = await postgrest
+        ;({ data: objects, error: objectError, status: objectStatus } = await postgrest
           .from<Obj>('objects')
           .select('name, id')
           .eq('bucket_id', bucketId)
           .limit(500))
 
-        console.log(objects, objectError)
+        if (objectError) {
+          request.log.error({ error: objectError }, 'error object')
+          return response.status(400).send(transformPostgrestError(objectError, objectStatus))
+        }
+        request.log.info({ results: objects }, 'results')
+
         if (objects && objects.length > 0) {
           const params = objects.map((ele) => {
             return {
@@ -82,7 +87,9 @@ export default async function routes(fastify: FastifyInstance) {
               objects.map((ele) => ele.id)
             ))
 
-          console.log(deleteError)
+          if (deleteError) {
+            request.log.error({ error: deleteError }, 'error bucket')
+          }
         }
       } while (!deleteError && !objectError && objects && objects.length > 0)
 

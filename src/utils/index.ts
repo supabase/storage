@@ -59,8 +59,6 @@ export function transformPostgrestError(
   } else if (responseStatus === 401) {
     code = '401'
     type = 'Invalid JWT'
-  } else {
-    console.log(error, responseStatus)
   }
   return {
     statusCode: code,

@@ -165,7 +165,6 @@ describe('testing POST object', () => {
       headers,
       payload: form,
     })
-    console.log(response)
     expect(response.statusCode).toBe(200)
     expect(mockUploadObject).toBeCalled()
     expect(response.body).toBe(
@@ -504,7 +503,6 @@ describe('testing deleting multiple objects', () => {
     expect(mockDeleteObjects).toBeCalled()
 
     const result = JSON.parse(response.body)
-    console.log(response.body)
     expect(result[0].name).toBe('authenticated/delete-multiple1.png')
     expect(result[1].name).toBe('authenticated/delete-multiple2.png')
   })
@@ -606,7 +604,6 @@ describe('testing generating signed URL', () => {
     })
     expect(response.statusCode).toBe(200)
     const result = JSON.parse(response.body)
-    console.log(response.body)
     expect(result.signedURL).toBeTruthy()
   })
 
@@ -691,7 +688,6 @@ describe('testing retrieving signed URL', () => {
       method: 'GET',
       url: '/object/sign/bucket2/public/sadcat-upload.png?token=xxx',
     })
-    console.log(response.body)
     expect(response.statusCode).toBe(400)
   })
 
@@ -702,7 +698,6 @@ describe('testing retrieving signed URL', () => {
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${expiredJWT}`,
     })
-    console.log(response.body)
     expect(response.statusCode).toBe(400)
   })
 })

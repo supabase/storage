@@ -46,14 +46,21 @@ export default async function routes(fastify: FastifyInstance) {
       const jwt = authHeader.substring('Bearer '.length)
 
       const { sourceKey, destinationKey, bucketName } = request.body
-      console.log(sourceKey, bucketName)
+      request.log.info(
+        'sourceKey is %s and bucketName is %s and destinationKey is %s',
+        sourceKey,
+        bucketName,
+        destinationKey
+      )
 
       if (!isValidKey(destinationKey)) {
-        return response.status(400).send({
+        const error = {
           statusCode: '400',
           error: 'Invalid key',
           message: 'The destination key contains invalid characters',
-        })
+        }
+        request.log.error(error)
+        return response.status(400).send(error)
       }
 
       const postgrest = getPostgrestClient(jwt)
@@ -61,7 +68,7 @@ export default async function routes(fastify: FastifyInstance) {
       try {
         owner = await getOwner(jwt)
       } catch (err) {
-        console.log(err)
+        request.log.error(err)
         return response.status(400).send({
           statusCode: '400',
           error: err.message,
@@ -79,17 +86,17 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (objectResponse.error) {
         const { status, error } = objectResponse
-        console.log(error)
+        request.log.error({ error }, 'error object')
         return response.status(400).send(transformPostgrestError(error, status))
       }
       const { data: origObject } = objectResponse
-      console.log('origObject', origObject)
+      request.log.info({ origObject }, 'origObject')
 
       const newObject = Object.assign({}, origObject, {
         name: destinationKey,
         owner,
       })
-      console.log(newObject)
+      request.log.info({ origObject }, 'newObject')
       const { data: results, error, status } = await postgrest
         .from<Obj>('objects')
         .insert([newObject], {
@@ -97,10 +104,11 @@ export default async function routes(fastify: FastifyInstance) {
         })
         .single()
 
-      console.log(results, error)
       if (error) {
+        request.log.error({ error }, 'error object')
         return response.status(400).send(transformPostgrestError(error, status))
       }
+      request.log.info({ results }, 'results')
 
       const s3SourceKey = `${projectRef}/${bucketName}/${sourceKey}`
       const s3DestinationKey = `${projectRef}/${bucketName}/${destinationKey}`

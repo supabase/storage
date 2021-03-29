@@ -49,19 +49,28 @@ export default async function routes(fastify: FastifyInstance) {
         status: bucketStatus,
       } = await userPostgrest.from<Bucket>('buckets').select('id').eq('id', bucketId).single()
 
-      console.log(bucketResults, bucketError)
-
       if (bucketError) {
+        request.log.error({ error: bucketError }, 'error bucket')
         return response.status(400).send(transformPostgrestError(bucketError, bucketStatus))
       }
+      request.log.info({ results: bucketResults }, 'results')
 
-      const { count: objectCount, error: objectError } = await superUserPostgrest
+      const {
+        count: objectCount,
+        error: objectError,
+        status: objectStatus,
+      } = await superUserPostgrest
         .from<Obj>('objects')
         .select('id', { count: 'exact' })
         .eq('bucket_id', bucketId)
         .limit(10)
 
-      console.log(objectCount, objectError)
+      if (objectError) {
+        request.log.error({ error: objectError }, 'error object')
+        return response.status(400).send(transformPostgrestError(objectError, objectStatus))
+      }
+
+      request.log.info('bucket has %s objects', objectCount)
       if (objectCount && objectCount > 0) {
         return response.status(400).send({
           statusCode: '400',
@@ -74,10 +83,11 @@ export default async function routes(fastify: FastifyInstance) {
         .from<Bucket>('buckets')
         .delete()
         .eq('id', bucketId)
-      console.log(results, error)
       if (error) {
+        request.log.error({ error }, 'error bucket')
         return response.status(400).send(transformPostgrestError(error, status))
       }
+      request.log.info({ results }, 'results')
       return response.status(200).send({ message: 'Deleted' })
     }
   )

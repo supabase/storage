@@ -68,7 +68,7 @@ export default async function routes(fastify: FastifyInstance) {
       try {
         owner = await getOwner(jwt)
       } catch (err) {
-        console.log(err)
+        request.log.error(err)
         return response.status(400).send({
           statusCode: '400',
           error: err.message,
@@ -92,10 +92,11 @@ export default async function routes(fastify: FastifyInstance) {
         )
         .single()
 
-      console.log(results, error)
       if (error) {
+        request.log.error({ error }, 'error object')
         return response.status(400).send(transformPostgrestError(error, status))
       }
+      request.log.info({ results }, 'results')
 
       // if successfully inserted, upload to s3
       const s3Key = `${projectRef}/${bucketName}/${objectName}`
@@ -141,7 +142,7 @@ export default async function routes(fastify: FastifyInstance) {
         cacheControl,
         size: objectMetadata.ContentLength,
       }
-      const { error: updateError } = await getPostgrestClient(serviceKey)
+      const { error: updateError, status: updateStatus } = await getPostgrestClient(serviceKey)
         .from<Obj>('objects')
         .update({
           metadata,
@@ -149,7 +150,10 @@ export default async function routes(fastify: FastifyInstance) {
         .match({ bucket_id: bucketName, name: objectName })
         .single()
 
-      console.log(updateError)
+      if (updateError) {
+        request.log.error({ error: updateError }, 'update error')
+        return response.status(400).send(transformPostgrestError(updateError, updateStatus))
+      }
 
       return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
         Key: s3Key,

@@ -47,7 +47,7 @@ export default async function routes(fastify: FastifyInstance) {
         const payload = await verifyJWT(token)
         const { url } = payload as signedToken
         const s3Key = `${projectRef}/${url}`
-        console.log(s3Key)
+        request.log.info(s3Key)
         const data = await getObject(client, globalS3Bucket, s3Key)
 
         return response
@@ -58,7 +58,7 @@ export default async function routes(fastify: FastifyInstance) {
           .header('Last-Modified', data.LastModified)
           .send(data.Body)
       } catch (err) {
-        console.log(err)
+        request.log.error(err)
         return response.status(400).send({
           statusCode: '400',
           error: err.name,

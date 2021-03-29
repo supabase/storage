@@ -90,7 +90,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (objectResponse.error) {
         const { status, error } = objectResponse
-        console.log(error)
+        request.log.error({ error }, 'error object')
         return response.status(400).send(transformPostgrestError(error, status))
       }
 
@@ -118,7 +118,7 @@ export default async function routes(fastify: FastifyInstance) {
       const objectMetadata = await headObject(client, globalS3Bucket, s3Key)
       // update content-length as super user since user may not have update permissions
       metadata.size = objectMetadata.ContentLength
-      const { error: updateError } = await postgrest
+      const { error: updateError, status: updateStatus } = await postgrest
         .from<Obj>('objects')
         .update({
           metadata,
@@ -126,7 +126,10 @@ export default async function routes(fastify: FastifyInstance) {
         .match({ bucket_id: bucketName, name: objectName })
         .single()
 
-      console.log(updateError)
+      if (updateError) {
+        request.log.error({ error: updateError }, 'error bucket')
+        return response.status(400).send(transformPostgrestError(updateError, updateStatus))
+      }
 
       return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
         Key: s3Key,

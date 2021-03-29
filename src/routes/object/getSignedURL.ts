@@ -65,13 +65,13 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (objectResponse.error) {
         const { status, error } = objectResponse
-        console.log(error)
+        request.log.error({ error }, 'error object')
         return response.status(400).send(transformPostgrestError(error, status))
       }
       const { data: results } = objectResponse
-      console.log(results)
+      request.log.info({ results }, 'results')
 
-      console.log(`going to sign ${request.url}`)
+      request.log.info(`going to sign ${request.url}`)
       const urlParts = request.url.split('/')
       const urlToSign = decodeURI(urlParts.splice(3).join('/'))
       const token = await signJWT({ url: urlToSign }, expiresIn)

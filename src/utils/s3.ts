@@ -37,7 +37,6 @@ export async function getObject(
     Key: key,
   })
   const data = await client.send(command)
-  console.log('done s3')
   return data
 }
 

@@ -69,11 +69,11 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (objectResponse.error) {
         const { error, status } = objectResponse
-        console.log(error)
+        request.log.error({ error }, 'error object')
         return response.status(400).send(transformPostgrestError(error, status))
       }
       const { data: results } = objectResponse
-      console.log(results)
+      request.log.info({ results }, 'results')
 
       // if successfully deleted, delete from s3 too
       const s3Key = `${projectRef}/${bucketName}/${objectName}`

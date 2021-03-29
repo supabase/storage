@@ -57,7 +57,6 @@ export default async function routes(fastify: FastifyInstance) {
         })
       }
 
-      // todo what if objectName is * or something
       const objectResponse = await postgrest
         .from<Obj>('objects')
         .delete()

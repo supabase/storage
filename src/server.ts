@@ -11,7 +11,7 @@ let exposeDocs = true
 if (process.env.NODE_ENV === 'production') {
   loggerConfig.prettyPrint = false
   loggerConfig.level = 'error'
-  exposeDocs = true // @todo change
+  exposeDocs = true
 }
 
 ;(async () => {

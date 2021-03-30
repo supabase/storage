@@ -2,7 +2,6 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner, transformPostgrestError, isValidKey } from '../../utils'
 import { AuthenticatedRequest, Bucket } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
-import { bucketSchema } from '../../schemas/bucket'
 
 const createBucketBodySchema = {
   type: 'object',
@@ -13,7 +12,13 @@ const createBucketBodySchema = {
   required: ['name'],
 } as const
 
-const successResponseSchema = bucketSchema
+const successResponseSchema = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+  },
+  required: ['name'],
+}
 interface createBucketRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof createBucketBodySchema>
 }
@@ -64,13 +69,18 @@ export default async function routes(fastify: FastifyInstance) {
 
       const { data: results, error, status } = await postgrest
         .from<Bucket>('buckets')
-        .insert([
+        .insert(
+          [
+            {
+              id,
+              name: bucketName,
+              owner,
+            },
+          ],
           {
-            id,
-            name: bucketName,
-            owner,
-          },
-        ])
+            returning: 'minimal',
+          }
+        )
         .single()
 
       if (error) {
@@ -78,7 +88,9 @@ export default async function routes(fastify: FastifyInstance) {
         return response.status(400).send(transformPostgrestError(error, status))
       }
       request.log.info({ results }, 'results')
-      return response.status(200).send(results)
+      return response.status(200).send({
+        name: bucketName,
+      })
     }
   )
 }

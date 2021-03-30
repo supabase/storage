@@ -4,6 +4,7 @@ import { getObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { signedToken } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { createResponse } from '../../utils/generic-routes'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -59,11 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
           .send(data.Body)
       } catch (err) {
         request.log.error(err)
-        return response.status(400).send({
-          statusCode: '400',
-          error: err.name,
-          message: err.message,
-        })
+        return response.status(400).send(createResponse(err.message, '400', err.name))
       }
     }
   )

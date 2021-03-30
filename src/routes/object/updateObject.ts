@@ -4,6 +4,7 @@ import { uploadObject, initClient, headObject } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, AuthenticatedRequest, ObjectMetadata } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -30,15 +31,15 @@ interface updateObjectRequestInterface extends AuthenticatedRequest {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Update the object at an existing key'
+
+  const schema = createDefaultSchema(successResponseSchema, {
+    params: updateObjectParamsSchema,
+    summary,
+  })
   fastify.put<updateObjectRequestInterface>(
     '/:bucketName/*',
     {
-      schema: {
-        params: updateObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      },
+      schema,
     },
     async (request, response) => {
       // check if the user is able to update the row
@@ -59,11 +60,9 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
 
       if (!isValidKey(objectName) || !isValidKey(bucketName)) {
-        return response.status(400).send({
-          statusCode: '400',
-          error: 'Invalid key',
-          message: 'The key contains invalid characters',
-        })
+        return response
+          .status(400)
+          .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
       const postgrest = getPostgrestClient(jwt)
@@ -72,11 +71,7 @@ export default async function routes(fastify: FastifyInstance) {
         owner = await getOwner(jwt)
       } catch (err) {
         console.log(err)
-        return response.status(400).send({
-          statusCode: '400',
-          error: err.message,
-          message: err.message,
-        })
+        return response.status(400).send(createResponse(err.message, '400', err.message))
       }
 
       const objectResponse = await postgrest

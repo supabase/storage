@@ -4,6 +4,7 @@ import { uploadObject, initClient, deleteObject, headObject } from '../../utils/
 import { getConfig } from '../../utils/config'
 import { Obj, AuthenticatedRequest, ObjectMetadata } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -30,15 +31,16 @@ interface createObjectRequestInterface extends AuthenticatedRequest {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Upload a new object'
+
+  const schema = createDefaultSchema(successResponseSchema, {
+    params: createObjectParamsSchema,
+    summary,
+  })
+
   fastify.post<createObjectRequestInterface>(
     '/:bucketName/*',
     {
-      schema: {
-        params: createObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      },
+      schema,
     },
     async (request, response) => {
       // check if the user is able to insert that row
@@ -56,11 +58,9 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
 
       if (!isValidKey(objectName) || !isValidKey(bucketName)) {
-        return response.status(400).send({
-          statusCode: '400',
-          error: 'Invalid key',
-          message: 'The key contains invalid characters',
-        })
+        return response
+          .status(400)
+          .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
       const postgrest = getPostgrestClient(jwt)
@@ -128,11 +128,15 @@ export default async function routes(fastify: FastifyInstance) {
         await deleteObject(client, globalS3Bucket, s3Key)
 
         // return an error response
-        return response.status(400).send({
-          statusCode: '413',
-          error: 'Payload too large',
-          message: 'The object exceeded the maximum allowed size',
-        })
+        return response
+          .status(400)
+          .send(
+            createResponse(
+              'The object exceeded the maximum allowed size',
+              '413',
+              'Payload too large'
+            )
+          )
       }
 
       const objectMetadata = await headObject(client, globalS3Bucket, s3Key)

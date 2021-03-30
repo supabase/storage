@@ -4,6 +4,7 @@ import { copyObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -31,15 +32,16 @@ interface copyRequestInterface extends AuthenticatedRequest {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Copies an object'
+
+  const schema = createDefaultSchema(successResponseSchema, {
+    body: copyRequestBodySchema,
+    summary,
+  })
+
   fastify.post<copyRequestInterface>(
     '/copy',
     {
-      schema: {
-        body: copyRequestBodySchema,
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      },
+      schema,
     },
     async (request, response) => {
       const authHeader = request.headers.authorization
@@ -54,13 +56,14 @@ export default async function routes(fastify: FastifyInstance) {
       )
 
       if (!isValidKey(destinationKey)) {
-        const error = {
-          statusCode: '400',
-          error: 'Invalid key',
-          message: 'The destination key contains invalid characters',
-        }
-        request.log.error(error)
-        return response.status(400).send(error)
+        const responseValue = createResponse(
+          'The destination key contains invalid characters',
+          '400',
+          'Invalid key'
+        )
+
+        request.log.error(responseValue)
+        return response.status(400).send(responseValue)
       }
 
       const postgrest = getPostgrestClient(jwt)
@@ -69,11 +72,7 @@ export default async function routes(fastify: FastifyInstance) {
         owner = await getOwner(jwt)
       } catch (err) {
         request.log.error(err)
-        return response.status(400).send({
-          statusCode: '400',
-          error: err.message,
-          message: err.message,
-        })
+        return response.status(400).send(createResponse(err.message, '400', err.message))
       }
       const objectResponse = await postgrest
         .from<Obj>('objects')

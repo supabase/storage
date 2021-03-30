@@ -3,6 +3,7 @@ import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types/types'
 import { objectSchema } from '../../schemas/object'
+import { createDefaultSchema } from '../../utils/generic-routes'
 
 const searchRequestParamsSchema = {
   type: 'object',
@@ -39,16 +40,17 @@ interface searchRequestInterface extends AuthenticatedRequest {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Search for objects under a prefix'
+
+  const schema = createDefaultSchema(successResponseSchema, {
+    body: searchRequestBodySchema,
+    params: searchRequestParamsSchema,
+    summary,
+  })
+
   fastify.post<searchRequestInterface>(
     '/list/:bucketName',
     {
-      schema: {
-        body: searchRequestBodySchema,
-        params: searchRequestParamsSchema,
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      },
+      schema,
     },
     async (request, response) => {
       const authHeader = request.headers.authorization

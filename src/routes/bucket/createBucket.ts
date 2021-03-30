@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, getOwner, transformPostgrestError, isValidKey } from '../../utils'
 import { AuthenticatedRequest, Bucket } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 
 const createBucketBodySchema = {
   type: 'object',
@@ -26,15 +27,14 @@ interface createBucketRequestInterface extends AuthenticatedRequest {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Create a bucket'
+  const schema = createDefaultSchema(successResponseSchema, {
+    body: createBucketBodySchema,
+    summary,
+  })
   fastify.post<createBucketRequestInterface>(
     '/',
     {
-      schema: {
-        body: createBucketBodySchema,
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      },
+      schema,
     },
     async (request, response) => {
       const authHeader = request.headers.authorization
@@ -45,26 +45,18 @@ export default async function routes(fastify: FastifyInstance) {
         owner = await getOwner(jwt)
       } catch (err) {
         console.log(err)
-        return response.status(400).send({
-          statusCode: '400',
-          error: err.message,
-          message: err.message,
-        })
+        return response.status(400).send()
       }
 
       const { name: bucketName } = request.body
-      let id = request.body.id
-      if (!id) {
-        //by default set the id as the name of the bucket
-        id = bucketName
-      }
+
+      // IMPORTANT: by default set the id as the name of the bucket
+      const id = request.body.id || bucketName
 
       if (!isValidKey(id) || !isValidKey(bucketName)) {
-        return response.status(400).send({
-          statusCode: '400',
-          error: 'Invalid key',
-          message: 'The key contains invalid characters',
-        })
+        return response
+          .status(400)
+          .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
       const { data: results, error, status } = await postgrest

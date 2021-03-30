@@ -4,6 +4,7 @@ import { initClient, copyObject, deleteObject } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -31,15 +32,16 @@ interface moveObjectRequestInterface extends AuthenticatedRequest {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Moves an object'
+
+  const schema = createDefaultSchema(successResponseSchema, {
+    body: moveObjectsBodySchema,
+    summary,
+  })
+
   fastify.post<moveObjectRequestInterface>(
     '/move',
     {
-      schema: {
-        body: moveObjectsBodySchema,
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      },
+      schema,
     },
     async (request, response) => {
       // check if the user is able to update the row
@@ -49,11 +51,11 @@ export default async function routes(fastify: FastifyInstance) {
       const { destinationKey, sourceKey, bucketName } = request.body
 
       if (!isValidKey(destinationKey)) {
-        return response.status(400).send({
-          statusCode: '400',
-          error: 'Invalid key',
-          message: 'The destination key contains invalid characters',
-        })
+        return response
+          .status(400)
+          .send(
+            createResponse('The destination key contains invalid characters', '400', 'Invalid key')
+          )
       }
 
       const postgrest = getPostgrestClient(jwt)
@@ -81,9 +83,7 @@ export default async function routes(fastify: FastifyInstance) {
       await copyObject(client, globalS3Bucket, oldS3Key, newS3Key)
       await deleteObject(client, globalS3Bucket, oldS3Key)
 
-      return response.status(200).send({
-        message: 'Move',
-      })
+      return response.status(200).send(createResponse('Move'))
     }
   )
 }

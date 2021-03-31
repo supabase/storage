@@ -9,7 +9,9 @@
 - Then run the following
 
 ```bash
+# this sets up a postgres database and postgrest locally via docker
 npm run restart:db
+# Start the storage server
 npm run dev
 ```
 

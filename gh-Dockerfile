@@ -1,4 +1,4 @@
 FROM debian:stable-slim
-COPY ./bin/storage-api-linux /bin/
-ENTRYPOINT "/bin/storage-api-linux"
+COPY storage-api-x86_64 /bin/
+ENTRYPOINT "/bin/storage-api-x86_64"
 EXPOSE 5000

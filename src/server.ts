@@ -7,11 +7,10 @@ const loggerConfig = {
   prettyPrint: true,
   level: 'info',
 }
-let exposeDocs = true
+const exposeDocs = true
 if (process.env.NODE_ENV === 'production') {
   loggerConfig.prettyPrint = false
   loggerConfig.level = 'error'
-  exposeDocs = true
 }
 
 ;(async () => {

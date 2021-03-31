@@ -1,12 +1,12 @@
 import { RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { objectSchema } from '../schemas/object'
 import { bucketSchema } from '../schemas/bucket'
+import { objectSchema } from '../schemas/object'
 
 export type Bucket = FromSchema<typeof bucketSchema>
 export type Obj = FromSchema<typeof objectSchema>
 
-export type signedToken = {
+export type SignedToken = {
   url: string
 }
 

@@ -1,6 +1,6 @@
 import dotenv from 'dotenv'
 
-type storageConfigType = {
+type StorageConfigType = {
   anonKey: string
   serviceKey: string
   projectRef: string
@@ -12,19 +12,19 @@ type storageConfigType = {
   fileSizeLimit: number
 }
 
+function getOptionalConfigFromEnv(key: string): string | undefined {
+  return process.env[key]
+}
+
 function getConfigFromEnv(key: string): string {
-  const value = process.env[key]
+  const value = getOptionalConfigFromEnv(key)
   if (!value) {
     throw new Error(`${key} is undefined`)
   }
   return value
 }
 
-function getOptionalConfigFromEnv(key: string): string | undefined {
-  return process.env[key]
-}
-
-export function getConfig(): storageConfigType {
+export function getConfig(): StorageConfigType {
   dotenv.config()
 
   return {

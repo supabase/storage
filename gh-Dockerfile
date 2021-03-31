@@ -1,3 +1,5 @@
+# Dockerfile used in the Github action
+# assumes the built binary is already present
 FROM debian:stable-slim
 
 RUN mkdir -p /root/storage

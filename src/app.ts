@@ -1,11 +1,10 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import fastifyMultipart from 'fastify-multipart'
 import fastifySwagger from 'fastify-swagger'
-import { errorSchema } from './schemas/error'
-import { authSchema } from './schemas/auth'
-
 import bucketRoutes from './routes/bucket/'
 import objectRoutes from './routes/object'
+import { authSchema } from './schemas/auth'
+import { errorSchema } from './schemas/error'
 import { getConfig } from './utils/config'
 
 interface buildOpts extends FastifyServerOptions {

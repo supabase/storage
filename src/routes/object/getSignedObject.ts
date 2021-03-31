@@ -1,9 +1,9 @@
 import { FastifyInstance } from 'fastify'
-import { verifyJWT } from '../../utils/'
-import { getObject, initClient } from '../../utils/s3'
-import { getConfig } from '../../utils/config'
-import { signedToken } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { SignedToken } from '../../types/types'
+import { verifyJWT } from '../../utils/'
+import { getConfig } from '../../utils/config'
+import { getObject, initClient } from '../../utils/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -45,7 +45,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { token } = request.query
       try {
         const payload = await verifyJWT(token)
-        const { url } = payload as signedToken
+        const { url } = payload as SignedToken
         const s3Key = `${projectRef}/${url}`
         request.log.info(s3Key)
         const data = await getObject(client, globalS3Bucket, s3Key)

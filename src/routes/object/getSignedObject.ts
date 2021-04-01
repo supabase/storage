@@ -3,7 +3,6 @@ import { FromSchema } from 'json-schema-to-ts'
 import { SignedToken } from '../../types/types'
 import { verifyJWT } from '../../utils/'
 import { getConfig } from '../../utils/config'
-import { FromSchema } from 'json-schema-to-ts'
 import { createResponse } from '../../utils/generic-routes'
 import { getObject, initClient } from '../../utils/s3'
 

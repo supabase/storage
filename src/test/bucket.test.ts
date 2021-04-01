@@ -185,7 +185,7 @@ describe('testing DELETE bucket', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.message).toBe('Deleted')
+    expect(responseJSON.message).toBe('Successfully deleted')
   })
 
   test('checking RLS: anon user is not able to delete a bucket', async () => {
@@ -246,7 +246,7 @@ describe('testing EMPTY bucket', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.message).toBe('Emptied')
+    expect(responseJSON.message).toBe('Successfully deflated')
   })
 
   test('user is able to delete a bucket', async () => {

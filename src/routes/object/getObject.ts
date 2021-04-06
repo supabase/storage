@@ -32,6 +32,7 @@ export default async function routes(fastify: FastifyInstance) {
         headers: { $ref: 'authSchema#' },
         summary,
         response: { '4xx': { $ref: 'errorSchema#' } },
+        tags: ['object'],
       },
     },
     async (request, response) => {

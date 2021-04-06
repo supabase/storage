@@ -45,6 +45,7 @@ export default async function routes(fastify: FastifyInstance) {
     body: searchRequestBodySchema,
     params: searchRequestParamsSchema,
     summary,
+    tags: ['object'],
   })
 
   fastify.post<searchRequestInterface>(

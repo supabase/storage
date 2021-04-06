@@ -34,6 +34,10 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
           description: 'API documentation for Supabase Storage',
           version: '0.0.1',
         },
+        tags: [
+          { name: 'object', description: 'Object end-points' },
+          { name: 'bucket', description: 'Bucket end-points' },
+        ],
       },
     })
   }

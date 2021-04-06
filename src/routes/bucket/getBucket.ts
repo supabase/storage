@@ -24,6 +24,7 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     params: getBucketParamsSchema,
     summary,
+    tags: ['bucket'],
   })
   fastify.get<getBucketRequestInterface>(
     '/:bucketId',

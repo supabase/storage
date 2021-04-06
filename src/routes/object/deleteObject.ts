@@ -34,6 +34,7 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     params: deleteObjectParamsSchema,
     summary,
+    tags: ['object'],
   })
 
   fastify.delete<deleteObjectRequestInterface>(

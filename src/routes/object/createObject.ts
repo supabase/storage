@@ -35,6 +35,7 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     params: createObjectParamsSchema,
     summary,
+    tags: ['object'],
   })
 
   fastify.post<createObjectRequestInterface>(

@@ -39,6 +39,7 @@ export default async function routes(fastify: FastifyInstance) {
     body: getSignedURLBodySchema,
     params: getSignedURLParamsSchema,
     summary,
+    tags: ['object'],
   })
 
   fastify.post<getSignedURLRequestInterface>(

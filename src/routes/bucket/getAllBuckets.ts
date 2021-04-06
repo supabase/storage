@@ -14,6 +14,7 @@ export default async function routes(fastify: FastifyInstance) {
   const summary = 'Gets all buckets'
   const schema = createDefaultSchema(successResponseSchema, {
     summary,
+    tags: ['bucket'],
   })
 
   fastify.get<AuthenticatedRequest>(

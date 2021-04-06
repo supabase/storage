@@ -41,6 +41,7 @@ export default async function routes(fastify: FastifyInstance) {
         querystring: getSignedObjectQSSchema,
         summary,
         response: { '4xx': { $ref: 'errorSchema#' } },
+        tags: ['object'],
       },
     },
     async (request, response) => {

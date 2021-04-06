@@ -30,6 +30,7 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     body: createBucketBodySchema,
     summary,
+    tags: ['bucket'],
   })
   fastify.post<createBucketRequestInterface>(
     '/',

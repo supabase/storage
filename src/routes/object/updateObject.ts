@@ -35,6 +35,7 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     params: updateObjectParamsSchema,
     summary,
+    tags: ['object'],
   })
   fastify.put<updateObjectRequestInterface>(
     '/:bucketName/*',

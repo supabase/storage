@@ -36,6 +36,7 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     body: copyRequestBodySchema,
     summary,
+    tags: ['object'],
   })
 
   fastify.post<copyRequestInterface>(

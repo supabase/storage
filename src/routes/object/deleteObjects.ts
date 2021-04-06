@@ -41,6 +41,7 @@ export default async function routes(fastify: FastifyInstance) {
     body: deleteObjectsBodySchema,
     params: deleteObjectsParamsSchema,
     summary,
+    tags: ['object'],
   })
 
   fastify.delete<deleteObjectsInterface>(

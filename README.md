@@ -11,6 +11,7 @@ A scalable, light-weight object storage service. Read [this post](https://supaba
 
 ## Documentation
 
+- [API Docs](https://supabase.github.io/storage-api/#/)
 - [Storage Guides](https://supabase.io/docs/guides/storage)
 - [Client library](https://supabase.io/docs/reference/javascript/storage-createbucket)
 

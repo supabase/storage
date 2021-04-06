@@ -45,6 +45,15 @@ jobs:
           echo DATABASE_URL=postgresql://postgres:postgres@127.0.0.1/postgres >> .env
           echo PGOPTIONS='-c search_path=storage' >> .env
           echo FILE_SIZE_LIMIT=52428800 >> .env
-      - run: |
+
+      - name: Install dependencies
+        run: |
           npm ci
+
+      - name: Builds successfully
+        run: |
+          npm run build
+
+      - name: Tests pass
+        run: |
           npm test

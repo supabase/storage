@@ -11,7 +11,7 @@
     "start:fly": "NODE_ENV=production node -r dotenv/config dist/server.js dotenv_config_path=.env.s3",
     "deploy": "flyctl deploy --remote-only",
     "logs": "flyctl logs",
-    "migration:run": "ts-node-dev ./src/utils/migrate-call.ts",
+    "migration:run": "ts-node-dev ./src/scripts/migrate-call.ts",
     "test": "npm run restart:db && jest --runInBand",
     "stop:db": "docker-compose --project-dir . -f src/test/db/docker-compose.yml down",
     "restart:db": "docker-compose --project-dir . -f src/test/db/docker-compose.yml down && docker-compose --project-dir . -f src/test/db/docker-compose.yml up -d && sleep 1 && npm run migration:run"

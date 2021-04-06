@@ -3,8 +3,9 @@
 A scalable, light-weight object storage service. Read [this post](https://supabase.io/blog/2021/03/30/supabase-storage) on why we decided to build a new object storage service.
 
 - Uses Postgres as it's datastore for storing metadata
-- Authorization rules are written as Postgres Row Level Security policies.
+- Authorization rules are written as Postgres Row Level Security policies
 - Integrates with S3 as the storage backend (with more in the pipeline!)
+- Extremely lightweight and performant
 
 ![Architecture](./static/architecture.png?raw=true 'Architecture')
 

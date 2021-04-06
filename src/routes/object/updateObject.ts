@@ -12,8 +12,8 @@ const client = initClient(region, globalS3Endpoint)
 const updateObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string' },
-    '*': { type: 'string' },
+    bucketName: { type: 'string', example: 'avatars' },
+    '*': { type: 'string', example: 'folder/cat.png' },
   },
   required: ['bucketName', '*'],
 } as const

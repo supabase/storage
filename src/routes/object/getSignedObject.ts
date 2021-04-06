@@ -12,15 +12,19 @@ const client = initClient(region, globalS3Endpoint)
 const getSignedObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string' },
-    '*': { type: 'string' },
+    bucketName: { type: 'string', example: 'avatars' },
+    '*': { type: 'string', example: 'folder/cat.png' },
   },
   required: ['bucketName', '*'],
 } as const
 const getSignedObjectQSSchema = {
   type: 'object',
   properties: {
-    token: { type: 'string' },
+    token: {
+      type: 'string',
+      example:
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJidWNrZXQyL3B1YmxpYy9zYWRjYXQtdXBsb2FkMjMucG5nIiwiaWF0IjoxNjE3NzI2MjczLCJleHAiOjE2MTc3MjcyNzN9.uBQcXzuvXxfw-9WgzWMBfE_nR3VOgpvfZe032sfLSSk',
+    },
   },
   required: ['token'],
 } as const

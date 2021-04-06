@@ -7,15 +7,15 @@ import { createDefaultSchema } from '../../utils/generic-routes'
 const getSignedURLParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string' },
-    '*': { type: 'string' },
+    bucketName: { type: 'string', example: 'avatars' },
+    '*': { type: 'string', example: 'folder/cat.png' },
   },
   required: ['bucketName', '*'],
 } as const
 const getSignedURLBodySchema = {
   type: 'object',
   properties: {
-    expiresIn: { type: 'number' },
+    expiresIn: { type: 'integer', minimum: 1, example: 60000 },
   },
   required: ['expiresIn'],
 } as const

@@ -10,7 +10,7 @@ const { serviceKey } = getConfig()
 const deleteBucketParamsSchema = {
   type: 'object',
   properties: {
-    bucketId: { type: 'string' },
+    bucketId: { type: 'string', example: 'avatars' },
   },
   required: ['bucketId'],
 } as const

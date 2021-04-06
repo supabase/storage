@@ -12,9 +12,9 @@ const client = initClient(region, globalS3Endpoint)
 const moveObjectsBodySchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string' },
-    sourceKey: { type: 'string' },
-    destinationKey: { type: 'string' },
+    bucketName: { type: 'string', example: 'avatars' },
+    sourceKey: { type: 'string', example: 'folder/cat.png' },
+    destinationKey: { type: 'string', example: 'folder/newcat.png' },
   },
   required: ['bucketName', 'sourceKey', 'destinationKey'],
 } as const

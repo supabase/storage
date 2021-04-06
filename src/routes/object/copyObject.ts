@@ -12,9 +12,9 @@ const client = initClient(region, globalS3Endpoint)
 const copyRequestBodySchema = {
   type: 'object',
   properties: {
-    sourceKey: { type: 'string' },
-    bucketName: { type: 'string' },
-    destinationKey: { type: 'string' },
+    sourceKey: { type: 'string', example: 'folder/cat.png' },
+    bucketName: { type: 'string', example: 'avatars' },
+    destinationKey: { type: 'string', example: 'folder/kitten.png' },
   },
   required: ['sourceKey', 'bucketName', 'destinationKey'],
 } as const

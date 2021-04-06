@@ -12,7 +12,7 @@ const client = initClient(region, globalS3Endpoint)
 const emptyBucketParamsSchema = {
   type: 'object',
   properties: {
-    bucketId: { type: 'string' },
+    bucketId: { type: 'string', example: 'avatars' },
   },
   required: ['bucketId'],
 } as const

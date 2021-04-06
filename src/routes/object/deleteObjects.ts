@@ -13,14 +13,20 @@ const client = initClient(region, globalS3Endpoint)
 const deleteObjectsParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string' },
+    bucketName: { type: 'string', example: 'avatars' },
   },
   required: ['bucketName'],
 } as const
 const deleteObjectsBodySchema = {
   type: 'object',
   properties: {
-    prefixes: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 1000 },
+    prefixes: {
+      type: 'array',
+      items: { type: 'string' },
+      minItems: 1,
+      maxItems: 1000,
+      example: ['folder/cat.png', 'folder/morecats.png'],
+    },
   },
   required: ['prefixes'],
 } as const

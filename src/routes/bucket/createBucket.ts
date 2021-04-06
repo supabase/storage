@@ -7,8 +7,8 @@ import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 const createBucketBodySchema = {
   type: 'object',
   properties: {
-    name: { type: 'string' },
-    id: { type: 'string' },
+    name: { type: 'string', example: 'avatars' },
+    id: { type: 'string', example: 'avatars' },
   },
   required: ['name'],
 } as const

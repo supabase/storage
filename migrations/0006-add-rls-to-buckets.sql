@@ -1,1 +1,0 @@
-ALTER TABLE storage.buckets ENABLE ROW LEVEL SECURITY;

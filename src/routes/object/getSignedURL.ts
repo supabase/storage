@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient, signJWT, transformPostgrestError } from '../../utils'
-import { AuthenticatedRequest, Obj } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { AuthenticatedRequest, Obj } from '../../types/types'
+import { getPostgrestClient, signJWT, transformPostgrestError } from '../../utils'
 import { createDefaultSchema } from '../../utils/generic-routes'
 
 const getSignedURLParamsSchema = {

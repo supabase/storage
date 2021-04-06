@@ -1,8 +1,8 @@
 'use strict'
-import app from '../app'
-import * as utils from '../utils/s3'
-import { getConfig } from '../utils/config'
 import dotenv from 'dotenv'
+import app from '../app'
+import { getConfig } from '../utils/config'
+import * as utils from '../utils/s3'
 
 dotenv.config({ path: '.env.test' })
 const { anonKey } = getConfig()

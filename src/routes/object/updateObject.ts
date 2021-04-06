@@ -1,10 +1,10 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient, getOwner, transformPostgrestError, isValidKey } from '../../utils'
-import { uploadObject, initClient, headObject } from '../../utils/s3'
-import { getConfig } from '../../utils/config'
-import { Obj, AuthenticatedRequest, ObjectMetadata } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { AuthenticatedRequest, Obj, ObjectMetadata } from '../../types/types'
+import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
+import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
+import { headObject, initClient, uploadObject } from '../../utils/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)

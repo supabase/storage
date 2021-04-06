@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { Server, IncomingMessage, ServerResponse } from 'http'
+import { IncomingMessage, Server, ServerResponse } from 'http'
 import build from './app'
 import { runMigrations } from './utils/migrate'
 

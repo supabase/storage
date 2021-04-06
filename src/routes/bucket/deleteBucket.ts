@@ -1,8 +1,8 @@
 import { FastifyInstance } from 'fastify'
+import { FromSchema } from 'json-schema-to-ts'
+import { AuthenticatedRequest, Bucket, Obj } from '../../types/types'
 import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
-import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
-import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 
 const { serviceKey } = getConfig()

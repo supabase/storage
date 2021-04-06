@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient, transformPostgrestError } from '../../utils'
-import { AuthenticatedRequest, Bucket } from '../../types/types'
 import { bucketSchema } from '../../schemas/bucket'
+import { AuthenticatedRequest, Bucket } from '../../types/types'
+import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { createDefaultSchema } from '../../utils/generic-routes'
 
 const successResponseSchema = {

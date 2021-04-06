@@ -1,8 +1,8 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient, transformPostgrestError } from '../../utils'
-import { AuthenticatedRequest, Bucket } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 import { bucketSchema } from '../../schemas/bucket'
+import { AuthenticatedRequest, Bucket } from '../../types/types'
+import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { createDefaultSchema } from '../../utils/generic-routes'
 
 const getBucketParamsSchema = {

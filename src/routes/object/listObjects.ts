@@ -1,8 +1,8 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { FromSchema } from 'json-schema-to-ts'
-import { AuthenticatedRequest } from '../../types/types'
 import { objectSchema } from '../../schemas/object'
+import { AuthenticatedRequest } from '../../types/types'
+import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { createDefaultSchema } from '../../utils/generic-routes'
 
 const searchRequestParamsSchema = {

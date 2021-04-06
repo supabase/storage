@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
-import { getPostgrestClient, getOwner, transformPostgrestError, isValidKey } from '../../utils'
-import { AuthenticatedRequest, Bucket } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { AuthenticatedRequest, Bucket } from '../../types/types'
+import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 
 const createBucketBodySchema = {
@@ -86,4 +86,3 @@ export default async function routes(fastify: FastifyInstance) {
     }
   )
 }
-

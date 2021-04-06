@@ -1,4 +1,17 @@
-# Supabase storage middleware
+# Supabase Storage Middleware
+
+A scalable, light-weight object storage service. Read [this post](https://supabase.io/blog/2021/03/30/supabase-storage) on why we decided to build a new object storage service.
+
+- Uses Postgres as it's datastore for storing metadata
+- Authorization rules are written as Postgres Row Level Security policies.
+- Integrates with S3 as the storage backend (with more in the pipeline!)
+
+![Architecture](./static/architecture.png?raw=true 'Architecture')
+
+## Documentation
+
+- [Storage Guides](https://supabase.io/docs/guides/storage)
+- [Client library](https://supabase.io/docs/reference/javascript/storage-createbucket)
 
 ## Development
 

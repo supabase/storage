@@ -20,7 +20,7 @@ const deleteObjectParamsSchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    message: { type: 'string' },
+    message: { type: 'string', example: 'Successfully deleted' },
   },
 }
 interface deleteObjectRequestInterface extends AuthenticatedRequest {

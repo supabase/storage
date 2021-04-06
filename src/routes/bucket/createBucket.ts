@@ -16,7 +16,7 @@ const createBucketBodySchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    name: { type: 'string' },
+    name: { type: 'string', example: 'avatars' },
   },
   required: ['name'],
 }

@@ -40,6 +40,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get<GetSignedObjectRequestInterface>(
     '/sign/:bucketName/*',
     {
+      // @todo add success response schema here
       schema: {
         params: getSignedObjectParamsSchema,
         querystring: getSignedObjectQSSchema,

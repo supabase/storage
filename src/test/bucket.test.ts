@@ -246,7 +246,7 @@ describe('testing EMPTY bucket', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.message).toBe('Successfully deflated')
+    expect(responseJSON.message).toBe('Successfully emptied')
   })
 
   test('user is able to delete a bucket', async () => {

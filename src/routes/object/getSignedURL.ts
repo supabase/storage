@@ -22,7 +22,11 @@ const getSignedURLBodySchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    signedURL: { type: 'string' },
+    signedURL: {
+      type: 'string',
+      example:
+        '/object/sign/avatars/folder/cat.png?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJhdmF0YXJzL2ZvbGRlci9jYXQucG5nIiwiaWF0IjoxNjE3NzI2MjczLCJleHAiOjE2MTc3MjcyNzN9.s7Gt8ME80iREVxPhH01ZNv8oUn4XtaWsmiQ5csiUHn4',
+    },
   },
   required: ['signedURL'],
 }

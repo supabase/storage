@@ -21,7 +21,7 @@ const moveObjectsBodySchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    message: { type: 'string' },
+    message: { type: 'string', example: 'Successfully moved' },
   },
   required: ['message'],
 }
@@ -84,7 +84,7 @@ export default async function routes(fastify: FastifyInstance) {
       await copyObject(client, globalS3Bucket, oldS3Key, newS3Key)
       await deleteObject(client, globalS3Bucket, oldS3Key)
 
-      return response.status(200).send(createResponse('Move'))
+      return response.status(200).send(createResponse('Successfully moved'))
     }
   )
 }

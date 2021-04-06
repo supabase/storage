@@ -17,7 +17,7 @@ const deleteBucketParamsSchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    message: { type: 'string' },
+    message: { type: 'string', example: 'Successfully deleted' },
   },
 }
 interface deleteBucketRequestInterface extends AuthenticatedRequest {

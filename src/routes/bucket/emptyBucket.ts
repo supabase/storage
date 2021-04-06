@@ -19,7 +19,7 @@ const emptyBucketParamsSchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    message: { type: 'string' },
+    message: { type: 'string', example: 'Successfully emptied' },
   },
 }
 interface emptyBucketRequestInterface extends AuthenticatedRequest {
@@ -94,7 +94,7 @@ export default async function routes(fastify: FastifyInstance) {
         }
       } while (!deleteError && !objectError && objects && objects.length > 0)
 
-      return response.status(200).send(createResponse('Successfully deflated'))
+      return response.status(200).send(createResponse('Successfully emptied'))
     }
   )
 }

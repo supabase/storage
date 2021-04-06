@@ -27,6 +27,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get<getObjectRequestInterface>(
     '/:bucketName/*',
     {
+      // @todo add success response schema here
       schema: {
         params: getObjectParamsSchema,
         headers: { $ref: 'authSchema#' },

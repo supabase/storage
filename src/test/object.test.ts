@@ -1,11 +1,11 @@
 'use strict'
-import app from '../app'
-import * as utils from '../utils/s3'
-import { getConfig } from '../utils/config'
-import { signJWT } from '../utils/index'
 import dotenv from 'dotenv'
 import FormData from 'form-data'
 import fs from 'fs'
+import app from '../app'
+import { getConfig } from '../utils/config'
+import { signJWT } from '../utils/index'
+import * as utils from '../utils/s3'
 
 dotenv.config({ path: '.env.test' })
 const { anonKey, serviceKey } = getConfig()
@@ -190,7 +190,7 @@ describe('testing POST object', () => {
     expect(response.body).toBe(
       JSON.stringify({
         statusCode: '42501',
-        error: null,
+        error: '',
         message: 'new row violates row-level security policy for table "objects"',
       })
     )

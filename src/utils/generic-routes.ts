@@ -26,11 +26,9 @@ function createResponse(message: string, status?: string, error?: string): Bucke
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function createDefaultSchema(successResponseSchema: any, properties: any): any {
   return {
-    schema: {
-      headers: { $ref: 'authSchema#' },
-      response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      ...properties,
-    },
+    headers: { $ref: 'authSchema#' },
+    response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
+    ...properties,
   }
 }
 

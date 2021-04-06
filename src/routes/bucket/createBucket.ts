@@ -45,13 +45,13 @@ export default async function routes(fastify: FastifyInstance) {
         owner = await getOwner(jwt)
       } catch (err) {
         console.log(err)
-        return response.status(400).send()
+        return response.status(400).send(createResponse(err.message, '400', err.message))
       }
 
       const { name: bucketName } = request.body
 
       // IMPORTANT: by default set the id as the name of the bucket
-      const id = request.body.id || bucketName
+      const id = request.body.id ?? bucketName
 
       if (!isValidKey(id) || !isValidKey(bucketName)) {
         return response
@@ -86,3 +86,4 @@ export default async function routes(fastify: FastifyInstance) {
     }
   )
 }
+

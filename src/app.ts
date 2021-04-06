@@ -27,8 +27,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
 
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {
-      exposeRoute: false,
-      routePrefix: '/',
+      exposeRoute: true,
       swagger: {
         info: {
           title: 'Supabase Storage API',

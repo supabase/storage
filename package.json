@@ -12,6 +12,7 @@
     "deploy": "flyctl deploy --remote-only",
     "logs": "flyctl logs",
     "migration:run": "ts-node-dev ./src/scripts/migrate-call.ts",
+    "docs:export": "ts-node-dev ./src/scripts/export-docs.ts",
     "test": "npm run restart:db && jest --runInBand",
     "stop:db": "docker-compose --project-dir . -f src/test/db/docker-compose.yml down",
     "restart:db": "docker-compose --project-dir . -f src/test/db/docker-compose.yml down && docker-compose --project-dir . -f src/test/db/docker-compose.yml up -d && sleep 1 && npm run migration:run"

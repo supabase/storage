@@ -4,3 +4,4 @@ dist/
 .env
 .env.*
 !.*.sample
+static/api.json

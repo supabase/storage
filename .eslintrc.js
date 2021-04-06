@@ -1,4 +1,5 @@
 module.exports = {
+  ignorePatterns: ['src/test/assets/**', 'src/test/db/**'],
   parser: '@typescript-eslint/parser',
   extends: ['plugin:@typescript-eslint/recommended', 'plugin:prettier/recommended'],
   parserOptions: {

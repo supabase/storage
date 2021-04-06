@@ -54,6 +54,10 @@ jobs:
         run: |
           npm run prettier:check
 
+      - name: ESLint checks
+        run: |
+          npm run eslint:check
+
       - name: Builds successfully
         run: |
           npm run build

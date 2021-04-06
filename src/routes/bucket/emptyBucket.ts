@@ -4,6 +4,7 @@ import { deleteObjects, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, Bucket, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -28,15 +29,14 @@ interface emptyBucketRequestInterface extends AuthenticatedRequest {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Empty a bucket'
+  const schema = createDefaultSchema(successResponseSchema, {
+    params: emptyBucketParamsSchema,
+    summary,
+  })
   fastify.post<emptyBucketRequestInterface>(
     '/:bucketId/empty',
     {
-      schema: {
-        params: emptyBucketParamsSchema,
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      },
+      schema,
     },
     async (request, response) => {
       const authHeader = request.headers.authorization
@@ -93,7 +93,7 @@ export default async function routes(fastify: FastifyInstance) {
         }
       } while (!deleteError && !objectError && objects && objects.length > 0)
 
-      return response.status(200).send({ message: 'Emptied' })
+      return response.status(200).send(createResponse('Successfully deflated'))
     }
   )
 }

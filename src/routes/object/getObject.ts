@@ -4,6 +4,7 @@ import { getPostgrestClient, isValidKey, transformPostgrestError } from '../../u
 import { getObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { AuthenticatedRequest, Obj } from '../../types/types'
+import { createResponse } from '../../utils/generic-routes'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -43,11 +44,9 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
 
       if (!isValidKey(objectName) || !isValidKey(bucketName)) {
-        return response.status(400).send({
-          statusCode: '400',
-          error: 'Invalid key',
-          message: 'The key contains invalid characters',
-        })
+        return response
+          .status(400)
+          .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
       const objectResponse = await postgrest

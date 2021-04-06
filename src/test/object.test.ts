@@ -190,7 +190,7 @@ describe('testing POST object', () => {
     expect(response.body).toBe(
       JSON.stringify({
         statusCode: '42501',
-        error: '',
+        error: null,
         message: 'new row violates row-level security policy for table "objects"',
       })
     )

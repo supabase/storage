@@ -5,6 +5,7 @@ import { getConfig } from '../../utils/config'
 import { AuthenticatedRequest, Obj } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 import { objectSchema } from '../../schemas/object'
+import { createDefaultSchema } from '../../utils/generic-routes'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -35,16 +36,17 @@ interface deleteObjectsInterface extends AuthenticatedRequest {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Delete multiple objects'
+
+  const schema = createDefaultSchema(successResponseSchema, {
+    body: deleteObjectsBodySchema,
+    params: deleteObjectsParamsSchema,
+    summary,
+  })
+
   fastify.delete<deleteObjectsInterface>(
     '/:bucketName',
     {
-      schema: {
-        body: deleteObjectsBodySchema,
-        params: deleteObjectsParamsSchema,
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      },
+      schema,
     },
     async (request, response) => {
       // check if the user is able to insert that row

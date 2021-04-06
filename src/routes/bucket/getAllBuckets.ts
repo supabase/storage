@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { AuthenticatedRequest, Bucket } from '../../types/types'
 import { bucketSchema } from '../../schemas/bucket'
+import { createDefaultSchema } from '../../utils/generic-routes'
 
 const successResponseSchema = {
   type: 'array',
@@ -11,14 +12,14 @@ const successResponseSchema = {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Gets all buckets'
+  const schema = createDefaultSchema(successResponseSchema, {
+    summary,
+  })
+
   fastify.get<AuthenticatedRequest>(
     '/',
     {
-      schema: {
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      },
+      schema,
     },
     async (request, response) => {
       // get list of all buckets

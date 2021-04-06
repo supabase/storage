@@ -4,6 +4,7 @@ import { deleteObject, initClient } from '../../utils/s3'
 import { getConfig } from '../../utils/config'
 import { Obj, AuthenticatedRequest } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -29,15 +30,16 @@ interface deleteObjectRequestInterface extends AuthenticatedRequest {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Delete an object'
+
+  const schema = createDefaultSchema(successResponseSchema, {
+    params: deleteObjectParamsSchema,
+    summary,
+  })
+
   fastify.delete<deleteObjectRequestInterface>(
     '/:bucketName/*',
     {
-      schema: {
-        params: deleteObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      },
+      schema,
     },
     async (request, response) => {
       // check if the user is able to insert that row
@@ -50,11 +52,9 @@ export default async function routes(fastify: FastifyInstance) {
       const postgrest = getPostgrestClient(jwt)
 
       if (!isValidKey(objectName) || !isValidKey(bucketName)) {
-        return response.status(400).send({
-          statusCode: '400',
-          error: 'Invalid key',
-          message: 'The key contains invalid characters',
-        })
+        return response
+          .status(400)
+          .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
       const objectResponse = await postgrest
@@ -78,7 +78,7 @@ export default async function routes(fastify: FastifyInstance) {
       const s3Key = `${projectRef}/${bucketName}/${objectName}`
       await deleteObject(client, globalS3Bucket, s3Key)
 
-      return response.status(200).send({ message: 'Deleted' })
+      return response.status(200).send(createResponse('Successfully deleted'))
     }
   )
 }

@@ -1,0 +1,37 @@
+type BucketResponseType = { message: string; statusCode?: string; error?: string }
+
+/**
+ * Create generic respose for all buckets
+ * @param message {string} Main message
+ * @param status {string=} StatusCode
+ * @param error {string=} Error number (presented as a string)
+ * @return {BucketResponseType} Object with all paramaters
+ */
+function createResponse(message: string, status?: string, error?: string): BucketResponseType {
+  const response: BucketResponseType = {
+    message,
+  }
+
+  if (status) {
+    response.statusCode = status
+  }
+
+  if (error) {
+    response.error = error
+  }
+
+  return response
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function createDefaultSchema(successResponseSchema: any, properties: any): any {
+  return {
+    schema: {
+      headers: { $ref: 'authSchema#' },
+      response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
+      ...properties,
+    },
+  }
+}
+
+export { createResponse, createDefaultSchema }

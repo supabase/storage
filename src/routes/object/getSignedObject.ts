@@ -3,6 +3,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import { SignedToken } from '../../types/types'
 import { verifyJWT } from '../../utils/'
 import { getConfig } from '../../utils/config'
+import { createResponse } from '../../utils/generic-routes'
 import { getObject, initClient } from '../../utils/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
@@ -23,7 +24,8 @@ const getSignedObjectQSSchema = {
   },
   required: ['token'],
 } as const
-interface getSignedObjectRequestInterface {
+
+interface GetSignedObjectRequestInterface {
   Params: FromSchema<typeof getSignedObjectParamsSchema>
   Querystring: FromSchema<typeof getSignedObjectQSSchema>
 }
@@ -31,7 +33,7 @@ interface getSignedObjectRequestInterface {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Retrieve an object via a presigned URL'
-  fastify.get<getSignedObjectRequestInterface>(
+  fastify.get<GetSignedObjectRequestInterface>(
     '/sign/:bucketName/*',
     {
       schema: {
@@ -59,11 +61,7 @@ export default async function routes(fastify: FastifyInstance) {
           .send(data.Body)
       } catch (err) {
         request.log.error(err)
-        return response.status(400).send({
-          statusCode: '400',
-          error: err.name,
-          message: err.message,
-        })
+        return response.status(400).send(createResponse(err.message, '400', err.name))
       }
     }
   )

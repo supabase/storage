@@ -3,6 +3,7 @@ import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { AuthenticatedRequest, Bucket } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
 import { bucketSchema } from '../../schemas/bucket'
+import { createDefaultSchema } from '../../utils/generic-routes'
 
 const getBucketParamsSchema = {
   type: 'object',
@@ -20,15 +21,14 @@ interface getBucketRequestInterface extends AuthenticatedRequest {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Get details of a bucket'
+  const schema = createDefaultSchema(successResponseSchema, {
+    params: getBucketParamsSchema,
+    summary,
+  })
   fastify.get<getBucketRequestInterface>(
     '/:bucketId',
     {
-      schema: {
-        params: getBucketParamsSchema,
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      },
+      schema,
     },
     async (request, response) => {
       const authHeader = request.headers.authorization

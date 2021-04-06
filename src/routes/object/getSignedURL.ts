@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { getPostgrestClient, signJWT, transformPostgrestError } from '../../utils'
 import { AuthenticatedRequest, Obj } from '../../types/types'
 import { FromSchema } from 'json-schema-to-ts'
+import { createDefaultSchema } from '../../utils/generic-routes'
 
 const getSignedURLParamsSchema = {
   type: 'object',
@@ -33,16 +34,17 @@ interface getSignedURLRequestInterface extends AuthenticatedRequest {
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Generate a presigned url to retrieve an object'
+
+  const schema = createDefaultSchema(successResponseSchema, {
+    body: getSignedURLBodySchema,
+    params: getSignedURLParamsSchema,
+    summary,
+  })
+
   fastify.post<getSignedURLRequestInterface>(
     '/sign/:bucketName/*',
     {
-      schema: {
-        body: getSignedURLBodySchema,
-        params: getSignedURLParamsSchema,
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
-      },
+      schema,
     },
     async (request, response) => {
       const authHeader = request.headers.authorization

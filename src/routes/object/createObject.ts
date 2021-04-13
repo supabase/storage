@@ -68,6 +68,8 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const postgrest = getPostgrestClient(jwt)
+      const superUserPostgrest = getPostgrestClient(serviceKey)
+
       let owner
       try {
         owner = await getOwner(jwt)
@@ -121,7 +123,6 @@ export default async function routes(fastify: FastifyInstance) {
       const isTruncated = data.file.truncated
       if (isTruncated) {
         // undo operations as super user
-        const superUserPostgrest = getPostgrestClient(serviceKey)
         await superUserPostgrest
           .from<Obj>('objects')
           .delete()
@@ -151,7 +152,7 @@ export default async function routes(fastify: FastifyInstance) {
         cacheControl,
         size: objectMetadata.ContentLength,
       }
-      const { error: updateError, status: updateStatus } = await getPostgrestClient(serviceKey)
+      const { error: updateError, status: updateStatus } = await superUserPostgrest
         .from<Obj>('objects')
         .update({
           metadata,

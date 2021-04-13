@@ -6,7 +6,7 @@ import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { copyObject, initClient } from '../../utils/s3'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
+const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
 const client = initClient(region, globalS3Endpoint)
 
 const copyRequestBodySchema = {
@@ -68,6 +68,8 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const postgrest = getPostgrestClient(jwt)
+      const superUserPostgrest = getPostgrestClient(serviceKey)
+
       let owner
       try {
         owner = await getOwner(jwt)
@@ -75,7 +77,7 @@ export default async function routes(fastify: FastifyInstance) {
         request.log.error(err)
         return response.status(400).send(createResponse(err.message, '400', err.message))
       }
-      const objectResponse = await postgrest
+      const objectResponse = await superUserPostgrest
         .from<Obj>('objects')
         .select('bucket_id, metadata')
         .match({

@@ -116,7 +116,7 @@ export default async function routes(fastify: FastifyInstance) {
       const s3DestinationKey = `${projectRef}/${bucketName}/${destinationKey}`
       const copyResult = await copyObject(client, globalS3Bucket, s3SourceKey, s3DestinationKey)
       return response.status(copyResult.$metadata.httpStatusCode ?? 200).send({
-        Key: destinationKey,
+        Key: `${bucketName}/${destinationKey}`,
       })
     }
   )

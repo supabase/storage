@@ -351,7 +351,7 @@ describe('testing copy object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(mockCopyObject).toBeCalled()
-    expect(response.body).toBe(`{"Key":"authenticated/casestudy11.png"}`)
+    expect(response.body).toBe(`{"Key":"bucket2/authenticated/casestudy11.png"}`)
   })
 
   test('check if RLS policies are respected: anon user is not able to update authenticated resource', async () => {
@@ -889,7 +889,7 @@ describe('testing list objects', () => {
     expect(responseJSON).toHaveLength(2)
   })
 
-  test('checking if RLS policies are respected', async () => {
+  test('listobjects: checking if RLS policies are respected', async () => {
     const response = await app().inject({
       method: 'POST',
       url: '/object/list/bucket2',

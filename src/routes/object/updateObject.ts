@@ -91,7 +91,8 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       // if successfully inserted, upload to s3
-      const s3Key = `${projectRef}/${bucketName}/${objectName}`
+      const path = `${bucketName}/${objectName}`
+      const s3Key = `${projectRef}/${path}`
 
       const uploadResult = await uploadObject(
         client,
@@ -127,9 +128,8 @@ export default async function routes(fastify: FastifyInstance) {
         return response.status(400).send(transformPostgrestError(updateError, updateStatus))
       }
 
-      // @todo strip out s3Key here
       return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
-        Key: s3Key,
+        Key: path,
       })
     }
   )

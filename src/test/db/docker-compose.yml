@@ -3,7 +3,7 @@
 version: '3'
 services:
   rest:
-    image: postgrest/postgrest:v7.0.1
+    image: postgrest/postgrest:nightly-2021-03-05-19-03-d3a8b5f
     ports:
       - '3000:3000'
     environment:

@@ -12,11 +12,11 @@ const client = initClient(region, globalS3Endpoint)
 const moveObjectsBodySchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', example: 'avatars' },
+    bucketId: { type: 'string', example: 'avatars' },
     sourceKey: { type: 'string', example: 'folder/cat.png' },
     destinationKey: { type: 'string', example: 'folder/newcat.png' },
   },
-  required: ['bucketName', 'sourceKey', 'destinationKey'],
+  required: ['bucketId', 'sourceKey', 'destinationKey'],
 } as const
 const successResponseSchema = {
   type: 'object',
@@ -49,7 +49,7 @@ export default async function routes(fastify: FastifyInstance) {
       const authHeader = request.headers.authorization
       const jwt = authHeader.substring('Bearer '.length)
 
-      const { destinationKey, sourceKey, bucketName } = request.body
+      const { destinationKey, sourceKey, bucketId } = request.body
 
       if (!isValidKey(destinationKey)) {
         return response
@@ -67,7 +67,7 @@ export default async function routes(fastify: FastifyInstance) {
           last_accessed_at: new Date().toISOString(),
           name: destinationKey,
         })
-        .match({ bucket_id: bucketName, name: sourceKey })
+        .match({ bucket_id: bucketId, name: sourceKey })
         .single()
 
       if (objectResponse.error) {
@@ -77,8 +77,8 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       // if successfully updated, copy and delete object from s3
-      const oldS3Key = `${projectRef}/${bucketName}/${sourceKey}`
-      const newS3Key = `${projectRef}/${bucketName}/${destinationKey}`
+      const oldS3Key = `${projectRef}/${bucketId}/${sourceKey}`
+      const newS3Key = `${projectRef}/${bucketId}/${destinationKey}`
 
       // @todo what happens if one of these fail?
       await copyObject(client, globalS3Bucket, oldS3Key, newS3Key)

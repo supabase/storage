@@ -344,7 +344,7 @@ describe('testing copy object', () => {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
       payload: {
-        bucketName: 'bucket2',
+        bucketId: 'bucket2',
         sourceKey: 'authenticated/casestudy.png',
         destinationKey: 'authenticated/casestudy11.png',
       },
@@ -362,7 +362,7 @@ describe('testing copy object', () => {
         authorization: `Bearer ${anonKey}`,
       },
       payload: {
-        bucketName: 'bucket2',
+        bucketId: 'bucket2',
         sourceKey: 'authenticated/casestudy.png',
         destinationKey: 'authenticated/casestudy11.png',
       },
@@ -376,7 +376,7 @@ describe('testing copy object', () => {
       method: 'POST',
       url: '/object/copy',
       payload: {
-        bucketName: 'bucket2',
+        bucketId: 'bucket2',
         sourceKey: 'authenticated/casestudy.png',
         destinationKey: 'authenticated/casestudy11.png',
       },
@@ -393,7 +393,7 @@ describe('testing copy object', () => {
         authorization: `Bearer ${anonKey}`,
       },
       payload: {
-        bucketName: 'notfound',
+        bucketId: 'notfound',
         sourceKey: 'authenticated/casestudy.png',
         destinationKey: 'authenticated/casestudy11.png',
       },
@@ -410,7 +410,7 @@ describe('testing copy object', () => {
         authorization: `Bearer ${anonKey}`,
       },
       payload: {
-        bucketName: 'bucket2',
+        bucketId: 'bucket2',
         sourceKey: 'authenticated/notfound.png',
         destinationKey: 'authenticated/casestudy11.png',
       },
@@ -708,7 +708,7 @@ describe('testing move object', () => {
       payload: {
         sourceKey: 'authenticated/move-orig.png',
         destinationKey: 'authenticated/move-new.png',
-        bucketName: 'bucket2',
+        bucketId: 'bucket2',
       },
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
@@ -726,7 +726,7 @@ describe('testing move object', () => {
       payload: {
         sourceKey: 'authenticated/move-orig-2.png',
         destinationKey: 'authenticated/move-new-2.png',
-        bucketName: 'bucket2',
+        bucketId: 'bucket2',
       },
       headers: {
         authorization: `Bearer ${anonKey}`,
@@ -744,7 +744,7 @@ describe('testing move object', () => {
       payload: {
         sourceKey: 'authenticated/move-orig-3.png',
         destinationKey: 'authenticated/move-orig-new-3.png',
-        bucketName: 'bucket2',
+        bucketId: 'bucket2',
       },
     })
     expect(response.statusCode).toBe(400)
@@ -759,7 +759,7 @@ describe('testing move object', () => {
       payload: {
         sourceKey: 'authenticated/move-orig-3.png',
         destinationKey: 'authenticated/move-orig-new-3.png',
-        bucketName: 'notfound',
+        bucketId: 'notfound',
       },
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
@@ -777,7 +777,7 @@ describe('testing move object', () => {
       payload: {
         sourceKey: 'authenticated/notfound',
         destinationKey: 'authenticated/move-orig-new-3.png',
-        bucketName: 'bucket2',
+        bucketId: 'bucket2',
       },
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
@@ -795,7 +795,7 @@ describe('testing move object', () => {
       payload: {
         sourceKey: 'authenticated/move-orig-2.png',
         destinationKey: 'authenticated/move-orig-3.png',
-        bucketName: 'bucket2',
+        bucketId: 'bucket2',
       },
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,

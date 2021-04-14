@@ -13,10 +13,10 @@ const copyRequestBodySchema = {
   type: 'object',
   properties: {
     sourceKey: { type: 'string', example: 'folder/source.png' },
-    bucketName: { type: 'string', example: 'avatars' },
+    bucketId: { type: 'string', example: 'avatars' },
     destinationKey: { type: 'string', example: 'folder/destination.png' },
   },
-  required: ['sourceKey', 'bucketName', 'destinationKey'],
+  required: ['sourceKey', 'bucketId', 'destinationKey'],
 } as const
 const successResponseSchema = {
   type: 'object',
@@ -48,11 +48,11 @@ export default async function routes(fastify: FastifyInstance) {
       const authHeader = request.headers.authorization
       const jwt = authHeader.substring('Bearer '.length)
 
-      const { sourceKey, destinationKey, bucketName } = request.body
+      const { sourceKey, destinationKey, bucketId } = request.body
       request.log.info(
         'sourceKey is %s and bucketName is %s and destinationKey is %s',
         sourceKey,
-        bucketName,
+        bucketId,
         destinationKey
       )
 
@@ -82,7 +82,7 @@ export default async function routes(fastify: FastifyInstance) {
         .select('bucket_id, metadata')
         .match({
           name: sourceKey,
-          bucket_id: bucketName,
+          bucket_id: bucketId,
         })
         .single()
 
@@ -112,11 +112,11 @@ export default async function routes(fastify: FastifyInstance) {
       }
       request.log.info({ results }, 'results')
 
-      const s3SourceKey = `${projectRef}/${bucketName}/${sourceKey}`
-      const s3DestinationKey = `${projectRef}/${bucketName}/${destinationKey}`
+      const s3SourceKey = `${projectRef}/${bucketId}/${sourceKey}`
+      const s3DestinationKey = `${projectRef}/${bucketId}/${destinationKey}`
       const copyResult = await copyObject(client, globalS3Bucket, s3SourceKey, s3DestinationKey)
       return response.status(copyResult.$metadata.httpStatusCode ?? 200).send({
-        Key: `${bucketName}/${destinationKey}`,
+        Key: `${bucketId}/${destinationKey}`,
       })
     }
   )

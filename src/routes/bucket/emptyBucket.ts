@@ -58,7 +58,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { data: bucket } = bucketResponse
       const bucketName = bucket.name
 
-      let deleteError, objectError, objects, objectStatus
+      let deleteError, deleteData, objectError, objects, objectStatus
       do {
         ;({ data: objects, error: objectError, status: objectStatus } = await postgrest
           .from<Obj>('objects')
@@ -73,14 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
         request.log.info({ results: objects }, 'results')
 
         if (objects && objects.length > 0) {
-          const params = objects.map((ele) => {
-            return {
-              Key: `${projectRef}/${bucketName}/${ele.name}`,
-            }
-          })
-          // delete files from s3 asynchronously
-          deleteObjects(client, globalS3Bucket, params)
-          ;({ error: deleteError } = await postgrest
+          ;({ error: deleteError, data: deleteData } = await postgrest
             .from<Obj>('objects')
             .delete()
             .in(
@@ -90,6 +83,16 @@ export default async function routes(fastify: FastifyInstance) {
 
           if (deleteError) {
             request.log.error({ error: deleteError }, 'error bucket')
+          }
+
+          if (deleteData && deleteData.length > 0) {
+            const params = deleteData.map((ele) => {
+              return {
+                Key: `${projectRef}/${bucketName}/${ele.name}`,
+              }
+            })
+            // delete files from s3 asynchronously
+            deleteObjects(client, globalS3Bucket, params)
           }
         }
       } while (!deleteError && !objectError && objects && objects.length > 0)

@@ -5,6 +5,7 @@ export const bucketSchema = {
     id: { type: 'string' },
     name: { type: 'string' },
     owner: { type: 'string' },
+    public: { type: 'boolean' },
     created_at: { type: 'string' },
     updated_at: { type: 'string' },
   },

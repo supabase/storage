@@ -15,11 +15,15 @@ import {
   ServiceOutputTypes,
 } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
+import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
 
 export function initClient(region: string, endpoint?: string | undefined): S3Client {
   const params: S3ClientConfig = {
     region,
     runtime: 'node',
+    requestHandler: new NodeHttpHandler({
+      socketTimeout: 300000,
+    }),
   }
   if (endpoint) {
     params.endpoint = endpoint

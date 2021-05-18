@@ -7,7 +7,7 @@ import * as utils from '../utils/s3'
 dotenv.config({ path: '.env.test' })
 const { anonKey } = getConfig()
 
-let mockDeleteObjects: any
+let mockDeleteObjects: any, mockGetObject: any
 
 beforeAll(() => {
   mockDeleteObjects = jest.spyOn(utils, 'deleteObjects')
@@ -16,6 +16,20 @@ beforeAll(() => {
       $metadata: {
         httpStatusCode: 204,
       },
+    })
+  )
+  mockGetObject = jest.spyOn(utils, 'getObject')
+  mockGetObject.mockImplementation(() =>
+    Promise.resolve({
+      $metadata: {
+        httpStatusCode: 200,
+      },
+      CacheControl: undefined,
+      ContentDisposition: undefined,
+      ContentEncoding: undefined,
+      ContentLength: 3746,
+      ContentType: 'image/png',
+      Metadata: {},
     })
   )
 })
@@ -89,7 +103,7 @@ describe('testing GET all buckets', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.length).toBe(4)
+    expect(responseJSON.length).toBe(5)
   })
 
   test('checking RLS: anon user is not able to get all buckets', async () => {
@@ -167,6 +181,93 @@ describe('testing POST bucket', () => {
       },
       payload: {
         name: 'bucket2',
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+})
+
+/*
+ * PUT /bucket
+ */
+describe('testing public bucket functionality', () => {
+  test('user is able to make a bucket public and private', async () => {
+    const bucketId = 'public-bucket'
+    const makePublicResponse = await app().inject({
+      method: 'PUT',
+      url: `/bucket/${bucketId}`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        public: true,
+      },
+    })
+    expect(makePublicResponse.statusCode).toBe(200)
+    const makePublicJSON = JSON.parse(makePublicResponse.body)
+    expect(makePublicJSON.message).toBe('Successfully updated')
+
+    const publicResponse = await app().inject({
+      method: 'GET',
+      url: `/object/public/public-bucket/favicon.ico`,
+    })
+    expect(publicResponse.statusCode).toBe(200)
+
+    const makePrivateResponse = await app().inject({
+      method: 'PUT',
+      url: `/bucket/${bucketId}`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        public: false,
+      },
+    })
+    expect(makePrivateResponse.statusCode).toBe(200)
+    const makePrivateJSON = JSON.parse(makePrivateResponse.body)
+    expect(makePrivateJSON.message).toBe('Successfully updated')
+
+    const privateResponse = await app().inject({
+      method: 'GET',
+      url: `/object/public/public-bucket/favicon.ico`,
+    })
+    expect(privateResponse.statusCode).toBe(400)
+  })
+
+  test('checking RLS: anon user is not able to update a bucket', async () => {
+    const bucketId = 'public-bucket'
+    const response = await app().inject({
+      method: 'PUT',
+      url: `/bucket/${bucketId}`,
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+      payload: {
+        public: true,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('user is not able to update a bucket without a auth header', async () => {
+    const bucketId = 'public-bucket'
+    const response = await app().inject({
+      method: 'PUT',
+      url: `/bucket/${bucketId}`,
+      payload: {
+        public: true,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('user is not able to update a non-existent bucket', async () => {
+    const bucketId = 'notfound'
+    const response = await app().inject({
+      method: 'PUT',
+      url: `/bucket/${bucketId}`,
+      payload: {
+        public: true,
       },
     })
     expect(response.statusCode).toBe(400)

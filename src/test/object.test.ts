@@ -660,6 +660,11 @@ describe('testing generating signed URL', () => {
 })
 
 /**
+ * GET /public/
+ */
+// these tests are written in bucket.test.ts since its easier
+
+/**
  * GET /sign/
  */
 describe('testing retrieving signed URL', () => {

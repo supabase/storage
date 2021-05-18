@@ -22,7 +22,7 @@ const successResponseSchema = {
   properties: {
     Key: {
       type: 'string',
-      example: 'projectref/avatars/folder/cat.png',
+      example: 'avatars/folder/cat.png',
     },
   },
   required: ['Key'],

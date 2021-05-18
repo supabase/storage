@@ -4,6 +4,7 @@ import createObject from './createObject'
 import deleteObject from './deleteObject'
 import deleteObjects from './deleteObjects'
 import getObject from './getObject'
+import getPublicObject from './getPublicObject'
 import getSignedObject from './getSignedObject'
 import getSignedURL from './getSignedURL'
 import listObjects from './listObjects'
@@ -18,6 +19,7 @@ export default async function routes(fastify: FastifyInstance) {
   deleteObjects(fastify)
   getObject(fastify)
   getSignedObject(fastify)
+  getPublicObject(fastify)
   getSignedURL(fastify)
   moveObject(fastify)
   updateObject(fastify)

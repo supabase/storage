@@ -1,0 +1,1 @@
+ALTER TABLE storage.buckets ADD COLUMN "public" boolean default false;

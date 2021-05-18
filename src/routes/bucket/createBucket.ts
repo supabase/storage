@@ -9,6 +9,7 @@ const createBucketBodySchema = {
   properties: {
     name: { type: 'string', example: 'avatars' },
     id: { type: 'string', example: 'avatars' },
+    public: { type: 'boolean', example: false },
   },
   required: ['name'],
 } as const
@@ -51,8 +52,11 @@ export default async function routes(fastify: FastifyInstance) {
 
       const { name: bucketName } = request.body
 
-      // IMPORTANT: by default set the id as the name of the bucket
+      // by default set the id as the name of the bucket
       const id = request.body.id ?? bucketName
+
+      // by default buckets are not public
+      const isPublic = request.body.public ?? false
 
       if (!isValidKey(id) || !isValidKey(bucketName)) {
         return response
@@ -68,6 +72,7 @@ export default async function routes(fastify: FastifyInstance) {
               id,
               name: bucketName,
               owner,
+              public: isPublic,
             },
           ],
           {

@@ -22,7 +22,7 @@ interface getObjectRequestInterface {
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
-  const summary = 'Retrieve a public object'
+  const summary = 'Retrieve an object from a public bucket'
   fastify.get<getObjectRequestInterface>(
     '/public/:bucketName/*',
     {

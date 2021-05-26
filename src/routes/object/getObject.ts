@@ -1,5 +1,6 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
+import { IncomingMessage, Server, ServerResponse } from 'http'
 import { AuthenticatedRequest, Obj } from '../../types/types'
 import { getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
@@ -21,23 +22,8 @@ interface getObjectRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof getObjectParamsSchema>
 }
 
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
-export default async function routes(fastify: FastifyInstance) {
-  const summary = 'Retrieve an object'
-  fastify.get<getObjectRequestInterface>(
-    '/:bucketName/*',
-    {
-      // @todo add success response schema here
-      schema: {
-        params: getObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
-        summary,
-        response: { '4xx': { $ref: 'errorSchema#' } },
-        tags: ['object'],
-      },
-    },
-    async (request, response) => {
-      const authHeader = request.headers.authorization
+async function requestHandler(request: FastifyRequest<getObjectRequestInterface, Server, IncomingMessage>, response: FastifyReply<Server, IncomingMessage, ServerResponse, getObjectRequestInterface, unknown>) {
+  const authHeader = request.headers.authorization
       const jwt = authHeader.substring('Bearer '.length)
 
       const postgrest = getPostgrestClient(jwt)
@@ -78,6 +64,43 @@ export default async function routes(fastify: FastifyInstance) {
         .header('ETag', data.ETag)
         .header('Last-Modified', data.LastModified)
         .send(data.Body)
+}
+
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
+export default async function routes(fastify: FastifyInstance) {
+  const summary = 'Retrieve an object'
+  fastify.get<getObjectRequestInterface>(
+    '/authenticated/:bucketName/*',
+    {
+      // @todo add success response schema here
+      schema: {
+        params: getObjectParamsSchema,
+        headers: { $ref: 'authSchema#' },
+        summary,
+        response: { '4xx': { $ref: 'errorSchema#' } },
+        tags: ['object'],
+      },
+    },
+    async (request, response) => {
+     return requestHandler(request, response) 
+    }
+  )
+
+  // to be deprecated
+  fastify.get<getObjectRequestInterface>(
+    '/:bucketName/*',
+    {
+      // @todo add success response schema here
+      schema: {
+        params: getObjectParamsSchema,
+        headers: { $ref: 'authSchema#' },
+        summary: "Deprecated (use /authenticated/bucketName/object instead): Retrieve an object",
+        response: { '4xx': { $ref: 'errorSchema#' } },
+        tags: ['object'],
+      },
+    },
+    async (request, response) => {
+     return requestHandler(request, response) 
     }
   )
 }

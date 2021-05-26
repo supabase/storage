@@ -94,7 +94,7 @@ describe('testing GET object', () => {
   test('check if RLS policies are respected: authenticated user is able to read authenticated resource', async () => {
     const response = await app().inject({
       method: 'GET',
-      url: '/object/bucket2/authenticated/casestudy.png',
+      url: '/object/authenticated/bucket2/authenticated/casestudy.png',
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
@@ -106,7 +106,7 @@ describe('testing GET object', () => {
   test('check if RLS policies are respected: anon user is not able to read authenticated resource', async () => {
     const response = await app().inject({
       method: 'GET',
-      url: '/object/bucket2/authenticated/casestudy.png',
+      url: '/object/authenticated/bucket2/authenticated/casestudy.png',
       headers: {
         authorization: `Bearer ${anonKey}`,
       },
@@ -118,7 +118,7 @@ describe('testing GET object', () => {
   test('user is not able to read a resource without Auth header', async () => {
     const response = await app().inject({
       method: 'GET',
-      url: '/object/bucket2/authenticated/casestudy.png',
+      url: '/object/authenticated/bucket2/authenticated/casestudy.png',
     })
     expect(response.statusCode).toBe(400)
     expect(mockGetObject).not.toHaveBeenCalled()
@@ -127,7 +127,7 @@ describe('testing GET object', () => {
   test('return 400 when reading a non existent object', async () => {
     const response = await app().inject({
       method: 'GET',
-      url: '/object/bucket2/authenticated/notfound',
+      url: '/object/authenticated/bucket2/authenticated/notfound',
       headers: {
         authorization: `Bearer ${anonKey}`,
       },
@@ -139,7 +139,7 @@ describe('testing GET object', () => {
   test('return 400 when reading a non existent bucket', async () => {
     const response = await app().inject({
       method: 'GET',
-      url: '/object/notfound/authenticated/casestudy.png',
+      url: '/object/authenticated/notfound/authenticated/casestudy.png',
       headers: {
         authorization: `Bearer ${anonKey}`,
       },

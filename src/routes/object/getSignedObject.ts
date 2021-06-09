@@ -32,6 +32,9 @@ const getSignedObjectQSSchema = {
 interface GetSignedObjectRequestInterface {
   Params: FromSchema<typeof getSignedObjectParamsSchema>
   Querystring: FromSchema<typeof getSignedObjectQSSchema>
+  Headers: {
+    range?: string
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
@@ -52,19 +55,23 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { token } = request.query
       try {
+        const range = request.headers.range
         const payload = await verifyJWT(token)
         const { url } = payload as SignedToken
         const s3Key = `${projectRef}/${url}`
         request.log.info(s3Key)
-        const data = await getObject(client, globalS3Bucket, s3Key)
+        const data = await getObject(client, globalS3Bucket, s3Key, range)
 
-        return response
+        response
           .status(data.$metadata.httpStatusCode ?? 200)
           .header('Content-Type', data.ContentType)
           .header('Cache-Control', data.CacheControl ?? 'no-cache')
           .header('ETag', data.ETag)
           .header('Last-Modified', data.LastModified)
-          .send(data.Body)
+        if (data.ContentRange) {
+          response.header('Content-Range', data.ContentRange)
+        }
+        return response.send(data.Body)
       } catch (err) {
         request.log.error(err)
         return response.status(400).send(createResponse(err.message, '400', err.name))

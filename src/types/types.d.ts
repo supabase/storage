@@ -15,6 +15,12 @@ export interface AuthenticatedRequest extends RequestGenericInterface {
     authorization: string
   }
 }
+export interface AuthenticatedRangeRequest extends RequestGenericInterface {
+  Headers: {
+    authorization: string
+    range?: string
+  }
+}
 type PostgrestError = {
   message: string
   details: string

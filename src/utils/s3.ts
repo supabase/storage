@@ -34,11 +34,13 @@ export function initClient(region: string, endpoint?: string | undefined): S3Cli
 export async function getObject(
   client: S3Client,
   bucketName: string,
-  key: string
+  key: string,
+  range?: string
 ): Promise<GetObjectCommandOutput> {
   const command = new GetObjectCommand({
     Bucket: bucketName,
     Key: key,
+    Range: range,
   })
   const data = await client.send(command)
   return data

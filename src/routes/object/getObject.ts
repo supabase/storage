@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { IncomingMessage, Server, ServerResponse } from 'http'
-import { AuthenticatedRequest, Obj } from '../../types/types'
+import { AuthenticatedRangeRequest, Obj } from '../../types/types'
 import { getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createResponse } from '../../utils/generic-routes'
@@ -18,7 +18,7 @@ const getObjectParamsSchema = {
   },
   required: ['bucketName', '*'],
 } as const
-interface getObjectRequestInterface extends AuthenticatedRequest {
+interface getObjectRequestInterface extends AuthenticatedRangeRequest {
   Params: FromSchema<typeof getObjectParamsSchema>
 }
 
@@ -33,6 +33,7 @@ async function requestHandler(
   >
 ) {
   const authHeader = request.headers.authorization
+  const range = request.headers.range
   const jwt = authHeader.substring('Bearer '.length)
 
   const postgrest = getPostgrestClient(jwt)
@@ -64,15 +65,18 @@ async function requestHandler(
   // send the object from s3
   const s3Key = `${projectRef}/${bucketName}/${objectName}`
   request.log.info(s3Key)
-  const data = await getObject(client, globalS3Bucket, s3Key)
+  const data = await getObject(client, globalS3Bucket, s3Key, range)
 
-  return response
+  response
     .status(data.$metadata.httpStatusCode ?? 200)
     .header('Content-Type', data.ContentType)
     .header('Cache-Control', data.CacheControl)
     .header('ETag', data.ETag)
     .header('Last-Modified', data.LastModified)
-    .send(data.Body)
+  if (data.ContentRange) {
+    response.header('Content-Range', data.ContentRange)
+  }
+  return response.send(data.Body)
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types

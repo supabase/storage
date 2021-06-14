@@ -10,11 +10,13 @@
     "start": "NODE_ENV=production node dist/server.js",
     "migration:run": "ts-node-dev ./src/scripts/migrate-call.ts",
     "docs:export": "ts-node-dev ./src/scripts/export-docs.ts",
-    "test": "npm run restart:db && jest --runInBand",
+    "test:dummy-data": "ts-node-dev -r dotenv/config ./src/test/db/import-dummy-data.ts",
+    "test": "npm run infra:restart && npm run test:dummy-data && jest --runInBand",
     "prettier:check": "prettier -c src/**",
     "eslint:check": "eslint 'src/**'",
-    "stop:db": "docker-compose --project-dir . -f src/test/db/docker-compose.yml down  --remove-orphans",
-    "restart:db": "docker-compose --project-dir . -f src/test/db/docker-compose.yml down && docker-compose --project-dir . -f src/test/db/docker-compose.yml up -d && sleep 5 && npm run migration:run"
+    "infra:stop": "docker-compose --project-dir . -f src/test/db/docker-compose.yml down  --remove-orphans",
+    "infra:start": "docker-compose --project-dir . -f src/test/db/docker-compose.yml up -d && sleep 5 && npm run migration:run",
+    "infra:restart": "npm run infra:stop && npm run infra:start"
   },
   "author": "Supabase",
   "license": "ISC",

@@ -27,13 +27,22 @@ A scalable, light-weight object storage service.
 
 **Your root directory should now have both `.env` and `.env.test` files.**
 
-5. Then run the following:
+Then run the following:
 
 ```bash
 # this sets up a postgres database and postgrest locally via docker
-npm run restart:db
+npm run infra:restart
 # Start the storage server
 npm run dev
+```
+
+The server should now be running at http://localhost:5000/
+
+The following request should return the list of buckets. This is an empty array since there are no buckets initially.
+
+```
+curl --location --request GET 'http://localhost:5000/bucket' \
+--header 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaWF0IjoxNjEzNTMxOTg1LCJleHAiOjE5MjkxMDc5ODV9.th84OKK0Iz8QchDyXZRrojmKSEZ-OuitQm_5DvLiSIc'
 ```
 
 ### Testing

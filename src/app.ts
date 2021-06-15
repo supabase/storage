@@ -20,6 +20,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
       fileSize: fileSizeLimit,
       files: 1,
     },
+    throwFileSizeLimit: false,
   })
 
   // kong should take care of cors

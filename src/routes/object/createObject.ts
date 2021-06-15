@@ -64,7 +64,7 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
       const path = `${bucketName}/${objectName}`
       const s3Key = `${projectRef}/${path}`
-      let mimeType: string, cacheControl: string
+      let mimeType: string, cacheControl: string, isTruncated: boolean
       let uploadResult: ServiceOutputTypes
 
       if (!isValidKey(objectName) || !isValidKey(bucketName)) {
@@ -132,34 +132,9 @@ export default async function routes(fastify: FastifyInstance) {
         // busboy sets the truncated property on streams if limit was exceeded
         // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
         /* @ts-expect-error: busboy doesn't export proper types */
-        const isTruncated = data.file.truncated
-        if (isTruncated) {
-          // undo operations as super user
-          await superUserPostgrest
-            .from<Obj>('objects')
-            .delete()
-            .match({
-              name: objectName,
-              bucket_id: bucketName,
-            })
-            .single()
-          await deleteObject(client, globalS3Bucket, s3Key)
-
-          // return an error response
-          return response
-            .status(400)
-            .send(
-              createResponse(
-                'The object exceeded the maximum allowed size',
-                '413',
-                'Payload too large'
-              )
-            )
-        }
+        isTruncated = data.file.truncated
       } else {
         // just assume its a binary file
-        // @todo we need to get cacheControl from header
-        // @todo how do we check max size
         mimeType = request.headers['content-type']
         cacheControl = request.headers['cache-control'] ?? 'no-cache'
 
@@ -171,6 +146,34 @@ export default async function routes(fastify: FastifyInstance) {
           mimeType,
           cacheControl
         )
+        const { fileSizeLimit } = getConfig()
+        // @todo more secure to get this from the stream or from s3 in the next step
+        console.log('comparing', Number(request.headers['content-length']), fileSizeLimit)
+        isTruncated = Number(request.headers['content-length']) > fileSizeLimit
+      }
+      console.log('trunc', isTruncated)
+      if (isTruncated) {
+        // undo operations as super user
+        await superUserPostgrest
+          .from<Obj>('objects')
+          .delete()
+          .match({
+            name: objectName,
+            bucket_id: bucketName,
+          })
+          .single()
+        await deleteObject(client, globalS3Bucket, s3Key)
+
+        // return an error response
+        return response
+          .status(400)
+          .send(
+            createResponse(
+              'The object exceeded the maximum allowed size',
+              '413',
+              'Payload too large'
+            )
+          )
       }
 
       const objectMetadata = await headObject(client, globalS3Bucket, s3Key)

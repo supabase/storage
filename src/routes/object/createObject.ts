@@ -58,7 +58,7 @@ export default async function routes(fastify: FastifyInstance) {
       const jwt = authHeader.substring('Bearer '.length)
 
       const contentType = request.headers['content-type']
-      console.log(contentType)
+      request.log.info(`content-type is ${contentType}`)
 
       const { bucketName } = request.params
       const objectName = request.params['*']
@@ -148,10 +148,8 @@ export default async function routes(fastify: FastifyInstance) {
         )
         const { fileSizeLimit } = getConfig()
         // @todo more secure to get this from the stream or from s3 in the next step
-        console.log('comparing', Number(request.headers['content-length']), fileSizeLimit)
         isTruncated = Number(request.headers['content-length']) > fileSizeLimit
       }
-      console.log('trunc', isTruncated)
       if (isTruncated) {
         // undo operations as super user
         await superUserPostgrest

@@ -333,6 +333,96 @@ describe('testing PUT object', () => {
 })
 
 /**
+ * POST /object/upsert
+ */
+describe('testing upsert object', () => {
+  test('check if RLS policies are respected: authenticated user is able to upsert authenticated resource', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+    })
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/upsert/bucket2/authenticated/cat.jpg',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockUploadObject).toBeCalled()
+    expect(response.body).toBe(`{"Key":"bucket2/authenticated/cat.jpg"}`)
+  })
+
+  test('check if RLS policies are respected: anon user is not able to upsert authenticated resource', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/upsert/bucket2/authenticated/cat.jpg',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+    // expect(response.body).toBe(`new row violates row-level security policy for table "objects"`)
+  })
+
+  test('user is not able to upsert a resource without Auth header', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/upsert/bucket2/authenticated/cat.jpg',
+      headers: form.getHeaders(),
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 400 when upsert to a non existent bucket', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/upsert/notfound/authenticated/cat.jpg',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 200 when upserting duplicate object', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/upsert/bucket2/public/sadcat-upload23.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockUploadObject).toHaveBeenCalled()
+  })
+})
+
+
+/**
  * POST /copy
  */
 describe('testing copy object', () => {

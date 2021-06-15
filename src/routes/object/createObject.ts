@@ -1,6 +1,7 @@
-import { FastifyInstance } from 'fastify'
+import { ServiceOutputTypes } from '@aws-sdk/client-s3'
+import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { AuthenticatedRequest, Obj, ObjectMetadata } from '../../types/types'
+import { Obj, ObjectMetadata } from '../../types/types'
 import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
@@ -27,8 +28,13 @@ const successResponseSchema = {
   },
   required: ['Key'],
 }
-interface createObjectRequestInterface extends AuthenticatedRequest {
+interface createObjectRequestInterface extends RequestGenericInterface {
   Params: FromSchema<typeof createObjectParamsSchema>
+  Headers: {
+    authorization: string
+    'content-type': string
+    'cache-control'?: string
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
@@ -50,16 +56,16 @@ export default async function routes(fastify: FastifyInstance) {
       // check if the user is able to insert that row
       const authHeader = request.headers.authorization
       const jwt = authHeader.substring('Bearer '.length)
-      const data = await request.file()
 
-      // Can't seem to get the typing to work properly
-      // https://github.com/fastify/fastify-multipart/issues/162
-      /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-      const cacheTime = data.fields.cacheControl?.value
-      const cacheControl: string = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
+      const contentType = request.headers['content-type']
+      console.log(contentType)
 
       const { bucketName } = request.params
       const objectName = request.params['*']
+      const path = `${bucketName}/${objectName}`
+      const s3Key = `${projectRef}/${path}`
+      let mimeType: string, cacheControl: string
+      let uploadResult: ServiceOutputTypes
 
       if (!isValidKey(objectName) || !isValidKey(bucketName)) {
         return response
@@ -105,50 +111,72 @@ export default async function routes(fastify: FastifyInstance) {
       request.log.info({ results }, 'results')
 
       // if successfully inserted, upload to s3
-      const path = `${bucketName}/${objectName}`
-      const s3Key = `${projectRef}/${path}`
-      const uploadResult = await uploadObject(
-        client,
-        globalS3Bucket,
-        s3Key,
-        data.file,
-        data.mimetype,
-        cacheControl
-      )
+      if (contentType?.startsWith('multipart/form-data')) {
+        const data = await request.file()
 
-      // since we are using streams, fastify can't throw the error reliably
-      // busboy sets the truncated property on streams if limit was exceeded
-      // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
-      /* @ts-expect-error: busboy doesn't export proper types */
-      const isTruncated = data.file.truncated
-      if (isTruncated) {
-        // undo operations as super user
-        await superUserPostgrest
-          .from<Obj>('objects')
-          .delete()
-          .match({
-            name: objectName,
-            bucket_id: bucketName,
-          })
-          .single()
-        await deleteObject(client, globalS3Bucket, s3Key)
+        // Can't seem to get the typing to work properly
+        // https://github.com/fastify/fastify-multipart/issues/162
+        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+        const cacheTime = data.fields.cacheControl?.value
+        cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
+        mimeType = data.mimetype
+        uploadResult = await uploadObject(
+          client,
+          globalS3Bucket,
+          s3Key,
+          data.file,
+          mimeType,
+          cacheControl
+        )
+        // since we are using streams, fastify can't throw the error reliably
+        // busboy sets the truncated property on streams if limit was exceeded
+        // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
+        /* @ts-expect-error: busboy doesn't export proper types */
+        const isTruncated = data.file.truncated
+        if (isTruncated) {
+          // undo operations as super user
+          await superUserPostgrest
+            .from<Obj>('objects')
+            .delete()
+            .match({
+              name: objectName,
+              bucket_id: bucketName,
+            })
+            .single()
+          await deleteObject(client, globalS3Bucket, s3Key)
 
-        // return an error response
-        return response
-          .status(400)
-          .send(
-            createResponse(
-              'The object exceeded the maximum allowed size',
-              '413',
-              'Payload too large'
+          // return an error response
+          return response
+            .status(400)
+            .send(
+              createResponse(
+                'The object exceeded the maximum allowed size',
+                '413',
+                'Payload too large'
+              )
             )
-          )
+        }
+      } else {
+        // just assume its a binary file
+        // @todo we need to get cacheControl from header
+        // @todo how do we check max size
+        mimeType = request.headers['content-type']
+        cacheControl = request.headers['cache-control'] ?? 'no-cache'
+
+        uploadResult = await uploadObject(
+          client,
+          globalS3Bucket,
+          s3Key,
+          request.raw,
+          mimeType,
+          cacheControl
+        )
       }
 
       const objectMetadata = await headObject(client, globalS3Bucket, s3Key)
       // update content-length as super user since user may not have update permissions
       const metadata: ObjectMetadata = {
-        mimetype: data.mimetype,
+        mimetype: mimeType,
         cacheControl,
         size: objectMetadata.ContentLength,
       }

@@ -1,6 +1,7 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import fastifyMultipart from 'fastify-multipart'
 import fastifySwagger from 'fastify-swagger'
+import { createWriteStream } from 'fs'
 import bucketRoutes from './routes/bucket/'
 import objectRoutes from './routes/object'
 import { authSchema } from './schemas/auth'
@@ -20,6 +21,10 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
       fileSize: fileSizeLimit,
       files: 1,
     },
+  })
+
+  app.addContentTypeParser('*', function (request, payload, done) {
+    done(null)
   })
 
   // kong should take care of cors

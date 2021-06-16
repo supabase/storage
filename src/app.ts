@@ -20,6 +20,11 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
       fileSize: fileSizeLimit,
       files: 1,
     },
+    throwFileSizeLimit: false,
+  })
+
+  app.addContentTypeParser('*', function (request, payload, done) {
+    done(null)
   })
 
   // kong should take care of cors

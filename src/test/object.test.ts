@@ -150,8 +150,9 @@ describe('testing GET object', () => {
 })
 /*
  * POST /object/:id
+ * multipart upload
  */
-describe('testing POST object', () => {
+describe('testing POST object via multipart upload', () => {
   test('check if RLS policies are respected: authenticated user is able to upload authenticated resource', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
@@ -237,6 +238,119 @@ describe('testing POST object', () => {
       url: '/object/bucket2/public/sadcat-upload23.png',
       headers,
       payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+  })
+})
+
+/*
+ * POST /object/:id
+ * binary upload
+ */
+describe('testing POST object via binary upload', () => {
+  test('check if RLS policies are respected: authenticated user is able to upload authenticated resource', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/authenticated/binary-casestudy1.png',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockUploadObject).toBeCalled()
+    expect(response.body).toBe(`{"Key":"bucket2/authenticated/binary-casestudy1.png"}`)
+  })
+
+  test('check if RLS policies are respected: anon user is not able to upload authenticated resource', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${anonKey}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/authenticated/binary-casestudy.png',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(response.body).toBe(
+      JSON.stringify({
+        statusCode: '42501',
+        error: '',
+        message: 'new row violates row-level security policy for table "objects"',
+      })
+    )
+  })
+
+  test('check if RLS policies are respected: user is not able to upload a resource without Auth header', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/authenticated/binary-casestudy1.png',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 400 when uploading to a non existent bucket', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/notfound/authenticated/binary-casestudy1.png',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 400 when uploading to duplicate object', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/public/sadcat-upload23.png',
+      headers,
+      payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(400)
     expect(mockUploadObject).not.toHaveBeenCalled()

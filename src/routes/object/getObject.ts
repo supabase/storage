@@ -107,7 +107,8 @@ export default async function routes(fastify: FastifyInstance) {
       schema: {
         params: getObjectParamsSchema,
         headers: { $ref: 'authSchema#' },
-        summary: 'Deprecated (use /authenticated/bucketName/object instead): Retrieve an object',
+        summary:
+          'Deprecated (use GET /object/authenticated/{bucketName} instead): Retrieve an object',
         response: { '4xx': { $ref: 'errorSchema#' } },
         tags: ['object'],
       },

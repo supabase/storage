@@ -27,7 +27,7 @@
     "@aws-sdk/client-s3": "^3.8.0",
     "@aws-sdk/lib-storage": "^3.8.0",
     "@aws-sdk/node-http-handler": "^3.6.1",
-    "@supabase/postgrest-js": "^0.26.1",
+    "@supabase/postgrest-js": "^0.28.4",
     "dotenv": "^8.2.0",
     "fastify": "^3.14.0",
     "fastify-cors": "^5.2.0",

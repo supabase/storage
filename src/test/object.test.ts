@@ -242,6 +242,24 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
     expect(mockUploadObject).not.toHaveBeenCalled()
   })
+
+  test('return 200 when upserting duplicate object', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+      'x-upsert': 'true',
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/public/sadcat-upload23.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockUploadObject).toHaveBeenCalled()
+  })
 })
 
 /*
@@ -354,6 +372,27 @@ describe('testing POST object via binary upload', () => {
     })
     expect(response.statusCode).toBe(400)
     expect(mockUploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 200 when upserting duplicate object', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+      'x-upsert': 'true',
+    }
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/public/sadcat-upload23.png',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockUploadObject).toHaveBeenCalled()
   })
 })
 

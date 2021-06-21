@@ -35,6 +35,7 @@ interface createObjectRequestInterface extends RequestGenericInterface {
     authorization: string
     'content-type': string
     'cache-control'?: string
+    'x-upsert'?: string
   }
 }
 

@@ -1,4 +1,5 @@
 import { ServiceOutputTypes } from '@aws-sdk/client-s3'
+import { PostgrestSingleResponse } from '@supabase/postgrest-js/dist/main/lib/types'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { Obj, ObjectMetadata } from '../../types/types'
@@ -34,6 +35,7 @@ interface createObjectRequestInterface extends RequestGenericInterface {
     authorization: string
     'content-type': string
     'cache-control'?: string
+    'x-upsert'?: string
   }
 }
 
@@ -88,21 +90,47 @@ export default async function routes(fastify: FastifyInstance) {
         })
       }
 
-      const { data: results, error, status } = await postgrest
-        .from<Obj>('objects')
-        .insert(
-          [
+      const isUpsert =
+        request.headers['x-upsert'] && request.headers['x-upsert'] === 'true' ? true : false
+
+      let postgrestResponse: PostgrestSingleResponse<Obj>
+
+      if (isUpsert) {
+        postgrestResponse = await postgrest
+          .from<Obj>('objects')
+          .upsert(
+            [
+              {
+                name: objectName,
+                owner: owner,
+                bucket_id: bucketName,
+              },
+            ],
             {
-              name: objectName,
-              owner: owner,
-              bucket_id: bucketName,
-            },
-          ],
-          {
-            returning: 'minimal',
-          }
-        )
-        .single()
+              onConflict: 'name, bucket_id',
+              returning: 'minimal',
+            }
+          )
+          .single()
+      } else {
+        postgrestResponse = await postgrest
+          .from<Obj>('objects')
+          .insert(
+            [
+              {
+                name: objectName,
+                owner: owner,
+                bucket_id: bucketName,
+              },
+            ],
+            {
+              returning: 'minimal',
+            }
+          )
+          .single()
+      }
+
+      const { error, status, data: results } = postgrestResponse
 
       if (error) {
         request.log.error({ error }, 'error object')

@@ -485,6 +485,112 @@ describe('testing PUT object', () => {
   })
 })
 
+/*
+ * PUT /object/:id
+ * binary upload
+ */
+describe('testing PUT object via binary upload', () => {
+  test('check if RLS policies are respected: authenticated user is able to update authenticated resource', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/bucket2/authenticated/cat.jpg',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockUploadObject).toBeCalled()
+    expect(response.body).toBe(`{"Key":"bucket2/authenticated/cat.jpg"}`)
+  })
+
+  test('check if RLS policies are respected: anon user is not able to update authenticated resource', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${anonKey}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/bucket2/authenticated/cat.jpg',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+  })
+
+  test('check if RLS policies are respected: user is not able to upload a resource without Auth header', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/bucket2/authenticated/cat.jpg',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 400 when updating an object in a non existent bucket', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/notfound/authenticated/binary-casestudy1.png',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 400 when updating an object in a non existent key', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: '/object/notfound/authenticated/notfound.jpg',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(mockUploadObject).not.toHaveBeenCalled()
+  })
+})
+
 /**
  * POST /copy
  */

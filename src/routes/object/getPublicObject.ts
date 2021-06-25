@@ -3,6 +3,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import { Bucket } from '../../types/types'
 import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
+import { normalizeContentType } from '../../utils'
 import { getObject, initClient } from '../../utils/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
@@ -61,7 +62,7 @@ export default async function routes(fastify: FastifyInstance) {
         const data = await getObject(client, globalS3Bucket, s3Key, range)
         response
           .status(data.$metadata.httpStatusCode ?? 200)
-          .header('Content-Type', data.ContentType)
+          .header('Content-Type', normalizeContentType(data.ContentType))
           .header('Cache-Control', data.CacheControl)
           .header('ETag', data.ETag)
           .header('Last-Modified', data.LastModified)

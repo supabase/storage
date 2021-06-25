@@ -3,6 +3,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import { SignedToken } from '../../types/types'
 import { verifyJWT } from '../../utils/'
 import { getConfig } from '../../utils/config'
+import { normalizeContentType } from '../../utils'
 import { createResponse } from '../../utils/generic-routes'
 import { getObject, initClient } from '../../utils/s3'
 
@@ -64,7 +65,7 @@ export default async function routes(fastify: FastifyInstance) {
 
         response
           .status(data.$metadata.httpStatusCode ?? 200)
-          .header('Content-Type', data.ContentType)
+          .header('Content-Type', normalizeContentType(data.ContentType))
           .header('Cache-Control', data.CacheControl ?? 'no-cache')
           .header('ETag', data.ETag)
           .header('Last-Modified', data.LastModified)

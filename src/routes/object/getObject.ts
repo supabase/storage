@@ -4,6 +4,7 @@ import { IncomingMessage, Server, ServerResponse } from 'http'
 import { AuthenticatedRangeRequest, Obj } from '../../types/types'
 import { getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
+import { normalizeContentType } from '../../utils'
 import { createResponse } from '../../utils/generic-routes'
 import { getObject, initClient } from '../../utils/s3'
 
@@ -69,7 +70,7 @@ async function requestHandler(
 
   response
     .status(data.$metadata.httpStatusCode ?? 200)
-    .header('Content-Type', data.ContentType)
+    .header('Content-Type', normalizeContentType(data.ContentType))
     .header('Cache-Control', data.CacheControl)
     .header('ETag', data.ETag)
     .header('Last-Modified', data.LastModified)

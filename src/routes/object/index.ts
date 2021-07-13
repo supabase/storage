@@ -13,15 +13,15 @@ import updateObject from './updateObject'
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
-  copyObject(fastify)
-  createObject(fastify)
-  deleteObject(fastify)
-  deleteObjects(fastify)
-  getObject(fastify)
-  getSignedObject(fastify)
-  getPublicObject(fastify)
-  getSignedURL(fastify)
-  moveObject(fastify)
-  updateObject(fastify)
-  listObjects(fastify)
+  fastify.register(copyObject)
+  fastify.register(createObject)
+  fastify.register(deleteObject)
+  fastify.register(deleteObjects)
+  fastify.register(getObject)
+  fastify.register(getSignedObject)
+  fastify.register(getPublicObject)
+  fastify.register(getSignedURL)
+  fastify.register(moveObject)
+  fastify.register(updateObject)
+  fastify.register(listObjects)
 }

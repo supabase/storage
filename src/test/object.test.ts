@@ -5,7 +5,7 @@ import fs from 'fs'
 import app from '../app'
 import { getConfig } from '../utils/config'
 import { signJWT } from '../utils/index'
-import * as utils from '../utils/s3'
+import * as utils from '../backend/s3'
 
 dotenv.config({ path: '.env.test' })
 const { anonKey, serviceKey } = getConfig()

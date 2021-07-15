@@ -5,7 +5,7 @@ import { Obj, ObjectMetadata } from '../../types/types'
 import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
-import { headObject, initClient, uploadObject } from '../../utils/s3'
+import { headObject, initClient, uploadObject } from '../../backend/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)

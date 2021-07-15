@@ -2,7 +2,7 @@
 import dotenv from 'dotenv'
 import app from '../app'
 import { getConfig } from '../utils/config'
-import * as utils from '../utils/s3'
+import * as utils from '../backend/s3'
 
 dotenv.config({ path: '.env.test' })
 const { anonKey } = getConfig()

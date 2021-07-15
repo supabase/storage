@@ -4,7 +4,7 @@ import { Bucket } from '../../types/types'
 import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { normalizeContentType } from '../../utils'
-import { getObject, initClient } from '../../utils/s3'
+import { getObject, initClient } from '../../backend/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
 const client = initClient(region, globalS3Endpoint)

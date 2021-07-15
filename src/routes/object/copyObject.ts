@@ -4,7 +4,7 @@ import { AuthenticatedRequest, Obj } from '../../types/types'
 import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
-import { copyObject, initClient } from '../../utils/s3'
+import { copyObject, initClient } from '../../backend/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -99,7 +99,11 @@ export default async function routes(fastify: FastifyInstance) {
         owner,
       })
       request.log.info({ origObject }, 'newObject')
-      const { data: results, error, status } = await postgrest
+      const {
+        data: results,
+        error,
+        status,
+      } = await postgrest
         .from<Obj>('objects')
         .insert([newObject], {
           returning: 'minimal',

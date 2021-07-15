@@ -4,7 +4,7 @@ import { AuthenticatedRequest, Bucket, Obj } from '../../types/types'
 import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
-import { deleteObjects, initClient } from '../../utils/s3'
+import { deleteObjects, initClient } from '../../backend/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)
@@ -60,7 +60,11 @@ export default async function routes(fastify: FastifyInstance) {
 
       let deleteError, deleteData, objectError, objects, objectStatus
       do {
-        ;({ data: objects, error: objectError, status: objectStatus } = await postgrest
+        ;({
+          data: objects,
+          error: objectError,
+          status: objectStatus,
+        } = await postgrest
           .from<Obj>('objects')
           .select('name, id')
           .eq('bucket_id', bucketId)

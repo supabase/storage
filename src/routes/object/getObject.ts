@@ -6,7 +6,7 @@ import { getPostgrestClient, isValidKey, transformPostgrestError } from '../../u
 import { getConfig } from '../../utils/config'
 import { normalizeContentType } from '../../utils'
 import { createResponse } from '../../utils/generic-routes'
-import { getObject, initClient } from '../../utils/s3'
+import { getObject, initClient } from '../../backend/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
 const client = initClient(region, globalS3Endpoint)

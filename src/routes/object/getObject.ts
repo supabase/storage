@@ -6,10 +6,10 @@ import { getPostgrestClient, isValidKey, transformPostgrestError } from '../../u
 import { getConfig } from '../../utils/config'
 import { normalizeContentType } from '../../utils'
 import { createResponse } from '../../utils/generic-routes'
-import { getObject, initClient } from '../../backend/s3'
+import { S3Backend } from '../../backend/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
-const client = initClient(region, globalS3Endpoint)
+const storageBackend = new S3Backend(region, globalS3Endpoint)
 
 const getObjectParamsSchema = {
   type: 'object',
@@ -66,7 +66,7 @@ async function requestHandler(
   // send the object from s3
   const s3Key = `${projectRef}/${bucketName}/${objectName}`
   request.log.info(s3Key)
-  const data = await getObject(client, globalS3Bucket, s3Key, range)
+  const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)
 
   response
     .status(data.$metadata.httpStatusCode ?? 200)

@@ -4,10 +4,10 @@ import { AuthenticatedRequest, Obj } from '../../types/types'
 import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
-import { copyObject, initClient } from '../../backend/s3'
+import { S3Backend } from '../../backend/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
-const client = initClient(region, globalS3Endpoint)
+const storageBackend = new S3Backend(region, globalS3Endpoint)
 
 const copyRequestBodySchema = {
   type: 'object',
@@ -118,7 +118,11 @@ export default async function routes(fastify: FastifyInstance) {
 
       const s3SourceKey = `${projectRef}/${bucketId}/${sourceKey}`
       const s3DestinationKey = `${projectRef}/${bucketId}/${destinationKey}`
-      const copyResult = await copyObject(client, globalS3Bucket, s3SourceKey, s3DestinationKey)
+      const copyResult = await storageBackend.copyObject(
+        globalS3Bucket,
+        s3SourceKey,
+        s3DestinationKey
+      )
       return response.status(copyResult.$metadata.httpStatusCode ?? 200).send({
         Key: `${bucketId}/${destinationKey}`,
       })

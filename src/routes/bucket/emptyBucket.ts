@@ -4,10 +4,10 @@ import { AuthenticatedRequest, Bucket, Obj } from '../../types/types'
 import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
-import { deleteObjects, initClient } from '../../backend/s3'
+import { S3Backend } from '../../backend/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
-const client = initClient(region, globalS3Endpoint)
+const storageBackend = new S3Backend(region, globalS3Endpoint)
 
 const emptyBucketParamsSchema = {
   type: 'object',
@@ -96,7 +96,7 @@ export default async function routes(fastify: FastifyInstance) {
               }
             })
             // delete files from s3 asynchronously
-            deleteObjects(client, globalS3Bucket, params)
+            storageBackend.deleteObjects(globalS3Bucket, params)
           }
         }
       } while (!deleteError && !objectError && objects && objects.length > 0)

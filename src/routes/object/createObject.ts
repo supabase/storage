@@ -6,10 +6,10 @@ import { Obj, ObjectMetadata } from '../../types/types'
 import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
-import { deleteObject, headObject, initClient, uploadObject } from '../../backend/s3'
+import { S3Backend } from '../../backend/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
-const client = initClient(region, globalS3Endpoint)
+const storageBackend = new S3Backend(region, globalS3Endpoint)
 
 const createObjectParamsSchema = {
   type: 'object',
@@ -155,8 +155,7 @@ export default async function routes(fastify: FastifyInstance) {
         const cacheTime = data.fields.cacheControl?.value
         cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
         mimeType = data.mimetype
-        uploadResult = await uploadObject(
-          client,
+        uploadResult = await storageBackend.uploadObject(
           globalS3Bucket,
           s3Key,
           data.file,
@@ -173,8 +172,7 @@ export default async function routes(fastify: FastifyInstance) {
         mimeType = request.headers['content-type']
         cacheControl = request.headers['cache-control'] ?? 'no-cache'
 
-        uploadResult = await uploadObject(
-          client,
+        uploadResult = await storageBackend.uploadObject(
           globalS3Bucket,
           s3Key,
           request.raw,
@@ -195,7 +193,7 @@ export default async function routes(fastify: FastifyInstance) {
             bucket_id: bucketName,
           })
           .single()
-        await deleteObject(client, globalS3Bucket, s3Key)
+        await storageBackend.deleteObject(globalS3Bucket, s3Key)
 
         // return an error response
         return response
@@ -209,7 +207,7 @@ export default async function routes(fastify: FastifyInstance) {
           )
       }
 
-      const objectMetadata = await headObject(client, globalS3Bucket, s3Key)
+      const objectMetadata = await storageBackend.headObject(globalS3Bucket, s3Key)
       // update content-length as super user since user may not have update permissions
       const metadata: ObjectMetadata = {
         mimetype: mimeType,

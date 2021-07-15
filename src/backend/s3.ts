@@ -17,106 +17,95 @@ import {
 import { Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
 
-export function initClient(region: string, endpoint?: string | undefined): S3Client {
-  const params: S3ClientConfig = {
-    region,
-    runtime: 'node',
-    requestHandler: new NodeHttpHandler({
-      socketTimeout: 300000,
-    }),
-  }
-  if (endpoint) {
-    params.endpoint = endpoint
-  }
-  return new S3Client(params)
-}
+export class S3Backend {
+  client: S3Client
 
-export async function getObject(
-  client: S3Client,
-  bucketName: string,
-  key: string,
-  range?: string
-): Promise<GetObjectCommandOutput> {
-  const command = new GetObjectCommand({
-    Bucket: bucketName,
-    Key: key,
-    Range: range,
-  })
-  const data = await client.send(command)
-  return data
-}
+  constructor(region: string, endpoint?: string | undefined) {
+    const params: S3ClientConfig = {
+      region,
+      runtime: 'node',
+      requestHandler: new NodeHttpHandler({
+        socketTimeout: 300000,
+      }),
+    }
+    if (endpoint) {
+      params.endpoint = endpoint
+    }
+    this.client = new S3Client(params)
+  }
 
-export async function uploadObject(
-  client: S3Client,
-  bucketName: string,
-  key: string,
-  body: NodeJS.ReadableStream,
-  contentType: string,
-  cacheControl: string
-): Promise<ServiceOutputTypes> {
-  const paralellUploadS3 = new Upload({
-    client,
-    params: {
+  async getObject(
+    bucketName: string,
+    key: string,
+    range?: string
+  ): Promise<GetObjectCommandOutput> {
+    const command = new GetObjectCommand({
       Bucket: bucketName,
       Key: key,
-      /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-      Body: body,
-      ContentType: contentType,
-      CacheControl: cacheControl,
-    },
-  })
+      Range: range,
+    })
+    const data = await this.client.send(command)
+    return data
+  }
 
-  return await paralellUploadS3.done()
-}
+  async uploadObject(
+    bucketName: string,
+    key: string,
+    body: NodeJS.ReadableStream,
+    contentType: string,
+    cacheControl: string
+  ): Promise<ServiceOutputTypes> {
+    const paralellUploadS3 = new Upload({
+      client: this.client,
+      params: {
+        Bucket: bucketName,
+        Key: key,
+        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+        Body: body,
+        ContentType: contentType,
+        CacheControl: cacheControl,
+      },
+    })
 
-export async function deleteObject(
-  client: S3Client,
-  bucket: string,
-  key: string
-): Promise<DeleteObjectCommandOutput> {
-  const command = new DeleteObjectCommand({
-    Bucket: bucket,
-    Key: key,
-  })
-  return await client.send(command)
-}
+    return await paralellUploadS3.done()
+  }
 
-export async function copyObject(
-  client: S3Client,
-  bucket: string,
-  source: string,
-  destination: string
-): Promise<CopyObjectCommandOutput> {
-  const command = new CopyObjectCommand({
-    Bucket: bucket,
-    CopySource: `/${bucket}/${source}`,
-    Key: destination,
-  })
-  return await client.send(command)
-}
+  async deleteObject(bucket: string, key: string): Promise<DeleteObjectCommandOutput> {
+    const command = new DeleteObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    })
+    return await this.client.send(command)
+  }
 
-export async function deleteObjects(
-  client: S3Client,
-  bucket: string,
-  prefixes: ObjectIdentifier[]
-): Promise<DeleteObjectsOutput> {
-  const command = new DeleteObjectsCommand({
-    Bucket: bucket,
-    Delete: {
-      Objects: prefixes,
-    },
-  })
-  return await client.send(command)
-}
+  async copyObject(
+    bucket: string,
+    source: string,
+    destination: string
+  ): Promise<CopyObjectCommandOutput> {
+    const command = new CopyObjectCommand({
+      Bucket: bucket,
+      CopySource: `/${bucket}/${source}`,
+      Key: destination,
+    })
+    return await this.client.send(command)
+  }
 
-export async function headObject(
-  client: S3Client,
-  bucket: string,
-  key: string
-): Promise<HeadObjectOutput> {
-  const command = new HeadObjectCommand({
-    Bucket: bucket,
-    Key: key,
-  })
-  return await client.send(command)
+  async deleteObjects(bucket: string, prefixes: ObjectIdentifier[]): Promise<DeleteObjectsOutput> {
+    const command = new DeleteObjectsCommand({
+      Bucket: bucket,
+      Delete: {
+        Objects: prefixes,
+      },
+    })
+    return await this.client.send(command)
+  }
+
+  async headObject(bucket: string, key: string): Promise<HeadObjectOutput> {
+    const command = new HeadObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    })
+    return await this.client.send(command)
+  }
 }

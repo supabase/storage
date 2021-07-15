@@ -4,10 +4,10 @@ import { Bucket } from '../../types/types'
 import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { normalizeContentType } from '../../utils'
-import { getObject, initClient } from '../../backend/s3'
+import { S3Backend } from '../../backend/s3'
 
 const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
-const client = initClient(region, globalS3Endpoint)
+const storageBackend = new S3Backend(region, globalS3Endpoint)
 
 const getPublicObjectParamsSchema = {
   type: 'object',
@@ -59,7 +59,7 @@ export default async function routes(fastify: FastifyInstance) {
       const s3Key = `${projectRef}/${bucketName}/${objectName}`
       request.log.info(s3Key)
       try {
-        const data = await getObject(client, globalS3Bucket, s3Key, range)
+        const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)
         response
           .status(data.$metadata.httpStatusCode ?? 200)
           .header('Content-Type', normalizeContentType(data.ContentType))

@@ -44,6 +44,14 @@ export default async function routes(fastify: FastifyInstance) {
     summary,
     tags: ['object'],
   })
+
+  fastify.addContentTypeParser(
+    ['application/json', 'text/plain'],
+    function (request, payload, done) {
+      done(null)
+    }
+  )
+
   fastify.put<updateObjectRequestInterface>(
     '/:bucketName/*',
     {

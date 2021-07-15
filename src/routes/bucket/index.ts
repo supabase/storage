@@ -8,10 +8,10 @@ import updateBucket from './updateBucket'
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
-  createBucket(fastify)
-  deleteBucket(fastify)
-  emptyBucket(fastify)
-  getAllBuckets(fastify)
-  getBucket(fastify)
-  updateBucket(fastify)
+  fastify.register(createBucket)
+  fastify.register(deleteBucket)
+  fastify.register(emptyBucket)
+  fastify.register(getAllBuckets)
+  fastify.register(getBucket)
+  fastify.register(updateBucket)
 }

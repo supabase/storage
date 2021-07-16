@@ -5,82 +5,54 @@ import fs from 'fs'
 import app from '../app'
 import { getConfig } from '../utils/config'
 import { signJWT } from '../utils/index'
-import * as utils from '../backend/s3'
+import { S3Backend } from '../backend/s3'
 
 dotenv.config({ path: '.env.test' })
 const { anonKey, serviceKey } = getConfig()
 
-let mockGetObject: any,
-  mockUploadObject: any,
-  mockCopyObject: any,
-  mockDeleteObject: any,
-  mockDeleteObjects: any,
-  mockHeadObject: any
-
 beforeAll(() => {
-  mockGetObject = jest.spyOn(utils, 'getObject')
-  mockGetObject.mockImplementation(() =>
-    Promise.resolve({
-      $metadata: {
+  jest.spyOn(S3Backend.prototype, 'getObject').mockImplementation(() => {
+    return Promise.resolve({
+      metadata: {
         httpStatusCode: 200,
+        size: 3746,
+        mimetype: 'image/png',
       },
-      CacheControl: undefined,
-      ContentDisposition: undefined,
-      ContentEncoding: undefined,
-      ContentLength: 3746,
-      ContentType: 'image/png',
-      Metadata: {},
+      body: '',
     })
-  )
+  })
 
-  mockUploadObject = jest.spyOn(utils, 'uploadObject')
-  mockUploadObject.mockImplementation(() =>
-    Promise.resolve({
-      $metadata: {
-        httpStatusCode: 200,
-      },
-      Bucket: 'xxx',
-      Key: 'bucket2/authenticated/sadcat-upload41.png',
+  jest.spyOn(S3Backend.prototype, 'uploadObject').mockImplementation(() => {
+    return Promise.resolve({
+      httpStatusCode: 200,
+      size: 3746,
+      mimetype: 'image/png',
     })
-  )
+  })
 
-  mockCopyObject = jest.spyOn(utils, 'copyObject')
-  mockCopyObject.mockImplementation(() =>
-    Promise.resolve({
-      $metadata: {
-        httpStatusCode: 200,
-      },
-      Bucket: 'xxx',
-      Key: 'authenticated/casestudy11.png',
+  jest.spyOn(S3Backend.prototype, 'copyObject').mockImplementation(() => {
+    return Promise.resolve({
+      httpStatusCode: 200,
+      size: 3746,
+      mimetype: 'image/png',
     })
-  )
+  })
 
-  mockDeleteObject = jest.spyOn(utils, 'deleteObject')
-  mockDeleteObject.mockImplementation(() =>
-    Promise.resolve({
-      $metadata: {
-        httpStatusCode: 204,
-      },
-    })
-  )
+  jest.spyOn(S3Backend.prototype, 'deleteObject').mockImplementation(() => {
+    return Promise.resolve({})
+  })
 
-  mockDeleteObjects = jest.spyOn(utils, 'deleteObjects')
-  mockDeleteObjects.mockImplementation(() =>
-    Promise.resolve({
-      $metadata: {
-        httpStatusCode: 204,
-      },
-    })
-  )
+  jest.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {
+    return Promise.resolve({})
+  })
 
-  mockHeadObject = jest.spyOn(utils, 'headObject')
-  mockHeadObject.mockImplementation(() =>
-    Promise.resolve({
-      $metadata: {
-        ContentLength: 1000,
-      },
+  jest.spyOn(S3Backend.prototype, 'headObject').mockImplementation(() => {
+    return Promise.resolve({
+      httpStatusCode: 200,
+      size: 3746,
+      mimetype: 'image/png',
     })
-  )
+  })
 })
 
 beforeEach(() => {
@@ -100,7 +72,7 @@ describe('testing GET object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(mockGetObject).toBeCalled()
+    expect(S3Backend.prototype.getObject).toBeCalled()
   })
 
   test('check if RLS policies are respected: anon user is not able to read authenticated resource', async () => {
@@ -112,7 +84,7 @@ describe('testing GET object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockGetObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.getObject).not.toHaveBeenCalled()
   })
 
   test('user is not able to read a resource without Auth header', async () => {
@@ -121,7 +93,7 @@ describe('testing GET object', () => {
       url: '/object/authenticated/bucket2/authenticated/casestudy.png',
     })
     expect(response.statusCode).toBe(400)
-    expect(mockGetObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.getObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when reading a non existent object', async () => {
@@ -133,7 +105,7 @@ describe('testing GET object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockGetObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.getObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when reading a non existent bucket', async () => {
@@ -145,7 +117,7 @@ describe('testing GET object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockGetObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.getObject).not.toHaveBeenCalled()
   })
 })
 /*
@@ -167,7 +139,7 @@ describe('testing POST object via multipart upload', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(200)
-    expect(mockUploadObject).toBeCalled()
+    expect(S3Backend.prototype.uploadObject).toBeCalled()
     expect(response.body).toBe(`{"Key":"bucket2/authenticated/casestudy1.png"}`)
   })
 
@@ -185,7 +157,7 @@ describe('testing POST object via multipart upload', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
     expect(response.body).toBe(
       JSON.stringify({
         statusCode: '42501',
@@ -206,7 +178,7 @@ describe('testing POST object via multipart upload', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when uploading to a non existent bucket', async () => {
@@ -223,7 +195,7 @@ describe('testing POST object via multipart upload', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when uploading to duplicate object', async () => {
@@ -240,7 +212,7 @@ describe('testing POST object via multipart upload', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('return 200 when upserting duplicate object', async () => {
@@ -258,7 +230,7 @@ describe('testing POST object via multipart upload', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(200)
-    expect(mockUploadObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
   })
 })
 
@@ -284,7 +256,7 @@ describe('testing POST object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(200)
-    expect(mockUploadObject).toBeCalled()
+    expect(S3Backend.prototype.uploadObject).toBeCalled()
     expect(response.body).toBe(`{"Key":"bucket2/authenticated/binary-casestudy1.png"}`)
   })
 
@@ -305,7 +277,7 @@ describe('testing POST object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
     expect(response.body).toBe(
       JSON.stringify({
         statusCode: '42501',
@@ -331,7 +303,7 @@ describe('testing POST object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when uploading to a non existent bucket', async () => {
@@ -351,7 +323,7 @@ describe('testing POST object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when uploading to duplicate object', async () => {
@@ -371,7 +343,7 @@ describe('testing POST object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('return 200 when upserting duplicate object', async () => {
@@ -392,7 +364,7 @@ describe('testing POST object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(200)
-    expect(mockUploadObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
   })
 })
 
@@ -414,7 +386,7 @@ describe('testing PUT object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(200)
-    expect(mockUploadObject).toBeCalled()
+    expect(S3Backend.prototype.uploadObject).toBeCalled()
     expect(response.body).toBe(`{"Key":"bucket2/authenticated/cat.jpg"}`)
   })
 
@@ -432,7 +404,7 @@ describe('testing PUT object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
     // expect(response.body).toBe(`new row violates row-level security policy for table "objects"`)
   })
 
@@ -447,7 +419,7 @@ describe('testing PUT object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when update to a non existent bucket', async () => {
@@ -464,7 +436,7 @@ describe('testing PUT object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when updating a non existent key', async () => {
@@ -481,7 +453,7 @@ describe('testing PUT object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 })
 
@@ -507,7 +479,7 @@ describe('testing PUT object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(200)
-    expect(mockUploadObject).toBeCalled()
+    expect(S3Backend.prototype.uploadObject).toBeCalled()
     expect(response.body).toBe(`{"Key":"bucket2/authenticated/cat.jpg"}`)
   })
 
@@ -528,7 +500,7 @@ describe('testing PUT object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('check if RLS policies are respected: user is not able to upload a resource without Auth header', async () => {
@@ -547,7 +519,7 @@ describe('testing PUT object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when updating an object in a non existent bucket', async () => {
@@ -567,7 +539,7 @@ describe('testing PUT object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when updating an object in a non existent key', async () => {
@@ -587,7 +559,7 @@ describe('testing PUT object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(400)
-    expect(mockUploadObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 })
 
@@ -609,7 +581,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(mockCopyObject).toBeCalled()
+    expect(S3Backend.prototype.copyObject).toBeCalled()
     expect(response.body).toBe(`{"Key":"bucket2/authenticated/casestudy11.png"}`)
   })
 
@@ -627,7 +599,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockCopyObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
   })
 
   test('user is not able to copy a resource without Auth header', async () => {
@@ -641,7 +613,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockCopyObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when copy from a non existent bucket', async () => {
@@ -658,7 +630,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockCopyObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when copying a non existent key', async () => {
@@ -675,7 +647,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockCopyObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
   })
 })
 
@@ -692,7 +664,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(mockDeleteObject).toBeCalled()
+    expect(S3Backend.prototype.deleteObject).toBeCalled()
   })
 
   test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {
@@ -704,7 +676,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockDeleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
   })
 
   test('user is not able to delete a resource without Auth header', async () => {
@@ -713,7 +685,7 @@ describe('testing delete object', () => {
       url: '/object/bucket2/authenticated/delete1.png',
     })
     expect(response.statusCode).toBe(400)
-    expect(mockDeleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when delete from a non existent bucket', async () => {
@@ -725,7 +697,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockDeleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when deleting a non existent key', async () => {
@@ -737,7 +709,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockDeleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
   })
 })
 
@@ -757,7 +729,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(mockDeleteObjects).toBeCalled()
+    expect(S3Backend.prototype.deleteObjects).toBeCalled()
 
     const result = JSON.parse(response.body)
     expect(result[0].name).toBe('authenticated/delete-multiple1.png')
@@ -776,7 +748,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(mockDeleteObjects).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
     const results = JSON.parse(response.body)
     expect(results.length).toBe(0)
   })
@@ -790,7 +762,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockDeleteObjects).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
   })
 
   test('deleting from a non existent bucket', async () => {
@@ -805,7 +777,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(mockDeleteObjects).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
   })
 
   test('deleting a non existent key', async () => {
@@ -820,7 +792,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(mockDeleteObjects).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
     const results = JSON.parse(response.body)
     expect(results.length).toBe(0)
   })
@@ -837,7 +809,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(mockDeleteObjects).toBeCalled()
+    expect(S3Backend.prototype.deleteObjects).toBeCalled()
     const results = JSON.parse(response.body)
     expect(results.length).toBe(1)
     expect(results[0].name).toBe('authenticated/delete-multiple7.png')
@@ -979,8 +951,8 @@ describe('testing move object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(mockCopyObject).toHaveBeenCalled()
-    expect(mockDeleteObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObject).toHaveBeenCalled()
   })
 
   test('check if RLS policies are respected: anon user is not able to move an authenticated object', async () => {
@@ -997,8 +969,8 @@ describe('testing move object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockCopyObject).not.toHaveBeenCalled()
-    expect(mockDeleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
   })
 
   test('user is not able to move an object without auth header', async () => {
@@ -1012,8 +984,8 @@ describe('testing move object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockCopyObject).not.toHaveBeenCalled()
-    expect(mockDeleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
   })
 
   test('user is not able to move an object in a non existent bucket', async () => {
@@ -1030,8 +1002,8 @@ describe('testing move object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockCopyObject).not.toHaveBeenCalled()
-    expect(mockDeleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
   })
 
   test('user is not able to move an non existent object', async () => {
@@ -1048,8 +1020,8 @@ describe('testing move object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockCopyObject).not.toHaveBeenCalled()
-    expect(mockDeleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
   })
 
   test('user is not able to move to an existing key', async () => {
@@ -1066,8 +1038,8 @@ describe('testing move object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(mockCopyObject).not.toHaveBeenCalled()
-    expect(mockDeleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
   })
 })
 

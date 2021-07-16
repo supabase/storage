@@ -34,8 +34,17 @@ type StorageError = {
   message: string
 }
 
+type ObjectResponse = {
+  metadata: ObjectMetadata
+  body?: ReadableStream<any> | Readable | Blob
+}
+
 type ObjectMetadata = {
   cacheControl?: string
   size?: number
   mimetype?: string
+  lastModified?: Date
+  eTag?: string
+  contentRange?: string
+  httpStatusCode?: number
 }

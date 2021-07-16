@@ -2,36 +2,26 @@
 import dotenv from 'dotenv'
 import app from '../app'
 import { getConfig } from '../utils/config'
-import * as utils from '../backend/s3'
+import { S3Backend } from '../backend/s3'
 
 dotenv.config({ path: '.env.test' })
 const { anonKey } = getConfig()
 
-let mockDeleteObjects: any, mockGetObject: any
-
 beforeAll(() => {
-  mockDeleteObjects = jest.spyOn(utils, 'deleteObjects')
-  mockDeleteObjects.mockImplementation(() =>
-    Promise.resolve({
-      $metadata: {
-        httpStatusCode: 204,
-      },
-    })
-  )
-  mockGetObject = jest.spyOn(utils, 'getObject')
-  mockGetObject.mockImplementation(() =>
-    Promise.resolve({
-      $metadata: {
+  jest.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {
+    return Promise.resolve({})
+  })
+
+  jest.spyOn(S3Backend.prototype, 'getObject').mockImplementation(() => {
+    return Promise.resolve({
+      metadata: {
         httpStatusCode: 200,
+        size: 3746,
+        mimetype: 'image/png',
       },
-      CacheControl: undefined,
-      ContentDisposition: undefined,
-      ContentEncoding: undefined,
-      ContentLength: 3746,
-      ContentType: 'image/png',
-      Metadata: {},
+      body: '',
     })
-  )
+  })
 })
 
 beforeEach(() => {

@@ -123,7 +123,7 @@ export default async function routes(fastify: FastifyInstance) {
         s3SourceKey,
         s3DestinationKey
       )
-      return response.status(copyResult.$metadata.httpStatusCode ?? 200).send({
+      return response.status(copyResult.httpStatusCode ?? 200).send({
         Key: `${bucketId}/${destinationKey}`,
       })
     }

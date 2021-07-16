@@ -1,21 +1,16 @@
 import {
   CopyObjectCommand,
-  CopyObjectCommandOutput,
   DeleteObjectCommand,
-  DeleteObjectCommandOutput,
   DeleteObjectsCommand,
-  DeleteObjectsOutput,
   GetObjectCommand,
-  GetObjectCommandOutput,
   HeadObjectCommand,
-  HeadObjectOutput,
   ObjectIdentifier,
   S3Client,
   S3ClientConfig,
-  ServiceOutputTypes,
 } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
+import { ObjectMetadata, ObjectResponse } from '../types/types'
 
 export class S3Backend {
   client: S3Client
@@ -34,18 +29,25 @@ export class S3Backend {
     this.client = new S3Client(params)
   }
 
-  async getObject(
-    bucketName: string,
-    key: string,
-    range?: string
-  ): Promise<GetObjectCommandOutput> {
+  async getObject(bucketName: string, key: string, range?: string): Promise<ObjectResponse> {
     const command = new GetObjectCommand({
       Bucket: bucketName,
       Key: key,
       Range: range,
     })
     const data = await this.client.send(command)
-    return data
+    data.Body
+    return {
+      metadata: {
+        cacheControl: data.CacheControl,
+        mimetype: data.ContentType,
+        eTag: data.ETag,
+        lastModified: data.LastModified,
+        contentRange: data.ContentRange,
+        httpStatusCode: data.$metadata.httpStatusCode,
+      },
+      body: data.Body,
+    }
   }
 
   async uploadObject(
@@ -54,7 +56,7 @@ export class S3Backend {
     body: NodeJS.ReadableStream,
     contentType: string,
     cacheControl: string
-  ): Promise<ServiceOutputTypes> {
+  ): Promise<ObjectMetadata> {
     const paralellUploadS3 = new Upload({
       client: this.client,
       params: {
@@ -67,45 +69,53 @@ export class S3Backend {
       },
     })
 
-    return await paralellUploadS3.done()
+    const data = await paralellUploadS3.done()
+    return {
+      httpStatusCode: data.$metadata.httpStatusCode,
+    }
   }
 
-  async deleteObject(bucket: string, key: string): Promise<DeleteObjectCommandOutput> {
+  async deleteObject(bucket: string, key: string): Promise<ObjectMetadata> {
     const command = new DeleteObjectCommand({
       Bucket: bucket,
       Key: key,
     })
-    return await this.client.send(command)
+    await this.client.send(command)
+    return {}
   }
 
-  async copyObject(
-    bucket: string,
-    source: string,
-    destination: string
-  ): Promise<CopyObjectCommandOutput> {
+  async copyObject(bucket: string, source: string, destination: string): Promise<ObjectMetadata> {
     const command = new CopyObjectCommand({
       Bucket: bucket,
       CopySource: `/${bucket}/${source}`,
       Key: destination,
     })
-    return await this.client.send(command)
+    const data = await this.client.send(command)
+    return {
+      httpStatusCode: data.$metadata.httpStatusCode,
+    }
   }
 
-  async deleteObjects(bucket: string, prefixes: ObjectIdentifier[]): Promise<DeleteObjectsOutput> {
+  async deleteObjects(bucket: string, prefixes: ObjectIdentifier[]): Promise<ObjectMetadata> {
     const command = new DeleteObjectsCommand({
       Bucket: bucket,
       Delete: {
         Objects: prefixes,
       },
     })
-    return await this.client.send(command)
+    await this.client.send(command)
+    return {}
   }
 
-  async headObject(bucket: string, key: string): Promise<HeadObjectOutput> {
+  async headObject(bucket: string, key: string): Promise<ObjectMetadata> {
     const command = new HeadObjectCommand({
       Bucket: bucket,
       Key: key,
     })
-    return await this.client.send(command)
+    const data = await this.client.send(command)
+    return {
+      httpStatusCode: data.$metadata.httpStatusCode,
+      size: data.ContentLength,
+    }
   }
 }

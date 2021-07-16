@@ -61,15 +61,15 @@ export default async function routes(fastify: FastifyInstance) {
       try {
         const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)
         response
-          .status(data.$metadata.httpStatusCode ?? 200)
-          .header('Content-Type', normalizeContentType(data.ContentType))
-          .header('Cache-Control', data.CacheControl)
-          .header('ETag', data.ETag)
-          .header('Last-Modified', data.LastModified)
-        if (data.ContentRange) {
-          response.header('Content-Range', data.ContentRange)
+          .status(data.metadata.httpStatusCode ?? 200)
+          .header('Content-Type', normalizeContentType(data.metadata.mimetype))
+          .header('Cache-Control', data.metadata.cacheControl)
+          .header('ETag', data.metadata.eTag)
+          .header('Last-Modified', data.metadata.lastModified)
+        if (data.metadata.contentRange) {
+          response.header('Content-Range', data.metadata.contentRange)
         }
-        return response.send(data.Body)
+        return response.send(data.body)
       } catch (err) {
         if (err.$metadata?.httpStatusCode === 404) {
           return response.status(404).send()

@@ -1,4 +1,3 @@
-import { ServiceOutputTypes } from '@aws-sdk/client-s3'
 import { PostgrestSingleResponse } from '@supabase/postgrest-js/dist/main/lib/types'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -74,7 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
       const path = `${bucketName}/${objectName}`
       const s3Key = `${projectRef}/${path}`
       let mimeType: string, cacheControl: string, isTruncated: boolean
-      let uploadResult: ServiceOutputTypes
+      let uploadResult: ObjectMetadata
 
       if (!isValidKey(objectName) || !isValidKey(bucketName)) {
         return response
@@ -212,7 +211,7 @@ export default async function routes(fastify: FastifyInstance) {
       const metadata: ObjectMetadata = {
         mimetype: mimeType,
         cacheControl,
-        size: objectMetadata.ContentLength,
+        size: objectMetadata.size,
       }
       const { error: updateError, status: updateStatus } = await superUserPostgrest
         .from<Obj>('objects')
@@ -227,7 +226,7 @@ export default async function routes(fastify: FastifyInstance) {
         return response.status(400).send(transformPostgrestError(updateError, updateStatus))
       }
 
-      return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
+      return response.status(uploadResult.httpStatusCode ?? 200).send({
         Key: path,
       })
     }

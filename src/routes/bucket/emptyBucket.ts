@@ -91,9 +91,7 @@ export default async function routes(fastify: FastifyInstance) {
 
           if (deleteData && deleteData.length > 0) {
             const params = deleteData.map((ele) => {
-              return {
-                Key: `${projectRef}/${bucketName}/${ele.name}`,
-              }
+              return `${projectRef}/${bucketName}/${ele.name}`
             })
             // delete files from s3 asynchronously
             storageBackend.deleteObjects(globalS3Bucket, params)

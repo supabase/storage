@@ -4,7 +4,6 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
-  ObjectIdentifier,
   S3Client,
   S3ClientConfig,
 } from '@aws-sdk/client-s3'
@@ -96,11 +95,15 @@ export class S3Backend {
     }
   }
 
-  async deleteObjects(bucket: string, prefixes: ObjectIdentifier[]): Promise<ObjectMetadata> {
+  async deleteObjects(bucket: string, prefixes: string[]): Promise<ObjectMetadata> {
+    const s3Prefixes = prefixes.map((ele) => {
+      return { Key: ele }
+    })
+
     const command = new DeleteObjectsCommand({
       Bucket: bucket,
       Delete: {
-        Objects: prefixes,
+        Objects: s3Prefixes,
       },
     })
     await this.client.send(command)

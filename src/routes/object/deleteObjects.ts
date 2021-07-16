@@ -81,7 +81,7 @@ export default async function routes(fastify: FastifyInstance) {
       if (results.length > 0) {
         // if successfully deleted, delete from s3 too
         const prefixesToDelete = results.map((ele) => {
-          return { Key: `${projectRef}/${bucketName}/${ele.name}` }
+          return `${projectRef}/${bucketName}/${ele.name}`
         })
 
         await storageBackend.deleteObjects(globalS3Bucket, prefixesToDelete)

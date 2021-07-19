@@ -1,4 +1,5 @@
 import { ObjectMetadata, ObjectResponse } from '../types/types'
+import xattr from 'fs-xattr'
 import fs from 'fs-extra'
 import path from 'path'
 import { promisify } from 'util'
@@ -19,17 +20,28 @@ export class FileBackend implements GenericStorageBackend {
     this.filePath = fileStoragePath
   }
 
+  getMetadata(file: string, attribute: string): Promise<string | undefined> {
+    return xattr.get(file, attribute).then((value) => {
+      return value?.toString() ?? undefined
+    })
+  }
+
+  setMetadata(file: string, attribute: string, value: string): Promise<void> {
+    return xattr.set(file, attribute, value)
+  }
+
   async getObject(bucketName: string, key: string, range?: string): Promise<ObjectResponse> {
     const file = path.resolve(this.filePath, `${bucketName}/${key}`)
     const body = await fs.readFile(file)
     const data = await fs.stat(file)
+    const cacheControl = await this.getMetadata(file, 'user.supabase.cache-control')
+    const contentType = await this.getMetadata(file, 'user.supabase.content-type')
     const lastModified = new Date(0)
     lastModified.setUTCMilliseconds(data.mtimeMs)
     return {
       metadata: {
-        // cacheControl: data.CacheControl,
-        // mimetype: data.ContentType,
-        // eTag: data.ETag,
+        cacheControl,
+        mimetype: contentType,
         lastModified: lastModified,
         // contentRange: data.ContentRange,
         httpStatusCode: 200,
@@ -49,6 +61,10 @@ export class FileBackend implements GenericStorageBackend {
     await fs.ensureFile(file)
     const destFile = fs.createWriteStream(file)
     await pipeline(body, destFile)
+    await Promise.all([
+      this.setMetadata(file, 'user.supabase.content-type', contentType),
+      this.setMetadata(file, 'user.supabase.cache-control', cacheControl),
+    ])
     return {
       httpStatusCode: 200,
     }

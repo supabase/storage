@@ -19,7 +19,7 @@ beforeAll(() => {
         size: 3746,
         mimetype: 'image/png',
       },
-      body: '',
+      body: Buffer.from(''),
     })
   })
 })

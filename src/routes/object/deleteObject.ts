@@ -5,9 +5,17 @@ import { getPostgrestClient, isValidKey, transformPostgrestError } from '../../u
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
+import { FileBackend } from '../../backend/file'
+import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
-const storageBackend = new S3Backend(region, globalS3Endpoint)
+const { region, projectRef, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
+let storageBackend: GenericStorageBackend
+
+if (storageBackendType === 'file') {
+  storageBackend = new FileBackend()
+} else {
+  storageBackend = new S3Backend(region, globalS3Endpoint)
+}
 
 const deleteObjectParamsSchema = {
   type: 'object',

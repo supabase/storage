@@ -1,5 +1,6 @@
 import { RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
+import { Readable } from 'stream'
 import { bucketSchema } from '../schemas/bucket'
 import { objectSchema } from '../schemas/object'
 
@@ -36,7 +37,7 @@ type StorageError = {
 
 type ObjectResponse = {
   metadata: ObjectMetadata
-  body?: ReadableStream<any> | Readable | Blob
+  body?: ReadableStream<any> | Readable | Blob | Buffer
 }
 
 type ObjectMetadata = {

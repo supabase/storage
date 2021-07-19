@@ -5,9 +5,24 @@ import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { normalizeContentType } from '../../utils'
 import { S3Backend } from '../../backend/s3'
+import { FileBackend } from '../../backend/file'
+import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
-const storageBackend = new S3Backend(region, globalS3Endpoint)
+const {
+  region,
+  projectRef,
+  globalS3Bucket,
+  globalS3Endpoint,
+  serviceKey,
+  storageBackendType,
+} = getConfig()
+let storageBackend: GenericStorageBackend
+
+if (storageBackendType === 'file') {
+  storageBackend = new FileBackend()
+} else {
+  storageBackend = new S3Backend(region, globalS3Endpoint)
+}
 
 const getPublicObjectParamsSchema = {
   type: 'object',

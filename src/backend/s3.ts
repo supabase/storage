@@ -10,8 +10,9 @@ import {
 import { Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
 import { ObjectMetadata, ObjectResponse } from '../types/types'
+import { GenericStorageBackend } from './generic'
 
-export class S3Backend {
+export class S3Backend implements GenericStorageBackend {
   client: S3Client
 
   constructor(region: string, endpoint?: string | undefined) {

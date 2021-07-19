@@ -56,7 +56,7 @@ export class FileBackend implements GenericStorageBackend {
 
   async deleteObject(bucket: string, key: string): Promise<ObjectMetadata> {
     const file = path.resolve(this.filePath, `${bucket}/${key}`)
-    await fs.rm(file)
+    await fs.remove(file)
     return {}
   }
 

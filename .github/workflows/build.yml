@@ -49,8 +49,9 @@ jobs:
           npm run pkg -- --targets node12-linux-x64,node12-macos-x64 --out-path bin
           mv bin/server-macos storage-api-macos-x86_64
           mv bin/server-linux storage-api-x86_64
-          tar -czvf storage-api-linux-x64.tar.gz storage-api-x86_64 migrations/
-          tar -czvf storage-api-macos-x64.tar.gz storage-api-macos-x86_64 migrations/
+          cp node_modules/fs-xattr/build/Release/xattr.node .
+          tar -czvf storage-api-linux-x64.tar.gz storage-api-x86_64 migrations/ xattr.node
+          tar -czvf storage-api-macos-x64.tar.gz storage-api-macos-x86_64 migrations/ xattr.node
       - name: Upload x64 binary to release
         uses: svenstaro/upload-release-action@v2
         with:
@@ -120,8 +121,9 @@ jobs:
             . ~/.nvm/nvm.sh
             npm ci
             npm run build
+            cp node_modules/fs-xattr/build/Release/xattr.node .
             npm run pkg -- --targets node12-linux-arm64 --output storage-api-aarch64
-            tar -czvf storage-api-aarch64.tar.gz storage-api-aarch64 migrations/
+            tar -czvf storage-api-aarch64.tar.gz storage-api-aarch64 migrations/ xattr.node
             cp storage-api-aarch64.tar.gz /artifacts/storage-api-aarch64.tar.gz
       - name: Upload binaries to release
         uses: svenstaro/upload-release-action@v2

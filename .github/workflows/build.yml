@@ -109,7 +109,7 @@ jobs:
           # --volume "${PWD}/.ccache:/root/.npm"
           install: |
             apt-get update -y
-            apt-get -y install --no-install-recommends curl wget ca-certificates
+            apt-get -y install --no-install-recommends curl wget ca-certificates python3
             curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.37.2/install.sh | bash
             . ~/.nvm/nvm.sh
             nvm install 12.18.1

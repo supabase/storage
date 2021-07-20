@@ -1,5 +1,6 @@
 import dotenv from 'dotenv'
 
+type StorageBackendType = 'file' | 's3'
 type StorageConfigType = {
   anonKey: string
   serviceKey: string
@@ -10,6 +11,8 @@ type StorageConfigType = {
   globalS3Endpoint?: string
   jwtSecret: string
   fileSizeLimit: number
+  storageBackendType: StorageBackendType
+  fileStoragePath?: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -37,5 +40,7 @@ export function getConfig(): StorageConfigType {
     globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
     jwtSecret: getConfigFromEnv('PGRST_JWT_SECRET'),
     fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
+    storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
+    fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
   }
 }

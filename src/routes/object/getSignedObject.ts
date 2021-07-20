@@ -5,10 +5,18 @@ import { verifyJWT } from '../../utils/'
 import { getConfig } from '../../utils/config'
 import { normalizeContentType } from '../../utils'
 import { createResponse } from '../../utils/generic-routes'
-import { getObject, initClient } from '../../utils/s3'
+import { S3Backend } from '../../backend/s3'
+import { FileBackend } from '../../backend/file'
+import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
-const client = initClient(region, globalS3Endpoint)
+const { region, projectRef, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
+let storageBackend: GenericStorageBackend
+
+if (storageBackendType === 'file') {
+  storageBackend = new FileBackend()
+} else {
+  storageBackend = new S3Backend(region, globalS3Endpoint)
+}
 
 const getSignedObjectParamsSchema = {
   type: 'object',
@@ -61,18 +69,18 @@ export default async function routes(fastify: FastifyInstance) {
         const { url } = payload as SignedToken
         const s3Key = `${projectRef}/${url}`
         request.log.info(s3Key)
-        const data = await getObject(client, globalS3Bucket, s3Key, range)
+        const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)
 
         response
-          .status(data.$metadata.httpStatusCode ?? 200)
-          .header('Content-Type', normalizeContentType(data.ContentType))
-          .header('Cache-Control', data.CacheControl ?? 'no-cache')
-          .header('ETag', data.ETag)
-          .header('Last-Modified', data.LastModified)
-        if (data.ContentRange) {
-          response.header('Content-Range', data.ContentRange)
+          .status(data.metadata.httpStatusCode ?? 200)
+          .header('Content-Type', normalizeContentType(data.metadata.mimetype))
+          .header('Cache-Control', data.metadata.cacheControl)
+          .header('ETag', data.metadata.eTag)
+          .header('Last-Modified', data.metadata.lastModified)
+        if (data.metadata.contentRange) {
+          response.header('Content-Range', data.metadata.contentRange)
         }
-        return response.send(data.Body)
+        return response.send(data.body)
       } catch (err) {
         request.log.error(err)
         return response.status(400).send(createResponse(err.message, '400', err.name))

@@ -4,11 +4,18 @@ import { AuthenticatedRequest, Bucket, Obj } from '../../types/types'
 import { getPostgrestClient, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
-import { deleteObjects, initClient } from '../../utils/s3'
+import { S3Backend } from '../../backend/s3'
+import { FileBackend } from '../../backend/file'
+import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
-const client = initClient(region, globalS3Endpoint)
+const { region, projectRef, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
+let storageBackend: GenericStorageBackend
 
+if (storageBackendType === 'file') {
+  storageBackend = new FileBackend()
+} else {
+  storageBackend = new S3Backend(region, globalS3Endpoint)
+}
 const emptyBucketParamsSchema = {
   type: 'object',
   properties: {
@@ -87,12 +94,10 @@ export default async function routes(fastify: FastifyInstance) {
 
           if (deleteData && deleteData.length > 0) {
             const params = deleteData.map((ele) => {
-              return {
-                Key: `${projectRef}/${bucketName}/${ele.name}`,
-              }
+              return `${projectRef}/${bucketName}/${ele.name}`
             })
             // delete files from s3 asynchronously
-            deleteObjects(client, globalS3Bucket, params)
+            storageBackend.deleteObjects(globalS3Bucket, params)
           }
         }
       } while (!deleteError && !objectError && objects && objects.length > 0)

@@ -1,4 +1,3 @@
-import { ServiceOutputTypes } from '@aws-sdk/client-s3'
 import { PostgrestSingleResponse } from '@supabase/postgrest-js/dist/main/lib/types'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -6,10 +5,25 @@ import { Obj, ObjectMetadata } from '../../types/types'
 import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
-import { deleteObject, headObject, initClient, uploadObject } from '../../utils/s3'
+import { S3Backend } from '../../backend/s3'
+import { FileBackend } from '../../backend/file'
+import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint, serviceKey } = getConfig()
-const client = initClient(region, globalS3Endpoint)
+const {
+  region,
+  projectRef,
+  globalS3Bucket,
+  globalS3Endpoint,
+  serviceKey,
+  storageBackendType,
+} = getConfig()
+let storageBackend: GenericStorageBackend
+
+if (storageBackendType === 'file') {
+  storageBackend = new FileBackend()
+} else {
+  storageBackend = new S3Backend(region, globalS3Endpoint)
+}
 
 const createObjectParamsSchema = {
   type: 'object',
@@ -74,7 +88,7 @@ export default async function routes(fastify: FastifyInstance) {
       const path = `${bucketName}/${objectName}`
       const s3Key = `${projectRef}/${path}`
       let mimeType: string, cacheControl: string, isTruncated: boolean
-      let uploadResult: ServiceOutputTypes
+      let uploadResult: ObjectMetadata
 
       if (!isValidKey(objectName) || !isValidKey(bucketName)) {
         return response
@@ -155,8 +169,7 @@ export default async function routes(fastify: FastifyInstance) {
         const cacheTime = data.fields.cacheControl?.value
         cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
         mimeType = data.mimetype
-        uploadResult = await uploadObject(
-          client,
+        uploadResult = await storageBackend.uploadObject(
           globalS3Bucket,
           s3Key,
           data.file,
@@ -173,8 +186,7 @@ export default async function routes(fastify: FastifyInstance) {
         mimeType = request.headers['content-type']
         cacheControl = request.headers['cache-control'] ?? 'no-cache'
 
-        uploadResult = await uploadObject(
-          client,
+        uploadResult = await storageBackend.uploadObject(
           globalS3Bucket,
           s3Key,
           request.raw,
@@ -195,7 +207,7 @@ export default async function routes(fastify: FastifyInstance) {
             bucket_id: bucketName,
           })
           .single()
-        await deleteObject(client, globalS3Bucket, s3Key)
+        await storageBackend.deleteObject(globalS3Bucket, s3Key)
 
         // return an error response
         return response
@@ -209,12 +221,12 @@ export default async function routes(fastify: FastifyInstance) {
           )
       }
 
-      const objectMetadata = await headObject(client, globalS3Bucket, s3Key)
+      const objectMetadata = await storageBackend.headObject(globalS3Bucket, s3Key)
       // update content-length as super user since user may not have update permissions
       const metadata: ObjectMetadata = {
         mimetype: mimeType,
         cacheControl,
-        size: objectMetadata.ContentLength,
+        size: objectMetadata.size,
       }
       const { error: updateError, status: updateStatus } = await superUserPostgrest
         .from<Obj>('objects')
@@ -229,7 +241,7 @@ export default async function routes(fastify: FastifyInstance) {
         return response.status(400).send(transformPostgrestError(updateError, updateStatus))
       }
 
-      return response.status(uploadResult.$metadata.httpStatusCode ?? 200).send({
+      return response.status(uploadResult.httpStatusCode ?? 200).send({
         Key: path,
       })
     }

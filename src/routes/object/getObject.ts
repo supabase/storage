@@ -6,10 +6,18 @@ import { getPostgrestClient, isValidKey, transformPostgrestError } from '../../u
 import { getConfig } from '../../utils/config'
 import { normalizeContentType } from '../../utils'
 import { createResponse } from '../../utils/generic-routes'
-import { getObject, initClient } from '../../utils/s3'
+import { S3Backend } from '../../backend/s3'
+import { FileBackend } from '../../backend/file'
+import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint } = getConfig()
-const client = initClient(region, globalS3Endpoint)
+const { region, projectRef, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
+let storageBackend: GenericStorageBackend
+
+if (storageBackendType === 'file') {
+  storageBackend = new FileBackend()
+} else {
+  storageBackend = new S3Backend(region, globalS3Endpoint)
+}
 
 const getObjectParamsSchema = {
   type: 'object',
@@ -66,18 +74,18 @@ async function requestHandler(
   // send the object from s3
   const s3Key = `${projectRef}/${bucketName}/${objectName}`
   request.log.info(s3Key)
-  const data = await getObject(client, globalS3Bucket, s3Key, range)
+  const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)
 
   response
-    .status(data.$metadata.httpStatusCode ?? 200)
-    .header('Content-Type', normalizeContentType(data.ContentType))
-    .header('Cache-Control', data.CacheControl)
-    .header('ETag', data.ETag)
-    .header('Last-Modified', data.LastModified)
-  if (data.ContentRange) {
-    response.header('Content-Range', data.ContentRange)
+    .status(data.metadata.httpStatusCode ?? 200)
+    .header('Content-Type', normalizeContentType(data.metadata.mimetype))
+    .header('Cache-Control', data.metadata.cacheControl)
+    .header('ETag', data.metadata.eTag)
+    .header('Last-Modified', data.metadata.lastModified)
+  if (data.metadata.contentRange) {
+    response.header('Content-Range', data.metadata.contentRange)
   }
-  return response.send(data.Body)
+  return response.send(data.body)
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types

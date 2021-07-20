@@ -43,7 +43,7 @@ export class FileBackend implements GenericStorageBackend {
         cacheControl,
         mimetype: contentType,
         lastModified: lastModified,
-        // contentRange: data.ContentRange,
+        // contentRange: data.ContentRange, @todo: support range requests
         httpStatusCode: 200,
       },
       body,

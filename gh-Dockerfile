@@ -7,7 +7,6 @@ WORKDIR /root/storage
 
 COPY storage-api-x86_64 .
 COPY migrations ./migrations
-COPY xattr.node .
 
 ENTRYPOINT "./storage-api-x86_64"
 EXPOSE 5000

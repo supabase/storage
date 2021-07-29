@@ -13,6 +13,7 @@ type StorageConfigType = {
   fileSizeLimit: number
   storageBackendType: StorageBackendType
   fileStoragePath?: string
+  xForwardedHostRegExp?: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -42,5 +43,6 @@ export function getConfig(): StorageConfigType {
     fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
     storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
+    xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
   }
 }

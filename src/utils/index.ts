@@ -8,8 +8,8 @@ interface jwtInterface {
   sub: string
 }
 
-export function getPostgrestClient(jwt: string): PostgrestClient {
-  const postgrest = new PostgrestClient(postgrestURL, {
+export function getPostgrestClient(jwt: string, url?: string): PostgrestClient {
+  const postgrest = new PostgrestClient(url || postgrestURL, {
     headers: {
       apiKey: anonKey,
       Authorization: `Bearer ${jwt}`,

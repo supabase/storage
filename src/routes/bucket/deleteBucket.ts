@@ -38,17 +38,14 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      const authHeader = request.headers.authorization
-      const jwt = authHeader.substring('Bearer '.length)
       const { bucketId } = request.params
-      const userPostgrest = getPostgrestClient(jwt)
       const superUserPostgrest = getPostgrestClient(serviceKey)
 
       const {
         data: bucketResults,
         error: bucketError,
         status: bucketStatus,
-      } = await userPostgrest.from<Bucket>('buckets').select('id').eq('id', bucketId).single()
+      } = await request.postgrest.from<Bucket>('buckets').select('id').eq('id', bucketId).single()
 
       if (bucketError) {
         request.log.error({ error: bucketError }, 'error bucket')
@@ -84,7 +81,7 @@ export default async function routes(fastify: FastifyInstance) {
           )
       }
 
-      const { data: results, error, status } = await userPostgrest
+      const { data: results, error, status } = await request.postgrest
         .from<Bucket>('buckets')
         .delete()
         .eq('id', bucketId)

@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest, Obj } from '../../types/types'
-import { getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
+import { isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
@@ -53,10 +53,6 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      // check if the user is able to update the row
-      const authHeader = request.headers.authorization
-      const jwt = authHeader.substring('Bearer '.length)
-
       const { destinationKey, sourceKey, bucketId } = request.body
 
       if (!isValidKey(destinationKey)) {
@@ -67,9 +63,7 @@ export default async function routes(fastify: FastifyInstance) {
           )
       }
 
-      const postgrest = getPostgrestClient(jwt)
-
-      const objectResponse = await postgrest
+      const objectResponse = await request.postgrest
         .from<Obj>('objects')
         .update({
           last_accessed_at: new Date().toISOString(),

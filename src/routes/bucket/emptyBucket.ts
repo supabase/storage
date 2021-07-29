@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest, Bucket, Obj } from '../../types/types'
-import { getPostgrestClient, transformPostgrestError } from '../../utils'
+import { transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
@@ -47,12 +47,9 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      const authHeader = request.headers.authorization
-      const jwt = authHeader.substring('Bearer '.length)
       const { bucketId } = request.params
-      const postgrest = getPostgrestClient(jwt)
 
-      const bucketResponse = await postgrest
+      const bucketResponse = await request.postgrest
         .from<Bucket>('buckets')
         .select('name')
         .eq('id', bucketId)
@@ -67,7 +64,11 @@ export default async function routes(fastify: FastifyInstance) {
 
       let deleteError, deleteData, objectError, objects, objectStatus
       do {
-        ;({ data: objects, error: objectError, status: objectStatus } = await postgrest
+        ;({
+          data: objects,
+          error: objectError,
+          status: objectStatus,
+        } = await request.postgrest
           .from<Obj>('objects')
           .select('name, id')
           .eq('bucket_id', bucketId)
@@ -80,7 +81,7 @@ export default async function routes(fastify: FastifyInstance) {
         request.log.info({ results: objects }, 'results')
 
         if (objects && objects.length > 0) {
-          ;({ error: deleteError, data: deleteData } = await postgrest
+          ;({ error: deleteError, data: deleteData } = await request.postgrest
             .from<Obj>('objects')
             .delete()
             .in(

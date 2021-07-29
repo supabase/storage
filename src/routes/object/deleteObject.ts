@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest, Obj } from '../../types/types'
-import { getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
+import { isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
@@ -51,14 +51,8 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      // check if the user is able to insert that row
-      const authHeader = request.headers.authorization
-      const jwt = authHeader.substring('Bearer '.length)
-
       const { bucketName } = request.params
       const objectName = request.params['*']
-
-      const postgrest = getPostgrestClient(jwt)
 
       if (!isValidKey(objectName) || !isValidKey(bucketName)) {
         return response
@@ -66,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
           .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
-      const objectResponse = await postgrest
+      const objectResponse = await request.postgrest
         .from<Obj>('objects')
         .delete()
         .match({

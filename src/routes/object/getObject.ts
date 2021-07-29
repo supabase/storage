@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { IncomingMessage, Server, ServerResponse } from 'http'
 import { AuthenticatedRangeRequest, Obj } from '../../types/types'
-import { getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
+import { isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { normalizeContentType } from '../../utils'
 import { createResponse } from '../../utils/generic-routes'
@@ -41,11 +41,7 @@ async function requestHandler(
     unknown
   >
 ) {
-  const authHeader = request.headers.authorization
   const range = request.headers.range
-  const jwt = authHeader.substring('Bearer '.length)
-
-  const postgrest = getPostgrestClient(jwt)
 
   const { bucketName } = request.params
   const objectName = request.params['*']
@@ -56,7 +52,7 @@ async function requestHandler(
       .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
   }
 
-  const objectResponse = await postgrest
+  const objectResponse = await request.postgrest
     .from<Obj>('objects')
     .select('id')
     .match({

@@ -1,7 +1,7 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { Obj, ObjectMetadata } from '../../types/types'
-import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
+import { getOwner, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
@@ -65,10 +65,6 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      // check if the user is able to update the row
-      const authHeader = request.headers.authorization
-      const jwt = authHeader.substring('Bearer '.length)
-
       const contentType = request.headers['content-type']
       request.log.info(`content-type is ${contentType}`)
 
@@ -85,16 +81,15 @@ export default async function routes(fastify: FastifyInstance) {
           .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
-      const postgrest = getPostgrestClient(jwt)
       let owner
       try {
-        owner = await getOwner(jwt)
+        owner = await getOwner(request.jwt)
       } catch (err) {
         console.log(err)
         return response.status(400).send(createResponse(err.message, '400', err.message))
       }
 
-      const objectResponse = await postgrest
+      const objectResponse = await request.postgrest
         .from<Obj>('objects')
         .update({
           last_accessed_at: new Date().toISOString(),
@@ -157,7 +152,7 @@ export default async function routes(fastify: FastifyInstance) {
         cacheControl,
         size: objectMetadata.size,
       }
-      const { error: updateError, status: updateStatus } = await postgrest
+      const { error: updateError, status: updateStatus } = await request.postgrest
         .from<Obj>('objects')
         .update({
           metadata,

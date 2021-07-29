@@ -76,10 +76,6 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      // check if the user is able to insert that row
-      const authHeader = request.headers.authorization
-      const jwt = authHeader.substring('Bearer '.length)
-
       const contentType = request.headers['content-type']
       request.log.info(`content-type is ${contentType}`)
 
@@ -96,12 +92,11 @@ export default async function routes(fastify: FastifyInstance) {
           .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
-      const postgrest = getPostgrestClient(jwt)
       const superUserPostgrest = getPostgrestClient(serviceKey)
 
       let owner
       try {
-        owner = await getOwner(jwt)
+        owner = await getOwner(request.jwt)
       } catch (err) {
         request.log.error(err)
         return response.status(400).send({
@@ -117,7 +112,7 @@ export default async function routes(fastify: FastifyInstance) {
       let postgrestResponse: PostgrestSingleResponse<Obj>
 
       if (isUpsert) {
-        postgrestResponse = await postgrest
+        postgrestResponse = await request.postgrest
           .from<Obj>('objects')
           .upsert(
             [
@@ -134,7 +129,7 @@ export default async function routes(fastify: FastifyInstance) {
           )
           .single()
       } else {
-        postgrestResponse = await postgrest
+        postgrestResponse = await request.postgrest
           .from<Obj>('objects')
           .insert(
             [

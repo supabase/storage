@@ -9,7 +9,7 @@ import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
+const { region, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
@@ -67,7 +67,7 @@ export default async function routes(fastify: FastifyInstance) {
         const range = request.headers.range
         const payload = await verifyJWT(token)
         const { url } = payload as SignedToken
-        const s3Key = `${projectRef}/${url}`
+        const s3Key = `${request.projectRef}/${url}`
         request.log.info(s3Key)
         const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)
 

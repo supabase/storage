@@ -8,7 +8,7 @@ import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
+const { region, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
@@ -79,8 +79,8 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       // if successfully updated, copy and delete object from s3
-      const oldS3Key = `${projectRef}/${bucketId}/${sourceKey}`
-      const newS3Key = `${projectRef}/${bucketId}/${destinationKey}`
+      const oldS3Key = `${request.projectRef}/${bucketId}/${sourceKey}`
+      const newS3Key = `${request.projectRef}/${bucketId}/${destinationKey}`
 
       // @todo what happens if one of these fail?
       await storageBackend.copyObject(globalS3Bucket, oldS3Key, newS3Key)

@@ -8,14 +8,7 @@ import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
 
-const {
-  region,
-  projectRef,
-  globalS3Bucket,
-  globalS3Endpoint,
-  serviceKey,
-  storageBackendType,
-} = getConfig()
+const { region, globalS3Bucket, globalS3Endpoint, serviceKey, storageBackendType } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
@@ -71,7 +64,7 @@ export default async function routes(fastify: FastifyInstance) {
         return response.status(400).send(transformPostgrestError(error, status))
       }
 
-      const s3Key = `${projectRef}/${bucketName}/${objectName}`
+      const s3Key = `${request.projectRef}/${bucketName}/${objectName}`
       request.log.info(s3Key)
       try {
         const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)

@@ -8,7 +8,7 @@ import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
+const { region, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
@@ -71,7 +71,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const objectName = request.params['*']
       const path = `${bucketName}/${objectName}`
-      const s3Key = `${projectRef}/${path}`
+      const s3Key = `${request.projectRef}/${path}`
       let mimeType: string, cacheControl: string, isTruncated: boolean
       let uploadResult: ObjectMetadata
 

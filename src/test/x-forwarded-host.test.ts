@@ -12,7 +12,7 @@ beforeEach(() => {
 
 describe('with X-Forwarded-Host header', () => {
   test('PostgREST URL is constructed using X-Forwarded-Host if regexp matches', async () => {
-    process.env.X_FORWARDED_HOST_REGEXP = '^[a-z]{20}\\.supabase\\.(co|in|net)$'
+    process.env.X_FORWARDED_HOST_REGEXP = '^([a-z]{20})\\.supabase\\.(?:co|in|net)$'
     const response = await app().inject({
       method: 'GET',
       url: `/bucket`,
@@ -27,7 +27,7 @@ describe('with X-Forwarded-Host header', () => {
   })
 
   test('PostgREST URL is not constructed using X-Forwarded-Host if regexp does not match', async () => {
-    process.env.X_FORWARDED_HOST_REGEXP = '^[a-z]{20}\\.supabase\\.(co|in|net)$'
+    process.env.X_FORWARDED_HOST_REGEXP = '^([a-z]{20})\\.supabase\\.(?:co|in|net)$'
     const response = await app().inject({
       method: 'GET',
       url: `/bucket`,

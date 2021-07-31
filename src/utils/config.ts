@@ -14,6 +14,9 @@ type StorageConfigType = {
   storageBackendType: StorageBackendType
   fileStoragePath?: string
   xForwardedHostRegExp?: string
+  supabaseUrl?: string
+  supabaseApiKey?: string
+  supabaseEncryptionKey?: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -44,5 +47,8 @@ export function getConfig(): StorageConfigType {
     storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
     xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
+    supabaseUrl: getOptionalConfigFromEnv('SUPABASE_URL'),
+    supabaseApiKey: getOptionalConfigFromEnv('SUPABASE_API_KEY'),
+    supabaseEncryptionKey: getOptionalConfigFromEnv('SUPABASE_ENCRYPTION_KEY'),
   }
 }

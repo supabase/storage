@@ -1,14 +1,14 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { Bucket } from '../../types/types'
-import { getPostgrestClient, transformPostgrestError } from '../../utils'
+import { transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { normalizeContentType } from '../../utils'
 import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, globalS3Bucket, globalS3Endpoint, serviceKey, storageBackendType } = getConfig()
+const { region, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
@@ -51,8 +51,7 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
       const range = request.headers.range
 
-      const superUserPostgrest = getPostgrestClient(serviceKey)
-      const { error, status } = await superUserPostgrest
+      const { error, status } = await request.superUserPostgrest
         .from<Bucket>('buckets')
         .select('id, public')
         .eq('id', bucketName)

@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import jwt from '../../plugins/jwt'
-import postgrest from '../../plugins/postgrest'
+import { postgrest, superUserPostgrest } from '../../plugins/postgrest'
 import createBucket from './createBucket'
 import deleteBucket from './deleteBucket'
 import emptyBucket from './emptyBucket'
@@ -14,9 +14,14 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.register(postgrest)
 
   fastify.register(createBucket)
-  fastify.register(deleteBucket)
   fastify.register(emptyBucket)
   fastify.register(getAllBuckets)
   fastify.register(getBucket)
   fastify.register(updateBucket)
+
+  fastify.register(async (fastify) => {
+    fastify.register(superUserPostgrest)
+
+    fastify.register(deleteBucket)
+  })
 }

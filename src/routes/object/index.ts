@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import jwt from '../../plugins/jwt'
-import postgrest from '../../plugins/postgrest'
+import { postgrest, superUserPostgrest } from '../../plugins/postgrest'
 import copyObject from './copyObject'
 import createObject from './createObject'
 import deleteObject from './deleteObject'
@@ -19,8 +19,6 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(jwt)
     fastify.register(postgrest)
 
-    fastify.register(copyObject)
-    fastify.register(createObject)
     fastify.register(deleteObject)
     fastify.register(deleteObjects)
     fastify.register(getObject)
@@ -28,8 +26,20 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(moveObject)
     fastify.register(updateObject)
     fastify.register(listObjects)
+
+    fastify.register(async (fastify) => {
+      fastify.register(superUserPostgrest)
+
+      fastify.register(copyObject)
+      fastify.register(createObject)
+    })
   })
 
   fastify.register(getSignedObject)
-  fastify.register(getPublicObject)
+
+  fastify.register(async (fastify) => {
+    fastify.register(superUserPostgrest)
+
+    fastify.register(getPublicObject)
+  })
 }

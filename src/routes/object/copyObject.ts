@@ -1,14 +1,14 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest, Obj } from '../../types/types'
-import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
+import { getOwner, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, globalS3Bucket, globalS3Endpoint, serviceKey, storageBackendType } = getConfig()
+const { region, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
@@ -75,8 +75,6 @@ export default async function routes(fastify: FastifyInstance) {
         return response.status(400).send(responseValue)
       }
 
-      const superUserPostgrest = getPostgrestClient(serviceKey)
-
       let owner
       try {
         owner = await getOwner(jwt)
@@ -84,7 +82,7 @@ export default async function routes(fastify: FastifyInstance) {
         request.log.error(err)
         return response.status(400).send(createResponse(err.message, '400', err.message))
       }
-      const objectResponse = await superUserPostgrest
+      const objectResponse = await request.superUserPostgrest
         .from<Obj>('objects')
         .select('bucket_id, metadata')
         .match({

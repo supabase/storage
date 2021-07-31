@@ -1,22 +1,10 @@
-import { PostgrestClient } from '@supabase/postgrest-js'
 import jwt from 'jsonwebtoken'
 import { PostgrestError, StorageError } from '../types/types'
 import { getConfig } from '../utils/config'
-const { postgrestURL, anonKey, jwtSecret } = getConfig()
+const { jwtSecret } = getConfig()
 
 interface jwtInterface {
   sub: string
-}
-
-export function getPostgrestClient(jwt: string, url?: string): PostgrestClient {
-  const postgrest = new PostgrestClient(url || postgrestURL, {
-    headers: {
-      apiKey: anonKey,
-      Authorization: `Bearer ${jwt}`,
-    },
-    schema: 'storage',
-  })
-  return postgrest
 }
 
 // eslint-disable-next-line @typescript-eslint/ban-types

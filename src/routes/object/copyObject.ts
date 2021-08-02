@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest, Obj } from '../../types/types'
-import { getOwner, isValidKey, transformPostgrestError } from '../../utils'
+import { getJwtSecret, getOwner, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
@@ -75,9 +75,10 @@ export default async function routes(fastify: FastifyInstance) {
         return response.status(400).send(responseValue)
       }
 
+      const jwtSecret = await getJwtSecret(request.projectRef)
       let owner
       try {
-        owner = await getOwner(jwt)
+        owner = await getOwner(jwt, jwtSecret)
       } catch (err) {
         request.log.error(err)
         return response.status(400).send(createResponse(err.message, '400', err.message))

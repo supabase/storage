@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { SignedToken } from '../../types/types'
-import { verifyJWT } from '../../utils/'
+import { getJwtSecret, verifyJWT } from '../../utils/'
 import { getConfig } from '../../utils/config'
 import { normalizeContentType } from '../../utils'
 import { createResponse } from '../../utils/generic-routes'
@@ -65,7 +65,8 @@ export default async function routes(fastify: FastifyInstance) {
       const { token } = request.query
       try {
         const range = request.headers.range
-        const payload = await verifyJWT(token)
+        const jwtSecret = await getJwtSecret(request.projectRef)
+        const payload = await verifyJWT(token, jwtSecret)
         const { url } = payload as SignedToken
         const s3Key = `${request.projectRef}/${url}`
         request.log.info(s3Key)

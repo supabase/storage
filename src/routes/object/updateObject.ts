@@ -1,7 +1,7 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { Obj, ObjectMetadata } from '../../types/types'
-import { getOwner, isValidKey, transformPostgrestError } from '../../utils'
+import { getJwtSecret, getOwner, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
@@ -81,9 +81,10 @@ export default async function routes(fastify: FastifyInstance) {
           .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
+      const jwtSecret = await getJwtSecret(request.projectRef)
       let owner
       try {
-        owner = await getOwner(request.jwt)
+        owner = await getOwner(request.jwt, jwtSecret)
       } catch (err) {
         console.log(err)
         return response.status(400).send(createResponse(err.message, '400', err.message))

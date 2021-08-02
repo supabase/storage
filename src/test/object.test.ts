@@ -4,11 +4,11 @@ import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
 import { getConfig } from '../utils/config'
-import { signJWT } from '../utils/index'
+import { getJwtSecret, signJWT } from '../utils/index'
 import { S3Backend } from '../backend/s3'
 
 dotenv.config({ path: '.env.test' })
-const { anonKey, serviceKey } = getConfig()
+const { anonKey, jwtSecret, serviceKey } = getConfig()
 
 beforeAll(() => {
   jest.spyOn(S3Backend.prototype, 'getObject').mockImplementation(() => {
@@ -901,7 +901,7 @@ describe('testing generating signed URL', () => {
 describe('testing retrieving signed URL', () => {
   test('get object with a token', async () => {
     const urlToSign = 'bucket2/public/sadcat-upload.png'
-    const jwtToken = await signJWT({ url: urlToSign }, 100)
+    const jwtToken = await signJWT({ url: urlToSign }, jwtSecret, 100)
     const response = await app().inject({
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,
@@ -927,7 +927,7 @@ describe('testing retrieving signed URL', () => {
 
   test('get object with an expired JWT', async () => {
     const urlToSign = 'bucket2/public/sadcat-upload.png'
-    const expiredJWT = await signJWT({ url: urlToSign }, -1)
+    const expiredJWT = await signJWT({ url: urlToSign }, jwtSecret, -1)
     const response = await app().inject({
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${expiredJWT}`,

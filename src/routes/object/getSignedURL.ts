@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest, Obj } from '../../types/types'
-import { signJWT, transformPostgrestError } from '../../utils'
+import { getJwtSecret, signJWT, transformPostgrestError } from '../../utils'
 import { createDefaultSchema } from '../../utils/generic-routes'
 
 const getSignedURLParamsSchema = {
@@ -76,7 +76,8 @@ export default async function routes(fastify: FastifyInstance) {
       request.log.info(`going to sign ${request.url}`)
       const urlParts = request.url.split('/')
       const urlToSign = decodeURI(urlParts.splice(3).join('/'))
-      const token = await signJWT({ url: urlToSign }, expiresIn)
+      const jwtSecret = await getJwtSecret(request.projectRef)
+      const token = await signJWT({ url: urlToSign }, jwtSecret, expiresIn)
 
       // @todo parse the url properly
       const signedURL = `/object/sign/${urlToSign}?token=${token}`

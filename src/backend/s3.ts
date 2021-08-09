@@ -20,7 +20,7 @@ export class S3Backend implements GenericStorageBackend {
       region,
       runtime: 'node',
       requestHandler: new NodeHttpHandler({
-        socketTimeout: 300000,
+        socketTimeout: 3000,
       }),
     }
     if (endpoint) {

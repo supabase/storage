@@ -1,6 +1,6 @@
 import dotenv from 'dotenv'
 
-type StorageBackendType = 'file' | 's3'
+type StorageBackendType = 'file' | 's3' | 'oss'
 type StorageConfigType = {
   anonKey: string
   serviceKey: string
@@ -13,6 +13,10 @@ type StorageConfigType = {
   fileSizeLimit: number
   storageBackendType: StorageBackendType
   fileStoragePath?: string
+  ossBucket: string
+  ossEndpoint: string
+  ossAccessKey: string
+  ossAccessSecret: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -42,5 +46,9 @@ export function getConfig(): StorageConfigType {
     fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
     storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
+    ossBucket: getConfigFromEnv('OSS_BUCKET'),
+    ossEndpoint: getConfigFromEnv('OSS_ENDPOINT'),
+    ossAccessKey: getConfigFromEnv('OSS_ACCESS_KEY'),
+    ossAccessSecret: getConfigFromEnv('OSS_ACCESS_SECRET'),
   }
 }

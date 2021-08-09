@@ -36,7 +36,6 @@ export class S3Backend implements GenericStorageBackend {
       Range: range,
     })
     const data = await this.client.send(command)
-    data.Body
     return {
       metadata: {
         cacheControl: data.CacheControl,

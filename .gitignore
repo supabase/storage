@@ -6,3 +6,4 @@ dist/
 !.*.sample
 static/api.json
 data/
+.idea/

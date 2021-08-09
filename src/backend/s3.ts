@@ -7,6 +7,7 @@ import {
   S3Client,
   S3ClientConfig,
 } from '@aws-sdk/client-s3'
+import https from 'https'
 import { Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
 import { ObjectMetadata, ObjectResponse } from '../types/types'
@@ -16,10 +17,15 @@ export class S3Backend implements GenericStorageBackend {
   client: S3Client
 
   constructor(region: string, endpoint?: string | undefined) {
+    const agent = new https.Agent({
+      maxSockets: 50,
+      keepAlive: true,
+    })
     const params: S3ClientConfig = {
       region,
       runtime: 'node',
       requestHandler: new NodeHttpHandler({
+        httpsAgent: agent,
         socketTimeout: 3000,
       }),
     }
@@ -36,7 +42,6 @@ export class S3Backend implements GenericStorageBackend {
       Range: range,
     })
     const data = await this.client.send(command)
-    data.Body
     return {
       metadata: {
         cacheControl: data.CacheControl,

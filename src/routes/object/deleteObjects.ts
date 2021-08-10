@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { objectSchema } from '../../schemas/object'
 import { AuthenticatedRequest, Obj } from '../../types/types'
-import { getPostgrestClient, transformPostgrestError } from '../../utils'
+import { transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
@@ -64,16 +64,10 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      // check if the user is able to insert that row
-      const authHeader = request.headers.authorization
-      const jwt = authHeader.substring('Bearer '.length)
-
       const { bucketName } = request.params
       const prefixes = request.body['prefixes']
 
-      const postgrest = getPostgrestClient(jwt)
-
-      const objectResponse = await postgrest
+      const objectResponse = await request.postgrest
         .from<Obj>('objects')
         .delete()
         .eq('bucket_id', bucketName)

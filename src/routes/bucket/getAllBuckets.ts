@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { bucketSchema } from '../../schemas/bucket'
 import { AuthenticatedRequest, Bucket } from '../../types/types'
-import { getPostgrestClient, transformPostgrestError } from '../../utils'
+import { transformPostgrestError } from '../../utils'
 import { createDefaultSchema } from '../../utils/generic-routes'
 
 const successResponseSchema = {
@@ -33,11 +33,7 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       // get list of all buckets
-      const authHeader = request.headers.authorization
-      const jwt = authHeader.substring('Bearer '.length)
-
-      const postgrest = getPostgrestClient(jwt)
-      const { data: results, error, status } = await postgrest
+      const { data: results, error, status } = await request.postgrest
         .from<Bucket>('buckets')
         .select('id, name, public, owner, created_at, updated_at')
 

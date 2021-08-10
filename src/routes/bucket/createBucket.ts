@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest, Bucket } from '../../types/types'
-import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
+import { getOwner, isValidKey, transformPostgrestError } from '../../utils'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 
 const createBucketBodySchema = {
@@ -39,12 +39,9 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      const authHeader = request.headers.authorization
-      const jwt = authHeader.substring('Bearer '.length)
-      const postgrest = getPostgrestClient(jwt)
       let owner
       try {
-        owner = await getOwner(jwt)
+        owner = await getOwner(request.jwt)
       } catch (err) {
         console.log(err)
         return response.status(400).send(createResponse(err.message, '400', err.message))
@@ -64,7 +61,7 @@ export default async function routes(fastify: FastifyInstance) {
           .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
-      const { data: results, error, status } = await postgrest
+      const { data: results, error, status } = await request.postgrest
         .from<Bucket>('buckets')
         .insert(
           [

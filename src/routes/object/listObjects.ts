@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { objectSchema } from '../../schemas/object'
 import { AuthenticatedRequest } from '../../types/types'
-import { getPostgrestClient, transformPostgrestError } from '../../utils'
+import { transformPostgrestError } from '../../utils'
 import { createDefaultSchema } from '../../utils/generic-routes'
 
 const searchRequestParamsSchema = {
@@ -54,10 +54,6 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      const authHeader = request.headers.authorization
-      const jwt = authHeader.substring('Bearer '.length)
-
-      const postgrest = getPostgrestClient(jwt)
       const { bucketName } = request.params
       const { limit, offset, sortBy } = request.body
       let sortColumn, sortOrder
@@ -76,7 +72,7 @@ export default async function routes(fastify: FastifyInstance) {
       request.log.info(request.body)
       request.log.info(`searching for %s`, prefix)
 
-      const { data: results, error, status } = await postgrest
+      const { data: results, error, status } = await request.postgrest
         .rpc('search', {
           prefix,
           bucketname: bucketName,

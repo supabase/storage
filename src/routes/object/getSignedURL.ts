@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest, Obj } from '../../types/types'
-import { getPostgrestClient, signJWT, transformPostgrestError } from '../../utils'
+import { signJWT, transformPostgrestError } from '../../utils'
 import { createDefaultSchema } from '../../utils/generic-routes'
 
 const getSignedURLParamsSchema = {
@@ -52,16 +52,11 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      const authHeader = request.headers.authorization
-      const jwt = authHeader.substring('Bearer '.length)
-
-      const postgrest = getPostgrestClient(jwt)
-
       const { bucketName } = request.params
       const objectName = request.params['*']
       const { expiresIn } = request.body
 
-      const objectResponse = await postgrest
+      const objectResponse = await request.postgrest
         .from<Obj>('objects')
         .select('id')
         .match({

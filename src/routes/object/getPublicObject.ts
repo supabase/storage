@@ -86,12 +86,13 @@ export default async function routes(fastify: FastifyInstance) {
         }
         return response.send(data.body)
       } catch (err) {
+        request.log.error(err)
         if (err.$metadata?.httpStatusCode === 404) {
           return response.status(404).send()
         } else {
           return response.status(400).send({
             message: err.message,
-            statusCode: err.$metadata?.httpStatusCode,
+            statusCode: '400',
             error: err.message,
           })
         }

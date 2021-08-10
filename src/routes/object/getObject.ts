@@ -74,18 +74,23 @@ async function requestHandler(
   // send the object from s3
   const s3Key = `${projectRef}/${bucketName}/${objectName}`
   request.log.info(s3Key)
-  const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)
+  try {
+    const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)
 
-  response
-    .status(data.metadata.httpStatusCode ?? 200)
-    .header('Content-Type', normalizeContentType(data.metadata.mimetype))
-    .header('Cache-Control', data.metadata.cacheControl)
-    .header('ETag', data.metadata.eTag)
-    .header('Last-Modified', data.metadata.lastModified)
-  if (data.metadata.contentRange) {
-    response.header('Content-Range', data.metadata.contentRange)
+    response
+      .status(data.metadata.httpStatusCode ?? 200)
+      .header('Content-Type', normalizeContentType(data.metadata.mimetype))
+      .header('Cache-Control', data.metadata.cacheControl)
+      .header('ETag', data.metadata.eTag)
+      .header('Last-Modified', data.metadata.lastModified)
+    if (data.metadata.contentRange) {
+      response.header('Content-Range', data.metadata.contentRange)
+    }
+    return response.send(data.body)
+  } catch (err) {
+    request.log.error(err)
+    return response.status(400).send(createResponse(err.message, '400', err.name))
   }
-  return response.send(data.body)
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types

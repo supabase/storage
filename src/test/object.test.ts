@@ -4,7 +4,7 @@ import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
 import { getConfig } from '../utils/config'
-import { getJwtSecret, signJWT } from '../utils/index'
+import { signJWT } from '../utils/index'
 import { S3Backend } from '../backend/s3'
 
 dotenv.config({ path: '.env.test' })

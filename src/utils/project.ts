@@ -3,7 +3,7 @@ import * as CryptoJS from 'crypto-js'
 import { createClient } from '@supabase/supabase-js'
 import { getConfig } from '../utils/config'
 
-const { supabaseUrl, supabaseApiKey, supabaseEncryptionKey } = getConfig()
+const { supabaseReadOnlyUrl, supabaseApiKey, supabaseEncryptionKey } = getConfig()
 
 interface JwtSecretAndServiceApiKeys {
   anonKey: string
@@ -21,13 +21,13 @@ async function getJwtSecretAndServiceApiKeys(
   if (jwtSecretAndServiceApiKeysCache[projectRef]) {
     return jwtSecretAndServiceApiKeysCache[projectRef]
   }
-  if (!supabaseUrl) {
-    throw new Error('SUPABASE_URL environment variable is not set')
+  if (!supabaseReadOnlyUrl) {
+    throw new Error('SUPABASE_READ_ONLY_URL environment variable is not set')
   }
   if (!supabaseApiKey) {
     throw new Error('SUPABASE_API_KEY environment variable is not set')
   }
-  const supabase = createClient(supabaseUrl, supabaseApiKey)
+  const supabase = createClient(supabaseReadOnlyUrl, supabaseApiKey)
   const {
     data: {
       jwt_secret_encrypted,

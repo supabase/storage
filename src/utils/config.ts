@@ -17,6 +17,7 @@ type StorageConfigType = {
   supabaseReadOnlyUrl?: string
   supabaseApiKey?: string
   supabaseEncryptionKey?: string
+  postgrestURLSuffix?: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -50,5 +51,6 @@ export function getConfig(): StorageConfigType {
     supabaseReadOnlyUrl: getOptionalConfigFromEnv('SUPABASE_READ_ONLY_URL'),
     supabaseApiKey: getOptionalConfigFromEnv('SUPABASE_API_KEY'),
     supabaseEncryptionKey: getOptionalConfigFromEnv('SUPABASE_ENCRYPTION_KEY'),
+    postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
   }
 }

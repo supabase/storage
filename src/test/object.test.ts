@@ -11,47 +11,35 @@ dotenv.config({ path: '.env.test' })
 const { anonKey, serviceKey } = getConfig()
 
 beforeAll(() => {
-  jest.spyOn(S3Backend.prototype, 'getObject').mockImplementation(() => {
-    return Promise.resolve({
-      metadata: {
-        httpStatusCode: 200,
-        size: 3746,
-        mimetype: 'image/png',
-      },
-      body: Buffer.from(''),
-    })
-  })
-
-  jest.spyOn(S3Backend.prototype, 'uploadObject').mockImplementation(() => {
-    return Promise.resolve({
+  jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
+    metadata: {
       httpStatusCode: 200,
       size: 3746,
       mimetype: 'image/png',
-    })
+    },
+    body: Buffer.from(''),
   })
 
-  jest.spyOn(S3Backend.prototype, 'copyObject').mockImplementation(() => {
-    return Promise.resolve({
-      httpStatusCode: 200,
-      size: 3746,
-      mimetype: 'image/png',
-    })
+  jest.spyOn(S3Backend.prototype, 'uploadObject').mockResolvedValue({
+    httpStatusCode: 200,
+    size: 3746,
+    mimetype: 'image/png',
   })
 
-  jest.spyOn(S3Backend.prototype, 'deleteObject').mockImplementation(() => {
-    return Promise.resolve({})
+  jest.spyOn(S3Backend.prototype, 'copyObject').mockResolvedValue({
+    httpStatusCode: 200,
+    size: 3746,
+    mimetype: 'image/png',
   })
 
-  jest.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {
-    return Promise.resolve({})
-  })
+  jest.spyOn(S3Backend.prototype, 'deleteObject').mockResolvedValue({})
 
-  jest.spyOn(S3Backend.prototype, 'headObject').mockImplementation(() => {
-    return Promise.resolve({
-      httpStatusCode: 200,
-      size: 3746,
-      mimetype: 'image/png',
-    })
+  jest.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue({})
+
+  jest.spyOn(S3Backend.prototype, 'headObject').mockResolvedValue({
+    httpStatusCode: 200,
+    size: 3746,
+    mimetype: 'image/png',
   })
 })
 

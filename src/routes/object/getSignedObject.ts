@@ -64,12 +64,15 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { token } = request.query
       try {
-        const range = request.headers.range
         const payload = await verifyJWT(token)
         const { url } = payload as SignedToken
         const s3Key = `${projectRef}/${url}`
         request.log.info(s3Key)
-        const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)
+        const data = await storageBackend.getObject(globalS3Bucket, s3Key, {
+          ifModifiedSince: request.headers['if-modified-since'],
+          ifNoneMatch: request.headers['if-none-match'],
+          range: request.headers.range,
+        })
 
         response
           .status(data.metadata.httpStatusCode ?? 200)
@@ -82,6 +85,9 @@ export default async function routes(fastify: FastifyInstance) {
         }
         return response.send(data.body)
       } catch (err) {
+        if (err.$metadata?.httpStatusCode === 304) {
+          return response.status(304).send()
+        }
         request.log.error(err)
         return response.status(400).send(createResponse(err.message, '400', err.name))
       }

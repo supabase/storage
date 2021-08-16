@@ -56,7 +56,6 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketName } = request.params
       const objectName = request.params['*']
-      const range = request.headers.range
 
       const superUserPostgrest = getPostgrestClient(serviceKey)
       const { error, status } = await superUserPostgrest
@@ -74,7 +73,11 @@ export default async function routes(fastify: FastifyInstance) {
       const s3Key = `${projectRef}/${bucketName}/${objectName}`
       request.log.info(s3Key)
       try {
-        const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)
+        const data = await storageBackend.getObject(globalS3Bucket, s3Key, {
+          ifModifiedSince: request.headers['if-modified-since'],
+          ifNoneMatch: request.headers['if-none-match'],
+          range: request.headers.range,
+        })
         response
           .status(data.metadata.httpStatusCode ?? 200)
           .header('Content-Type', normalizeContentType(data.metadata.mimetype))
@@ -86,6 +89,9 @@ export default async function routes(fastify: FastifyInstance) {
         }
         return response.send(data.body)
       } catch (err) {
+        if (err.$metadata?.httpStatusCode === 304) {
+          return response.status(304).send()
+        }
         request.log.error(err)
         if (err.$metadata?.httpStatusCode === 404) {
           return response.status(404).send()

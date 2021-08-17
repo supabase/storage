@@ -3,6 +3,7 @@ import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
+  GetObjectCommandInput,
   HeadObjectCommand,
   S3Client,
   S3ClientConfig,
@@ -11,7 +12,7 @@ import https from 'https'
 import { Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
 import { ObjectMetadata, ObjectResponse } from '../types/types'
-import { GenericStorageBackend } from './generic'
+import { GenericStorageBackend, GetObjectHeaders } from './generic'
 
 export class S3Backend implements GenericStorageBackend {
   client: S3Client
@@ -35,12 +36,21 @@ export class S3Backend implements GenericStorageBackend {
     this.client = new S3Client(params)
   }
 
-  async getObject(bucketName: string, key: string, range?: string): Promise<ObjectResponse> {
-    const command = new GetObjectCommand({
+  async getObject(
+    bucketName: string,
+    key: string,
+    headers?: GetObjectHeaders
+  ): Promise<ObjectResponse> {
+    const input: GetObjectCommandInput = {
       Bucket: bucketName,
+      IfNoneMatch: headers?.ifNoneMatch,
       Key: key,
-      Range: range,
-    })
+      Range: headers?.range,
+    }
+    if (headers?.ifModifiedSince) {
+      input.IfModifiedSince = new Date(headers.ifModifiedSince)
+    }
+    const command = new GetObjectCommand(input)
     const data = await this.client.send(command)
     return {
       metadata: {

@@ -1,11 +1,21 @@
 import { ObjectMetadata, ObjectResponse } from '../types/types'
 
+export interface GetObjectHeaders {
+  ifModifiedSince?: string
+  ifNoneMatch?: string
+  range?: string
+}
+
 export abstract class GenericStorageBackend {
   client: any
   constructor() {
     this.client = null
   }
-  async getObject(bucketName: string, key: string, range?: string): Promise<ObjectResponse> {
+  async getObject(
+    bucketName: string,
+    key: string,
+    headers?: GetObjectHeaders
+  ): Promise<ObjectResponse> {
     throw new Error('getObject not implemented')
   }
   async uploadObject(

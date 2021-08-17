@@ -30,7 +30,7 @@ export class FileBackend implements GenericStorageBackend {
     return xattr.set(file, attribute, value)
   }
 
-  async getObject(bucketName: string, key: string, range?: string): Promise<ObjectResponse> {
+  async getObject(bucketName: string, key: string): Promise<ObjectResponse> {
     const file = path.resolve(this.filePath, `${bucketName}/${key}`)
     const body = await fs.readFile(file)
     const data = await fs.stat(file)

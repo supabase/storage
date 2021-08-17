@@ -6,6 +6,7 @@ import objectRoutes from './routes/object'
 import { authSchema } from './schemas/auth'
 import { errorSchema } from './schemas/error'
 import { getConfig } from './utils/config'
+import logProjectRef from './plugins/log-project-ref'
 import projectRef from './plugins/project-ref'
 
 interface buildOpts extends FastifyServerOptions {
@@ -53,6 +54,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.addSchema(errorSchema)
 
   app.register(projectRef)
+  app.register(logProjectRef)
   app.register(bucketRoutes, { prefix: 'bucket' })
   app.register(objectRoutes, { prefix: 'object' })
 

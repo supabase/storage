@@ -10,7 +10,7 @@ declare module 'fastify' {
 export default fastifyPlugin(async (fastify) => {
   const { projectRef, xForwardedHostRegExp } = getConfig()
   fastify.decorateRequest('projectRef', projectRef)
-  fastify.addHook('preHandler', async (request) => {
+  fastify.addHook('onRequest', async (request) => {
     if (!xForwardedHostRegExp) return
     const xForwardedHost = request.headers['x-forwarded-host']
     if (typeof xForwardedHost !== 'string') return

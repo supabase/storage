@@ -10,7 +10,7 @@ export async function runMigrations(): Promise<void> {
   const client = new Client(dbConfig)
   await client.connect()
   try {
-    await migrate({ client }, './migrations')
+    await migrate({ client }, './migrations/tenant')
   } finally {
     await client.end()
   }

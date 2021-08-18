@@ -75,7 +75,7 @@ export default async function routes(fastify: FastifyInstance) {
         return response.status(400).send(responseValue)
       }
 
-      const jwtSecret = await getJwtSecret(request.projectRef)
+      const jwtSecret = await getJwtSecret(request.tenantId)
       let owner
       try {
         owner = await getOwner(jwt, jwtSecret)
@@ -118,8 +118,8 @@ export default async function routes(fastify: FastifyInstance) {
       }
       request.log.info({ results }, 'results')
 
-      const s3SourceKey = `${request.projectRef}/${bucketId}/${sourceKey}`
-      const s3DestinationKey = `${request.projectRef}/${bucketId}/${destinationKey}`
+      const s3SourceKey = `${request.tenantId}/${bucketId}/${sourceKey}`
+      const s3DestinationKey = `${request.tenantId}/${bucketId}/${destinationKey}`
       const copyResult = await storageBackend.copyObject(
         globalS3Bucket,
         s3SourceKey,

@@ -4,7 +4,7 @@ type StorageBackendType = 'file' | 's3'
 type StorageConfigType = {
   anonKey: string
   serviceKey: string
-  projectRef: string
+  tenantId: string
   region: string
   postgrestURL: string
   globalS3Bucket: string
@@ -38,7 +38,7 @@ export function getConfig(): StorageConfigType {
   return {
     anonKey: getConfigFromEnv('ANON_KEY'),
     serviceKey: getConfigFromEnv('SERVICE_KEY'),
-    projectRef: getConfigFromEnv('PROJECT_REF'),
+    tenantId: getOptionalConfigFromEnv('PROJECT_REF') || getConfigFromEnv('TENANT_ID'),
     region: getConfigFromEnv('REGION'),
     postgrestURL: getConfigFromEnv('POSTGREST_URL'),
     globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),

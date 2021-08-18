@@ -12,14 +12,14 @@ interface JwtSecretAndServiceApiKeys {
 }
 
 const jwtSecretAndServiceApiKeysCache: {
-  [projectRef: string]: JwtSecretAndServiceApiKeys
+  [tenantId: string]: JwtSecretAndServiceApiKeys
 } = {}
 
 async function getJwtSecretAndServiceApiKeys(
-  projectRef: string
+  tenantId: string
 ): Promise<JwtSecretAndServiceApiKeys> {
-  if (jwtSecretAndServiceApiKeysCache[projectRef]) {
-    return jwtSecretAndServiceApiKeysCache[projectRef]
+  if (jwtSecretAndServiceApiKeysCache[tenantId]) {
+    return jwtSecretAndServiceApiKeysCache[tenantId]
   }
   if (!supabaseReadOnlyUrl) {
     throw new Error('SUPABASE_READ_ONLY_URL environment variable is not set')
@@ -36,7 +36,7 @@ async function getJwtSecretAndServiceApiKeys(
   } = await supabase
     .from('projects')
     .select('jwt_secret_encrypted, services(service_api_keys(api_key_encrypted, tags))')
-    .eq('ref', projectRef)
+    .eq('ref', tenantId)
     .single()
   if (!supabaseEncryptionKey) {
     throw new Error('SUPABASE_ENCRYPTION_KEY environment variable is not set')
@@ -58,21 +58,21 @@ async function getJwtSecretAndServiceApiKeys(
       CryptoJS.enc.Utf8
     ),
   }
-  jwtSecretAndServiceApiKeysCache[projectRef] = jwtSecretAndServiceApiKeys
+  jwtSecretAndServiceApiKeysCache[tenantId] = jwtSecretAndServiceApiKeys
   return jwtSecretAndServiceApiKeys
 }
 
-export async function getAnonKey(projectRef: string): Promise<string> {
-  const { anonKey } = await getJwtSecretAndServiceApiKeys(projectRef)
+export async function getAnonKey(tenantId: string): Promise<string> {
+  const { anonKey } = await getJwtSecretAndServiceApiKeys(tenantId)
   return anonKey
 }
 
-export async function getServiceKey(projectRef: string): Promise<string> {
-  const { serviceKey } = await getJwtSecretAndServiceApiKeys(projectRef)
+export async function getServiceKey(tenantId: string): Promise<string> {
+  const { serviceKey } = await getJwtSecretAndServiceApiKeys(tenantId)
   return serviceKey
 }
 
-export async function getJwtSecret(projectRef: string): Promise<string> {
-  const { jwtSecret } = await getJwtSecretAndServiceApiKeys(projectRef)
+export async function getJwtSecret(tenantId: string): Promise<string> {
+  const { jwtSecret } = await getJwtSecretAndServiceApiKeys(tenantId)
   return jwtSecret
 }

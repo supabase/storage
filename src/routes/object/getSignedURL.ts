@@ -76,7 +76,7 @@ export default async function routes(fastify: FastifyInstance) {
       request.log.info(`going to sign ${request.url}`)
       const urlParts = request.url.split('/')
       const urlToSign = decodeURI(urlParts.splice(3).join('/'))
-      const jwtSecret = await getJwtSecret(request.projectRef)
+      const jwtSecret = await getJwtSecret(request.tenantId)
       const token = await signJWT({ url: urlToSign }, jwtSecret, expiresIn)
 
       // @todo parse the url properly

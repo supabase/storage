@@ -78,7 +78,7 @@ export default async function routes(fastify: FastifyInstance) {
       request.log.info({ results }, 'results')
 
       // if successfully deleted, delete from s3 too
-      const s3Key = `${request.projectRef}/${bucketName}/${objectName}`
+      const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
       await storageBackend.deleteObject(globalS3Bucket, s3Key)
 
       return response.status(200).send(createResponse('Successfully deleted'))

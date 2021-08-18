@@ -9,10 +9,10 @@ interface jwtInterface {
   sub: string
 }
 
-export async function getJwtSecret(projectRef: string): Promise<string> {
+export async function getJwtSecret(tenantId: string): Promise<string> {
   let secret = jwtSecret
   if (xForwardedHostRegExp) {
-    secret = await getJwtSecretForProject(projectRef)
+    secret = await getJwtSecretForProject(tenantId)
   }
   return secret
 }

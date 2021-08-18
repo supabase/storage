@@ -63,7 +63,7 @@ export default async function routes(fastify: FastifyInstance) {
         return response.status(400).send(transformPostgrestError(error, status))
       }
 
-      const s3Key = `${request.projectRef}/${bucketName}/${objectName}`
+      const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
       request.log.info(s3Key)
       try {
         const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)

@@ -75,7 +75,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const objectName = request.params['*']
       const path = `${bucketName}/${objectName}`
-      const s3Key = `${request.projectRef}/${path}`
+      const s3Key = `${request.tenantId}/${path}`
       let mimeType: string, cacheControl: string, isTruncated: boolean
       let uploadResult: ObjectMetadata
 
@@ -85,7 +85,7 @@ export default async function routes(fastify: FastifyInstance) {
           .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
-      const jwtSecret = await getJwtSecret(request.projectRef)
+      const jwtSecret = await getJwtSecret(request.tenantId)
       let owner
       try {
         owner = await getOwner(request.jwt, jwtSecret)

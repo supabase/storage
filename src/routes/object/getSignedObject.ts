@@ -65,10 +65,10 @@ export default async function routes(fastify: FastifyInstance) {
       const { token } = request.query
       try {
         const range = request.headers.range
-        const jwtSecret = await getJwtSecret(request.projectRef)
+        const jwtSecret = await getJwtSecret(request.tenantId)
         const payload = await verifyJWT(token, jwtSecret)
         const { url } = payload as SignedToken
-        const s3Key = `${request.projectRef}/${url}`
+        const s3Key = `${request.tenantId}/${url}`
         request.log.info(s3Key)
         const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)
 

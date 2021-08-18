@@ -25,7 +25,7 @@ async function getPostgrestClient(request: FastifyRequest, jwt: string): Promise
       throw new Error('X-Forwarded-Host header does not match regular expression')
     }
     url = `http://${xForwardedHost}${postgrestURLSuffix}`
-    apiKey = await getAnonKey(request.projectRef)
+    apiKey = await getAnonKey(request.tenantId)
   }
   const postgrest = new PostgrestClient(url, {
     headers: {
@@ -50,7 +50,7 @@ export const superUserPostgrest = fastifyPlugin(async (fastify) => {
   fastify.addHook('preHandler', async (request) => {
     let jwt = serviceKey
     if (xForwardedHostRegExp) {
-      jwt = await getServiceKey(request.projectRef)
+      jwt = await getServiceKey(request.tenantId)
     }
     request.superUserPostgrest = await getPostgrestClient(request, jwt)
   })

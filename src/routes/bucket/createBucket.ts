@@ -39,7 +39,7 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      const jwtSecret = await getJwtSecret(request.projectRef)
+      const jwtSecret = await getJwtSecret(request.tenantId)
       let owner
       try {
         owner = await getOwner(request.jwt, jwtSecret)

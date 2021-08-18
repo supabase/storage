@@ -79,8 +79,8 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       // if successfully updated, copy and delete object from s3
-      const oldS3Key = `${request.projectRef}/${bucketId}/${sourceKey}`
-      const newS3Key = `${request.projectRef}/${bucketId}/${destinationKey}`
+      const oldS3Key = `${request.tenantId}/${bucketId}/${sourceKey}`
+      const newS3Key = `${request.tenantId}/${bucketId}/${destinationKey}`
 
       // @todo what happens if one of these fail?
       await storageBackend.copyObject(globalS3Bucket, oldS3Key, newS3Key)

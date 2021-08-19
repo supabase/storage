@@ -25,3 +25,13 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_PORT: 5432
+  multitenant_db:
+    image: postgres:12
+    ports:
+      - '5433:5432'
+    volumes:
+      - ./src/test/db/multitenant:/docker-entrypoint-initdb.d/
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres

@@ -13,6 +13,7 @@ type StorageConfigType = {
   fileSizeLimit: number
   storageBackendType: StorageBackendType
   fileStoragePath?: string
+  isMultitenant: boolean
   xForwardedHostRegExp?: string
   supabaseReadOnlyUrl?: string
   supabaseApiKey?: string
@@ -47,6 +48,7 @@ export function getConfig(): StorageConfigType {
     fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
     storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
+    isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
     xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
     supabaseReadOnlyUrl: getOptionalConfigFromEnv('SUPABASE_READ_ONLY_URL'),
     supabaseApiKey: getOptionalConfigFromEnv('SUPABASE_API_KEY'),

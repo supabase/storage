@@ -6,7 +6,7 @@ import objectRoutes from './routes/object'
 import { authSchema } from './schemas/auth'
 import { errorSchema } from './schemas/error'
 import { getConfig } from './utils/config'
-import logTenantId from './plugins/log-project-ref'
+import logTenantId from './plugins/log-tenant-id'
 import tenantId from './plugins/project-ref'
 
 interface buildOpts extends FastifyServerOptions {

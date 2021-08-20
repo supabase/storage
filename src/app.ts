@@ -7,7 +7,7 @@ import { authSchema } from './schemas/auth'
 import { errorSchema } from './schemas/error'
 import { getConfig } from './utils/config'
 import logTenantId from './plugins/log-tenant-id'
-import tenantId from './plugins/project-ref'
+import tenantId from './plugins/tenant-id'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean

@@ -10,48 +10,36 @@ import { S3Backend } from '../backend/s3'
 dotenv.config({ path: '.env.test' })
 const { anonKey, jwtSecret, serviceKey } = getConfig()
 
-beforeAll(() => {
-  jest.spyOn(S3Backend.prototype, 'getObject').mockImplementation(() => {
-    return Promise.resolve({
-      metadata: {
-        httpStatusCode: 200,
-        size: 3746,
-        mimetype: 'image/png',
-      },
-      body: Buffer.from(''),
-    })
-  })
-
-  jest.spyOn(S3Backend.prototype, 'uploadObject').mockImplementation(() => {
-    return Promise.resolve({
+beforeEach(() => {
+  jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
+    metadata: {
       httpStatusCode: 200,
       size: 3746,
       mimetype: 'image/png',
-    })
+    },
+    body: Buffer.from(''),
   })
 
-  jest.spyOn(S3Backend.prototype, 'copyObject').mockImplementation(() => {
-    return Promise.resolve({
-      httpStatusCode: 200,
-      size: 3746,
-      mimetype: 'image/png',
-    })
+  jest.spyOn(S3Backend.prototype, 'uploadObject').mockResolvedValue({
+    httpStatusCode: 200,
+    size: 3746,
+    mimetype: 'image/png',
   })
 
-  jest.spyOn(S3Backend.prototype, 'deleteObject').mockImplementation(() => {
-    return Promise.resolve({})
+  jest.spyOn(S3Backend.prototype, 'copyObject').mockResolvedValue({
+    httpStatusCode: 200,
+    size: 3746,
+    mimetype: 'image/png',
   })
 
-  jest.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {
-    return Promise.resolve({})
-  })
+  jest.spyOn(S3Backend.prototype, 'deleteObject').mockResolvedValue({})
 
-  jest.spyOn(S3Backend.prototype, 'headObject').mockImplementation(() => {
-    return Promise.resolve({
-      httpStatusCode: 200,
-      size: 3746,
-      mimetype: 'image/png',
-    })
+  jest.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue({})
+
+  jest.spyOn(S3Backend.prototype, 'headObject').mockResolvedValue({
+    httpStatusCode: 200,
+    size: 3746,
+    mimetype: 'image/png',
   })
 })
 
@@ -73,6 +61,29 @@ describe('testing GET object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.getObject).toBeCalled()
+  })
+
+  test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
+    const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
+    mockGetObject.mockRejectedValue({
+      $metadata: {
+        httpStatusCode: 304,
+      },
+    })
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/authenticated/bucket2/authenticated/casestudy.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        'if-modified-since': 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+        'if-none-match': 'abc',
+      },
+    })
+    expect(response.statusCode).toBe(304)
+    expect(mockGetObject.mock.calls[0][2]).toMatchObject({
+      ifModifiedSince: 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+      ifNoneMatch: 'abc',
+    })
   })
 
   test('check if RLS policies are respected: anon user is not able to read authenticated resource', async () => {
@@ -907,6 +918,30 @@ describe('testing retrieving signed URL', () => {
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,
     })
     expect(response.statusCode).toBe(200)
+  })
+
+  test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
+    const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
+    mockGetObject.mockRejectedValue({
+      $metadata: {
+        httpStatusCode: 304,
+      },
+    })
+    const urlToSign = 'bucket2/public/sadcat-upload.png'
+    const jwtToken = await signJWT({ url: urlToSign }, 100)
+    const response = await app().inject({
+      method: 'GET',
+      url: `/object/sign/${urlToSign}?token=${jwtToken}`,
+      headers: {
+        'if-modified-since': 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+        'if-none-match': 'abc',
+      },
+    })
+    expect(response.statusCode).toBe(304)
+    expect(mockGetObject.mock.calls[0][2]).toMatchObject({
+      ifModifiedSince: 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+      ifNoneMatch: 'abc',
+    })
   })
 
   test('get object without a token', async () => {

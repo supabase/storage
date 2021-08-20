@@ -203,6 +203,26 @@ describe('testing public bucket functionality', () => {
     })
     expect(publicResponse.statusCode).toBe(200)
 
+    const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
+    mockGetObject.mockRejectedValue({
+      $metadata: {
+        httpStatusCode: 304,
+      },
+    })
+    const notModifiedResponse = await app().inject({
+      method: 'GET',
+      url: `/object/public/public-bucket/favicon.ico`,
+      headers: {
+        'if-modified-since': 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+        'if-none-match': 'abc',
+      },
+    })
+    expect(notModifiedResponse.statusCode).toBe(304)
+    expect(mockGetObject.mock.calls[1][2]).toMatchObject({
+      ifModifiedSince: 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+      ifNoneMatch: 'abc',
+    })
+
     const makePrivateResponse = await app().inject({
       method: 'PUT',
       url: `/bucket/${bucketId}`,

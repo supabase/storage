@@ -1,9 +1,9 @@
 import jwt from 'jsonwebtoken'
 import { PostgrestError, StorageError } from '../types/types'
 import { getConfig } from '../utils/config'
-import { getJwtSecret as getJwtSecretForProject } from './project'
+import { getJwtSecret as getJwtSecretForTenant } from './tenant'
 
-const { jwtSecret, xForwardedHostRegExp } = getConfig()
+const { isMultitenant, jwtSecret } = getConfig()
 
 interface jwtInterface {
   sub: string
@@ -11,8 +11,8 @@ interface jwtInterface {
 
 export async function getJwtSecret(tenantId: string): Promise<string> {
   let secret = jwtSecret
-  if (xForwardedHostRegExp) {
-    secret = await getJwtSecretForProject(tenantId)
+  if (isMultitenant) {
+    secret = await getJwtSecretForTenant(tenantId)
   }
   return secret
 }

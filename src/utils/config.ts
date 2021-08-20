@@ -14,10 +14,8 @@ type StorageConfigType = {
   storageBackendType: StorageBackendType
   fileStoragePath?: string
   isMultitenant: boolean
+  multitenantDatabaseUrl?: string
   xForwardedHostRegExp?: string
-  supabaseReadOnlyUrl?: string
-  supabaseApiKey?: string
-  supabaseEncryptionKey?: string
   postgrestURLSuffix?: string
 }
 
@@ -49,10 +47,8 @@ export function getConfig(): StorageConfigType {
     storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
     isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
+    multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
     xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
-    supabaseReadOnlyUrl: getOptionalConfigFromEnv('SUPABASE_READ_ONLY_URL'),
-    supabaseApiKey: getOptionalConfigFromEnv('SUPABASE_API_KEY'),
-    supabaseEncryptionKey: getOptionalConfigFromEnv('SUPABASE_ENCRYPTION_KEY'),
     postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
   }
 }

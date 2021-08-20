@@ -1,4 +1,4 @@
-import { getAnonKey, getServiceKey } from '../utils/project'
+import { getAnonKey, getServiceKey } from '../utils/tenant'
 
 import { FastifyRequest } from 'fastify'
 import { PostgrestClient } from '@supabase/postgrest-js'

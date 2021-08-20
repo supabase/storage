@@ -28,8 +28,6 @@
     "@aws-sdk/lib-storage": "^3.8.0",
     "@aws-sdk/node-http-handler": "^3.6.1",
     "@supabase/postgrest-js": "^0.32.0",
-    "@supabase/supabase-js": "^1.21.0",
-    "crypto-js": "^4.1.1",
     "dotenv": "^8.2.0",
     "fastify": "^3.14.0",
     "fastify-cors": "^5.2.0",
@@ -45,7 +43,6 @@
   },
   "devDependencies": {
     "@types/busboy": "^0.2.3",
-    "@types/crypto-js": "^4.0.2",
     "@types/fs-extra": "^9.0.12",
     "@types/jest": "^26.0.20",
     "@types/jsonwebtoken": "^8.5.0",

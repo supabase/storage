@@ -928,7 +928,7 @@ describe('testing retrieving signed URL', () => {
       },
     })
     const urlToSign = 'bucket2/public/sadcat-upload.png'
-    const jwtToken = await signJWT({ url: urlToSign }, 100)
+    const jwtToken = await signJWT({ url: urlToSign }, jwtSecret, 100)
     const response = await app().inject({
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,

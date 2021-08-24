@@ -28,14 +28,26 @@ export async function cacheTenantConfigsFromDbAndRunMigrations(): Promise<void> 
     `
     SELECT
       id,
-      config
+      anon_key,
+      database_url,
+      jwt_secret,
+      service_key
     FROM
       tenants
     `
   )
   const limit = pLimit(100)
   await Promise.all(
-    result.rows.map(({ id, config }) => limit(() => cacheTenantConfigAndRunMigrations(id, config)))
+    result.rows.map(({ id, anon_key, database_url, jwt_secret, service_key }) =>
+      limit(() =>
+        cacheTenantConfigAndRunMigrations(id, {
+          anonKey: anon_key,
+          databaseUrl: database_url,
+          jwtSecret: jwt_secret,
+          serviceKey: service_key,
+        })
+      )
+    )
   )
 }
 
@@ -46,7 +58,10 @@ async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   const result = await pool.query(
     `
     SELECT
-      config
+      anon_key,
+      database_url,
+      jwt_secret,
+      service_key
     FROM
       tenants
     WHERE
@@ -57,7 +72,13 @@ async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   if (result.rows.length === 0) {
     throw new Error(`Tenant config for ${tenantId} not found`)
   }
-  const { config } = result.rows[0]
+  const { anon_key, database_url, jwt_secret, service_key } = result.rows[0]
+  const config = {
+    anonKey: anon_key,
+    databaseUrl: database_url,
+    jwtSecret: jwt_secret,
+    serviceKey: service_key,
+  }
   await cacheTenantConfigAndRunMigrations(tenantId, config)
   return config
 }

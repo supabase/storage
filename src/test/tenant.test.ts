@@ -51,8 +51,8 @@ describe('Tenant configs', () => {
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON).toEqual([
       {
-        config: payload,
         id: 'abc',
+        ...payload,
       },
     ])
   })

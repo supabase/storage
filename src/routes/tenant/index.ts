@@ -30,19 +30,31 @@ export default async function routes(fastify: FastifyInstance) {
       `
       SELECT
         id,
-        config
+        anon_key,
+        database_url,
+        jwt_secret,
+        service_key
       FROM
         tenants
       `
     )
-    return result.rows
+    return result.rows.map(({ id, anon_key, database_url, jwt_secret, service_key }) => ({
+      id,
+      anonKey: anon_key,
+      databaseUrl: database_url,
+      jwtSecret: jwt_secret,
+      serviceKey: service_key,
+    }))
   })
 
   fastify.get<tenantRequestInterface>('/:tenantId', async (request, reply) => {
     const result = await pool.query(
       `
       SELECT
-        config
+        anon_key,
+        database_url,
+        jwt_secret,
+        service_key
       FROM
         tenants
       WHERE
@@ -53,17 +65,29 @@ export default async function routes(fastify: FastifyInstance) {
     if (result.rows.length === 0) {
       reply.code(404).send()
     } else {
-      return result.rows[0].config
+      const { anon_key, database_url, jwt_secret, service_key } = result.rows[0]
+      return {
+        anonKey: anon_key,
+        databaseUrl: database_url,
+        jwtSecret: jwt_secret,
+        serviceKey: service_key,
+      }
     }
   })
 
   fastify.post<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
     await pool.query(
       `
-      INSERT INTO tenants (id, config)
-        VALUES ($1, $2)
+      INSERT INTO tenants (id, anon_key, database_url, jwt_secret, service_key)
+        VALUES ($1, $2, $3, $4, $5)
       `,
-      [request.params.tenantId, request.body]
+      [
+        request.params.tenantId,
+        request.body.anonKey,
+        request.body.databaseUrl,
+        request.body.jwtSecret,
+        request.body.serviceKey,
+      ]
     )
     await cacheTenantConfigAndRunMigrations(request.params.tenantId, request.body)
     reply.code(201).send()
@@ -75,11 +99,20 @@ export default async function routes(fastify: FastifyInstance) {
       UPDATE
         tenants
       SET
-        config = $2
+        anon_key = $2,
+        database_url = $3,
+        jwt_secret = $4,
+        service_key = $5
       WHERE
         id = $1
       `,
-      [request.params.tenantId, request.body]
+      [
+        request.params.tenantId,
+        request.body.anonKey,
+        request.body.databaseUrl,
+        request.body.jwtSecret,
+        request.body.serviceKey,
+      ]
     )
     await cacheTenantConfigAndRunMigrations(request.params.tenantId, request.body)
     reply.code(204).send()
@@ -88,13 +121,22 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.put<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
     await pool.query(
       `
-      INSERT INTO tenants (id, config)
-        VALUES ($1, $2)
+      INSERT INTO tenants (id, anon_key, database_url, jwt_secret, service_key)
+        VALUES ($1, $2, $3, $4, $5)
       ON CONFLICT (id)
         DO UPDATE SET
-          config = EXCLUDED.config
+          anon_key = EXCLUDED.anon_key,
+          database_url = EXCLUDED.database_url,
+          jwt_secret = EXCLUDED.jwt_secret,
+          service_key = EXCLUDED.service_key
       `,
-      [request.params.tenantId, request.body]
+      [
+        request.params.tenantId,
+        request.body.anonKey,
+        request.body.databaseUrl,
+        request.body.jwtSecret,
+        request.body.serviceKey,
+      ]
     )
     await cacheTenantConfigAndRunMigrations(request.params.tenantId, request.body)
     reply.code(204).send()

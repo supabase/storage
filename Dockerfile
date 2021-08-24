@@ -1,17 +1,17 @@
-FROM mhart/alpine-node:16
+FROM node:16-alpine
 RUN apk add --no-cache g++ make python3
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --production
 
-FROM mhart/alpine-node:16
+FROM node:16-alpine
 RUN apk add --no-cache g++ make python3
 WORKDIR /app
 COPY . .
 RUN npm ci
 RUN npm run build
 
-FROM mhart/alpine-node:16
+FROM node:16-alpine
 WORKDIR /app
 COPY migrations migrations
 COPY package.json .

@@ -29,6 +29,9 @@ afterEach(async () => {
   await app().inject({
     method: 'DELETE',
     url: '/tenants/abc',
+    headers: {
+      apikey: process.env.API_KEY,
+    },
   })
 })
 
@@ -42,10 +45,16 @@ describe('Tenant configs', () => {
       method: 'POST',
       url: `/tenants/abc`,
       payload,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     const response = await app().inject({
       method: 'GET',
       url: `/tenants`,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
@@ -61,6 +70,9 @@ describe('Tenant configs', () => {
     const response = await app().inject({
       method: 'GET',
       url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     expect(response.statusCode).toBe(404)
   })
@@ -70,10 +82,16 @@ describe('Tenant configs', () => {
       method: 'POST',
       url: `/tenants/abc`,
       payload,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     const response = await app().inject({
       method: 'GET',
       url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
@@ -85,6 +103,9 @@ describe('Tenant configs', () => {
       method: 'POST',
       url: `/tenants/abc`,
       payload: {},
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     expect(response.statusCode).toBe(400)
   })
@@ -94,12 +115,18 @@ describe('Tenant configs', () => {
       method: 'POST',
       url: `/tenants/abc`,
       payload,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     expect(firstInsertResponse.statusCode).toBe(201)
     const secondInsertResponse = await app().inject({
       method: 'POST',
       url: `/tenants/abc`,
       payload,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     expect(secondInsertResponse.statusCode).toBe(500)
   })
@@ -109,16 +136,25 @@ describe('Tenant configs', () => {
       method: 'POST',
       url: `/tenants/abc`,
       payload,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     const patchResponse = await app().inject({
       method: 'PATCH',
       url: `/tenants/abc`,
       payload: payload2,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     expect(patchResponse.statusCode).toBe(204)
     const getResponse = await app().inject({
       method: 'GET',
       url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     const getResponseJSON = JSON.parse(getResponse.body)
     expect(getResponseJSON).toEqual(payload2)
@@ -129,11 +165,17 @@ describe('Tenant configs', () => {
       method: 'PUT',
       url: `/tenants/abc`,
       payload,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     expect(firstPutResponse.statusCode).toBe(204)
     const firstGetResponse = await app().inject({
       method: 'GET',
       url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     const firstGetResponseJSON = JSON.parse(firstGetResponse.body)
     expect(firstGetResponseJSON).toEqual(payload)
@@ -141,11 +183,17 @@ describe('Tenant configs', () => {
       method: 'PUT',
       url: `/tenants/abc`,
       payload: payload2,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     expect(secondPutResponse.statusCode).toBe(204)
     const secondGetResponse = await app().inject({
       method: 'GET',
       url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     const secondGetResponseJSON = JSON.parse(secondGetResponse.body)
     expect(secondGetResponseJSON).toEqual(payload2)
@@ -156,15 +204,24 @@ describe('Tenant configs', () => {
       method: 'POST',
       url: `/tenants/abc`,
       payload,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     const deleteResponse = await app().inject({
       method: 'DELETE',
       url: '/tenants/abc',
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     expect(deleteResponse.statusCode).toBe(204)
     const getResponse = await app().inject({
       method: 'GET',
       url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     expect(getResponse.statusCode).toBe(404)
   })

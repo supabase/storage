@@ -48,6 +48,7 @@ jobs:
           echo STORAGE_BACKEND=s3 >> .env
           echo MULTITENANT_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/postgres >> .env
           echo POSTGREST_URL_SUFFIX=/rest/v1 >> .env
+          echo API_KEY=apikey >> .env
 
       - name: Install dependencies
         run: |

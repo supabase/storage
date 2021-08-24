@@ -34,6 +34,9 @@ describe('with X-Forwarded-Host header', () => {
         jwtSecret: 'c',
         serviceKey: 'd',
       },
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
     const response = await app().inject({
       method: 'GET',
@@ -49,6 +52,9 @@ describe('with X-Forwarded-Host header', () => {
     await adminApp().inject({
       method: 'DELETE',
       url: '/tenants/abcdefghijklmnopqrst',
+      headers: {
+        apikey: process.env.API_KEY,
+      },
     })
   })
 

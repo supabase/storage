@@ -1,3 +1,4 @@
+import pLimit from 'p-limit'
 import { runMigrationsOnTenant } from './migrate'
 import { pool } from './multitenant-db'
 
@@ -34,10 +35,10 @@ export async function cacheTenantConfigsFromDbAndRunMigrations(): Promise<void> 
       tenants
     `
   )
-  for (const tenant of result.rows) {
-    const { id, config } = tenant
-    await cacheTenantConfigAndRunMigrations(id, config)
-  }
+  const limit = pLimit(100)
+  await Promise.all(
+    result.rows.map(({ id, config }) => limit(() => cacheTenantConfigAndRunMigrations(id, config)))
+  )
 }
 
 async function getTenantConfig(tenantId: string): Promise<TenantConfig> {

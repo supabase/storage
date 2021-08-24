@@ -32,7 +32,7 @@ export default async function routes(fastify: FastifyInstance) {
         id,
         config
       FROM
-        storage.tenants
+        tenants
       `
     )
     return result.rows
@@ -44,7 +44,7 @@ export default async function routes(fastify: FastifyInstance) {
       SELECT
         config
       FROM
-        storage.tenants
+        tenants
       WHERE
         id = $1
       `,
@@ -60,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.post<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
     await pool.query(
       `
-      INSERT INTO storage.tenants (id, config)
+      INSERT INTO tenants (id, config)
         VALUES ($1, $2)
       `,
       [request.params.tenantId, request.body]
@@ -73,7 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
     await pool.query(
       `
       UPDATE
-        storage.tenants
+        tenants
       SET
         config = $2
       WHERE
@@ -88,7 +88,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.put<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
     await pool.query(
       `
-      INSERT INTO storage.tenants (id, config)
+      INSERT INTO tenants (id, config)
         VALUES ($1, $2)
       ON CONFLICT (id)
         DO UPDATE SET
@@ -103,7 +103,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.delete<tenantRequestInterface>('/:tenantId', async (request, reply) => {
     await pool.query(
       `
-      DELETE FROM storage.tenants
+      DELETE FROM tenants
       WHERE id = $1
       `,
       [request.params.tenantId]

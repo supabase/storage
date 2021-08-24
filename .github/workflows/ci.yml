@@ -43,7 +43,7 @@ jobs:
           echo PGRST_JWT_SECRET=${{ secrets.PGRST_JWT_SECRET }} >> .env
           echo AUTHENTICATED_KEY=${{ secrets.AUTHENTICATED_KEY }} >> .env
           echo DATABASE_URL=postgresql://postgres:postgres@127.0.0.1/postgres >> .env
-          echo PGOPTIONS='-c search_path=storage' >> .env
+          echo PGOPTIONS='-c search_path=storage,public' >> .env
           echo FILE_SIZE_LIMIT=52428800 >> .env
           echo STORAGE_BACKEND=s3 >> .env
           echo MULTITENANT_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/postgres >> .env

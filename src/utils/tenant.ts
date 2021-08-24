@@ -31,7 +31,7 @@ export async function cacheTenantConfigsFromDbAndRunMigrations(): Promise<void> 
       id,
       config
     FROM
-      storage.tenants
+      tenants
     `
   )
   for (const tenant of result.rows) {
@@ -49,7 +49,7 @@ async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
     SELECT
       config
     FROM
-      storage.tenants
+      tenants
     WHERE
       id = $1
     `,

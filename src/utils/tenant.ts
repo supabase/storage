@@ -9,20 +9,18 @@ interface TenantConfig {
   serviceKey: string
 }
 
-const tenantConfigCache: {
-  [tenantId: string]: TenantConfig
-} = {}
+const tenantConfigCache = new Map<string, TenantConfig>()
 
 export async function cacheTenantConfigAndRunMigrations(
   tenantId: string,
   config: TenantConfig
 ): Promise<void> {
   await runMigrationsOnTenant(config.databaseUrl)
-  tenantConfigCache[tenantId] = config
+  tenantConfigCache.set(tenantId, config)
 }
 
 export function deleteTenantConfig(tenantId: string): void {
-  delete tenantConfigCache[tenantId]
+  tenantConfigCache.delete(tenantId)
 }
 
 export async function cacheTenantConfigsFromDbAndRunMigrations(): Promise<void> {
@@ -42,8 +40,8 @@ export async function cacheTenantConfigsFromDbAndRunMigrations(): Promise<void> 
 }
 
 async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
-  if (tenantConfigCache[tenantId]) {
-    return tenantConfigCache[tenantId]
+  if (tenantConfigCache.has(tenantId)) {
+    return tenantConfigCache.get(tenantId) as TenantConfig
   }
   const result = await pool.query(
     `

@@ -1,17 +1,17 @@
-FROM node:16-alpine
+FROM node:14-alpine
 RUN apk add --no-cache g++ make python3
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --production
 
-FROM node:16-alpine
+FROM node:14-alpine
 RUN apk add --no-cache g++ make python3
 WORKDIR /app
 COPY . .
 RUN npm ci
 RUN npm run build
 
-FROM node:16-alpine
+FROM node:14-alpine
 WORKDIR /app
 COPY migrations migrations
 COPY package.json .

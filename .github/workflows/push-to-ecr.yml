@@ -1,0 +1,41 @@
+name: Build and push Docker image to ECR
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  push:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: compute version string
+        run: echo "GIT_TAG=`echo $(git describe --tags --always --dirty --first-parent)`" >> $GITHUB_ENV
+
+      - name: Login to ECR account - staging
+        uses: docker/login-action@v1
+        with:
+          registry: 436098097459.dkr.ecr.us-east-1.amazonaws.com
+          username: ${{ secrets.DEV_ACCESS_KEY_ID }}
+          password: ${{ secrets.DEV_SECRET_ACCESS_KEY }}
+
+      - name: Login to ECR account - prod
+        uses: docker/login-action@v1
+        with:
+          registry: 646182064048.dkr.ecr.us-east-1.amazonaws.com
+          username: ${{ secrets.PROD_ACCESS_KEY_ID }}
+          password: ${{ secrets.PROD_SECRET_ACCESS_KEY }}
+
+      - name: Build and upload image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            436098097459.dkr.ecr.us-east-1.amazonaws.com/storage-api:${{ env.GIT_TAG }}
+            646182064048.dkr.ecr.us-east-1.amazonaws.com/storage-api:${{ env.GIT_TAG }}

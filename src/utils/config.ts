@@ -32,18 +32,27 @@ function getConfigFromEnv(key: string): string {
   return value
 }
 
+function getOptionalIfMultitenantConfigFromEnv(key: string): string | undefined {
+  return getOptionalConfigFromEnv('IS_MULTITENANT') === 'true'
+    ? getOptionalConfigFromEnv(key)
+    : getConfigFromEnv(key)
+}
+
 export function getConfig(): StorageConfigType {
   dotenv.config()
 
   return {
-    anonKey: getConfigFromEnv('ANON_KEY'),
-    serviceKey: getConfigFromEnv('SERVICE_KEY'),
-    tenantId: getOptionalConfigFromEnv('PROJECT_REF') || getConfigFromEnv('TENANT_ID'),
+    anonKey: getOptionalIfMultitenantConfigFromEnv('ANON_KEY') || '',
+    serviceKey: getOptionalIfMultitenantConfigFromEnv('SERVICE_KEY') || '',
+    tenantId:
+      getOptionalIfMultitenantConfigFromEnv('PROJECT_REF') ||
+      getOptionalIfMultitenantConfigFromEnv('TENANT_ID') ||
+      '',
     region: getConfigFromEnv('REGION'),
-    postgrestURL: getConfigFromEnv('POSTGREST_URL'),
+    postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
     globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
     globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
-    jwtSecret: getConfigFromEnv('PGRST_JWT_SECRET'),
+    jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
     fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
     storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),

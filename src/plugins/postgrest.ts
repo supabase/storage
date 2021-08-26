@@ -45,11 +45,11 @@ export const postgrest = fastifyPlugin(async (fastify) => {
 })
 
 export const superUserPostgrest = fastifyPlugin(async (fastify) => {
-  const { serviceKey, xForwardedHostRegExp } = getConfig()
+  const { isMultitenant, serviceKey } = getConfig()
   fastify.decorateRequest('superUserPostgrest', null)
   fastify.addHook('preHandler', async (request) => {
     let jwt = serviceKey
-    if (xForwardedHostRegExp) {
+    if (isMultitenant) {
       jwt = await getServiceKey(request.tenantId)
     }
     request.superUserPostgrest = await getPostgrestClient(request, jwt)

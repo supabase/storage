@@ -14,7 +14,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 ;(async () => {
-  await runMigrations()
+  // await runMigrations()
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = await build({
     logger: loggerConfig,
     exposeDocs,

@@ -7,12 +7,25 @@ import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
+import { OSSBackend } from '../../backend/oss'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
+const {
+  region,
+  projectRef,
+  globalS3Bucket,
+  globalS3Endpoint,
+  storageBackendType,
+  ossEndpoint,
+  ossAccessKey,
+  ossAccessSecret,
+  ossBucket,
+} = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
   storageBackend = new FileBackend()
+} else if (storageBackendType === 'oss') {
+  storageBackend = new OSSBackend(ossBucket, ossEndpoint, ossAccessKey, ossAccessSecret)
 } else {
   storageBackend = new S3Backend(region, globalS3Endpoint)
 }

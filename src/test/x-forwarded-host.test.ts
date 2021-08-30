@@ -35,7 +35,7 @@ describe('with X-Forwarded-Host header', () => {
         serviceKey: 'd',
       },
       headers: {
-        apikey: process.env.API_KEY,
+        apikey: process.env.ADMIN_API_KEY,
       },
     })
     const response = await app().inject({
@@ -53,7 +53,7 @@ describe('with X-Forwarded-Host header', () => {
       method: 'DELETE',
       url: '/tenants/abcdefghijklmnopqrst',
       headers: {
-        apikey: process.env.API_KEY,
+        apikey: process.env.ADMIN_API_KEY,
       },
     })
   })

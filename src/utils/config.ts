@@ -17,7 +17,7 @@ type StorageConfigType = {
   multitenantDatabaseUrl?: string
   xForwardedHostRegExp?: string
   postgrestURLSuffix?: string
-  apiKey?: string
+  adminApiKey?: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -60,6 +60,6 @@ export function getConfig(): StorageConfigType {
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
     xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
     postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
-    apiKey: getOptionalConfigFromEnv('API_KEY'),
+    adminApiKey: getOptionalConfigFromEnv('ADMIN_API_KEY'),
   }
 }

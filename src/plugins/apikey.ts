@@ -2,9 +2,10 @@ import fastifyPlugin from 'fastify-plugin'
 import { getConfig } from '../utils/config'
 
 export default fastifyPlugin(async (fastify) => {
-  const { adminApiKey } = getConfig()
+  const { adminApiKeys } = getConfig()
+  const apiKeys = new Set(adminApiKeys.split(','))
   fastify.addHook('onRequest', async (request, reply) => {
-    if (request.headers.apikey !== adminApiKey) {
+    if (typeof request.headers.apikey !== 'string' || !apiKeys.has(request.headers.apikey)) {
       reply.status(401).send()
     }
   })

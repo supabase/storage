@@ -30,7 +30,7 @@ afterEach(async () => {
     method: 'DELETE',
     url: '/tenants/abc',
     headers: {
-      apikey: process.env.ADMIN_API_KEY,
+      apikey: process.env.ADMIN_API_KEYS,
     },
   })
 })
@@ -46,14 +46,14 @@ describe('Tenant configs', () => {
       url: `/tenants/abc`,
       payload,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     const response = await app().inject({
       method: 'GET',
       url: `/tenants`,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     expect(response.statusCode).toBe(200)
@@ -71,7 +71,7 @@ describe('Tenant configs', () => {
       method: 'GET',
       url: `/tenants/abc`,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     expect(response.statusCode).toBe(404)
@@ -83,14 +83,14 @@ describe('Tenant configs', () => {
       url: `/tenants/abc`,
       payload,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     const response = await app().inject({
       method: 'GET',
       url: `/tenants/abc`,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     expect(response.statusCode).toBe(200)
@@ -104,7 +104,7 @@ describe('Tenant configs', () => {
       url: `/tenants/abc`,
       payload: {},
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     expect(response.statusCode).toBe(400)
@@ -116,7 +116,7 @@ describe('Tenant configs', () => {
       url: `/tenants/abc`,
       payload,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     expect(firstInsertResponse.statusCode).toBe(201)
@@ -125,7 +125,7 @@ describe('Tenant configs', () => {
       url: `/tenants/abc`,
       payload,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     expect(secondInsertResponse.statusCode).toBe(500)
@@ -137,7 +137,7 @@ describe('Tenant configs', () => {
       url: `/tenants/abc`,
       payload,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     const patchResponse = await app().inject({
@@ -145,7 +145,7 @@ describe('Tenant configs', () => {
       url: `/tenants/abc`,
       payload: payload2,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     expect(patchResponse.statusCode).toBe(204)
@@ -153,7 +153,7 @@ describe('Tenant configs', () => {
       method: 'GET',
       url: `/tenants/abc`,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     const getResponseJSON = JSON.parse(getResponse.body)
@@ -166,7 +166,7 @@ describe('Tenant configs', () => {
       url: `/tenants/abc`,
       payload,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     expect(firstPutResponse.statusCode).toBe(204)
@@ -174,7 +174,7 @@ describe('Tenant configs', () => {
       method: 'GET',
       url: `/tenants/abc`,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     const firstGetResponseJSON = JSON.parse(firstGetResponse.body)
@@ -184,7 +184,7 @@ describe('Tenant configs', () => {
       url: `/tenants/abc`,
       payload: payload2,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     expect(secondPutResponse.statusCode).toBe(204)
@@ -192,7 +192,7 @@ describe('Tenant configs', () => {
       method: 'GET',
       url: `/tenants/abc`,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     const secondGetResponseJSON = JSON.parse(secondGetResponse.body)
@@ -205,14 +205,14 @@ describe('Tenant configs', () => {
       url: `/tenants/abc`,
       payload,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     const deleteResponse = await app().inject({
       method: 'DELETE',
       url: '/tenants/abc',
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     expect(deleteResponse.statusCode).toBe(204)
@@ -220,7 +220,7 @@ describe('Tenant configs', () => {
       method: 'GET',
       url: `/tenants/abc`,
       headers: {
-        apikey: process.env.ADMIN_API_KEY,
+        apikey: process.env.ADMIN_API_KEYS,
       },
     })
     expect(getResponse.statusCode).toBe(404)

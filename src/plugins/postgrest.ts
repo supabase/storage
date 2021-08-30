@@ -13,10 +13,16 @@ declare module 'fastify' {
 }
 
 async function getPostgrestClient(request: FastifyRequest, jwt: string): Promise<PostgrestClient> {
-  const { anonKey, postgrestURL, postgrestURLSuffix, xForwardedHostRegExp } = getConfig()
+  const {
+    anonKey,
+    isMultitenant,
+    postgrestURL,
+    postgrestURLSuffix,
+    xForwardedHostRegExp,
+  } = getConfig()
   let url = postgrestURL
   let apiKey = anonKey
-  if (xForwardedHostRegExp) {
+  if (isMultitenant && xForwardedHostRegExp) {
     const xForwardedHost = request.headers['x-forwarded-host']
     if (typeof xForwardedHost !== 'string') {
       throw new Error('X-Forwarded-Host header is not a string')

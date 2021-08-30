@@ -16,6 +16,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   process.env = { ...ENV }
+  process.env.IS_MULTITENANT = 'true'
   process.env.X_FORWARDED_HOST_REGEXP = '^([a-z]{20})\\.supabase\\.(?:co|in|net)$'
 })
 

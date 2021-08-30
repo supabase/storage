@@ -1,6 +1,7 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import fastifyMultipart from 'fastify-multipart'
 import fastifySwagger from 'fastify-swagger'
+import underPressure from 'under-pressure'
 import bucketRoutes from './routes/bucket/'
 import objectRoutes from './routes/object'
 import { authSchema } from './schemas/auth'
@@ -57,6 +58,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(logTenantId)
   app.register(bucketRoutes, { prefix: 'bucket' })
   app.register(objectRoutes, { prefix: 'object' })
+  app.register(underPressure, { exposeStatusRoute: true, maxEventLoopUtilization: 0.99 })
 
   return app
 }

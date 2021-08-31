@@ -45,7 +45,9 @@ export function getConfig(): StorageConfigType {
     anonKey: getOptionalIfMultitenantConfigFromEnv('ANON_KEY') || '',
     serviceKey: getOptionalIfMultitenantConfigFromEnv('SERVICE_KEY') || '',
     tenantId:
-      getOptionalConfigFromEnv('PROJECT_REF') || getOptionalConfigFromEnv('TENANT_ID') || '',
+      getOptionalConfigFromEnv('PROJECT_REF') ||
+      getOptionalIfMultitenantConfigFromEnv('TENANT_ID') ||
+      '',
     region: getConfigFromEnv('REGION'),
     postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
     globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),

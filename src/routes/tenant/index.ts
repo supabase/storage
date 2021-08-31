@@ -1,5 +1,6 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
+import apiKey from '../../plugins/apikey'
 import { pool } from '../../utils/multitenant-db'
 import { cacheTenantConfigAndRunMigrations, deleteTenantConfig } from '../../utils/tenant'
 
@@ -25,6 +26,8 @@ interface tenantRequestInterface extends RequestGenericInterface {
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
+  fastify.register(apiKey)
+
   fastify.get('/', async () => {
     const result = await pool.query(
       `

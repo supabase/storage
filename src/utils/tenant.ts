@@ -1,4 +1,5 @@
 import pLimit from 'p-limit'
+import { decrypt } from './crypto'
 import { runMigrationsOnTenant } from './migrate'
 import { pool } from './multitenant-db'
 
@@ -42,7 +43,7 @@ export async function cacheTenantConfigsFromDbAndRunMigrations(): Promise<void> 
       limit(() =>
         cacheTenantConfigAndRunMigrations(id, {
           anonKey: anon_key,
-          databaseUrl: database_url,
+          databaseUrl: decrypt(database_url),
           jwtSecret: jwt_secret,
           serviceKey: service_key,
         })
@@ -75,7 +76,7 @@ async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   const { anon_key, database_url, jwt_secret, service_key } = result.rows[0]
   const config = {
     anonKey: anon_key,
-    databaseUrl: database_url,
+    databaseUrl: decrypt(database_url),
     jwtSecret: jwt_secret,
     serviceKey: service_key,
   }

@@ -18,6 +18,7 @@ type StorageConfigType = {
   xForwardedHostRegExp?: string
   postgrestURLSuffix?: string
   adminApiKeys: string
+  encryptionKey: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -61,5 +62,6 @@ export function getConfig(): StorageConfigType {
     xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
     postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
     adminApiKeys: getOptionalConfigFromEnv('ADMIN_API_KEYS') || '',
+    encryptionKey: getOptionalConfigFromEnv('ENCRYPTION_KEY') || '',
   }
 }

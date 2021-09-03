@@ -1,6 +1,7 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import apiKey from '../../plugins/apikey'
+import { decrypt, encrypt } from '../../utils/crypto'
 import { pool } from '../../utils/multitenant-db'
 import { cacheTenantConfigAndRunMigrations, deleteTenantConfig } from '../../utils/tenant'
 
@@ -44,7 +45,7 @@ export default async function routes(fastify: FastifyInstance) {
     return result.rows.map(({ id, anon_key, database_url, jwt_secret, service_key }) => ({
       id,
       anonKey: anon_key,
-      databaseUrl: database_url,
+      databaseUrl: decrypt(database_url),
       jwtSecret: jwt_secret,
       serviceKey: service_key,
     }))
@@ -71,7 +72,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { anon_key, database_url, jwt_secret, service_key } = result.rows[0]
       return {
         anonKey: anon_key,
-        databaseUrl: database_url,
+        databaseUrl: decrypt(database_url),
         jwtSecret: jwt_secret,
         serviceKey: service_key,
       }
@@ -87,7 +88,7 @@ export default async function routes(fastify: FastifyInstance) {
       [
         request.params.tenantId,
         request.body.anonKey,
-        request.body.databaseUrl,
+        encrypt(request.body.databaseUrl),
         request.body.jwtSecret,
         request.body.serviceKey,
       ]
@@ -112,7 +113,7 @@ export default async function routes(fastify: FastifyInstance) {
       [
         request.params.tenantId,
         request.body.anonKey,
-        request.body.databaseUrl,
+        encrypt(request.body.databaseUrl),
         request.body.jwtSecret,
         request.body.serviceKey,
       ]
@@ -136,7 +137,7 @@ export default async function routes(fastify: FastifyInstance) {
       [
         request.params.tenantId,
         request.body.anonKey,
-        request.body.databaseUrl,
+        encrypt(request.body.databaseUrl),
         request.body.jwtSecret,
         request.body.serviceKey,
       ]

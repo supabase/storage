@@ -28,6 +28,7 @@
     "@aws-sdk/lib-storage": "^3.8.0",
     "@aws-sdk/node-http-handler": "^3.6.1",
     "@supabase/postgrest-js": "^0.32.0",
+    "crypto-js": "^4.1.1",
     "dotenv": "^8.2.0",
     "fastify": "^3.14.0",
     "fastify-cors": "^5.2.0",
@@ -37,12 +38,15 @@
     "fs-extra": "^8.1.0",
     "fs-xattr": "^0.3.1",
     "jsonwebtoken": "^8.5.1",
+    "p-limit": "^3.1.0",
     "pg": "^8.5.1",
     "pkg": "^5.3.0",
-    "postgres-migrations": "^5.1.1"
+    "postgres-migrations": "^5.1.1",
+    "under-pressure": "^5.7.0"
   },
   "devDependencies": {
     "@types/busboy": "^0.2.3",
+    "@types/crypto-js": "^4.0.2",
     "@types/fs-extra": "^9.0.12",
     "@types/jest": "^26.0.20",
     "@types/jsonwebtoken": "^8.5.0",

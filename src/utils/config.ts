@@ -4,7 +4,7 @@ type StorageBackendType = 'file' | 's3'
 type StorageConfigType = {
   anonKey: string
   serviceKey: string
-  projectRef: string
+  tenantId: string
   region: string
   postgrestURL: string
   globalS3Bucket: string
@@ -13,6 +13,12 @@ type StorageConfigType = {
   fileSizeLimit: number
   storageBackendType: StorageBackendType
   fileStoragePath?: string
+  isMultitenant: boolean
+  multitenantDatabaseUrl?: string
+  xForwardedHostRegExp?: string
+  postgrestURLSuffix?: string
+  adminApiKeys: string
+  encryptionKey: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -27,20 +33,35 @@ function getConfigFromEnv(key: string): string {
   return value
 }
 
+function getOptionalIfMultitenantConfigFromEnv(key: string): string | undefined {
+  return getOptionalConfigFromEnv('IS_MULTITENANT') === 'true'
+    ? getOptionalConfigFromEnv(key)
+    : getConfigFromEnv(key)
+}
+
 export function getConfig(): StorageConfigType {
   dotenv.config()
 
   return {
-    anonKey: getConfigFromEnv('ANON_KEY'),
-    serviceKey: getConfigFromEnv('SERVICE_KEY'),
-    projectRef: getConfigFromEnv('PROJECT_REF'),
+    anonKey: getOptionalIfMultitenantConfigFromEnv('ANON_KEY') || '',
+    serviceKey: getOptionalIfMultitenantConfigFromEnv('SERVICE_KEY') || '',
+    tenantId:
+      getOptionalConfigFromEnv('PROJECT_REF') ||
+      getOptionalIfMultitenantConfigFromEnv('TENANT_ID') ||
+      '',
     region: getConfigFromEnv('REGION'),
-    postgrestURL: getConfigFromEnv('POSTGREST_URL'),
+    postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
     globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
     globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
-    jwtSecret: getConfigFromEnv('PGRST_JWT_SECRET'),
+    jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
     fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
     storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
+    isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
+    multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
+    xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
+    postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
+    adminApiKeys: getOptionalConfigFromEnv('ADMIN_API_KEYS') || '',
+    encryptionKey: getOptionalConfigFromEnv('ENCRYPTION_KEY') || '',
   }
 }

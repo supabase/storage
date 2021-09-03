@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { SignedToken } from '../../types/types'
-import { verifyJWT } from '../../utils/'
+import { getJwtSecret, verifyJWT } from '../../utils/'
 import { getConfig } from '../../utils/config'
 import { normalizeContentType } from '../../utils'
 import { createResponse } from '../../utils/generic-routes'
@@ -9,7 +9,7 @@ import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
+const { region, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
@@ -64,9 +64,10 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { token } = request.query
       try {
-        const payload = await verifyJWT(token)
+        const jwtSecret = await getJwtSecret(request.tenantId)
+        const payload = await verifyJWT(token, jwtSecret)
         const { url } = payload as SignedToken
-        const s3Key = `${projectRef}/${url}`
+        const s3Key = `${request.tenantId}/${url}`
         request.log.info(s3Key)
         const data = await storageBackend.getObject(globalS3Bucket, s3Key, {
           ifModifiedSince: request.headers['if-modified-since'],

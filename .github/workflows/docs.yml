@@ -30,25 +30,23 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      - name: Set up .env file
-        run: |
-          touch .env
-          echo ANON_KEY=${{ secrets.ANON_KEY }} >> .env
-          echo SERVICE_KEY=${{ secrets.SERVICE_KEY }} >> .env
-          echo PROJECT_REF=${{ secrets.PROJECT_REF }} >> .env
-          echo REGION=${{ secrets.REGION }} >> .env
-          echo POSTGREST_URL=${{ secrets.POSTGREST_URL }} >> .env
-          echo GLOBAL_S3_BUCKET=${{ secrets.GLOBAL_S3_BUCKET }} >> .env
-          echo PGRST_JWT_SECRET=${{ secrets.PGRST_JWT_SECRET }} >> .env
-          echo AUTHENTICATED_KEY=${{ secrets.AUTHENTICATED_KEY }} >> .env
-          echo DATABASE_URL=postgresql://postgres:postgres@127.0.0.1/postgres >> .env
-          echo PGOPTIONS='-c search_path=storage' >> .env
-          echo FILE_SIZE_LIMIT=52428800 >> .env
-          echo STORAGE_BACKEND=s3 >> .env
       - name: export docs
         run: |
           npm ci
           npm run docs:export
+        env:
+          ANON_KEY: ${{ secrets.ANON_KEY }}
+          SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          REGION: ${{ secrets.REGION }}
+          POSTGREST_URL: ${{ secrets.POSTGREST_URL }}
+          GLOBAL_S3_BUCKET: ${{ secrets.GLOBAL_S3_BUCKET }}
+          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
+          AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
+          PGOPTIONS: -c search_path=storage,public
+          FILE_SIZE_LIMIT: '52428800'
+          STORAGE_BACKEND: s3
 
       - name: Generate Swagger UI
         uses: Legion2/swagger-ui-action@v1

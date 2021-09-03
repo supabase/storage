@@ -1,11 +1,8 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest, Bucket, Obj } from '../../types/types'
-import { getPostgrestClient, transformPostgrestError } from '../../utils'
-import { getConfig } from '../../utils/config'
+import { transformPostgrestError } from '../../utils'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
-
-const { serviceKey } = getConfig()
 
 const deleteBucketParamsSchema = {
   type: 'object',
@@ -39,7 +36,6 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       const { bucketId } = request.params
-      const superUserPostgrest = getPostgrestClient(serviceKey)
 
       const {
         data: bucketResults,
@@ -57,7 +53,7 @@ export default async function routes(fastify: FastifyInstance) {
         count: objectCount,
         error: objectError,
         status: objectStatus,
-      } = await superUserPostgrest
+      } = await request.superUserPostgrest
         .from<Obj>('objects')
         .select('id', { count: 'exact' })
         .eq('bucket_id', bucketId)

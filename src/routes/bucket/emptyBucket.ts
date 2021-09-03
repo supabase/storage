@@ -8,7 +8,7 @@ import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, projectRef, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
+const { region, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
@@ -95,7 +95,7 @@ export default async function routes(fastify: FastifyInstance) {
 
           if (deleteData && deleteData.length > 0) {
             const params = deleteData.map((ele) => {
-              return `${projectRef}/${bucketName}/${ele.name}`
+              return `${request.tenantId}/${bucketName}/${ele.name}`
             })
             // delete files from s3 asynchronously
             storageBackend.deleteObjects(globalS3Bucket, params)

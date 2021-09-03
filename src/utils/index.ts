@@ -1,28 +1,26 @@
-import { PostgrestClient } from '@supabase/postgrest-js'
 import jwt from 'jsonwebtoken'
 import { PostgrestError, StorageError } from '../types/types'
 import { getConfig } from '../utils/config'
-const { postgrestURL, anonKey, jwtSecret } = getConfig()
+import { getJwtSecret as getJwtSecretForTenant } from './tenant'
+
+const { isMultitenant, jwtSecret } = getConfig()
 
 interface jwtInterface {
   sub: string
 }
 
-export function getPostgrestClient(jwt: string): PostgrestClient {
-  const postgrest = new PostgrestClient(postgrestURL, {
-    headers: {
-      apiKey: anonKey,
-      Authorization: `Bearer ${jwt}`,
-    },
-    schema: 'storage',
-  })
-  return postgrest
+export async function getJwtSecret(tenantId: string): Promise<string> {
+  let secret = jwtSecret
+  if (isMultitenant) {
+    secret = await getJwtSecretForTenant(tenantId)
+  }
+  return secret
 }
 
 // eslint-disable-next-line @typescript-eslint/ban-types
-export function verifyJWT(token: string): Promise<object | undefined> {
+export function verifyJWT(token: string, secret: string): Promise<object | undefined> {
   return new Promise((resolve, reject) => {
-    jwt.verify(token, jwtSecret, (err, decoded) => {
+    jwt.verify(token, secret, (err, decoded) => {
       if (err) return reject(err)
       resolve(decoded)
     })
@@ -32,18 +30,19 @@ export function verifyJWT(token: string): Promise<object | undefined> {
 export function signJWT(
   // eslint-disable-next-line @typescript-eslint/ban-types
   payload: string | object | Buffer,
+  secret: string,
   expiresIn: string | number
 ): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
-    jwt.sign(payload, jwtSecret, { expiresIn }, (err, token) => {
+    jwt.sign(payload, secret, { expiresIn }, (err, token) => {
       if (err) return reject(err)
       resolve(token)
     })
   })
 }
 
-export async function getOwner(token: string): Promise<string | undefined> {
-  const decodedJWT = await verifyJWT(token)
+export async function getOwner(token: string, secret: string): Promise<string | undefined> {
+  const decodedJWT = await verifyJWT(token, secret)
   return (decodedJWT as jwtInterface)?.sub
 }
 

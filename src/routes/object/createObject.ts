@@ -2,21 +2,14 @@ import { PostgrestSingleResponse } from '@supabase/postgrest-js/dist/main/lib/ty
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { Obj, ObjectMetadata } from '../../types/types'
-import { getOwner, getPostgrestClient, isValidKey, transformPostgrestError } from '../../utils'
+import { getJwtSecret, getOwner, isValidKey, transformPostgrestError } from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
 
-const {
-  region,
-  projectRef,
-  globalS3Bucket,
-  globalS3Endpoint,
-  serviceKey,
-  storageBackendType,
-} = getConfig()
+const { region, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
@@ -82,7 +75,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const objectName = request.params['*']
       const path = `${bucketName}/${objectName}`
-      const s3Key = `${projectRef}/${path}`
+      const s3Key = `${request.tenantId}/${path}`
       let mimeType: string, cacheControl: string, isTruncated: boolean
       let uploadResult: ObjectMetadata
 
@@ -92,11 +85,10 @@ export default async function routes(fastify: FastifyInstance) {
           .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
-      const superUserPostgrest = getPostgrestClient(serviceKey)
-
+      const jwtSecret = await getJwtSecret(request.tenantId)
       let owner
       try {
-        owner = await getOwner(request.jwt)
+        owner = await getOwner(request.jwt, jwtSecret)
       } catch (err) {
         request.log.error(err)
         return response.status(400).send({
@@ -194,7 +186,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
       if (isTruncated) {
         // undo operations as super user
-        await superUserPostgrest
+        await request.superUserPostgrest
           .from<Obj>('objects')
           .delete()
           .match({
@@ -223,7 +215,7 @@ export default async function routes(fastify: FastifyInstance) {
         cacheControl,
         size: objectMetadata.size,
       }
-      const { error: updateError, status: updateStatus } = await superUserPostgrest
+      const { error: updateError, status: updateStatus } = await request.superUserPostgrest
         .from<Obj>('objects')
         .update({
           metadata,

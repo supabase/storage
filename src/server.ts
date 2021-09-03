@@ -1,7 +1,10 @@
 import { FastifyInstance } from 'fastify'
 import { IncomingMessage, Server, ServerResponse } from 'http'
 import build from './app'
-import { runMigrations } from './utils/migrate'
+import buildAdmin from './admin-app'
+import { getConfig } from './utils/config'
+import { runMultitenantMigrations, runMigrations } from './utils/migrate'
+import { cacheTenantConfigsFromDbAndRunMigrations } from './utils/tenant'
 
 const loggerConfig = {
   prettyPrint: true,
@@ -14,7 +17,25 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 ;(async () => {
-  await runMigrations()
+  const { isMultitenant } = getConfig()
+  if (isMultitenant) {
+    await runMultitenantMigrations()
+    await cacheTenantConfigsFromDbAndRunMigrations()
+
+    const adminApp: FastifyInstance<Server, IncomingMessage, ServerResponse> = buildAdmin({
+      logger: loggerConfig,
+    })
+
+    try {
+      await adminApp.listen(5001, '0.0.0.0')
+    } catch (err) {
+      adminApp.log.error(err)
+      process.exit(1)
+    }
+  } else {
+    await runMigrations()
+  }
+
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = await build({
     logger: loggerConfig,
     exposeDocs,

@@ -1,11 +1,14 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import fastifyMultipart from 'fastify-multipart'
 import fastifySwagger from 'fastify-swagger'
+import underPressure from 'under-pressure'
 import bucketRoutes from './routes/bucket/'
 import objectRoutes from './routes/object'
 import { authSchema } from './schemas/auth'
 import { errorSchema } from './schemas/error'
 import { getConfig } from './utils/config'
+import logTenantId from './plugins/log-tenant-id'
+import tenantId from './plugins/tenant-id'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -51,8 +54,11 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.addSchema(authSchema)
   app.addSchema(errorSchema)
 
+  app.register(tenantId)
+  app.register(logTenantId)
   app.register(bucketRoutes, { prefix: 'bucket' })
   app.register(objectRoutes, { prefix: 'object' })
+  app.register(underPressure, { exposeStatusRoute: true, maxEventLoopUtilization: 0.99 })
 
   return app
 }

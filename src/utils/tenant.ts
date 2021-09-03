@@ -42,10 +42,10 @@ export async function cacheTenantConfigsFromDbAndRunMigrations(): Promise<void> 
     result.rows.map(({ id, anon_key, database_url, jwt_secret, service_key }) =>
       limit(() =>
         cacheTenantConfigAndRunMigrations(id, {
-          anonKey: anon_key,
+          anonKey: decrypt(anon_key),
           databaseUrl: decrypt(database_url),
-          jwtSecret: jwt_secret,
-          serviceKey: service_key,
+          jwtSecret: decrypt(jwt_secret),
+          serviceKey: decrypt(service_key),
         })
       )
     )
@@ -75,10 +75,10 @@ async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   }
   const { anon_key, database_url, jwt_secret, service_key } = result.rows[0]
   const config = {
-    anonKey: anon_key,
+    anonKey: decrypt(anon_key),
     databaseUrl: decrypt(database_url),
-    jwtSecret: jwt_secret,
-    serviceKey: service_key,
+    jwtSecret: decrypt(jwt_secret),
+    serviceKey: decrypt(service_key),
   }
   await cacheTenantConfigAndRunMigrations(tenantId, config)
   return config

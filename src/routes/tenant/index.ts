@@ -44,10 +44,10 @@ export default async function routes(fastify: FastifyInstance) {
     )
     return result.rows.map(({ id, anon_key, database_url, jwt_secret, service_key }) => ({
       id,
-      anonKey: anon_key,
+      anonKey: decrypt(anon_key),
       databaseUrl: decrypt(database_url),
-      jwtSecret: jwt_secret,
-      serviceKey: service_key,
+      jwtSecret: decrypt(jwt_secret),
+      serviceKey: decrypt(service_key),
     }))
   })
 
@@ -71,10 +71,10 @@ export default async function routes(fastify: FastifyInstance) {
     } else {
       const { anon_key, database_url, jwt_secret, service_key } = result.rows[0]
       return {
-        anonKey: anon_key,
+        anonKey: decrypt(anon_key),
         databaseUrl: decrypt(database_url),
-        jwtSecret: jwt_secret,
-        serviceKey: service_key,
+        jwtSecret: decrypt(jwt_secret),
+        serviceKey: decrypt(service_key),
       }
     }
   })
@@ -87,10 +87,10 @@ export default async function routes(fastify: FastifyInstance) {
       `,
       [
         request.params.tenantId,
-        request.body.anonKey,
+        encrypt(request.body.anonKey),
         encrypt(request.body.databaseUrl),
-        request.body.jwtSecret,
-        request.body.serviceKey,
+        encrypt(request.body.jwtSecret),
+        encrypt(request.body.serviceKey),
       ]
     )
     await cacheTenantConfigAndRunMigrations(request.params.tenantId, request.body)
@@ -112,10 +112,10 @@ export default async function routes(fastify: FastifyInstance) {
       `,
       [
         request.params.tenantId,
-        request.body.anonKey,
+        encrypt(request.body.anonKey),
         encrypt(request.body.databaseUrl),
-        request.body.jwtSecret,
-        request.body.serviceKey,
+        encrypt(request.body.jwtSecret),
+        encrypt(request.body.serviceKey),
       ]
     )
     await cacheTenantConfigAndRunMigrations(request.params.tenantId, request.body)
@@ -136,10 +136,10 @@ export default async function routes(fastify: FastifyInstance) {
       `,
       [
         request.params.tenantId,
-        request.body.anonKey,
+        encrypt(request.body.anonKey),
         encrypt(request.body.databaseUrl),
-        request.body.jwtSecret,
-        request.body.serviceKey,
+        encrypt(request.body.jwtSecret),
+        encrypt(request.body.serviceKey),
       ]
     )
     await cacheTenantConfigAndRunMigrations(request.params.tenantId, request.body)

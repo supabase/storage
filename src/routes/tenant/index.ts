@@ -3,7 +3,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import apiKey from '../../plugins/apikey'
 import { decrypt, encrypt } from '../../utils/crypto'
 import { pool } from '../../utils/multitenant-db'
-import { cacheTenantConfigAndRunMigrations, deleteTenantConfig } from '../../utils/tenant'
+import { deleteTenantConfig } from '../../utils/tenant'
 
 const schema = {
   body: {
@@ -93,7 +93,6 @@ export default async function routes(fastify: FastifyInstance) {
         encrypt(request.body.serviceKey),
       ]
     )
-    await cacheTenantConfigAndRunMigrations(request.params.tenantId, request.body)
     reply.code(201).send()
   })
 
@@ -118,7 +117,6 @@ export default async function routes(fastify: FastifyInstance) {
         encrypt(request.body.serviceKey),
       ]
     )
-    await cacheTenantConfigAndRunMigrations(request.params.tenantId, request.body)
     reply.code(204).send()
   })
 
@@ -142,7 +140,6 @@ export default async function routes(fastify: FastifyInstance) {
         encrypt(request.body.serviceKey),
       ]
     )
-    await cacheTenantConfigAndRunMigrations(request.params.tenantId, request.body)
     reply.code(204).send()
   })
 

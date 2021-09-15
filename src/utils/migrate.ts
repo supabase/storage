@@ -11,6 +11,7 @@ async function connectAndMigrate(
 ) {
   const dbConfig = {
     connectionString: databaseUrl,
+    connectionTimeoutMillis: 1000,
   }
   const client = new Client(dbConfig)
   try {

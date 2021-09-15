@@ -9,9 +9,11 @@ async function connectAndMigrate(databaseUrl: string | undefined, migrationsDire
     connectionString: databaseUrl,
   }
   const client = new Client(dbConfig)
-  await client.connect()
   try {
+    await client.connect()
     await migrate({ client }, migrationsDirectory)
+  } catch (error) {
+    console.error('Migration error:', error.message)
   } finally {
     await client.end()
   }

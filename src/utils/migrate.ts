@@ -4,14 +4,24 @@ import { getConfig } from './config'
 
 const { multitenantDatabaseUrl } = getConfig()
 
-async function connectAndMigrate(databaseUrl: string | undefined, migrationsDirectory: string) {
+async function connectAndMigrate(
+  databaseUrl: string | undefined,
+  migrationsDirectory: string,
+  logOnError = false
+) {
   const dbConfig = {
     connectionString: databaseUrl,
   }
   const client = new Client(dbConfig)
-  await client.connect()
   try {
+    await client.connect()
     await migrate({ client }, migrationsDirectory)
+  } catch (error) {
+    if (logOnError) {
+      console.error('Migration error:', error.message)
+    } else {
+      throw error
+    }
   } finally {
     await client.end()
   }
@@ -30,5 +40,5 @@ export async function runMultitenantMigrations(): Promise<void> {
 }
 
 export async function runMigrationsOnTenant(databaseUrl: string): Promise<void> {
-  await connectAndMigrate(databaseUrl, './migrations/tenant')
+  await connectAndMigrate(databaseUrl, './migrations/tenant', true)
 }

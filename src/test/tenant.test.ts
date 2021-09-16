@@ -162,6 +162,35 @@ describe('Tenant configs', () => {
     expect(getResponseJSON).toEqual(payload2)
   })
 
+  test('Update tenant config partially', async () => {
+    await app().inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    const patchResponse = await app().inject({
+      method: 'PATCH',
+      url: `/tenants/abc`,
+      payload: { fileSizeLimit: 2 },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(patchResponse.statusCode).toBe(204)
+    const getResponse = await app().inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    const getResponseJSON = JSON.parse(getResponse.body)
+    expect(getResponseJSON).toEqual({ ...payload, fileSizeLimit: 2 })
+  })
+
   test('Upsert tenant config', async () => {
     const firstPutResponse = await app().inject({
       method: 'PUT',

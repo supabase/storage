@@ -5,10 +5,9 @@ import { decrypt, encrypt } from '../../utils/crypto'
 import { knex } from '../../utils/multitenant-db'
 import { deleteTenantConfig } from '../../utils/tenant'
 
-const schema = {
+const patchSchema = {
   body: {
     type: 'object',
-    required: ['anonKey', 'databaseUrl', 'jwtSecret', 'serviceKey'],
     properties: {
       anonKey: { type: 'string' },
       databaseUrl: { type: 'string' },
@@ -18,6 +17,20 @@ const schema = {
     },
   },
 } as const
+
+const schema = {
+  body: {
+    ...patchSchema.body,
+    required: ['anonKey', 'databaseUrl', 'jwtSecret', 'serviceKey'],
+  },
+} as const
+
+interface tenantPatchRequestInterface extends RequestGenericInterface {
+  Body: FromSchema<typeof patchSchema.body>
+  Params: {
+    tenantId: string
+  }
+}
 
 interface tenantRequestInterface extends RequestGenericInterface {
   Body: FromSchema<typeof schema.body>
@@ -72,18 +85,23 @@ export default async function routes(fastify: FastifyInstance) {
     reply.code(201).send()
   })
 
-  fastify.patch<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
-    await knex('tenants')
-      .update({
-        anon_key: encrypt(request.body.anonKey),
-        database_url: encrypt(request.body.databaseUrl),
-        file_size_limit: request.body.fileSizeLimit,
-        jwt_secret: encrypt(request.body.jwtSecret),
-        service_key: encrypt(request.body.serviceKey),
-      })
-      .where('id', request.params.tenantId)
-    reply.code(204).send()
-  })
+  fastify.patch<tenantPatchRequestInterface>(
+    '/:tenantId',
+    { schema: patchSchema },
+    async (request, reply) => {
+      const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey } = request.body
+      await knex('tenants')
+        .update({
+          anon_key: anonKey !== undefined ? encrypt(anonKey) : undefined,
+          database_url: databaseUrl !== undefined ? encrypt(databaseUrl) : undefined,
+          file_size_limit: fileSizeLimit,
+          jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,
+          service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
+        })
+        .where('id', request.params.tenantId)
+      reply.code(204).send()
+    }
+  )
 
   fastify.put<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
     await knex('tenants')

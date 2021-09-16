@@ -9,6 +9,7 @@ dotenv.config({ path: '.env.test' })
 const payload = {
   anonKey: 'a',
   databaseUrl: 'b',
+  fileSizeLimit: 1,
   jwtSecret: 'c',
   serviceKey: 'd',
 }
@@ -16,6 +17,7 @@ const payload = {
 const payload2 = {
   anonKey: 'e',
   databaseUrl: 'f',
+  fileSizeLimit: 2,
   jwtSecret: 'g',
   serviceKey: 'h',
 }

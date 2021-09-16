@@ -6,6 +6,7 @@ import { knex } from './multitenant-db'
 interface TenantConfig {
   anonKey: string
   databaseUrl: string
+  fileSizeLimit: number
   jwtSecret: string
   serviceKey: string
 }
@@ -28,11 +29,12 @@ export async function cacheTenantConfigsFromDbAndRunMigrations(): Promise<void> 
   const tenants = await knex('tenants').select()
   const limit = pLimit(100)
   await Promise.all(
-    tenants.map(({ id, anon_key, database_url, jwt_secret, service_key }) =>
+    tenants.map(({ id, anon_key, database_url, file_size_limit, jwt_secret, service_key }) =>
       limit(() =>
         cacheTenantConfigAndRunMigrations(id, {
           anonKey: decrypt(anon_key),
           databaseUrl: decrypt(database_url),
+          fileSizeLimit: Number(file_size_limit),
           jwtSecret: decrypt(jwt_secret),
           serviceKey: decrypt(service_key),
         })
@@ -49,10 +51,11 @@ async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   if (!tenant) {
     throw new Error(`Tenant config for ${tenantId} not found`)
   }
-  const { anon_key, database_url, jwt_secret, service_key } = tenant
+  const { anon_key, database_url, file_size_limit, jwt_secret, service_key } = tenant
   const config = {
     anonKey: decrypt(anon_key),
     databaseUrl: decrypt(database_url),
+    fileSizeLimit: Number(file_size_limit),
     jwtSecret: decrypt(jwt_secret),
     serviceKey: decrypt(service_key),
   }

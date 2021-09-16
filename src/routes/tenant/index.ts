@@ -12,6 +12,7 @@ const schema = {
     properties: {
       anonKey: { type: 'string' },
       databaseUrl: { type: 'string' },
+      fileSizeLimit: { type: 'number' },
       jwtSecret: { type: 'string' },
       serviceKey: { type: 'string' },
     },
@@ -31,13 +32,16 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.get('/', async () => {
     const tenants = await knex('tenants').select()
-    return tenants.map(({ id, anon_key, database_url, jwt_secret, service_key }) => ({
-      id,
-      anonKey: decrypt(anon_key),
-      databaseUrl: decrypt(database_url),
-      jwtSecret: decrypt(jwt_secret),
-      serviceKey: decrypt(service_key),
-    }))
+    return tenants.map(
+      ({ id, anon_key, database_url, file_size_limit, jwt_secret, service_key }) => ({
+        id,
+        anonKey: decrypt(anon_key),
+        databaseUrl: decrypt(database_url),
+        fileSizeLimit: Number(file_size_limit),
+        jwtSecret: decrypt(jwt_secret),
+        serviceKey: decrypt(service_key),
+      })
+    )
   })
 
   fastify.get<tenantRequestInterface>('/:tenantId', async (request, reply) => {
@@ -45,10 +49,11 @@ export default async function routes(fastify: FastifyInstance) {
     if (!tenant) {
       reply.code(404).send()
     } else {
-      const { anon_key, database_url, jwt_secret, service_key } = tenant
+      const { anon_key, database_url, file_size_limit, jwt_secret, service_key } = tenant
       return {
         anonKey: decrypt(anon_key),
         databaseUrl: decrypt(database_url),
+        fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),
         serviceKey: decrypt(service_key),
       }
@@ -60,6 +65,7 @@ export default async function routes(fastify: FastifyInstance) {
       id: request.params.tenantId,
       anon_key: encrypt(request.body.anonKey),
       database_url: encrypt(request.body.databaseUrl),
+      file_size_limit: request.body.fileSizeLimit,
       jwt_secret: encrypt(request.body.jwtSecret),
       service_key: encrypt(request.body.serviceKey),
     })
@@ -71,6 +77,7 @@ export default async function routes(fastify: FastifyInstance) {
       .update({
         anon_key: encrypt(request.body.anonKey),
         database_url: encrypt(request.body.databaseUrl),
+        file_size_limit: request.body.fileSizeLimit,
         jwt_secret: encrypt(request.body.jwtSecret),
         service_key: encrypt(request.body.serviceKey),
       })
@@ -84,6 +91,7 @@ export default async function routes(fastify: FastifyInstance) {
         id: request.params.tenantId,
         anon_key: encrypt(request.body.anonKey),
         database_url: encrypt(request.body.databaseUrl),
+        file_size_limit: request.body.fileSizeLimit,
         jwt_secret: encrypt(request.body.jwtSecret),
         service_key: encrypt(request.body.serviceKey),
       })

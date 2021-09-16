@@ -6,7 +6,6 @@ import bucketRoutes from './routes/bucket/'
 import objectRoutes from './routes/object'
 import { authSchema } from './schemas/auth'
 import { errorSchema } from './schemas/error'
-import { getConfig } from './utils/config'
 import logTenantId from './plugins/log-tenant-id'
 import tenantId from './plugins/tenant-id'
 
@@ -16,11 +15,9 @@ interface buildOpts extends FastifyServerOptions {
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
   const app = fastify(opts)
-  const { fileSizeLimit } = getConfig()
   app.register(fastifyMultipart, {
     limits: {
       fields: 10,
-      fileSize: fileSizeLimit,
       files: 1,
     },
     throwFileSizeLimit: false,

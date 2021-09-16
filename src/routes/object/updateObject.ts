@@ -1,7 +1,13 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { Obj, ObjectMetadata } from '../../types/types'
-import { getJwtSecret, getOwner, isValidKey, transformPostgrestError } from '../../utils'
+import {
+  getFileSizeLimit,
+  getJwtSecret,
+  getOwner,
+  isValidKey,
+  transformPostgrestError,
+} from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
@@ -105,8 +111,10 @@ export default async function routes(fastify: FastifyInstance) {
         return response.status(400).send(transformPostgrestError(error, status))
       }
 
+      const fileSizeLimit = await getFileSizeLimit(request.tenantId)
+
       if (contentType?.startsWith('multipart/form-data')) {
-        const data = await request.file()
+        const data = await request.file({ limits: { fileSize: fileSizeLimit } })
         /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
         const cacheTime = data.fields.cacheControl?.value
         cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
@@ -137,7 +145,6 @@ export default async function routes(fastify: FastifyInstance) {
           mimeType,
           cacheControl
         )
-        const { fileSizeLimit } = getConfig()
         // @todo more secure to get this from the stream or from s3 in the next step
         isTruncated = Number(request.headers['content-length']) > fileSizeLimit
       }

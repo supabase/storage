@@ -77,3 +77,8 @@ export async function getJwtSecret(tenantId: string): Promise<string> {
   const { jwtSecret } = await getTenantConfig(tenantId)
   return jwtSecret
 }
+
+export async function getFileSizeLimit(tenantId: string): Promise<number> {
+  const { fileSizeLimit } = await getTenantConfig(tenantId)
+  return fileSizeLimit
+}

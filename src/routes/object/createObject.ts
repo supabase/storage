@@ -2,7 +2,13 @@ import { PostgrestSingleResponse } from '@supabase/postgrest-js/dist/main/lib/ty
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { Obj, ObjectMetadata } from '../../types/types'
-import { getJwtSecret, getOwner, isValidKey, transformPostgrestError } from '../../utils'
+import {
+  getFileSizeLimit,
+  getJwtSecret,
+  getOwner,
+  isValidKey,
+  transformPostgrestError,
+} from '../../utils'
 import { getConfig } from '../../utils/config'
 import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
@@ -146,9 +152,11 @@ export default async function routes(fastify: FastifyInstance) {
       }
       request.log.info({ results }, 'results')
 
+      const fileSizeLimit = await getFileSizeLimit(request.tenantId)
+
       // if successfully inserted, upload to s3
       if (contentType?.startsWith('multipart/form-data')) {
-        const data = await request.file()
+        const data = await request.file({ limits: { fileSize: fileSizeLimit } })
 
         // Can't seem to get the typing to work properly
         // https://github.com/fastify/fastify-multipart/issues/162
@@ -180,7 +188,6 @@ export default async function routes(fastify: FastifyInstance) {
           mimeType,
           cacheControl
         )
-        const { fileSizeLimit } = getConfig()
         // @todo more secure to get this from the stream or from s3 in the next step
         isTruncated = Number(request.headers['content-length']) > fileSizeLimit
       }

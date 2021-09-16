@@ -1,12 +1,23 @@
 import jwt from 'jsonwebtoken'
 import { PostgrestError, StorageError } from '../types/types'
 import { getConfig } from '../utils/config'
-import { getJwtSecret as getJwtSecretForTenant } from './tenant'
+import {
+  getFileSizeLimit as getFileSizeLimitForTenant,
+  getJwtSecret as getJwtSecretForTenant,
+} from './tenant'
 
 const { isMultitenant, jwtSecret } = getConfig()
 
 interface jwtInterface {
   sub: string
+}
+
+export async function getFileSizeLimit(tenantId: string): Promise<number> {
+  let { fileSizeLimit } = getConfig()
+  if (isMultitenant) {
+    fileSizeLimit = await getFileSizeLimitForTenant(tenantId)
+  }
+  return fileSizeLimit
 }
 
 export async function getJwtSecret(tenantId: string): Promise<string> {

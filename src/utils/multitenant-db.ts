@@ -1,8 +1,9 @@
-import { Pool } from 'pg'
+import Knex from 'knex'
 import { getConfig } from './config'
 
 const { multitenantDatabaseUrl } = getConfig()
 
-export const pool = new Pool({
-  connectionString: multitenantDatabaseUrl,
+export const knex = Knex({
+  client: 'pg',
+  connection: multitenantDatabaseUrl,
 })

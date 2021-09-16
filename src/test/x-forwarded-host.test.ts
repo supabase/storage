@@ -3,7 +3,7 @@ import adminApp from '../admin-app'
 import app from '../app'
 import dotenv from 'dotenv'
 import * as migrate from '../utils/migrate'
-import { pool } from '../utils/multitenant-db'
+import { knex } from '../utils/multitenant-db'
 
 dotenv.config({ path: '.env.test' })
 
@@ -21,7 +21,7 @@ beforeEach(() => {
 })
 
 afterAll(async () => {
-  await pool.end()
+  await knex.destroy()
 })
 
 describe('with X-Forwarded-Host header', () => {

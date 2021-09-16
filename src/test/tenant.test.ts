@@ -2,7 +2,7 @@
 import app from '../admin-app'
 import dotenv from 'dotenv'
 import * as migrate from '../utils/migrate'
-import { pool } from '../utils/multitenant-db'
+import { knex } from '../utils/multitenant-db'
 
 dotenv.config({ path: '.env.test' })
 
@@ -36,7 +36,7 @@ afterEach(async () => {
 })
 
 afterAll(async () => {
-  await pool.end()
+  await knex.destroy()
 })
 
 describe('Tenant configs', () => {

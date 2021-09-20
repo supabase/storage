@@ -8,9 +8,12 @@ import { signJWT } from '../utils/index'
 import { S3Backend } from '../backend/s3'
 
 dotenv.config({ path: '.env.test' })
+const ENV = process.env
 const { anonKey, jwtSecret, serviceKey } = getConfig()
 
 beforeEach(() => {
+  process.env = { ...ENV }
+
   jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
     metadata: {
       httpStatusCode: 200,
@@ -243,6 +246,30 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
   })
+
+  test('return 400 when exceeding file size limit', async () => {
+    process.env.FILE_SIZE_LIMIT = '1'
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/public/sadcat.jpg',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.body).toBe(
+      JSON.stringify({
+        statusCode: '413',
+        error: 'Payload too large',
+        message: 'The object exceeded the maximum allowed size',
+      })
+    )
+  })
 })
 
 /*
@@ -376,6 +403,33 @@ describe('testing POST object via binary upload', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+  })
+
+  test('return 400 when exceeding file size limit', async () => {
+    process.env.FILE_SIZE_LIMIT = '1'
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/public/sadcat.jpg',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.body).toBe(
+      JSON.stringify({
+        statusCode: '413',
+        error: 'Payload too large',
+        message: 'The object exceeded the maximum allowed size',
+      })
+    )
   })
 })
 

@@ -2,13 +2,14 @@
 import app from '../admin-app'
 import dotenv from 'dotenv'
 import * as migrate from '../utils/migrate'
-import { pool } from '../utils/multitenant-db'
+import { knex } from '../utils/multitenant-db'
 
 dotenv.config({ path: '.env.test' })
 
 const payload = {
   anonKey: 'a',
   databaseUrl: 'b',
+  fileSizeLimit: 1,
   jwtSecret: 'c',
   serviceKey: 'd',
 }
@@ -16,6 +17,7 @@ const payload = {
 const payload2 = {
   anonKey: 'e',
   databaseUrl: 'f',
+  fileSizeLimit: 2,
   jwtSecret: 'g',
   serviceKey: 'h',
 }
@@ -36,7 +38,7 @@ afterEach(async () => {
 })
 
 afterAll(async () => {
-  await pool.end()
+  await knex.destroy()
 })
 
 describe('Tenant configs', () => {
@@ -158,6 +160,35 @@ describe('Tenant configs', () => {
     })
     const getResponseJSON = JSON.parse(getResponse.body)
     expect(getResponseJSON).toEqual(payload2)
+  })
+
+  test('Update tenant config partially', async () => {
+    await app().inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    const patchResponse = await app().inject({
+      method: 'PATCH',
+      url: `/tenants/abc`,
+      payload: { fileSizeLimit: 2 },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(patchResponse.statusCode).toBe(204)
+    const getResponse = await app().inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    const getResponseJSON = JSON.parse(getResponse.body)
+    expect(getResponseJSON).toEqual({ ...payload, fileSizeLimit: 2 })
   })
 
   test('Upsert tenant config', async () => {

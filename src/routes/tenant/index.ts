@@ -2,21 +2,35 @@ import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import apiKey from '../../plugins/apikey'
 import { decrypt, encrypt } from '../../utils/crypto'
-import { pool } from '../../utils/multitenant-db'
+import { knex } from '../../utils/multitenant-db'
 import { deleteTenantConfig } from '../../utils/tenant'
 
-const schema = {
+const patchSchema = {
   body: {
     type: 'object',
-    required: ['anonKey', 'databaseUrl', 'jwtSecret', 'serviceKey'],
     properties: {
       anonKey: { type: 'string' },
       databaseUrl: { type: 'string' },
+      fileSizeLimit: { type: 'number' },
       jwtSecret: { type: 'string' },
       serviceKey: { type: 'string' },
     },
   },
 } as const
+
+const schema = {
+  body: {
+    ...patchSchema.body,
+    required: ['anonKey', 'databaseUrl', 'jwtSecret', 'serviceKey'],
+  },
+} as const
+
+interface tenantPatchRequestInterface extends RequestGenericInterface {
+  Body: FromSchema<typeof patchSchema.body>
+  Params: {
+    tenantId: string
+  }
+}
 
 interface tenantRequestInterface extends RequestGenericInterface {
   Body: FromSchema<typeof schema.body>
@@ -30,49 +44,29 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
 
   fastify.get('/', async () => {
-    const result = await pool.query(
-      `
-      SELECT
+    const tenants = await knex('tenants').select()
+    return tenants.map(
+      ({ id, anon_key, database_url, file_size_limit, jwt_secret, service_key }) => ({
         id,
-        anon_key,
-        database_url,
-        jwt_secret,
-        service_key
-      FROM
-        tenants
-      `
+        anonKey: decrypt(anon_key),
+        databaseUrl: decrypt(database_url),
+        fileSizeLimit: Number(file_size_limit),
+        jwtSecret: decrypt(jwt_secret),
+        serviceKey: decrypt(service_key),
+      })
     )
-    return result.rows.map(({ id, anon_key, database_url, jwt_secret, service_key }) => ({
-      id,
-      anonKey: decrypt(anon_key),
-      databaseUrl: decrypt(database_url),
-      jwtSecret: decrypt(jwt_secret),
-      serviceKey: decrypt(service_key),
-    }))
   })
 
   fastify.get<tenantRequestInterface>('/:tenantId', async (request, reply) => {
-    const result = await pool.query(
-      `
-      SELECT
-        anon_key,
-        database_url,
-        jwt_secret,
-        service_key
-      FROM
-        tenants
-      WHERE
-        id = $1
-      `,
-      [request.params.tenantId]
-    )
-    if (result.rows.length === 0) {
+    const tenant = await knex('tenants').first().where('id', request.params.tenantId)
+    if (!tenant) {
       reply.code(404).send()
     } else {
-      const { anon_key, database_url, jwt_secret, service_key } = result.rows[0]
+      const { anon_key, database_url, file_size_limit, jwt_secret, service_key } = tenant
       return {
         anonKey: decrypt(anon_key),
         databaseUrl: decrypt(database_url),
+        fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),
         serviceKey: decrypt(service_key),
       }
@@ -80,77 +74,52 @@ export default async function routes(fastify: FastifyInstance) {
   })
 
   fastify.post<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
-    await pool.query(
-      `
-      INSERT INTO tenants (id, anon_key, database_url, jwt_secret, service_key)
-        VALUES ($1, $2, $3, $4, $5)
-      `,
-      [
-        request.params.tenantId,
-        encrypt(request.body.anonKey),
-        encrypt(request.body.databaseUrl),
-        encrypt(request.body.jwtSecret),
-        encrypt(request.body.serviceKey),
-      ]
-    )
+    await knex('tenants').insert({
+      id: request.params.tenantId,
+      anon_key: encrypt(request.body.anonKey),
+      database_url: encrypt(request.body.databaseUrl),
+      file_size_limit: request.body.fileSizeLimit,
+      jwt_secret: encrypt(request.body.jwtSecret),
+      service_key: encrypt(request.body.serviceKey),
+    })
     reply.code(201).send()
   })
 
-  fastify.patch<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
-    await pool.query(
-      `
-      UPDATE
-        tenants
-      SET
-        anon_key = $2,
-        database_url = $3,
-        jwt_secret = $4,
-        service_key = $5
-      WHERE
-        id = $1
-      `,
-      [
-        request.params.tenantId,
-        encrypt(request.body.anonKey),
-        encrypt(request.body.databaseUrl),
-        encrypt(request.body.jwtSecret),
-        encrypt(request.body.serviceKey),
-      ]
-    )
-    reply.code(204).send()
-  })
+  fastify.patch<tenantPatchRequestInterface>(
+    '/:tenantId',
+    { schema: patchSchema },
+    async (request, reply) => {
+      const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey } = request.body
+      await knex('tenants')
+        .update({
+          anon_key: anonKey !== undefined ? encrypt(anonKey) : undefined,
+          database_url: databaseUrl !== undefined ? encrypt(databaseUrl) : undefined,
+          file_size_limit: fileSizeLimit,
+          jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,
+          service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
+        })
+        .where('id', request.params.tenantId)
+      reply.code(204).send()
+    }
+  )
 
   fastify.put<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
-    await pool.query(
-      `
-      INSERT INTO tenants (id, anon_key, database_url, jwt_secret, service_key)
-        VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (id)
-        DO UPDATE SET
-          anon_key = EXCLUDED.anon_key,
-          database_url = EXCLUDED.database_url,
-          jwt_secret = EXCLUDED.jwt_secret,
-          service_key = EXCLUDED.service_key
-      `,
-      [
-        request.params.tenantId,
-        encrypt(request.body.anonKey),
-        encrypt(request.body.databaseUrl),
-        encrypt(request.body.jwtSecret),
-        encrypt(request.body.serviceKey),
-      ]
-    )
+    await knex('tenants')
+      .insert({
+        id: request.params.tenantId,
+        anon_key: encrypt(request.body.anonKey),
+        database_url: encrypt(request.body.databaseUrl),
+        file_size_limit: request.body.fileSizeLimit,
+        jwt_secret: encrypt(request.body.jwtSecret),
+        service_key: encrypt(request.body.serviceKey),
+      })
+      .onConflict('id')
+      .merge()
     reply.code(204).send()
   })
 
   fastify.delete<tenantRequestInterface>('/:tenantId', async (request, reply) => {
-    await pool.query(
-      `
-      DELETE FROM tenants
-      WHERE id = $1
-      `,
-      [request.params.tenantId]
-    )
+    await knex('tenants').del().where('id', request.params.tenantId)
     deleteTenantConfig(request.params.tenantId)
     reply.code(204).send()
   })

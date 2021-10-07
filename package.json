@@ -16,7 +16,8 @@
     "eslint:check": "eslint 'src/**'",
     "infra:stop": "docker-compose --project-directory . -f src/test/db/docker-compose.yml down  --remove-orphans",
     "infra:start": "docker-compose --project-directory . -f src/test/db/docker-compose.yml up -d && sleep 5 && npm run migration:run",
-    "infra:restart": "npm run infra:stop && npm run infra:start"
+    "infra:restart": "npm run infra:stop && npm run infra:start",
+    "prepare": "husky install"
   },
   "author": "Supabase",
   "license": "ISC",
@@ -46,6 +47,8 @@
     "under-pressure": "^5.7.0"
   },
   "devDependencies": {
+    "@commitlint/cli": "^13.2.0",
+    "@commitlint/config-conventional": "^13.2.0",
     "@types/busboy": "^0.2.3",
     "@types/crypto-js": "^4.0.2",
     "@types/fs-extra": "^9.0.12",
@@ -59,6 +62,7 @@
     "eslint-config-prettier": "^8.1.0",
     "eslint-plugin-prettier": "^3.3.1",
     "form-data": "^4.0.0",
+    "husky": "^7.0.0",
     "jest": "^26.6.3",
     "json-schema-to-ts": "^1.6.0",
     "pino-pretty": "^4.7.1",

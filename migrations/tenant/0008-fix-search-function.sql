@@ -1,5 +1,3 @@
-alter table storage.objects add column path_tokens text[] generated always as (string_to_array("name", '/')) stored;
-
 CREATE OR REPLACE FUNCTION storage.search(prefix text, bucketname text, limits int DEFAULT 100, levels int DEFAULT 1, offsets int DEFAULT 0)
  RETURNS TABLE (
     name text,

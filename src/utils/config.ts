@@ -7,14 +7,12 @@ type StorageConfigType = {
   projectRef: string
   region: string
   postgrestURL: string
-  globalS3Bucket: string
-  globalS3Endpoint?: string
+  globalBucket: string
+  globalEndpoint: string
   jwtSecret: string
   fileSizeLimit: number
   storageBackendType: StorageBackendType
   fileStoragePath?: string
-  ossBucket: string
-  ossEndpoint: string
   ossAccessKey: string
   ossAccessSecret: string
 }
@@ -40,14 +38,12 @@ export function getConfig(): StorageConfigType {
     projectRef: getConfigFromEnv('PROJECT_REF'),
     region: getConfigFromEnv('REGION'),
     postgrestURL: getConfigFromEnv('POSTGREST_URL'),
-    globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
-    globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
+    globalBucket: getConfigFromEnv('GLOBAL_BUCKET'),
+    globalEndpoint: getOptionalConfigFromEnv('GLOBAL_ENDPOINT') || '',
     jwtSecret: getConfigFromEnv('PGRST_JWT_SECRET'),
     fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
     storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
-    ossBucket: getConfigFromEnv('OSS_BUCKET'),
-    ossEndpoint: getConfigFromEnv('OSS_ENDPOINT'),
     ossAccessKey: getConfigFromEnv('OSS_ACCESS_KEY'),
     ossAccessSecret: getConfigFromEnv('OSS_ACCESS_SECRET'),
   }

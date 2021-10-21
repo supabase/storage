@@ -12,22 +12,19 @@ import { OSSBackend } from '../../backend/oss'
 const {
   region,
   projectRef,
-  globalS3Bucket,
-  globalS3Endpoint,
   storageBackendType,
-  ossEndpoint,
+  globalEndpoint,
   ossAccessKey,
   ossAccessSecret,
-  ossBucket,
+  globalBucket,
+  serviceKey
 } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
   storageBackend = new FileBackend()
-} else if (storageBackendType === 'oss') {
-  storageBackend = new OSSBackend(ossBucket, ossEndpoint, ossAccessKey, ossAccessSecret)
 } else {
-  storageBackend = new S3Backend(region, globalS3Endpoint)
+  storageBackend = new OSSBackend(globalBucket, globalEndpoint, ossAccessKey, ossAccessSecret)
 }
 
 const moveObjectsBodySchema = {
@@ -102,8 +99,8 @@ export default async function routes(fastify: FastifyInstance) {
       const newS3Key = `${projectRef}/${bucketId}/${destinationKey}`
 
       // @todo what happens if one of these fail?
-      await storageBackend.copyObject(globalS3Bucket, oldS3Key, newS3Key)
-      await storageBackend.deleteObject(globalS3Bucket, oldS3Key)
+      await storageBackend.copyObject(globalBucket, oldS3Key, newS3Key)
+      await storageBackend.deleteObject(globalBucket, oldS3Key)
 
       return response.status(200).send(createResponse('Successfully moved'))
     }

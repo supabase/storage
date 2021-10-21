@@ -12,22 +12,19 @@ import { OSSBackend } from '../../backend/oss'
 const {
   region,
   projectRef,
-  globalS3Bucket,
-  globalS3Endpoint,
   storageBackendType,
-  ossEndpoint,
+  globalEndpoint,
   ossAccessKey,
   ossAccessSecret,
-  ossBucket,
+  globalBucket,
+  serviceKey
 } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
   storageBackend = new FileBackend()
-} else if (storageBackendType === 'oss') {
-  storageBackend = new OSSBackend(ossBucket, ossEndpoint, ossAccessKey, ossAccessSecret)
 } else {
-  storageBackend = new S3Backend(region, globalS3Endpoint)
+  storageBackend = new OSSBackend(globalBucket, globalEndpoint, ossAccessKey, ossAccessSecret)
 }
 
 const updateObjectParamsSchema = {
@@ -130,7 +127,7 @@ export default async function routes(fastify: FastifyInstance) {
         mimeType = data.mimetype
 
         uploadResult = await storageBackend.uploadObject(
-          globalS3Bucket,
+          globalBucket,
           s3Key,
           data.file,
           data.mimetype,
@@ -148,7 +145,7 @@ export default async function routes(fastify: FastifyInstance) {
         cacheControl = request.headers['cache-control'] ?? 'no-cache'
 
         uploadResult = await storageBackend.uploadObject(
-          globalS3Bucket,
+          globalBucket,
           s3Key,
           request.raw,
           mimeType,
@@ -163,7 +160,7 @@ export default async function routes(fastify: FastifyInstance) {
         // @todo tricky to handle since we need to undo the s3 upload
       }
 
-      const objectMetadata = await storageBackend.headObject(globalS3Bucket, s3Key)
+      const objectMetadata = await storageBackend.headObject(globalBucket, s3Key)
       // update content-length as super user since user may not have update permissions
       const metadata: ObjectMetadata = {
         mimetype: mimeType,

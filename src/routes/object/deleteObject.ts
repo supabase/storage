@@ -12,22 +12,19 @@ import { OSSBackend } from '../../backend/oss'
 const {
   region,
   projectRef,
-  globalS3Bucket,
-  globalS3Endpoint,
   storageBackendType,
-  ossEndpoint,
+  globalEndpoint,
   ossAccessKey,
   ossAccessSecret,
-  ossBucket,
+  globalBucket,
+  serviceKey
 } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
   storageBackend = new FileBackend()
-} else if (storageBackendType === 'oss') {
-  storageBackend = new OSSBackend(ossBucket, ossEndpoint, ossAccessKey, ossAccessSecret)
 } else {
-  storageBackend = new S3Backend(region, globalS3Endpoint)
+  storageBackend = new OSSBackend(globalBucket, globalEndpoint, ossAccessKey, ossAccessSecret)
 }
 
 const deleteObjectParamsSchema = {
@@ -98,7 +95,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       // if successfully deleted, delete from s3 too
       const s3Key = `${projectRef}/${bucketName}/${objectName}`
-      await storageBackend.deleteObject(globalS3Bucket, s3Key)
+      await storageBackend.deleteObject(globalBucket, s3Key)
 
       return response.status(200).send(createResponse('Successfully deleted'))
     }

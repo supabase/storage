@@ -14,22 +14,19 @@ import { OSSBackend } from '../../backend/oss'
 const {
   region,
   projectRef,
-  globalS3Bucket,
-  globalS3Endpoint,
   storageBackendType,
-  ossEndpoint,
+  globalEndpoint,
   ossAccessKey,
   ossAccessSecret,
-  ossBucket,
+  globalBucket,
+  serviceKey
 } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
   storageBackend = new FileBackend()
-} else if (storageBackendType === 'oss') {
-  storageBackend = new OSSBackend(ossBucket, ossEndpoint, ossAccessKey, ossAccessSecret)
 } else {
-  storageBackend = new S3Backend(region, globalS3Endpoint)
+  storageBackend = new OSSBackend(globalBucket, globalEndpoint, ossAccessKey, ossAccessSecret)
 }
 
 const getObjectParamsSchema = {
@@ -87,7 +84,7 @@ async function requestHandler(
   // send the object from s3
   const s3Key = `${projectRef}/${bucketName}/${objectName}`
   request.log.info(s3Key)
-  const data = await storageBackend.getObject(globalS3Bucket, s3Key, range)
+  const data = await storageBackend.getObject(globalBucket, s3Key, range)
 
   response
     .status(data.metadata.httpStatusCode ?? 200)

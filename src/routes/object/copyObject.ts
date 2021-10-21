@@ -12,23 +12,19 @@ import { OSSBackend } from '../../backend/oss'
 const {
   region,
   projectRef,
-  globalS3Bucket,
-  globalS3Endpoint,
-  serviceKey,
   storageBackendType,
-  ossEndpoint,
+  globalEndpoint,
   ossAccessKey,
   ossAccessSecret,
-  ossBucket,
+  globalBucket,
+  serviceKey
 } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
   storageBackend = new FileBackend()
-} else if (storageBackendType === 'oss') {
-  storageBackend = new OSSBackend(ossBucket, ossEndpoint, ossAccessKey, ossAccessSecret)
 } else {
-  storageBackend = new S3Backend(region, globalS3Endpoint)
+  storageBackend = new OSSBackend(globalBucket, globalEndpoint, ossAccessKey, ossAccessSecret)
 }
 
 const copyRequestBodySchema = {
@@ -137,7 +133,7 @@ export default async function routes(fastify: FastifyInstance) {
       const s3SourceKey = `${projectRef}/${bucketId}/${sourceKey}`
       const s3DestinationKey = `${projectRef}/${bucketId}/${destinationKey}`
       const copyResult = await storageBackend.copyObject(
-        globalS3Bucket,
+        globalBucket,
         s3SourceKey,
         s3DestinationKey
       )

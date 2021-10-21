@@ -1,4 +1,4 @@
-alter table storage.objects add column path_tokens text[] generated always as (string_to_array("name", '/')) stored;
+alter table storage.objects add column path_tokens text[];
 
 CREATE OR REPLACE FUNCTION storage.search(prefix text, bucketname text, limits int DEFAULT 100, levels int DEFAULT 1, offsets int DEFAULT 0)
  RETURNS TABLE (
@@ -12,7 +12,7 @@ CREATE OR REPLACE FUNCTION storage.search(prefix text, bucketname text, limits i
  LANGUAGE plpgsql
 AS $function$
 BEGIN
-	return query 
+	return query
 		with files_folders as (
 			select path_tokens[levels] as folder
 			from storage.objects
@@ -21,8 +21,8 @@ BEGIN
 			GROUP by folder
 			limit limits
 			offset offsets
-		) 
-		select files_folders.folder as name, objects.id, objects.updated_at, objects.created_at, objects.last_accessed_at, objects.metadata from files_folders 
+		)
+		select files_folders.folder as name, objects.id, objects.updated_at, objects.created_at, objects.last_accessed_at, objects.metadata from files_folders
 		left join storage.objects
 		on prefix || files_folders.folder = objects.name
         where objects.id is null or objects.bucket_id=bucketname;

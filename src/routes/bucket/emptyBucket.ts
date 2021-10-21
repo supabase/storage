@@ -12,23 +12,20 @@ import { OSSBackend } from '../../backend/oss'
 const {
   region,
   projectRef,
-  globalS3Bucket,
-  globalS3Endpoint,
   storageBackendType,
-  ossEndpoint,
+  globalEndpoint,
   ossAccessKey,
   ossAccessSecret,
-  ossBucket,
+  globalBucket,
 } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
   storageBackend = new FileBackend()
-} else if (storageBackendType === 'oss') {
-  storageBackend = new OSSBackend(ossBucket, ossEndpoint, ossAccessKey, ossAccessSecret)
 } else {
-  storageBackend = new S3Backend(region, globalS3Endpoint)
+  storageBackend = new OSSBackend(globalBucket, globalEndpoint, ossAccessKey, ossAccessSecret)
 }
+
 const emptyBucketParamsSchema = {
   type: 'object',
   properties: {
@@ -110,7 +107,7 @@ export default async function routes(fastify: FastifyInstance) {
               return `${projectRef}/${bucketName}/${ele.name}`
             })
             // delete files from s3 asynchronously
-            storageBackend.deleteObjects(globalS3Bucket, params)
+            storageBackend.deleteObjects(globalBucket, params)
           }
         }
       } while (!deleteError && !objectError && objects && objects.length > 0)

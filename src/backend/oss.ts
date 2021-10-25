@@ -57,6 +57,7 @@ export class OSSBackend implements GenericStorageBackend {
 
   async deleteObject(bucket: string, key: string): Promise<ObjectMetadata> {
     console.log(bucket)
+    console.log(key)
     await this.client.delete(key)
     return {}
   }
@@ -71,6 +72,7 @@ export class OSSBackend implements GenericStorageBackend {
 
   async deleteObjects(bucket: string, prefixes: string[]): Promise<ObjectMetadata> {
     console.log(bucket)
+    console.log(prefixes)
     await this.client.deleteMulti(prefixes)
     return {}
   }

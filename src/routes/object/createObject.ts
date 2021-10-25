@@ -18,7 +18,7 @@ const {
   ossAccessKey,
   ossAccessSecret,
   globalBucket,
-    serviceKey
+  serviceKey
 } = getConfig()
 let storageBackend: GenericStorageBackend
 

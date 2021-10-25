@@ -35,7 +35,7 @@ export function getConfig(): StorageConfigType {
   return {
     anonKey: getConfigFromEnv('ANON_KEY'),
     serviceKey: getConfigFromEnv('SERVICE_KEY'),
-    projectRef: getConfigFromEnv('PROJECT_REF'),
+    projectRef: getConfigFromEnv('PROJECT_ID'),
     region: getConfigFromEnv('REGION'),
     postgrestURL: getConfigFromEnv('POSTGREST_URL'),
     globalBucket: getConfigFromEnv('GLOBAL_BUCKET'),

@@ -77,9 +77,11 @@ async function requestHandler(
 
     response
       .status(data.metadata.httpStatusCode ?? 200)
+      .header('Accept-Ranges', 'bytes')
       .header('Content-Type', normalizeContentType(data.metadata.mimetype))
       .header('Cache-Control', data.metadata.cacheControl)
       .header('ETag', data.metadata.eTag)
+      .header('Content-Length', data.metadata.contentLength)
       .header('Last-Modified', data.metadata.lastModified)
     if (data.metadata.contentRange) {
       response.header('Content-Range', data.metadata.contentRange)

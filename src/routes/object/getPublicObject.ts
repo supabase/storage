@@ -72,8 +72,10 @@ export default async function routes(fastify: FastifyInstance) {
         })
         response
           .status(data.metadata.httpStatusCode ?? 200)
+          .header('Accept-Ranges', 'bytes')
           .header('Content-Type', normalizeContentType(data.metadata.mimetype))
           .header('Cache-Control', data.metadata.cacheControl)
+          .header('Content-Length', data.metadata.contentLength)
           .header('ETag', data.metadata.eTag)
           .header('Last-Modified', data.metadata.lastModified)
         if (data.metadata.contentRange) {

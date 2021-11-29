@@ -42,6 +42,7 @@ type ObjectResponse = {
 
 type ObjectMetadata = {
   cacheControl?: string
+  contentLength?: number
   size?: number
   mimetype?: string
   lastModified?: Date

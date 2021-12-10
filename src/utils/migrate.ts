@@ -16,9 +16,7 @@ async function connectAndMigrate(
   const client = new Client(dbConfig)
   try {
     await client.connect()
-    await client.query('SET pg_stat_statements.track TO none')
     await migrate({ client }, migrationsDirectory)
-    await client.query('SET pg_stat_statements.track TO DEFAULT')
   } catch (error) {
     if (logOnError) {
       console.error('Migration error:', error.message)

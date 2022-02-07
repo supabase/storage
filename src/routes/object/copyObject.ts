@@ -105,7 +105,11 @@ export default async function routes(fastify: FastifyInstance) {
         owner,
       })
       request.log.info({ origObject }, 'newObject')
-      const { data: results, error, status } = await request.postgrest
+      const {
+        data: results,
+        error,
+        status,
+      } = await request.postgrest
         .from<Obj>('objects')
         .insert([newObject], {
           returning: 'minimal',

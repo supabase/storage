@@ -72,7 +72,11 @@ export default async function routes(fastify: FastifyInstance) {
       request.log.info(request.body)
       request.log.info(`searching for %s`, prefix)
 
-      const { data: results, error, status } = await request.postgrest
+      const {
+        data: results,
+        error,
+        status,
+      } = await request.postgrest
         .rpc('search', {
           prefix,
           bucketname: bucketName,

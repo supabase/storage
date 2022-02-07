@@ -8,7 +8,7 @@ import { getConfig } from './utils/config'
 import { runMultitenantMigrations, runMigrations } from './utils/migrate'
 import { cacheTenantConfigsFromDbAndRunMigrations } from './utils/tenant'
 
-let logger = pino({
+const logger = pino({
   formatters: {
     level(label) {
       return { level: label }
@@ -19,36 +19,36 @@ let logger = pino({
 
 const exposeDocs = true
 
-  ; (async () => {
-    const { isMultitenant } = getConfig()
-    if (isMultitenant) {
-      await runMultitenantMigrations()
-      await cacheTenantConfigsFromDbAndRunMigrations()
+;(async () => {
+  const { isMultitenant } = getConfig()
+  if (isMultitenant) {
+    await runMultitenantMigrations()
+    await cacheTenantConfigsFromDbAndRunMigrations()
 
-      const adminApp: FastifyInstance<Server, IncomingMessage, ServerResponse> = buildAdmin({
-        logger,
-      })
-
-      try {
-        await adminApp.listen(5001, '0.0.0.0')
-      } catch (err) {
-        adminApp.log.error(err)
-        process.exit(1)
-      }
-    } else {
-      await runMigrations()
-    }
-
-    const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
+    const adminApp: FastifyInstance<Server, IncomingMessage, ServerResponse> = buildAdmin({
       logger,
-      exposeDocs,
     })
 
-    app.listen(5000, '0.0.0.0', (err, address) => {
-      if (err) {
-        console.error(err)
-        process.exit(1)
-      }
-      console.log(`Server listening at ${address}`)
-    })
-  })()
+    try {
+      await adminApp.listen(5001, '0.0.0.0')
+    } catch (err) {
+      adminApp.log.error(err)
+      process.exit(1)
+    }
+  } else {
+    await runMigrations()
+  }
+
+  const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
+    logger,
+    exposeDocs,
+  })
+
+  app.listen(5000, '0.0.0.0', (err, address) => {
+    if (err) {
+      console.error(err)
+      process.exit(1)
+    }
+    console.log(`Server listening at ${address}`)
+  })
+})()

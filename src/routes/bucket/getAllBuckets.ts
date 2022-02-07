@@ -33,7 +33,11 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       // get list of all buckets
-      const { data: results, error, status } = await request.postgrest
+      const {
+        data: results,
+        error,
+        status,
+      } = await request.postgrest
         .from<Bucket>('buckets')
         .select('id, name, public, owner, created_at, updated_at')
 

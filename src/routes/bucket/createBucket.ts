@@ -62,7 +62,11 @@ export default async function routes(fastify: FastifyInstance) {
           .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
       }
 
-      const { data: results, error, status } = await request.postgrest
+      const {
+        data: results,
+        error,
+        status,
+      } = await request.postgrest
         .from<Bucket>('buckets')
         .insert(
           [

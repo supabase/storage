@@ -13,13 +13,8 @@ declare module 'fastify' {
 }
 
 async function getPostgrestClient(request: FastifyRequest, jwt: string): Promise<PostgrestClient> {
-  const {
-    anonKey,
-    isMultitenant,
-    postgrestURL,
-    postgrestURLSuffix,
-    xForwardedHostRegExp,
-  } = getConfig()
+  const { anonKey, isMultitenant, postgrestURL, postgrestURLSuffix, xForwardedHostRegExp } =
+    getConfig()
   let url = postgrestURL
   let apiKey = anonKey
   if (isMultitenant && xForwardedHostRegExp) {

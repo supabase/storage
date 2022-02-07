@@ -33,14 +33,18 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       const { bucketId } = request.params
-      const { data: results, error, status } = await request.postgrest
+      const {
+        data: results,
+        error,
+        status,
+      } = await request.postgrest
         .from<Bucket>('buckets')
         .select('id, name, owner, public, created_at, updated_at')
         .eq('id', bucketId)
         .single()
 
       if (error) {
-        request.log.error({ error }, 'error bucket')
+        request.log.error({ error, bucketId }, 'failed to retrieve bucket info')
         return response.status(400).send(transformPostgrestError(error, status))
       }
       request.log.info({ results }, 'results')

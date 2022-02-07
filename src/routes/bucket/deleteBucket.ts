@@ -44,7 +44,7 @@ export default async function routes(fastify: FastifyInstance) {
       } = await request.postgrest.from<Bucket>('buckets').select('id').eq('id', bucketId).single()
 
       if (bucketError) {
-        request.log.error({ error: bucketError }, 'error bucket')
+        request.log.error({ error: bucketError, bucketId }, 'failed to retrieve bucket')
         return response.status(400).send(transformPostgrestError(bucketError, bucketStatus))
       }
       request.log.info({ results: bucketResults }, 'results')
@@ -60,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
         .limit(10)
 
       if (objectError) {
-        request.log.error({ error: objectError }, 'error object')
+        request.log.error({ error: objectError, bucketId }, 'failed to retrieve object counts')
         return response.status(400).send(transformPostgrestError(objectError, objectStatus))
       }
 
@@ -77,12 +77,13 @@ export default async function routes(fastify: FastifyInstance) {
           )
       }
 
-      const { data: results, error, status } = await request.postgrest
-        .from<Bucket>('buckets')
-        .delete()
-        .eq('id', bucketId)
+      const {
+        data: results,
+        error,
+        status,
+      } = await request.postgrest.from<Bucket>('buckets').delete().eq('id', bucketId)
       if (error) {
-        request.log.error({ error }, 'error bucket')
+        request.log.error({ error, bucketId }, 'failed to delete bucket')
         return response.status(400).send(transformPostgrestError(error, status))
       }
       request.log.info({ results }, 'results')

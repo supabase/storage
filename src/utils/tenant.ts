@@ -14,9 +14,19 @@ const tenantConfigCache = new Map<string, TenantConfig>()
 
 export async function cacheTenantConfigAndRunMigrations(
   tenantId: string,
-  config: TenantConfig
+  config: TenantConfig,
+  logOnError = false
 ): Promise<void> {
-  await runMigrationsOnTenant(config.databaseUrl)
+  try {
+    await runMigrationsOnTenant(config.databaseUrl)
+  } catch (error) {
+    if (logOnError) {
+      console.error('Migration error:', error.message)
+      return
+    } else {
+      throw error
+    }
+  }
   tenantConfigCache.set(tenantId, config)
 }
 
@@ -30,12 +40,16 @@ export async function cacheTenantConfigsFromDbAndRunMigrations(): Promise<void> 
   await Promise.all(
     tenants.map(({ id, anon_key, database_url, jwt_secret, service_key }) =>
       limit(() =>
-        cacheTenantConfigAndRunMigrations(id, {
-          anonKey: decrypt(anon_key),
-          databaseUrl: decrypt(database_url),
-          jwtSecret: decrypt(jwt_secret),
-          serviceKey: decrypt(service_key),
-        })
+        cacheTenantConfigAndRunMigrations(
+          id,
+          {
+            anonKey: decrypt(anon_key),
+            databaseUrl: decrypt(database_url),
+            jwtSecret: decrypt(jwt_secret),
+            serviceKey: decrypt(service_key),
+          },
+          true
+        )
       )
     )
   )

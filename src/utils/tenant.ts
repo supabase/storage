@@ -1,4 +1,6 @@
 import pLimit from 'p-limit'
+import createSubscriber from 'pg-listen'
+import { getConfig } from './config'
 import { decrypt } from './crypto'
 import { runMigrationsOnTenant } from './migrate'
 import { knex } from './multitenant-db'
@@ -9,6 +11,8 @@ interface TenantConfig {
   jwtSecret: string
   serviceKey: string
 }
+
+const { multitenantDatabaseUrl } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
 
@@ -95,4 +99,21 @@ export async function getFileSizeLimit(tenantId: string): Promise<number> {
     throw new Error(`Tenant config for ${tenantId} not found`)
   }
   return Number(tenant.file_size_limit)
+}
+
+const TENANTS_UPDATE_CHANNEL = 'tenants_update'
+
+export async function listenForTenantUpdate(): Promise<void> {
+  const subscriber = createSubscriber({ connectionString: multitenantDatabaseUrl })
+
+  subscriber.notifications.on(TENANTS_UPDATE_CHANNEL, (tenantId) => {
+    tenantConfigCache.delete(tenantId)
+  })
+
+  subscriber.events.on('error', (error) => {
+    console.error('Postgres notification subscription error:', error)
+  })
+
+  await subscriber.connect()
+  await subscriber.listenTo(TENANTS_UPDATE_CHANNEL)
 }

@@ -6,7 +6,7 @@ import build from './app'
 import buildAdmin from './admin-app'
 import { getConfig } from './utils/config'
 import { runMultitenantMigrations, runMigrations } from './utils/migrate'
-import { cacheTenantConfigsFromDbAndRunMigrations } from './utils/tenant'
+import { cacheTenantConfigsFromDbAndRunMigrations, listenForTenantUpdate } from './utils/tenant'
 
 const logger = pino({
   formatters: {
@@ -24,6 +24,7 @@ const exposeDocs = true
   if (isMultitenant) {
     await runMultitenantMigrations()
     await cacheTenantConfigsFromDbAndRunMigrations()
+    await listenForTenantUpdate()
 
     const adminApp: FastifyInstance<Server, IncomingMessage, ServerResponse> = buildAdmin({
       logger,

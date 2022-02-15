@@ -1,8 +1,6 @@
-
 CREATE FUNCTION tenants_update_notify_trigger ()
     RETURNS TRIGGER
     AS $$
-DECLARE
 BEGIN
     PERFORM
         pg_notify('tenants_update', '"' || NEW.id || '"');
@@ -10,7 +8,6 @@ BEGIN
 END;
 $$
 LANGUAGE plpgsql;
-
 CREATE TRIGGER tenants_update_notify_trigger
     AFTER UPDATE ON tenants
     FOR EACH ROW

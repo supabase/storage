@@ -15,7 +15,7 @@ const getSignedURLsBodySchema = {
   type: 'object',
   properties: {
     expiresIn: { type: 'integer', minimum: 1, example: 60000 },
-    prefixes: {
+    paths: {
       type: 'array',
       items: { type: 'string' },
       minItems: 1,
@@ -23,14 +23,14 @@ const getSignedURLsBodySchema = {
       example: ['folder/cat.png', 'folder/morecats.png'],
     },
   },
-  required: ['expiresIn', 'prefixes'],
+  required: ['expiresIn', 'paths'],
 } as const
 const successResponseSchema = {
   type: 'array',
   items: {
     type: 'object',
     properties: {
-      prefix: {
+      path: {
         type: 'string',
         example: 'folder/cat.png',
       },
@@ -66,13 +66,13 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       const { bucketName } = request.params
-      const { expiresIn, prefixes } = request.body
+      const { expiresIn, paths } = request.body
 
       const objectResponse = await request.postgrest
         .from<Obj>('objects')
         .select('name')
         .eq('bucket_id', bucketName)
-        .in('name', prefixes)
+        .in('name', paths)
 
       if (objectResponse.error) {
         const { error, status } = objectResponse
@@ -84,7 +84,7 @@ export default async function routes(fastify: FastifyInstance) {
       request.log.info({ results }, 'results')
 
       const nameSet = new Set(results.map(({ name }) => name))
-      const difference = [...new Set(prefixes)].filter((prefix) => !nameSet.has(prefix))
+      const difference = [...new Set(paths)].filter((path) => !nameSet.has(path))
 
       if (difference.length > 0) {
         return response
@@ -102,11 +102,11 @@ export default async function routes(fastify: FastifyInstance) {
 
       const jwtSecret = await getJwtSecret(request.tenantId)
       const signedUrls = await Promise.all(
-        prefixes.map(async (prefix) => {
-          const urlToSign = `${bucketName}/${prefix}`
+        paths.map(async (path) => {
+          const urlToSign = `${bucketName}/${path}`
           const token = await signJWT({ url: urlToSign }, jwtSecret, expiresIn)
           return {
-            prefix,
+            path,
             signedURL: `/object/sign/${urlToSign}?token=${token}`,
           }
         })

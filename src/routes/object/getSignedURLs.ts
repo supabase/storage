@@ -104,7 +104,6 @@ export default async function routes(fastify: FastifyInstance) {
       const signedUrls = await Promise.all(
         prefixes.map(async (prefix) => {
           const urlToSign = `${bucketName}/${prefix}`
-          request.log.info(`going to sign ${urlToSign}`)
           const token = await signJWT({ url: urlToSign }, jwtSecret, expiresIn)
           return {
             prefix,

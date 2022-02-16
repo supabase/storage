@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "downlevelIteration": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
     "esModuleInterop": true,
@@ -11,15 +12,10 @@
     "strict": true,
     "lib": ["ES6", "DOM"]
   },
-  "include": [
-    "./src/**/*"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist"
-  ],
-  "parserOptions":  {
-    "ecmaVersion":  "2020",  // Allows for the parsing of modern ECMAScript features
-    "sourceType":  "module"  // Allows for the use of imports
+  "include": ["./src/**/*"],
+  "exclude": ["node_modules", "dist"],
+  "parserOptions": {
+    "ecmaVersion": "2020", // Allows for the parsing of modern ECMAScript features
+    "sourceType": "module" // Allows for the use of imports
   }
 }

@@ -76,7 +76,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (objectResponse.error) {
         const { error, status } = objectResponse
-        request.log.error({ error }, 'error object')
+        request.log.error({ error }, 'failed to retrieve object names while getting signed URLs')
         return response.status(400).send(transformPostgrestError(error, status))
       }
 

@@ -23,7 +23,6 @@ const exposeDocs = true
   const { isMultitenant } = getConfig()
   if (isMultitenant) {
     await runMultitenantMigrations()
-    await cacheTenantConfigsFromDbAndRunMigrations()
     await listenForTenantUpdate()
 
     const adminApp: FastifyInstance<Server, IncomingMessage, ServerResponse> = buildAdmin({
@@ -52,4 +51,8 @@ const exposeDocs = true
     }
     console.log(`Server listening at ${address}`)
   })
+
+  if (isMultitenant) {
+    await cacheTenantConfigsFromDbAndRunMigrations()
+  }
 })()

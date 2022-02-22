@@ -30,17 +30,21 @@ const successResponseSchema = {
   items: {
     type: 'object',
     properties: {
+      error: {
+        error: ['string', 'null'],
+        example: 'Either the object does not exist or you do not have access to it',
+      },
       path: {
         type: 'string',
         example: 'folder/cat.png',
       },
       signedURL: {
-        type: 'string',
+        type: ['string', 'null'],
         example:
           '/object/sign/avatars/folder/cat.png?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJhdmF0YXJzL2ZvbGRlci9jYXQucG5nIiwiaWF0IjoxNjE3NzI2MjczLCJleHAiOjE2MTc3MjcyNzN9.s7Gt8ME80iREVxPhH01ZNv8oUn4XtaWsmiQ5csiUHn4',
       },
     },
-    required: ['signedURL'],
+    required: ['error', 'path', 'signedURL'],
   },
 }
 interface getSignedURLsRequestInterface extends AuthenticatedRequest {
@@ -84,35 +88,28 @@ export default async function routes(fastify: FastifyInstance) {
       request.log.info({ results }, 'results')
 
       const nameSet = new Set(results.map(({ name }) => name))
-      const difference = [...new Set(paths)].filter((path) => !nameSet.has(path))
-
-      if (difference.length > 0) {
-        return response
-          .status(400)
-          .send(
-            createResponse(
-              `Either the objects do not exist or you do not have access to: ${difference.join(
-                ' ,'
-              )}`,
-              '400',
-              'Non-existent or no access'
-            )
-          )
-      }
 
       const jwtSecret = await getJwtSecret(request.tenantId)
-      const signedUrls = await Promise.all(
+      const signedURLs = await Promise.all(
         paths.map(async (path) => {
-          const urlToSign = `${bucketName}/${path}`
-          const token = await signJWT({ url: urlToSign }, jwtSecret, expiresIn)
+          let error = null
+          let signedURL = null
+          if (nameSet.has(path)) {
+            const urlToSign = `${bucketName}/${path}`
+            const token = await signJWT({ url: urlToSign }, jwtSecret, expiresIn)
+            signedURL = `/object/sign/${urlToSign}?token=${token}`
+          } else {
+            error = 'Either the object does not exist or you do not have access to it'
+          }
           return {
+            error,
             path,
-            signedURL: `/object/sign/${urlToSign}?token=${token}`,
+            signedURL,
           }
         })
       )
 
-      return response.status(200).send(signedUrls)
+      return response.status(200).send(signedURLs)
     }
   )
 }

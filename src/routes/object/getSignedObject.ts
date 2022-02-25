@@ -87,7 +87,7 @@ export default async function routes(fastify: FastifyInstance) {
           response.header('Content-Range', data.metadata.contentRange)
         }
         return response.send(data.body)
-      } catch (err) {
+      } catch (err: any) {
         if (err.$metadata?.httpStatusCode === 304) {
           return response.status(304).send()
         }

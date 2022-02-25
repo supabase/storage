@@ -29,7 +29,10 @@ export async function getJwtSecret(tenantId: string): Promise<string> {
 }
 
 // eslint-disable-next-line @typescript-eslint/ban-types
-export function verifyJWT(token: string, secret: string): Promise<object | undefined> {
+export function verifyJWT(
+  token: string,
+  secret: string
+): Promise<string | jwt.JwtPayload | undefined> {
   return new Promise((resolve, reject) => {
     jwt.verify(token, secret, (err, decoded) => {
       if (err) return reject(err)

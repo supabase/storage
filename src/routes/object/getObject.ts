@@ -87,7 +87,7 @@ async function requestHandler(
       response.header('Content-Range', data.metadata.contentRange)
     }
     return response.send(data.body)
-  } catch (err) {
+  } catch (err: any) {
     if (err.$metadata?.httpStatusCode === 304) {
       return response.status(304).send()
     }

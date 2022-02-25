@@ -91,7 +91,7 @@ export default async function routes(fastify: FastifyInstance) {
       let owner
       try {
         owner = await getOwner(request.jwt, jwtSecret)
-      } catch (err) {
+      } catch (err: any) {
         console.log(err)
         return response.status(400).send(createResponse(err.message, '400', err.message))
       }
@@ -131,7 +131,6 @@ export default async function routes(fastify: FastifyInstance) {
         // since we are using streams, fastify can't throw the error reliably
         // busboy sets the truncated property on streams if limit was exceeded
         // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
-        /* @ts-expect-error: busboy doesn't export proper types */
         isTruncated = data.file.truncated
       } else {
         // just assume its a binary file

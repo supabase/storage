@@ -9,7 +9,7 @@ import { GenericStorageBackend } from './generic'
 const pipeline = promisify(stream.pipeline)
 
 export class FileBackend implements GenericStorageBackend {
-  client: null
+  client = null
   filePath: string
 
   constructor() {

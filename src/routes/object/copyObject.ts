@@ -79,7 +79,7 @@ export default async function routes(fastify: FastifyInstance) {
       let owner
       try {
         owner = await getOwner(jwt, jwtSecret)
-      } catch (err) {
+      } catch (err: any) {
         request.log.error(err)
         return response.status(400).send(createResponse(err.message, '400', err.message))
       }

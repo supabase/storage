@@ -47,7 +47,7 @@ describe('with X-Forwarded-Host header', () => {
         'x-forwarded-host': 'abcdefghijklmnopqrst.supabase.co',
       },
     })
-    expect(response.statusCode).toBe(500)
+    expect(response.statusCode).toBe(400)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON.message).toContain('http://abcdefghijklmnopqrst.supabase.co/rest/v1')
     await adminApp().inject({

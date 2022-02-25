@@ -24,7 +24,7 @@ export async function cacheTenantConfigAndRunMigrations(
 ): Promise<void> {
   try {
     await runMigrationsOnTenant(config.databaseUrl)
-  } catch (error) {
+  } catch (error: any) {
     if (logOnError) {
       console.error('Migration error:', error.message)
       return

@@ -71,11 +71,6 @@
   },
   "bin": "./dist/server.js",
   "pkg": {
-    "assets": "node_modules/pg-format/lib/reserved.js",
-    "outputPath": "bin",
-    "targets": [
-      "node14-linux-x64",
-      "node14-macos-x64"
-    ]
+    "assets": "node_modules/pg-format/lib/reserved.js"
   }
 }

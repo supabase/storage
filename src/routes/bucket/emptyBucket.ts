@@ -62,9 +62,8 @@ export default async function routes(fastify: FastifyInstance) {
       const { data: bucket } = bucketResponse
       const bucketName = bucket.name
 
-      let deleteError, deleteData, objectError, objects, objectStatus
-      do {
-        ;({
+      while (true) {
+        const {
           data: objects,
           error: objectError,
           status: objectStatus,
@@ -72,7 +71,7 @@ export default async function routes(fastify: FastifyInstance) {
           .from<Obj>('objects')
           .select('name, id')
           .eq('bucket_id', bucketId)
-          .limit(500))
+          .limit(500)
 
         if (objectError) {
           request.log.error({ error: objectError }, 'error object')
@@ -80,29 +79,53 @@ export default async function routes(fastify: FastifyInstance) {
         }
         request.log.info({ results: objects }, 'results')
 
-        if (objects && objects.length > 0) {
-          ;({ error: deleteError, data: deleteData } = await request.postgrest
-            .from<Obj>('objects')
-            .delete()
-            .in(
-              'id',
-              objects.map((ele) => ele.id)
-            ))
-
-          if (deleteError) {
-            request.log.error({ error: deleteError }, 'error bucket')
-          }
-
-          if (deleteData && deleteData.length > 0) {
-            const params = deleteData.map((ele) => {
-              return `${request.tenantId}/${bucketName}/${ele.name}`
-            })
-            // delete files from s3 asynchronously
-            storageBackend.deleteObjects(globalS3Bucket, params)
-          }
+        if (!(objects && objects.length > 0)) {
+          break
         }
-      } while (!deleteError && !objectError && objects && objects.length > 0)
 
+        const {
+          error: deleteError,
+          data: deleteData,
+          status: deleteStatus,
+        } = await request.postgrest
+          .from<Obj>('objects')
+          .delete()
+          .in(
+            'id',
+            objects.map(({ id }) => id)
+          )
+
+        if (deleteError) {
+          request.log.error({ error: deleteError }, 'error bucket')
+          return response.status(400).send(transformPostgrestError(deleteError, deleteStatus))
+        }
+
+        if (deleteData && deleteData.length > 0) {
+          const params = deleteData.map(({ name }) => {
+            return `${request.tenantId}/${bucketName}/${name}`
+          })
+          // delete files from s3 asynchronously
+          storageBackend.deleteObjects(globalS3Bucket, params)
+        }
+
+        if (deleteData?.length !== objects.length) {
+          const deletedNames = new Set(deleteData?.map(({ name }) => name))
+          const remainingNames = objects
+            .filter(({ name }) => !deletedNames.has(name))
+            .map(({ name }) => name)
+          return response
+            .status(400)
+            .send(
+              createResponse(
+                `Cannot delete: ${remainingNames.join(
+                  ' ,'
+                )}, you may have SELECT but not DELETE permissions`,
+                '400',
+                'Cannot delete'
+              )
+            )
+        }
+      }
       return response.status(200).send(createResponse('Successfully emptied'))
     }
   )

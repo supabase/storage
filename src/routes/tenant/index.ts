@@ -3,7 +3,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import apiKey from '../../plugins/apikey'
 import { decrypt, encrypt } from '../../utils/crypto'
 import { knex } from '../../utils/multitenant-db'
-import { deleteTenantConfig } from '../../utils/tenant'
+import { deleteTenantConfig, runMigrations } from '../../utils/tenant'
 
 const patchSchema = {
   body: {
@@ -74,13 +74,15 @@ export default async function routes(fastify: FastifyInstance) {
   })
 
   fastify.post<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
+    const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey } = request.body
+    await runMigrations(databaseUrl)
     await knex('tenants').insert({
       id: request.params.tenantId,
-      anon_key: encrypt(request.body.anonKey),
-      database_url: encrypt(request.body.databaseUrl),
-      file_size_limit: request.body.fileSizeLimit,
-      jwt_secret: encrypt(request.body.jwtSecret),
-      service_key: encrypt(request.body.serviceKey),
+      anon_key: encrypt(anonKey),
+      database_url: encrypt(databaseUrl),
+      file_size_limit: fileSizeLimit,
+      jwt_secret: encrypt(jwtSecret),
+      service_key: encrypt(serviceKey),
     })
     reply.code(201).send()
   })
@@ -90,6 +92,9 @@ export default async function routes(fastify: FastifyInstance) {
     { schema: patchSchema },
     async (request, reply) => {
       const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey } = request.body
+      if (databaseUrl) {
+        await runMigrations(databaseUrl)
+      }
       await knex('tenants')
         .update({
           anon_key: anonKey !== undefined ? encrypt(anonKey) : undefined,
@@ -104,14 +109,16 @@ export default async function routes(fastify: FastifyInstance) {
   )
 
   fastify.put<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
+    const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey } = request.body
+    await runMigrations(databaseUrl)
     await knex('tenants')
       .insert({
         id: request.params.tenantId,
-        anon_key: encrypt(request.body.anonKey),
-        database_url: encrypt(request.body.databaseUrl),
-        file_size_limit: request.body.fileSizeLimit,
-        jwt_secret: encrypt(request.body.jwtSecret),
-        service_key: encrypt(request.body.serviceKey),
+        anon_key: encrypt(anonKey),
+        database_url: encrypt(databaseUrl),
+        file_size_limit: fileSizeLimit,
+        jwt_secret: encrypt(jwtSecret),
+        service_key: encrypt(serviceKey),
       })
       .onConflict('id')
       .merge()

@@ -17,13 +17,9 @@ const { multitenantDatabaseUrl } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
 
-export async function cacheTenantConfigAndRunMigrations(
-  tenantId: string,
-  config: TenantConfig,
-  logOnError = false
-): Promise<void> {
+export async function runMigrations(databaseUrl: string, logOnError = false): Promise<void> {
   try {
-    await runMigrationsOnTenant(config.databaseUrl)
+    await runMigrationsOnTenant(databaseUrl)
   } catch (error: any) {
     if (logOnError) {
       console.error('Migration error:', error.message)
@@ -32,6 +28,14 @@ export async function cacheTenantConfigAndRunMigrations(
       throw error
     }
   }
+}
+
+export async function cacheTenantConfigAndRunMigrations(
+  tenantId: string,
+  config: TenantConfig,
+  logOnError = false
+): Promise<void> {
+  await runMigrations(config.databaseUrl, logOnError)
   tenantConfigCache.set(tenantId, config)
 }
 

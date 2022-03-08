@@ -22,7 +22,7 @@ export async function runMigrations(databaseUrl: string, logOnError = false): Pr
     await runMigrationsOnTenant(databaseUrl)
   } catch (error: any) {
     if (logOnError) {
-      console.error('Migration error:', error.message)
+      console.error(`Migration error for ${tenantId}: ${error.message}`)
       return
     } else {
       throw error

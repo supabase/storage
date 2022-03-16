@@ -12,10 +12,11 @@ RUN npm ci
 RUN npm run build
 
 FROM node:14-alpine
+RUN npm install -g pm2
 WORKDIR /app
 COPY migrations migrations
-COPY package.json .
+COPY ecosystem.config.js package.json .
 COPY --from=0 /app/node_modules node_modules
 COPY --from=1 /app/dist dist
 EXPOSE 5000
-CMD ["npm", "run", "start"]
+CMD ["pm2-runtime", "ecosystem.config.js"]

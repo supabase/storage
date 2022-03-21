@@ -26,6 +26,9 @@ const searchRequestBodySchema = {
       },
       required: ['column'],
     },
+    search: {
+      type: 'string',
+    },
   },
   required: ['prefix'],
 } as const
@@ -55,7 +58,7 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       const { bucketName } = request.params
-      const { limit, offset, sortBy } = request.body
+      const { limit, offset, sortBy, search } = request.body
       let sortColumn, sortOrder
       if (sortBy?.column) {
         sortColumn = sortBy.column
@@ -76,17 +79,16 @@ export default async function routes(fastify: FastifyInstance) {
         data: results,
         error,
         status,
-      } = await request.postgrest
-        .rpc('search', {
-          prefix,
-          bucketname: bucketName,
-          limits: limit,
-          offsets: offset,
-          levels: prefix.split('/').length,
-        })
-        .order(sortColumn, {
-          ascending: sortOrder === 'asc',
-        })
+      } = await request.postgrest.rpc('search', {
+        prefix,
+        bucketname: bucketName,
+        limits: limit,
+        offsets: offset,
+        levels: prefix.split('/').length,
+        search,
+        sortcolumn: sortColumn,
+        sortorder: sortOrder,
+      })
 
       if (error) {
         request.log.error({ error }, 'search rpc')

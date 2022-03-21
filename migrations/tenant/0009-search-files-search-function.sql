@@ -20,6 +20,7 @@ create or replace function storage.search (
 as $$
 declare
   v_order_by text;
+  v_sort_order text;
 begin
   case
     when sortcolumn = 'name' then
@@ -36,34 +37,44 @@ begin
 
   case
     when sortorder = 'asc' then
-      v_order_by = v_order_by || ' asc';
+      v_sort_order = 'asc';
     when sortorder = 'desc' then
-      v_order_by = v_order_by || ' desc';
+      v_sort_order = 'desc';
     else
-      v_order_by = v_order_by || ' asc';
+      v_sort_order = 'asc';
   end case;
 
+  v_order_by = v_order_by || ' ' || v_sort_order;
+
   return query execute
-    'select p.name,
-            p.id,
-            p.updated_at,
-            p.created_at,
-            p.last_accessed_at,
-            p.metadata
-     from (
-       select o.path_tokens[$1] as "name",
-              o.id,
-              o.updated_at,
-              o.created_at,
-              o.last_accessed_at,
-              o.metadata,
-              array_length(regexp_split_to_array(o.name, ''/''), 1) = $1 as is_file
-       from storage.objects o
-       where o.name ilike $2 || $3 || ''%''
-       and o.bucket_id = $4
-       order by is_file, ' || v_order_by || '
-       limit $5
-       offset $6
-     ) p;' using levels, prefix, search, bucketname, limits, offsets;
+    'with folders as (
+       select path_tokens[$1] as folder
+       from storage.objects
+         where objects.name ilike $2 || $3 || ''%''
+           and bucket_id = $4
+           and array_length(regexp_split_to_array(objects.name, ''/''), 1) <> $1
+       group by folder
+       order by folder ' || v_sort_order || '
+     )
+     (select folder as "name",
+            null as id,
+            null as updated_at,
+            null as created_at,
+            null as last_accessed_at,
+            null as metadata from folders)
+     union all
+     (select path_tokens[$1] as "name",
+            id,
+            updated_at,
+            created_at,
+            last_accessed_at,
+            metadata
+     from storage.objects
+     where objects.name ilike $2 || $3 || ''%''
+       and bucket_id = $4
+       and array_length(regexp_split_to_array(objects.name, ''/''), 1) = $1
+     order by ' || v_order_by || ')
+     limit $5
+     offset $6' using levels, prefix, search, bucketname, limits, offsets;
 end;
 $$ language plpgsql stable;

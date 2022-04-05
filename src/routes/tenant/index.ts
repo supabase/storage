@@ -75,9 +75,10 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.post<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
     const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey } = request.body
-    await runMigrations(databaseUrl)
+    const { tenantId } = request.params
+    await runMigrations(tenantId, databaseUrl)
     await knex('tenants').insert({
-      id: request.params.tenantId,
+      id: tenantId,
       anon_key: encrypt(anonKey),
       database_url: encrypt(databaseUrl),
       file_size_limit: fileSizeLimit,
@@ -92,8 +93,9 @@ export default async function routes(fastify: FastifyInstance) {
     { schema: patchSchema },
     async (request, reply) => {
       const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey } = request.body
+      const { tenantId } = request.params
       if (databaseUrl) {
-        await runMigrations(databaseUrl)
+        await runMigrations(tenantId, databaseUrl)
       }
       await knex('tenants')
         .update({
@@ -103,17 +105,18 @@ export default async function routes(fastify: FastifyInstance) {
           jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,
           service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
         })
-        .where('id', request.params.tenantId)
+        .where('id', tenantId)
       reply.code(204).send()
     }
   )
 
   fastify.put<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
     const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey } = request.body
-    await runMigrations(databaseUrl)
+    const { tenantId } = request.params
+    await runMigrations(tenantId, databaseUrl)
     await knex('tenants')
       .insert({
-        id: request.params.tenantId,
+        id: tenantId,
         anon_key: encrypt(anonKey),
         database_url: encrypt(databaseUrl),
         file_size_limit: fileSizeLimit,

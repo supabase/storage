@@ -24,6 +24,7 @@ export async function runMigrations(
 ): Promise<void> {
   try {
     await runMigrationsOnTenant(databaseUrl)
+    console.log(`${tenantId} migrations ran successfully`)
   } catch (error: any) {
     if (logOnError) {
       console.error(`${tenantId} migration error:`, error.message)

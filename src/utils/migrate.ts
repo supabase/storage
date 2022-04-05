@@ -7,7 +7,7 @@ const { multitenantDatabaseUrl } = getConfig()
 async function connectAndMigrate(databaseUrl: string | undefined, migrationsDirectory: string) {
   const dbConfig = {
     connectionString: databaseUrl,
-    connectionTimeoutMillis: 1000,
+    connectionTimeoutMillis: 10_000,
   }
   const client = new Client(dbConfig)
   try {

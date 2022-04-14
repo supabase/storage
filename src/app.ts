@@ -55,7 +55,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(logTenantId)
   app.register(bucketRoutes, { prefix: 'bucket' })
   app.register(objectRoutes, { prefix: 'object' })
-  app.register(underPressure, { exposeStatusRoute: true, maxEventLoopUtilization: 0.99 })
+  app.register(underPressure, { exposeStatusRoute: true })
 
   return app
 }

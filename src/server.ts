@@ -6,7 +6,7 @@ import build from './app'
 import buildAdmin from './admin-app'
 import { getConfig } from './utils/config'
 import { runMultitenantMigrations, runMigrations } from './utils/migrate'
-import { cacheTenantConfigsFromDbAndRunMigrations, listenForTenantUpdate } from './utils/tenant'
+import { listenForTenantUpdate } from './utils/tenant'
 
 const logger = pino({
   formatters: {
@@ -51,8 +51,4 @@ const exposeDocs = true
     }
     console.log(`Server listening at ${address}`)
   })
-
-  if (isMultitenant) {
-    await cacheTenantConfigsFromDbAndRunMigrations()
-  }
 })()

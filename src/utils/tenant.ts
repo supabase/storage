@@ -1,4 +1,3 @@
-import pLimit from 'p-limit'
 import createSubscriber from 'pg-listen'
 import { getConfig } from './config'
 import { decrypt } from './crypto'
@@ -46,28 +45,6 @@ export async function cacheTenantConfigAndRunMigrations(
 
 export function deleteTenantConfig(tenantId: string): void {
   tenantConfigCache.delete(tenantId)
-}
-
-export async function cacheTenantConfigsFromDbAndRunMigrations(): Promise<void> {
-  const tenants = await knex('tenants').select()
-  const limit = pLimit(100)
-  await Promise.all(
-    tenants.map(({ id, anon_key, database_url, file_size_limit, jwt_secret, service_key }) =>
-      limit(() =>
-        cacheTenantConfigAndRunMigrations(
-          id,
-          {
-            anonKey: decrypt(anon_key),
-            databaseUrl: decrypt(database_url),
-            fileSizeLimit: Number(file_size_limit),
-            jwtSecret: decrypt(jwt_secret),
-            serviceKey: decrypt(service_key),
-          },
-          true
-        )
-      )
-    )
-  )
 }
 
 async function getTenantConfig(tenantId: string): Promise<TenantConfig> {

@@ -224,7 +224,6 @@ export default async function routes(fastify: FastifyInstance) {
       const { error: updateError, status: updateStatus } = await request.superUserPostgrest
         .from<Obj>('objects')
         .update({
-          updated_at: new Date().toISOString(),
           metadata,
         })
         .match({ bucket_id: bucketName, name: objectName })

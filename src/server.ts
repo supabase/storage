@@ -44,11 +44,13 @@ const exposeDocs = true
     exposeDocs,
   })
 
-  app.listen(5000, '0.0.0.0', (err, address) => {
-    if (err) {
-      console.error(err)
-      process.exit(1)
-    }
-    console.log(`Server listening at ${address}`)
-  })
+  for (const port of [5000, 5002]) {
+    app.listen(port, '0.0.0.0', (err, address) => {
+      if (err) {
+        console.error(err)
+        process.exit(1)
+      }
+      console.log(`Server listening at ${address}`)
+    })
+  }
 })()

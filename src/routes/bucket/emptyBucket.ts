@@ -71,7 +71,7 @@ export default async function routes(fastify: FastifyInstance) {
           .from<Obj>('objects')
           .select('name, id')
           .eq('bucket_id', bucketId)
-          .limit(500)
+          .limit(300)
 
         if (objectError) {
           request.log.error({ error: objectError }, 'error object')

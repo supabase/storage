@@ -5,7 +5,7 @@ import tenantRoutes from './routes/tenant'
 const build = (opts: FastifyServerOptions = {}): FastifyInstance => {
   const app = fastify(opts)
   app.register(tenantRoutes, { prefix: 'tenants' })
-  app.register(underPressure, { exposeStatusRoute: true, maxEventLoopUtilization: 0.99 })
+  app.register(underPressure, { exposeStatusRoute: true })
   return app
 }
 

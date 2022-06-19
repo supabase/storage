@@ -20,13 +20,14 @@ const logger = pino({
 const exposeDocs = true
 
 ;(async () => {
-  const { isMultitenant } = getConfig()
+  const { isMultitenant, requestIdHeader, adminRequestIdHeader } = getConfig()
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate()
 
     const adminApp: FastifyInstance<Server, IncomingMessage, ServerResponse> = buildAdmin({
       logger,
+      requestIdHeader: adminRequestIdHeader,
     })
 
     try {
@@ -42,6 +43,7 @@ const exposeDocs = true
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
     logger,
     exposeDocs,
+    requestIdHeader,
   })
 
   app.listen(5000, '0.0.0.0', (err, address) => {

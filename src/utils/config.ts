@@ -2,23 +2,25 @@ import dotenv from 'dotenv'
 
 type StorageBackendType = 'file' | 's3'
 type StorageConfigType = {
+  adminApiKeys: string
+  adminRequestIdHeader?: string
   anonKey: string
-  serviceKey: string
-  tenantId: string
-  region: string
-  postgrestURL: string
+  encryptionKey: string
+  fileSizeLimit: number
+  fileStoragePath?: string
   globalS3Bucket: string
   globalS3Endpoint?: string
-  jwtSecret: string
-  fileSizeLimit: number
-  storageBackendType: StorageBackendType
-  fileStoragePath?: string
   isMultitenant: boolean
+  jwtSecret: string
   multitenantDatabaseUrl?: string
-  xForwardedHostRegExp?: string
+  postgrestURL: string
   postgrestURLSuffix?: string
-  adminApiKeys: string
-  encryptionKey: string
+  region: string
+  requestIdHeader?: string
+  serviceKey: string
+  storageBackendType: StorageBackendType
+  tenantId: string
+  xForwardedHostRegExp?: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -43,25 +45,27 @@ export function getConfig(): StorageConfigType {
   dotenv.config()
 
   return {
+    adminApiKeys: getOptionalConfigFromEnv('ADMIN_API_KEYS') || '',
+    adminRequestIdHeader: getOptionalConfigFromEnv('ADMIN_REQUEST_ID_HEADER'),
     anonKey: getOptionalIfMultitenantConfigFromEnv('ANON_KEY') || '',
+    encryptionKey: getOptionalConfigFromEnv('ENCRYPTION_KEY') || '',
+    fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
+    fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
+    globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
+    globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
+    isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
+    jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
+    multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
+    postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
+    postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
+    region: getConfigFromEnv('REGION'),
+    requestIdHeader: getOptionalConfigFromEnv('REQUEST_ID_HEADER'),
     serviceKey: getOptionalIfMultitenantConfigFromEnv('SERVICE_KEY') || '',
+    storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     tenantId:
       getOptionalConfigFromEnv('PROJECT_REF') ||
       getOptionalIfMultitenantConfigFromEnv('TENANT_ID') ||
       '',
-    region: getConfigFromEnv('REGION'),
-    postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
-    globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
-    globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
-    jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
-    fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
-    storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
-    fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
-    isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
-    multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
     xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
-    postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
-    adminApiKeys: getOptionalConfigFromEnv('ADMIN_API_KEYS') || '',
-    encryptionKey: getOptionalConfigFromEnv('ENCRYPTION_KEY') || '',
   }
 }

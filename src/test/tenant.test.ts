@@ -1,4 +1,6 @@
 'use strict'
+import { Registry } from 'prom-client'
+
 import app from '../admin-app'
 import dotenv from 'dotenv'
 import * as migrate from '../utils/migrate'
@@ -28,7 +30,7 @@ beforeAll(async () => {
 })
 
 afterEach(async () => {
-  await app().inject({
+  await app({}, { register: new Registry() }).inject({
     method: 'DELETE',
     url: '/tenants/abc',
     headers: {
@@ -43,7 +45,7 @@ afterAll(async () => {
 
 describe('Tenant configs', () => {
   test('Get all tenant configs', async () => {
-    await app().inject({
+    await app({}, { register: new Registry() }).inject({
       method: 'POST',
       url: `/tenants/abc`,
       payload,
@@ -51,7 +53,7 @@ describe('Tenant configs', () => {
         apikey: process.env.ADMIN_API_KEYS,
       },
     })
-    const response = await app().inject({
+    const response = await app({}, { register: new Registry() }).inject({
       method: 'GET',
       url: `/tenants`,
       headers: {
@@ -69,7 +71,7 @@ describe('Tenant configs', () => {
   })
 
   test('Get nonexistent tenant config', async () => {
-    const response = await app().inject({
+    const response = await app({}, { register: new Registry() }).inject({
       method: 'GET',
       url: `/tenants/abc`,
       headers: {
@@ -80,7 +82,7 @@ describe('Tenant configs', () => {
   })
 
   test('Get existing tenant config', async () => {
-    await app().inject({
+    await app({}, { register: new Registry() }).inject({
       method: 'POST',
       url: `/tenants/abc`,
       payload,
@@ -88,7 +90,7 @@ describe('Tenant configs', () => {
         apikey: process.env.ADMIN_API_KEYS,
       },
     })
-    const response = await app().inject({
+    const response = await app({}, { register: new Registry() }).inject({
       method: 'GET',
       url: `/tenants/abc`,
       headers: {
@@ -101,7 +103,7 @@ describe('Tenant configs', () => {
   })
 
   test('Insert tenant config without required properties', async () => {
-    const response = await app().inject({
+    const response = await app({}, { register: new Registry() }).inject({
       method: 'POST',
       url: `/tenants/abc`,
       payload: {},
@@ -113,7 +115,7 @@ describe('Tenant configs', () => {
   })
 
   test('Insert tenant config twice', async () => {
-    const firstInsertResponse = await app().inject({
+    const firstInsertResponse = await app({}, { register: new Registry() }).inject({
       method: 'POST',
       url: `/tenants/abc`,
       payload,
@@ -122,7 +124,7 @@ describe('Tenant configs', () => {
       },
     })
     expect(firstInsertResponse.statusCode).toBe(201)
-    const secondInsertResponse = await app().inject({
+    const secondInsertResponse = await app({}, { register: new Registry() }).inject({
       method: 'POST',
       url: `/tenants/abc`,
       payload,
@@ -134,7 +136,7 @@ describe('Tenant configs', () => {
   })
 
   test('Update tenant config', async () => {
-    await app().inject({
+    await app({}, { register: new Registry() }).inject({
       method: 'POST',
       url: `/tenants/abc`,
       payload,
@@ -142,7 +144,7 @@ describe('Tenant configs', () => {
         apikey: process.env.ADMIN_API_KEYS,
       },
     })
-    const patchResponse = await app().inject({
+    const patchResponse = await app({}, { register: new Registry() }).inject({
       method: 'PATCH',
       url: `/tenants/abc`,
       payload: payload2,
@@ -151,7 +153,7 @@ describe('Tenant configs', () => {
       },
     })
     expect(patchResponse.statusCode).toBe(204)
-    const getResponse = await app().inject({
+    const getResponse = await app({}, { register: new Registry() }).inject({
       method: 'GET',
       url: `/tenants/abc`,
       headers: {
@@ -163,7 +165,7 @@ describe('Tenant configs', () => {
   })
 
   test('Update tenant config partially', async () => {
-    await app().inject({
+    await app({}, { register: new Registry() }).inject({
       method: 'POST',
       url: `/tenants/abc`,
       payload,
@@ -171,7 +173,7 @@ describe('Tenant configs', () => {
         apikey: process.env.ADMIN_API_KEYS,
       },
     })
-    const patchResponse = await app().inject({
+    const patchResponse = await app({}, { register: new Registry() }).inject({
       method: 'PATCH',
       url: `/tenants/abc`,
       payload: { fileSizeLimit: 2 },
@@ -180,7 +182,7 @@ describe('Tenant configs', () => {
       },
     })
     expect(patchResponse.statusCode).toBe(204)
-    const getResponse = await app().inject({
+    const getResponse = await app({}, { register: new Registry() }).inject({
       method: 'GET',
       url: `/tenants/abc`,
       headers: {
@@ -192,7 +194,7 @@ describe('Tenant configs', () => {
   })
 
   test('Upsert tenant config', async () => {
-    const firstPutResponse = await app().inject({
+    const firstPutResponse = await app({}, { register: new Registry() }).inject({
       method: 'PUT',
       url: `/tenants/abc`,
       payload,
@@ -201,7 +203,7 @@ describe('Tenant configs', () => {
       },
     })
     expect(firstPutResponse.statusCode).toBe(204)
-    const firstGetResponse = await app().inject({
+    const firstGetResponse = await app({}, { register: new Registry() }).inject({
       method: 'GET',
       url: `/tenants/abc`,
       headers: {
@@ -210,7 +212,7 @@ describe('Tenant configs', () => {
     })
     const firstGetResponseJSON = JSON.parse(firstGetResponse.body)
     expect(firstGetResponseJSON).toEqual(payload)
-    const secondPutResponse = await app().inject({
+    const secondPutResponse = await app({}, { register: new Registry() }).inject({
       method: 'PUT',
       url: `/tenants/abc`,
       payload: payload2,
@@ -219,7 +221,7 @@ describe('Tenant configs', () => {
       },
     })
     expect(secondPutResponse.statusCode).toBe(204)
-    const secondGetResponse = await app().inject({
+    const secondGetResponse = await app({}, { register: new Registry() }).inject({
       method: 'GET',
       url: `/tenants/abc`,
       headers: {
@@ -231,7 +233,7 @@ describe('Tenant configs', () => {
   })
 
   test('Delete tenant config', async () => {
-    await app().inject({
+    await app({}, { register: new Registry() }).inject({
       method: 'POST',
       url: `/tenants/abc`,
       payload,
@@ -239,7 +241,7 @@ describe('Tenant configs', () => {
         apikey: process.env.ADMIN_API_KEYS,
       },
     })
-    const deleteResponse = await app().inject({
+    const deleteResponse = await app({}, { register: new Registry() }).inject({
       method: 'DELETE',
       url: '/tenants/abc',
       headers: {
@@ -247,7 +249,7 @@ describe('Tenant configs', () => {
       },
     })
     expect(deleteResponse.statusCode).toBe(204)
-    const getResponse = await app().inject({
+    const getResponse = await app({}, { register: new Registry() }).inject({
       method: 'GET',
       url: `/tenants/abc`,
       headers: {

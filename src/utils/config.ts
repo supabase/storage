@@ -20,6 +20,7 @@ type StorageConfigType = {
   serviceKey: string
   storageBackendType: StorageBackendType
   tenantId: string
+  urlLengthLimit: number
   xForwardedHostRegExp?: string
 }
 
@@ -66,6 +67,7 @@ export function getConfig(): StorageConfigType {
       getOptionalConfigFromEnv('PROJECT_REF') ||
       getOptionalIfMultitenantConfigFromEnv('TENANT_ID') ||
       '',
+    urlLengthLimit: Number(getOptionalConfigFromEnv('URL_LENGTH_LIMIT')) || 7_500,
     xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
   }
 }

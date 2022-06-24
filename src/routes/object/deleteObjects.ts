@@ -9,7 +9,7 @@ import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
+const { region, globalS3Bucket, globalS3Endpoint, storageBackendType, urlLengthLimit } = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
@@ -32,7 +32,6 @@ const deleteObjectsBodySchema = {
       type: 'array',
       items: { type: 'string' },
       minItems: 1,
-      maxItems: 1000,
       example: ['folder/cat.png', 'folder/morecats.png'],
     },
   },
@@ -66,27 +65,41 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketName } = request.params
       const prefixes = request.body['prefixes']
+      let results: { name: string }[] = []
 
-      const objectResponse = await request.postgrest
-        .from<Obj>('objects')
-        .delete()
-        .eq('bucket_id', bucketName)
-        .in('name', prefixes)
+      for (let i = 0; i < prefixes.length; ) {
+        const prefixesSubset = []
+        let urlParamLength = 0
 
-      if (objectResponse.error) {
-        const { error, status } = objectResponse
-        request.log.error({ error }, 'error object')
-        return response.status(status).send(transformPostgrestError(error, status))
-      }
+        for (; i < prefixes.length && urlParamLength < urlLengthLimit; i++) {
+          const prefix = prefixes[i]
+          prefixesSubset.push(prefix)
+          urlParamLength += prefix.length + 3 // %2C
+        }
 
-      const { data: results } = objectResponse
-      if (results.length > 0) {
-        // if successfully deleted, delete from s3 too
-        const prefixesToDelete = results.map((ele) => {
-          return `${request.tenantId}/${bucketName}/${ele.name}`
-        })
+        const objectResponse = await request.postgrest
+          .from<Obj>('objects')
+          .delete()
+          .eq('bucket_id', bucketName)
+          .in('name', prefixesSubset)
 
-        await storageBackend.deleteObjects(globalS3Bucket, prefixesToDelete)
+        if (objectResponse.error) {
+          const { error, status } = objectResponse
+          request.log.error({ error }, 'error object')
+          return response.status(status).send(transformPostgrestError(error, status))
+        }
+
+        const { data } = objectResponse
+        if (data.length > 0) {
+          results = results.concat(data)
+
+          // if successfully deleted, delete from s3 too
+          const prefixesToDelete = data.map(
+            ({ name }) => `${request.tenantId}/${bucketName}/${name}`
+          )
+
+          await storageBackend.deleteObjects(globalS3Bucket, prefixesToDelete)
+        }
       }
 
       return response.status(200).send(results)

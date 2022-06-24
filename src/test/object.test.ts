@@ -883,7 +883,7 @@ describe('testing deleting multiple objects', () => {
 })
 
 /**
- * POST /sign/
+ * POST /sign/:bucketName/*
  */
 describe('testing generating signed URL', () => {
   test('check if RLS policies are respected: authenticated user is able to sign URL for an authenticated resource', async () => {
@@ -953,6 +953,91 @@ describe('testing generating signed URL', () => {
       },
     })
     expect(response.statusCode).toBe(400)
+  })
+})
+
+/**
+ * POST /sign/:bucketName
+ */
+describe('testing generating signed URLs', () => {
+  test('check if RLS policies are respected: authenticated user is able to sign URLs for an authenticated resource', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/sign/bucket2',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+        paths: [...Array(10001).keys()].map((i) => `authenticated/${i}`),
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const result = JSON.parse(response.body)
+    expect(result).toHaveLength(10001)
+  })
+
+  test('check if RLS policies are respected: anon user is not able to generate signedURLs for authenticated resource', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/sign/bucket2',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+      payload: {
+        expiresIn: 1000,
+        paths: [...Array(10001).keys()].map((i) => `authenticated/${i}`),
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const result = JSON.parse(response.body)
+    expect(result[0].error).toBe('Either the object does not exist or you do not have access to it')
+  })
+
+  test('user is not able to generate signedURLs without Auth header', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/sign/bucket2',
+      payload: {
+        expiresIn: 1000,
+        paths: [...Array(10001).keys()].map((i) => `authenticated/${i}`),
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('return 400 when generate signed urls from a non existent bucket', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/sign/notfound',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+        paths: [...Array(10001).keys()].map((i) => `authenticated/${i}`),
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const result = JSON.parse(response.body)
+    expect(result[0].error).toBe('Either the object does not exist or you do not have access to it')
+  })
+
+  test('signing url of a non existent key', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/sign/bucket2clearAllMocks',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+        paths: ['authenticated/notfound.jpg'],
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const result = JSON.parse(response.body)
+    expect(result[0].error).toBe('Either the object does not exist or you do not have access to it')
   })
 })
 

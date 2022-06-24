@@ -37,6 +37,9 @@ INSERT INTO "storage"."objects" ("id", "bucket_id", "name", "owner", "created_at
 ('D3EB488E-94F4-46CD-86D3-242C13B95BAC', 'bucket3', 'sadcat-upload2.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml", "size": 1234}'),
 ('746180e8-8029-4134-8a21-48ab35485d81', 'public-bucket', 'favicon.ico', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml", "size": 1234}');
 ;
+INSERT INTO "storage"."objects" ("id", "bucket_id", "name", "owner", "created_at", "updated_at", "last_accessed_at", "metadata")
+SELECT gen_random_uuid(), 'bucket2', 'authenticated/' || i, '317eadce-631a-4429-a0bb-f19a7a517b4a', now(), now(), now(), '{"size": 1234}'
+from generate_series(0, 10000) i;
 
 -- add policies
 -- allows user to CRUD all buckets

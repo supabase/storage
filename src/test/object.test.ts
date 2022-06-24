@@ -790,15 +790,16 @@ describe('testing deleting multiple objects', () => {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
       payload: {
-        prefixes: ['authenticated/delete-multiple1.png', 'authenticated/delete-multiple2.png'],
+        prefixes: [...Array(10001).keys()].map((i) => `authenticated/${i}`),
       },
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.deleteObjects).toBeCalled()
 
     const result = JSON.parse(response.body)
-    expect(result[0].name).toBe('authenticated/delete-multiple1.png')
-    expect(result[1].name).toBe('authenticated/delete-multiple2.png')
+    expect(result).toHaveLength(10001)
+    expect(result[0].name).toBe('authenticated/0')
+    expect(result[1].name).toBe('authenticated/1')
   })
 
   test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {
@@ -815,7 +816,7 @@ describe('testing deleting multiple objects', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
     const results = JSON.parse(response.body)
-    expect(results.length).toBe(0)
+    expect(results).toHaveLength(0)
   })
 
   test('user is not able to delete a resource without Auth header', async () => {
@@ -859,7 +860,7 @@ describe('testing deleting multiple objects', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
     const results = JSON.parse(response.body)
-    expect(results.length).toBe(0)
+    expect(results).toHaveLength(0)
   })
 
   test('check if RLS policies are respected: user has permission to delete only one of the objects', async () => {
@@ -876,7 +877,7 @@ describe('testing deleting multiple objects', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.deleteObjects).toBeCalled()
     const results = JSON.parse(response.body)
-    expect(results.length).toBe(1)
+    expect(results).toHaveLength(1)
     expect(results[0].name).toBe('authenticated/delete-multiple7.png')
   })
 })

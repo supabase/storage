@@ -74,7 +74,7 @@ export default async function routes(fastify: FastifyInstance) {
         for (; i < prefixes.length && urlParamLength < urlLengthLimit; i++) {
           const prefix = prefixes[i]
           prefixesSubset.push(prefix)
-          urlParamLength += prefix.length + 3 // %2C
+          urlParamLength += encodeURIComponent(prefix).length + 9 // length of '%22%2C%22'
         }
 
         const objectResponse = await request.postgrest

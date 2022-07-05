@@ -14,6 +14,7 @@ import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
+import { isS3Error } from '../../utils/errors'
 
 const { region, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
 let storageBackend: GenericStorageBackend
@@ -82,8 +83,10 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
       const path = `${bucketName}/${objectName}`
       const s3Key = `${request.tenantId}/${path}`
-      let mimeType: string, cacheControl: string, isTruncated: boolean
+      let mimeType: string, cacheControl: string
+      let isTruncated = false
       let uploadResult: ObjectMetadata
+      let uploadError
 
       if (!isValidKey(objectName) || !isValidKey(bucketName)) {
         return response
@@ -164,32 +167,78 @@ export default async function routes(fastify: FastifyInstance) {
         const cacheTime = data.fields.cacheControl?.value
         cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
         mimeType = data.mimetype
-        uploadResult = await storageBackend.uploadObject(
-          globalS3Bucket,
-          s3Key,
-          data.file,
-          mimeType,
-          cacheControl
-        )
-        // since we are using streams, fastify can't throw the error reliably
-        // busboy sets the truncated property on streams if limit was exceeded
-        // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
-        isTruncated = data.file.truncated
+        try {
+          uploadResult = await storageBackend.uploadObject(
+            globalS3Bucket,
+            s3Key,
+            data.file,
+            mimeType,
+            cacheControl
+          )
+          // since we are using streams, fastify can't throw the error reliably
+          // busboy sets the truncated property on streams if limit was exceeded
+          // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
+          isTruncated = data.file.truncated
+        } catch (err) {
+          uploadError = err
+        }
       } else {
         // just assume its a binary file
         mimeType = request.headers['content-type']
         cacheControl = request.headers['cache-control'] ?? 'no-cache'
 
-        uploadResult = await storageBackend.uploadObject(
-          globalS3Bucket,
-          s3Key,
-          request.raw,
-          mimeType,
-          cacheControl
-        )
-        // @todo more secure to get this from the stream or from s3 in the next step
-        isTruncated = Number(request.headers['content-length']) > fileSizeLimit
+        try {
+          uploadResult = await storageBackend.uploadObject(
+            globalS3Bucket,
+            s3Key,
+            request.raw,
+            mimeType,
+            cacheControl
+          )
+          // @todo more secure to get this from the stream or from s3 in the next step
+          isTruncated = Number(request.headers['content-length']) > fileSizeLimit
+        } catch (err) {
+          uploadError = err
+        }
       }
+
+      // Remove row from `storage.objects` if there was an error uploading to the backend.
+      if (uploadError) {
+        request.log.error({ error }, 'upload error object')
+
+        let errorName: string
+        let errorStatusCode: number
+        let errorMessage: string | undefined
+
+        if (isS3Error(uploadError)) {
+          errorName = uploadError.name
+          errorStatusCode = uploadError.$metadata.httpStatusCode ?? 400
+          errorMessage = uploadError.message
+        } else if (uploadError instanceof Error) {
+          errorName = uploadError.name
+          errorStatusCode = 400
+          errorMessage = uploadError.message
+        } else {
+          errorName = 'Internal service error'
+          errorStatusCode = 400
+        }
+
+        // undo operations as super user
+        await request.superUserPostgrest
+          .from<Obj>('objects')
+          .delete()
+          .match({
+            name: objectName,
+            bucket_id: bucketName,
+          })
+          .single()
+
+        // return an error response
+        return response
+          .status(400)
+          .send(createResponse(errorName, String(errorStatusCode), errorMessage))
+      }
+
       if (isTruncated) {
         // undo operations as super user
         await request.superUserPostgrest

@@ -86,7 +86,6 @@ export default async function routes(fastify: FastifyInstance) {
       let mimeType: string, cacheControl: string
       let isTruncated = false
       let uploadResult: ObjectMetadata
-      let uploadError
 
       if (!isValidKey(objectName) || !isValidKey(bucketName)) {
         return response
@@ -180,7 +179,7 @@ export default async function routes(fastify: FastifyInstance) {
           // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
           isTruncated = data.file.truncated
         } catch (err) {
-          uploadError = err
+          return await handleUploadError(err)
         }
       } else {
         // just assume its a binary file
@@ -198,45 +197,8 @@ export default async function routes(fastify: FastifyInstance) {
           // @todo more secure to get this from the stream or from s3 in the next step
           isTruncated = Number(request.headers['content-length']) > fileSizeLimit
         } catch (err) {
-          uploadError = err
+          return await handleUploadError(err)
         }
-      }
-
-      // Remove row from `storage.objects` if there was an error uploading to the backend.
-      if (uploadError) {
-        request.log.error({ error }, 'upload error object')
-
-        let errorName: string
-        let errorStatusCode: number
-        let errorMessage: string | undefined
-
-        if (isS3Error(uploadError)) {
-          errorName = uploadError.name
-          errorStatusCode = uploadError.$metadata.httpStatusCode ?? 400
-          errorMessage = uploadError.message
-        } else if (uploadError instanceof Error) {
-          errorName = uploadError.name
-          errorStatusCode = 400
-          errorMessage = uploadError.message
-        } else {
-          errorName = 'Internal service error'
-          errorStatusCode = 400
-        }
-
-        // undo operations as super user
-        await request.superUserPostgrest
-          .from<Obj>('objects')
-          .delete()
-          .match({
-            name: objectName,
-            bucket_id: bucketName,
-          })
-          .single()
-
-        // return an error response
-        return response
-          .status(400)
-          .send(createResponse(errorName, String(errorStatusCode), errorMessage))
       }
 
       if (isTruncated) {
@@ -286,6 +248,47 @@ export default async function routes(fastify: FastifyInstance) {
       return response.status(uploadResult.httpStatusCode ?? 200).send({
         Key: path,
       })
+
+      /**
+       * Remove row from `storage.objects` if there was an error uploading to the backend.
+       */
+      async function handleUploadError(uploadError: unknown) {
+        if (uploadError) {
+          request.log.error({ error: uploadError }, 'upload error object')
+
+          let errorName: string
+          let errorStatusCode: number
+          let errorMessage: string | undefined
+
+          if (isS3Error(uploadError)) {
+            errorName = uploadError.name
+            errorStatusCode = uploadError.$metadata.httpStatusCode ?? 400
+            errorMessage = uploadError.message
+          } else if (uploadError instanceof Error) {
+            errorName = uploadError.name
+            errorStatusCode = 400
+            errorMessage = uploadError.message
+          } else {
+            errorName = 'Internal service error'
+            errorStatusCode = 400
+          }
+
+          // undo operations as super user
+          await request.superUserPostgrest
+            .from<Obj>('objects')
+            .delete()
+            .match({
+              name: objectName,
+              bucket_id: bucketName,
+            })
+            .single()
+
+          // return an error response
+          return response
+            .status(400)
+            .send(createResponse(errorName, String(errorStatusCode), errorMessage))
+        }
+      }
     }
   )
 }

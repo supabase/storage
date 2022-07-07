@@ -262,15 +262,15 @@ export default async function routes(fastify: FastifyInstance) {
 
           if (isS3Error(uploadError)) {
             errorName = uploadError.name
-            errorStatusCode = uploadError.$metadata.httpStatusCode ?? 400
+            errorStatusCode = uploadError.$metadata.httpStatusCode ?? 500
             errorMessage = uploadError.message
           } else if (uploadError instanceof Error) {
             errorName = uploadError.name
-            errorStatusCode = 400
+            errorStatusCode = 500
             errorMessage = uploadError.message
           } else {
             errorName = 'Internal service error'
-            errorStatusCode = 400
+            errorStatusCode = 500
           }
 
           // undo operations as super user
@@ -285,7 +285,7 @@ export default async function routes(fastify: FastifyInstance) {
 
           // return an error response
           return response
-            .status(400)
+            .status(errorStatusCode)
             .send(createResponse(errorName, String(errorStatusCode), errorMessage))
         }
       }

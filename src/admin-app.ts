@@ -12,7 +12,7 @@ const build = (opts: FastifyServerOptions = {}, adminOpts: AdminOptions = {}): F
   app.register(tenantRoutes, { prefix: 'tenants' })
   app.register(metrics, {
     endpoint: '/metrics',
-    enableRouteMetrics: false,
+    enableRouteMetrics: true,
     blacklist: ['nodejs_version_info', 'process_start_time_seconds'],
     register: adminOpts.register,
   })

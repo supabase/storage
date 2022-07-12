@@ -134,6 +134,7 @@ describe('testing GET object', () => {
     expect(S3Backend.prototype.getObject).not.toHaveBeenCalled()
   })
 })
+
 /*
  * POST /object/:id
  * multipart upload
@@ -269,6 +270,54 @@ describe('testing POST object via multipart upload', () => {
         message: 'The object exceeded the maximum allowed size',
       })
     )
+  })
+
+  test('should not add row to database if upload fails', async () => {
+    // Mock S3 upload failure.
+    jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue({
+      name: 'S3ServiceException',
+      message: 'Unknown error',
+      $fault: 'server',
+      $metadata: {
+        httpStatusCode: 500,
+      },
+    })
+
+    process.env.FILE_SIZE_LIMIT = '1'
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
+
+    const createObjectResponse = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/public/should-not-insert/sadcat.jpg',
+      headers,
+      payload: form,
+    })
+    expect(createObjectResponse.statusCode).toBe(500)
+    expect(JSON.parse(createObjectResponse.body)).toStrictEqual({
+      statusCode: '500',
+      error: 'Unknown error',
+      message: 'S3ServiceException',
+    })
+
+    // Ensure that row does not exist in database.
+    const listObjectsResponse = await app().inject({
+      method: 'POST',
+      url: '/object/list/bucket2',
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        prefix: 'public/should-not-insert/',
+        limit: 10,
+        offset: 0,
+      },
+    })
+    expect(listObjectsResponse.statusCode).toBe(200)
+    expect(JSON.parse(listObjectsResponse.body)).toHaveLength(0)
   })
 })
 
@@ -431,10 +480,62 @@ describe('testing POST object via binary upload', () => {
       })
     )
   })
+
+  test('should not add row to database if upload fails', async () => {
+    // Mock S3 upload failure.
+    jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue({
+      name: 'S3ServiceException',
+      message: 'Unknown error',
+      $fault: 'server',
+      $metadata: {
+        httpStatusCode: 500,
+      },
+    })
+
+    process.env.FILE_SIZE_LIMIT = '1'
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const createObjectResponse = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/public/should-not-insert/sadcat.jpg',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(createObjectResponse.statusCode).toBe(500)
+    expect(JSON.parse(createObjectResponse.body)).toStrictEqual({
+      statusCode: '500',
+      error: 'Unknown error',
+      message: 'S3ServiceException',
+    })
+
+    // Ensure that row does not exist in database.
+    const listObjectsResponse = await app().inject({
+      method: 'POST',
+      url: '/object/list/bucket2',
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        prefix: 'public/should-not-insert/',
+        limit: 10,
+        offset: 0,
+      },
+    })
+    expect(listObjectsResponse.statusCode).toBe(200)
+    expect(JSON.parse(listObjectsResponse.body)).toHaveLength(0)
+  })
 })
 
 /**
  * PUT /object/:id
+ * multipart upload
  */
 describe('testing PUT object', () => {
   test('check if RLS policies are respected: authenticated user is able to update authenticated resource', async () => {

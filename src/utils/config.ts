@@ -20,9 +20,10 @@ type StorageConfigType = {
   serviceKey: string
   storageBackendType: StorageBackendType
   tenantId: string
-  xForwardedHostRegExp?: string,
-  globalS3AccessKeyId?: string,
-  globalS3SecretAccessKey?: string,
+  urlLengthLimit: number
+  xForwardedHostRegExp?: string
+  globalS3AccessKeyId?: string
+  globalS3SecretAccessKey?: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -68,8 +69,9 @@ export function getConfig(): StorageConfigType {
       getOptionalConfigFromEnv('PROJECT_REF') ||
       getOptionalIfMultitenantConfigFromEnv('TENANT_ID') ||
       '',
+    urlLengthLimit: Number(getOptionalConfigFromEnv('URL_LENGTH_LIMIT')) || 7_500,
+    xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
     globalS3AccessKeyId: getOptionalConfigFromEnv('GLOBAL_S3_ACCESS_KEY_ID'),
     globalS3SecretAccessKey: getOptionalConfigFromEnv('GLOBAL_S3_SECRET_ACCESS_KEY'),
-    xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
   }
 }

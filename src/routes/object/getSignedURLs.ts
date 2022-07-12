@@ -2,7 +2,10 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest, Obj } from '../../types/types'
 import { getJwtSecret, signJWT, transformPostgrestError } from '../../utils'
-import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
+import { getConfig } from '../../utils/config'
+import { createDefaultSchema } from '../../utils/generic-routes'
+
+const { urlLengthLimit } = getConfig()
 
 const getSignedURLsParamsSchema = {
   type: 'object',
@@ -19,7 +22,6 @@ const getSignedURLsBodySchema = {
       type: 'array',
       items: { type: 'string' },
       minItems: 1,
-      maxItems: 1000,
       example: ['folder/cat.png', 'folder/morecats.png'],
     },
   },
@@ -71,21 +73,33 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketName } = request.params
       const { expiresIn, paths } = request.body
+      let results: { name: string }[] = []
 
-      const objectResponse = await request.postgrest
-        .from<Obj>('objects')
-        .select('name')
-        .eq('bucket_id', bucketName)
-        .in('name', paths)
+      for (let i = 0; i < paths.length; ) {
+        const pathsSubset = []
+        let urlParamLength = 0
 
-      if (objectResponse.error) {
-        const { error, status } = objectResponse
-        request.log.error({ error }, 'failed to retrieve object names while getting signed URLs')
-        return response.status(400).send(transformPostgrestError(error, status))
+        for (; i < paths.length && urlParamLength < urlLengthLimit; i++) {
+          const path = paths[i]
+          pathsSubset.push(path)
+          urlParamLength += encodeURIComponent(path).length + 9 // length of '%22%2C%22'
+        }
+
+        const objectResponse = await request.postgrest
+          .from<Obj>('objects')
+          .select('name')
+          .eq('bucket_id', bucketName)
+          .in('name', pathsSubset)
+
+        if (objectResponse.error) {
+          const { error, status } = objectResponse
+          request.log.error({ error }, 'failed to retrieve object names while getting signed URLs')
+          return response.status(400).send(transformPostgrestError(error, status))
+        }
+
+        const { data } = objectResponse
+        results = results.concat(data)
       }
-
-      const { data: results } = objectResponse
-      request.log.info({ results }, 'results')
 
       const nameSet = new Set(results.map(({ name }) => name))
 

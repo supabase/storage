@@ -204,7 +204,7 @@ export default async function routes(fastify: FastifyInstance) {
 
         // return an error response
         return response
-          .status(400)
+          .status(413)
           .send(
             createResponse(
               'The object exceeded the maximum allowed size',

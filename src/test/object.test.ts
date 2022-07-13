@@ -261,14 +261,12 @@ describe('testing POST object via multipart upload', () => {
       headers,
       payload: form,
     })
-    expect(response.statusCode).toBe(400)
-    expect(response.body).toBe(
-      JSON.stringify({
-        statusCode: '413',
-        error: 'Payload too large',
-        message: 'The object exceeded the maximum allowed size',
-      })
-    )
+    expect(response.statusCode).toBe(413)
+    expect(JSON.parse(response.body)).toStrictEqual({
+      statusCode: '413',
+      error: 'Payload too large',
+      message: 'The object exceeded the maximum allowed size',
+    })
   })
 })
 
@@ -422,14 +420,12 @@ describe('testing POST object via binary upload', () => {
       headers,
       payload: fs.createReadStream(path),
     })
-    expect(response.statusCode).toBe(400)
-    expect(response.body).toBe(
-      JSON.stringify({
-        statusCode: '413',
-        error: 'Payload too large',
-        message: 'The object exceeded the maximum allowed size',
-      })
-    )
+    expect(response.statusCode).toBe(413)
+    expect(JSON.parse(response.body)).toStrictEqual({
+      statusCode: '413',
+      error: 'Payload too large',
+      message: 'The object exceeded the maximum allowed size',
+    })
   })
 })
 

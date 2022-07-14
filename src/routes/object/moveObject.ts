@@ -8,13 +8,25 @@ import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
 
-const { region, globalS3Bucket, globalS3Endpoint, storageBackendType, globalS3AccessKeyId, globalS3SecretAccessKey } = getConfig()
+const {
+  region,
+  globalS3Bucket,
+  globalS3Endpoint,
+  storageBackendType,
+  globalS3AccessKeyId,
+  globalS3SecretAccessKey,
+} = getConfig()
 let storageBackend: GenericStorageBackend
 
 if (storageBackendType === 'file') {
   storageBackend = new FileBackend()
 } else {
-  storageBackend = new S3Backend(region, globalS3Endpoint, globalS3AccessKeyId, globalS3SecretAccessKey)
+  storageBackend = new S3Backend(
+    region,
+    globalS3Endpoint,
+    globalS3AccessKeyId,
+    globalS3SecretAccessKey
+  )
 }
 
 const moveObjectsBodySchema = {

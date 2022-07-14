@@ -17,7 +17,12 @@ import { GenericStorageBackend, GetObjectHeaders } from './generic'
 export class S3Backend implements GenericStorageBackend {
   client: S3Client
 
-  constructor(region: string, endpoint?: string | undefined, accessKeyId?: string | undefined, secretAccessKey?: string | undefined) {
+  constructor(
+    region: string,
+    endpoint?: string | undefined,
+    accessKeyId?: string | undefined,
+    secretAccessKey?: string | undefined
+  ) {
     const agent = new https.Agent({
       maxSockets: 50,
       keepAlive: true,

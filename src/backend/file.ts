@@ -6,6 +6,7 @@ import { promisify } from 'util'
 import stream from 'stream'
 import { getConfig } from '../utils/config'
 import { GenericStorageBackend } from './generic'
+import { convertErrorToStorageBackendError } from '../utils/errors'
 const pipeline = promisify(stream.pipeline)
 
 export class FileBackend implements GenericStorageBackend {
@@ -57,16 +58,20 @@ export class FileBackend implements GenericStorageBackend {
     contentType: string,
     cacheControl: string
   ): Promise<ObjectMetadata> {
-    const file = path.resolve(this.filePath, `${bucketName}/${key}`)
-    await fs.ensureFile(file)
-    const destFile = fs.createWriteStream(file)
-    await pipeline(body, destFile)
-    await Promise.all([
-      this.setMetadata(file, 'user.supabase.content-type', contentType),
-      this.setMetadata(file, 'user.supabase.cache-control', cacheControl),
-    ])
-    return {
-      httpStatusCode: 200,
+    try {
+      const file = path.resolve(this.filePath, `${bucketName}/${key}`)
+      await fs.ensureFile(file)
+      const destFile = fs.createWriteStream(file)
+      await pipeline(body, destFile)
+      await Promise.all([
+        this.setMetadata(file, 'user.supabase.content-type', contentType),
+        this.setMetadata(file, 'user.supabase.cache-control', cacheControl),
+      ])
+      return {
+        httpStatusCode: 200,
+      }
+    } catch (err: any) {
+      throw convertErrorToStorageBackendError(err)
     }
   }
 

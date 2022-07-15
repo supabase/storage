@@ -14,7 +14,7 @@ import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
-import { isS3Error } from '../../utils/errors'
+import { StorageBackendError } from '../../utils/errors'
 
 const { region, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
 let storageBackend: GenericStorageBackend
@@ -179,7 +179,7 @@ export default async function routes(fastify: FastifyInstance) {
           // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
           isTruncated = data.file.truncated
         } catch (err) {
-          return await handleUploadError(err)
+          return await handleUploadError(err as StorageBackendError)
         }
       } else {
         // just assume its a binary file
@@ -197,7 +197,7 @@ export default async function routes(fastify: FastifyInstance) {
           // @todo more secure to get this from the stream or from s3 in the next step
           isTruncated = Number(request.headers['content-length']) > fileSizeLimit
         } catch (err) {
-          return await handleUploadError(err)
+          return await handleUploadError(err as StorageBackendError)
         }
       }
 
@@ -252,42 +252,29 @@ export default async function routes(fastify: FastifyInstance) {
       /**
        * Remove row from `storage.objects` if there was an error uploading to the backend.
        */
-      async function handleUploadError(uploadError: unknown) {
-        if (uploadError) {
-          request.log.error({ error: uploadError }, 'upload error object')
+      async function handleUploadError(uploadError: StorageBackendError) {
+        request.log.error({ error: uploadError }, 'upload error object')
 
-          let errorName: string
-          let errorStatusCode: number
-          let errorMessage: string | undefined
+        // undo operations as super user
+        await request.superUserPostgrest
+          .from<Obj>('objects')
+          .delete()
+          .match({
+            name: objectName,
+            bucket_id: bucketName,
+          })
+          .single()
 
-          if (isS3Error(uploadError)) {
-            errorName = uploadError.name
-            errorStatusCode = uploadError.$metadata.httpStatusCode ?? 500
-            errorMessage = uploadError.message
-          } else if (uploadError instanceof Error) {
-            errorName = uploadError.name
-            errorStatusCode = 500
-            errorMessage = uploadError.message
-          } else {
-            errorName = 'Internal service error'
-            errorStatusCode = 500
-          }
-
-          // undo operations as super user
-          await request.superUserPostgrest
-            .from<Obj>('objects')
-            .delete()
-            .match({
-              name: objectName,
-              bucket_id: bucketName,
-            })
-            .single()
-
-          // return an error response
-          return response
-            .status(errorStatusCode)
-            .send(createResponse(errorName, String(errorStatusCode), errorMessage))
-        }
+        // return an error response
+        return response
+          .status(uploadError.httpStatusCode)
+          .send(
+            createResponse(
+              uploadError.name,
+              String(uploadError.httpStatusCode),
+              uploadError.message
+            )
+          )
       }
     }
   )

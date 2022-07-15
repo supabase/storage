@@ -37,7 +37,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v2
         with:
-          node-version: '14.17.0'
+          node-version: '16.16.0'
       - uses: actions/cache@v2
         with:
           path: ~/.npm
@@ -49,7 +49,7 @@ jobs:
         run: |
           npm ci
           npm run build
-          npm run pkg -- --targets node14-linux-x64,node14-macos-x64 --out-path bin
+          npm run pkg -- --targets node16-linux-x64,node16-macos-x64 --out-path bin
           mv bin/supa-storage-macos storage-api-macos-x86_64
           mv bin/supa-storage-linux storage-api-x86_64
           tar -czvf storage-api-linux-x64.tar.gz storage-api-x86_64 migrations/
@@ -101,12 +101,12 @@ jobs:
             apt-get -y install --no-install-recommends curl wget ca-certificates python3 build-essential
             curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.38.0/install.sh | bash
             . ~/.nvm/nvm.sh
-            nvm install 14.17.0
+            nvm install 16.16.0
           run: |
             . ~/.nvm/nvm.sh
             npm ci
             npm run build
-            npm run pkg -- --targets node14-linux-arm64 --output storage-api-aarch64
+            npm run pkg -- --targets node16-linux-arm64 --output storage-api-aarch64
             tar -czvf storage-api-aarch64.tar.gz storage-api-aarch64 migrations/
             cp storage-api-aarch64.tar.gz /artifacts/storage-api-aarch64.tar.gz
       - name: Upload binaries to release

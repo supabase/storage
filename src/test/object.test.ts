@@ -6,10 +6,23 @@ import app from '../app'
 import { getConfig } from '../utils/config'
 import { signJWT } from '../utils/index'
 import { S3Backend } from '../backend/s3'
+import { PostgrestClient } from '@supabase/postgrest-js'
+import { Obj } from '../types/types'
+import { convertErrorToStorageBackendError } from '../utils/errors'
 
 dotenv.config({ path: '.env.test' })
 const ENV = process.env
-const { anonKey, jwtSecret, serviceKey } = getConfig()
+const { anonKey, jwtSecret, serviceKey, postgrestURL } = getConfig()
+
+function getSuperuserPostgrestClient() {
+  return new PostgrestClient(postgrestURL, {
+    headers: {
+      apiKey: anonKey,
+      Authorization: `Bearer ${serviceKey}`,
+    },
+    schema: 'storage',
+  })
+}
 
 beforeEach(() => {
   process.env = { ...ENV }
@@ -274,14 +287,16 @@ describe('testing POST object via multipart upload', () => {
 
   test('should not add row to database if upload fails', async () => {
     // Mock S3 upload failure.
-    jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue({
-      name: 'S3ServiceException',
-      message: 'Unknown error',
-      $fault: 'server',
-      $metadata: {
-        httpStatusCode: 500,
-      },
-    })
+    jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
+      convertErrorToStorageBackendError({
+        name: 'S3ServiceException',
+        message: 'Unknown error',
+        $fault: 'server',
+        $metadata: {
+          httpStatusCode: 500,
+        },
+      })
+    )
 
     process.env.FILE_SIZE_LIMIT = '1'
     const form = new FormData()
@@ -290,9 +305,12 @@ describe('testing POST object via multipart upload', () => {
       authorization: `Bearer ${anonKey}`,
     })
 
+    const BUCKET_ID = 'bucket2'
+    const OBJECT_NAME = 'public/should-not-insert/sadcat.jpg'
+
     const createObjectResponse = await app().inject({
       method: 'POST',
-      url: '/object/bucket2/public/should-not-insert/sadcat.jpg',
+      url: `/object/${BUCKET_ID}/${OBJECT_NAME}`,
       headers,
       payload: form,
     })
@@ -304,20 +322,17 @@ describe('testing POST object via multipart upload', () => {
     })
 
     // Ensure that row does not exist in database.
-    const listObjectsResponse = await app().inject({
-      method: 'POST',
-      url: '/object/list/bucket2',
-      headers: {
-        authorization: `Bearer ${serviceKey}`,
-      },
-      payload: {
-        prefix: 'public/should-not-insert/',
-        limit: 10,
-        offset: 0,
-      },
-    })
-    expect(listObjectsResponse.statusCode).toBe(200)
-    expect(JSON.parse(listObjectsResponse.body)).toHaveLength(0)
+    const postgrest = getSuperuserPostgrestClient()
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .select()
+      .match({
+        name: OBJECT_NAME,
+        bucket_id: BUCKET_ID,
+      })
+      .maybeSingle()
+    expect(objectResponse.error).toBe(null)
+    expect(objectResponse.data).toBe(null)
   })
 })
 
@@ -483,14 +498,16 @@ describe('testing POST object via binary upload', () => {
 
   test('should not add row to database if upload fails', async () => {
     // Mock S3 upload failure.
-    jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue({
-      name: 'S3ServiceException',
-      message: 'Unknown error',
-      $fault: 'server',
-      $metadata: {
-        httpStatusCode: 500,
-      },
-    })
+    jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
+      convertErrorToStorageBackendError({
+        name: 'S3ServiceException',
+        message: 'Unknown error',
+        $fault: 'server',
+        $metadata: {
+          httpStatusCode: 500,
+        },
+      })
+    )
 
     process.env.FILE_SIZE_LIMIT = '1'
     const path = './src/test/assets/sadcat.jpg'
@@ -502,9 +519,12 @@ describe('testing POST object via binary upload', () => {
       'Content-Type': 'image/jpeg',
     }
 
+    const BUCKET_ID = 'bucket2'
+    const OBJECT_NAME = 'public/should-not-insert/sadcat.jpg'
+
     const createObjectResponse = await app().inject({
       method: 'POST',
-      url: '/object/bucket2/public/should-not-insert/sadcat.jpg',
+      url: `/object/${BUCKET_ID}/${OBJECT_NAME}`,
       headers,
       payload: fs.createReadStream(path),
     })
@@ -516,20 +536,17 @@ describe('testing POST object via binary upload', () => {
     })
 
     // Ensure that row does not exist in database.
-    const listObjectsResponse = await app().inject({
-      method: 'POST',
-      url: '/object/list/bucket2',
-      headers: {
-        authorization: `Bearer ${serviceKey}`,
-      },
-      payload: {
-        prefix: 'public/should-not-insert/',
-        limit: 10,
-        offset: 0,
-      },
-    })
-    expect(listObjectsResponse.statusCode).toBe(200)
-    expect(JSON.parse(listObjectsResponse.body)).toHaveLength(0)
+    const postgrest = getSuperuserPostgrestClient()
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .select()
+      .match({
+        name: OBJECT_NAME,
+        bucket_id: BUCKET_ID,
+      })
+      .maybeSingle()
+    expect(objectResponse.error).toBe(null)
+    expect(objectResponse.data).toBe(null)
   })
 })
 

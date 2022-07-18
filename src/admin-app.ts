@@ -12,9 +12,15 @@ const build = (opts: FastifyServerOptions = {}, adminOpts: AdminOptions = {}): F
   app.register(tenantRoutes, { prefix: 'tenants' })
   app.register(metrics, {
     endpoint: '/metrics',
-    enableRouteMetrics: false,
-    blacklist: ['nodejs_version_info', 'process_start_time_seconds'],
-    register: adminOpts.register,
+    defaultMetrics: {
+      enabled: true,
+      register: adminOpts.register,
+    },
+    routeMetrics: {
+      enabled: false,
+    },
+    // TODO: find equivalent configuration in fastify-metrics v9.
+    // blacklist: ['nodejs_version_info', 'process_start_time_seconds'],
   })
   app.get('/status', async (_, response) => response.status(200).send())
   return app

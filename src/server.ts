@@ -31,7 +31,7 @@ const exposeDocs = true
     })
 
     try {
-      await adminApp.listen(5001, '0.0.0.0')
+      await adminApp.listen({ port: 5001, host: '0.0.0.0' })
     } catch (err) {
       adminApp.log.error(err)
       process.exit(1)
@@ -46,11 +46,17 @@ const exposeDocs = true
     requestIdHeader,
   })
 
-  app.listen(5000, '0.0.0.0', (err, address) => {
-    if (err) {
-      console.error(err)
-      process.exit(1)
+  app.listen(
+    {
+      port: 5000,
+      host: '0.0.0.0',
+    },
+    (err, address) => {
+      if (err) {
+        console.error(err)
+        process.exit(1)
+      }
+      console.log(`Server listening at ${address}`)
     }
-    console.log(`Server listening at ${address}`)
-  })
+  )
 })()

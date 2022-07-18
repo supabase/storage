@@ -26,15 +26,15 @@ if (storageBackendType === 'file') {
 const updateObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', example: 'avatars' },
-    '*': { type: 'string', example: 'folder/cat.png' },
+    bucketName: { type: 'string', examples: ['avatars'] },
+    '*': { type: 'string', examples: ['folder/cat.png'] },
   },
   required: ['bucketName', '*'],
 } as const
 const successResponseSchema = {
   type: 'object',
   properties: {
-    Key: { type: 'string', example: 'projectref/avatars/folder/cat.png' },
+    Key: { type: 'string', examples: ['projectref/avatars/folder/cat.png'] },
   },
   required: ['Key'],
 }

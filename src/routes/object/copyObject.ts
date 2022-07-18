@@ -20,16 +20,16 @@ if (storageBackendType === 'file') {
 const copyRequestBodySchema = {
   type: 'object',
   properties: {
-    sourceKey: { type: 'string', example: 'folder/source.png' },
-    bucketId: { type: 'string', example: 'avatars' },
-    destinationKey: { type: 'string', example: 'folder/destination.png' },
+    sourceKey: { type: 'string', examples: ['folder/source.png'] },
+    bucketId: { type: 'string', examples: ['avatars'] },
+    destinationKey: { type: 'string', examples: ['folder/destination.png'] },
   },
   required: ['sourceKey', 'bucketId', 'destinationKey'],
 } as const
 const successResponseSchema = {
   type: 'object',
   properties: {
-    Key: { type: 'string', example: 'folder/destination.png' },
+    Key: { type: 'string', examples: ['folder/destination.png'] },
   },
   required: ['Key'],
 }

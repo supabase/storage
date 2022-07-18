@@ -7,15 +7,15 @@ import { createDefaultSchema } from '../../utils/generic-routes'
 const getSignedURLParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', example: 'avatars' },
-    '*': { type: 'string', example: 'folder/cat.png' },
+    bucketName: { type: 'string', examples: ['avatars'] },
+    '*': { type: 'string', examples: ['folder/cat.png'] },
   },
   required: ['bucketName', '*'],
 } as const
 const getSignedURLBodySchema = {
   type: 'object',
   properties: {
-    expiresIn: { type: 'integer', minimum: 1, example: 60000 },
+    expiresIn: { type: 'integer', minimum: 1, examples: [60000] },
   },
   required: ['expiresIn'],
 } as const
@@ -24,8 +24,9 @@ const successResponseSchema = {
   properties: {
     signedURL: {
       type: 'string',
-      example:
+      examples: [
         '/object/sign/avatars/folder/cat.png?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJhdmF0YXJzL2ZvbGRlci9jYXQucG5nIiwiaWF0IjoxNjE3NzI2MjczLCJleHAiOjE2MTc3MjcyNzN9.s7Gt8ME80iREVxPhH01ZNv8oUn4XtaWsmiQ5csiUHn4',
+      ],
     },
   },
   required: ['signedURL'],

@@ -15,9 +15,9 @@ const searchRequestParamsSchema = {
 const searchRequestBodySchema = {
   type: 'object',
   properties: {
-    prefix: { type: 'string', example: 'folder/subfolder' },
-    limit: { type: 'integer', minimum: 1, example: 10 },
-    offset: { type: 'integer', minimum: 0, example: 0 },
+    prefix: { type: 'string', examples: ['folder/subfolder'] },
+    limit: { type: 'integer', minimum: 1, examples: [10] },
+    offset: { type: 'integer', minimum: 0, examples: [0] },
     sortBy: {
       type: 'object',
       properties: {

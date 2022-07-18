@@ -20,16 +20,16 @@ if (storageBackendType === 'file') {
 const moveObjectsBodySchema = {
   type: 'object',
   properties: {
-    bucketId: { type: 'string', example: 'avatars' },
-    sourceKey: { type: 'string', example: 'folder/cat.png' },
-    destinationKey: { type: 'string', example: 'folder/newcat.png' },
+    bucketId: { type: 'string', examples: ['avatars'] },
+    sourceKey: { type: 'string', examples: ['folder/cat.png'] },
+    destinationKey: { type: 'string', examples: ['folder/newcat.png'] },
   },
   required: ['bucketId', 'sourceKey', 'destinationKey'],
 } as const
 const successResponseSchema = {
   type: 'object',
   properties: {
-    message: { type: 'string', example: 'Successfully moved' },
+    message: { type: 'string', examples: ['Successfully moved'] },
   },
   required: ['message'],
 }

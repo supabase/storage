@@ -8,7 +8,7 @@ import { createDefaultSchema } from '../../utils/generic-routes'
 const getBucketParamsSchema = {
   type: 'object',
   properties: {
-    bucketId: { type: 'string', example: 'avatars' },
+    bucketId: { type: 'string', examples: ['avatars'] },
   },
   required: ['bucketId'],
 } as const

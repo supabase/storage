@@ -20,8 +20,8 @@ if (storageBackendType === 'file') {
 const getPublicObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', example: 'avatars' },
-    '*': { type: 'string', example: 'folder/cat.png' },
+    bucketName: { type: 'string', examples: ['avatars'] },
+    '*': { type: 'string', examples: ['folder/cat.png'] },
   },
   required: ['bucketName', '*'],
 } as const

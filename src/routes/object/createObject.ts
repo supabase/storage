@@ -27,8 +27,8 @@ if (storageBackendType === 'file') {
 const createObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', example: 'avatars' },
-    '*': { type: 'string', example: 'folder/cat.png' },
+    bucketName: { type: 'string', examples: ['avatars'] },
+    '*': { type: 'string', examples: ['folder/cat.png'] },
   },
   required: ['bucketName', '*'],
 } as const
@@ -37,7 +37,7 @@ const successResponseSchema = {
   properties: {
     Key: {
       type: 'string',
-      example: 'avatars/folder/cat.png',
+      examples: ['avatars/folder/cat.png'],
     },
   },
   required: ['Key'],

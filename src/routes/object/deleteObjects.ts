@@ -21,7 +21,7 @@ if (storageBackendType === 'file') {
 const deleteObjectsParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', example: 'avatars' },
+    bucketName: { type: 'string', examples: ['avatars'] },
   },
   required: ['bucketName'],
 } as const
@@ -32,7 +32,7 @@ const deleteObjectsBodySchema = {
       type: 'array',
       items: { type: 'string' },
       minItems: 1,
-      example: ['folder/cat.png', 'folder/morecats.png'],
+      examples: [['folder/cat.png', 'folder/morecats.png']],
     },
   },
   required: ['prefixes'],

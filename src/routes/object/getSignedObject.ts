@@ -21,8 +21,8 @@ if (storageBackendType === 'file') {
 const getSignedObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', example: 'avatars' },
-    '*': { type: 'string', example: 'folder/cat.png' },
+    bucketName: { type: 'string', examples: ['avatars'] },
+    '*': { type: 'string', examples: ['folder/cat.png'] },
   },
   required: ['bucketName', '*'],
 } as const
@@ -31,8 +31,9 @@ const getSignedObjectQSSchema = {
   properties: {
     token: {
       type: 'string',
-      example:
+      examples: [
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJidWNrZXQyL3B1YmxpYy9zYWRjYXQtdXBsb2FkMjMucG5nIiwiaWF0IjoxNjE3NzI2MjczLCJleHAiOjE2MTc3MjcyNzN9.uBQcXzuvXxfw-9WgzWMBfE_nR3VOgpvfZe032sfLSSk',
+      ],
     },
   },
   required: ['token'],

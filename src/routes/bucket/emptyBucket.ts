@@ -19,14 +19,14 @@ if (storageBackendType === 'file') {
 const emptyBucketParamsSchema = {
   type: 'object',
   properties: {
-    bucketId: { type: 'string', example: 'avatars' },
+    bucketId: { type: 'string', examples: ['avatars'] },
   },
   required: ['bucketId'],
 } as const
 const successResponseSchema = {
   type: 'object',
   properties: {
-    message: { type: 'string', example: 'Successfully emptied' },
+    message: { type: 'string', examples: ['Successfully emptied'] },
   },
 }
 interface emptyBucketRequestInterface extends AuthenticatedRequest {

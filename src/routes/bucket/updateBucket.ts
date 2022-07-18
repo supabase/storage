@@ -7,13 +7,13 @@ import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 const updateBucketBodySchema = {
   type: 'object',
   properties: {
-    public: { type: 'boolean', example: false },
+    public: { type: 'boolean', examples: [false] },
   },
 } as const
 const updateBucketParamsSchema = {
   type: 'object',
   properties: {
-    bucketId: { type: 'string', example: 'avatars' },
+    bucketId: { type: 'string', examples: ['avatars'] },
   },
   required: ['bucketId'],
 } as const
@@ -21,7 +21,7 @@ const updateBucketParamsSchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    message: { type: 'string', example: 'Successfully updated' },
+    message: { type: 'string', examples: ['Successfully updated'] },
   },
   required: ['message'],
 }

@@ -20,15 +20,15 @@ if (storageBackendType === 'file') {
 const deleteObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', example: 'avatars' },
-    '*': { type: 'string', example: 'folder/cat.png' },
+    bucketName: { type: 'string', examples: ['avatars'] },
+    '*': { type: 'string', examples: ['folder/cat.png'] },
   },
   required: ['bucketName', '*'],
 } as const
 const successResponseSchema = {
   type: 'object',
   properties: {
-    message: { type: 'string', example: 'Successfully deleted' },
+    message: { type: 'string', examples: ['Successfully deleted'] },
   },
 }
 interface deleteObjectRequestInterface extends AuthenticatedRequest {

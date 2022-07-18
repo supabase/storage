@@ -7,9 +7,9 @@ import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 const createBucketBodySchema = {
   type: 'object',
   properties: {
-    name: { type: 'string', example: 'avatars' },
-    id: { type: 'string', example: 'avatars' },
-    public: { type: 'boolean', example: false },
+    name: { type: 'string', examples: ['avatars'] },
+    id: { type: 'string', examples: ['avatars'] },
+    public: { type: 'boolean', examples: [false] },
   },
   required: ['name'],
 } as const
@@ -17,7 +17,7 @@ const createBucketBodySchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    name: { type: 'string', example: 'avatars' },
+    name: { type: 'string', examples: ['avatars'] },
   },
   required: ['name'],
 }

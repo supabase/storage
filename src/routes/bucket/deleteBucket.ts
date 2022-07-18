@@ -7,14 +7,14 @@ import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 const deleteBucketParamsSchema = {
   type: 'object',
   properties: {
-    bucketId: { type: 'string', example: 'avatars' },
+    bucketId: { type: 'string', examples: ['avatars'] },
   },
   required: ['bucketId'],
 } as const
 const successResponseSchema = {
   type: 'object',
   properties: {
-    message: { type: 'string', example: 'Successfully deleted' },
+    message: { type: 'string', examples: ['Successfully deleted'] },
   },
 }
 interface deleteBucketRequestInterface extends AuthenticatedRequest {

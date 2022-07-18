@@ -1,5 +1,5 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
-import fastifyMultipart from 'fastify-multipart'
+import fastifyMultipart from '@fastify/multipart'
 import fastifySwagger from 'fastify-swagger'
 import bucketRoutes from './routes/bucket/'
 import objectRoutes from './routes/object'

@@ -36,7 +36,6 @@
     "fastify-cors": "^6.1.0",
     "fastify-metrics": "^9.0.0",
     "fastify-plugin": "^4.0.0",
-    "fastify-swagger": "^5.2.0",
     "fs-extra": "^10.0.1",
     "fs-xattr": "^0.3.1",
     "jsonwebtoken": "^8.5.1",

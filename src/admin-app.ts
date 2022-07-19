@@ -17,7 +17,9 @@ const build = (opts: FastifyServerOptions = {}, adminOpts: AdminOptions = {}): F
       register: adminOpts.register,
     },
     routeMetrics: {
-      enabled: false,
+      enabled: true,
+      registeredRoutesOnly: true,
+      groupStatusCodes: true,
     },
   })
   app.get('/status', async (_, response) => response.status(200).send())

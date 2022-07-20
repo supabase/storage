@@ -14,6 +14,7 @@ import { createDefaultSchema, createResponse } from '../../utils/generic-routes'
 import { S3Backend } from '../../backend/s3'
 import { FileBackend } from '../../backend/file'
 import { GenericStorageBackend } from '../../backend/generic'
+import { StorageBackendError } from '../../utils/errors'
 
 const { region, globalS3Bucket, globalS3Endpoint, storageBackendType } = getConfig()
 let storageBackend: GenericStorageBackend
@@ -82,7 +83,8 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
       const path = `${bucketName}/${objectName}`
       const s3Key = `${request.tenantId}/${path}`
-      let mimeType: string, cacheControl: string, isTruncated: boolean
+      let mimeType: string, cacheControl: string
+      let isTruncated = false
       let uploadResult: ObjectMetadata
 
       if (!isValidKey(objectName) || !isValidKey(bucketName)) {
@@ -164,32 +166,41 @@ export default async function routes(fastify: FastifyInstance) {
         const cacheTime = data.fields.cacheControl?.value
         cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
         mimeType = data.mimetype
-        uploadResult = await storageBackend.uploadObject(
-          globalS3Bucket,
-          s3Key,
-          data.file,
-          mimeType,
-          cacheControl
-        )
-        // since we are using streams, fastify can't throw the error reliably
-        // busboy sets the truncated property on streams if limit was exceeded
-        // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
-        isTruncated = data.file.truncated
+        try {
+          uploadResult = await storageBackend.uploadObject(
+            globalS3Bucket,
+            s3Key,
+            data.file,
+            mimeType,
+            cacheControl
+          )
+          // since we are using streams, fastify can't throw the error reliably
+          // busboy sets the truncated property on streams if limit was exceeded
+          // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
+          isTruncated = data.file.truncated
+        } catch (err) {
+          return await handleUploadError(err as StorageBackendError)
+        }
       } else {
         // just assume its a binary file
         mimeType = request.headers['content-type']
         cacheControl = request.headers['cache-control'] ?? 'no-cache'
 
-        uploadResult = await storageBackend.uploadObject(
-          globalS3Bucket,
-          s3Key,
-          request.raw,
-          mimeType,
-          cacheControl
-        )
-        // @todo more secure to get this from the stream or from s3 in the next step
-        isTruncated = Number(request.headers['content-length']) > fileSizeLimit
+        try {
+          uploadResult = await storageBackend.uploadObject(
+            globalS3Bucket,
+            s3Key,
+            request.raw,
+            mimeType,
+            cacheControl
+          )
+          // @todo more secure to get this from the stream or from s3 in the next step
+          isTruncated = Number(request.headers['content-length']) > fileSizeLimit
+        } catch (err) {
+          return await handleUploadError(err as StorageBackendError)
+        }
       }
+
       if (isTruncated) {
         // undo operations as super user
         await request.superUserPostgrest
@@ -237,6 +248,34 @@ export default async function routes(fastify: FastifyInstance) {
       return response.status(uploadResult.httpStatusCode ?? 200).send({
         Key: path,
       })
+
+      /**
+       * Remove row from `storage.objects` if there was an error uploading to the backend.
+       */
+      async function handleUploadError(uploadError: StorageBackendError) {
+        request.log.error({ error: uploadError }, 'upload error object')
+
+        // undo operations as super user
+        await request.superUserPostgrest
+          .from<Obj>('objects')
+          .delete()
+          .match({
+            name: objectName,
+            bucket_id: bucketName,
+          })
+          .single()
+
+        // return an error response
+        return response
+          .status(uploadError.httpStatusCode)
+          .send(
+            createResponse(
+              uploadError.name,
+              String(uploadError.httpStatusCode),
+              uploadError.message
+            )
+          )
+      }
     }
   )
 }

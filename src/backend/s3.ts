@@ -13,6 +13,7 @@ import { Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
 import { ObjectMetadata, ObjectResponse } from '../types/types'
 import { GenericStorageBackend, GetObjectHeaders } from './generic'
+import { convertErrorToStorageBackendError } from '../utils/errors'
 
 export class S3Backend implements GenericStorageBackend {
   client: S3Client
@@ -73,21 +74,25 @@ export class S3Backend implements GenericStorageBackend {
     contentType: string,
     cacheControl: string
   ): Promise<ObjectMetadata> {
-    const paralellUploadS3 = new Upload({
-      client: this.client,
-      params: {
-        Bucket: bucketName,
-        Key: key,
-        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-        Body: body,
-        ContentType: contentType,
-        CacheControl: cacheControl,
-      },
-    })
+    try {
+      const paralellUploadS3 = new Upload({
+        client: this.client,
+        params: {
+          Bucket: bucketName,
+          Key: key,
+          /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+          Body: body,
+          ContentType: contentType,
+          CacheControl: cacheControl,
+        },
+      })
 
-    const data = await paralellUploadS3.done()
-    return {
-      httpStatusCode: data.$metadata.httpStatusCode,
+      const data = await paralellUploadS3.done()
+      return {
+        httpStatusCode: data.$metadata.httpStatusCode,
+      }
+    } catch (err: any) {
+      throw convertErrorToStorageBackendError(err)
     }
   }
 

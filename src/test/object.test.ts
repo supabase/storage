@@ -6,10 +6,23 @@ import app from '../app'
 import { getConfig } from '../utils/config'
 import { signJWT } from '../utils/index'
 import { S3Backend } from '../backend/s3'
+import { PostgrestClient } from '@supabase/postgrest-js'
+import { Obj } from '../types/types'
+import { convertErrorToStorageBackendError } from '../utils/errors'
 
 dotenv.config({ path: '.env.test' })
 const ENV = process.env
-const { anonKey, jwtSecret, serviceKey } = getConfig()
+const { anonKey, jwtSecret, serviceKey, postgrestURL } = getConfig()
+
+function getSuperuserPostgrestClient() {
+  return new PostgrestClient(postgrestURL, {
+    headers: {
+      apiKey: anonKey,
+      Authorization: `Bearer ${serviceKey}`,
+    },
+    schema: 'storage',
+  })
+}
 
 beforeEach(() => {
   process.env = { ...ENV }
@@ -134,6 +147,7 @@ describe('testing GET object', () => {
     expect(S3Backend.prototype.getObject).not.toHaveBeenCalled()
   })
 })
+
 /*
  * POST /object/:id
  * multipart upload
@@ -269,6 +283,56 @@ describe('testing POST object via multipart upload', () => {
         message: 'The object exceeded the maximum allowed size',
       })
     )
+  })
+
+  test('should not add row to database if upload fails', async () => {
+    // Mock S3 upload failure.
+    jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
+      convertErrorToStorageBackendError({
+        name: 'S3ServiceException',
+        message: 'Unknown error',
+        $fault: 'server',
+        $metadata: {
+          httpStatusCode: 500,
+        },
+      })
+    )
+
+    process.env.FILE_SIZE_LIMIT = '1'
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
+
+    const BUCKET_ID = 'bucket2'
+    const OBJECT_NAME = 'public/should-not-insert/sadcat.jpg'
+
+    const createObjectResponse = await app().inject({
+      method: 'POST',
+      url: `/object/${BUCKET_ID}/${OBJECT_NAME}`,
+      headers,
+      payload: form,
+    })
+    expect(createObjectResponse.statusCode).toBe(500)
+    expect(JSON.parse(createObjectResponse.body)).toStrictEqual({
+      statusCode: '500',
+      error: 'Unknown error',
+      message: 'S3ServiceException',
+    })
+
+    // Ensure that row does not exist in database.
+    const postgrest = getSuperuserPostgrestClient()
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .select()
+      .match({
+        name: OBJECT_NAME,
+        bucket_id: BUCKET_ID,
+      })
+      .maybeSingle()
+    expect(objectResponse.error).toBe(null)
+    expect(objectResponse.data).toBe(null)
   })
 })
 
@@ -431,10 +495,64 @@ describe('testing POST object via binary upload', () => {
       })
     )
   })
+
+  test('should not add row to database if upload fails', async () => {
+    // Mock S3 upload failure.
+    jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
+      convertErrorToStorageBackendError({
+        name: 'S3ServiceException',
+        message: 'Unknown error',
+        $fault: 'server',
+        $metadata: {
+          httpStatusCode: 500,
+        },
+      })
+    )
+
+    process.env.FILE_SIZE_LIMIT = '1'
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+    }
+
+    const BUCKET_ID = 'bucket2'
+    const OBJECT_NAME = 'public/should-not-insert/sadcat.jpg'
+
+    const createObjectResponse = await app().inject({
+      method: 'POST',
+      url: `/object/${BUCKET_ID}/${OBJECT_NAME}`,
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(createObjectResponse.statusCode).toBe(500)
+    expect(JSON.parse(createObjectResponse.body)).toStrictEqual({
+      statusCode: '500',
+      error: 'Unknown error',
+      message: 'S3ServiceException',
+    })
+
+    // Ensure that row does not exist in database.
+    const postgrest = getSuperuserPostgrestClient()
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .select()
+      .match({
+        name: OBJECT_NAME,
+        bucket_id: BUCKET_ID,
+      })
+      .maybeSingle()
+    expect(objectResponse.error).toBe(null)
+    expect(objectResponse.data).toBe(null)
+  })
 })
 
 /**
  * PUT /object/:id
+ * multipart upload
  */
 describe('testing PUT object', () => {
   test('check if RLS policies are respected: authenticated user is able to update authenticated resource', async () => {

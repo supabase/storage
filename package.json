@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "ts-node-dev --log-error --files ./src/server.ts",
     "build": "tsc -p tsconfig.json",
-    "pkg": "pkg .",
     "start": "NODE_ENV=production node dist/server.js",
     "migration:run": "ts-node-dev ./src/scripts/migrate-call.ts",
     "docs:export": "ts-node-dev ./src/scripts/export-docs.ts",
@@ -43,7 +42,6 @@
     "pg": "^8.7.3",
     "pg-listen": "^1.7.0",
     "pino": "^8.2.0",
-    "pkg": "^5.8.0",
     "postgres-migrations": "^5.3.0",
     "prom-client": "^14.0.1"
   },
@@ -69,8 +67,5 @@
     "ts-node-dev": "^1.1.8",
     "typescript": "^4.5.5"
   },
-  "bin": "./dist/server.js",
-  "pkg": {
-    "assets": "node_modules/pg-format/lib/reserved.js"
-  }
+  "bin": "./dist/server.js"
 }

@@ -1446,6 +1446,37 @@ describe('testing retrieving signed URL', () => {
     })
   })
 
+  test('should set content type headers from metadata', async () => {
+    jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
+      metadata: {
+        httpStatusCode: 200,
+        size: 0,
+        mimetype: 'image/png',
+        cacheControl: 'max-age=3600',
+        contentDisposition: 'attachment; filename="signed-image.png"',
+        contentEncoding: 'gzip',
+        contentLanguage: 'en-US',
+      },
+      body: Buffer.from(''),
+    })
+
+    const urlToSign = 'bucket2/public/sadcat-upload.png'
+    const jwtToken = await signJWT({ url: urlToSign }, jwtSecret, 100)
+    const response = await app().inject({
+      method: 'GET',
+      url: `/object/sign/${urlToSign}?token=${jwtToken}`,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers).toMatchObject({
+      'cache-control': 'max-age=3600',
+      'content-length': '0',
+      'content-type': 'image/png',
+      'content-disposition': 'attachment; filename="signed-image.png"',
+      'content-encoding': 'gzip',
+      'content-language': 'en-US',
+    })
+  })
+
   test('get object without a token', async () => {
     const response = await app().inject({
       method: 'GET',

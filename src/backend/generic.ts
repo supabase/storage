@@ -12,6 +12,9 @@ export interface UploadObjectOptions {
   body: NodeJS.ReadableStream
   contentType: string
   cacheControl: string
+  contentDisposition?: string
+  contentEncoding?: string
+  contentLanguage?: string
 }
 
 export abstract class GenericStorageBackend {

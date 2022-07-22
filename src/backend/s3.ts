@@ -61,6 +61,9 @@ export class S3Backend implements GenericStorageBackend {
         lastModified: data.LastModified,
         contentRange: data.ContentRange,
         contentLength: data.ContentLength,
+        contentDisposition: data.ContentDisposition,
+        contentEncoding: data.ContentEncoding,
+        contentLanguage: data.ContentLanguage,
         httpStatusCode: data.$metadata.httpStatusCode,
       },
       body: data.Body,
@@ -73,6 +76,9 @@ export class S3Backend implements GenericStorageBackend {
     body,
     contentType,
     cacheControl,
+    contentDisposition,
+    contentEncoding,
+    contentLanguage,
   }: UploadObjectOptions): Promise<ObjectMetadata> {
     try {
       const paralellUploadS3 = new Upload({
@@ -84,6 +90,9 @@ export class S3Backend implements GenericStorageBackend {
           Body: body,
           ContentType: contentType,
           CacheControl: cacheControl,
+          ContentDisposition: contentDisposition,
+          ContentEncoding: contentEncoding,
+          ContentLanguage: contentLanguage,
         },
       })
 

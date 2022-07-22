@@ -35,8 +35,14 @@ export class FileBackend implements GenericStorageBackend {
     const file = path.resolve(this.filePath, `${bucketName}/${key}`)
     const body = await fs.readFile(file)
     const data = await fs.stat(file)
-    const cacheControl = await this.getMetadata(file, 'user.supabase.cache-control')
-    const contentType = await this.getMetadata(file, 'user.supabase.content-type')
+    const [cacheControl, contentType, contentDisposition, contentEncoding, contentLanguage] =
+      await Promise.all([
+        this.getMetadata(file, 'user.supabase.cache-control'),
+        this.getMetadata(file, 'user.supabase.content-type'),
+        this.getMetadata(file, 'user.supabase.content-disposition'),
+        this.getMetadata(file, 'user.supabase.content-encoding'),
+        this.getMetadata(file, 'user.supabase.content-language'),
+      ])
     const lastModified = new Date(0)
     lastModified.setUTCMilliseconds(data.mtimeMs)
     return {
@@ -45,6 +51,10 @@ export class FileBackend implements GenericStorageBackend {
         mimetype: contentType,
         lastModified: lastModified,
         // contentRange: data.ContentRange, @todo: support range requests
+        contentLength: data.size,
+        contentDisposition,
+        contentEncoding,
+        contentLanguage,
         httpStatusCode: 200,
       },
       body,
@@ -57,6 +67,9 @@ export class FileBackend implements GenericStorageBackend {
     body,
     contentType,
     cacheControl,
+    contentDisposition,
+    contentEncoding,
+    contentLanguage,
   }: UploadObjectOptions): Promise<ObjectMetadata> {
     try {
       const file = path.resolve(this.filePath, `${bucketName}/${key}`)
@@ -64,8 +77,14 @@ export class FileBackend implements GenericStorageBackend {
       const destFile = fs.createWriteStream(file)
       await pipeline(body, destFile)
       await Promise.all([
-        this.setMetadata(file, 'user.supabase.content-type', contentType),
         this.setMetadata(file, 'user.supabase.cache-control', cacheControl),
+        this.setMetadata(file, 'user.supabase.content-type', contentType),
+        contentDisposition &&
+          this.setMetadata(file, 'user.supabase.content-disposition', contentDisposition),
+        contentEncoding &&
+          this.setMetadata(file, 'user.supabase.content-encoding', contentEncoding),
+        contentLanguage &&
+          this.setMetadata(file, 'user.supabase.content-language', contentLanguage),
       ])
       return {
         httpStatusCode: 200,

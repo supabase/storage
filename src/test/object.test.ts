@@ -146,6 +146,38 @@ describe('testing GET object', () => {
     expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.getObject).not.toHaveBeenCalled()
   })
+
+  test('should set content type headers from metadata', async () => {
+    jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
+      metadata: {
+        httpStatusCode: 200,
+        size: 0,
+        mimetype: 'image/png',
+        cacheControl: 'max-age=3600',
+        contentDisposition: 'attachment; filename="image.png"',
+        contentEncoding: 'gzip',
+        contentLanguage: 'en-US',
+      },
+      body: Buffer.from(''),
+    })
+
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/authenticated/bucket2/authenticated/casestudy.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers).toMatchObject({
+      'cache-control': 'max-age=3600',
+      'content-length': '0',
+      'content-type': 'image/png',
+      'content-disposition': 'attachment; filename="image.png"',
+      'content-encoding': 'gzip',
+      'content-language': 'en-US',
+    })
+  })
 })
 
 /*
@@ -260,7 +292,7 @@ describe('testing POST object via multipart upload', () => {
       .delete()
       .match({
         name: object_name,
-        bucket_id: bucket_id,
+        bucket_id,
       })
       .single()
     expect(deleteObjectResponse.error).toBe(null)
@@ -475,7 +507,7 @@ describe('testing POST object via binary upload', () => {
       'Cache-Control': 'max-age=3600',
       'Content-Length': size,
       'Content-Type': 'image/jpeg',
-      'Content-Disposition': 'attachment; filename="metadata-test-2.jpg"',
+      'X-Content-Disposition': 'attachment; filename="metadata-test-2.jpg"',
       'Content-Encoding': 'gzip',
       'Content-Language': 'en-US',
     }
@@ -519,7 +551,7 @@ describe('testing POST object via binary upload', () => {
       .delete()
       .match({
         name: object_name,
-        bucket_id: bucket_id,
+        bucket_id,
       })
       .single()
     expect(deleteObjectResponse.error).toBe(null)
@@ -918,7 +950,7 @@ describe('testing PUT object via binary upload', () => {
       'Cache-Control': 'max-age=7200',
       'Content-Length': size,
       'Content-Type': 'image/jpeg',
-      'Content-Disposition': 'attachment; filename="sadcat-put-2.png"',
+      'X-Content-Disposition': 'attachment; filename="sadcat-put-2.png"',
       'Content-Encoding': 'deflate',
       'Content-Language': 'en-GB',
     }

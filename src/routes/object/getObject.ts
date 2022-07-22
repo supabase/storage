@@ -86,6 +86,15 @@ async function requestHandler(
     if (data.metadata.contentRange) {
       response.header('Content-Range', data.metadata.contentRange)
     }
+    if (data.metadata.contentDisposition) {
+      response.header('Content-Disposition', data.metadata.contentDisposition)
+    }
+    if (data.metadata.contentEncoding) {
+      response.header('Content-Encoding', data.metadata.contentEncoding)
+    }
+    if (data.metadata.contentLanguage) {
+      response.header('Content-Language', data.metadata.contentLanguage)
+    }
     return response.send(data.body)
   } catch (err: any) {
     if (err.$metadata?.httpStatusCode === 304) {

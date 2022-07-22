@@ -1,7 +1,7 @@
 'use strict'
 import { Registry } from 'prom-client'
 
-import adminApp from '../admin-app'
+import { adminApp } from './common'
 import app from '../app'
 import dotenv from 'dotenv'
 import * as migrate from '../utils/migrate'
@@ -28,7 +28,7 @@ afterAll(async () => {
 
 describe('with X-Forwarded-Host header', () => {
   test('PostgREST URL is constructed using X-Forwarded-Host if regexp matches', async () => {
-    await adminApp({}, { register: new Registry() }).inject({
+    await adminApp.inject({
       method: 'POST',
       url: `/tenants/abcdefghijklmnopqrst`,
       payload: {
@@ -52,7 +52,7 @@ describe('with X-Forwarded-Host header', () => {
     expect(response.statusCode).toBe(400)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON.message).toContain('http://abcdefghijklmnopqrst.supabase.co/rest/v1')
-    await adminApp({}, { register: new Registry() }).inject({
+    await adminApp.inject({
       method: 'DELETE',
       url: '/tenants/abcdefghijklmnopqrst',
       headers: {

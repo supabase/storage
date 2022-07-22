@@ -209,6 +209,63 @@ describe('testing POST object via multipart upload', () => {
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
+  test('should store content metadata', async () => {
+    // Create object with custom metadata.
+    const form = new FormData()
+    form.append('file', fs.createReadStream('./src/test/assets/sadcat.jpg'))
+    form.append('cacheControl', '3600')
+    form.append('contentDisposition', 'attachment; filename="metadata-test-2.jpg"')
+    form.append('contentEncoding', 'gzip')
+    form.append('contentLanguage', 'en-US')
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+    })
+
+    const bucket_id = 'bucket2'
+    const object_name = 'public/metadata-test.jpg'
+
+    const response = await app().inject({
+      method: 'POST',
+      url: `/object/${bucket_id}/${object_name}`,
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toBeCalled()
+    expect(response.body).toBe(`{"Key":"${bucket_id}/${object_name}"}`)
+
+    // Ensure that metadata is stored in database.
+    const postgrest = getSuperuserPostgrestClient()
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .select()
+      .match({
+        name: object_name,
+        bucket_id,
+      })
+      .maybeSingle()
+    expect(objectResponse.error).toBe(null)
+    expect(objectResponse.data).toMatchObject({
+      metadata: {
+        cacheControl: 'max-age=3600',
+        contentDisposition: 'attachment; filename="metadata-test-2.jpg"',
+        contentEncoding: 'gzip',
+        contentLanguage: 'en-US',
+      },
+    })
+
+    // Clear row in database.
+    const deleteObjectResponse = await postgrest
+      .from<Obj>('objects')
+      .delete()
+      .match({
+        name: object_name,
+        bucket_id: bucket_id,
+      })
+      .single()
+    expect(deleteObjectResponse.error).toBe(null)
+  })
+
   test('return 400 when uploading to a non existent bucket', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
@@ -406,6 +463,66 @@ describe('testing POST object via binary upload', () => {
     })
     expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('should store content metadata', async () => {
+    // Create object with custom metadata.
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'Cache-Control': 'max-age=3600',
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+      'Content-Disposition': 'attachment; filename="metadata-test-2.jpg"',
+      'Content-Encoding': 'gzip',
+      'Content-Language': 'en-US',
+    }
+
+    const bucket_id = 'bucket2'
+    const object_name = 'public/metadata-test.jpg'
+
+    const response = await app().inject({
+      method: 'POST',
+      url: `/object/${bucket_id}/${object_name}`,
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toBeCalled()
+    expect(response.body).toBe(`{"Key":"${bucket_id}/${object_name}"}`)
+
+    // Ensure that metadata is stored in database.
+    const postgrest = getSuperuserPostgrestClient()
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .select()
+      .match({
+        name: object_name,
+        bucket_id,
+      })
+      .maybeSingle()
+    expect(objectResponse.error).toBe(null)
+    expect(objectResponse.data).toMatchObject({
+      metadata: {
+        cacheControl: 'max-age=3600',
+        contentDisposition: 'attachment; filename="metadata-test-2.jpg"',
+        contentEncoding: 'gzip',
+        contentLanguage: 'en-US',
+      },
+    })
+
+    // Clear row in database.
+    const deleteObjectResponse = await postgrest
+      .from<Obj>('objects')
+      .delete()
+      .match({
+        name: object_name,
+        bucket_id: bucket_id,
+      })
+      .single()
+    expect(deleteObjectResponse.error).toBe(null)
   })
 
   test('return 400 when uploading to a non existent bucket', async () => {

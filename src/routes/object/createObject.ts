@@ -48,7 +48,10 @@ interface createObjectRequestInterface extends RequestGenericInterface {
   Headers: {
     authorization: string
     'content-type': string
+    'content-encoding'?: string
+    'content-language'?: string
     'cache-control'?: string
+    'x-content-disposition'?: string
     'x-upsert'?: string
   }
 }
@@ -84,6 +87,9 @@ export default async function routes(fastify: FastifyInstance) {
       const path = `${bucketName}/${objectName}`
       const s3Key = `${request.tenantId}/${path}`
       let mimeType: string, cacheControl: string
+      let contentDisposition: string | undefined,
+        contentEncoding: string | undefined,
+        contentLanguage: string | undefined
       let isTruncated = false
       let uploadResult: ObjectMetadata
 
@@ -160,12 +166,18 @@ export default async function routes(fastify: FastifyInstance) {
       if (contentType?.startsWith('multipart/form-data')) {
         const data = await request.file({ limits: { fileSize: fileSizeLimit } })
 
+        mimeType = data.mimetype
         // Can't seem to get the typing to work properly
-        // https://github.com/fastify/fastify-multipart/issues/162
-        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+        /* @ts-expect-error: https://github.com/fastify/fastify-multipart/issues/162 */
         const cacheTime = data.fields.cacheControl?.value
         cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
-        mimeType = data.mimetype
+        /* @ts-expect-error: https://github.com/fastify/fastify-multipart/issues/162 */
+        contentDisposition = data.fields.contentDisposition?.value
+        /* @ts-expect-error: https://github.com/fastify/fastify-multipart/issues/162 */
+        contentEncoding = data.fields.contentEncoding?.value
+        /* @ts-expect-error: https://github.com/fastify/fastify-multipart/issues/162 */
+        contentLanguage = data.fields.contentLanguage?.value
+
         try {
           uploadResult = await storageBackend.uploadObject({
             bucketName: globalS3Bucket,
@@ -173,6 +185,9 @@ export default async function routes(fastify: FastifyInstance) {
             body: data.file,
             contentType: mimeType,
             cacheControl,
+            contentDisposition,
+            contentEncoding,
+            contentLanguage,
           })
           // since we are using streams, fastify can't throw the error reliably
           // busboy sets the truncated property on streams if limit was exceeded
@@ -185,6 +200,9 @@ export default async function routes(fastify: FastifyInstance) {
         // just assume its a binary file
         mimeType = request.headers['content-type']
         cacheControl = request.headers['cache-control'] ?? 'no-cache'
+        contentDisposition = request.headers['x-content-disposition']
+        contentEncoding = request.headers['content-encoding']
+        contentLanguage = request.headers['content-language']
 
         try {
           uploadResult = await storageBackend.uploadObject({
@@ -193,6 +211,9 @@ export default async function routes(fastify: FastifyInstance) {
             body: request.raw,
             contentType: mimeType,
             cacheControl,
+            contentDisposition,
+            contentEncoding,
+            contentLanguage,
           })
           // @todo more secure to get this from the stream or from s3 in the next step
           isTruncated = Number(request.headers['content-length']) > fileSizeLimit
@@ -232,6 +253,10 @@ export default async function routes(fastify: FastifyInstance) {
         cacheControl,
         size: objectMetadata.size,
       }
+      if (contentDisposition) metadata.contentDisposition = contentDisposition
+      if (contentEncoding) metadata.contentEncoding = contentEncoding
+      if (contentLanguage) metadata.contentLanguage = contentLanguage
+
       const { error: updateError, status: updateStatus } = await request.superUserPostgrest
         .from<Obj>('objects')
         .update({

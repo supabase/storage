@@ -755,6 +755,52 @@ describe('testing PUT object', () => {
     expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
+
+  test('should store content metadata', async () => {
+    // Create object with custom metadata.
+    const form = new FormData()
+    form.append('file', fs.createReadStream('./src/test/assets/sadcat.jpg'))
+    form.append('cacheControl', '3600')
+    form.append('contentDisposition', 'attachment; filename="sadcat-put-1.png"')
+    form.append('contentEncoding', 'gzip')
+    form.append('contentLanguage', 'en-US')
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+    })
+
+    const bucket_id = 'bucket2'
+    const object_name = 'public/sadcat-upload.png'
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: `/object/${bucket_id}/${object_name}`,
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toBeCalled()
+    expect(response.body).toBe(`{"Key":"${bucket_id}/${object_name}"}`)
+
+    // Ensure that metadata is stored in database.
+    const postgrest = getSuperuserPostgrestClient()
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .select()
+      .match({
+        name: object_name,
+        bucket_id,
+      })
+      .maybeSingle()
+    expect(objectResponse.error).toBe(null)
+    expect(objectResponse.data).toMatchObject({
+      metadata: {
+        cacheControl: 'max-age=3600',
+        contentDisposition: 'attachment; filename="sadcat-put-1.png"',
+        contentEncoding: 'gzip',
+        contentLanguage: 'en-US',
+      },
+    })
+  })
 })
 
 /*
@@ -860,6 +906,55 @@ describe('testing PUT object via binary upload', () => {
     })
     expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('should store content metadata', async () => {
+    // Create object with custom metadata.
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'Cache-Control': 'max-age=7200',
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+      'Content-Disposition': 'attachment; filename="sadcat-put-2.png"',
+      'Content-Encoding': 'deflate',
+      'Content-Language': 'en-GB',
+    }
+
+    const bucket_id = 'bucket2'
+    const object_name = 'public/sadcat-upload.png'
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: `/object/${bucket_id}/${object_name}`,
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toBeCalled()
+    expect(response.body).toBe(`{"Key":"${bucket_id}/${object_name}"}`)
+
+    // Ensure that metadata is stored in database.
+    const postgrest = getSuperuserPostgrestClient()
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .select()
+      .match({
+        name: object_name,
+        bucket_id,
+      })
+      .maybeSingle()
+    expect(objectResponse.error).toBe(null)
+    expect(objectResponse.data).toMatchObject({
+      metadata: {
+        cacheControl: 'max-age=7200',
+        contentDisposition: 'attachment; filename="sadcat-put-2.png"',
+        contentEncoding: 'deflate',
+        contentLanguage: 'en-GB',
+      },
+    })
   })
 })
 

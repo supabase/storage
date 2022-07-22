@@ -6,6 +6,14 @@ export interface GetObjectHeaders {
   range?: string
 }
 
+export interface UploadObjectOptions {
+  bucketName: string
+  key: string
+  body: NodeJS.ReadableStream
+  contentType: string
+  cacheControl: string
+}
+
 export abstract class GenericStorageBackend {
   client: any
   constructor() {
@@ -18,13 +26,7 @@ export abstract class GenericStorageBackend {
   ): Promise<ObjectResponse> {
     throw new Error('getObject not implemented')
   }
-  async uploadObject(
-    bucketName: string,
-    key: string,
-    body: NodeJS.ReadableStream,
-    contentType: string,
-    cacheControl: string
-  ): Promise<ObjectMetadata> {
+  async uploadObject(options: UploadObjectOptions): Promise<ObjectMetadata> {
     throw new Error('uploadObject not implemented')
   }
   async deleteObject(bucket: string, key: string): Promise<ObjectMetadata> {

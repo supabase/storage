@@ -167,13 +167,13 @@ export default async function routes(fastify: FastifyInstance) {
         cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
         mimeType = data.mimetype
         try {
-          uploadResult = await storageBackend.uploadObject(
-            globalS3Bucket,
-            s3Key,
-            data.file,
-            mimeType,
-            cacheControl
-          )
+          uploadResult = await storageBackend.uploadObject({
+            bucketName: globalS3Bucket,
+            key: s3Key,
+            body: data.file,
+            contentType: mimeType,
+            cacheControl,
+          })
           // since we are using streams, fastify can't throw the error reliably
           // busboy sets the truncated property on streams if limit was exceeded
           // https://github.com/fastify/fastify-multipart/issues/196#issuecomment-782847791
@@ -187,13 +187,13 @@ export default async function routes(fastify: FastifyInstance) {
         cacheControl = request.headers['cache-control'] ?? 'no-cache'
 
         try {
-          uploadResult = await storageBackend.uploadObject(
-            globalS3Bucket,
-            s3Key,
-            request.raw,
-            mimeType,
-            cacheControl
-          )
+          uploadResult = await storageBackend.uploadObject({
+            bucketName: globalS3Bucket,
+            key: s3Key,
+            body: request.raw,
+            contentType: mimeType,
+            cacheControl,
+          })
           // @todo more secure to get this from the stream or from s3 in the next step
           isTruncated = Number(request.headers['content-length']) > fileSizeLimit
         } catch (err) {

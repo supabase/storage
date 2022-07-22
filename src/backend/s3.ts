@@ -12,7 +12,7 @@ import https from 'https'
 import { Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
 import { ObjectMetadata, ObjectResponse } from '../types/types'
-import { GenericStorageBackend, GetObjectHeaders } from './generic'
+import { GenericStorageBackend, GetObjectHeaders, UploadObjectOptions } from './generic'
 import { convertErrorToStorageBackendError } from '../utils/errors'
 
 export class S3Backend implements GenericStorageBackend {
@@ -67,13 +67,13 @@ export class S3Backend implements GenericStorageBackend {
     }
   }
 
-  async uploadObject(
-    bucketName: string,
-    key: string,
-    body: NodeJS.ReadableStream,
-    contentType: string,
-    cacheControl: string
-  ): Promise<ObjectMetadata> {
+  async uploadObject({
+    bucketName,
+    key,
+    body,
+    contentType,
+    cacheControl,
+  }: UploadObjectOptions): Promise<ObjectMetadata> {
     try {
       const paralellUploadS3 = new Upload({
         client: this.client,
@@ -91,7 +91,7 @@ export class S3Backend implements GenericStorageBackend {
       return {
         httpStatusCode: data.$metadata.httpStatusCode,
       }
-    } catch (err: any) {
+    } catch (err) {
       throw convertErrorToStorageBackendError(err)
     }
   }

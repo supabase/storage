@@ -5,7 +5,7 @@ import path from 'path'
 import { promisify } from 'util'
 import stream from 'stream'
 import { getConfig } from '../utils/config'
-import { GenericStorageBackend } from './generic'
+import { GenericStorageBackend, UploadObjectOptions } from './generic'
 import { convertErrorToStorageBackendError } from '../utils/errors'
 const pipeline = promisify(stream.pipeline)
 
@@ -51,13 +51,13 @@ export class FileBackend implements GenericStorageBackend {
     }
   }
 
-  async uploadObject(
-    bucketName: string,
-    key: string,
-    body: NodeJS.ReadableStream,
-    contentType: string,
-    cacheControl: string
-  ): Promise<ObjectMetadata> {
+  async uploadObject({
+    bucketName,
+    key,
+    body,
+    contentType,
+    cacheControl,
+  }: UploadObjectOptions): Promise<ObjectMetadata> {
     try {
       const file = path.resolve(this.filePath, `${bucketName}/${key}`)
       await fs.ensureFile(file)
@@ -70,7 +70,7 @@ export class FileBackend implements GenericStorageBackend {
       return {
         httpStatusCode: 200,
       }
-    } catch (err: any) {
+    } catch (err) {
       throw convertErrorToStorageBackendError(err)
     }
   }

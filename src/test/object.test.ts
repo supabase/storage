@@ -2,12 +2,13 @@
 import dotenv from 'dotenv'
 import FormData from 'form-data'
 import fs from 'fs'
+import { URL } from 'url'
 import app from '../app'
 import { getConfig } from '../utils/config'
-import { signJWT } from '../utils/index'
+import { signJWT, verifyJWT } from '../utils/index'
 import { S3Backend } from '../backend/s3'
 import { PostgrestClient } from '@supabase/postgrest-js'
-import { Obj } from '../types/types'
+import { Obj, SignedToken } from '../types/types'
 import { convertErrorToStorageBackendError } from '../utils/errors'
 
 dotenv.config({ path: '.env.test' })
@@ -1315,6 +1316,31 @@ describe('testing generating signed URL', () => {
       },
     })
     expect(response.statusCode).toBe(400)
+  })
+
+  test('should allow setting of custom headers', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/sign/bucket2/public/sadcat-upload.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+        responseContentType: 'image/png',
+        responseContentDisposition: 'inline',
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const result = JSON.parse(response.body)
+    expect(result.signedURL).toBeTruthy()
+    expect(result.signedURL.startsWith('/')).toBe(true)
+    const parsedUrl = new URL(`http://localhost${result.signedURL}`)
+    const tokenString = parsedUrl.searchParams.get('token')
+    expect(tokenString).toBeTruthy()
+    const token = (await verifyJWT(tokenString as string, jwtSecret)) as SignedToken
+    expect(token.contentType).toBe('image/png')
+    expect(token.contentDisposition).toBe('inline')
   })
 })
 

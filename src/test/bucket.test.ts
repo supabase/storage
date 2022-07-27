@@ -223,6 +223,32 @@ describe('testing public bucket functionality', () => {
       ifNoneMatch: 'abc',
     })
 
+    jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
+      metadata: {
+        httpStatusCode: 200,
+        size: 0,
+        mimetype: 'image/svg',
+        cacheControl: 'max-age=3600',
+        contentDisposition: 'attachment; filename="favicon.svg"',
+        contentEncoding: 'gzip',
+        contentLanguage: 'en-US',
+      },
+      body: Buffer.from(''),
+    })
+    const customMetadataResponse = await app().inject({
+      method: 'GET',
+      url: `/object/public/public-bucket/favicon.ico`,
+    })
+    expect(customMetadataResponse.statusCode).toBe(200)
+    expect(customMetadataResponse.headers).toMatchObject({
+      'cache-control': 'max-age=3600',
+      'content-length': '0',
+      'content-type': 'image/svg',
+      'content-disposition': 'attachment; filename="favicon.svg"',
+      'content-encoding': 'gzip',
+      'content-language': 'en-US',
+    })
+
     const makePrivateResponse = await app().inject({
       method: 'PUT',
       url: `/bucket/${bucketId}`,

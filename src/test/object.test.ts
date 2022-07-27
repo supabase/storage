@@ -1477,6 +1477,35 @@ describe('testing retrieving signed URL', () => {
     })
   })
 
+  test('get object with custom response headers', async () => {
+    jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
+      metadata: {
+        httpStatusCode: 200,
+        size: 0,
+        mimetype: 'image/png',
+        contentDisposition: 'attachment; filename="signed-image.png"',
+      },
+      body: Buffer.from(''),
+    })
+
+    const urlToSign = 'bucket2/public/sadcat-upload.png'
+    const jwtToken = await signJWT(
+      { url: urlToSign, contentType: 'image/jpeg', contentDisposition: 'inline' },
+      jwtSecret,
+      100
+    )
+    const response = await app().inject({
+      method: 'GET',
+      url: `/object/sign/${urlToSign}?token=${jwtToken}`,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers).toMatchObject({
+      'content-length': '0',
+      'content-type': 'image/jpeg',
+      'content-disposition': 'inline',
+    })
+  })
+
   test('get object without a token', async () => {
     const response = await app().inject({
       method: 'GET',

@@ -102,6 +102,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get<getObjectRequestInterface>(
     '/authenticated/:bucketName/*',
     {
+      exposeHeadRoute: true,
       // @todo add success response schema here
       schema: {
         params: getObjectParamsSchema,
@@ -120,6 +121,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get<getObjectRequestInterface>(
     '/:bucketName/*',
     {
+      exposeHeadRoute: true,
       // @todo add success response schema here
       schema: {
         params: getObjectParamsSchema,

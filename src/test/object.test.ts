@@ -285,6 +285,23 @@ describe('testing POST object via multipart upload', () => {
     )
   })
 
+  test('return 400 when uploading to object with no file name', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${anonKey}`,
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket4/',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
   test('should not add row to database if upload fails', async () => {
     // Mock S3 upload failure.
     jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
@@ -494,6 +511,27 @@ describe('testing POST object via binary upload', () => {
         message: 'The object exceeded the maximum allowed size',
       })
     )
+  })
+
+  test('return 400 when uploading to object with no file name', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${anonKey}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+      'x-upsert': 'true',
+    }
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket4/',
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('should not add row to database if upload fails', async () => {

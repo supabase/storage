@@ -49,7 +49,7 @@ jobs:
 
       - name: Tests pass
         run: |
-          npm test:coverage
+          npm run test:coverage
         env:
           ANON_KEY: ${{ secrets.ANON_KEY }}
           SERVICE_KEY: ${{ secrets.SERVICE_KEY }}

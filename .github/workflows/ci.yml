@@ -49,7 +49,7 @@ jobs:
 
       - name: Tests pass
         run: |
-          npm test
+          npm test:coverage
         env:
           ANON_KEY: ${{ secrets.ANON_KEY }}
           SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
@@ -66,3 +66,8 @@ jobs:
           MULTITENANT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5433/postgres
           POSTGREST_URL_SUFFIX: /rest/v1
           ADMIN_API_KEYS: apikey
+
+      - name: Upload coverage results to Coveralls
+        uses: coverallsapp/github-action@master
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}

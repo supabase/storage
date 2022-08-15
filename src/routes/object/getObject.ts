@@ -126,7 +126,7 @@ export default async function routes(fastify: FastifyInstance) {
         summary: 'Get object (deprecated)',
         description: 'use GET /object/authenticated/{bucketName} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
-        tags: ['object', 'deprecated'],
+        tags: ['deprecated'],
       },
     },
     async (request, response) => {

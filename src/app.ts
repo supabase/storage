@@ -41,6 +41,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
         tags: [
           { name: 'object', description: 'Object end-points' },
           { name: 'bucket', description: 'Bucket end-points' },
+          { name: 'deprecated', description: 'Deprecated end-points' },
         ],
       },
     })

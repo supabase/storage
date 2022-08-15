@@ -32,7 +32,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {
       exposeRoute: true,
-      swagger: {
+      openapi: {
         info: {
           title: 'Supabase Storage API',
           description: 'API documentation for Supabase Storage',

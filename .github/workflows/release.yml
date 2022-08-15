@@ -80,6 +80,13 @@ jobs:
           username: ${{ secrets.PROD_ACCESS_KEY_ID }}
           password: ${{ secrets.PROD_SECRET_ACCESS_KEY }}
 
+      - name: Login to ECR account
+        uses: docker/login-action@v1
+        with:
+          registry: public.ecr.aws
+          username: ${{ secrets.PROD_ACCESS_KEY_ID }}
+          password: ${{ secrets.PROD_SECRET_ACCESS_KEY }}
+
       - name: Build and upload image
         uses: docker/build-push-action@v2
         with:
@@ -89,3 +96,4 @@ jobs:
           tags: |
             436098097459.dkr.ecr.us-east-1.amazonaws.com/storage-api:v${{ needs.release.outputs.version }}
             646182064048.dkr.ecr.us-east-1.amazonaws.com/storage-api:v${{ needs.release.outputs.version }}
+            public.ecr.aws/t3w2s2c9/storage-api:v${{ needs.release.outputs.version }}

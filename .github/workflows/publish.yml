@@ -1,9 +1,11 @@
 name: Publish to Image Registry
 
 on:
-  release:
-    types:
-      - published
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
   push:
     tags:
       - "v*"
@@ -23,6 +25,7 @@ jobs:
             646182064048.dkr.ecr.us-east-1.amazonaws.com/storage-api
           tags: |
             type=ref,event=tag
+            type=raw,value=${{ inputs.version }},enable=${{ github.event_name == 'workflow_call' }}
             type=raw,value=latest
 
       - uses: docker/setup-qemu-action@v2

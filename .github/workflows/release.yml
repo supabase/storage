@@ -26,3 +26,13 @@ jobs:
             @semantic-release/github
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    needs:
+      - release
+    if: needs.release.outputs.published == 'true'
+    # Call publish explicitly because events from actions cannot trigger more actions
+    uses: ./.github/workflows/publish.yml
+    with:
+      version: v${{ needs.release.outputs.version }}
+    secrets: inherit

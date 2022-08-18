@@ -8,16 +8,16 @@ on:
 
 jobs:
   release:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     outputs:
       published: ${{ steps.semantic.outputs.new_release_published }}
       version: ${{ steps.semantic.outputs.new_release_version }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Semantic Release
         id: semantic
-        uses: cycjimmy/semantic-release-action@v2
+        uses: cycjimmy/semantic-release-action@v3
         with:
           semantic_version: 18
           extra_plugins: |

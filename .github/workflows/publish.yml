@@ -26,6 +26,7 @@ jobs:
           images: |
             supabase/storage-api
             public.ecr.aws/t3w2s2c9/storage-api
+            436098097459.dkr.ecr.us-east-1.amazonaws.com/storage-api
             646182064048.dkr.ecr.us-east-1.amazonaws.com/storage-api
           flavor: |
             latest=false

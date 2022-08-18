@@ -1,6 +1,9 @@
 name: Publish to Image Registry
 
 on:
+  release:
+    types:
+      - published
   push:
     tags:
       - "v*"

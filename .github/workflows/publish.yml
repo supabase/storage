@@ -12,8 +12,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Image tag (defaults to latest)"
-        required: false
+        description: "Image tag"
+        required: true
         type: string
 
 jobs:
@@ -30,7 +30,7 @@ jobs:
             646182064048.dkr.ecr.us-east-1.amazonaws.com/storage-api
           tags: |
             type=ref,event=tag
-            type=raw,value=${{ inputs.version || 'latest' }},enable=${{ github.event_name != 'push' }}
+            type=raw,value=${{ inputs.version }},enable=${{ github.event_name != 'push' }}
 
       - uses: docker/setup-qemu-action@v2
         with:

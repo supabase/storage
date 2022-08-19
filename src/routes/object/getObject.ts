@@ -107,7 +107,7 @@ export default async function routes(fastify: FastifyInstance) {
         params: getObjectParamsSchema,
         headers: { $ref: 'authSchema#' },
         summary,
-        response: { '4xx': { $ref: 'errorSchema#' } },
+        response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },
     },

@@ -27,7 +27,10 @@ function createResponse(message: string, status?: string, error?: string): Bucke
 function createDefaultSchema(successResponseSchema: any, properties: any): any {
   return {
     headers: { $ref: 'authSchema#' },
-    response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
+    response: {
+      200: { description: 'Successful response', ...successResponseSchema },
+      '4xx': { description: 'Error response', $ref: 'errorSchema#' },
+    },
     ...properties,
   }
 }

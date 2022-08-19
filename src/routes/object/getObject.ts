@@ -123,7 +123,7 @@ export default async function routes(fastify: FastifyInstance) {
       schema: {
         params: getObjectParamsSchema,
         headers: { $ref: 'authSchema#' },
-        summary: 'Get object (deprecated)',
+        summary: 'Get object',
         description: 'use GET /object/authenticated/{bucketName} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
         tags: ['deprecated'],

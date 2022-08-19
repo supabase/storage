@@ -47,21 +47,29 @@ describe('testing Generic Routes Utils', () => {
 
   describe('creating generic schema [createDefaultSchema]', () => {
     test('create generic schema without additional properties', () => {
-      const successResponseSchema = { generic: 'example' }
+      const successResponseSchema = { generic: 'example', description: 'Successful response' }
       const response = {
         headers: { $ref: 'authSchema#' },
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
+        response: {
+          200: successResponseSchema,
+          '4xx': { $ref: 'errorSchema#', description: 'Error response' },
+        },
       }
 
       expect(createDefaultSchema(successResponseSchema, {})).toEqual(response)
     })
 
     test('create generic schema with additional properties', () => {
-      const successResponseSchema = { generic: 'example' }
+      const successResponseSchema = { generic: 'example', description: 'Successful response' }
       const additionalProperties = { generic: 'example' }
       const response = {
-        headers: { $ref: 'authSchema#' },
-        response: { 200: successResponseSchema, '4xx': { $ref: 'errorSchema#' } },
+        headers: {
+          $ref: 'authSchema#',
+        },
+        response: {
+          200: successResponseSchema,
+          '4xx': { $ref: 'errorSchema#', description: 'Error response' },
+        },
         ...additionalProperties,
       }
 

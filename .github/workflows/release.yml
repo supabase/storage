@@ -42,7 +42,7 @@ jobs:
             436098097459.dkr.ecr.us-east-1.amazonaws.com/storage-api
             646182064048.dkr.ecr.us-east-1.amazonaws.com/storage-api
           tags: |
-            type=raw,value=${{ needs.release.outputs.version }}
+            type=raw,value=v${{ needs.release.outputs.version }}
 
       - uses: docker/setup-qemu-action@v2
         with:

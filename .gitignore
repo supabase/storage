@@ -7,3 +7,4 @@ dist/
 static/api.json
 data/
 bin/
+.idea/

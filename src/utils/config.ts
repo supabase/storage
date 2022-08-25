@@ -22,6 +22,9 @@ type StorageConfigType = {
   tenantId: string
   urlLengthLimit: number
   xForwardedHostRegExp?: string
+  logflareEnabled?: boolean
+  logflareApiKey?: string
+  logflareSourceToken?: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -69,5 +72,8 @@ export function getConfig(): StorageConfigType {
       '',
     urlLengthLimit: Number(getOptionalConfigFromEnv('URL_LENGTH_LIMIT')) || 7_500,
     xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
+    logflareEnabled: getOptionalConfigFromEnv('LOGFLARE_ENABLED') === 'true',
+    logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
+    logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
   }
 }

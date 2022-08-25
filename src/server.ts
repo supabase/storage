@@ -1,21 +1,12 @@
 import { FastifyInstance } from 'fastify'
 import { IncomingMessage, Server, ServerResponse } from 'http'
-import pino from 'pino'
 
 import build from './app'
 import buildAdmin from './admin-app'
 import { getConfig } from './utils/config'
 import { runMultitenantMigrations, runMigrations } from './utils/migrate'
 import { listenForTenantUpdate } from './utils/tenant'
-
-const logger = pino({
-  formatters: {
-    level(label) {
-      return { level: label }
-    },
-  },
-  timestamp: pino.stdTimeFunctions.isoTime,
-})
+import { logger } from './monitoring'
 
 const exposeDocs = true
 

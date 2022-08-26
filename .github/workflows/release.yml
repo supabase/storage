@@ -8,16 +8,16 @@ on:
 
 jobs:
   release:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     outputs:
       published: ${{ steps.semantic.outputs.new_release_published }}
       version: ${{ steps.semantic.outputs.new_release_version }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Semantic Release
         id: semantic
-        uses: cycjimmy/semantic-release-action@v2
+        uses: cycjimmy/semantic-release-action@v3
         with:
           semantic_version: 18
           extra_plugins: |
@@ -27,65 +27,59 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  docker-hub:
-    name: Release on Docker Hub
+  publish:
     needs:
       - release
     if: needs.release.outputs.published == 'true'
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            supabase/storage-api
+            public.ecr.aws/t3w2s2c9/storage-api
+            436098097459.dkr.ecr.us-east-1.amazonaws.com/storage-api
+            646182064048.dkr.ecr.us-east-1.amazonaws.com/storage-api
+          tags: |
+            type=raw,value=v${{ needs.release.outputs.version }}
 
-      - uses: docker/setup-qemu-action@v1
+      - uses: docker/setup-qemu-action@v2
         with:
           platforms: amd64,arm64
+      - uses: docker/setup-buildx-action@v2
 
-      - uses: docker/setup-buildx-action@v1
-
-      - uses: docker/login-action@v1
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - uses: docker/build-push-action@v2
+      - name: Login to ECR
+        uses: docker/login-action@v2
         with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            supabase/storage-api:latest
-            supabase/storage-api:v${{ needs.release.outputs.version }}
-
-  release-image:
-    needs:
-      - release
-    if: needs.release.outputs.published == 'true'
-    runs-on: ubuntu-20.04
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
+          registry: public.ecr.aws
+          username: ${{ secrets.PROD_ACCESS_KEY_ID }}
+          password: ${{ secrets.PROD_SECRET_ACCESS_KEY }}
 
       - name: Login to ECR account - staging
-        uses: docker/login-action@v1
+        uses: docker/login-action@v2
         with:
           registry: 436098097459.dkr.ecr.us-east-1.amazonaws.com
           username: ${{ secrets.DEV_ACCESS_KEY_ID }}
           password: ${{ secrets.DEV_SECRET_ACCESS_KEY }}
 
       - name: Login to ECR account - prod
-        uses: docker/login-action@v1
+        uses: docker/login-action@v2
         with:
           registry: 646182064048.dkr.ecr.us-east-1.amazonaws.com
           username: ${{ secrets.PROD_ACCESS_KEY_ID }}
           password: ${{ secrets.PROD_SECRET_ACCESS_KEY }}
 
-      - name: Build and upload image
-        uses: docker/build-push-action@v2
+      - uses: docker/build-push-action@v3
         with:
-          context: .
-          file: ./Dockerfile
           push: true
-          tags: |
-            436098097459.dkr.ecr.us-east-1.amazonaws.com/storage-api:v${{ needs.release.outputs.version }}
-            646182064048.dkr.ecr.us-east-1.amazonaws.com/storage-api:v${{ needs.release.outputs.version }}
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

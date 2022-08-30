@@ -6,18 +6,20 @@ interface RequestLoggerOptions {
 
 export default (options: RequestLoggerOptions) =>
   fastifyPlugin(async (fastify) => {
-    fastify.addHook('onRequest', async (req) => {
-      if (options.excludeUrls?.includes(req.url)) {
-        return
-      }
-
-      req.log.info({ req }, 'incoming request')
-    })
-
     fastify.addHook('onResponse', async (req, reply) => {
       if (options.excludeUrls?.includes(req.url)) {
         return
       }
-      req.log.info({ res: reply }, 'request completed')
+
+      const rMeth = req.method
+      const rUrl = req.url
+      const uAgent = req.headers['user-agent']
+      const rId = req.id
+      const cIP = req.ip
+      const statusCode = reply.statusCode
+
+      const buildLogMessage = `${rMeth} | ${statusCode} | ${cIP} | ${rId} | ${rUrl} | ${uAgent}`
+
+      req.log.info({ req, res: reply, responseTime: reply.getResponseTime() }, buildLogMessage)
     })
   })

@@ -15,6 +15,7 @@ type StorageConfigType = {
   multitenantDatabaseUrl?: string
   postgrestURL: string
   postgrestURLSuffix?: string
+  postgrestURLScheme?: string
   region: string
   requestIdHeader?: string
   serviceKey: string
@@ -62,6 +63,7 @@ export function getConfig(): StorageConfigType {
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
     postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
     postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
+    postgrestURLScheme: getOptionalConfigFromEnv('POSTGREST_URL_SCHEME') || 'http',
     region: getConfigFromEnv('REGION'),
     requestIdHeader: getOptionalConfigFromEnv('REQUEST_ID_HEADER'),
     serviceKey: getOptionalIfMultitenantConfigFromEnv('SERVICE_KEY') || '',

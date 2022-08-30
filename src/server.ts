@@ -18,6 +18,7 @@ const exposeDocs = true
 
     const adminApp: FastifyInstance<Server, IncomingMessage, ServerResponse> = buildAdmin({
       logger,
+      disableRequestLogging: true,
       requestIdHeader: adminRequestIdHeader,
     })
 
@@ -33,6 +34,7 @@ const exposeDocs = true
 
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
     logger,
+    disableRequestLogging: true,
     exposeDocs,
     requestIdHeader,
   })

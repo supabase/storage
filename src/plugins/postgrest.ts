@@ -13,8 +13,15 @@ declare module 'fastify' {
 }
 
 async function getPostgrestClient(request: FastifyRequest, jwt: string): Promise<PostgrestClient> {
-  const { anonKey, isMultitenant, postgrestURL, postgrestURLSuffix, xForwardedHostRegExp } =
-    getConfig()
+  const {
+    anonKey,
+    isMultitenant,
+    postgrestURL,
+    postgrestURLScheme,
+    postgrestURLSuffix,
+    xForwardedHostRegExp,
+  } = getConfig()
+
   let url = postgrestURL
   let apiKey = anonKey
   if (isMultitenant && xForwardedHostRegExp) {
@@ -25,7 +32,7 @@ async function getPostgrestClient(request: FastifyRequest, jwt: string): Promise
     if (!new RegExp(xForwardedHostRegExp).test(xForwardedHost)) {
       throw new Error('X-Forwarded-Host header does not match regular expression')
     }
-    url = `http://${xForwardedHost}${postgrestURLSuffix}`
+    url = `${postgrestURLScheme}://${xForwardedHost}${postgrestURLSuffix}`
     apiKey = await getAnonKey(request.tenantId)
   }
   const postgrest = new PostgrestClient(url, {

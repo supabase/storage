@@ -8,6 +8,25 @@ export const logger = pino({
       return { level: label }
     },
   },
+  redact: ['req.headers.authorization', 'req.headers.apikey', 'req.headers["api-key"]'],
+  serializers: {
+    res(reply) {
+      return {
+        url: reply.url,
+        statusCode: reply.statusCode,
+      }
+    },
+    req(request) {
+      return {
+        method: request.method,
+        url: request.url,
+        headers: request.headers,
+        hostname: request.hostname,
+        remoteAddress: request.ip,
+        remotePort: request.socket.remotePort,
+      }
+    },
+  },
   timestamp: pino.stdTimeFunctions.isoTime,
 })
 

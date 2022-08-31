@@ -92,7 +92,7 @@ export default async function routes(fastify: FastifyInstance) {
       try {
         owner = await getOwner(request.jwt, jwtSecret)
       } catch (err: any) {
-        console.log(err)
+        request.log.error({ error: err }, 'unable to get owner')
         return response.status(400).send(createResponse(err.message, '400', err.message))
       }
 

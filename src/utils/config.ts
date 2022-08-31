@@ -15,6 +15,7 @@ type StorageConfigType = {
   multitenantDatabaseUrl?: string
   postgrestURL: string
   postgrestURLSuffix?: string
+  postgrestURLScheme?: string
   region: string
   requestIdHeader?: string
   serviceKey: string
@@ -22,6 +23,7 @@ type StorageConfigType = {
   tenantId: string
   urlLengthLimit: number
   xForwardedHostRegExp?: string
+  logLevel?: string
   logflareEnabled?: boolean
   logflareApiKey?: string
   logflareSourceToken?: string
@@ -62,6 +64,7 @@ export function getConfig(): StorageConfigType {
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
     postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
     postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
+    postgrestURLScheme: getOptionalConfigFromEnv('POSTGREST_URL_SCHEME') || 'http',
     region: getConfigFromEnv('REGION'),
     requestIdHeader: getOptionalConfigFromEnv('REQUEST_ID_HEADER'),
     serviceKey: getOptionalIfMultitenantConfigFromEnv('SERVICE_KEY') || '',
@@ -72,6 +75,7 @@ export function getConfig(): StorageConfigType {
       '',
     urlLengthLimit: Number(getOptionalConfigFromEnv('URL_LENGTH_LIMIT')) || 7_500,
     xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
+    logLevel: getOptionalConfigFromEnv('LOG_LEVEL') || 'trace',
     logflareEnabled: getOptionalConfigFromEnv('LOGFLARE_ENABLED') === 'true',
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),

@@ -44,7 +44,7 @@ export default async function routes(fastify: FastifyInstance) {
       try {
         owner = await getOwner(request.jwt, jwtSecret)
       } catch (err: any) {
-        console.log(err)
+        request.log.error({ error: err }, 'unable to get owner')
         return response.status(400).send(createResponse(err.message, '400', err.message))
       }
 
@@ -84,7 +84,7 @@ export default async function routes(fastify: FastifyInstance) {
         .single()
 
       if (error) {
-        request.log.error({ error }, 'error bucket')
+        request.log.error({ error }, 'error creating bucket')
         return response.status(400).send(transformPostgrestError(error, status))
       }
       request.log.info({ results }, 'results')

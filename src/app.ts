@@ -7,6 +7,7 @@ import { authSchema } from './schemas/auth'
 import { errorSchema } from './schemas/error'
 import logTenantId from './plugins/log-tenant-id'
 import tenantId from './plugins/tenant-id'
+import logRequest from './plugins/log-request'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -53,6 +54,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
 
   app.register(tenantId)
   app.register(logTenantId)
+  app.register(logRequest({ excludeUrls: ['/status'] }))
   app.register(bucketRoutes, { prefix: 'bucket' })
   app.register(objectRoutes, { prefix: 'object' })
 

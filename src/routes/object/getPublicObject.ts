@@ -42,7 +42,7 @@ export default async function routes(fastify: FastifyInstance) {
       schema: {
         params: getPublicObjectParamsSchema,
         summary,
-        response: { '4xx': { $ref: 'errorSchema#' } },
+        response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },
     },

@@ -1,26 +1,27 @@
 import pino from 'pino'
 import { getConfig } from '../utils/config'
+import { FastifyRequest } from 'fastify'
+import { URL } from 'url'
 
 const { logLevel } = getConfig()
 
 export const logger = pino({
   transport: buildTransport(),
   formatters: {
-    level(label, number) {
-      return { level: number }
+    level(label) {
+      return { level: label }
     },
   },
   serializers: {
     res(reply) {
       return {
-        url: reply.url,
         statusCode: reply.statusCode,
       }
     },
     req(request) {
       return {
         method: request.method,
-        url: request.url,
+        url: redactQueryParamFromRequest(request, ['token']),
         headers: whitelistHeaders(request.headers),
         hostname: request.hostname,
         remoteAddress: request.ip,
@@ -91,4 +92,15 @@ const whitelistHeaders = (headers: Record<string, unknown>) => {
     })
 
   return responseMetadata
+}
+
+export function redactQueryParamFromRequest(req: FastifyRequest, params: string[]) {
+  const lUrl = new URL(req.url, `${req.protocol}://${req.hostname}`)
+
+  params.forEach((param) => {
+    if (lUrl.searchParams.has(param)) {
+      lUrl.searchParams.set(param, 'redacted')
+    }
+  })
+  return `${lUrl.pathname}${lUrl.search}`
 }

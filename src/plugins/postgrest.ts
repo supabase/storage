@@ -4,6 +4,7 @@ import { FastifyRequest } from 'fastify'
 import { PostgrestClient } from '@supabase/postgrest-js'
 import fastifyPlugin from 'fastify-plugin'
 import { getConfig } from '../utils/config'
+import { generateForwardHeaders } from '../utils/plugins'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -20,6 +21,7 @@ async function getPostgrestClient(request: FastifyRequest, jwt: string): Promise
     postgrestURLScheme,
     postgrestURLSuffix,
     xForwardedHostRegExp,
+    forwardHeaders
   } = getConfig()
 
   let url = postgrestURL
@@ -35,14 +37,18 @@ async function getPostgrestClient(request: FastifyRequest, jwt: string): Promise
     url = `${postgrestURLScheme}://${xForwardedHost}${postgrestURLSuffix}`
     apiKey = await getAnonKey(request.tenantId)
   }
-  const postgrest = new PostgrestClient(url, {
+
+  const pgClientHeaders = {
+    apiKey,
+    Authorization: `Bearer ${jwt}`
+  }
+  return new PostgrestClient(url, {
     headers: {
-      apiKey,
-      Authorization: `Bearer ${jwt}`,
+      ...pgClientHeaders, // hard coded headers
+      ...generateForwardHeaders(forwardHeaders, request, Object.keys(pgClientHeaders)) // extra forwarded headers
     },
     schema: 'storage',
   })
-  return postgrest
 }
 
 export const postgrest = fastifyPlugin(async (fastify) => {

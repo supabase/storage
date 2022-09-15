@@ -27,6 +27,7 @@ type StorageConfigType = {
   logflareEnabled?: boolean
   logflareApiKey?: string
   logflareSourceToken?: string
+  forwardHeaders?: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -79,5 +80,6 @@ export function getConfig(): StorageConfigType {
     logflareEnabled: getOptionalConfigFromEnv('LOGFLARE_ENABLED') === 'true',
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
+    forwardHeaders: getOptionalConfigFromEnv('FORWARD_HEADERS')
   }
 }

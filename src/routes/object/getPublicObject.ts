@@ -77,7 +77,7 @@ export default async function routes(fastify: FastifyInstance) {
           .header('Cache-Control', data.metadata.cacheControl)
           .header('Content-Length', data.metadata.contentLength)
           .header('ETag', data.metadata.eTag)
-          .header('Last-Modified', data.metadata.lastModified)
+          .header('Last-Modified', data.metadata.lastModified?.toUTCString())
         if (data.metadata.contentRange) {
           response.header('Content-Range', data.metadata.contentRange)
         }

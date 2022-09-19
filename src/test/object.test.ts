@@ -32,6 +32,8 @@ beforeEach(() => {
       httpStatusCode: 200,
       size: 3746,
       mimetype: 'image/png',
+      lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
+      eTag: 'abc',
     },
     body: Buffer.from(''),
   })
@@ -76,6 +78,8 @@ describe('testing GET object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
+    expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
     expect(S3Backend.prototype.getObject).toBeCalled()
   })
 
@@ -91,13 +95,13 @@ describe('testing GET object', () => {
       url: '/object/authenticated/bucket2/authenticated/casestudy.png',
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
-        'if-modified-since': 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+        'if-modified-since': 'Thu, 12 Aug 2021 16:00:00 GMT',
         'if-none-match': 'abc',
       },
     })
     expect(response.statusCode).toBe(304)
     expect(mockGetObject.mock.calls[0][2]).toMatchObject({
-      ifModifiedSince: 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+      ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })
   })
@@ -1214,6 +1218,8 @@ describe('testing retrieving signed URL', () => {
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,
     })
     expect(response.statusCode).toBe(200)
+    expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
   })
 
   test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
@@ -1229,13 +1235,13 @@ describe('testing retrieving signed URL', () => {
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,
       headers: {
-        'if-modified-since': 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+        'if-modified-since': 'Thu, 12 Aug 2021 16:00:00 GMT',
         'if-none-match': 'abc',
       },
     })
     expect(response.statusCode).toBe(304)
     expect(mockGetObject.mock.calls[0][2]).toMatchObject({
-      ifModifiedSince: 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+      ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })
   })

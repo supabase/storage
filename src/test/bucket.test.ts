@@ -18,6 +18,8 @@ beforeAll(() => {
         httpStatusCode: 200,
         size: 3746,
         mimetype: 'image/png',
+        lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
+        eTag: 'abc',
       },
       body: Buffer.from(''),
     })
@@ -202,6 +204,8 @@ describe('testing public bucket functionality', () => {
       url: `/object/public/public-bucket/favicon.ico`,
     })
     expect(publicResponse.statusCode).toBe(200)
+    expect(publicResponse.headers['etag']).toBe('abc')
+    expect(publicResponse.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
 
     const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
     mockGetObject.mockRejectedValue({
@@ -213,13 +217,13 @@ describe('testing public bucket functionality', () => {
       method: 'GET',
       url: `/object/public/public-bucket/favicon.ico`,
       headers: {
-        'if-modified-since': 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+        'if-modified-since': 'Thu, 12 Aug 2021 16:00:00 GMT',
         'if-none-match': 'abc',
       },
     })
     expect(notModifiedResponse.statusCode).toBe(304)
     expect(mockGetObject.mock.calls[1][2]).toMatchObject({
-      ifModifiedSince: 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+      ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })
 

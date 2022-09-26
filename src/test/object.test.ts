@@ -102,6 +102,38 @@ describe('testing GET object', () => {
     })
   })
 
+  test('force downloading file with default name', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/authenticated/bucket2/authenticated/casestudy.png?download',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(S3Backend.prototype.getObject).toBeCalled()
+    expect(response.headers).toEqual(
+      expect.objectContaining({
+        'content-disposition': `attachment;`,
+      })
+    )
+  })
+
+  test('force downloading file with a custom name', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/authenticated/bucket2/authenticated/casestudy.png?download=testname.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(S3Backend.prototype.getObject).toBeCalled()
+    expect(response.headers).toEqual(
+      expect.objectContaining({
+        'content-disposition': `attachment; filename=testname.png; filename*=UTF-8''testname.png;`,
+      })
+    )
+  })
+
   test('check if RLS policies are respected: anon user is not able to read authenticated resource', async () => {
     const response = await app().inject({
       method: 'GET',

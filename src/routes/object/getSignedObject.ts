@@ -26,9 +26,11 @@ const getSignedObjectParamsSchema = {
   },
   required: ['bucketName', '*'],
 } as const
+
 const getSignedObjectQSSchema = {
   type: 'object',
   properties: {
+    download: { type: 'string', examples: ['filename.jpg', null] },
     token: {
       type: 'string',
       examples: [
@@ -64,6 +66,8 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       const { token } = request.query
+      const { download } = request.query
+
       try {
         const jwtSecret = await getJwtSecret(request.tenantId)
         const payload = await verifyJWT(token, jwtSecret)
@@ -87,6 +91,20 @@ export default async function routes(fastify: FastifyInstance) {
         if (data.metadata.contentRange) {
           response.header('Content-Range', data.metadata.contentRange)
         }
+
+        if (typeof download !== 'undefined') {
+          if (download === '') {
+            response.header('Content-Disposition', 'attachment;')
+          } else {
+            const encodedFileName = encodeURIComponent(download)
+
+            response.header(
+              'Content-Disposition',
+              `attachment; filename=${encodedFileName}; filename*=UTF-8''${encodedFileName};`
+            )
+          }
+        }
+
         return response.send(data.body)
       } catch (err: any) {
         if (err.$metadata?.httpStatusCode === 304) {

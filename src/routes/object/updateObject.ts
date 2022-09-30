@@ -34,9 +34,13 @@ const updateObjectParamsSchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
+    Id: {
+      type: 'string',
+      examples: ['2eb16359-ecd4-4070-8eb1-8408baa42493'],
+    },
     Key: { type: 'string', examples: ['projectref/avatars/folder/cat.png'] },
   },
-  required: ['Key'],
+  required: ['Id', 'Key'],
 }
 interface updateObjectRequestInterface extends RequestGenericInterface {
   Params: FromSchema<typeof updateObjectParamsSchema>
@@ -159,7 +163,11 @@ export default async function routes(fastify: FastifyInstance) {
         cacheControl,
         size: objectMetadata.size,
       }
-      const { error: updateError, status: updateStatus } = await request.postgrest
+      const {
+        error: updateError,
+        status: updateStatus,
+        data: updateStatusData,
+      } = await request.postgrest
         .from<Obj>('objects')
         .update({
           metadata,
@@ -173,6 +181,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       return response.status(uploadResult.httpStatusCode ?? 200).send({
+        Id: updateStatusData?.id,
         Key: path,
       })
     }

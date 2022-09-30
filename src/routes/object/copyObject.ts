@@ -29,9 +29,13 @@ const copyRequestBodySchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
+    Id: {
+      type: 'string',
+      examples: ['2eb16359-ecd4-4070-8eb1-8408baa42493'],
+    },
     Key: { type: 'string', examples: ['folder/destination.png'] },
   },
-  required: ['Key'],
+  required: ['Key', 'Id'],
 }
 interface copyRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof copyRequestBodySchema>
@@ -109,12 +113,7 @@ export default async function routes(fastify: FastifyInstance) {
         data: results,
         error,
         status,
-      } = await request.postgrest
-        .from<Obj>('objects')
-        .insert([newObject], {
-          returning: 'minimal',
-        })
-        .single()
+      } = await request.postgrest.from<Obj>('objects').insert(newObject).single()
 
       if (error) {
         request.log.error({ error }, 'error object')
@@ -130,6 +129,7 @@ export default async function routes(fastify: FastifyInstance) {
         s3DestinationKey
       )
       return response.status(copyResult.httpStatusCode ?? 200).send({
+        Id: results?.id,
         Key: `${bucketId}/${destinationKey}`,
       })
     }

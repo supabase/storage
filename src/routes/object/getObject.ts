@@ -27,8 +27,17 @@ const getObjectParamsSchema = {
   },
   required: ['bucketName', '*'],
 } as const
+
+const getObjectQuerySchema = {
+  type: 'object',
+  properties: {
+    download: { type: 'string', examples: ['filename.jpg', null] },
+  },
+} as const
+
 interface getObjectRequestInterface extends AuthenticatedRangeRequest {
   Params: FromSchema<typeof getObjectParamsSchema>
+  Querystring: FromSchema<typeof getObjectQuerySchema>
 }
 
 async function requestHandler(
@@ -42,6 +51,7 @@ async function requestHandler(
   >
 ) {
   const { bucketName } = request.params
+  const { download } = request.query
   const objectName = request.params['*']
 
   if (!isValidKey(objectName) || !isValidKey(bucketName)) {
@@ -86,6 +96,20 @@ async function requestHandler(
     if (data.metadata.contentRange) {
       response.header('Content-Range', data.metadata.contentRange)
     }
+
+    if (typeof download !== 'undefined') {
+      if (download === '') {
+        response.header('Content-Disposition', 'attachment;')
+      } else {
+        const encodedFileName = encodeURIComponent(download)
+
+        response.header(
+          'Content-Disposition',
+          `attachment; filename=${encodedFileName}; filename*=UTF-8''${encodedFileName};`
+        )
+      }
+    }
+
     return response.send(data.body)
   } catch (err: any) {
     if (err.$metadata?.httpStatusCode === 304) {

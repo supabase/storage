@@ -33,3 +33,13 @@ services:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+
+  imgproxy:
+    image: darthsim/imgproxy
+    ports:
+      - 50020:8080
+    volumes:
+      - ./data:/images/data
+    environment:
+      - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/images
+      - IMGPROXY_USE_ETAG=true

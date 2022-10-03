@@ -24,12 +24,14 @@
     "node": ">= 14.0.0"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.53.0",
-    "@aws-sdk/lib-storage": "^3.53.0",
-    "@aws-sdk/node-http-handler": "^3.53.0",
+    "@aws-sdk/client-s3": "^3.181.0",
+    "@aws-sdk/lib-storage": "^3.182.0",
+    "@aws-sdk/node-http-handler": "^3.178.0",
+    "@aws-sdk/s3-request-presigner": "^3.182.0",
     "@fastify/multipart": "^7.1.0",
     "@fastify/swagger": "^7.4.1",
     "@supabase/postgrest-js": "^0.36.0",
+    "axios": "^0.27.2",
     "crypto-js": "^4.1.1",
     "dotenv": "^16.0.0",
     "fastify": "^4.2.1",

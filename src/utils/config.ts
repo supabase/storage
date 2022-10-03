@@ -27,6 +27,13 @@ type StorageConfigType = {
   logflareEnabled?: boolean
   logflareApiKey?: string
   logflareSourceToken?: string
+  imgProxyURL?: string
+  imgLimits: {
+    size: {
+      min: number
+      max: number
+    }
+  }
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -79,5 +86,12 @@ export function getConfig(): StorageConfigType {
     logflareEnabled: getOptionalConfigFromEnv('LOGFLARE_ENABLED') === 'true',
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
+    imgProxyURL: getOptionalConfigFromEnv('IMGPROXY_URL'),
+    imgLimits: {
+      size: {
+        min: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MIN_SIZE') || '1', 10),
+        max: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MAX_SIZE') || '5000', 10),
+      },
+    },
   }
 }

@@ -106,4 +106,8 @@ export class FileBackend implements GenericStorageBackend {
       size: data.size,
     }
   }
+
+  async privateAssetUrl(bucket: string, key: string): Promise<string> {
+    return 'local:///' + path.join(this.filePath, `${bucket}/${key}`)
+  }
 }

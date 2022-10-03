@@ -92,7 +92,7 @@ async function requestHandler(
       .header('Cache-Control', data.metadata.cacheControl)
       .header('ETag', data.metadata.eTag)
       .header('Content-Length', data.metadata.contentLength)
-      .header('Last-Modified', data.metadata.lastModified)
+      .header('Last-Modified', data.metadata.lastModified?.toUTCString())
     if (data.metadata.contentRange) {
       response.header('Content-Range', data.metadata.contentRange)
     }

@@ -14,6 +14,7 @@ import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
 import { ObjectMetadata, ObjectResponse } from '../types/types'
 import { GenericStorageBackend, GetObjectHeaders } from './generic'
 import { convertErrorToStorageBackendError } from '../utils/errors'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
 export class S3Backend implements GenericStorageBackend {
   client: S3Client
@@ -142,5 +143,15 @@ export class S3Backend implements GenericStorageBackend {
       httpStatusCode: data.$metadata.httpStatusCode,
       size: data.ContentLength,
     }
+  }
+
+  async privateAssetUrl(bucket: string, key: string): Promise<string> {
+    const input: GetObjectCommandInput = {
+      Bucket: bucket,
+      Key: key,
+    }
+
+    const command = new GetObjectCommand(input)
+    return getSignedUrl(this.client, command, { expiresIn: 3600 })
   }
 }

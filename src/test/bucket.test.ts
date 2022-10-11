@@ -95,7 +95,7 @@ describe('testing GET all buckets', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.length).toBe(5)
+    expect(responseJSON.length).toBe(6)
   })
 
   test('checking RLS: anon user is not able to get all buckets', async () => {

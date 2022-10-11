@@ -39,4 +39,7 @@ export abstract class GenericStorageBackend {
   async headObject(bucket: string, key: string): Promise<ObjectMetadata> {
     throw new Error('headObject not implemented')
   }
+  async privateAssetUrl(bucket: string, key: string): Promise<string> {
+    throw new Error('privateAssetUrl not implemented')
+  }
 }

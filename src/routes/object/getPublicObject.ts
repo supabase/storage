@@ -48,6 +48,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/public/:bucketName/*',
     {
       // @todo add success response schema here
+      exposeHeadRoute: false,
       schema: {
         params: getPublicObjectParamsSchema,
         summary,

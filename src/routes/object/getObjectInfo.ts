@@ -28,16 +28,8 @@ const getObjectParamsSchema = {
   required: ['bucketName', '*'],
 } as const
 
-const getObjectQuerySchema = {
-  type: 'object',
-  properties: {
-    download: { type: 'string', examples: ['filename.jpg', null] },
-  },
-} as const
-
 interface getObjectRequestInterface extends AuthenticatedRangeRequest {
   Params: FromSchema<typeof getObjectParamsSchema>
-  Querystring: FromSchema<typeof getObjectQuerySchema>
 }
 
 async function requestHandler(
@@ -48,10 +40,10 @@ async function requestHandler(
     ServerResponse,
     getObjectRequestInterface,
     unknown
-  >
+  >,
+  publicRoute = false
 ) {
   const { bucketName } = request.params
-  const { download } = request.query
   const objectName = request.params['*']
 
   if (!isValidKey(objectName) || !isValidKey(bucketName)) {
@@ -60,7 +52,8 @@ async function requestHandler(
       .send(createResponse('The key contains invalid characters', '400', 'Invalid key'))
   }
 
-  const objectResponse = await request.postgrest
+  const postgrest = publicRoute ? request.superUserPostgrest : request.postgrest
+  const objectResponse = await postgrest
     .from<Obj>('objects')
     .select('id')
     .match({
@@ -75,42 +68,20 @@ async function requestHandler(
     return response.status(400).send(transformPostgrestError(error, status))
   }
 
-  // send the object from s3
   const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
-  request.log.info(s3Key)
+
   try {
-    const data = await storageBackend.getObject(globalS3Bucket, s3Key, {
-      ifModifiedSince: request.headers['if-modified-since'],
-      ifNoneMatch: request.headers['if-none-match'],
-      range: request.headers.range,
-    })
+    const data = await storageBackend.headObject(globalS3Bucket, s3Key)
 
     response
-      .status(data.metadata.httpStatusCode ?? 200)
-      .header('Accept-Ranges', 'bytes')
-      .header('Content-Type', normalizeContentType(data.metadata.mimetype))
-      .header('Cache-Control', data.metadata.cacheControl)
-      .header('ETag', data.metadata.eTag)
-      .header('Content-Length', data.metadata.contentLength)
-      .header('Last-Modified', data.metadata.lastModified?.toUTCString())
-    if (data.metadata.contentRange) {
-      response.header('Content-Range', data.metadata.contentRange)
-    }
+      .status(data.httpStatusCode ?? 200)
+      .header('Content-Type', normalizeContentType(data.mimetype))
+      .header('Cache-Control', data.cacheControl)
+      .header('Content-Length', data.size)
+      .header('ETag', data.eTag)
+      .header('Last-Modified', data.lastModified?.toUTCString())
 
-    if (typeof download !== 'undefined') {
-      if (download === '') {
-        response.header('Content-Disposition', 'attachment;')
-      } else {
-        const encodedFileName = encodeURIComponent(download)
-
-        response.header(
-          'Content-Disposition',
-          `attachment; filename=${encodedFileName}; filename*=UTF-8''${encodedFileName};`
-        )
-      }
-    }
-
-    return response.send(data.body)
+    return response.send()
   } catch (err: any) {
     if (err.$metadata?.httpStatusCode === 304) {
       return response.status(304).send()
@@ -120,14 +91,29 @@ async function requestHandler(
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
-export default async function routes(fastify: FastifyInstance) {
-  const summary = 'Retrieve an object'
-  fastify.get<getObjectRequestInterface>(
+export async function publicRoutes(fastify: FastifyInstance) {
+  fastify.head<getObjectRequestInterface>(
+    '/public/:bucketName/*',
+    {
+      schema: {
+        params: getObjectParamsSchema,
+        headers: { $ref: 'authSchema#' },
+        summary: 'Get object info',
+        description: 'returns object info',
+        response: { '4xx': { $ref: 'errorSchema#' } },
+      },
+    },
+    async (request, response) => {
+      return requestHandler(request, response, true)
+    }
+  )
+}
+
+export async function authenticatedRoutes(fastify: FastifyInstance) {
+  const summary = 'Retrieve object info'
+  fastify.head<getObjectRequestInterface>(
     '/authenticated/:bucketName/*',
     {
-      exposeHeadRoute: false,
-      // @todo add success response schema here
       schema: {
         params: getObjectParamsSchema,
         headers: { $ref: 'authSchema#' },
@@ -141,16 +127,14 @@ export default async function routes(fastify: FastifyInstance) {
     }
   )
 
-  fastify.get<getObjectRequestInterface>(
+  fastify.head<getObjectRequestInterface>(
     '/:bucketName/*',
     {
-      exposeHeadRoute: false,
-      // @todo add success response schema here
       schema: {
         params: getObjectParamsSchema,
         headers: { $ref: 'authSchema#' },
-        summary: 'Get object',
-        description: 'use GET /object/authenticated/{bucketName} instead',
+        summary,
+        description: 'use HEAD /object/authenticated/{bucketName} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
         tags: ['deprecated'],
       },

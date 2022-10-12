@@ -58,6 +58,9 @@ beforeEach(() => {
     httpStatusCode: 200,
     size: 3746,
     mimetype: 'image/png',
+    eTag: 'abc',
+    cacheControl: 'no-cache',
+    lastModified: new Date('Wed, 12 Oct 2022 11:17:02 GMT'),
   })
 })
 
@@ -104,6 +107,38 @@ describe('testing GET object', () => {
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })
+  })
+
+  test('get authenticated object info', async () => {
+    const response = await app().inject({
+      method: 'HEAD',
+      url: '/object/authenticated/bucket2/authenticated/casestudy.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
+    expect(response.headers['content-length']).toBe(3746)
+    expect(response.headers['cache-control']).toBe('no-cache')
+    expect(S3Backend.prototype.headObject).toBeCalled()
+  })
+
+  test('get public object info', async () => {
+    const response = await app().inject({
+      method: 'HEAD',
+      url: '/object/public/public-bucket-2/favicon.ico',
+      headers: {
+        authorization: ``,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
+    expect(response.headers['content-length']).toBe(3746)
+    expect(response.headers['cache-control']).toBe('no-cache')
+    expect(S3Backend.prototype.headObject).toBeCalled()
   })
 
   test('force downloading file with default name', async () => {

@@ -142,6 +142,10 @@ export class S3Backend implements GenericStorageBackend {
     return {
       httpStatusCode: data.$metadata.httpStatusCode,
       size: data.ContentLength,
+      eTag: data.ETag,
+      cacheControl: data.CacheControl,
+      lastModified: data.LastModified,
+      mimetype: data.ContentType,
     }
   }
 

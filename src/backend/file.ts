@@ -2,6 +2,7 @@ import { ObjectMetadata, ObjectResponse } from '../types/types'
 import xattr from 'fs-xattr'
 import fs from 'fs-extra'
 import path from 'path'
+import fileChecksum from 'md5-file'
 import { promisify } from 'util'
 import stream from 'stream'
 import { getConfig } from '../utils/config'
@@ -39,6 +40,7 @@ export class FileBackend implements GenericStorageBackend {
     const contentType = await this.getMetadata(file, 'user.supabase.content-type')
     const lastModified = new Date(0)
     lastModified.setUTCMilliseconds(data.mtimeMs)
+
     return {
       metadata: {
         cacheControl,
@@ -101,9 +103,20 @@ export class FileBackend implements GenericStorageBackend {
   async headObject(bucket: string, key: string): Promise<ObjectMetadata> {
     const file = path.resolve(this.filePath, `${bucket}/${key}`)
     const data = await fs.stat(file)
+    const cacheControl = await this.getMetadata(file, 'user.supabase.cache-control')
+    const contentType = await this.getMetadata(file, 'user.supabase.content-type')
+    const lastModified = new Date(0)
+    lastModified.setUTCMilliseconds(data.mtimeMs)
+
+    const checksum = await fileChecksum(file)
+
     return {
       httpStatusCode: 200,
       size: data.size,
+      cacheControl,
+      mimetype: contentType,
+      eTag: `"${checksum}"`,
+      lastModified: data.birthtime,
     }
   }
 

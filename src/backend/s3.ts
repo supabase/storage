@@ -152,6 +152,6 @@ export class S3Backend implements GenericStorageBackend {
     }
 
     const command = new GetObjectCommand(input)
-    return getSignedUrl(this.client, command, { expiresIn: 3600 })
+    return getSignedUrl(this.client, command, { expiresIn: 300 })
   }
 }

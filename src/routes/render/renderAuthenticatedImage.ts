@@ -80,7 +80,11 @@ export default async function routes(fastify: FastifyInstance) {
       const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
 
       try {
-        const imageResponse = await imageRenderer.transform(globalS3Bucket, s3Key, request.query)
+        const { response: imageResponse, urlTransformation } = await imageRenderer.transform(
+          globalS3Bucket,
+          s3Key,
+          request.query
+        )
 
         response
           .status(imageResponse.status)
@@ -89,6 +93,7 @@ export default async function routes(fastify: FastifyInstance) {
           .header('Cache-Control', imageResponse.headers['cache-control'])
           .header('Content-Length', imageResponse.headers['content-length'])
           .header('ETag', imageResponse.headers['etag'])
+          .header('X-Transformation', urlTransformation.concat(','))
 
         return response.send(imageResponse.data)
       } catch (err: any) {

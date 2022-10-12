@@ -46,11 +46,21 @@ export class Imgproxy {
     const privateURL = await this.backend.privateAssetUrl(bucket, key)
     const urlTransformation = this.applyURLTransformation(options)
 
-    const url = ['/public', ...urlTransformation, 'plain', privateURL]
+    const url = [
+      '/public',
+      ...urlTransformation,
+      'plain',
+      privateURL.startsWith('local://') ? privateURL : encodeURIComponent(privateURL),
+    ]
 
-    return this.getClient().get(url.join('/'), {
+    const response = await this.getClient().get(url.join('/'), {
       responseType: 'stream',
     })
+
+    return {
+      response,
+      urlTransformation,
+    }
   }
 
   protected applyURLTransformation(options: TransformOptions) {

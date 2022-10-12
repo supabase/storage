@@ -89,7 +89,7 @@ export default async function routes(fastify: FastifyInstance) {
           .header('Cache-Control', imageResponse.headers['cache-control'])
           .header('Content-Length', imageResponse.headers['content-length'])
           .header('ETag', imageResponse.headers['etag'])
-          .header('X-Transformations', urlTransformation.concat(','))
+          .header('X-Transformations', urlTransformation.join(','))
 
         return response.send(imageResponse.data)
       } catch (err: any) {

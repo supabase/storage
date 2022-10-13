@@ -13,6 +13,10 @@ import getSignedURLs from './getSignedURLs'
 import listObjects from './listObjects'
 import moveObject from './moveObject'
 import updateObject from './updateObject'
+import {
+  publicRoutes as getObjectInfoPublic,
+  authenticatedRoutes as getObjectInfoAuth,
+} from './getObjectInfo'
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
@@ -28,6 +32,7 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(moveObject)
     fastify.register(updateObject)
     fastify.register(listObjects)
+    fastify.register(getObjectInfoAuth)
 
     fastify.register(async (fastify) => {
       fastify.register(superUserPostgrest)
@@ -43,5 +48,6 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(superUserPostgrest)
 
     fastify.register(getPublicObject)
+    fastify.register(getObjectInfoPublic)
   })
 }

@@ -39,6 +39,15 @@ interface tenantRequestInterface extends RequestGenericInterface {
   }
 }
 
+interface tenantDBInterface {
+  id: string
+  anon_key: string
+  database_url: string
+  jwt_secret: string
+  service_key: string
+  file_size_limit?: number
+}
+
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
@@ -114,17 +123,20 @@ export default async function routes(fastify: FastifyInstance) {
     const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey } = request.body
     const { tenantId } = request.params
     await runMigrations(tenantId, databaseUrl)
-    await knex('tenants')
-      .insert({
-        id: tenantId,
-        anon_key: encrypt(anonKey),
-        database_url: encrypt(databaseUrl),
-        file_size_limit: fileSizeLimit,
-        jwt_secret: encrypt(jwtSecret),
-        service_key: encrypt(serviceKey),
-      })
-      .onConflict('id')
-      .merge()
+
+    const tenantInfo: tenantDBInterface = {
+      id: tenantId,
+      anon_key: encrypt(anonKey),
+      database_url: encrypt(databaseUrl),
+      jwt_secret: encrypt(jwtSecret),
+      service_key: encrypt(serviceKey),
+    }
+
+    if (fileSizeLimit) {
+      tenantInfo.file_size_limit = fileSizeLimit
+    }
+
+    await knex('tenants').insert(tenantInfo).onConflict('id').merge()
     reply.code(204).send()
   })
 

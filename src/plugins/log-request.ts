@@ -1,4 +1,5 @@
 import fastifyPlugin from 'fastify-plugin'
+import { redactQueryParamFromRequest } from '../monitoring'
 
 interface RequestLoggerOptions {
   excludeUrls?: string[]
@@ -12,7 +13,7 @@ export default (options: RequestLoggerOptions) =>
       }
 
       const rMeth = req.method
-      const rUrl = req.url
+      const rUrl = redactQueryParamFromRequest(req, ['token'])
       const uAgent = req.headers['user-agent']
       const rId = req.id
       const cIP = req.ip

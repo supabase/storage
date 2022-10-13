@@ -3,6 +3,7 @@ import fastifyMultipart from '@fastify/multipart'
 import fastifySwagger from '@fastify/swagger'
 import bucketRoutes from './routes/bucket/'
 import objectRoutes from './routes/object'
+import renderRoutes from './routes/render'
 import { authSchema } from './schemas/auth'
 import { errorSchema } from './schemas/error'
 import logTenantId from './plugins/log-tenant-id'
@@ -57,6 +58,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(logRequest({ excludeUrls: ['/status'] }))
   app.register(bucketRoutes, { prefix: 'bucket' })
   app.register(objectRoutes, { prefix: 'object' })
+  app.register(renderRoutes, { prefix: 'render' })
 
   app.get('/status', async (request, response) => response.status(200).send())
 

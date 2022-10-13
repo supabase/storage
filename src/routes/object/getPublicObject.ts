@@ -25,11 +25,20 @@ const getPublicObjectParamsSchema = {
   },
   required: ['bucketName', '*'],
 } as const
+
+const getObjectQuerySchema = {
+  type: 'object',
+  properties: {
+    download: { type: 'string', examples: ['filename.jpg', null] },
+  },
+} as const
+
 interface getObjectRequestInterface {
   Params: FromSchema<typeof getPublicObjectParamsSchema>
   Headers: {
     range?: string
   }
+  Querystring: FromSchema<typeof getObjectQuerySchema>
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
@@ -39,6 +48,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/public/:bucketName/*',
     {
       // @todo add success response schema here
+      exposeHeadRoute: false,
       schema: {
         params: getPublicObjectParamsSchema,
         summary,
@@ -49,6 +59,7 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketName } = request.params
       const objectName = request.params['*']
+      const { download } = request.query
 
       const { error, status } = await request.superUserPostgrest
         .from<Bucket>('buckets')
@@ -77,10 +88,24 @@ export default async function routes(fastify: FastifyInstance) {
           .header('Cache-Control', data.metadata.cacheControl)
           .header('Content-Length', data.metadata.contentLength)
           .header('ETag', data.metadata.eTag)
-          .header('Last-Modified', data.metadata.lastModified)
+          .header('Last-Modified', data.metadata.lastModified?.toUTCString())
         if (data.metadata.contentRange) {
           response.header('Content-Range', data.metadata.contentRange)
         }
+
+        if (typeof download !== 'undefined') {
+          if (download === '') {
+            response.header('Content-Disposition', 'attachment;')
+          } else {
+            const encodedFileName = encodeURIComponent(download)
+
+            response.header(
+              'Content-Disposition',
+              `attachment; filename=${encodedFileName}; filename*=UTF-8''${encodedFileName};`
+            )
+          }
+        }
+
         return response.send(data.body)
       } catch (err: any) {
         if (err.$metadata?.httpStatusCode === 304) {

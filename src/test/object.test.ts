@@ -32,6 +32,8 @@ beforeEach(() => {
       httpStatusCode: 200,
       size: 3746,
       mimetype: 'image/png',
+      lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
+      eTag: 'abc',
     },
     body: Buffer.from(''),
   })
@@ -56,6 +58,9 @@ beforeEach(() => {
     httpStatusCode: 200,
     size: 3746,
     mimetype: 'image/png',
+    eTag: 'abc',
+    cacheControl: 'no-cache',
+    lastModified: new Date('Wed, 12 Oct 2022 11:17:02 GMT'),
   })
 })
 
@@ -76,6 +81,8 @@ describe('testing GET object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
+    expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
     expect(S3Backend.prototype.getObject).toBeCalled()
   })
 
@@ -91,15 +98,79 @@ describe('testing GET object', () => {
       url: '/object/authenticated/bucket2/authenticated/casestudy.png',
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
-        'if-modified-since': 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+        'if-modified-since': 'Thu, 12 Aug 2021 16:00:00 GMT',
         'if-none-match': 'abc',
       },
     })
     expect(response.statusCode).toBe(304)
     expect(mockGetObject.mock.calls[0][2]).toMatchObject({
-      ifModifiedSince: 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+      ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })
+  })
+
+  test('get authenticated object info', async () => {
+    const response = await app().inject({
+      method: 'HEAD',
+      url: '/object/authenticated/bucket2/authenticated/casestudy.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
+    expect(response.headers['content-length']).toBe(3746)
+    expect(response.headers['cache-control']).toBe('no-cache')
+    expect(S3Backend.prototype.headObject).toBeCalled()
+  })
+
+  test('get public object info', async () => {
+    const response = await app().inject({
+      method: 'HEAD',
+      url: '/object/public/public-bucket-2/favicon.ico',
+      headers: {
+        authorization: ``,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
+    expect(response.headers['content-length']).toBe(3746)
+    expect(response.headers['cache-control']).toBe('no-cache')
+    expect(S3Backend.prototype.headObject).toBeCalled()
+  })
+
+  test('force downloading file with default name', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/authenticated/bucket2/authenticated/casestudy.png?download',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(S3Backend.prototype.getObject).toBeCalled()
+    expect(response.headers).toEqual(
+      expect.objectContaining({
+        'content-disposition': `attachment;`,
+      })
+    )
+  })
+
+  test('force downloading file with a custom name', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/authenticated/bucket2/authenticated/casestudy.png?download=testname.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(S3Backend.prototype.getObject).toBeCalled()
+    expect(response.headers).toEqual(
+      expect.objectContaining({
+        'content-disposition': `attachment; filename=testname.png; filename*=UTF-8''testname.png;`,
+      })
+    )
   })
 
   test('check if RLS policies are respected: anon user is not able to read authenticated resource', async () => {
@@ -1214,6 +1285,8 @@ describe('testing retrieving signed URL', () => {
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,
     })
     expect(response.statusCode).toBe(200)
+    expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
   })
 
   test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
@@ -1229,13 +1302,13 @@ describe('testing retrieving signed URL', () => {
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,
       headers: {
-        'if-modified-since': 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+        'if-modified-since': 'Thu, 12 Aug 2021 16:00:00 GMT',
         'if-none-match': 'abc',
       },
     })
     expect(response.statusCode).toBe(304)
     expect(mockGetObject.mock.calls[0][2]).toMatchObject({
-      ifModifiedSince: 'Fri Aug 13 2021 00:00:00 GMT+0800 (Singapore Standard Time)',
+      ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })
   })

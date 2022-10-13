@@ -141,6 +141,22 @@ describe('testing GET object', () => {
     expect(S3Backend.prototype.headObject).toBeCalled()
   })
 
+  test('returns 404 for non exising public', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/public/public-bucket-2/not-existing.ico',
+      headers: {
+        authorization: ``,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'Not found',
+      message: 'The resource was not found',
+    })
+  })
+
   test('force downloading file with default name', async () => {
     const response = await app().inject({
       method: 'GET',

@@ -61,16 +61,25 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
       const { download } = request.query
 
-      const { error, status } = await request.superUserPostgrest
-        .from<Bucket>('buckets')
-        .select('id, public')
+      const { error, status, data } = await request.superUserPostgrest
+        .from<Bucket & { objects: { name: string }[] }>('buckets')
+        .select('id, public, objects(name)')
         .eq('id', bucketName)
         .eq('public', true)
+        .eq('objects.name' as never, objectName)
         .single()
 
       if (error) {
         request.log.error({ error }, 'error finding public bucket')
         return response.status(400).send(transformPostgrestError(error, status))
+      }
+
+      if (data?.objects.length === 0) {
+        return response.status(400).send({
+          statusCode: '404',
+          message: 'The resource was not found',
+          error: 'Not found',
+        })
       }
 
       const s3Key = `${request.tenantId}/${bucketName}/${objectName}`

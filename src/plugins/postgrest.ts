@@ -4,13 +4,35 @@ import { FastifyRequest } from 'fastify'
 import { PostgrestClient } from '@supabase/postgrest-js'
 import fastifyPlugin from 'fastify-plugin'
 import { getConfig } from '../utils/config'
-import { generateForwardHeaders } from '../utils/plugins'
 
 declare module 'fastify' {
   interface FastifyRequest {
     postgrest: PostgrestClient
     superUserPostgrest: PostgrestClient
   }
+}
+
+function generatePostgrestForwardHeaders(
+  forwardHeaders: string | undefined,
+  request: FastifyRequest,
+  ignore: string[] = []
+): Record<string, string> {
+  if (!forwardHeaders) {
+    return {}
+  }
+
+  return forwardHeaders
+    .split(',')
+    .map((headerName) => headerName.trim())
+    .filter((headerName) => headerName in request.headers && !ignore.includes(headerName))
+    .reduce((extraHeaders, headerName) => {
+      const headerValue = request.headers[headerName]
+      if (typeof headerValue !== 'string') {
+        throw new Error(`header ${headerName} must be string`)
+      }
+      extraHeaders[headerName] = headerValue
+      return extraHeaders
+    }, {} as Record<string, string>)
 }
 
 async function getPostgrestClient(request: FastifyRequest, jwt: string): Promise<PostgrestClient> {
@@ -21,7 +43,7 @@ async function getPostgrestClient(request: FastifyRequest, jwt: string): Promise
     postgrestURLScheme,
     postgrestURLSuffix,
     xForwardedHostRegExp,
-    forwardHeaders
+    postgrestForwardHeaders,
   } = getConfig()
 
   let url = postgrestURL
@@ -40,12 +62,16 @@ async function getPostgrestClient(request: FastifyRequest, jwt: string): Promise
 
   const pgClientHeaders = {
     apiKey,
-    Authorization: `Bearer ${jwt}`
+    Authorization: `Bearer ${jwt}`,
   }
   return new PostgrestClient(url, {
     headers: {
-      ...pgClientHeaders, // hard coded headers
-      ...generateForwardHeaders(forwardHeaders, request, Object.keys(pgClientHeaders)) // extra forwarded headers
+      ...pgClientHeaders,
+      ...generatePostgrestForwardHeaders(
+        postgrestForwardHeaders,
+        request,
+        Object.keys(pgClientHeaders)
+      ), // extra forwarded headers
     },
     schema: 'storage',
   })

@@ -1,11 +1,10 @@
 'use strict'
-import { Registry } from 'prom-client'
-
 import { adminApp } from './common'
-import app from '../app'
 import dotenv from 'dotenv'
-import * as migrate from '../utils/migrate'
-import { knex } from '../utils/multitenant-db'
+import * as migrate from '../database/migrate'
+import { knex } from '../database/multitenant-db'
+import app from '../app'
+import * as tenant from '../database/tenant'
 
 dotenv.config({ path: '.env.test' })
 
@@ -14,6 +13,17 @@ const ENV = process.env
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
   jest.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  jest.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
+    anonKey: process.env.ANON_KEY || '',
+    databaseUrl: process.env.DATABASE_URL || '',
+    serviceKey: process.env.SERVICE_KEY || '',
+    jwtSecret: process.env.PGRST_JWT_SECRET || '',
+    fileSizeLimit: parseInt(process.env.FILE_SIZE_LIMIT || '1000'),
+  }))
+
+  jest
+    .spyOn(tenant, 'getServiceKey')
+    .mockResolvedValue(Promise.resolve(process.env.SERVICE_KEY || ''))
 })
 
 beforeEach(() => {
@@ -69,7 +79,7 @@ describe('with X-Forwarded-Host header', () => {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
     })
-    expect(response.statusCode).toBe(500)
+    expect(response.statusCode).toBe(400)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON.message).toBe('X-Forwarded-Host header is not a string')
   })
@@ -83,7 +93,7 @@ describe('with X-Forwarded-Host header', () => {
         'x-forwarded-host': 'abcdefghijklmnopqrst.supabase.com',
       },
     })
-    expect(response.statusCode).toBe(500)
+    expect(response.statusCode).toBe(400)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON.message).toBe('X-Forwarded-Host header does not match regular expression')
   })

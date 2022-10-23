@@ -3,9 +3,9 @@ import { IncomingMessage, Server, ServerResponse } from 'http'
 
 import build from './app'
 import buildAdmin from './admin-app'
-import { getConfig } from './utils/config'
-import { runMultitenantMigrations, runMigrations } from './utils/migrate'
-import { listenForTenantUpdate } from './utils/tenant'
+import { getConfig } from './config'
+import { runMultitenantMigrations, runMigrations } from './database/migrate'
+import { listenForTenantUpdate } from './database/tenant'
 import { logger } from './monitoring'
 
 const exposeDocs = true

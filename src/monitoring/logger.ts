@@ -1,5 +1,5 @@
 import pino from 'pino'
-import { getConfig } from '../utils/config'
+import { getConfig } from '../config'
 import { FastifyRequest } from 'fastify'
 import { URL } from 'url'
 

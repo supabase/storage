@@ -1,6 +1,6 @@
 'use strict'
 
-import { createDefaultSchema, createResponse } from '../utils/generic-routes'
+import { createDefaultSchema, createResponse } from '../http/generic-routes'
 
 describe('testing Generic Routes Utils', () => {
   describe('creating generic responses [createResponse]', () => {

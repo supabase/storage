@@ -3,12 +3,12 @@ import dotenv from 'dotenv'
 import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
-import { getConfig } from '../utils/config'
-import { signJWT } from '../utils/index'
-import { S3Backend } from '../backend/s3'
+import { getConfig } from '../config'
+import { S3Backend } from '../storage/backend'
 import { PostgrestClient } from '@supabase/postgrest-js'
-import { Obj } from '../types/types'
-import { convertErrorToStorageBackendError } from '../utils/errors'
+import { Obj } from '../storage/schemas'
+import { signJWT } from '../auth'
+import { StorageBackendError } from '../storage'
 
 dotenv.config({ path: '.env.test' })
 const ENV = process.env
@@ -34,6 +34,8 @@ beforeEach(() => {
       mimetype: 'image/png',
       lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
       eTag: 'abc',
+      cacheControl: 'no-cache',
+      contentLength: 3746,
     },
     body: Buffer.from(''),
   })
@@ -42,17 +44,19 @@ beforeEach(() => {
     httpStatusCode: 200,
     size: 3746,
     mimetype: 'image/png',
+    lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
+    eTag: 'abc',
+    cacheControl: 'no-cache',
+    contentLength: 3746,
   })
 
   jest.spyOn(S3Backend.prototype, 'copyObject').mockResolvedValue({
     httpStatusCode: 200,
-    size: 3746,
-    mimetype: 'image/png',
   })
 
-  jest.spyOn(S3Backend.prototype, 'deleteObject').mockResolvedValue({})
+  jest.spyOn(S3Backend.prototype, 'deleteObject').mockResolvedValue()
 
-  jest.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue({})
+  jest.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue()
 
   jest.spyOn(S3Backend.prototype, 'headObject').mockResolvedValue({
     httpStatusCode: 200,
@@ -61,6 +65,7 @@ beforeEach(() => {
     eTag: 'abc',
     cacheControl: 'no-cache',
     lastModified: new Date('Wed, 12 Oct 2022 11:17:02 GMT'),
+    contentLength: 3746,
   })
 })
 
@@ -376,7 +381,7 @@ describe('testing POST object via multipart upload', () => {
   test('should not add row to database if upload fails', async () => {
     // Mock S3 upload failure.
     jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
-      convertErrorToStorageBackendError({
+      StorageBackendError.fromError({
         name: 'S3ServiceException',
         message: 'Unknown error',
         $fault: 'server',
@@ -608,7 +613,7 @@ describe('testing POST object via binary upload', () => {
   test('should not add row to database if upload fails', async () => {
     // Mock S3 upload failure.
     jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
-      convertErrorToStorageBackendError({
+      StorageBackendError.fromError({
         name: 'S3ServiceException',
         message: 'Unknown error',
         $fault: 'server',

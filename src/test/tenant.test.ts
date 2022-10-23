@@ -1,7 +1,7 @@
 'use strict'
 import dotenv from 'dotenv'
-import * as migrate from '../utils/migrate'
-import { knex } from '../utils/multitenant-db'
+import * as migrate from '../database/migrate'
+import { knex } from '../database/multitenant-db'
 import { adminApp } from './common'
 
 dotenv.config({ path: '.env.test' })

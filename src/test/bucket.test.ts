@@ -1,15 +1,15 @@
 'use strict'
 import dotenv from 'dotenv'
 import app from '../app'
-import { getConfig } from '../utils/config'
-import { S3Backend } from '../backend/s3'
+import { getConfig } from '../config'
+import { S3Backend } from '../storage/backend'
 
 dotenv.config({ path: '.env.test' })
 const { anonKey } = getConfig()
 
 beforeAll(() => {
   jest.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {
-    return Promise.resolve({})
+    return Promise.resolve()
   })
 
   jest.spyOn(S3Backend.prototype, 'getObject').mockImplementation(() => {
@@ -20,6 +20,8 @@ beforeAll(() => {
         mimetype: 'image/png',
         lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
         eTag: 'abc',
+        cacheControl: 'no-cache',
+        contentLength: 3746,
       },
       body: Buffer.from(''),
     })
@@ -72,7 +74,7 @@ describe('testing GET bucket', () => {
   test('return 404 when reading a non existent bucket', async () => {
     const response = await app().inject({
       method: 'GET',
-      url: '/object/notfouns',
+      url: '/object/notfound',
       headers: {
         authorization: `Bearer ${anonKey}`,
       },

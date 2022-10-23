@@ -1,8 +1,7 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { default as metrics } from 'fastify-metrics'
 import { Registry } from 'prom-client'
-import tenantRoutes from './routes/tenant'
-import logRequest from './plugins/log-request'
+import { routes, plugins } from './http'
 
 export interface AdminOptions {
   register?: Registry
@@ -10,8 +9,8 @@ export interface AdminOptions {
 
 const build = (opts: FastifyServerOptions = {}, adminOpts: AdminOptions = {}): FastifyInstance => {
   const app = fastify(opts)
-  app.register(logRequest({ excludeUrls: ['/status'] }))
-  app.register(tenantRoutes, { prefix: 'tenants' })
+  app.register(plugins.logRequest({ excludeUrls: ['/status'] }))
+  app.register(routes.tenant, { prefix: 'tenants' })
   app.register(metrics, {
     endpoint: '/metrics',
     defaultMetrics: {

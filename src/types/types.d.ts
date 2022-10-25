@@ -9,6 +9,8 @@ export type Obj = FromSchema<typeof objectSchema>
 
 export type SignedToken = {
   url: string
+  contentDisposition?: string
+  contentType?: string
 }
 
 export interface AuthenticatedRequest extends RequestGenericInterface {

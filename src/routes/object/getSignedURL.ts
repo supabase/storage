@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { AuthenticatedRequest, Obj } from '../../types/types'
+import { AuthenticatedRequest, Obj, SignedToken } from '../../types/types'
 import { getJwtSecret, signJWT, transformPostgrestError } from '../../utils'
 import { createDefaultSchema } from '../../utils/generic-routes'
 
@@ -16,6 +16,8 @@ const getSignedURLBodySchema = {
   type: 'object',
   properties: {
     expiresIn: { type: 'integer', minimum: 1, examples: [60000] },
+    responseContentDisposition: { type: 'string', examples: ['attachment; filename="image.png"'] },
+    responseContentType: { type: 'string', examples: ['application/octet-stream'] },
   },
   required: ['expiresIn'],
 } as const
@@ -55,7 +57,7 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketName } = request.params
       const objectName = request.params['*']
-      const { expiresIn } = request.body
+      const { expiresIn, responseContentDisposition, responseContentType } = request.body
 
       const objectResponse = await request.postgrest
         .from<Obj>('objects')
@@ -78,7 +80,11 @@ export default async function routes(fastify: FastifyInstance) {
       const urlParts = request.url.split('/')
       const urlToSign = decodeURI(urlParts.splice(3).join('/'))
       const jwtSecret = await getJwtSecret(request.tenantId)
-      const token = await signJWT({ url: urlToSign }, jwtSecret, expiresIn)
+
+      const objectToSign: SignedToken = { url: urlToSign }
+      if (responseContentDisposition) objectToSign.contentDisposition = responseContentDisposition
+      if (responseContentType) objectToSign.contentType = responseContentType
+      const token = await signJWT(objectToSign, jwtSecret, expiresIn)
 
       // @todo parse the url properly
       const signedURL = `/object/sign/${urlToSign}?token=${token}`

@@ -67,7 +67,7 @@ export default async function routes(fastify: FastifyInstance) {
       try {
         const jwtSecret = await getJwtSecret(request.tenantId)
         const payload = await verifyJWT(token, jwtSecret)
-        const { url } = payload as SignedToken
+        const { url, contentDisposition, contentType } = payload as SignedToken
         const s3Key = `${request.tenantId}/${url}`
         request.log.info(s3Key)
         const data = await storageBackend.getObject(globalS3Bucket, s3Key, {
@@ -79,7 +79,7 @@ export default async function routes(fastify: FastifyInstance) {
         response
           .status(data.metadata.httpStatusCode ?? 200)
           .header('Accept-Ranges', 'bytes')
-          .header('Content-Type', normalizeContentType(data.metadata.mimetype))
+          .header('Content-Type', normalizeContentType(contentType ?? data.metadata.mimetype))
           .header('Cache-Control', data.metadata.cacheControl)
           .header('Content-Length', data.metadata.contentLength)
           .header('ETag', data.metadata.eTag)
@@ -87,8 +87,11 @@ export default async function routes(fastify: FastifyInstance) {
         if (data.metadata.contentRange) {
           response.header('Content-Range', data.metadata.contentRange)
         }
-        if (data.metadata.contentDisposition) {
-          response.header('Content-Disposition', data.metadata.contentDisposition)
+        if (contentDisposition || data.metadata.contentDisposition) {
+          response.header(
+            'Content-Disposition',
+            contentDisposition || data.metadata.contentDisposition
+          )
         }
         if (data.metadata.contentEncoding) {
           response.header('Content-Encoding', data.metadata.contentEncoding)

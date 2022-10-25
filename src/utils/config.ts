@@ -12,6 +12,7 @@ type StorageConfigType = {
   globalS3Endpoint?: string
   isMultitenant: boolean
   jwtSecret: string
+  jwtAlgorithm: string,
   multitenantDatabaseUrl?: string
   postgrestURL: string
   postgrestURLSuffix?: string
@@ -69,6 +70,7 @@ export function getConfig(): StorageConfigType {
     globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
     isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
+    jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
     postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
     postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
@@ -81,7 +83,7 @@ export function getConfig(): StorageConfigType {
       getOptionalConfigFromEnv('PROJECT_REF') ||
       getOptionalIfMultitenantConfigFromEnv('TENANT_ID') ||
       '',
-    urlLengthLimit: Number(getOptionalConfigFromEnv('URL_LENGTH_LIMIT')) || 7_500,
+      urlLengthLimit: Number(getOptionalConfigFromEnv('URL_LENGTH_LIMIT')) || 7_500,
     xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
     logLevel: getOptionalConfigFromEnv('LOG_LEVEL') || 'trace',
     logflareEnabled: getOptionalConfigFromEnv('LOGFLARE_ENABLED') === 'true',

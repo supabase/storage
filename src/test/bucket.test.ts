@@ -366,6 +366,20 @@ describe('testing EMPTY bucket', () => {
     expect(responseJSON.message).toBe('Successfully emptied')
   })
 
+  test('user is able to empty a bucket with a service key', async () => {
+    const bucketId = 'bucket3'
+    const response = await app().inject({
+      method: 'POST',
+      url: `/bucket/${bucketId}/empty`,
+      headers: {
+        authorization: `Bearer ${process.env.SERVICE_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const responseJSON = JSON.parse(response.body)
+    expect(responseJSON.message).toBe('Successfully emptied')
+  })
+
   test('user is able to delete a bucket', async () => {
     const bucketId = 'bucket3'
     const response = await app().inject({

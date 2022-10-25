@@ -3,6 +3,7 @@ import { PostgrestClient } from '@supabase/postgrest-js'
 import { getConfig } from '../config'
 import { getAnonKey } from './tenant'
 import { StorageBackendError } from '../storage'
+import { IncomingHttpHeaders } from 'http2'
 
 /**
  * Creates a tenant specific postgrest client
@@ -20,6 +21,7 @@ export async function getPostgrestClient(
     postgrestURLScheme,
     postgrestURLSuffix,
     xForwardedHostRegExp,
+    postgrestForwardHeaders,
   } = getConfig()
 
   let url = postgrestURL
@@ -48,7 +50,29 @@ export async function getPostgrestClient(
     headers: {
       apiKey,
       Authorization: `Bearer ${jwt}`,
+      ...whitelistPostgrestHeaders(postgrestForwardHeaders, request.headers), // extra forwarded headers
     },
     schema: 'storage',
   })
+}
+
+function whitelistPostgrestHeaders(
+  allowedHeaders: string | undefined,
+  headers: IncomingHttpHeaders
+): Record<string, string> {
+  if (!allowedHeaders) {
+    return {}
+  }
+
+  return allowedHeaders
+    .split(',')
+    .map((headerName) => headerName.trim())
+    .reduce((extraHeaders, headerName) => {
+      const headerValue = headers[headerName]
+      if (typeof headerValue !== 'string') {
+        throw new Error(`header ${headerName} must be string`)
+      }
+      extraHeaders[headerName] = headerValue
+      return extraHeaders
+    }, {} as Record<string, string>)
 }

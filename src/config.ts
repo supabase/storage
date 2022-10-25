@@ -12,6 +12,7 @@ type StorageConfigType = {
   globalS3Endpoint?: string
   isMultitenant: boolean
   jwtSecret: string
+  jwtAlgorithm: string
   multitenantDatabaseUrl?: string
   postgrestURL: string
   postgrestURLSuffix?: string
@@ -34,6 +35,7 @@ type StorageConfigType = {
       max: number
     }
   }
+  postgrestForwardHeaders?: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -68,6 +70,7 @@ export function getConfig(): StorageConfigType {
     globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
     isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
+    jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
     postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
     postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
@@ -93,5 +96,6 @@ export function getConfig(): StorageConfigType {
         max: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MAX_SIZE') || '5000', 10),
       },
     },
+    postgrestForwardHeaders: getOptionalConfigFromEnv('POSTGREST_FORWARD_HEADERS'),
   }
 }

@@ -2,7 +2,7 @@ import { getJwtSecret as getJwtSecretForTenant } from '../database/tenant'
 import jwt from 'jsonwebtoken'
 import { getConfig } from '../config'
 
-const { isMultitenant, jwtSecret } = getConfig()
+const { isMultitenant, jwtSecret, jwtAlgorithm } = getConfig()
 
 interface jwtInterface {
   sub: string
@@ -35,7 +35,7 @@ export function verifyJWT(
   secret: string
 ): Promise<string | jwt.JwtPayload | undefined> {
   return new Promise((resolve, reject) => {
-    jwt.verify(token, secret, (err, decoded) => {
+    jwt.verify(token, secret, { algorithms: [jwtAlgorithm as jwt.Algorithm] }, (err, decoded) => {
       if (err) return reject(err)
       resolve(decoded)
     })
@@ -54,10 +54,15 @@ export function signJWT(
   expiresIn: string | number
 ): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
-    jwt.sign(payload, secret, { expiresIn }, (err, token) => {
-      if (err) return reject(err)
-      resolve(token)
-    })
+    jwt.sign(
+      payload,
+      secret,
+      { expiresIn, algorithm: jwtAlgorithm as jwt.Algorithm },
+      (err, token) => {
+        if (err) return reject(err)
+        resolve(token)
+      }
+    )
   })
 }
 

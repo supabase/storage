@@ -34,6 +34,7 @@ type StorageConfigType = {
       max: number
     }
   }
+  postgrestForwardHeaders?: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -93,5 +94,6 @@ export function getConfig(): StorageConfigType {
         max: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MAX_SIZE') || '5000', 10),
       },
     },
+    postgrestForwardHeaders: getOptionalConfigFromEnv('POSTGREST_FORWARD_HEADERS'),
   }
 }

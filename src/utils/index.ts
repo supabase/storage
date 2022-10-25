@@ -34,7 +34,7 @@ export function verifyJWT(
   secret: string
 ): Promise<string | jwt.JwtPayload | undefined> {
   return new Promise((resolve, reject) => {
-    jwt.verify(token, secret, { algorithms: [jwtAlgorithm as jwt.Algorithm]}, (err, decoded) => {
+    jwt.verify(token, secret, { algorithms: [jwtAlgorithm as jwt.Algorithm] }, (err, decoded) => {
       if (err) return reject(err)
       resolve(decoded)
     })

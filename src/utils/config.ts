@@ -12,7 +12,7 @@ type StorageConfigType = {
   globalS3Endpoint?: string
   isMultitenant: boolean
   jwtSecret: string
-  jwtAlgorithm: string,
+  jwtAlgorithm: string
   multitenantDatabaseUrl?: string
   postgrestURL: string
   postgrestURLSuffix?: string
@@ -83,7 +83,7 @@ export function getConfig(): StorageConfigType {
       getOptionalConfigFromEnv('PROJECT_REF') ||
       getOptionalIfMultitenantConfigFromEnv('TENANT_ID') ||
       '',
-      urlLengthLimit: Number(getOptionalConfigFromEnv('URL_LENGTH_LIMIT')) || 7_500,
+    urlLengthLimit: Number(getOptionalConfigFromEnv('URL_LENGTH_LIMIT')) || 7_500,
     xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
     logLevel: getOptionalConfigFromEnv('LOG_LEVEL') || 'trace',
     logflareEnabled: getOptionalConfigFromEnv('LOGFLARE_ENABLED') === 'true',

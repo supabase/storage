@@ -1,14 +1,7 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import fastifyMultipart from '@fastify/multipart'
 import fastifySwagger from '@fastify/swagger'
-import bucketRoutes from './routes/bucket/'
-import objectRoutes from './routes/object'
-import renderRoutes from './routes/render'
-import { authSchema } from './schemas/auth'
-import { errorSchema } from './schemas/error'
-import logTenantId from './plugins/log-tenant-id'
-import tenantId from './plugins/tenant-id'
-import logRequest from './plugins/log-request'
+import { routes, schemas, plugins, setErrorHandler } from './http'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -50,15 +43,17 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   }
 
   // add in common schemas
-  app.addSchema(authSchema)
-  app.addSchema(errorSchema)
+  app.addSchema(schemas.authSchema)
+  app.addSchema(schemas.errorSchema)
 
-  app.register(tenantId)
-  app.register(logTenantId)
-  app.register(logRequest({ excludeUrls: ['/status'] }))
-  app.register(bucketRoutes, { prefix: 'bucket' })
-  app.register(objectRoutes, { prefix: 'object' })
-  app.register(renderRoutes, { prefix: 'render' })
+  app.register(plugins.tenantId)
+  app.register(plugins.logTenantId)
+  app.register(plugins.logRequest({ excludeUrls: ['/status'] }))
+  app.register(routes.bucket, { prefix: 'bucket' })
+  app.register(routes.object, { prefix: 'object' })
+  app.register(routes.render, { prefix: 'render' })
+
+  setErrorHandler(app)
 
   app.get('/status', async (request, response) => response.status(200).send())
 

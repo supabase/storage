@@ -7,6 +7,7 @@ import { getConfig } from './config'
 import { runMultitenantMigrations, runMigrations } from './database/migrate'
 import { listenForTenantUpdate } from './database/tenant'
 import { logger } from './monitoring'
+import { Queue } from './queue'
 
 const exposeDocs = true
 
@@ -31,6 +32,8 @@ const exposeDocs = true
   } else {
     await runMigrations()
   }
+
+  await Queue.init()
 
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
     logger,

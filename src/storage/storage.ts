@@ -9,6 +9,7 @@ import { ObjectStorage } from './object'
 
 const { urlLengthLimit, globalS3Bucket } = getConfig()
 
+
 export class Storage {
   constructor(
     private readonly backend: GenericStorageBackend,
@@ -24,6 +25,10 @@ export class Storage {
 
   asSuperUser() {
     return new Storage(this.backend, this.db.asSuperUser(), this.id)
+  }
+
+  uploader() {
+    return new Uploader(this.backend)
   }
 
   renderer(type: 'asset' | 'head' | 'image') {
@@ -71,10 +76,6 @@ export class Storage {
     }
 
     return this.db.deleteBucket(id)
-  }
-
-  uploader() {
-    return new Uploader(this.backend)
   }
 
   async emptyBucket(bucketId: string) {

@@ -21,6 +21,7 @@ export const setErrorHandler = (app: FastifyInstance) => {
       })
     }
 
+    console.error(error)
     reply.status(500).send({
       statusCode: '500',
       error: 'Internal',

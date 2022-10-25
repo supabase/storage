@@ -27,6 +27,8 @@ type StorageConfigType = {
   logflareEnabled?: boolean
   logflareApiKey?: string
   logflareSourceToken?: string
+  webhookURL?: string
+  webhookApiKey?: string
   imgProxyURL?: string
   imgLimits: {
     size: {
@@ -82,10 +84,12 @@ export function getConfig(): StorageConfigType {
       '',
     urlLengthLimit: Number(getOptionalConfigFromEnv('URL_LENGTH_LIMIT')) || 7_500,
     xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
-    logLevel: getOptionalConfigFromEnv('LOG_LEVEL') || 'trace',
+    logLevel: getOptionalConfigFromEnv('LOG_LEVEL') || 'info',
     logflareEnabled: getOptionalConfigFromEnv('LOGFLARE_ENABLED') === 'true',
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
+    webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),
+    webhookApiKey: getOptionalConfigFromEnv('WEBHOOK_API_KEY'),
     imgProxyURL: getOptionalConfigFromEnv('IMGPROXY_URL'),
     imgLimits: {
       size: {

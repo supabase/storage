@@ -14,28 +14,25 @@ export class Uploader {
   constructor(private readonly backend: GenericStorageBackend) {}
 
   async upload(request: FastifyRequest, options: UploaderOptions) {
-    let error: StorageBackendError | undefined
-    let objectMetadata: ObjectMetadata | undefined
-
     const file = await this.incomingFileInfo(request)
 
-    try {
-      objectMetadata = await this.backend.uploadObject(
-        globalS3Bucket,
-        options.key,
-        file.body,
-        file.mimeType,
-        file.cacheControl
+    const objectMetadata = await this.backend.uploadObject(
+      globalS3Bucket,
+      options.key,
+      file.body,
+      file.mimeType,
+      file.cacheControl
+    )
+
+    if (file.isTruncated()) {
+      throw new StorageBackendError(
+        'Payload too large',
+        413,
+        'The object exceeded the maximum allowed size'
       )
-    } catch (err) {
-      error = err as StorageBackendError
     }
 
-    return {
-      objectMetadata,
-      error,
-      isTruncated: file.isTruncated(),
-    }
+    return objectMetadata
   }
 
   protected async incomingFileInfo(request: FastifyRequest) {

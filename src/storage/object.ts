@@ -1,9 +1,17 @@
 import { GenericStorageBackend, ObjectMetadata } from './backend'
 import { Database, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
-import { Obj } from './schemas'
 import { getJwtSecret, signJWT } from '../auth'
 import { getConfig } from '../config'
+import { FastifyRequest } from 'fastify'
+import { Uploader } from './uploader'
+import { ObjectCreated } from '../queue'
+
+export interface UploadObjectOptions {
+  objectName: string
+  owner?: string
+  isUpsert?: boolean
+}
 
 const { urlLengthLimit, globalS3Bucket } = getConfig()
 
@@ -14,27 +22,88 @@ export class ObjectStorage {
     private readonly bucketId: string
   ) {}
 
+  async uploadNewObject(request: FastifyRequest, options: UploadObjectOptions) {
+    await this.createObject(
+      {
+        name: options.objectName,
+        owner: options.owner,
+      },
+      options.isUpsert
+    )
+
+    const path = `${this.bucketId}/${options.objectName}`
+    const s3Key = `${this.db.tenantId}/${path}`
+
+    try {
+      const uploader = new Uploader(this.backend)
+      const objectMetadata = await uploader.upload(request, {
+        key: s3Key,
+      })
+
+      await this.db
+        .asSuperUser()
+        .updateObjectMetadata(this.bucketId, options.objectName, objectMetadata as ObjectMetadata)
+
+      await ObjectCreated.sendWebhook({
+        project: this.db.project(),
+        name: options.objectName,
+        bucketId: this.bucketId,
+        metadata: objectMetadata,
+      })
+
+      return { objectMetadata, path }
+    } catch (e) {
+      // undo operations as super user
+      await this.db.asSuperUser().deleteObject(this.bucketId, options.objectName)
+      throw e
+    }
+  }
+
+  async uploadOverridingObject(
+    request: FastifyRequest,
+    options: Omit<UploadObjectOptions, 'isUpsert'>
+  ) {
+    await this.updateObjectOwner(options.objectName, options.owner)
+
+    const path = `${this.bucketId}/${options.objectName}`
+    const s3Key = `${this.db.tenantId}/${path}`
+
+    try {
+      const uploader = new Uploader(this.backend)
+      const objectMetadata = await uploader.upload(request, {
+        key: s3Key,
+      })
+
+      await this.db
+        .asSuperUser()
+        .updateObjectMetadata(this.bucketId, options.objectName, objectMetadata as ObjectMetadata)
+
+      return { objectMetadata, path }
+    } catch (e) {
+      // @todo tricky to handle since we need to undo the s3 upload
+      throw e
+    }
+  }
+
   async createObject(
     data: Omit<Parameters<Database['upsertObject']>[0], 'bucket_id'>,
     isUpsert = false
   ) {
     mustBeValidKey(data.name, 'The object name contains invalid characters')
 
-    let object: Obj
-
     if (isUpsert) {
-      object = await this.upsertObject({
+      await this.upsertObject({
         name: data.name,
         owner: data.owner,
       })
     } else {
-      object = await this.db.createObject({
+      await this.db.createObject({
         bucket_id: this.bucketId,
         ...data,
       })
     }
 
-    return object
+    return null
   }
 
   upsertObject(data: Omit<Parameters<Database['upsertObject']>[0], 'bucket_id'>) {

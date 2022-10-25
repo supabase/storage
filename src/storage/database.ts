@@ -3,6 +3,12 @@ import { Bucket, Obj } from './schemas'
 import { DatabaseError } from './errors'
 import { ObjectMetadata } from './backend'
 
+export interface DatabaseOptions {
+  tenantId: string
+  host: string
+  superAdmin?: PostgrestClient
+}
+
 export interface SearchObjectOption {
   search?: string
   sortBy?: {
@@ -18,17 +24,29 @@ export interface FindBucketFilters {
 }
 
 export class Database {
+  public readonly host: string
+  public readonly tenantId: string
+
   constructor(
-    public readonly tenantId: string,
     private readonly postgrest: PostgrestClient,
-    private readonly superAdmin?: PostgrestClient
-  ) {}
+    private readonly options: DatabaseOptions
+  ) {
+    this.host = options.host
+    this.tenantId = options.tenantId
+  }
+
+  project() {
+    return {
+      ref: this.tenantId,
+      host: this.host,
+    }
+  }
 
   asSuperUser() {
-    if (!this.superAdmin) {
+    if (!this.options.superAdmin) {
       throw new Error('super admin client not instantiated')
     }
-    return new Database(this.tenantId, this.superAdmin)
+    return new Database(this.options.superAdmin, this.options)
   }
 
   async createBucket(data: Pick<Bucket, 'id' | 'name' | 'public' | 'owner'>) {
@@ -186,11 +204,7 @@ export class Database {
   }
 
   async createObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id'>) {
-    const {
-      error,
-      status,
-      data: result,
-    } = await this.postgrest
+    const { error, status } = await this.postgrest
       .from<Obj>('objects')
       .insert(
         [
@@ -213,7 +227,7 @@ export class Database {
       })
     }
 
-    return result as Obj
+    return null
   }
 
   async deleteObject(bucketId: string, objectName: string) {

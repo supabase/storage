@@ -2,6 +2,12 @@ import { FastifyInstance } from 'fastify'
 import { isRenderableError } from '../storage'
 import { FastifyError } from '@fastify/error'
 
+/**
+ * The global error handler for all the uncaught exceptions within a request.
+ * We try our best to display meaningful information to our users
+ * and log any error that occurs
+ * @param app
+ */
 export const setErrorHandler = (app: FastifyInstance) => {
   app.setErrorHandler<Error>(function (error, request, reply) {
     if (isRenderableError(error)) {
@@ -21,7 +27,6 @@ export const setErrorHandler = (app: FastifyInstance) => {
       })
     }
 
-    console.error(error)
     reply.status(500).send({
       statusCode: '500',
       error: 'Internal',

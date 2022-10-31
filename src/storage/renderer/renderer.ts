@@ -14,9 +14,20 @@ export interface AssetResponse {
   transformations?: string[]
 }
 
+/**
+ * Renderer
+ * a generic renderer that respond to a request with an asset content
+ * and all the important headers
+ */
 export abstract class Renderer {
   abstract getAsset(request: FastifyRequest, options: RenderOptions): Promise<AssetResponse>
 
+  /**
+   * Renders a specific asset applying all the important headers
+   * @param request
+   * @param response
+   * @param options
+   */
   async render(request: FastifyRequest<any>, response: FastifyReply<any>, options: RenderOptions) {
     try {
       const data = await this.getAsset(request, options)
@@ -55,7 +66,7 @@ export abstract class Renderer {
     }
   }
 
-  handleDownload(response: FastifyReply<any>, download?: string) {
+  protected handleDownload(response: FastifyReply<any>, download?: string) {
     if (typeof download !== 'undefined') {
       if (download === '') {
         response.header('Content-Disposition', 'attachment;')
@@ -71,7 +82,7 @@ export abstract class Renderer {
   }
 }
 
-export function normalizeContentType(contentType: string | undefined): string | undefined {
+function normalizeContentType(contentType: string | undefined): string | undefined {
   if (contentType?.includes('text/html')) {
     return 'text/plain'
   }

@@ -1,9 +1,12 @@
-import { GenericStorageBackend, ObjectMetadata } from '../backend'
+import { StorageBackendAdapter, ObjectMetadata } from '../backend'
 import axios, { Axios } from 'axios'
 import { getConfig } from '../../config'
 import { FastifyRequest } from 'fastify'
 import { Renderer, RenderOptions } from './renderer'
 
+/**
+ * All the transformations options available
+ */
 export interface TransformOptions {
   width?: number
   height?: number
@@ -28,24 +31,44 @@ const client = axios.create({
   timeout: 8000,
 })
 
+/**
+ * ImageRenderer
+ * renders an image by applying transformations
+ *
+ * Interacts with an imgproxy backend for the actual transformation
+ */
 export class ImageRenderer extends Renderer {
   private readonly client: Axios
   private transformOptions?: TransformOptions
 
-  constructor(private readonly backend: GenericStorageBackend) {
+  constructor(private readonly backend: StorageBackendAdapter) {
     super()
     this.client = client
   }
 
+  /**
+   * Get the base http client
+   */
   getClient() {
     return this.client
   }
 
+  /**
+   * Set transformations parameters before calling the render method
+   * @param transformations
+   */
   setTransformations(transformations: TransformOptions) {
     this.transformOptions = transformations
     return this
   }
 
+  /**
+   * Fetch the transformed asset from imgproxy.
+   * We use a secure signed url in order for imgproxy to download and
+   * transform the image
+   * @param request
+   * @param options
+   */
   async getAsset(request: FastifyRequest, options: RenderOptions) {
     const privateURL = await this.backend.privateAssetUrl(options.bucket, options.key)
     const transformations = ImageRenderer.applyTransformation(this.transformOptions || {})
@@ -81,6 +104,10 @@ export class ImageRenderer extends Renderer {
     }
   }
 
+  /**
+   * Applies whitelisted transformations with specific limits applied
+   * @param options
+   */
   static applyTransformation(options: TransformOptions) {
     const segments = []
 

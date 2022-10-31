@@ -6,8 +6,14 @@ import { StorageBackendError } from '../storage'
 interface PostgrestClientOptions {
   host?: string
   tenantId?: string
+  forwardHeaders?: Record<string, string>
 }
 
+/**
+ * Creates a tenant specific postgrest client
+ * @param jwt
+ * @param options
+ */
 export async function getPostgrestClient(
   jwt: string,
   options: PostgrestClientOptions
@@ -53,6 +59,7 @@ export async function getPostgrestClient(
     headers: {
       apiKey,
       Authorization: `Bearer ${jwt}`,
+      ...(options.forwardHeaders || {}),
     },
     schema: 'storage',
   })

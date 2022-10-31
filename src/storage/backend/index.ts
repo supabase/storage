@@ -1,4 +1,4 @@
-import { GenericStorageBackend } from './generic'
+import { StorageBackendAdapter } from './generic'
 import { FileBackend } from './file'
 import { S3Backend } from './s3'
 import { getConfig } from '../../config'
@@ -10,7 +10,7 @@ export * from './generic'
 const { region, globalS3Endpoint, storageBackendType } = getConfig()
 
 export function createStorageBackend() {
-  let storageBackend: GenericStorageBackend
+  let storageBackend: StorageBackendAdapter
 
   if (storageBackendType === 'file') {
     storageBackend = new FileBackend()

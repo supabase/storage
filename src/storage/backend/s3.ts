@@ -11,11 +11,20 @@ import {
 import https from 'https'
 import { Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
-import { GenericStorageBackend, GetObjectHeaders, ObjectMetadata, ObjectResponse } from './generic'
+import {
+  StorageBackendAdapter,
+  BrowserCacheHeaders,
+  ObjectMetadata,
+  ObjectResponse,
+} from './generic'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { StorageBackendError } from '../errors'
 
-export class S3Backend implements GenericStorageBackend {
+/**
+ * S3Backend
+ * Interacts with a s3 system with this S3Backend adapter
+ */
+export class S3Backend implements StorageBackendAdapter {
   client: S3Client
 
   constructor(region: string, endpoint?: string | undefined) {
@@ -37,10 +46,16 @@ export class S3Backend implements GenericStorageBackend {
     this.client = new S3Client(params)
   }
 
+  /**
+   * Gets an object body and metadata
+   * @param bucketName
+   * @param key
+   * @param headers
+   */
   async getObject(
     bucketName: string,
     key: string,
-    headers?: GetObjectHeaders
+    headers?: BrowserCacheHeaders
   ): Promise<ObjectResponse> {
     const input: GetObjectCommandInput = {
       Bucket: bucketName,
@@ -69,6 +84,14 @@ export class S3Backend implements GenericStorageBackend {
     }
   }
 
+  /**
+   * Uploads and store an object
+   * @param bucketName
+   * @param key
+   * @param body
+   * @param contentType
+   * @param cacheControl
+   */
   async uploadObject(
     bucketName: string,
     key: string,
@@ -107,6 +130,11 @@ export class S3Backend implements GenericStorageBackend {
     }
   }
 
+  /**
+   * Deletes an object
+   * @param bucket
+   * @param key
+   */
   async deleteObject(bucket: string, key: string): Promise<void> {
     const command = new DeleteObjectCommand({
       Bucket: bucket,
@@ -115,6 +143,12 @@ export class S3Backend implements GenericStorageBackend {
     await this.client.send(command)
   }
 
+  /**
+   * Copies an existing object to the given location
+   * @param bucket
+   * @param source
+   * @param destination
+   */
   async copyObject(
     bucket: string,
     source: string,
@@ -131,6 +165,11 @@ export class S3Backend implements GenericStorageBackend {
     }
   }
 
+  /**
+   * Deletes multiple objects
+   * @param bucket
+   * @param prefixes
+   */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
     const s3Prefixes = prefixes.map((ele) => {
       return { Key: ele }
@@ -145,6 +184,11 @@ export class S3Backend implements GenericStorageBackend {
     await this.client.send(command)
   }
 
+  /**
+   * Returns metadata information of a specific object
+   * @param bucket
+   * @param key
+   */
   async headObject(bucket: string, key: string): Promise<ObjectMetadata> {
     const command = new HeadObjectCommand({
       Bucket: bucket,
@@ -162,6 +206,11 @@ export class S3Backend implements GenericStorageBackend {
     }
   }
 
+  /**
+   * Returns a private url that can only be accessed internally by the system
+   * @param bucket
+   * @param key
+   */
   async privateAssetUrl(bucket: string, key: string): Promise<string> {
     const input: GetObjectCommandInput = {
       Bucket: bucket,

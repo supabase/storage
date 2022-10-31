@@ -1,9 +1,13 @@
 import { FastifyRequest } from 'fastify'
-import { GenericStorageBackend } from '../backend'
+import { StorageBackendAdapter } from '../backend'
 import { Renderer, RenderOptions } from './renderer'
 
+/**
+ * AssetRenderer
+ * renders an asset from a backend adapter
+ */
 export class AssetRenderer extends Renderer {
-  constructor(private readonly backend: GenericStorageBackend) {
+  constructor(private readonly backend: StorageBackendAdapter) {
     super()
   }
 

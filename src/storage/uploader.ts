@@ -1,6 +1,6 @@
 import { FastifyRequest } from 'fastify'
 import { getFileSizeLimit } from './limits'
-import { GenericStorageBackend, ObjectMetadata } from './backend'
+import { StorageBackendAdapter } from './backend'
 import { getConfig } from '../config'
 import { StorageBackendError } from './errors'
 
@@ -10,9 +10,19 @@ interface UploaderOptions {
 
 const { globalS3Bucket } = getConfig()
 
+/**
+ * Uploader
+ * Handles the upload of a multi-part request or binary body
+ */
 export class Uploader {
-  constructor(private readonly backend: GenericStorageBackend) {}
+  constructor(private readonly backend: StorageBackendAdapter) {}
 
+  /**
+   * Extracts file information from the request and upload it them
+   * to the remote storage if valid
+   * @param request
+   * @param options
+   */
   async upload(request: FastifyRequest, options: UploaderOptions) {
     const file = await this.incomingFileInfo(request)
 

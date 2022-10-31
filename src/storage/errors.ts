@@ -7,11 +7,18 @@ export type StorageError = {
   message: string
 }
 
+/**
+ * A renderable error is a handled error
+ *  that we want to display to our users
+ */
 export interface RenderableError {
   render(): StorageError
   getOriginalError(): unknown
 }
 
+/**
+ * A specific database error
+ */
 export class DatabaseError extends Error implements RenderableError {
   constructor(
     message: string,
@@ -51,14 +58,25 @@ export class DatabaseError extends Error implements RenderableError {
   }
 }
 
+/**
+ * Determines if an error is a renderable error
+ * @param error
+ */
 export function isRenderableError(error: unknown): error is RenderableError {
   return !!error && typeof error === 'object' && 'render' in error
 }
 
+/**
+ * Determines if an error is an S3 error
+ * @param error
+ */
 export function isS3Error(error: unknown): error is S3ServiceException {
   return !!error && typeof error === 'object' && '$metadata' in error
 }
 
+/**
+ * A generic error that should be always thrown for generic exceptions
+ */
 export class StorageBackendError extends Error implements RenderableError {
   httpStatusCode: number
   originalError: unknown
@@ -69,6 +87,7 @@ export class StorageBackendError extends Error implements RenderableError {
     this.httpStatusCode = httpStatusCode
     this.message = message
     this.originalError = originalError
+    Object.setPrototypeOf(this, StorageBackendError.prototype)
   }
 
   static fromError(error?: unknown) {

@@ -23,6 +23,10 @@ export interface FindBucketFilters {
   isPublic?: boolean
 }
 
+/**
+ * Database
+ * the only source of truth for interacting with the storage database
+ */
 export class Database {
   public readonly host: string
   public readonly tenantId: string
@@ -203,8 +207,11 @@ export class Database {
     return result as Obj
   }
 
-  async createObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id'>) {
-    const { error, status } = await this.postgrest
+  async createObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata'>) {
+    const {
+      error,
+      status,
+    } = await this.postgrest
       .from<Obj>('objects')
       .insert(
         [
@@ -212,6 +219,7 @@ export class Database {
             name: data.name,
             owner: data.owner,
             bucket_id: data.bucket_id,
+            metadata: data.metadata,
           },
         ],
         {
@@ -250,12 +258,12 @@ export class Database {
     return data as Obj
   }
 
-  async deleteObjects(bucketId: string, objectNames: string[]) {
+  async deleteObjects(bucketId: string, objectNames: string[], by: keyof Obj = 'name') {
     const { error, status, data } = await this.postgrest
       .from<Obj>('objects')
       .delete()
       .eq('bucket_id', bucketId)
-      .in('name', objectNames)
+      .in(by, objectNames)
 
     if (error) {
       throw new DatabaseError('failed deleting object', status, error, {

@@ -1,10 +1,14 @@
 import { AssetResponse, Renderer, RenderOptions } from './renderer'
 import { FastifyRequest } from 'fastify'
-import { GenericStorageBackend } from '../backend'
+import { StorageBackendAdapter } from '../backend'
 import { ImageRenderer, TransformOptions } from './image'
 
+/**
+ * HeadRenderer
+ * is a special renderer that only outputs metadata information with an empty content
+ */
 export class HeadRenderer extends Renderer {
-  constructor(private readonly backend: GenericStorageBackend) {
+  constructor(private readonly backend: StorageBackendAdapter) {
     super()
   }
 

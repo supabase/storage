@@ -1,12 +1,12 @@
 import fastifyPlugin from 'fastify-plugin'
-import { GenericStorageBackend, createStorageBackend } from '../../storage/backend'
+import { StorageBackendAdapter, createStorageBackend } from '../../storage/backend'
 import { Storage } from '../../storage'
 import { Database } from '../../storage/database'
 
 declare module 'fastify' {
   interface FastifyRequest {
     storage: Storage
-    backend: GenericStorageBackend
+    backend: StorageBackendAdapter
   }
 }
 

@@ -1,5 +1,5 @@
 import { Queue } from '../queue'
-import {Job, SendOptions, WorkOptions} from 'pg-boss'
+import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { getServiceKey } from '../../database/tenant'
 import { getPostgrestClient } from '../../database'
 import { Storage } from '../../storage'
@@ -19,6 +19,10 @@ export abstract class BaseEvent<T extends object> {
   constructor(public readonly payload: T & BasePayload) {}
 
   protected static queueName = ''
+
+  static eventName() {
+    return this.name
+  }
 
   static getQueueName() {
     if (!this.queueName) {
@@ -45,10 +49,12 @@ export abstract class BaseEvent<T extends object> {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { Webhook } = require('./webhook')
 
+    console.log((this as any).eventName(), 'eventName')
     await Webhook.send({
-      eventName: this.constructor.name,
+      eventName: (this as any).eventName(),
       payload: payload,
       project: payload.project,
+      applyTime: Date.now(),
     })
   }
 

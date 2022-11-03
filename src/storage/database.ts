@@ -39,7 +39,7 @@ export class Database {
     this.tenantId = options.tenantId
   }
 
-  project() {
+  tenant() {
     return {
       ref: this.tenantId,
       host: this.host,
@@ -208,10 +208,7 @@ export class Database {
   }
 
   async createObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata'>) {
-    const {
-      error,
-      status,
-    } = await this.postgrest
+    const { error, status } = await this.postgrest
       .from<Obj>('objects')
       .insert(
         [

@@ -30,7 +30,9 @@ type StorageConfigType = {
   logflareSourceToken?: string
   webhookURL?: string
   webhookApiKey?: string
+  disableImageTransformation: boolean
   imgProxyURL?: string
+  imgProxyRequestTimeout: number
   imgLimits: {
     size: {
       min: number
@@ -93,11 +95,16 @@ export function getConfig(): StorageConfigType {
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),
     webhookApiKey: getOptionalConfigFromEnv('WEBHOOK_API_KEY'),
+    disableImageTransformation: getOptionalConfigFromEnv('DISABLE_IMAGE_TRANSFORMATION') === 'true',
+    imgProxyRequestTimeout: parseInt(
+      getOptionalConfigFromEnv('IMGPROXY_REQUEST_TIMEOUT') || '15',
+      10
+    ),
     imgProxyURL: getOptionalConfigFromEnv('IMGPROXY_URL'),
     imgLimits: {
       size: {
         min: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MIN_SIZE') || '1', 10),
-        max: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MAX_SIZE') || '5000', 10),
+        max: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MAX_SIZE') || '2000', 10),
       },
     },
     postgrestForwardHeaders: getOptionalConfigFromEnv('POSTGREST_FORWARD_HEADERS'),

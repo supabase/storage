@@ -7,7 +7,8 @@ import { Database } from '../../storage/database'
 import { createStorageBackend } from '../../storage/backend'
 
 export interface BasePayload {
-  project: {
+  $version: string
+  tenant: {
     ref: string
     host: string
   }
@@ -15,7 +16,9 @@ export interface BasePayload {
 
 export type StaticThis<T> = { new (...args: any): T }
 
-export abstract class BaseEvent<T extends object> {
+export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
+  public static readonly version: string = 'v1'
+
   constructor(public readonly payload: T & BasePayload) {}
 
   protected static queueName = ''
@@ -45,16 +48,21 @@ export abstract class BaseEvent<T extends object> {
     return that.send()
   }
 
-  static async sendWebhook<T extends BaseEvent<any>>(this: StaticThis<T>, payload: T['payload']) {
+  static async sendWebhook<T extends BaseEvent<any>>(
+    this: StaticThis<T>,
+    payload: Omit<T['payload'], '$version'>
+  ) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { Webhook } = require('./webhook')
 
-    console.log((this as any).eventName(), 'eventName')
     await Webhook.send({
-      eventName: (this as any).eventName(),
-      payload: payload,
-      project: payload.project,
-      applyTime: Date.now(),
+      event: {
+        type: (this as any).eventName(),
+        $version: (this as any).version,
+        applyTime: Date.now(),
+        payload,
+      },
+      tenant: payload.tenant,
     })
   }
 
@@ -67,21 +75,24 @@ export abstract class BaseEvent<T extends object> {
 
     return Queue.getInstance().send({
       name: constructor.getQueueName(),
-      data: this.payload,
+      data: {
+        ...this.payload,
+        $version: constructor.version,
+      },
       options: constructor.getQueueOptions(),
     })
   }
 
   protected async createStorage(payload: BasePayload) {
-    const serviceKey = await getServiceKey(payload.project.ref)
+    const serviceKey = await getServiceKey(payload.tenant.ref)
     const client = await getPostgrestClient(serviceKey, {
-      host: payload.project.host,
-      tenantId: payload.project.ref,
+      host: payload.tenant.host,
+      tenantId: payload.tenant.ref,
     })
 
     const db = new Database(client, {
-      tenantId: payload.project.ref,
-      host: payload.project.host,
+      tenantId: payload.tenant.ref,
+      host: payload.tenant.host,
       superAdmin: client,
     })
 

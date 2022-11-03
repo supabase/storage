@@ -218,6 +218,6 @@ export class S3Backend implements StorageBackendAdapter {
     }
 
     const command = new GetObjectCommand(input)
-    return getSignedUrl(this.client, command, { expiresIn: 300 })
+    return getSignedUrl(this.client, command, { expiresIn: 600 })
   }
 }

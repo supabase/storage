@@ -61,7 +61,6 @@ export abstract class Renderer {
         return response.status(404).send()
       }
 
-      // TODO: handle error
       throw err
     }
   }

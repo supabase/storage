@@ -97,7 +97,7 @@ describe('testing GET all buckets', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.length).toBe(6)
+    expect(responseJSON.length).toBe(7)
   })
 
   test('checking RLS: anon user is not able to get all buckets', async () => {
@@ -139,6 +139,25 @@ describe('testing POST bucket', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON.name).toBe('newbucket')
+  })
+
+  test('user is not able to create a bucket with a /', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        name: 'newbucket/test',
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      error: 'Invalid Input',
+      message: 'Bucket name invalid',
+      statusCode: '400',
+    })
   })
 
   test('checking RLS: anon user is not able to create a bucket', async () => {

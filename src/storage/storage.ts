@@ -2,7 +2,7 @@ import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters } from './database'
 import { StorageBackendError } from './errors'
 import { ImageRenderer, AssetRenderer, HeadRenderer } from './renderer'
-import { mustBeValidKey } from './limits'
+import { mustBeValidBucketName, mustBeValidKey } from './limits'
 import { Uploader } from './uploader'
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
@@ -82,6 +82,7 @@ export class Storage {
    * @param data
    */
   createBucket(data: Parameters<Database['createBucket']>[0]) {
+    mustBeValidBucketName(data.name, 'Bucket name invalid')
     return this.db.createBucket(data)
   }
 
@@ -91,6 +92,7 @@ export class Storage {
    * @param isPublic
    */
   updateBucket(id: string, isPublic: boolean | undefined) {
+    mustBeValidBucketName(id, 'Bucket name invalid')
     return this.db.updateBucket(id, isPublic)
   }
 

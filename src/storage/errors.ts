@@ -42,10 +42,15 @@ export class DatabaseError extends Error implements RenderableError {
       code = '401'
       type = 'Invalid JWT'
     } else if (responseStatus === 409) {
-      code = '409'
-      type = 'Duplicate'
-      message = 'The resource already exists'
+      const relationNotPresent = type?.includes('not present')
+
+      code = relationNotPresent ? '404' : '409'
+      type = relationNotPresent ? 'Not Found' : 'Duplicate'
+      message = relationNotPresent
+        ? 'The parent resource is not found'
+        : 'The resource already exists'
     }
+
     return {
       statusCode: code,
       error: type,
@@ -96,17 +101,17 @@ export class StorageBackendError extends Error implements RenderableError {
     let message: string
 
     if (isS3Error(error)) {
-      name = error.name
+      name = error.message
       httpStatusCode = error.$metadata.httpStatusCode ?? 500
-      message = error.message
+      message = error.name
     } else if (error instanceof Error) {
       name = error.name
       httpStatusCode = 500
       message = error.message
     } else {
-      name = 'Internal service error'
+      name = 'Internal server error'
       httpStatusCode = 500
-      message = 'Internal service error'
+      message = 'Internal server error'
     }
 
     return new StorageBackendError(name, httpStatusCode, message, error)

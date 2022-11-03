@@ -10,12 +10,18 @@ import { FastifyError } from '@fastify/error'
  */
 export const setErrorHandler = (app: FastifyInstance) => {
   app.setErrorHandler<Error>(function (error, request, reply) {
-    if (isRenderableError(error)) {
-      this.log.error({ error, originalError: error.getOriginalError() }, error.message)
-      return reply.status(400).send(error.render())
+    // We assign the error received.
+    // it will be logged in the request log plugin
+    reply.executionError = error
+
+    if (process.env.NODE_ENV !== 'production') {
+      console.error(error)
     }
 
-    this.log.error({ error }, error.message)
+    if (isRenderableError(error)) {
+      const renderableError = error.render()
+      return reply.status(renderableError.statusCode === '500' ? 500 : 400).send(renderableError)
+    }
 
     // Fastify errors
     if ('statusCode' in error) {

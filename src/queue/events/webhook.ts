@@ -3,15 +3,21 @@ import { Job, WorkOptions } from 'pg-boss'
 import axios from 'axios'
 import { getConfig } from '../../config'
 import { logger } from '../../monitoring'
-import apikey from '../../http/plugins/apikey'
 
 const { webhookURL, webhookApiKey } = getConfig()
 
 interface WebhookEvent {
-  eventName: string
-  payload: object
+  event: {
+    $version: string
+    type: string
+    payload: object
+    applyTime: number
+  }
   sentAt: string
-  applyTime: number
+  tenant: {
+    ref: string
+    host: string
+  }
 }
 
 export class Webhook extends BaseEvent<WebhookEvent> {
@@ -19,37 +25,35 @@ export class Webhook extends BaseEvent<WebhookEvent> {
 
   static getWorkerOptions(): WorkOptions {
     return {
-      // batchSize: 30,
-      newJobCheckIntervalSeconds: 2,
+      newJobCheckInterval: 200,
     }
   }
 
   static async handle(job: Job<WebhookEvent>) {
-    console.log('WEBHOOK JOB', webhookURL)
     if (!webhookURL) {
       logger.info('skipping webhook, no WEBHOOK_URL set')
       return job
     }
 
+    logger.info({ job }, 'handling webhook')
+
     try {
-      const response = await axios.post(
+      await axios.post(
         webhookURL,
         {
-          type: job.data.eventName,
-          payload: job.data.payload,
+          type: 'Webhook',
+          event: job.data.event,
           sentAt: new Date(),
-          applyTime: job.data.applyTime,
+          tenant: job.data.tenant,
         },
         {
           headers: {
-            ...(webhookApiKey ? { authorization: `Bearer ${apikey}` } : {}),
+            ...(webhookApiKey ? { authorization: `Bearer ${webhookApiKey}` } : {}),
           },
         }
       )
-
-      console.log(response)
     } catch (e) {
-      console.error(e)
+      logger.error({ error: e }, 'Webhook failed')
       throw e
     }
 

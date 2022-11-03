@@ -12,11 +12,13 @@ declare module 'fastify' {
   }
 }
 
-const { isMultitenant, serviceKey, postgrestForwardHeaders } = getConfig()
+const { isMultitenant, serviceKey } = getConfig()
 
 export const postgrest = fastifyPlugin(async (fastify) => {
   fastify.decorateRequest('postgrest', null)
   fastify.addHook('preHandler', async (request) => {
+    const { postgrestForwardHeaders } = getConfig()
+
     request.postgrest = await getPostgrestClient(request.jwt, {
       tenantId: request.tenantId,
       host: request.headers['x-forwarded-host'] as string,
@@ -32,9 +34,12 @@ export const superUserPostgrest = fastifyPlugin(async (fastify) => {
     if (isMultitenant) {
       jwt = await getServiceKey(request.tenantId)
     }
+    const { postgrestForwardHeaders } = getConfig()
+
     request.superUserPostgrest = await getPostgrestClient(jwt, {
       tenantId: request.tenantId,
       host: request.headers['x-forwarded-host'] as string,
+      forwardHeaders: whitelistPostgrestHeaders(postgrestForwardHeaders, request.headers),
     })
   })
 })

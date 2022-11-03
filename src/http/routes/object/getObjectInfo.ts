@@ -98,6 +98,39 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
     }
   )
 
+  fastify.get<getObjectRequestInterface>(
+    '/info/authenticated/:bucketName/*',
+    {
+      schema: {
+        params: getObjectParamsSchema,
+        headers: { $ref: 'authSchema#' },
+        summary,
+        response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
+        tags: ['object'],
+      },
+    },
+    async (request, response) => {
+      return requestHandler(request, response)
+    }
+  )
+
+  fastify.get<getObjectRequestInterface>(
+    '/info/:bucketName/*',
+    {
+      schema: {
+        params: getObjectParamsSchema,
+        headers: { $ref: 'authSchema#' },
+        summary,
+        description: 'use HEAD /object/authenticated/{bucketName} instead',
+        response: { '4xx': { $ref: 'errorSchema#' } },
+        tags: ['deprecated'],
+      },
+    },
+    async (request, response) => {
+      return requestHandler(request, response)
+    }
+  )
+
   fastify.head<getObjectRequestInterface>(
     '/:bucketName/*',
     {

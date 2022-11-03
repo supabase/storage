@@ -1,4 +1,5 @@
 'use strict'
+
 import dotenv from 'dotenv'
 import FormData from 'form-data'
 import fs from 'fs'
@@ -9,9 +10,10 @@ import { PostgrestClient } from '@supabase/postgrest-js'
 import { Obj } from '../storage/schemas'
 import { signJWT } from '../auth'
 import { StorageBackendError } from '../storage'
+import { useMockObject, useMockQueue } from './common'
 
 dotenv.config({ path: '.env.test' })
-const ENV = process.env
+
 const { anonKey, jwtSecret, serviceKey, postgrestURL } = getConfig()
 
 function getSuperuserPostgrestClient() {
@@ -24,54 +26,8 @@ function getSuperuserPostgrestClient() {
   })
 }
 
-beforeEach(() => {
-  process.env = { ...ENV }
-
-  jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
-    metadata: {
-      httpStatusCode: 200,
-      size: 3746,
-      mimetype: 'image/png',
-      lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
-      eTag: 'abc',
-      cacheControl: 'no-cache',
-      contentLength: 3746,
-    },
-    body: Buffer.from(''),
-  })
-
-  jest.spyOn(S3Backend.prototype, 'uploadObject').mockResolvedValue({
-    httpStatusCode: 200,
-    size: 3746,
-    mimetype: 'image/png',
-    lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
-    eTag: 'abc',
-    cacheControl: 'no-cache',
-    contentLength: 3746,
-  })
-
-  jest.spyOn(S3Backend.prototype, 'copyObject').mockResolvedValue({
-    httpStatusCode: 200,
-  })
-
-  jest.spyOn(S3Backend.prototype, 'deleteObject').mockResolvedValue()
-
-  jest.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue()
-
-  jest.spyOn(S3Backend.prototype, 'headObject').mockResolvedValue({
-    httpStatusCode: 200,
-    size: 3746,
-    mimetype: 'image/png',
-    eTag: 'abc',
-    cacheControl: 'no-cache',
-    lastModified: new Date('Wed, 12 Oct 2022 11:17:02 GMT'),
-    contentLength: 3746,
-  })
-})
-
-beforeEach(() => {
-  jest.clearAllMocks()
-})
+useMockObject()
+useMockQueue()
 
 /*
  * GET /object/:id

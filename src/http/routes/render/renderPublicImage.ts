@@ -17,8 +17,8 @@ const renderPublicImageParamsSchema = {
 const renderImageQuerySchema = {
   type: 'object',
   properties: {
-    height: { type: 'number', examples: [100] },
-    width: { type: 'number', examples: [100] },
+    height: { type: 'integer', examples: [100], minimum: 0 },
+    width: { type: 'integer', examples: [100], minimum: 0 },
     resize: { type: 'string', enum: ['fill', 'fit', 'fill-down', 'force', 'auto'] },
   },
 } as const
@@ -35,6 +35,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       schema: {
         params: renderPublicImageParamsSchema,
+        querystring: renderImageQuerySchema,
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],

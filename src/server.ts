@@ -10,6 +10,9 @@ import { logger } from './monitoring'
 
 const exposeDocs = true
 
+const port = process.env.PORT || 5000;
+const host = process.env.HOST || '0.0.0.0'
+
 ;(async () => {
   const { isMultitenant, requestIdHeader, adminRequestIdHeader } = getConfig()
   if (isMultitenant) {
@@ -23,7 +26,7 @@ const exposeDocs = true
     })
 
     try {
-      await adminApp.listen({ port: 5001, host: '0.0.0.0' })
+      await adminApp.listen({ port, host })
     } catch (err) {
       adminApp.log.error(err)
       process.exit(1)
@@ -41,8 +44,8 @@ const exposeDocs = true
 
   app.listen(
     {
-      port: 5000,
-      host: '0.0.0.0',
+      port,
+      host,
     },
     (err, address) => {
       if (err) {

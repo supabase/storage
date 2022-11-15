@@ -10,11 +10,8 @@ import { logger } from './monitoring'
 
 const exposeDocs = true
 
-const port = Number(process.env.PORT) || 5000;
-const host = process.env.HOST as string || '0.0.0.0'
-
 ;(async () => {
-  const { isMultitenant, requestIdHeader, adminRequestIdHeader } = getConfig()
+  const { isMultitenant, requestIdHeader, adminRequestIdHeader, port, host } = getConfig()
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate()

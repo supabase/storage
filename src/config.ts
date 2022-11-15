@@ -36,6 +36,8 @@ type StorageConfigType = {
     }
   }
   postgrestForwardHeaders?: string
+  port?: number;
+  host?: string;
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -97,5 +99,7 @@ export function getConfig(): StorageConfigType {
       },
     },
     postgrestForwardHeaders: getOptionalConfigFromEnv('POSTGREST_FORWARD_HEADERS'),
+    host: getOptionalConfigFromEnv('HOST') || '0.0.0.0',
+    port: Number(getOptionalConfigFromEnv('PORT')) || 5000
   }
 }

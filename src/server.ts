@@ -11,7 +11,7 @@ import { logger } from './monitoring'
 const exposeDocs = true
 
 ;(async () => {
-  const { isMultitenant, requestIdHeader, adminRequestIdHeader, port, host } = getConfig()
+  const { isMultitenant, requestIdHeader, adminRequestIdHeader, adminPort, port, host } = getConfig()
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate()
@@ -23,7 +23,7 @@ const exposeDocs = true
     })
 
     try {
-      await adminApp.listen({ port, host })
+      await adminApp.listen({ port: adminPort, host })
     } catch (err) {
       adminApp.log.error(err)
       process.exit(1)
@@ -39,11 +39,7 @@ const exposeDocs = true
     requestIdHeader,
   })
 
-  app.listen(
-    {
-      port,
-      host,
-    },
+  app.listen({ port, host },
     (err, address) => {
       if (err) {
         console.error(err)

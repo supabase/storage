@@ -2,7 +2,7 @@ import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters } from './database'
 import { StorageBackendError } from './errors'
 import { ImageRenderer, AssetRenderer, HeadRenderer } from './renderer'
-import { mustBeValidKey } from './limits'
+import { mustBeValidBucketName, mustBeValidKey } from './limits'
 import { Uploader } from './uploader'
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
@@ -15,11 +15,7 @@ const { urlLengthLimit, globalS3Bucket } = getConfig()
  * to provide a rich management API for any folders and files operations
  */
 export class Storage {
-  constructor(
-    private readonly backend: StorageBackendAdapter,
-    private readonly db: Database,
-    private readonly id?: string
-  ) {}
+  constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
 
   /**
    * Creates an object storage operations for a specific bucket
@@ -36,7 +32,7 @@ export class Storage {
    * as superUser bypassing RLS rules
    */
   asSuperUser() {
-    return new Storage(this.backend, this.db.asSuperUser(), this.id)
+    return new Storage(this.backend, this.db.asSuperUser())
   }
 
   /**
@@ -86,6 +82,7 @@ export class Storage {
    * @param data
    */
   createBucket(data: Parameters<Database['createBucket']>[0]) {
+    mustBeValidBucketName(data.name, 'Bucket name invalid')
     return this.db.createBucket(data)
   }
 
@@ -95,6 +92,7 @@ export class Storage {
    * @param isPublic
    */
   updateBucket(id: string, isPublic: boolean | undefined) {
+    mustBeValidBucketName(id, 'Bucket name invalid')
     return this.db.updateBucket(id, isPublic)
   }
 

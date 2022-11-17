@@ -7,11 +7,13 @@ import { getConfig } from './config'
 import { runMultitenantMigrations, runMigrations } from './database/migrate'
 import { listenForTenantUpdate } from './database/tenant'
 import { logger } from './monitoring'
+import { Queue } from './queue'
 
 const exposeDocs = true
 
 ;(async () => {
-  const { isMultitenant, requestIdHeader, adminRequestIdHeader, adminPort, port, host } = getConfig()
+  const { isMultitenant, requestIdHeader, adminRequestIdHeader, adminPort, port, host } =
+    getConfig()
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate()
@@ -32,6 +34,8 @@ const exposeDocs = true
     await runMigrations()
   }
 
+  await Queue.init()
+
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
     logger,
     disableRequestLogging: true,
@@ -39,13 +43,11 @@ const exposeDocs = true
     requestIdHeader,
   })
 
-  app.listen({ port, host },
-    (err, address) => {
-      if (err) {
-        console.error(err)
-        process.exit(1)
-      }
-      console.log(`Server listening at ${address}`)
+  app.listen({ port, host }, (err, address) => {
+    if (err) {
+      console.error(err)
+      process.exit(1)
     }
-  )
+    console.log(`Server listening at ${address}`)
+  })
 })()

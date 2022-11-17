@@ -2,10 +2,11 @@ import dotenv from 'dotenv'
 import fs from 'fs/promises'
 import { getConfig } from '../config'
 import app from '../app'
-import { S3Backend } from '../storage/backend/s3'
+import { S3Backend } from '../storage/backend'
 import path from 'path'
-import { ImageRenderer } from '../storage/renderer/image'
+import { ImageRenderer } from '../storage/renderer'
 import axios from 'axios'
+import { useMockObject } from './common'
 
 dotenv.config({ path: '.env.test' })
 const ENV = process.env
@@ -19,52 +20,8 @@ describe('image rendering routes', () => {
       path.join(__dirname, '..', '..', 'data', 'sadcat.jpg')
     )
   })
-  beforeEach(() => {
-    process.env = { ...ENV }
 
-    jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
-      metadata: {
-        httpStatusCode: 200,
-        size: 3746,
-        mimetype: 'image/png',
-        lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
-        eTag: 'abc',
-        cacheControl: 'no-cache',
-        contentLength: 3746,
-      },
-      body: Buffer.from(''),
-    })
-
-    jest.spyOn(S3Backend.prototype, 'uploadObject').mockResolvedValue({
-      httpStatusCode: 200,
-      size: 3746,
-      mimetype: 'image/png',
-      lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
-      eTag: 'abc',
-      cacheControl: 'no-cache',
-      contentLength: 3746,
-    })
-
-    jest.spyOn(S3Backend.prototype, 'copyObject').mockResolvedValue({
-      httpStatusCode: 200,
-    })
-
-    jest.spyOn(S3Backend.prototype, 'deleteObject').mockResolvedValue()
-
-    jest.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue()
-
-    jest.spyOn(S3Backend.prototype, 'headObject').mockResolvedValue({
-      httpStatusCode: 200,
-      size: 3746,
-      mimetype: 'image/png',
-      lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
-      eTag: 'abc',
-      cacheControl: 'no-cache',
-      contentLength: 3746,
-    })
-
-    jest.spyOn(S3Backend.prototype, 'privateAssetUrl').mockResolvedValue('local:///data/sadcat.jpg')
-  })
+  useMockObject()
 
   afterEach(() => {
     jest.clearAllMocks()

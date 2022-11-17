@@ -22,7 +22,7 @@ import { StorageBackendError } from '../errors'
 
 /**
  * S3Backend
- * Interacts with an s3 system with this S3Backend adapter
+ * Interacts with a s3 system with this S3Backend adapter
  */
 export class S3Backend implements StorageBackendAdapter {
   client: S3Client
@@ -218,6 +218,6 @@ export class S3Backend implements StorageBackendAdapter {
     }
 
     const command = new GetObjectCommand(input)
-    return getSignedUrl(this.client, command, { expiresIn: 300 })
+    return getSignedUrl(this.client, command, { expiresIn: 600 })
   }
 }

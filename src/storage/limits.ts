@@ -28,12 +28,37 @@ export function isValidKey(key: string): boolean {
 
 /**
  * Validates if a given object key or bucket key is valid
+ * @param bucketName
+ */
+export function isValidBucketName(bucketName: string): boolean {
+  // only allow s3 safe characters and characters which require special handling for now
+  // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+  // excluding / for bucketName
+  return (
+    bucketName.length > 0 && /^(\w|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(bucketName)
+  )
+}
+
+/**
+ * Validates if a given object key is valid
  * throws if invalid
  * @param key
  * @param message
  */
 export function mustBeValidKey(key: string, message: string) {
   if (!isValidKey(key)) {
+    throw new StorageBackendError('Invalid Input', 400, message)
+  }
+}
+
+/**
+ * Validates if a given bucket name is valid
+ * throws if invalid
+ * @param key
+ * @param message
+ */
+export function mustBeValidBucketName(key: string, message: string) {
+  if (!isValidBucketName(key)) {
     throw new StorageBackendError('Invalid Input', 400, message)
   }
 }

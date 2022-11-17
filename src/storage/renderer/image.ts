@@ -1,8 +1,11 @@
 import { StorageBackendAdapter, ObjectMetadata } from '../backend'
-import axios, { Axios } from 'axios'
+import axios, { Axios, AxiosError } from 'axios'
 import { getConfig } from '../../config'
 import { FastifyRequest } from 'fastify'
 import { Renderer, RenderOptions } from './renderer'
+import axiosRetry from 'axios-retry'
+import { StorageBackendError } from '../errors'
+import { Stream } from 'stream'
 
 /**
  * All the transformations options available
@@ -13,7 +16,7 @@ export interface TransformOptions {
   resize?: 'fill' | 'fit' | 'fill-down' | 'force' | 'auto'
 }
 
-const { imgLimits, imgProxyURL } = getConfig()
+const { imgLimits, imgProxyURL, imgProxyRequestTimeout } = getConfig()
 
 const LIMITS = {
   height: {
@@ -28,7 +31,22 @@ const LIMITS = {
 
 const client = axios.create({
   baseURL: imgProxyURL,
-  timeout: 8000,
+  timeout: imgProxyRequestTimeout * 1000,
+})
+
+axiosRetry(client, {
+  retries: 10,
+  retryDelay: (retryCount, error) => {
+    let exponentialTime = 50
+
+    if (error.response?.status === 500) {
+      exponentialTime = 150
+    }
+    return retryCount * exponentialTime
+  },
+  retryCondition: async (err) => {
+    return [429, 500].includes(err.response?.status || 0)
+  },
 })
 
 /**
@@ -80,27 +98,37 @@ export class ImageRenderer extends Renderer {
       privateURL.startsWith('local://') ? privateURL : encodeURIComponent(privateURL),
     ]
 
-    const response = await this.getClient().get(url.join('/'), {
-      responseType: 'stream',
-    })
+    console.log(url.join('/'))
 
-    const contentLength = parseInt(response.headers['content-length'], 10)
-    const lastModified = response.headers['last-modified']
-      ? new Date(response.headers['last-modified'])
-      : undefined
+    try {
+      const response = await this.getClient().get(url.join('/'), {
+        responseType: 'stream',
+      })
 
-    return {
-      body: response.data,
-      transformations,
-      metadata: {
-        httpStatusCode: response.status,
-        size: contentLength,
-        contentLength: contentLength,
-        lastModified: lastModified,
-        eTag: response.headers['etag'],
-        cacheControl: response.headers['cache-control'],
-        mimetype: response.headers['content-type'],
-      } as ObjectMetadata,
+      const contentLength = parseInt(response.headers['content-length'], 10)
+      const lastModified = response.headers['last-modified']
+        ? new Date(response.headers['last-modified'])
+        : undefined
+
+      return {
+        body: response.data,
+        transformations,
+        metadata: {
+          httpStatusCode: response.status,
+          size: contentLength,
+          contentLength: contentLength,
+          lastModified: lastModified,
+          eTag: response.headers['etag'],
+          cacheControl: response.headers['cache-control'],
+          mimetype: response.headers['content-type'],
+        } as ObjectMetadata,
+      }
+    } catch (e) {
+      if (e instanceof AxiosError) {
+        await this.handleRequestError(e)
+      }
+
+      throw e
     }
   }
 
@@ -124,6 +152,28 @@ export class ImageRenderer extends Renderer {
     }
 
     return segments
+  }
+
+  protected async handleRequestError(error: AxiosError) {
+    const stream = error.response?.data as Stream
+    if (!stream) {
+      throw new StorageBackendError('Internal Server Error', 500, 'Internal Server Error', error)
+    }
+
+    const errorResponse = await new Promise<string>((resolve) => {
+      let errorBuffer = ''
+
+      stream.on('data', (data) => {
+        errorBuffer += data
+      })
+
+      stream.on('end', () => {
+        resolve(errorBuffer)
+      })
+    })
+
+    const statusCode = error.response?.status || 500
+    throw new StorageBackendError('ImageProcessingError', statusCode, errorResponse, error)
   }
 }
 

@@ -1,7 +1,6 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { createDefaultSchema, createResponse } from '../../generic-routes'
-import { ObjectMetadata } from '../../../storage/backend'
+import { createDefaultSchema } from '../../generic-routes'
 
 const updateObjectParamsSchema = {
   type: 'object',
@@ -55,31 +54,14 @@ export default async function routes(fastify: FastifyInstance) {
 
       const { bucketName } = request.params
       const objectName = request.params['*']
-      const path = `${bucketName}/${objectName}`
-      const s3Key = `${request.tenantId}/${path}`
-      const owner = request.owner
+      const owner = request.owner as string
 
-      await request.storage.from(bucketName).updateObjectOwner(objectName, owner)
-
-      const { error, isTruncated, objectMetadata } = await request.storage
-        .uploader()
-        .upload(request, {
-          key: s3Key,
-        })
-
-      if (error) {
-        return response
-          .status(error.httpStatusCode)
-          .send(createResponse(error.name, String(error.httpStatusCode), error.message))
-      }
-
-      if (isTruncated) {
-        // @todo tricky to handle since we need to undo the s3 upload
-      }
-
-      await request.storage
+      const { objectMetadata, path } = await request.storage
         .from(bucketName)
-        .updateObjectMetadata(objectName, objectMetadata as ObjectMetadata)
+        .uploadOverridingObject(request, {
+          owner,
+          objectName: objectName,
+        })
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({
         Key: path,

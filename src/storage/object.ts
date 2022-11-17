@@ -1,9 +1,25 @@
 import { StorageBackendAdapter, ObjectMetadata } from './backend'
 import { Database, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
-import { Obj } from './schemas'
 import { getJwtSecret, signJWT } from '../auth'
 import { getConfig } from '../config'
+import { FastifyRequest } from 'fastify'
+import { Uploader } from './uploader'
+import {
+  ObjectCreatedCopyEvent,
+  ObjectCreatedMove,
+  ObjectCreatedPostEvent,
+  ObjectCreatedPutEvent,
+  ObjectRemoved,
+  ObjectRemovedMove,
+  ObjectUpdatedMetadata,
+} from '../queue'
+
+export interface UploadObjectOptions {
+  objectName: string
+  owner?: string
+  isUpsert?: boolean
+}
 
 const { urlLengthLimit, globalS3Bucket } = getConfig()
 
@@ -19,6 +35,87 @@ export class ObjectStorage {
   ) {}
 
   /**
+   * Upload an new object to a storage
+   * @param request
+   * @param options
+   */
+  async uploadNewObject(request: FastifyRequest, options: UploadObjectOptions) {
+    await this.createObject(
+      {
+        name: options.objectName,
+        owner: options.owner,
+      },
+      options.isUpsert
+    )
+
+    const path = `${this.bucketId}/${options.objectName}`
+    const s3Key = `${this.db.tenantId}/${path}`
+
+    try {
+      const uploader = new Uploader(this.backend)
+      const objectMetadata = await uploader.upload(request, {
+        key: s3Key,
+      })
+
+      await this.db
+        .asSuperUser()
+        .updateObjectMetadata(this.bucketId, options.objectName, objectMetadata)
+
+      const event = options.isUpsert ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
+      await event.sendWebhook({
+        tenant: this.db.tenant(),
+        name: options.objectName,
+        bucketId: this.bucketId,
+        metadata: objectMetadata,
+      })
+
+      return { objectMetadata, path }
+    } catch (e) {
+      // undo operations as super user
+      await this.db.asSuperUser().deleteObject(this.bucketId, options.objectName)
+      throw e
+    }
+  }
+
+  /**
+   * Upload overriding an existing object
+   * @param request
+   * @param options
+   */
+  async uploadOverridingObject(
+    request: FastifyRequest,
+    options: Omit<UploadObjectOptions, 'isUpsert'>
+  ) {
+    await this.updateObjectOwner(options.objectName, options.owner)
+
+    const path = `${this.bucketId}/${options.objectName}`
+    const s3Key = `${this.db.tenantId}/${path}`
+
+    try {
+      const uploader = new Uploader(this.backend)
+      const objectMetadata = await uploader.upload(request, {
+        key: s3Key,
+      })
+
+      await this.db
+        .asSuperUser()
+        .updateObjectMetadata(this.bucketId, options.objectName, objectMetadata)
+
+      await ObjectCreatedPutEvent.sendWebhook({
+        tenant: this.db.tenant(),
+        name: options.objectName,
+        bucketId: this.bucketId,
+        metadata: objectMetadata,
+      })
+
+      return { objectMetadata, path }
+    } catch (e) {
+      // @todo tricky to handle since we need to undo the s3 upload
+      throw e
+    }
+  }
+
+  /**
    * Creates an object record
    * @param data object data
    * @param isUpsert specify if it is an upsert operation (default: false)
@@ -29,21 +126,19 @@ export class ObjectStorage {
   ) {
     mustBeValidKey(data.name, 'The object name contains invalid characters')
 
-    let object: Obj
-
     if (isUpsert) {
-      object = await this.upsertObject({
+      await this.upsertObject({
         name: data.name,
         owner: data.owner,
       })
     } else {
-      object = await this.db.createObject({
+      await this.db.createObject({
         bucket_id: this.bucketId,
         ...data,
       })
     }
 
-    return object
+    return null
   }
 
   /**
@@ -67,7 +162,16 @@ export class ObjectStorage {
   async deleteObject(objectName: string) {
     await this.db.deleteObject(this.bucketId, objectName)
     const s3Key = `${this.db.tenantId}/${this.bucketId}/${objectName}`
-    return this.backend.deleteObject(globalS3Bucket, s3Key)
+
+    const result = await this.backend.deleteObject(globalS3Bucket, s3Key)
+
+    await ObjectRemoved.sendWebhook({
+      tenant: this.db.tenant(),
+      name: objectName,
+      bucketId: this.bucketId,
+    })
+
+    return result
   }
 
   /**
@@ -93,6 +197,16 @@ export class ObjectStorage {
       if (data.length > 0) {
         results = results.concat(data)
 
+        await Promise.allSettled(
+          data.map((object) =>
+            ObjectRemoved.sendWebhook({
+              tenant: this.db.tenant(),
+              name: object.name,
+              bucketId: this.bucketId,
+            })
+          )
+        )
+
         // if successfully deleted, delete from s3 too
         const prefixesToDelete = data.map(
           ({ name }) => `${this.db.tenantId}/${this.bucketId}/${name}`
@@ -113,7 +227,16 @@ export class ObjectStorage {
   async updateObjectMetadata(objectName: string, metadata: ObjectMetadata) {
     mustBeValidKey(objectName, 'The object name contains invalid characters')
 
-    return this.db.updateObjectMetadata(this.bucketId, objectName, metadata)
+    const result = await this.db.updateObjectMetadata(this.bucketId, objectName, metadata)
+
+    await ObjectUpdatedMetadata.sendWebhook({
+      tenant: this.db.tenant(),
+      name: objectName,
+      bucketId: this.bucketId,
+      metadata,
+    })
+
+    return result
   }
 
   /**
@@ -123,15 +246,6 @@ export class ObjectStorage {
    */
   updateObjectOwner(objectName: string, owner?: string) {
     return this.db.updateObjectOwner(this.bucketId, objectName, owner)
-  }
-
-  /**
-   * Updates an existing object name to a given name
-   * @param sourceKey
-   * @param destinationKey
-   */
-  updateObjectName(sourceKey: string, destinationKey: string) {
-    return this.db.updateObjectName(this.bucketId, sourceKey, destinationKey)
   }
 
   /**
@@ -178,6 +292,13 @@ export class ObjectStorage {
 
     const copyResult = await this.backend.copyObject(globalS3Bucket, s3SourceKey, s3DestinationKey)
 
+    await ObjectCreatedCopyEvent.sendWebhook({
+      tenant: this.db.tenant(),
+      name: destinationKey,
+      bucketId: this.bucketId,
+      metadata: originObject.metadata as ObjectMetadata,
+    })
+
     return {
       destObject,
       httpStatusCode: copyResult.httpStatusCode,
@@ -192,7 +313,7 @@ export class ObjectStorage {
   async moveObject(sourceObjectName: string, destinationObjectName: string) {
     mustBeValidKey(destinationObjectName, 'The destination object name contains invalid characters')
 
-    await this.updateObjectName(sourceObjectName, destinationObjectName)
+    await this.db.updateObjectName(this.bucketId, sourceObjectName, destinationObjectName)
 
     const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
     const s3DestinationKey = `${this.db.tenantId}/${this.bucketId}/${destinationObjectName}`
@@ -200,6 +321,30 @@ export class ObjectStorage {
     // @todo what happens if one of these fail?
     await this.backend.copyObject(globalS3Bucket, s3SourceKey, s3DestinationKey)
     await this.backend.deleteObject(globalS3Bucket, s3SourceKey)
+
+    const movedObject = await this.db.findObject(
+      this.bucketId,
+      destinationObjectName,
+      'bucket_id, metadata'
+    )
+
+    await Promise.all([
+      ObjectRemovedMove.sendWebhook({
+        tenant: this.db.tenant(),
+        name: sourceObjectName,
+        bucketId: this.bucketId,
+      }),
+      ObjectCreatedMove.sendWebhook({
+        tenant: this.db.tenant(),
+        name: destinationObjectName,
+        bucketId: this.bucketId,
+        metadata: movedObject.metadata as ObjectMetadata,
+        oldObject: {
+          name: sourceObjectName,
+          bucketId: this.bucketId,
+        },
+      }),
+    ])
   }
 
   /**

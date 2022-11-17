@@ -9,7 +9,8 @@ import { postgrest, superUserPostgrest, storage, jwt } from '../../plugins'
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(jwt)
-  fastify.register(postgrest, superUserPostgrest)
+  fastify.register(postgrest)
+  fastify.register(superUserPostgrest)
   fastify.register(storage)
 
   fastify.register(createBucket)

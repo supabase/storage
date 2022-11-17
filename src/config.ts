@@ -28,7 +28,11 @@ type StorageConfigType = {
   logflareEnabled?: boolean
   logflareApiKey?: string
   logflareSourceToken?: string
+  webhookURL?: string
+  webhookApiKey?: string
+  disableImageTransformation: boolean
   imgProxyURL?: string
+  imgProxyRequestTimeout: number
   imgLimits: {
     size: {
       min: number
@@ -36,9 +40,9 @@ type StorageConfigType = {
     }
   }
   postgrestForwardHeaders?: string
-  adminPort: number;
-  port: number;
-  host: string;
+  adminPort: number
+  port: number
+  host: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -92,16 +96,23 @@ export function getConfig(): StorageConfigType {
     logflareEnabled: getOptionalConfigFromEnv('LOGFLARE_ENABLED') === 'true',
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
+    webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),
+    webhookApiKey: getOptionalConfigFromEnv('WEBHOOK_API_KEY'),
+    disableImageTransformation: getOptionalConfigFromEnv('DISABLE_IMAGE_TRANSFORMATION') === 'true',
+    imgProxyRequestTimeout: parseInt(
+      getOptionalConfigFromEnv('IMGPROXY_REQUEST_TIMEOUT') || '15',
+      10
+    ),
     imgProxyURL: getOptionalConfigFromEnv('IMGPROXY_URL'),
     imgLimits: {
       size: {
         min: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MIN_SIZE') || '1', 10),
-        max: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MAX_SIZE') || '5000', 10),
+        max: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MAX_SIZE') || '2000', 10),
       },
     },
     postgrestForwardHeaders: getOptionalConfigFromEnv('POSTGREST_FORWARD_HEADERS'),
     host: getOptionalConfigFromEnv('HOST') || '0.0.0.0',
     port: Number(getOptionalConfigFromEnv('PORT')) || 5000,
-    adminPort: Number(getOptionalConfigFromEnv('ADMIN_PORT')) || 5001
+    adminPort: Number(getOptionalConfigFromEnv('ADMIN_PORT')) || 5001,
   }
 }

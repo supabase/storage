@@ -1,18 +1,22 @@
-import { FastifyRequest } from 'fastify'
 import { PostgrestClient } from '@supabase/postgrest-js'
 import { getConfig } from '../config'
 import { getAnonKey } from './tenant'
 import { StorageBackendError } from '../storage'
-import { IncomingHttpHeaders } from 'http2'
+
+interface PostgrestClientOptions {
+  host?: string
+  tenantId?: string
+  forwardHeaders?: Record<string, string>
+}
 
 /**
  * Creates a tenant specific postgrest client
- * @param request
  * @param jwt
+ * @param options
  */
 export async function getPostgrestClient(
-  request: FastifyRequest,
-  jwt: string
+  jwt: string,
+  options: PostgrestClientOptions
 ): Promise<PostgrestClient> {
   const {
     anonKey,
@@ -21,13 +25,13 @@ export async function getPostgrestClient(
     postgrestURLScheme,
     postgrestURLSuffix,
     xForwardedHostRegExp,
-    postgrestForwardHeaders,
   } = getConfig()
 
   let url = postgrestURL
   let apiKey = anonKey
+
   if (isMultitenant && xForwardedHostRegExp) {
-    const xForwardedHost = request.headers['x-forwarded-host']
+    const xForwardedHost = options.host
     if (typeof xForwardedHost !== 'string') {
       throw new StorageBackendError(
         'Invalid Header',
@@ -42,37 +46,21 @@ export async function getPostgrestClient(
         'X-Forwarded-Host header does not match regular expression'
       )
     }
+
+    if (!options.tenantId) {
+      throw new StorageBackendError('Invalid Tenant Id', 400, 'Tenant id not provided')
+    }
+
     url = `${postgrestURLScheme}://${xForwardedHost}${postgrestURLSuffix}`
-    apiKey = await getAnonKey(request.tenantId)
+    apiKey = await getAnonKey(options.tenantId)
   }
 
   return new PostgrestClient(url, {
     headers: {
       apiKey,
       Authorization: `Bearer ${jwt}`,
-      ...whitelistPostgrestHeaders(postgrestForwardHeaders, request.headers), // extra forwarded headers
+      ...(options.forwardHeaders || {}),
     },
     schema: 'storage',
   })
-}
-
-function whitelistPostgrestHeaders(
-  allowedHeaders: string | undefined,
-  headers: IncomingHttpHeaders
-): Record<string, string> {
-  if (!allowedHeaders) {
-    return {}
-  }
-
-  return allowedHeaders
-    .split(',')
-    .map((headerName) => headerName.trim())
-    .reduce((extraHeaders, headerName) => {
-      const headerValue = headers[headerName]
-      if (typeof headerValue !== 'string') {
-        throw new Error(`header ${headerName} must be string`)
-      }
-      extraHeaders[headerName] = headerValue
-      return extraHeaders
-    }, {} as Record<string, string>)
 }

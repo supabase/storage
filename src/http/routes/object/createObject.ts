@@ -1,7 +1,6 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { createDefaultSchema, createResponse } from '../../generic-routes'
-import { ObjectMetadata } from '../../../storage/backend'
+import { createDefaultSchema } from '../../generic-routes'
 
 const createObjectParamsSchema = {
   type: 'object',
@@ -58,55 +57,17 @@ export default async function routes(fastify: FastifyInstance) {
 
       const { bucketName } = request.params
       const objectName = request.params['*']
-      const path = `${bucketName}/${objectName}`
-      const s3Key = `${request.tenantId}/${path}`
 
       const isUpsert = request.headers['x-upsert'] === 'true'
+      const owner = request.owner as string
 
-      const object = await request.storage.from(bucketName).createObject(
-        {
-          name: objectName,
-          owner: request.owner,
-        },
-        isUpsert
-      )
-
-      request.log.info({ results: object }, 'results')
-
-      const { error, isTruncated, objectMetadata } = await request.storage
-        .uploader()
-        .upload(request, {
-          key: s3Key,
-        })
-
-      if (error || isTruncated) {
-        // undo operations as super user
-        await request.storage.asSuperUser().from(bucketName).deleteObject(objectName)
-      }
-
-      if (error) {
-        return response
-          .status(error.httpStatusCode)
-          .send(createResponse(error.name, String(error.httpStatusCode), error.message))
-      }
-
-      if (isTruncated) {
-        // return an error response
-        return response
-          .status(400)
-          .send(
-            createResponse(
-              'The object exceeded the maximum allowed size',
-              '413',
-              'Payload too large'
-            )
-          )
-      }
-
-      await request.storage
-        .asSuperUser()
+      const { objectMetadata, path } = await request.storage
         .from(bucketName)
-        .updateObjectMetadata(objectName, objectMetadata as ObjectMetadata)
+        .uploadNewObject(request, {
+          objectName,
+          owner,
+          isUpsert,
+        })
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({
         Key: path,

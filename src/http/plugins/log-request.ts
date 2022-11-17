@@ -5,6 +5,12 @@ interface RequestLoggerOptions {
   excludeUrls?: string[]
 }
 
+declare module 'fastify' {
+  interface FastifyReply {
+    executionError?: Error
+  }
+}
+
 export const logRequest = (options: RequestLoggerOptions) =>
   fastifyPlugin(async (fastify) => {
     fastify.addHook('onResponse', async (req, reply) => {
@@ -18,9 +24,13 @@ export const logRequest = (options: RequestLoggerOptions) =>
       const rId = req.id
       const cIP = req.ip
       const statusCode = reply.statusCode
+      const error = reply.executionError
 
       const buildLogMessage = `${rMeth} | ${statusCode} | ${cIP} | ${rId} | ${rUrl} | ${uAgent}`
 
-      req.log.info({ req, res: reply, responseTime: reply.getResponseTime() }, buildLogMessage)
+      req.log.info(
+        { req, res: reply, responseTime: reply.getResponseTime(), error },
+        buildLogMessage
+      )
     })
   })

@@ -47,9 +47,12 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
       const { download } = request.query
 
-      await request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
-        isPublic: true,
-      })
+      await Promise.all([
+        request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
+          isPublic: true,
+        }),
+        request.storage.asSuperUser().from(bucketName).findObject(objectName),
+      ])
 
       // send the object from s3
       const s3Key = `${request.tenantId}/${bucketName}/${objectName}`

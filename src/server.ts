@@ -12,7 +12,8 @@ import { Queue } from './queue'
 const exposeDocs = true
 
 ;(async () => {
-  const { isMultitenant, requestIdHeader, adminRequestIdHeader } = getConfig()
+  const { isMultitenant, requestIdHeader, adminRequestIdHeader, adminPort, port, host } =
+    getConfig()
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate()
@@ -24,7 +25,7 @@ const exposeDocs = true
     })
 
     try {
-      await adminApp.listen({ port: 5001, host: '0.0.0.0' })
+      await adminApp.listen({ port: adminPort, host })
     } catch (err) {
       adminApp.log.error(err)
       process.exit(1)
@@ -42,17 +43,11 @@ const exposeDocs = true
     requestIdHeader,
   })
 
-  app.listen(
-    {
-      port: 5000,
-      host: '0.0.0.0',
-    },
-    (err, address) => {
-      if (err) {
-        console.error(err)
-        process.exit(1)
-      }
-      console.log(`Server listening at ${address}`)
+  app.listen({ port, host }, (err, address) => {
+    if (err) {
+      console.error(err)
+      process.exit(1)
     }
-  )
+    console.log(`Server listening at ${address}`)
+  })
 })()

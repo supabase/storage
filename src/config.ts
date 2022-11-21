@@ -28,6 +28,8 @@ type StorageConfigType = {
   logflareEnabled?: boolean
   logflareApiKey?: string
   logflareSourceToken?: string
+  enableQueueEvents: boolean
+  pgQueueConnectionURL?: string
   webhookURL?: string
   webhookApiKey?: string
   disableImageTransformation: boolean
@@ -96,6 +98,8 @@ export function getConfig(): StorageConfigType {
     logflareEnabled: getOptionalConfigFromEnv('LOGFLARE_ENABLED') === 'true',
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
+    enableQueueEvents: getOptionalConfigFromEnv('ENABLE_QUEUE_EVENTS') === 'true',
+    pgQueueConnectionURL: getOptionalConfigFromEnv('PG_QUEUE_CONNECTION_URL'),
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),
     webhookApiKey: getOptionalConfigFromEnv('WEBHOOK_API_KEY'),
     disableImageTransformation: getOptionalConfigFromEnv('DISABLE_IMAGE_TRANSFORMATION') === 'true',

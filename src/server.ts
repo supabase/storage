@@ -12,8 +12,16 @@ import { Queue } from './queue'
 const exposeDocs = true
 
 ;(async () => {
-  const { isMultitenant, requestIdHeader, adminRequestIdHeader, adminPort, port, host } =
-    getConfig()
+  const {
+    isMultitenant,
+    requestIdHeader,
+    adminRequestIdHeader,
+    adminPort,
+    port,
+    host,
+    enableQueueEvents,
+  } = getConfig()
+
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate()
@@ -34,7 +42,9 @@ const exposeDocs = true
     await runMigrations()
   }
 
-  await Queue.init()
+  if (enableQueueEvents) {
+    await Queue.init()
+  }
 
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
     logger,

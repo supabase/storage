@@ -220,7 +220,7 @@ describe('testing POST object via multipart upload', () => {
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
     expect(response.body).toBe(
       JSON.stringify({
-        statusCode: '42501',
+        statusCode: '403',
         error: '',
         message: 'new row violates row-level security policy for table "objects"',
       })
@@ -431,7 +431,7 @@ describe('testing POST object via binary upload', () => {
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
     expect(response.body).toBe(
       JSON.stringify({
-        statusCode: '42501',
+        statusCode: '403',
         error: '',
         message: 'new row violates row-level security policy for table "objects"',
       })

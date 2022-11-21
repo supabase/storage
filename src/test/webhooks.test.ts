@@ -1,5 +1,8 @@
+process.env.ENABLE_QUEUE_EVENTS = 'true'
+
 import { mockQueue, useMockObject } from './common'
 import FormData from 'form-data'
+
 import fs from 'fs'
 import app from '../app'
 import { getConfig } from '../config'

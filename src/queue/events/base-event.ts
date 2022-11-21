@@ -5,6 +5,7 @@ import { getPostgrestClient } from '../../database'
 import { Storage } from '../../storage'
 import { Database } from '../../storage/database'
 import { createStorageBackend } from '../../storage/backend'
+import { getConfig } from '../../config'
 
 export interface BasePayload {
   $version: string
@@ -15,6 +16,8 @@ export interface BasePayload {
 }
 
 export type StaticThis<T> = { new (...args: any): T }
+
+const { enableQueueEvents } = getConfig()
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   public static readonly version: string = 'v1'
@@ -71,6 +74,10 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   }
 
   send() {
+    if (!enableQueueEvents) {
+      return
+    }
+
     const constructor = this.constructor as typeof BaseEvent
 
     return Queue.getInstance().send({

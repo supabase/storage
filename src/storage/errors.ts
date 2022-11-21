@@ -49,6 +49,11 @@ export class DatabaseError extends Error implements RenderableError {
       message = relationNotPresent
         ? 'The parent resource is not found'
         : 'The resource already exists'
+    } else if (responseStatus === 403) {
+      code = '403'
+    } else {
+      code = '500'
+      type = 'Database Error'
     }
 
     return {

@@ -17,12 +17,12 @@ export abstract class Queue {
       return Queue.pgBoss
     }
 
-    const { isMultitenant, multitenantDatabaseUrl } = getConfig()
+    const { isMultitenant, multitenantDatabaseUrl, pgQueueConnectionURL } = getConfig()
 
-    let url = process.env.DATABASE_URL
+    let url = pgQueueConnectionURL ?? process.env.DATABASE_URL
 
     if (isMultitenant) {
-      url = multitenantDatabaseUrl
+      url = pgQueueConnectionURL ?? multitenantDatabaseUrl
     }
     Queue.pgBoss = new PgBoss({
       connectionString: url,

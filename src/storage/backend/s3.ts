@@ -154,14 +154,18 @@ export class S3Backend implements StorageBackendAdapter {
     source: string,
     destination: string
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode'>> {
-    const command = new CopyObjectCommand({
-      Bucket: bucket,
-      CopySource: `/${bucket}/${source}`,
-      Key: destination,
-    })
-    const data = await this.client.send(command)
-    return {
-      httpStatusCode: data.$metadata.httpStatusCode || 200,
+    try {
+      const command = new CopyObjectCommand({
+        Bucket: bucket,
+        CopySource: `/${bucket}/${source}`,
+        Key: destination,
+      })
+      const data = await this.client.send(command)
+      return {
+        httpStatusCode: data.$metadata.httpStatusCode || 200,
+      }
+    } catch (e: any) {
+      throw StorageBackendError.fromError(e)
     }
   }
 
@@ -171,17 +175,21 @@ export class S3Backend implements StorageBackendAdapter {
    * @param prefixes
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
-    const s3Prefixes = prefixes.map((ele) => {
-      return { Key: ele }
-    })
+    try {
+      const s3Prefixes = prefixes.map((ele) => {
+        return { Key: ele }
+      })
 
-    const command = new DeleteObjectsCommand({
-      Bucket: bucket,
-      Delete: {
-        Objects: s3Prefixes,
-      },
-    })
-    await this.client.send(command)
+      const command = new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: {
+          Objects: s3Prefixes,
+        },
+      })
+      await this.client.send(command)
+    } catch (e) {
+      throw StorageBackendError.fromError(e)
+    }
   }
 
   /**
@@ -190,19 +198,23 @@ export class S3Backend implements StorageBackendAdapter {
    * @param key
    */
   async headObject(bucket: string, key: string): Promise<ObjectMetadata> {
-    const command = new HeadObjectCommand({
-      Bucket: bucket,
-      Key: key,
-    })
-    const data = await this.client.send(command)
-    return {
-      cacheControl: data.CacheControl || 'no-cache',
-      mimetype: data.ContentType || 'application/octet-stream',
-      eTag: data.ETag || '',
-      lastModified: data.LastModified,
-      contentLength: data.ContentLength || 0,
-      httpStatusCode: data.$metadata.httpStatusCode || 200,
-      size: data.ContentLength || 0,
+    try {
+      const command = new HeadObjectCommand({
+        Bucket: bucket,
+        Key: key,
+      })
+      const data = await this.client.send(command)
+      return {
+        cacheControl: data.CacheControl || 'no-cache',
+        mimetype: data.ContentType || 'application/octet-stream',
+        eTag: data.ETag || '',
+        lastModified: data.LastModified,
+        contentLength: data.ContentLength || 0,
+        httpStatusCode: data.$metadata.httpStatusCode || 200,
+        size: data.ContentLength || 0,
+      }
+    } catch (e: any) {
+      throw StorageBackendError.fromError(e)
     }
   }
 

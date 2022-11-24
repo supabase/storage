@@ -34,7 +34,7 @@ describe('image rendering routes', () => {
 
     const response = await app().inject({
       method: 'GET',
-      url: '/render/authenticated/bucket2/authenticated/casestudy.png?width=100&height=100',
+      url: '/render/image/authenticated/bucket2/authenticated/casestudy.png?width=100&height=100',
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
@@ -55,7 +55,7 @@ describe('image rendering routes', () => {
 
     const response = await app().inject({
       method: 'GET',
-      url: '/render/public/public-bucket-2/favicon.ico?width=100&height=100',
+      url: '/render/image/public/public-bucket-2/favicon.ico?width=100&height=100',
     })
 
     expect(response.statusCode).toBe(200)

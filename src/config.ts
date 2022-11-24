@@ -32,7 +32,7 @@ type StorageConfigType = {
   pgQueueConnectionURL?: string
   webhookURL?: string
   webhookApiKey?: string
-  disableImageTransformation: boolean
+  enableImageTransformation: boolean
   imgProxyURL?: string
   imgProxyRequestTimeout: number
   imgLimits: {
@@ -102,7 +102,7 @@ export function getConfig(): StorageConfigType {
     pgQueueConnectionURL: getOptionalConfigFromEnv('PG_QUEUE_CONNECTION_URL'),
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),
     webhookApiKey: getOptionalConfigFromEnv('WEBHOOK_API_KEY'),
-    disableImageTransformation: getOptionalConfigFromEnv('DISABLE_IMAGE_TRANSFORMATION') === 'true',
+    enableImageTransformation: getOptionalConfigFromEnv('ENABLE_IMAGE_TRANSFORMATION') === 'true',
     imgProxyRequestTimeout: parseInt(
       getOptionalConfigFromEnv('IMGPROXY_REQUEST_TIMEOUT') || '15',
       10

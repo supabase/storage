@@ -20,6 +20,7 @@ const renderImageQuerySchema = {
     height: { type: 'integer', examples: [100], minimum: 0 },
     width: { type: 'integer', examples: [100], minimum: 0 },
     resize: { type: 'string', enum: ['fill', 'fit', 'fill-down', 'force', 'auto'] },
+    download: { type: 'string' },
   },
 } as const
 
@@ -42,6 +43,7 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
+      const { download } = request.query
       const { bucketName } = request.params
       const objectName = request.params['*']
 
@@ -54,6 +56,7 @@ export default async function routes(fastify: FastifyInstance) {
       return renderer.setTransformations(request.query).render(request, response, {
         bucket: globalS3Bucket,
         key: s3Key,
+        download,
       })
     }
   )

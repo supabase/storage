@@ -98,8 +98,6 @@ export class ImageRenderer extends Renderer {
       privateURL.startsWith('local://') ? privateURL : encodeURIComponent(privateURL),
     ]
 
-    console.log(url.join('/'))
-
     try {
       const response = await this.getClient().get(url.join('/'), {
         responseType: 'stream',

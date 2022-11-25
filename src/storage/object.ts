@@ -313,6 +313,10 @@ export class ObjectStorage {
   async moveObject(sourceObjectName: string, destinationObjectName: string) {
     mustBeValidKey(destinationObjectName, 'The destination object name contains invalid characters')
 
+    if (sourceObjectName === destinationObjectName) {
+      return
+    }
+
     await this.db.updateObjectName(this.bucketId, sourceObjectName, destinationObjectName)
 
     const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`

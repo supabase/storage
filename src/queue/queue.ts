@@ -26,6 +26,7 @@ export abstract class Queue {
     }
     Queue.pgBoss = new PgBoss({
       connectionString: url,
+      max: 4,
       application_name: 'storage-api',
       deleteAfterDays: 7,
       retentionDays: 7,

@@ -2,7 +2,7 @@ import { getConfig } from '../../../config'
 import { FromSchema } from 'json-schema-to-ts'
 import { FastifyInstance } from 'fastify'
 import { ImageRenderer } from '../../../storage/renderer'
-import { transformationQueryString } from '../../schemas/transformations'
+import { transformationOptionsSchema } from '../../schemas/transformations'
 
 const { globalS3Bucket } = getConfig()
 
@@ -19,7 +19,7 @@ const renderPublicImageParamsSchema = {
 const renderImageQuerySchema = {
   type: 'object',
   properties: {
-    ...transformationQueryString,
+    ...transformationOptionsSchema,
     download: { type: 'string' },
   },
 } as const

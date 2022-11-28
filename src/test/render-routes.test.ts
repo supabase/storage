@@ -65,4 +65,35 @@ describe('image rendering routes', () => {
       { responseType: 'stream' }
     )
   })
+
+  it('will render a transformed image providing a signed url', async () => {
+    const signURLResponse = await app().inject({
+      method: 'POST',
+      url: '/object/sign/bucket2/authenticated/casestudy.png?width=100&height=100',
+      payload: {
+        expiresIn: 60000,
+      },
+      headers: {
+        authorization: `Bearer ${process.env.SERVICE_KEY}`,
+      },
+    })
+
+    const signedURLBody = signURLResponse.json<{ signedURL: string }>()
+
+    const testAxios = axios.create({ baseURL: imgProxyURL })
+    jest.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
+    const axiosSpy = jest.spyOn(testAxios, 'get')
+
+    const response = await app().inject({
+      method: 'GET',
+      url: signedURLBody.signedURL,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
+    expect(axiosSpy).toBeCalledWith(
+      '/public/height:100/width:100/resizing_type:fill/plain/local:///data/sadcat.jpg',
+      { responseType: 'stream' }
+    )
+  })
 })

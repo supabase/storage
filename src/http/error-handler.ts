@@ -14,8 +14,6 @@ export const setErrorHandler = (app: FastifyInstance) => {
     // it will be logged in the request log plugin
     reply.executionError = error
 
-    request.log.error({ error }, `request error | ${request.id}`)
-
     if (process.env.NODE_ENV !== 'production') {
       console.error(error)
     }

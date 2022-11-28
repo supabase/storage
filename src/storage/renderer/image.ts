@@ -1,4 +1,4 @@
-import { StorageBackendAdapter, ObjectMetadata } from '../backend'
+import { ObjectMetadata, StorageBackendAdapter } from '../backend'
 import axios, { Axios, AxiosError } from 'axios'
 import { getConfig } from '../../config'
 import { FastifyRequest } from 'fastify'
@@ -80,6 +80,27 @@ export class ImageRenderer extends Renderer {
     return this
   }
 
+  setTransformationsFromString(transformations: string) {
+    const params = transformations.split(',')
+
+    this.transformOptions = params.reduce((all, param) => {
+      const [name, value] = param.split(':') as [keyof TransformOptions, any]
+      switch (name) {
+        case 'height':
+          all.height = parseInt(value, 10)
+          break
+        case 'width':
+          all.width = parseInt(value, 10)
+          break
+        case 'resize':
+          all.resize = value
+      }
+      return all
+    }, {} as TransformOptions)
+
+    return this
+  }
+
   /**
    * Fetch the transformed asset from imgproxy.
    * We use a secure signed url in order for imgproxy to download and
@@ -134,7 +155,7 @@ export class ImageRenderer extends Renderer {
    * Applies whitelisted transformations with specific limits applied
    * @param options
    */
-  static applyTransformation(options: TransformOptions) {
+  static applyTransformation(options: TransformOptions): string[] {
     const segments = []
 
     if (options.height) {

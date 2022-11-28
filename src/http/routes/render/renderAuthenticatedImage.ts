@@ -2,6 +2,7 @@ import { getConfig } from '../../../config'
 import { FromSchema } from 'json-schema-to-ts'
 import { FastifyInstance } from 'fastify'
 import { ImageRenderer } from '../../../storage/renderer'
+import { transformationQueryString } from '../../schemas/transformations'
 
 const { globalS3Bucket } = getConfig()
 
@@ -17,9 +18,7 @@ const renderAuthenticatedImageParamsSchema = {
 const renderImageQuerySchema = {
   type: 'object',
   properties: {
-    height: { type: 'integer', examples: [100], minimum: 0 },
-    width: { type: 'integer', examples: [100], minimum: 0 },
-    resize: { type: 'string', enum: ['fill', 'fit', 'fill-down', 'force', 'auto'] },
+    ...transformationQueryString,
     download: { type: 'string' },
   },
 } as const

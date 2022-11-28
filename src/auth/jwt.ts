@@ -10,6 +10,7 @@ interface jwtInterface {
 
 export type SignedToken = {
   url: string
+  transformations?: string
 }
 
 /**

@@ -19,9 +19,6 @@ const renderAuthenticatedImageParamsSchema = {
 const renderImageQuerySchema = {
   type: 'object',
   properties: {
-    height: { type: 'integer', examples: [100], minimum: 0 },
-    width: { type: 'integer', examples: [100], minimum: 0 },
-    resize: { type: 'string', enum: ['fill', 'fit', 'fill-down', 'force', 'auto'] },
     token: { type: 'string' },
     download: { type: 'string' },
   },
@@ -36,7 +33,7 @@ interface renderImageRequestInterface {
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Render an authenticated image with the given transformations'
   fastify.get<renderImageRequestInterface>(
-    '/signed/:bucketName/*',
+    '/sign/:bucketName/*',
     {
       schema: {
         params: renderAuthenticatedImageParamsSchema,
@@ -60,17 +57,18 @@ export default async function routes(fastify: FastifyInstance) {
         throw new StorageBackendError('Invalid JWT', 400, err.message, err)
       }
 
-      const { url } = payload
+      const { url, transformations } = payload
       const s3Key = `${request.tenantId}/${url}`
       request.log.info(s3Key)
 
       const renderer = request.storage.renderer('image') as ImageRenderer
-
-      return renderer.setTransformations(request.query).render(request, response, {
-        bucket: globalS3Bucket,
-        key: s3Key,
-        download,
-      })
+      return renderer
+        .setTransformationsFromString(transformations || '')
+        .render(request, response, {
+          bucket: globalS3Bucket,
+          key: s3Key,
+          download,
+        })
     }
   )
 }

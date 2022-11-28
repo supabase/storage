@@ -2,6 +2,8 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
+import { ImageRenderer } from '../../../storage/renderer'
+import { transformationQueryString } from '../../schemas/transformations'
 
 const getSignedURLParamsSchema = {
   type: 'object',
@@ -18,6 +20,12 @@ const getSignedURLBodySchema = {
   },
   required: ['expiresIn'],
 } as const
+const renderImageQuerySchema = {
+  type: 'object',
+  properties: {
+    ...transformationQueryString,
+  },
+} as const
 const successResponseSchema = {
   type: 'object',
   properties: {
@@ -33,6 +41,7 @@ const successResponseSchema = {
 interface getSignedURLRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof getSignedURLParamsSchema>
   Body: FromSchema<typeof getSignedURLBodySchema>
+  Querystring: FromSchema<typeof renderImageQuerySchema>
 }
 
 export default async function routes(fastify: FastifyInstance) {
@@ -41,6 +50,7 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     body: getSignedURLBodySchema,
     params: getSignedURLParamsSchema,
+    querystring: renderImageQuerySchema,
     summary,
     tags: ['object'],
   })
@@ -55,9 +65,13 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
       const { expiresIn } = request.body
 
+      const urlPath = request.url.split('?').shift()
+
       const signedURL = await request.storage
         .from(bucketName)
-        .signObjectUrl(objectName, request.url, expiresIn)
+        .signObjectUrl(objectName, urlPath as string, expiresIn, {
+          transformations: ImageRenderer.applyTransformation(request.query || {}).join(','),
+        })
 
       return response.status(200).send({ signedURL })
     }

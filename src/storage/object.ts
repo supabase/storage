@@ -370,17 +370,30 @@ export class ObjectStorage {
    * @param objectName
    * @param url
    * @param expiresIn seconds
+   * @param metadata
    */
-  async signObjectUrl(objectName: string, url: string, expiresIn: number) {
+  async signObjectUrl(
+    objectName: string,
+    url: string,
+    expiresIn: number,
+    metadata?: Record<string, string>
+  ) {
     await this.findObject(objectName)
+    metadata = metadata ?? {}
 
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(3).join('/'))
     const jwtSecret = await getJwtSecret(this.db.tenantId)
-    const token = await signJWT({ url: urlToSign }, jwtSecret, expiresIn)
+    const token = await signJWT({ url: urlToSign, ...metadata }, jwtSecret, expiresIn)
+
+    let urlPath = 'object'
+
+    if (metadata?.transformations) {
+      urlPath = 'render/image'
+    }
 
     // @todo parse the url properly
-    return `/object/sign/${urlToSign}?token=${token}`
+    return `/${urlPath}/sign/${urlToSign}?token=${token}`
   }
 
   /**

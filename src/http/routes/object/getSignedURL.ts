@@ -3,7 +3,8 @@ import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
 import { ImageRenderer } from '../../../storage/renderer'
-import { transformationQueryString } from '../../schemas/transformations'
+import { getConfig } from '../../../config'
+import { transformationOptionsSchema } from '../../schemas/transformations'
 
 const getSignedURLParamsSchema = {
   type: 'object',
@@ -17,15 +18,14 @@ const getSignedURLBodySchema = {
   type: 'object',
   properties: {
     expiresIn: { type: 'integer', minimum: 1, examples: [60000] },
+    transform: {
+      type: 'object',
+      properties: transformationOptionsSchema,
+    },
   },
   required: ['expiresIn'],
 } as const
-const renderImageQuerySchema = {
-  type: 'object',
-  properties: {
-    ...transformationQueryString,
-  },
-} as const
+
 const successResponseSchema = {
   type: 'object',
   properties: {
@@ -41,8 +41,9 @@ const successResponseSchema = {
 interface getSignedURLRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof getSignedURLParamsSchema>
   Body: FromSchema<typeof getSignedURLBodySchema>
-  Querystring: FromSchema<typeof renderImageQuerySchema>
 }
+
+const { enableImageTransformation } = getConfig()
 
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Generate a presigned url to retrieve an object'
@@ -50,7 +51,6 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     body: getSignedURLBodySchema,
     params: getSignedURLParamsSchema,
-    querystring: renderImageQuerySchema,
     summary,
     tags: ['object'],
   })
@@ -70,7 +70,9 @@ export default async function routes(fastify: FastifyInstance) {
       const signedURL = await request.storage
         .from(bucketName)
         .signObjectUrl(objectName, urlPath as string, expiresIn, {
-          transformations: ImageRenderer.applyTransformation(request.query || {}).join(','),
+          transformations: enableImageTransformation
+            ? ImageRenderer.applyTransformation(request.body.transform || {}).join(',')
+            : '',
         })
 
       return response.status(200).send({ signedURL })

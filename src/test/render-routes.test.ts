@@ -69,9 +69,13 @@ describe('image rendering routes', () => {
   it('will render a transformed image providing a signed url', async () => {
     const signURLResponse = await app().inject({
       method: 'POST',
-      url: '/object/sign/bucket2/authenticated/casestudy.png?width=100&height=100',
+      url: '/object/sign/bucket2/authenticated/casestudy.png',
       payload: {
         expiresIn: 60000,
+        transform: {
+          width: 100,
+          height: 100,
+        },
       },
       headers: {
         authorization: `Bearer ${process.env.SERVICE_KEY}`,

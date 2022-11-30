@@ -2,7 +2,7 @@ import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters } from './database'
 import { StorageBackendError } from './errors'
 import { ImageRenderer, AssetRenderer, HeadRenderer } from './renderer'
-import { mustBeValidBucketName, mustBeValidKey } from './limits'
+import { mustBeValidBucketName } from './limits'
 import { Uploader } from './uploader'
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
@@ -22,7 +22,7 @@ export class Storage {
    * @param bucketId
    */
   from(bucketId: string) {
-    mustBeValidKey(bucketId, 'The bucketId name contains invalid characters')
+    mustBeValidBucketName(bucketId, 'The bucketId name contains invalid characters')
 
     return new ObjectStorage(this.backend, this.db, bucketId)
   }

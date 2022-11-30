@@ -14,6 +14,17 @@ const patchSchema = {
       fileSizeLimit: { type: 'number' },
       jwtSecret: { type: 'string' },
       serviceKey: { type: 'string' },
+      features: {
+        type: 'object',
+        properties: {
+          imageTransformation: {
+            type: 'object',
+            properties: {
+              enabled: { type: 'boolean' },
+            },
+          },
+        },
+      },
     },
   },
 } as const
@@ -46,6 +57,7 @@ interface tenantDBInterface {
   jwt_secret: string
   service_key: string
   file_size_limit?: number
+  feature_image_transformation: boolean
 }
 
 export default async function routes(fastify: FastifyInstance) {
@@ -54,13 +66,26 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get('/', async () => {
     const tenants = await knex('tenants').select()
     return tenants.map(
-      ({ id, anon_key, database_url, file_size_limit, jwt_secret, service_key }) => ({
+      ({
+        id,
+        anon_key,
+        database_url,
+        file_size_limit,
+        jwt_secret,
+        service_key,
+        feature_image_transformation,
+      }) => ({
         id,
         anonKey: decrypt(anon_key),
         databaseUrl: decrypt(database_url),
         fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),
         serviceKey: decrypt(service_key),
+        features: {
+          imageTransformation: {
+            enabled: feature_image_transformation,
+          },
+        },
       })
     )
   })
@@ -70,20 +95,34 @@ export default async function routes(fastify: FastifyInstance) {
     if (!tenant) {
       reply.code(404).send()
     } else {
-      const { anon_key, database_url, file_size_limit, jwt_secret, service_key } = tenant
+      const {
+        anon_key,
+        database_url,
+        file_size_limit,
+        jwt_secret,
+        service_key,
+        feature_image_transformation,
+      } = tenant
+
       return {
         anonKey: decrypt(anon_key),
         databaseUrl: decrypt(database_url),
         fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),
         serviceKey: decrypt(service_key),
+        features: {
+          imageTransformation: {
+            enabled: feature_image_transformation,
+          },
+        },
       }
     }
   })
 
   fastify.post<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
-    const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey } = request.body
     const { tenantId } = request.params
+    const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey, features } = request.body
+
     await runMigrations(tenantId, databaseUrl)
     await knex('tenants').insert({
       id: tenantId,
@@ -92,6 +131,7 @@ export default async function routes(fastify: FastifyInstance) {
       file_size_limit: fileSizeLimit,
       jwt_secret: encrypt(jwtSecret),
       service_key: encrypt(serviceKey),
+      feature_image_transformation: features?.imageTransformation?.enabled ?? false,
     })
     reply.code(201).send()
   })
@@ -100,7 +140,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId',
     { schema: patchSchema },
     async (request, reply) => {
-      const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey } = request.body
+      const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey, features } = request.body
       const { tenantId } = request.params
       if (databaseUrl) {
         await runMigrations(tenantId, databaseUrl)
@@ -112,6 +152,7 @@ export default async function routes(fastify: FastifyInstance) {
           file_size_limit: fileSizeLimit,
           jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,
           service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
+          feature_image_transformation: features?.imageTransformation?.enabled,
         })
         .where('id', tenantId)
       reply.code(204).send()
@@ -119,7 +160,7 @@ export default async function routes(fastify: FastifyInstance) {
   )
 
   fastify.put<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
-    const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey } = request.body
+    const { anonKey, databaseUrl, fileSizeLimit, jwtSecret, serviceKey, features } = request.body
     const { tenantId } = request.params
     await runMigrations(tenantId, databaseUrl)
 
@@ -129,6 +170,7 @@ export default async function routes(fastify: FastifyInstance) {
       database_url: encrypt(databaseUrl),
       jwt_secret: encrypt(jwtSecret),
       service_key: encrypt(serviceKey),
+      feature_image_transformation: features?.imageTransformation?.enabled ?? false,
     }
 
     if (fileSizeLimit) {

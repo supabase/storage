@@ -3,8 +3,8 @@ import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
 import { ImageRenderer } from '../../../storage/renderer'
-import { getConfig } from '../../../config'
 import { transformationOptionsSchema } from '../../schemas/transformations'
+import { isImageTransformationEnabled } from '../../../storage/limits'
 
 const getSignedURLParamsSchema = {
   type: 'object',
@@ -43,8 +43,6 @@ interface getSignedURLRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof getSignedURLBodySchema>
 }
 
-const { enableImageTransformation } = getConfig()
-
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Generate a presigned url to retrieve an object'
 
@@ -66,11 +64,12 @@ export default async function routes(fastify: FastifyInstance) {
       const { expiresIn } = request.body
 
       const urlPath = request.url.split('?').shift()
+      const imageTransformationEnabled = await isImageTransformationEnabled(request.tenantId)
 
       const signedURL = await request.storage
         .from(bucketName)
         .signObjectUrl(objectName, urlPath as string, expiresIn, {
-          transformations: enableImageTransformation
+          transformations: imageTransformationEnabled
             ? ImageRenderer.applyTransformation(request.body.transform || {}).join(',')
             : '',
         })

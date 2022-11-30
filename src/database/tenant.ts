@@ -9,8 +9,15 @@ interface TenantConfig {
   anonKey: string
   databaseUrl: string
   fileSizeLimit: number
+  features: Features
   jwtSecret: string
   serviceKey: string
+}
+
+export interface Features {
+  imageTransformation: {
+    enabled: boolean
+  }
 }
 
 const { multitenantDatabaseUrl } = getConfig()
@@ -66,13 +73,26 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       `Tenant config for ${tenantId} not found`
     )
   }
-  const { anon_key, database_url, file_size_limit, jwt_secret, service_key } = tenant
+  const {
+    anon_key,
+    database_url,
+    file_size_limit,
+    jwt_secret,
+    service_key,
+    feature_image_transformation,
+  } = tenant
+
   const config = {
     anonKey: decrypt(anon_key),
     databaseUrl: decrypt(database_url),
     fileSizeLimit: Number(file_size_limit),
     jwtSecret: decrypt(jwt_secret),
     serviceKey: decrypt(service_key),
+    features: {
+      imageTransformation: {
+        enabled: feature_image_transformation,
+      },
+    },
   }
   await cacheTenantConfigAndRunMigrations(tenantId, config)
   return config
@@ -112,6 +132,15 @@ export async function getJwtSecret(tenantId: string): Promise<string> {
 export async function getFileSizeLimit(tenantId: string): Promise<number> {
   const { fileSizeLimit } = await getTenantConfig(tenantId)
   return fileSizeLimit
+}
+
+/**
+ * Get features flags config for a specific tenant
+ * @param tenantId
+ */
+export async function getFeatures(tenantId: string): Promise<Features> {
+  const { features } = await getTenantConfig(tenantId)
+  return features
 }
 
 const TENANTS_UPDATE_CHANNEL = 'tenants_update'

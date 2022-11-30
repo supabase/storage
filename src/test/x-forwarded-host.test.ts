@@ -19,6 +19,11 @@ beforeAll(async () => {
     serviceKey: process.env.SERVICE_KEY || '',
     jwtSecret: process.env.PGRST_JWT_SECRET || '',
     fileSizeLimit: parseInt(process.env.FILE_SIZE_LIMIT || '1000'),
+    features: {
+      imageTransformation: {
+        enabled: true,
+      },
+    },
   }))
 
   jest

@@ -1,8 +1,8 @@
 import { getConfig } from '../config'
-import { getFileSizeLimit as getFileSizeLimitForTenant } from '../database/tenant'
+import { getFileSizeLimit as getFileSizeLimitForTenant, getFeatures } from '../database/tenant'
 import { StorageBackendError } from './errors'
 
-const { isMultitenant } = getConfig()
+const { isMultitenant, enableImageTransformation } = getConfig()
 
 /**
  * Get the maximum file size for a specific project
@@ -14,6 +14,20 @@ export async function getFileSizeLimit(tenantId: string): Promise<number> {
     fileSizeLimit = await getFileSizeLimitForTenant(tenantId)
   }
   return fileSizeLimit
+}
+
+/**
+ * Determines if the image transformation feature is enabled.
+ * @param tenantId
+ */
+export async function isImageTransformationEnabled(tenantId: string) {
+  if (!isMultitenant) {
+    return enableImageTransformation
+  }
+
+  const { imageTransformation } = await getFeatures(tenantId)
+
+  return imageTransformation.enabled
 }
 
 /**

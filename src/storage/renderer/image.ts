@@ -13,7 +13,7 @@ import { Stream } from 'stream'
 export interface TransformOptions {
   width?: number
   height?: number
-  resize?: 'fill' | 'fit' | 'fill-down' | 'force' | 'auto'
+  resize?: 'cover' | 'contain' | 'fill'
 }
 
 const { imgLimits, imgProxyURL, imgProxyRequestTimeout } = getConfig()
@@ -167,10 +167,25 @@ export class ImageRenderer extends Renderer {
     }
 
     if (options.width || options.height) {
-      segments.push(`resizing_type:${options.resize || 'fill'}`)
+      segments.push(`resizing_type:${this.formatResizeType(options.resize)}`)
     }
 
     return segments
+  }
+
+  protected static formatResizeType(resize: TransformOptions['resize']) {
+    const defaultResize = 'fill'
+
+    switch (resize) {
+      case 'cover':
+        return defaultResize
+      case 'contain':
+        return 'fit'
+      case 'fill':
+        return 'force'
+      default:
+        return defaultResize
+    }
   }
 
   protected async handleRequestError(error: AxiosError) {

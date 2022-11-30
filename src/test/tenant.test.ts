@@ -12,6 +12,11 @@ const payload = {
   fileSizeLimit: 1,
   jwtSecret: 'c',
   serviceKey: 'd',
+  features: {
+    imageTransformation: {
+      enabled: true,
+    },
+  },
 }
 
 const payload2 = {
@@ -20,6 +25,11 @@ const payload2 = {
   fileSizeLimit: 2,
   jwtSecret: 'g',
   serviceKey: 'h',
+  features: {
+    imageTransformation: {
+      enabled: false,
+    },
+  },
 }
 
 beforeAll(async () => {

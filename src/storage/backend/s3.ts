@@ -22,7 +22,7 @@ import { StorageBackendError } from '../errors'
 
 /**
  * S3Backend
- * Interacts with a s3 system with this S3Backend adapter
+ * Interacts with an s3-compatible file system with this S3Adapter
  */
 export class S3Backend implements StorageBackendAdapter {
   client: S3Client

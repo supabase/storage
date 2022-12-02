@@ -6,12 +6,14 @@ export interface RenderOptions {
   bucket: string
   key: string
   download?: string
+  expires?: string
 }
 
 export interface AssetResponse {
   body?: Readable | ReadableStream<any> | Blob | Buffer
   metadata: ObjectMetadata
   transformations?: string[]
+  originalEtag?: string
 }
 
 /**
@@ -32,24 +34,7 @@ export abstract class Renderer {
     try {
       const data = await this.getAsset(request, options)
 
-      response
-        .status(data.metadata.httpStatusCode ?? 200)
-        .header('Accept-Ranges', 'bytes')
-        .header('Content-Type', normalizeContentType(data.metadata.mimetype))
-        .header('Cache-Control', data.metadata.cacheControl)
-        .header('ETag', data.metadata.eTag)
-        .header('Content-Length', data.metadata.contentLength)
-        .header('Last-Modified', data.metadata.lastModified?.toUTCString())
-
-      if (data.metadata.contentRange) {
-        response.header('Content-Range', data.metadata.contentRange)
-      }
-
-      if (data.transformations && data.transformations.length > 0) {
-        response.header('X-Transformations', data.transformations.join(','))
-      }
-
-      this.handleDownload(response, options.download)
+      await this.setHeaders(response, data, options)
 
       return response.send(data.body)
     } catch (err: any) {
@@ -63,6 +48,36 @@ export abstract class Renderer {
 
       throw err
     }
+  }
+
+  protected setHeaders(response: FastifyReply<any>, data: AssetResponse, options: RenderOptions) {
+    response
+      .status(data.metadata.httpStatusCode ?? 200)
+      .header('Accept-Ranges', 'bytes')
+      .header('Content-Type', normalizeContentType(data.metadata.mimetype))
+      .header('ETag', data.metadata.eTag)
+      .header('Content-Length', data.metadata.contentLength)
+      .header('Last-Modified', data.metadata.lastModified?.toUTCString())
+
+    if (options.expires) {
+      response.header('Expires', options.expires)
+    } else {
+      response.header('Cache-Control', data.metadata.cacheControl)
+    }
+
+    if (data.metadata.contentRange) {
+      response.header('Content-Range', data.metadata.contentRange)
+    }
+
+    if (data.transformations && data.transformations.length > 0) {
+      response.header('X-Transformations', data.transformations.join(','))
+    }
+
+    if (data.originalEtag) {
+      response.header('x-origin-etag', data.originalEtag)
+    }
+
+    this.handleDownload(response, options.download)
   }
 
   protected handleDownload(response: FastifyReply<any>, download?: string) {

@@ -65,7 +65,7 @@ export default async function routes(fastify: FastifyInstance) {
         throw new StorageBackendError('Invalid JWT', 400, err.message, err)
       }
 
-      const { url } = payload
+      const { url, exp } = payload
       const s3Key = `${request.tenantId}/${url}`
       request.log.info(s3Key)
 
@@ -73,6 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
         bucket: globalS3Bucket,
         key: s3Key,
         download,
+        expires: new Date(exp * 1000).toUTCString(),
       })
     }
   )

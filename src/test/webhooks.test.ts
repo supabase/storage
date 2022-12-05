@@ -245,7 +245,7 @@ describe('Webhooks', () => {
                 cacheControl: 'no-cache',
                 contentLength: 3746,
                 eTag: 'abc',
-                lastModified: expect.any(String),
+                lastModified: expect.any(Date),
                 httpStatusCode: 200,
                 mimetype: 'image/png',
                 size: 3746,

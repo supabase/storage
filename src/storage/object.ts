@@ -291,12 +291,15 @@ export class ObjectStorage {
     const s3DestinationKey = `${this.db.tenantId}/${bucketId}/${destinationKey}`
 
     const copyResult = await this.backend.copyObject(globalS3Bucket, s3SourceKey, s3DestinationKey)
+    const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey)
+
+    await this.db.asSuperUser().updateObjectMetadata(bucketId, destinationKey, metadata)
 
     await ObjectCreatedCopyEvent.sendWebhook({
       tenant: this.db.tenant(),
       name: destinationKey,
       bucketId: this.bucketId,
-      metadata: originObject.metadata as ObjectMetadata,
+      metadata,
     })
 
     return {
@@ -325,6 +328,9 @@ export class ObjectStorage {
     // @todo what happens if one of these fail?
     await this.backend.copyObject(globalS3Bucket, s3SourceKey, s3DestinationKey)
     await this.backend.deleteObject(globalS3Bucket, s3SourceKey)
+
+    const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey)
+    await this.db.asSuperUser().updateObjectMetadata(this.bucketId, destinationObjectName, metadata)
 
     const movedObject = await this.db.findObject(
       this.bucketId,

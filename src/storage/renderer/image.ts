@@ -109,7 +109,10 @@ export class ImageRenderer extends Renderer {
    * @param options
    */
   async getAsset(request: FastifyRequest, options: RenderOptions) {
-    const privateURL = await this.backend.privateAssetUrl(options.bucket, options.key)
+    const [privateURL, headObj] = await Promise.all([
+      this.backend.privateAssetUrl(options.bucket, options.key),
+      this.backend.headObject(options.bucket, options.key),
+    ])
     const transformations = ImageRenderer.applyTransformation(this.transformOptions || {})
 
     const url = [
@@ -132,6 +135,7 @@ export class ImageRenderer extends Renderer {
       return {
         body: response.data,
         transformations,
+        originalEtag: headObj.eTag,
         metadata: {
           httpStatusCode: response.status,
           size: contentLength,

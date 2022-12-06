@@ -18,8 +18,8 @@ export class Uploader {
   constructor(private readonly backend: StorageBackendAdapter) {}
 
   /**
-   * Extracts file information from the request and upload it them
-   * to the remote storage if valid
+   * Extracts file information from the request and upload the buffer
+   * to the remote storage
    * @param request
    * @param options
    */

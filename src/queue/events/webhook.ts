@@ -4,7 +4,7 @@ import axios from 'axios'
 import { getConfig } from '../../config'
 import { logger } from '../../monitoring'
 
-const { webhookURL, webhookApiKey } = getConfig()
+const { webhookURL, webhookApiKey, webhookQueuePullInterval } = getConfig()
 
 interface WebhookEvent {
   event: {
@@ -25,7 +25,7 @@ export class Webhook extends BaseEvent<WebhookEvent> {
 
   static getWorkerOptions(): WorkOptions {
     return {
-      newJobCheckInterval: 200,
+      newJobCheckInterval: webhookQueuePullInterval,
     }
   }
 

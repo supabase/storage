@@ -67,6 +67,7 @@ const whitelistHeaders = (headers: Record<string, unknown>) => {
     'x-real-ip',
     'x-client-info',
     'x-forwarded-user-agent',
+    'x-client-trace-id',
   ]
   const allowlistedResponseHeaders = [
     'cf-cache-status',

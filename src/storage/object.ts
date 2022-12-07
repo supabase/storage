@@ -338,7 +338,7 @@ export class ObjectStorage {
       'bucket_id, metadata'
     )
 
-    await Promise.all([
+    await Promise.allSettled([
       ObjectRemovedMove.sendWebhook({
         tenant: this.db.tenant(),
         name: sourceObjectName,

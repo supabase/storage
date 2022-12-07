@@ -34,6 +34,12 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
 
+  redis:
+    image: redis:6.2-alpine
+    restart: always
+    ports:
+      - '6379:6379'
+
   imgproxy:
     image: darthsim/imgproxy
     ports:

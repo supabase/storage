@@ -46,6 +46,10 @@ type StorageConfigType = {
   adminPort: number
   port: number
   host: string
+  enableRateLimiter: boolean
+  rateLimiterDriver: 'memory' | 'redis' | string
+  rateLimiterRedisUrl?: string
+  rateLimiterRenderPathMaxReqSec: number
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -122,5 +126,12 @@ export function getConfig(): StorageConfigType {
     host: getOptionalConfigFromEnv('HOST') || '0.0.0.0',
     port: Number(getOptionalConfigFromEnv('PORT')) || 5000,
     adminPort: Number(getOptionalConfigFromEnv('ADMIN_PORT')) || 5001,
+    enableRateLimiter: getOptionalConfigFromEnv('ENABLE_RATE_LIMITER') === 'true',
+    rateLimiterDriver: getOptionalConfigFromEnv('RATE_LIMITER_DRIVER') || 'memory',
+    rateLimiterRedisUrl: getOptionalConfigFromEnv('RATE_LIMITER_REDIS_URL'),
+    rateLimiterRenderPathMaxReqSec: parseInt(
+      getOptionalConfigFromEnv('RATE_LIMITER_RENDER_PATH_MAX_REQ_SEC') || '5',
+      10
+    ),
   }
 }

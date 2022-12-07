@@ -66,6 +66,12 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const { url, exp } = payload
+      const path = `${request.params.bucketName}/${request.params['*']}`
+
+      if (url !== path) {
+        throw new StorageBackendError('InvalidSignature', 400, 'The url do not match the signature')
+      }
+
       const s3Key = `${request.tenantId}/${url}`
       request.log.info(s3Key)
 

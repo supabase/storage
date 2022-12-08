@@ -1,6 +1,6 @@
 import dotenv from 'dotenv'
 
-type StorageBackendType = 'file' | 's3'
+type StorageBackendType = 'file' | 's3' | 'oss'
 type StorageConfigType = {
   adminApiKeys: string
   adminRequestIdHeader?: string
@@ -10,6 +10,10 @@ type StorageConfigType = {
   fileStoragePath?: string
   globalS3Bucket: string
   globalS3Endpoint?: string
+  globalOSSBucket: string
+  globalOSSEndpoint: string
+  ossAccessKey: string
+  ossAccessSecret: string
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: string
@@ -77,6 +81,10 @@ export function getConfig(): StorageConfigType {
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
     globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
     globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
+    globalOSSBucket: getConfigFromEnv('GLOBAL_OSS_BUCKET'),
+    globalOSSEndpoint: getConfigFromEnv('GLOBAL_OSS_ENDPOINT'),
+    ossAccessKey: getConfigFromEnv('OSS_ACCESS_KEY'),
+    ossAccessSecret: getConfigFromEnv('OSS_ACCESS_SECRET'),
     isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
     jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',

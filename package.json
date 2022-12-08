@@ -31,6 +31,8 @@
     "@fastify/multipart": "^7.1.0",
     "@fastify/swagger": "^7.4.1",
     "@supabase/postgrest-js": "^0.36.0",
+    "@types/ali-oss": "^6.16.7",
+    "ali-oss": "^6.17.1",
     "axios": "^0.27.2",
     "axios-retry": "^3.3.1",
     "conventional-changelog-conventionalcommits": "^5.0.0",

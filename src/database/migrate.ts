@@ -33,7 +33,7 @@ export async function runMigrationsOnTenant(databaseUrl: string): Promise<void> 
 async function connectAndMigrate(databaseUrl: string | undefined, migrationsDirectory: string) {
   const dbConfig = {
     connectionString: databaseUrl,
-    connectionTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 10000,
   }
   const client = new Client(dbConfig)
   try {

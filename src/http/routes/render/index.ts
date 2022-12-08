@@ -4,12 +4,17 @@ import renderAuthenticatedImage from './renderAuthenticatedImage'
 import renderSignedImage from './renderSignedImage'
 import { jwt, postgrest, superUserPostgrest, storage, requireTenantFeature } from '../../plugins'
 import { getConfig } from '../../../config'
+import { rateLimiter } from './rate-limiter'
 
-const { enableImageTransformation } = getConfig()
+const { enableImageTransformation, enableRateLimiter } = getConfig()
 
 export default async function routes(fastify: FastifyInstance) {
   if (!enableImageTransformation) {
     return
+  }
+
+  if (enableRateLimiter) {
+    fastify.register(rateLimiter)
   }
 
   fastify.register(async function authorizationContext(fastify) {

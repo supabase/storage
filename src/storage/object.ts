@@ -14,6 +14,7 @@ import {
   ObjectRemovedMove,
   ObjectUpdatedMetadata,
 } from '../queue'
+import { StorageBackendError } from './errors'
 
 export interface UploadObjectOptions {
   objectName: string
@@ -446,5 +447,40 @@ export class ObjectStorage {
         }
       })
     )
+  }
+
+  /**
+   * Generates a signed url for uploading an object
+   * @param objectName
+   * @param url
+   * @param expiresIn
+   * @param metadata
+   * @returns
+   */
+  async signUploadObjectUrl(
+    objectName: string,
+    url: string,
+    expiresIn: number,
+    metadata?: Record<string, string>
+  ) {
+    await this.db.findBucketById(this.bucketId) // Require bucket to be present
+
+    let found
+    try {
+      found = await this.findObject(objectName)
+    } catch (e) {
+      // Don't do anything, since it will throw an error if the object doesn't exist (but that is what we want.)
+    }
+
+    if (found) {
+      throw new StorageBackendError('Duplicate', 409, 'The resource already exists')
+    }
+
+    const urlParts = url.split('/')
+    const urlToSign = decodeURI(urlParts.splice(4).join('/'))
+    const jwtSecret = await getJwtSecret(this.db.tenantId)
+    const token = await signJWT({ url: urlToSign, ...metadata }, jwtSecret, expiresIn)
+
+    return `/object/upload/sign/${urlToSign}?token=${token}`
   }
 }

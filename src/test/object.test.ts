@@ -1145,6 +1145,82 @@ describe('testing generating signed URL', () => {
 })
 
 /**
+ * POST /upload/sign/:bucketName/*
+ */
+
+describe('testing generating signed URL for upload', () => {
+  test('check if RLS policies are respected: authenticated user is able to sign upload URL for a resource', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/upload/sign/bucket2/cat.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const result = JSON.parse(response.body)
+    expect(result.signedUploadURL).toBeTruthy()
+  })
+
+  test('user is not able to sign a upload url without Auth header', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/upload/sign/bucket2/authenticated/cat.jpg',
+      payload: {
+        expiresIn: 1000,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('return 400 when generating signed upload urls from a non existent bucket', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/upload/sign/notfound/authenticated/cat.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('signing upload url of a non existent key', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/upload/sign/bucket2/authenticated/notfound.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+  })
+
+  test('signing upload url of an existent key', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/upload/sign/bucket2/authenticated/cat.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.body).statusCode).toBe('409')
+  })
+})
+
+/**
  * POST /sign/:bucketName
  */
 describe('testing generating signed URLs', () => {

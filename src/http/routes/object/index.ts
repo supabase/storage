@@ -16,6 +16,8 @@ import {
   publicRoutes as getObjectInfoPublic,
   authenticatedRoutes as getObjectInfoAuth,
 } from './getObjectInfo'
+import getSignedUploadURL from './getSignedUploadURL'
+import uploadSignedObject from './uploadSignedObject'
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(async function authorizationContext(fastify) {
@@ -27,6 +29,7 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(deleteObject)
     fastify.register(deleteObjects)
     fastify.register(getObject)
+    fastify.register(getSignedUploadURL)
     fastify.register(getSignedURL)
     fastify.register(getSignedURLs)
     fastify.register(moveObject)
@@ -42,6 +45,7 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(storage)
     fastify.register(getPublicObject)
     fastify.register(getSignedObject)
+    fastify.register(uploadSignedObject)
     fastify.register(getObjectInfoPublic)
   })
 }

@@ -135,14 +135,13 @@ export class ImageRenderer extends Renderer {
       return {
         body: response.data,
         transformations,
-        originalEtag: headObj.eTag,
         metadata: {
           httpStatusCode: response.status,
           size: contentLength,
           contentLength: contentLength,
           lastModified: lastModified,
-          eTag: response.headers['etag'],
-          cacheControl: response.headers['cache-control'],
+          eTag: headObj.eTag,
+          cacheControl: headObj.cacheControl,
           mimetype: response.headers['content-type'],
         } as ObjectMetadata,
       }

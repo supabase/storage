@@ -1,15 +1,15 @@
 DROP FUNCTION storage.get_size_by_bucket();
 CREATE OR REPLACE FUNCTION storage.get_size_by_bucket()
- RETURNS TABLE (
+  RETURNS TABLE (
     size BIGINT,
     bucket_id text
   )
- LANGUAGE plpgsql
+  LANGUAGE plpgsql
 AS $function$
 BEGIN
-    return query
-        select sum((metadata->>'size')::int) as size, obj.bucket_id
-        from "storage".objects as obj
-        group by obj.bucket_id;
+  return query
+    select sum((metadata->>'size')::int) as size, obj.bucket_id
+    from "storage".objects as obj
+    group by obj.bucket_id;
 END
 $function$;

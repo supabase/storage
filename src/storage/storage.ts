@@ -22,7 +22,7 @@ export class Storage {
    * @param bucketId
    */
   from(bucketId: string) {
-    mustBeValidKey(bucketId, 'The bucketId name contains invalid characters')
+    mustBeValidKey(bucketId, 'Bucket名称包含不可用字符')
 
     return new ObjectStorage(this.backend, this.db, bucketId)
   }
@@ -49,7 +49,7 @@ export class Storage {
         return new ImageRenderer(this.backend)
     }
 
-    throw new Error(`renderer of type "${type}" not supported`)
+    throw new Error(`暂时无法预览类型为"${type}"的对象`)
   }
 
   /**

@@ -124,7 +124,7 @@ export function getConfig(): StorageConfigType {
     },
     postgrestForwardHeaders: getOptionalConfigFromEnv('POSTGREST_FORWARD_HEADERS'),
     host: getOptionalConfigFromEnv('HOST') || '0.0.0.0',
-    port: Number(getOptionalConfigFromEnv('PORT')) || 5000,
+    port: Number(getOptionalConfigFromEnv('PORT')) || 8000,
     adminPort: Number(getOptionalConfigFromEnv('ADMIN_PORT')) || 5001,
   }
 }

@@ -23,7 +23,9 @@ export async function getFileSizeLimit(tenantId: string): Promise<number> {
 export function isValidKey(key: string): boolean {
   // only allow s3 safe characters and characters which require special handling for now
   // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
-  return key.length > 0 && /^(\w|\/|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(key)
+  // return key.length > 0 && /^(\w|\/|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(key)
+  // 允许中文，不超过64个字符
+  return /^(?=.{1,64}$)(?!.*\/\/)(?!.*\.\.)[^?:#%\\<>"'|*]+$/.test(key)
 }
 
 /**
@@ -34,9 +36,11 @@ export function isValidBucketName(bucketName: string): boolean {
   // only allow s3 safe characters and characters which require special handling for now
   // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
   // excluding / for bucketName
-  return (
-    bucketName.length > 0 && /^(\w|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(bucketName)
-  )
+  // return (
+  //   bucketName.length > 0 && /^(\w|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(bucketName)
+  // )
+  // 允许中文，不超过64个字符
+  return /^(?=.{1,64}$)(?!.*\/\/)(?!.*\.\.)[^?:#%\\<>"'|*]+$/.test(bucketName)
 }
 
 /**
@@ -47,7 +51,8 @@ export function isValidBucketName(bucketName: string): boolean {
  */
 export function mustBeValidKey(key: string, message: string) {
   if (!isValidKey(key)) {
-    throw new StorageBackendError('Invalid Input', 400, message)
+    // throw new StorageBackendError('Invalid Input', 400, message)
+    throw new StorageBackendError('文件名无效', 400, message)
   }
 }
 
@@ -59,6 +64,7 @@ export function mustBeValidKey(key: string, message: string) {
  */
 export function mustBeValidBucketName(key: string, message: string) {
   if (!isValidBucketName(key)) {
-    throw new StorageBackendError('Invalid Input', 400, message)
+    // throw new StorageBackendError('Invalid Input', 400, message)
+    throw new StorageBackendError('Bucket名称无效', 400, message)
   }
 }

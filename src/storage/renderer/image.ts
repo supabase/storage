@@ -155,7 +155,7 @@ export class ImageRenderer extends Renderer {
   protected async handleRequestError(error: AxiosError) {
     const stream = error.response?.data as Stream
     if (!stream) {
-      throw new StorageBackendError('Internal Server Error', 500, 'Internal Server Error', error)
+      throw new StorageBackendError('内部服务故障', 500, '内部服务故障', error)
     }
 
     const errorResponse = await new Promise<string>((resolve) => {
@@ -171,7 +171,7 @@ export class ImageRenderer extends Renderer {
     })
 
     const statusCode = error.response?.status || 500
-    throw new StorageBackendError('ImageProcessingError', statusCode, errorResponse, error)
+    throw new StorageBackendError('内部服务故障', statusCode, errorResponse, error)
   }
 }
 

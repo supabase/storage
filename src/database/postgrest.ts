@@ -55,6 +55,9 @@ export async function getPostgrestClient(
     apiKey = await getAnonKey(options.tenantId)
   }
 
+  console.log('------------------------')
+  console.log(apiKey, jwt)
+
   return new PostgrestClient(url, {
     headers: {
       apiKey,

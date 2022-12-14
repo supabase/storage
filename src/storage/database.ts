@@ -76,7 +76,7 @@ export class Database {
       .single()
 
     if (error) {
-      throw new DatabaseError('failed to create bucket', status, error)
+      throw new DatabaseError('创建Bucket失败', status, error)
     }
 
     return results as Bucket
@@ -92,7 +92,7 @@ export class Database {
     const { data, error, status } = await query.single()
 
     if (error) {
-      throw new DatabaseError('failed to retrieve bucket', status, error, {
+      throw new DatabaseError('未能找到该Bucket', status, error, {
         bucketId,
       })
     }
@@ -108,7 +108,7 @@ export class Database {
       .limit(10)
 
     if (error) {
-      throw new DatabaseError('failed to count objects in bucket', status, error, {
+      throw new DatabaseError('暂时无法计算Bucket中的对象数量', status, error, {
         bucketId,
       })
     }
@@ -123,7 +123,7 @@ export class Database {
       .in('id', Array.isArray(bucketId) ? bucketId : [bucketId])
 
     if (error) {
-      throw new DatabaseError('failed to delete bucket', status, error, {
+      throw new DatabaseError('删除Bucket失败', status, error, {
         bucketId,
       })
     }
@@ -139,7 +139,7 @@ export class Database {
       .limit(limit)
 
     if (error) {
-      throw new DatabaseError('failed listing objects', status, error, {
+      throw new DatabaseError('获取对象列表失败', status, error, {
         bucketId,
       })
     }
@@ -151,7 +151,7 @@ export class Database {
     const { data, error, status } = await this.postgrest.from<Bucket>('buckets').select(columns)
 
     if (error) {
-      throw new DatabaseError('failed listing buckets', status, error)
+      throw new DatabaseError('获取Bucket列表失败', status, error)
     }
 
     return data as Bucket[]
@@ -167,7 +167,7 @@ export class Database {
       .single()
 
     if (error) {
-      throw new DatabaseError('failed updating bucket', status, error, {
+      throw new DatabaseError('更新Bucket失败', status, error, {
         bucketId,
       })
     }
@@ -198,7 +198,7 @@ export class Database {
       .single()
 
     if (error) {
-      throw new DatabaseError('failed upserting object', status, error, {
+      throw new DatabaseError('插入对象失败', status, error, {
         bucketId: data.bucket_id,
         name: data.name,
       })
@@ -226,7 +226,7 @@ export class Database {
       .single()
 
     if (error) {
-      throw new DatabaseError('failed inserting object', status, error, {
+      throw new DatabaseError('插入对象失败', status, error, {
         bucketId: data.bucket_id,
         name: data.name,
       })
@@ -246,7 +246,7 @@ export class Database {
       .single()
 
     if (error) {
-      throw new DatabaseError('failed deleting object', status, error, {
+      throw new DatabaseError('删除对象失败', status, error, {
         bucketId: bucketId,
         name: objectName,
       })
@@ -263,7 +263,7 @@ export class Database {
       .in(by, objectNames)
 
     if (error) {
-      throw new DatabaseError('failed deleting object', status, error, {
+      throw new DatabaseError('删除对象失败', status, error, {
         bucketId: bucketId,
         names: objectNames,
       })
@@ -282,7 +282,7 @@ export class Database {
       .single()
 
     if (error) {
-      throw new DatabaseError('failed updating object metadata', status, error, {
+      throw new DatabaseError('更新对象元数据失败', status, error, {
         bucketId: bucketId,
         name: objectName,
       })
@@ -302,7 +302,7 @@ export class Database {
       .single()
 
     if (error) {
-      throw new DatabaseError('failed updating object owner', status, error, {
+      throw new DatabaseError('更新对象所有者失败', status, error, {
         bucketId: bucketId,
         name: objectName,
       })
@@ -322,7 +322,7 @@ export class Database {
       .single()
 
     if (error) {
-      throw new DatabaseError('failed updating object name', status, error, {
+      throw new DatabaseError('更新对象名称失败', status, error, {
         bucketId: bucketId,
         name: sourceKey,
       })
@@ -342,7 +342,7 @@ export class Database {
       .single()
 
     if (error) {
-      throw new DatabaseError('failed finding object', status, error, {
+      throw new DatabaseError('无法找到对象', status, error, {
         bucketId: bucketId,
         name: objectName,
       })
@@ -359,7 +359,7 @@ export class Database {
       .in('name', objectNames)
 
     if (error) {
-      throw new DatabaseError('failed finding objects', status, error, {
+      throw new DatabaseError('找不到对象', status, error, {
         bucketId: bucketId,
       })
     }
@@ -380,7 +380,7 @@ export class Database {
     })
 
     if (error) {
-      throw new DatabaseError('failed listing objects', status, error, {
+      throw new DatabaseError('获取对象列表失败', status, error, {
         bucketId: bucketId,
       })
     }

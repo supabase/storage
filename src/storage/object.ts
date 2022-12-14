@@ -124,7 +124,7 @@ export class ObjectStorage {
     data: Omit<Parameters<Database['upsertObject']>[0], 'bucket_id'>,
     isUpsert = false
   ) {
-    mustBeValidKey(data.name, 'The object name contains invalid characters')
+    mustBeValidKey(data.name, '文件名包含不可用字符')
 
     if (isUpsert) {
       await this.upsertObject({
@@ -146,7 +146,7 @@ export class ObjectStorage {
    * @param data object data
    */
   upsertObject(data: Omit<Parameters<Database['upsertObject']>[0], 'bucket_id'>) {
-    mustBeValidKey(data.name, 'The object name contains invalid characters')
+    mustBeValidKey(data.name, '文件名包含不可用字符')
 
     return this.db.upsertObject({
       bucket_id: this.bucketId,
@@ -225,7 +225,7 @@ export class ObjectStorage {
    * @param metadata
    */
   async updateObjectMetadata(objectName: string, metadata: ObjectMetadata) {
-    mustBeValidKey(objectName, 'The object name contains invalid characters')
+    mustBeValidKey(objectName, '文件名包含不可用字符')
 
     const result = await this.db.updateObjectMetadata(this.bucketId, objectName, metadata)
 
@@ -254,7 +254,7 @@ export class ObjectStorage {
    * @param columns
    */
   async findObject(objectName: string, columns = 'id') {
-    mustBeValidKey(objectName, 'The object name contains invalid characters')
+    mustBeValidKey(objectName, '文件名包含不可用字符')
 
     return this.db.findObject(this.bucketId, objectName, columns)
   }
@@ -275,7 +275,7 @@ export class ObjectStorage {
    * @param owner
    */
   async copyObject(sourceKey: string, destinationKey: string, owner?: string) {
-    mustBeValidKey(destinationKey, 'The destination object name contains invalid characters')
+    mustBeValidKey(destinationKey, '目标文件名包含不可用字符')
 
     const bucketId = this.bucketId
     const originObject = await this.db.findObject(this.bucketId, sourceKey, 'bucket_id, metadata')
@@ -311,7 +311,7 @@ export class ObjectStorage {
    * @param destinationObjectName
    */
   async moveObject(sourceObjectName: string, destinationObjectName: string) {
-    mustBeValidKey(destinationObjectName, 'The destination object name contains invalid characters')
+    mustBeValidKey(destinationObjectName, '目标文件名包含不可用字符')
 
     await this.db.updateObjectName(this.bucketId, sourceObjectName, destinationObjectName)
 

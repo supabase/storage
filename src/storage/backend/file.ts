@@ -16,15 +16,15 @@ interface FileMetadata {
 
 // file metadata attribute keys on different platforms
 const METADATA_ATTR_KEYS = {
-  'darwin': {
+  darwin: {
     'cache-control': 'com.apple.metadata.supabase.cache-control',
     'content-type': 'com.apple.metadata.supabase.content-type',
   },
-  'linux': {
+  linux: {
     'cache-control': 'user.supabase.cache-control',
     'content-type': 'user.supabase.content-type',
   },
-};
+}
 
 /**
  * FileBackend
@@ -189,7 +189,7 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   protected async getFileMetadata(file: string) {
-    const platform = process.platform == 'darwin' ? 'darwin' : 'linux';
+    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
     const [cacheControl, contentType] = await Promise.all([
       this.getMetadataAttr(file, METADATA_ATTR_KEYS[platform]['cache-control']),
       this.getMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type']),
@@ -202,7 +202,7 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   protected async setFileMetadata(file: string, { contentType, cacheControl }: FileMetadata) {
-    const platform = process.platform == 'darwin' ? 'darwin' : 'linux';
+    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
     await Promise.all([
       this.setMetadataAttr(file, METADATA_ATTR_KEYS[platform]['cache-control'], cacheControl),
       this.setMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type'], contentType),

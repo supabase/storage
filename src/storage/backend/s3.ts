@@ -42,6 +42,7 @@ export class S3Backend implements StorageBackendAdapter {
     }
     if (endpoint) {
       params.endpoint = endpoint
+      params.forcePathStyle = true
     }
     this.client = new S3Client(params)
   }

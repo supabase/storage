@@ -27,7 +27,7 @@ import { StorageBackendError } from '../errors'
 export class S3Backend implements StorageBackendAdapter {
   client: S3Client
 
-  constructor(region: string, endpoint?: string | undefined, globalS3ForcePathStyle?: boolean | false) {
+  constructor(region: string, endpoint?: string | undefined, globalS3ForcePathStyle?: boolean) {
     const agent = new https.Agent({
       maxSockets: 50,
       keepAlive: true,

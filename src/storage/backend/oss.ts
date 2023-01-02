@@ -80,10 +80,22 @@ export class OSSBackend implements StorageBackendAdapter {
   ): Promise<ObjectMetadata> {
     try {
       this.client.useBucket(bucketName)
-      await this.client.putStream(key, body)
+      await this.client.putStream(key, body, {
+        timeout: 0,
+        meta: { uid: 0, pid: 0 },
+        callback: {
+          contentType: contentType,
+          body: '',
+          url: '',
+        },
+        mime: contentType,
+        headers: { 'Content-Type': contentType, 'Cache-Control': cacheControl },
+      })
       const data = await this.client.head(key, {
         headers: { 'Content-Type': contentType, 'Cache-Control': cacheControl },
       })
+
+      console.log('=======================', data)
 
       return {
         httpStatusCode: data.res.status || 200,

@@ -35,11 +35,7 @@ export class Uploader {
     )
 
     if (file.isTruncated()) {
-      throw new StorageBackendError(
-        'Payload too large',
-        413,
-        'The object exceeded the maximum allowed size'
-      )
+      throw new StorageBackendError('Payload too large', 413, '文件超过了大小限制')
     }
 
     return objectMetadata

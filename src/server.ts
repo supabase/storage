@@ -39,7 +39,12 @@ const exposeDocs = true
       process.exit(1)
     }
   } else {
-    await runMigrations()
+    try {
+      await runMigrations()
+    } catch (e) {
+      console.error('run migration error: ', e)
+      process.exit(1)
+    }
   }
 
   if (enableQueueEvents) {

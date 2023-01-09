@@ -8,12 +8,12 @@ import {
 } from './generic'
 
 interface Headers {
-  'Content-Length': number
-  'Content-Type': string
-  'Cache-Control': string
-  'Last-Modified': Date
-  'Content-Range': string
-  Etag: string
+  'content-length': number
+  'content-type': string
+  'cache-control': string
+  'last-modified': Date
+  'content-range': string
+  etag: string
 }
 
 export class OSSBackend implements StorageBackendAdapter {
@@ -50,14 +50,14 @@ export class OSSBackend implements StorageBackendAdapter {
 
     return {
       metadata: {
-        cacheControl: (data.res.headers as Headers)['Cache-Control'] || 'no-cache',
-        mimetype: (data.res.headers as Headers)['Content-Type'] || 'application/octa-stream',
-        eTag: (data.res.headers as Headers)['Etag'] || '',
-        lastModified: (data.res.headers as Headers)['Last-Modified'],
-        contentRange: (data.res.headers as Headers)['Content-Range'],
-        contentLength: (data.res.headers as Headers)['Content-Length'] || 0,
+        cacheControl: (data.res.headers as Headers)['cache-control'] || 'no-cache',
+        mimetype: (data.res.headers as Headers)['content-type'] || 'application/octa-stream',
+        eTag: (data.res.headers as Headers)['etag'] || '',
+        lastModified: (data.res.headers as Headers)['last-modified'],
+        contentRange: (data.res.headers as Headers)['content-range'],
+        contentLength: (data.res.headers as Headers)['content-length'] || 0,
         httpStatusCode: data.res.status || 200,
-        size: data.res.size,
+        size: (data.res.headers as Headers)['content-length'],
       },
       body: data.content,
     }
@@ -80,32 +80,20 @@ export class OSSBackend implements StorageBackendAdapter {
   ): Promise<ObjectMetadata> {
     try {
       this.client.useBucket(bucketName)
-      await this.client.putStream(key, body, {
-        timeout: 0,
-        meta: { uid: 0, pid: 0 },
-        callback: {
-          contentType: contentType,
-          body: '',
-          url: '',
-        },
-        mime: contentType,
-        headers: { 'Content-Type': contentType, 'Cache-Control': cacheControl },
-      })
+      await this.client.putStream(key, body)
       const data = await this.client.head(key, {
         headers: { 'Content-Type': contentType, 'Cache-Control': cacheControl },
       })
 
-      console.log('=======================', data)
-
       return {
         httpStatusCode: data.res.status || 200,
-        cacheControl: (data.res.headers as Headers)['Cache-Control'],
-        eTag: (data.res.headers as Headers).Etag,
-        mimetype: (data.res.headers as Headers)['Content-Type'],
-        contentLength: (data.res.headers as Headers)['Content-Length'],
-        lastModified: (data.res.headers as Headers)['Last-Modified'],
-        size: data.res.size,
-        contentRange: (data.res.headers as Headers)['Content-Range'],
+        cacheControl: (data.res.headers as Headers)['cache-control'],
+        eTag: (data.res.headers as Headers).etag,
+        mimetype: (data.res.headers as Headers)['content-type'],
+        contentLength: (data.res.headers as Headers)['content-length'],
+        lastModified: (data.res.headers as Headers)['last-modified'],
+        size: (data.res.headers as Headers)['content-length'],
+        contentRange: (data.res.headers as Headers)['content-range'],
       }
     } catch (err) {
       throw StorageBackendError.fromError(err)
@@ -168,13 +156,13 @@ export class OSSBackend implements StorageBackendAdapter {
     try {
       const data = await this.client.head(key)
       return {
-        cacheControl: (data.res.headers as Headers)['Cache-Control'] || 'no-cache',
-        mimetype: (data.res.headers as Headers)['Content-Type'] || 'application/octa-stream',
-        eTag: (data.res.headers as Headers)['Etag'] || '',
-        lastModified: (data.res.headers as Headers)['Last-Modified'],
-        contentLength: (data.res.headers as Headers)['Content-Length'] || 0,
+        cacheControl: (data.res.headers as Headers)['cache-control'] || 'no-cache',
+        mimetype: (data.res.headers as Headers)['content-type'] || 'application/octa-stream',
+        eTag: (data.res.headers as Headers)['etag'] || '',
+        lastModified: (data.res.headers as Headers)['last-modified'],
+        contentLength: (data.res.headers as Headers)['content-length'] || 0,
         httpStatusCode: data.res.status || 200,
-        size: data.res.size,
+        size: (data.res.headers as Headers)['content-length'],
       }
     } catch (e) {
       throw StorageBackendError.fromError(e)

@@ -21,7 +21,6 @@ describe('Extra headers should be forwarded to postgrest client', () => {
     app.register(postgrest)
 
     app.get('/test', (req, reply) => {
-      console.log(req.jwt)
       reply.send('ok')
     })
 

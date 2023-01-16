@@ -14,7 +14,7 @@ export interface TransformOptions {
   width?: number
   height?: number
   resize?: 'cover' | 'contain' | 'fill'
-  format?: 'auto'
+  format?: 'origin'
 }
 
 const { imgLimits, imgProxyURL, imgProxyRequestTimeout } = getConfig()
@@ -129,7 +129,7 @@ export class ImageRenderer extends Renderer {
 
     try {
       const acceptHeader =
-        this.transformOptions?.format === 'auto' ? request.headers['accept'] : undefined
+        this.transformOptions?.format !== 'origin' ? request.headers['accept'] : undefined
 
       const response = await this.getClient().get(url.join('/'), {
         responseType: 'stream',

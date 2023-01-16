@@ -49,3 +49,4 @@ services:
     environment:
       - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/images
       - IMGPROXY_USE_ETAG=true
+      - IMGPROXY_ENABLE_WEBP_DETECTION=true

@@ -15,6 +15,7 @@ export interface TransformOptions {
   height?: number
   resize?: 'cover' | 'contain' | 'fill'
   format?: 'origin'
+  quality?: number
 }
 
 const { imgLimits, imgProxyURL, imgProxyRequestTimeout } = getConfig()
@@ -98,6 +99,9 @@ export class ImageRenderer extends Renderer {
           break
         case 'format':
           all.format = value
+          break
+        case 'quality':
+          all.quality = parseInt(value, 10)
           break
       }
       return all
@@ -184,6 +188,10 @@ export class ImageRenderer extends Renderer {
 
     if (options.width || options.height) {
       segments.push(`resizing_type:${this.formatResizeType(options.resize)}`)
+    }
+
+    if (options.quality) {
+      segments.push(`quality:${options.quality}`)
     }
 
     return segments

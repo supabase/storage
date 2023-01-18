@@ -13,12 +13,13 @@ export default async function routes(fastify: FastifyInstance) {
     return
   }
 
-  if (enableRateLimiter) {
-    fastify.register(rateLimiter)
-  }
-
   fastify.register(async function authorizationContext(fastify) {
     fastify.register(requireTenantFeature('imageTransformation'))
+
+    if (enableRateLimiter) {
+      fastify.register(rateLimiter)
+    }
+
     fastify.register(jwt)
     fastify.register(postgrest)
     fastify.register(superUserPostgrest)
@@ -28,6 +29,11 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.register(async (fastify) => {
     fastify.register(requireTenantFeature('imageTransformation'))
+
+    if (enableRateLimiter) {
+      fastify.register(rateLimiter)
+    }
+
     fastify.register(superUserPostgrest)
     fastify.register(storage)
     fastify.register(renderSignedImage)

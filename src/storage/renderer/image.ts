@@ -14,7 +14,7 @@ export interface TransformOptions {
   width?: number
   height?: number
   resize?: 'cover' | 'contain' | 'fill'
-  format?: 'origin'
+  format?: 'origin' | 'avif'
   quality?: number
 }
 
@@ -192,6 +192,10 @@ export class ImageRenderer extends Renderer {
 
     if (options.quality) {
       segments.push(`quality:${options.quality}`)
+    }
+
+    if (options.format && options.format !== 'origin') {
+      segments.push(`format:${options.format}`)
     }
 
     return segments

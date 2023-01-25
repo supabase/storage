@@ -14,6 +14,8 @@ export interface TransformOptions {
   width?: number
   height?: number
   resize?: 'cover' | 'contain' | 'fill'
+  format?: 'origin' | 'avif'
+  quality?: number
 }
 
 const { imgLimits, imgProxyURL, imgProxyRequestTimeout } = getConfig()
@@ -94,6 +96,13 @@ export class ImageRenderer extends Renderer {
           break
         case 'resize':
           all.resize = value
+          break
+        case 'format':
+          all.format = value
+          break
+        case 'quality':
+          all.quality = parseInt(value, 10)
+          break
       }
       return all
     }, {} as TransformOptions)
@@ -123,8 +132,16 @@ export class ImageRenderer extends Renderer {
     ]
 
     try {
+      const acceptHeader =
+        this.transformOptions?.format !== 'origin' ? request.headers['accept'] : undefined
+
       const response = await this.getClient().get(url.join('/'), {
         responseType: 'stream',
+        headers: acceptHeader
+          ? {
+              accept: acceptHeader,
+            }
+          : undefined,
       })
 
       const contentLength = parseInt(response.headers['content-length'], 10)
@@ -135,14 +152,13 @@ export class ImageRenderer extends Renderer {
       return {
         body: response.data,
         transformations,
-        originalEtag: headObj.eTag,
         metadata: {
           httpStatusCode: response.status,
           size: contentLength,
           contentLength: contentLength,
           lastModified: lastModified,
-          eTag: response.headers['etag'],
-          cacheControl: response.headers['cache-control'],
+          eTag: headObj.eTag,
+          cacheControl: headObj.cacheControl,
           mimetype: response.headers['content-type'],
         } as ObjectMetadata,
       }
@@ -172,6 +188,14 @@ export class ImageRenderer extends Renderer {
 
     if (options.width || options.height) {
       segments.push(`resizing_type:${this.formatResizeType(options.resize)}`)
+    }
+
+    if (options.quality) {
+      segments.push(`quality:${options.quality}`)
+    }
+
+    if (options.format && options.format !== 'origin') {
+      segments.push(`format:${options.format}`)
     }
 
     return segments

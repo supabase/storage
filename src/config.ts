@@ -10,6 +10,7 @@ type StorageConfigType = {
   fileStoragePath?: string
   globalS3Bucket: string
   globalS3Endpoint?: string
+  globalS3ForcePathStyle?: boolean
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: string
@@ -82,6 +83,7 @@ export function getConfig(): StorageConfigType {
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
     globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
     globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
+    globalS3ForcePathStyle: getOptionalConfigFromEnv('GLOBAL_S3_FORCE_PATH_STYLE') === 'true',
     isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
     jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',

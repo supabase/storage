@@ -66,13 +66,18 @@ export default async function routes(fastify: FastifyInstance) {
       const urlPath = request.url.split('?').shift()
       const imageTransformationEnabled = await isImageTransformationEnabled(request.tenantId)
 
+      const transformationOptions = imageTransformationEnabled
+        ? {
+            transformations: ImageRenderer.applyTransformation(request.body.transform || {}).join(
+              ','
+            ),
+            format: request.body.transform?.format || '',
+          }
+        : undefined
+
       const signedURL = await request.storage
         .from(bucketName)
-        .signObjectUrl(objectName, urlPath as string, expiresIn, {
-          transformations: imageTransformationEnabled
-            ? ImageRenderer.applyTransformation(request.body.transform || {}).join(',')
-            : '',
-        })
+        .signObjectUrl(objectName, urlPath as string, expiresIn, transformationOptions)
 
       return response.status(200).send({ signedURL })
     }

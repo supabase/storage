@@ -13,7 +13,6 @@ export interface AssetResponse {
   body?: Readable | ReadableStream<any> | Blob | Buffer
   metadata: ObjectMetadata
   transformations?: string[]
-  originalEtag?: string
 }
 
 /**
@@ -76,10 +75,6 @@ export abstract class Renderer {
 
     if (data.transformations && data.transformations.length > 0) {
       response.header('X-Transformations', data.transformations.join(','))
-    }
-
-    if (data.originalEtag) {
-      response.header('x-origin-etag', data.originalEtag)
     }
 
     this.handleDownload(response, options.download)

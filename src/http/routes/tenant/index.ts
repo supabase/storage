@@ -57,7 +57,7 @@ interface tenantDBInterface {
   jwt_secret: string
   service_key: string
   file_size_limit?: number
-  feature_image_transformation: boolean
+  feature_image_transformation?: boolean
 }
 
 export default async function routes(fastify: FastifyInstance) {
@@ -170,11 +170,14 @@ export default async function routes(fastify: FastifyInstance) {
       database_url: encrypt(databaseUrl),
       jwt_secret: encrypt(jwtSecret),
       service_key: encrypt(serviceKey),
-      feature_image_transformation: features?.imageTransformation?.enabled ?? false,
     }
 
     if (fileSizeLimit) {
       tenantInfo.file_size_limit = fileSizeLimit
+    }
+
+    if (typeof features?.imageTransformation?.enabled !== 'undefined') {
+      tenantInfo.feature_image_transformation = features?.imageTransformation?.enabled
     }
 
     await knex('tenants').insert(tenantInfo).onConflict('id').merge()

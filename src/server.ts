@@ -60,4 +60,14 @@ const exposeDocs = true
     }
     console.log(`Server listening at ${address}`)
   })
+
+  process.on('SIGTERM', async () => {
+    try {
+      await app.close()
+      process.exit(0)
+    } catch (e) {
+      logger.error('shutdown error', { error: e })
+      process.exit(1)
+    }
+  })
 })()

@@ -386,7 +386,13 @@ export class ObjectStorage {
     metadata?: Record<string, string>
   ) {
     await this.findObject(objectName)
-    metadata = metadata ?? {}
+
+    metadata = Object.keys(metadata || {}).reduce((all, key) => {
+      if (!all[key]) {
+        delete all[key]
+      }
+      return all
+    }, metadata || {})
 
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(3).join('/'))

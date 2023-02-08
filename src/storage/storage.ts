@@ -2,7 +2,7 @@ import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters } from './database'
 import { StorageBackendError } from './errors'
 import { ImageRenderer, AssetRenderer, HeadRenderer } from './renderer'
-import { mustBeValidBucketName } from './limits'
+import { getFileSizeLimit, mustBeValidBucketName } from './limits'
 import { Uploader } from './uploader'
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
@@ -81,19 +81,29 @@ export class Storage {
    * Creates a bucket
    * @param data
    */
-  createBucket(data: Parameters<Database['createBucket']>[0]) {
+  async createBucket(data: Parameters<Database['createBucket']>[0]) {
     mustBeValidBucketName(data.name, 'Bucket name invalid')
+
+    if (data.max_file_size_kb) {
+      await this.validateMaxSizeLimit(data.max_file_size_kb)
+    }
+
     return this.db.createBucket(data)
   }
 
   /**
    * Updates a bucket
    * @param id
-   * @param isPublic
+   * @param data
    */
-  updateBucket(id: string, isPublic: boolean | undefined) {
+  async updateBucket(id: string, data: Parameters<Database['updateBucket']>[1]) {
     mustBeValidBucketName(id, 'Bucket name invalid')
-    return this.db.updateBucket(id, isPublic)
+
+    if (data.max_file_size_kb) {
+      await this.validateMaxSizeLimit(data.max_file_size_kb)
+    }
+
+    return this.db.updateBucket(id, data)
   }
 
   /**
@@ -168,6 +178,19 @@ export class Storage {
           )}, you may have SELECT but not DELETE permissions`
         )
       }
+    }
+  }
+
+  protected async validateMaxSizeLimit(maxFileLimit: number) {
+    const globalMaxLimit = await getFileSizeLimit(this.db.tenantId)
+    const globalMaxLimitKb = globalMaxLimit * 1000
+
+    if (maxFileLimit > globalMaxLimitKb) {
+      throw new StorageBackendError(
+        'max_file_size',
+        422,
+        'the requested max_file_size exceed the global limit'
+      )
     }
   }
 }

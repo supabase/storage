@@ -6,6 +6,8 @@ import { StorageBackendError } from './errors'
 
 interface UploaderOptions {
   key: string
+  maxFileSizeKb?: number
+  allowedMimeTypes?: string[]
 }
 
 const { globalS3Bucket } = getConfig()
@@ -24,7 +26,13 @@ export class Uploader {
    * @param options
    */
   async upload(request: FastifyRequest, options: UploaderOptions) {
-    const file = await this.incomingFileInfo(request)
+    const file = await this.incomingFileInfo(request, options)
+
+    if (options.allowedMimeTypes && options.allowedMimeTypes.length > 0) {
+      if (!options.allowedMimeTypes.includes(file.mimeType)) {
+        throw new StorageBackendError('invalid_mime_type', 422, 'mime type not supported')
+      }
+    }
 
     const objectMetadata = await this.backend.uploadObject(
       globalS3Bucket,
@@ -45,9 +53,18 @@ export class Uploader {
     return objectMetadata
   }
 
-  protected async incomingFileInfo(request: FastifyRequest) {
+  protected async incomingFileInfo(
+    request: FastifyRequest,
+    options?: Pick<UploaderOptions, 'maxFileSizeKb'>
+  ) {
     const contentType = request.headers['content-type']
-    const fileSizeLimit = await getFileSizeLimit(request.tenantId)
+    let fileSizeLimit = await getFileSizeLimit(request.tenantId)
+
+    if (options?.maxFileSizeKb) {
+      if (options.maxFileSizeKb * 1000 <= fileSizeLimit) {
+        fileSizeLimit = options.maxFileSizeKb * 1000
+      }
+    }
 
     let body: NodeJS.ReadableStream
     let mimeType: string

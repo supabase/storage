@@ -16,6 +16,8 @@ export const logger = pino({
     res(reply) {
       return {
         statusCode: reply.statusCode,
+        contentLength: reply.headers['content-length'],
+        contentType: reply.headers['content-type'],
       }
     },
     req(request) {

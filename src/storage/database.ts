@@ -53,7 +53,12 @@ export class Database {
     return new Database(this.options.superAdmin, this.options)
   }
 
-  async createBucket(data: Pick<Bucket, 'id' | 'name' | 'public' | 'owner'>) {
+  async createBucket(
+    data: Pick<
+      Bucket,
+      'id' | 'name' | 'public' | 'owner' | 'max_file_size_kb' | 'allowed_mime_types'
+    >
+  ) {
     const {
       data: results,
       error,
@@ -67,6 +72,8 @@ export class Database {
             name: data.name,
             owner: data.owner,
             public: data.public,
+            allowed_mime_types: data.allowed_mime_types,
+            max_file_size_kb: data.max_file_size_kb,
           },
         ],
         {
@@ -157,11 +164,16 @@ export class Database {
     return data as Bucket[]
   }
 
-  async updateBucket(bucketId: string, isPublic?: boolean) {
+  async updateBucket(
+    bucketId: string,
+    fields: Pick<Bucket, 'public' | 'max_file_size_kb' | 'allowed_mime_types'>
+  ) {
     const { error, status, data } = await this.postgrest
       .from<Bucket>('buckets')
       .update({
-        public: isPublic,
+        public: fields.public,
+        max_file_size_kb: fields.max_file_size_kb,
+        allowed_mime_types: fields.allowed_mime_types,
       })
       .match({ id: bucketId })
       .single()

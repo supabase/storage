@@ -9,6 +9,8 @@ const createBucketBodySchema = {
     name: { type: 'string', examples: ['avatars'] },
     id: { type: 'string', examples: ['avatars'] },
     public: { type: 'boolean', examples: [false] },
+    max_file_size_kb: { type: 'integer', minimum: 1 },
+    allowed_mime_types: { type: 'array', items: { type: 'string' } },
   },
   required: ['name'],
 } as const

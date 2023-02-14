@@ -9,8 +9,9 @@ import {
   S3ClientConfig,
 } from '@aws-sdk/client-s3'
 import https from 'https'
+import http from 'http'
 import { Upload } from '@aws-sdk/lib-storage'
-import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
+import { NodeHttp2Handler, NodeHttpHandler } from '@aws-sdk/node-http-handler'
 import {
   StorageBackendAdapter,
   BrowserCacheHeaders,
@@ -39,6 +40,27 @@ export class S3Backend implements StorageBackendAdapter {
         httpsAgent: agent,
         socketTimeout: 3000,
       }),
+    }
+    if (process.env.SP_DISABLE_HTTPS) {
+      const httpAgent = new http.Agent({
+        maxSockets: 50,
+        keepAlive: true,
+      })
+      params['requestHandler'] = new NodeHttpHandler({
+        httpAgent,
+        socketTimeout: 3000
+      })
+      params['tls'] = false
+      console.warn('disabling TLS for http1')
+    }
+    if (process.env.SP_USE_HTTP2) {
+      params['requestHandler'] = new NodeHttp2Handler()
+      console.warn('using http2')
+    }
+    if (process.env.SP_HTTP2_DISABLE_TLS) {
+      params['requestHandler'] = new NodeHttp2Handler()
+      params['tls'] = false
+      console.warn('disabling TLS for http2')
     }
     if (endpoint) {
       params.endpoint = endpoint

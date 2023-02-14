@@ -34,7 +34,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       const results = await request.storage.findBucket(
         bucketId,
-        'id, name, owner, public, created_at, updated_at'
+        'id, name, owner, public, created_at, updated_at, max_file_size_kb, allowed_mime_types'
       )
 
       request.log.info({ results }, 'results')

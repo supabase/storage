@@ -183,7 +183,7 @@ export class Storage {
 
   protected async validateMaxSizeLimit(maxFileLimit: number) {
     const globalMaxLimit = await getFileSizeLimit(this.db.tenantId)
-    const globalMaxLimitKb = globalMaxLimit * 1000
+    const globalMaxLimitKb = globalMaxLimit / 1000
 
     if (maxFileLimit > globalMaxLimitKb) {
       throw new StorageBackendError(

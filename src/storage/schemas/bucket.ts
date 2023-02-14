@@ -9,7 +9,7 @@ export const bucketSchema = {
     owner: { type: 'string' },
     public: { type: 'boolean' },
     max_file_size_kb: { type: 'integer' },
-    allowed_mime_types: { type: 'array', items: { type: 'string' } },
+    allowed_mime_types: { type: ['array', 'null'], items: { type: 'string' } },
     created_at: { type: 'string' },
     updated_at: { type: 'string' },
   },

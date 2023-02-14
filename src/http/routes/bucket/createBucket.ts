@@ -41,13 +41,21 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const owner = request.owner
 
-      const { name: bucketName, public: isPublic, id } = request.body
+      const {
+        name: bucketName,
+        public: isPublic,
+        id,
+        allowed_mime_types,
+        max_file_size_kb,
+      } = request.body
 
       const bucket = await request.storage.createBucket({
         id: id ?? bucketName,
         name: bucketName,
         owner,
         public: isPublic ?? false,
+        max_file_size_kb,
+        allowed_mime_types,
       })
 
       request.log.info({ results: bucket }, 'results')

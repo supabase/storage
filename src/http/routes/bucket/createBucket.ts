@@ -9,7 +9,7 @@ const createBucketBodySchema = {
     name: { type: 'string', examples: ['avatars'] },
     id: { type: 'string', examples: ['avatars'] },
     public: { type: 'boolean', examples: [false] },
-    max_file_size_kb: { type: 'integer', minimum: 1 },
+    file_size_limit: { anyOf: [{ type: 'string' }, { type: 'integer' }] },
     allowed_mime_types: { type: 'array', items: { type: 'string' } },
   },
   required: ['name'],
@@ -29,6 +29,7 @@ interface createBucketRequestInterface extends AuthenticatedRequest {
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Create a bucket'
   const schema = createDefaultSchema(successResponseSchema, {
+    allowUnionTypes: true,
     body: createBucketBodySchema,
     summary,
     tags: ['bucket'],
@@ -46,7 +47,7 @@ export default async function routes(fastify: FastifyInstance) {
         public: isPublic,
         id,
         allowed_mime_types,
-        max_file_size_kb,
+        file_size_limit,
       } = request.body
 
       const bucket = await request.storage.createBucket({
@@ -54,8 +55,8 @@ export default async function routes(fastify: FastifyInstance) {
         name: bucketName,
         owner,
         public: isPublic ?? false,
-        max_file_size_kb,
-        allowed_mime_types,
+        fileSizeLimit: file_size_limit,
+        allowedMimeTypes: allowed_mime_types,
       })
 
       request.log.info({ results: bucket }, 'results')

@@ -76,3 +76,36 @@ export function mustBeValidBucketName(key: string, message: string) {
     throw new StorageBackendError('Invalid Input', 400, message)
   }
 }
+
+export function parseFileSizeToBytes(valueWithUnit: string) {
+  const valuesRegex = /(^[0-9]+(?:\.[0-9]+)?)(gb|mb|kb|b)$/i
+
+  if (!valuesRegex.test(valueWithUnit)) {
+    throw new StorageBackendError(
+      'file_size_limit',
+      422,
+      'the requested file_size_limit uses an invalid format, use 20GB / 20MB / 30KB / 3B'
+    )
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  const [, valueS, unit] = valueWithUnit.match(valuesRegex)!
+  const value = +parseFloat(valueS).toPrecision(3)
+
+  switch (unit.toUpperCase()) {
+    case 'GB':
+      return value * 1e9
+    case 'MB':
+      return value * 1e6
+    case 'KB':
+      return value * 1000
+    case 'B':
+      return value
+    default:
+      throw new StorageBackendError(
+        'file_size_limit',
+        422,
+        'the requested file_size_limit unit is not supported, use GB/MB/KB/B'
+      )
+  }
+}

@@ -56,7 +56,7 @@ export class Database {
   async createBucket(
     data: Pick<
       Bucket,
-      'id' | 'name' | 'public' | 'owner' | 'max_file_size_kb' | 'allowed_mime_types'
+      'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types'
     >
   ) {
     const {
@@ -73,7 +73,7 @@ export class Database {
             owner: data.owner,
             public: data.public,
             allowed_mime_types: data.allowed_mime_types,
-            max_file_size_kb: data.max_file_size_kb,
+            file_size_limit: data.file_size_limit,
           },
         ],
         {
@@ -166,14 +166,14 @@ export class Database {
 
   async updateBucket(
     bucketId: string,
-    fields: Pick<Bucket, 'public' | 'max_file_size_kb' | 'allowed_mime_types'>
+    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
   ) {
     const { error, status, data } = await this.postgrest
       .from<Bucket>('buckets')
       .update({
         public: fields.public,
-        max_file_size_kb: fields.max_file_size_kb,
-        allowed_mime_types: fields.allowed_mime_types,
+        file_size_limit: fields.file_size_limit,
+        allowed_mime_types: fields.allowed_mime_types === null ? [] : fields.allowed_mime_types,
       })
       .match({ id: bucketId })
       .single()

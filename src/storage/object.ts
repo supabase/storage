@@ -42,7 +42,7 @@ export class ObjectStorage {
   async uploadNewObject(request: FastifyRequest, options: UploadObjectOptions) {
     const bucket = await this.db
       .asSuperUser()
-      .findBucketById(this.bucketId, 'id, max_file_size_kb, allowed_mime_types')
+      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
 
     await this.createObject(
       {
@@ -59,7 +59,7 @@ export class ObjectStorage {
       const uploader = new Uploader(this.backend)
       const objectMetadata = await uploader.upload(request, {
         key: s3Key,
-        maxFileSizeKb: bucket.max_file_size_kb,
+        fileSizeLimit: bucket.file_size_limit,
         allowedMimeTypes: bucket.allowed_mime_types,
       })
 
@@ -94,7 +94,7 @@ export class ObjectStorage {
   ) {
     const bucket = await this.db
       .asSuperUser()
-      .findBucketById(this.bucketId, 'id, max_file_size_kb, allowed_mime_types')
+      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
 
     await this.updateObjectOwner(options.objectName, options.owner)
 
@@ -105,7 +105,7 @@ export class ObjectStorage {
       const uploader = new Uploader(this.backend)
       const objectMetadata = await uploader.upload(request, {
         key: s3Key,
-        maxFileSizeKb: bucket.max_file_size_kb,
+        fileSizeLimit: bucket.file_size_limit,
         allowedMimeTypes: bucket.allowed_mime_types,
       })
 

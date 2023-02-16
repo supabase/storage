@@ -1,8 +1,8 @@
 import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters } from './database'
 import { StorageBackendError } from './errors'
-import { ImageRenderer, AssetRenderer, HeadRenderer } from './renderer'
-import { getFileSizeLimit, mustBeValidBucketName } from './limits'
+import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
+import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from './limits'
 import { Uploader } from './uploader'
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
@@ -81,14 +81,26 @@ export class Storage {
    * Creates a bucket
    * @param data
    */
-  async createBucket(data: Parameters<Database['createBucket']>[0]) {
+  async createBucket(
+    data: Omit<
+      Parameters<Database['createBucket']>[0],
+      'file_size_limit' | 'allowed_mime_types'
+    > & {
+      fileSizeLimit?: number | string | null
+      allowedMimeTypes?: null | string[]
+    }
+  ) {
     mustBeValidBucketName(data.name, 'Bucket name invalid')
 
-    if (data.max_file_size_kb) {
-      await this.validateMaxSizeLimit(data.max_file_size_kb)
+    const bucketData: Parameters<Database['createBucket']>[0] = data
+
+    if (data.fileSizeLimit) {
+      bucketData.file_size_limit = await this.validateMaxSizeLimit(data.fileSizeLimit)
     }
 
-    return this.db.createBucket(data)
+    bucketData.allowed_mime_types = data.allowedMimeTypes
+
+    return this.db.createBucket(bucketData)
   }
 
   /**
@@ -96,14 +108,27 @@ export class Storage {
    * @param id
    * @param data
    */
-  async updateBucket(id: string, data: Parameters<Database['updateBucket']>[1]) {
+  async updateBucket(
+    id: string,
+    data: Omit<
+      Parameters<Database['updateBucket']>[1],
+      'file_size_limit' | 'allowed_mime_types'
+    > & {
+      fileSizeLimit?: number | string | null
+      allowedMimeTypes?: null | string[]
+    }
+  ) {
     mustBeValidBucketName(id, 'Bucket name invalid')
 
-    if (data.max_file_size_kb) {
-      await this.validateMaxSizeLimit(data.max_file_size_kb)
+    const bucketData: Parameters<Database['updateBucket']>[1] = data
+
+    if (data.fileSizeLimit) {
+      bucketData.file_size_limit = await this.validateMaxSizeLimit(data.fileSizeLimit)
     }
 
-    return this.db.updateBucket(id, data)
+    bucketData.allowed_mime_types = data.allowedMimeTypes
+
+    return this.db.updateBucket(id, bucketData)
   }
 
   /**
@@ -181,16 +206,21 @@ export class Storage {
     }
   }
 
-  protected async validateMaxSizeLimit(maxFileLimit: number) {
-    const globalMaxLimit = await getFileSizeLimit(this.db.tenantId)
-    const globalMaxLimitKb = globalMaxLimit / 1000
+  protected async validateMaxSizeLimit(maxFileLimit: number | string) {
+    if (typeof maxFileLimit === 'string') {
+      maxFileLimit = parseFileSizeToBytes(maxFileLimit)
+    }
 
-    if (maxFileLimit > globalMaxLimitKb) {
+    const globalMaxLimit = await getFileSizeLimit(this.db.tenantId)
+
+    if (maxFileLimit > globalMaxLimit) {
       throw new StorageBackendError(
         'max_file_size',
         422,
         'the requested max_file_size exceed the global limit'
       )
     }
+
+    return maxFileLimit
   }
 }

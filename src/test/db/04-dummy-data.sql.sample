@@ -5,7 +5,7 @@ INSERT INTO "auth"."users" ("instance_id", "id", "aud", "role", "email", "encryp
 ('00000000-0000-0000-0000-000000000000', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', 'authenticated', 'authenticated', 'inian+admin@supabase.io', '', NULL, '2021-02-17 04:40:42.901743+00', '3EG99GjT_e3NC4eGEBXOjw', '2021-02-17 04:40:42.901743+00', '', NULL, '', '', NULL, NULL, '{"provider": "email"}', 'null', 'f', '2021-02-17 04:40:42.890632+00', '2021-02-17 04:40:42.890637+00');
 
 -- insert buckets
-INSERT INTO "storage"."buckets" ("id", "name", "owner", "created_at", "updated_at", "public", "max_file_size_kb", "allowed_mime_types") VALUES
+INSERT INTO "storage"."buckets" ("id", "name", "owner", "created_at", "updated_at", "public", "file_size_limit", "allowed_mime_types") VALUES
 ('bucket2', 'bucket2', '4d56e902-f0a0-4662-8448-a4d9e643c142', '2021-02-17 04:43:32.770206+00', '2021-02-17 04:43:32.770206+00', false, NULL, NULL),
 ('bucket3', 'bucket3', '4d56e902-f0a0-4662-8448-a4d9e643c142', '2021-02-17 04:43:32.770206+00', '2021-02-17 04:43:32.770206+00', false, NULL, NULL),
 ('bucket4', 'bucket4', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-25 09:23:01.58385+00', '2021-02-25 09:23:01.58385+00', false, NULL, NULL),
@@ -14,7 +14,7 @@ INSERT INTO "storage"."buckets" ("id", "name", "owner", "created_at", "updated_a
 ('public-bucket', 'public-bucket', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-27 03:04:25.6386+00', '2021-02-27 03:04:25.6386+00', true, NULL, NULL),
 ('public-bucket-2', 'public-bucket-2', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-27 03:04:25.6386+00', '2021-02-27 03:04:25.6386+00', true, NULL, NULL),
 ('public-limit-max-size', 'public-limit-max-size', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-27 03:04:25.6386+00', '2021-02-27 03:04:25.6386+00', true, 10, NULL),
-('public-limit-max-size-2', 'public-limit-max-size-2', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-27 03:04:25.6386+00', '2021-02-27 03:04:25.6386+00', true, 3746, NULL),
+('public-limit-max-size-2', 'public-limit-max-size-2', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-27 03:04:25.6386+00', '2021-02-27 03:04:25.6386+00', true, 29526, NULL),
 ('public-limit-mime-types', 'public-limit-mime-types', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-27 03:04:25.6386+00', '2021-02-27 03:04:25.6386+00', true, NULL, '{"image/jpeg"}');
 
 

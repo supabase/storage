@@ -6,8 +6,8 @@ import { StorageBackendError } from './errors'
 
 interface UploaderOptions {
   key: string
-  maxFileSizeKb?: number
-  allowedMimeTypes?: string[]
+  fileSizeLimit?: number
+  allowedMimeTypes?: string[] | null
 }
 
 const { globalS3Bucket } = getConfig()
@@ -55,14 +55,14 @@ export class Uploader {
 
   protected async incomingFileInfo(
     request: FastifyRequest,
-    options?: Pick<UploaderOptions, 'maxFileSizeKb'>
+    options?: Pick<UploaderOptions, 'fileSizeLimit'>
   ) {
     const contentType = request.headers['content-type']
     let fileSizeLimit = await getFileSizeLimit(request.tenantId)
 
-    if (options?.maxFileSizeKb) {
-      if (options.maxFileSizeKb * 1000 <= fileSizeLimit) {
-        fileSizeLimit = options.maxFileSizeKb * 1000
+    if (options?.fileSizeLimit) {
+      if (options.fileSizeLimit <= fileSizeLimit) {
+        fileSizeLimit = options.fileSizeLimit
       }
     }
 

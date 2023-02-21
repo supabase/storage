@@ -7,6 +7,8 @@ const updateBucketBodySchema = {
   type: 'object',
   properties: {
     public: { type: 'boolean', examples: [false] },
+    file_size_limit: { anyOf: [{ type: 'string' }, { type: 'integer' }] },
+    allowed_mime_types: { type: 'array', items: { type: 'string' } },
   },
 } as const
 const updateBucketParamsSchema = {
@@ -44,9 +46,13 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketId } = request.params
 
-      const { public: isPublic } = request.body
+      const { public: isPublic, file_size_limit, allowed_mime_types } = request.body
 
-      await request.storage.updateBucket(bucketId, isPublic)
+      await request.storage.updateBucket(bucketId, {
+        public: isPublic,
+        fileSizeLimit: file_size_limit,
+        allowedMimeTypes: allowed_mime_types?.filter((mime) => mime),
+      })
 
       return response.status(200).send(createResponse('Successfully updated'))
     }

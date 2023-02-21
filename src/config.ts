@@ -56,7 +56,10 @@ type StorageConfigType = {
   enableRateLimiter: boolean
   rateLimiterDriver: 'memory' | 'redis' | string
   rateLimiterRedisUrl?: string
+  rateLimiterSkipOnError?: boolean
   rateLimiterRenderPathMaxReqSec: number
+  rateLimiterRedisConnectTimeout: number
+  rateLimiterRedisCommandTimeout: number
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -147,10 +150,19 @@ export function getConfig(): StorageConfigType {
     port: Number(getOptionalConfigFromEnv('PORT')) || 5000,
     adminPort: Number(getOptionalConfigFromEnv('ADMIN_PORT')) || 5001,
     enableRateLimiter: getOptionalConfigFromEnv('ENABLE_RATE_LIMITER') === 'true',
+    rateLimiterSkipOnError: getOptionalConfigFromEnv('RATE_LIMITER_SKIP_ON_ERROR') === 'true',
     rateLimiterDriver: getOptionalConfigFromEnv('RATE_LIMITER_DRIVER') || 'memory',
     rateLimiterRedisUrl: getOptionalConfigFromEnv('RATE_LIMITER_REDIS_URL'),
     rateLimiterRenderPathMaxReqSec: parseInt(
       getOptionalConfigFromEnv('RATE_LIMITER_RENDER_PATH_MAX_REQ_SEC') || '5',
+      10
+    ),
+    rateLimiterRedisConnectTimeout: parseInt(
+      getOptionalConfigFromEnv('RATE_LIMITER_REDIS_CONNECT_TIMEOUT') || '2',
+      10
+    ),
+    rateLimiterRedisCommandTimeout: parseInt(
+      getOptionalConfigFromEnv('RATE_LIMITER_REDIS_COMMAND_TIMEOUT') || '2',
       10
     ),
   }

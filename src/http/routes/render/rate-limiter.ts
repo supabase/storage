@@ -4,7 +4,14 @@ import fastifyRateLimit from '@fastify/rate-limit'
 import Redis from 'ioredis'
 import { getConfig } from '../../../config'
 
-const { rateLimiterDriver, rateLimiterRedisUrl, rateLimiterRenderPathMaxReqSec } = getConfig()
+const {
+  rateLimiterDriver,
+  rateLimiterRedisUrl,
+  rateLimiterSkipOnError,
+  rateLimiterRedisConnectTimeout,
+  rateLimiterRedisCommandTimeout,
+  rateLimiterRenderPathMaxReqSec,
+} = getConfig()
 
 export const rateLimiter = fp((fastify: FastifyInstance, ops: any, done: () => void) => {
   fastify.register(fastifyRateLimit, {
@@ -13,7 +20,14 @@ export const rateLimiter = fp((fastify: FastifyInstance, ops: any, done: () => v
     timeWindow: 4 * 1000, //4s
     continueExceeding: true,
     nameSpace: 'image-transformation-ratelimit-',
-    redis: rateLimiterDriver === 'redis' ? new Redis(rateLimiterRedisUrl || '') : undefined,
+    skipOnError: rateLimiterSkipOnError,
+    redis:
+      rateLimiterDriver === 'redis'
+        ? new Redis(rateLimiterRedisUrl || '', {
+            connectTimeout: rateLimiterRedisConnectTimeout * 1000,
+            commandTimeout: rateLimiterRedisCommandTimeout * 1000,
+          })
+        : undefined,
     keyGenerator: function (request) {
       const tenant = request.tenantId
       const ip = request.headers['x-real-ip'] || request.headers['x-client-ip'] || request.ip

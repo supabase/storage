@@ -68,9 +68,10 @@ export default async function routes(fastify: FastifyInstance) {
 
       const transformationOptions = imageTransformationEnabled
         ? {
-            transformations: ImageRenderer.applyTransformation(request.body.transform || {}).join(
-              ','
-            ),
+            transformations: ImageRenderer.applyTransformation(
+              request.body.transform || {},
+              true
+            ).join(','),
             format: request.body.transform?.format || '',
           }
         : undefined

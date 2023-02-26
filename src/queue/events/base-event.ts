@@ -1,9 +1,9 @@
 import { Queue } from '../queue'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { getServiceKey } from '../../database/tenant'
-import { getPostgrestClient } from '../../database'
+import { getPostgresConnection } from '../../database'
 import { Storage } from '../../storage'
-import { Database } from '../../storage/database'
+import { StorageKnexDB } from '../../storage/database'
 import { createStorageBackend } from '../../storage/backend'
 import { getConfig } from '../../config'
 
@@ -17,14 +17,13 @@ export interface BasePayload {
 
 export type StaticThis<T> = { new (...args: any): T }
 
-const { enableQueueEvents } = getConfig()
+const { enableQueueEvents, isMultitenant, serviceKey } = getConfig()
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   public static readonly version: string = 'v1'
+  protected static queueName = ''
 
   constructor(public readonly payload: T & BasePayload) {}
-
-  protected static queueName = ''
 
   static eventName() {
     return this.name
@@ -46,7 +45,13 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     return {}
   }
 
-  static send<T extends BaseEvent<any>>(this: StaticThis<T>, payload: T['payload']) {
+  static send<T extends BaseEvent<any>>(
+    this: StaticThis<T>,
+    payload: Omit<T['payload'], '$version'>
+  ) {
+    if (!payload.$version) {
+      ;(payload as any).$version = (this as any).version
+    }
     const that = new this(payload)
     return that.send()
   }
@@ -73,12 +78,37 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     throw new Error('not implemented')
   }
 
-  send() {
-    if (!enableQueueEvents) {
-      return
-    }
+  protected static async createStorage(payload: BasePayload) {
+    const masterServiceKey = isMultitenant ? await getServiceKey(payload.tenant.ref) : serviceKey
+    const client = await getPostgresConnection(masterServiceKey, {
+      host: payload.tenant.host,
+      tenantId: payload.tenant.ref,
+    })
 
+    const db = new StorageKnexDB(client, {
+      tenantId: payload.tenant.ref,
+      host: payload.tenant.host,
+      superAdmin: client,
+    })
+
+    const storageBackend = createStorageBackend()
+
+    return new Storage(storageBackend, db)
+  }
+
+  send() {
     const constructor = this.constructor as typeof BaseEvent
+
+    if (!enableQueueEvents) {
+      return constructor.handle({
+        id: '',
+        name: constructor.getQueueName(),
+        data: {
+          ...this.payload,
+          $version: constructor.version,
+        },
+      })
+    }
 
     return Queue.getInstance().send({
       name: constructor.getQueueName(),
@@ -88,23 +118,5 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
       },
       options: constructor.getQueueOptions(),
     })
-  }
-
-  protected async createStorage(payload: BasePayload) {
-    const serviceKey = await getServiceKey(payload.tenant.ref)
-    const client = await getPostgrestClient(serviceKey, {
-      host: payload.tenant.host,
-      tenantId: payload.tenant.ref,
-    })
-
-    const db = new Database(client, {
-      tenantId: payload.tenant.ref,
-      host: payload.tenant.host,
-      superAdmin: client,
-    })
-
-    const storageBackend = createStorageBackend()
-
-    return new Storage(storageBackend, db)
   }
 }

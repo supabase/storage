@@ -5,7 +5,8 @@ import { getConfig } from '../config'
 const { isMultitenant, jwtSecret, jwtAlgorithm } = getConfig()
 
 interface jwtInterface {
-  sub: string
+  sub?: string
+  role?: string
 }
 
 export type SignedToken = {
@@ -32,14 +33,14 @@ export async function getJwtSecret(tenantId: string): Promise<string> {
  * @param token
  * @param secret
  */
-export function verifyJWT(
+export function verifyJWT<T>(
   token: string,
   secret: string
-): Promise<string | jwt.JwtPayload | undefined> {
+): Promise<(jwt.JwtPayload & T) | undefined> {
   return new Promise((resolve, reject) => {
     jwt.verify(token, secret, { algorithms: [jwtAlgorithm as jwt.Algorithm] }, (err, decoded) => {
       if (err) return reject(err)
-      resolve(decoded)
+      resolve(decoded as jwt.JwtPayload & T)
     })
   })
 }
@@ -76,4 +77,9 @@ export function signJWT(
 export async function getOwner(token: string, secret: string): Promise<string | undefined> {
   const decodedJWT = await verifyJWT(token, secret)
   return (decodedJWT as jwtInterface)?.sub
+}
+
+export async function getRole(token: string, secret: string): Promise<string | undefined> {
+  const decodedJWT = await verifyJWT(token, secret)
+  return (decodedJWT as jwtInterface)?.role
 }

@@ -41,7 +41,7 @@ async function requestHandler(
   const { download } = request.query
   const objectName = request.params['*']
 
-  await request.storage.from(bucketName).findObject(objectName)
+  const obj = await request.storage.from(bucketName).findObject(objectName, 'id, version')
 
   // send the object from s3
   const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
@@ -50,6 +50,7 @@ async function requestHandler(
   return request.storage.renderer('asset').render(request, response, {
     bucket: globalS3Bucket,
     key: s3Key,
+    version: obj.version,
     download,
   })
 }

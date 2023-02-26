@@ -12,7 +12,7 @@ declare module 'fastify' {
 export const jwt = fastifyPlugin(async (fastify) => {
   fastify.decorateRequest('jwt', '')
   fastify.addHook('preHandler', async (request, reply) => {
-    request.jwt = (request.headers.authorization as string).substring('Bearer '.length)
+    request.jwt = (request.headers.authorization || '').substring('Bearer '.length)
 
     const jwtSecret = await getJwtSecret(request.tenantId)
     try {

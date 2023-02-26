@@ -1,39 +1,30 @@
 import { PostgrestClient } from '@supabase/postgrest-js'
-import { Bucket, Obj } from './schemas'
-import { DatabaseError } from './errors'
-import { ObjectMetadata } from './backend'
+import { Bucket, Obj } from '../schemas'
+import { DatabaseError } from '../errors'
+import { ObjectMetadata } from '../backend'
+import { Database, FindBucketFilters, SearchObjectOption } from './adapter'
+import { TenantConnection } from '../../database/connection'
 
-export interface DatabaseOptions {
+export interface DatabaseOptions<DB, TNX> {
   tenantId: string
   host: string
-  superAdmin?: PostgrestClient
-}
-
-export interface SearchObjectOption {
-  search?: string
-  sortBy?: {
-    column?: string
-    order?: string
-  }
-  limit?: number
-  offset?: number
-}
-
-export interface FindBucketFilters {
-  isPublic?: boolean
+  superAdmin?: DB
+  tnx?: TNX
+  parentConnection?: TenantConnection
 }
 
 /**
  * Database
  * the only source of truth for interacting with the storage database
  */
-export class Database {
+export class StoragePostgrestDB implements Database {
   public readonly host: string
   public readonly tenantId: string
+  public readonly role?: string
 
   constructor(
     private readonly postgrest: PostgrestClient,
-    private readonly options: DatabaseOptions
+    private readonly options: DatabaseOptions<PostgrestClient, undefined>
   ) {
     this.host = options.host
     this.tenantId = options.tenantId
@@ -46,11 +37,15 @@ export class Database {
     }
   }
 
-  asSuperUser() {
+  async withTransaction<T extends (db: Database) => Promise<any>>(fn: T): Promise<ReturnType<T>> {
+    return fn(this)
+  }
+
+  asSuperUser(): Database {
     if (!this.options.superAdmin) {
       throw new Error('super admin client not instantiated')
     }
-    return new Database(this.options.superAdmin, this.options)
+    return new StoragePostgrestDB(this.options.superAdmin, this.options)
   }
 
   async createBucket(
@@ -220,7 +215,11 @@ export class Database {
   }
 
   async createObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata'>) {
-    const { error, status } = await this.postgrest
+    const {
+      error,
+      status,
+      data: obj,
+    } = await this.postgrest
       .from<Obj>('objects')
       .insert(
         [
@@ -244,7 +243,7 @@ export class Database {
       })
     }
 
-    return null
+    return obj as Obj
   }
 
   async deleteObject(bucketId: string, objectName: string) {
@@ -398,5 +397,13 @@ export class Database {
     }
 
     return data as Obj[]
+  }
+
+  mustLockObject(bucketId: string, objectName: string): Promise<boolean> {
+    return Promise.resolve(true)
+  }
+
+  waitObjectLock(bucketId: string, objectName: string): Promise<boolean> {
+    return Promise.resolve(true)
   }
 }

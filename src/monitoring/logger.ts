@@ -14,6 +14,7 @@ export const logger = pino({
   },
   serializers: {
     res(reply) {
+      // console.log(reply)
       return {
         statusCode: reply.statusCode,
         contentLength: reply.headers['content-length'],

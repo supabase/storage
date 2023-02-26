@@ -5,12 +5,12 @@ import emptyBucket from './emptyBucket'
 import getAllBuckets from './getAllBuckets'
 import getBucket from './getBucket'
 import updateBucket from './updateBucket'
-import { postgrest, superUserPostgrest, storage, jwt } from '../../plugins'
+import { storage, jwt, db, dbSuperUser } from '../../plugins'
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(jwt)
-  fastify.register(postgrest)
-  fastify.register(superUserPostgrest)
+  fastify.register(db)
+  fastify.register(dbSuperUser)
   fastify.register(storage)
 
   fastify.register(createBucket)

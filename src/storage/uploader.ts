@@ -6,6 +6,7 @@ import { StorageBackendError } from './errors'
 
 interface UploaderOptions {
   key: string
+  version: string | undefined
   fileSizeLimit?: number
   allowedMimeTypes?: string[] | null
 }
@@ -37,6 +38,7 @@ export class Uploader {
     const objectMetadata = await this.backend.uploadObject(
       globalS3Bucket,
       options.key,
+      options.version,
       file.body,
       file.mimeType,
       file.cacheControl
@@ -72,15 +74,24 @@ export class Uploader {
 
     let cacheControl: string
     if (contentType?.startsWith('multipart/form-data')) {
-      const formData = await request.file({ limits: { fileSize: fileSizeLimit } })
-      // https://github.com/fastify/fastify-multipart/issues/162
-      /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-      const cacheTime = formData.fields.cacheControl?.value
+      try {
+        const formData = await request.file({ limits: { fileSize: fileSizeLimit } })
 
-      body = formData.file
-      mimeType = formData.mimetype
-      cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
-      isTruncated = () => formData.file.truncated
+        if (!formData) {
+          throw new StorageBackendError(`no_file_provided`, 400, 'No file provided')
+        }
+
+        // https://github.com/fastify/fastify-multipart/issues/162
+        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+        const cacheTime = formData.fields.cacheControl?.value
+
+        body = formData.file
+        mimeType = formData.mimetype
+        cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
+        isTruncated = () => formData.file.truncated
+      } catch (e) {
+        throw new StorageBackendError('empty_file', 400, 'Unexpected empty file received', e)
+      }
     } else {
       // just assume its a binary file
       body = request.raw

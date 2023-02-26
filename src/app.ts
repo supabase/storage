@@ -55,10 +55,15 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(plugins.tenantId)
   app.register(plugins.logTenantId)
   app.register(plugins.logRequest({ excludeUrls: ['/status'] }))
+  app.register(routes.multiPart, { prefix: 'multi-part' })
   app.register(routes.bucket, { prefix: 'bucket' })
   app.register(routes.object, { prefix: 'object' })
   app.register(routes.render, { prefix: 'render/image' })
 
+  app.post('/dummy-webhook', (req, reply) => {
+    console.log('handled webhook')
+    reply.send()
+  })
   setErrorHandler(app)
 
   app.get('/status', async (request, response) => response.status(200).send())

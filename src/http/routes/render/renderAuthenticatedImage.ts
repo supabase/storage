@@ -46,7 +46,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const objectName = request.params['*']
 
-      await request.storage.from(bucketName).findObject(objectName)
+      const obj = await request.storage.from(bucketName).findObject(objectName, 'id,version')
 
       const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
 
@@ -55,6 +55,7 @@ export default async function routes(fastify: FastifyInstance) {
       return renderer.setTransformations(request.query).render(request, response, {
         bucket: globalS3Bucket,
         key: s3Key,
+        version: obj.version,
         download,
       })
     }

@@ -47,6 +47,9 @@ services:
     volumes:
       - ./data:/images/data
     environment:
+      - IMGPROXY_WRITE_TIMEOUT=20
+      - IMGPROXY_READ_TIMEOUT=20
+      - IMGPROXY_REQUESTS_QUEUE_SIZE=24
       - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/images
       - IMGPROXY_USE_ETAG=true
       - IMGPROXY_ENABLE_WEBP_DETECTION=true

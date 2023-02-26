@@ -1,11 +1,12 @@
 import { StorageBackendAdapter, ObjectMetadata } from './backend'
-import { Database, SearchObjectOption } from './database'
+import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
 import { getJwtSecret, signJWT } from '../auth'
 import { getConfig } from '../config'
 import { FastifyRequest } from 'fastify'
 import { Uploader } from './uploader'
 import {
+  AdminDeleteObject,
   ObjectCreatedCopyEvent,
   ObjectCreatedMove,
   ObjectCreatedPostEvent,
@@ -14,11 +15,13 @@ import {
   ObjectRemovedMove,
   ObjectUpdatedMetadata,
 } from '../queue'
+import { randomUUID } from 'crypto'
 
 export interface UploadObjectOptions {
   objectName: string
   owner?: string
   isUpsert?: boolean
+  version?: string
 }
 
 const { urlLengthLimit, globalS3Bucket } = getConfig()
@@ -35,39 +38,138 @@ export class ObjectStorage {
   ) {}
 
   /**
-   * Upload an new object to a storage
+   * Impersonate any subsequent chained operations
+   * as superUser bypassing RLS rules
+   */
+  asSuperUser() {
+    return new ObjectStorage(this.backend, this.db.asSuperUser(), this.bucketId)
+  }
+
+  /**
+   * Finds or create an object, used to ensure single access operations
+   * @param options
+   * @param dbInstance
+   */
+  async findOrCreateObjectForUpload(options: UploadObjectOptions, dbInstance?: Database) {
+    return (dbInstance || this.db).withTransaction(async (db) => {
+      await db.waitObjectLock(this.bucketId, options.objectName)
+
+      let obj = await db.findObject(this.bucketId, options.objectName, 'id, version', {
+        dontErrorOnEmpty: true,
+        forUpdate: true,
+      })
+
+      const exists = Boolean(obj)
+
+      if (!options.isUpsert || (options.isUpsert && !exists)) {
+        obj = await db.createObject({
+          bucket_id: this.bucketId,
+          name: options.objectName,
+          owner: options.owner,
+          version: options.version,
+          upload_state: 'STARTED',
+        })
+      } else {
+        await db.testPermission((db) => {
+          return db.upsertObject({
+            bucket_id: this.bucketId,
+            name: options.objectName,
+            version: options.version,
+          })
+        })
+      }
+
+      return { obj, isNew: !exists }
+    })
+  }
+
+  async completeObjectUpload({
+    objectName,
+    version,
+    owner,
+    objectMetadata,
+  }: UploadObjectOptions & { objectMetadata: ObjectMetadata }) {
+    return this.db.withTransaction(async (db) => {
+      const currentObj = await db.findObject(this.bucketId, objectName, 'id, version, metadata', {
+        forUpdate: true,
+        dontErrorOnEmpty: true,
+      })
+
+      if (!currentObj) {
+        await AdminDeleteObject.send({
+          name: objectName,
+          bucketId: this.bucketId,
+          tenant: this.db.tenant(),
+          version: version,
+        })
+        return
+      }
+
+      // update object
+      await db.updateObject(this.bucketId, objectName, {
+        name: objectName,
+        metadata: objectMetadata,
+        version,
+        owner,
+        upload_state: 'COMPLETED',
+      })
+
+      // schedule the delete of the previous file
+      if (currentObj.version !== version && currentObj.metadata) {
+        await AdminDeleteObject.send({
+          name: objectName,
+          bucketId: this.bucketId,
+          tenant: this.db.tenant(),
+          version: currentObj.version,
+        })
+      }
+
+      return currentObj
+    })
+  }
+
+  /**
+   * Upload a new object to a storage
    * @param request
    * @param options
    */
   async uploadNewObject(request: FastifyRequest, options: UploadObjectOptions) {
+    mustBeValidKey(options.objectName, 'The object name contains invalid characters')
+
+    const version = randomUUID()
+    const path = `${this.bucketId}/${options.objectName}`
+    const s3Key = `${this.db.tenantId}/${path}`
+
     const bucket = await this.db
       .asSuperUser()
       .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
 
-    await this.createObject(
-      {
-        name: options.objectName,
-        owner: options.owner,
-      },
-      options.isUpsert
-    )
-
-    const path = `${this.bucketId}/${options.objectName}`
-    const s3Key = `${this.db.tenantId}/${path}`
+    const { isNew } = await this.findOrCreateObjectForUpload({
+      ...options,
+      version,
+    })
 
     try {
       const uploader = new Uploader(this.backend)
       const objectMetadata = await uploader.upload(request, {
         key: s3Key,
+        version,
         fileSizeLimit: bucket.file_size_limit,
         allowedMimeTypes: bucket.allowed_mime_types,
       })
 
-      await this.db
-        .asSuperUser()
-        .updateObjectMetadata(this.bucketId, options.objectName, objectMetadata)
+      const obj = await this.completeObjectUpload({
+        objectName: options.objectName,
+        version,
+        objectMetadata,
+        isUpsert: options.isUpsert,
+      })
 
-      const event = options.isUpsert ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
+      if (!obj) {
+        return { objectMetadata, path }
+      }
+
+      const event = options.isUpsert && !isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
       await event.sendWebhook({
         tenant: this.db.tenant(),
         name: options.objectName,
@@ -77,93 +179,83 @@ export class ObjectStorage {
 
       return { objectMetadata, path }
     } catch (e) {
-      // undo operations as super user
-      await this.db.asSuperUser().deleteObject(this.bucketId, options.objectName)
+      await this.db.deleteObject(this.bucketId, options.objectName, version)
+      await AdminDeleteObject.send({
+        name: options.objectName,
+        bucketId: this.bucketId,
+        tenant: this.db.tenant(),
+        version: version,
+      })
       throw e
     }
   }
 
-  /**
-   * Upload overriding an existing object
-   * @param request
-   * @param options
-   */
-  async uploadOverridingObject(
-    request: FastifyRequest,
-    options: Omit<UploadObjectOptions, 'isUpsert'>
-  ) {
+  public async uploadOverridingObject(request: FastifyRequest, options: UploadObjectOptions) {
+    mustBeValidKey(options.objectName, 'The object name contains invalid characters')
+
+    const version = randomUUID()
+    const path = `${this.bucketId}/${options.objectName}`
+    const s3Key = `${this.db.tenantId}/${path}`
+
     const bucket = await this.db
       .asSuperUser()
       .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
 
-    await this.updateObjectOwner(options.objectName, options.owner)
-
-    const path = `${this.bucketId}/${options.objectName}`
-    const s3Key = `${this.db.tenantId}/${path}`
+    await this.db.testPermission((db) => {
+      return db.updateObject(this.bucketId, options.objectName, {
+        name: options.objectName,
+        owner: options.owner,
+        metadata: {},
+        version: version,
+      })
+    })
 
     try {
       const uploader = new Uploader(this.backend)
+      console.log('uploading.....')
+
       const objectMetadata = await uploader.upload(request, {
         key: s3Key,
+        version,
         fileSizeLimit: bucket.file_size_limit,
         allowedMimeTypes: bucket.allowed_mime_types,
       })
 
-      await this.db
-        .asSuperUser()
-        .updateObjectMetadata(this.bucketId, options.objectName, objectMetadata)
-
-      await ObjectCreatedPutEvent.sendWebhook({
-        tenant: this.db.tenant(),
-        name: options.objectName,
-        bucketId: this.bucketId,
-        metadata: objectMetadata,
+      const obj = await this.completeObjectUpload({
+        objectName: options.objectName,
+        version,
+        objectMetadata,
       })
+
+      if (!obj) {
+        return { objectMetadata, path }
+      }
+
+      await Promise.allSettled([
+        AdminDeleteObject.send({
+          name: options.objectName,
+          bucketId: this.bucketId,
+          tenant: this.db.tenant(),
+          version: obj.version,
+        }),
+        ObjectCreatedPutEvent.sendWebhook({
+          tenant: this.db.tenant(),
+          name: options.objectName,
+          bucketId: this.bucketId,
+          metadata: objectMetadata,
+        }),
+      ])
 
       return { objectMetadata, path }
     } catch (e) {
-      // @todo tricky to handle since we need to undo the s3 upload
+      await AdminDeleteObject.send({
+        name: options.objectName,
+        bucketId: this.bucketId,
+        tenant: this.db.tenant(),
+        version,
+      })
       throw e
     }
-  }
-
-  /**
-   * Creates an object record
-   * @param data object data
-   * @param isUpsert specify if it is an upsert operation (default: false)
-   */
-  async createObject(
-    data: Omit<Parameters<Database['upsertObject']>[0], 'bucket_id'>,
-    isUpsert = false
-  ) {
-    mustBeValidKey(data.name, 'The object name contains invalid characters')
-
-    if (isUpsert) {
-      await this.upsertObject({
-        name: data.name,
-        owner: data.owner,
-      })
-    } else {
-      await this.db.createObject({
-        bucket_id: this.bucketId,
-        ...data,
-      })
-    }
-
-    return null
-  }
-
-  /**
-   * Upsert an object record
-   * @param data object data
-   */
-  upsertObject(data: Omit<Parameters<Database['upsertObject']>[0], 'bucket_id'>) {
-    mustBeValidKey(data.name, 'The object name contains invalid characters')
-
-    return this.db.upsertObject({
-      bucket_id: this.bucketId,
-      ...data,
-    })
   }
 
   /**
@@ -172,18 +264,24 @@ export class ObjectStorage {
    * @param objectName
    */
   async deleteObject(objectName: string) {
-    await this.db.deleteObject(this.bucketId, objectName)
     const s3Key = `${this.db.tenantId}/${this.bucketId}/${objectName}`
 
-    const result = await this.backend.deleteObject(globalS3Bucket, s3Key)
+    await this.db.withTransaction(async (db) => {
+      const obj = await db.findObject(this.bucketId, objectName, 'id,version', {
+        forUpdate: true,
+      })
+
+      await db.deleteObject(this.bucketId, objectName)
+
+      await this.backend.deleteObject(globalS3Bucket, s3Key, obj.version)
+      await this.backend.deleteObject(globalS3Bucket, s3Key, obj.version + '.info')
+    })
 
     await ObjectRemoved.sendWebhook({
       tenant: this.db.tenant(),
       name: objectName,
       bucketId: this.bucketId,
     })
-
-    return result
   }
 
   /**
@@ -195,7 +293,7 @@ export class ObjectStorage {
     let results: { name: string }[] = []
 
     for (let i = 0; i < prefixes.length; ) {
-      const prefixesSubset = []
+      const prefixesSubset: string[] = []
       let urlParamLength = 0
 
       for (; i < prefixes.length && urlParamLength < urlLengthLimit; i++) {
@@ -204,28 +302,29 @@ export class ObjectStorage {
         urlParamLength += encodeURIComponent(prefix).length + 9 // length of '%22%2C%22'
       }
 
-      const data = await this.db.deleteObjects(this.bucketId, prefixesSubset)
+      await this.db.withTransaction(async (db) => {
+        // todo: for update
+        const data = await db.deleteObjects(this.bucketId, prefixesSubset, 'name')
 
-      if (data.length > 0) {
-        results = results.concat(data)
+        if (data.length > 0) {
+          results = results.concat(data)
 
-        await Promise.allSettled(
-          data.map((object) =>
-            ObjectRemoved.sendWebhook({
-              tenant: this.db.tenant(),
-              name: object.name,
-              bucketId: this.bucketId,
-            })
+          // if successfully deleted, delete from s3 too
+          const prefixesToDelete = data.map(({ name }) => `${db.tenantId}/${this.bucketId}/${name}`)
+
+          await this.backend.deleteObjects(globalS3Bucket, prefixesToDelete)
+
+          await Promise.allSettled(
+            data.map((object) =>
+              ObjectRemoved.sendWebhook({
+                tenant: db.tenant(),
+                name: object.name,
+                bucketId: this.bucketId,
+              })
+            )
           )
-        )
-
-        // if successfully deleted, delete from s3 too
-        const prefixesToDelete = data.map(
-          ({ name }) => `${this.db.tenantId}/${this.bucketId}/${name}`
-        )
-
-        await this.backend.deleteObjects(globalS3Bucket, prefixesToDelete)
-      }
+        }
+      })
     }
 
     return results
@@ -264,11 +363,12 @@ export class ObjectStorage {
    * Finds an object by name
    * @param objectName
    * @param columns
+   * @param filters
    */
-  async findObject(objectName: string, columns = 'id') {
+  async findObject(objectName: string, columns = 'id', filters?: FindObjectFilters) {
     mustBeValidKey(objectName, 'The object name contains invalid characters')
 
-    return this.db.findObject(this.bucketId, objectName, columns)
+    return this.db.findObject(this.bucketId, objectName, columns, filters)
   }
 
   /**
@@ -289,34 +389,94 @@ export class ObjectStorage {
   async copyObject(sourceKey: string, destinationKey: string, owner?: string) {
     mustBeValidKey(destinationKey, 'The destination object name contains invalid characters')
 
+    if (sourceKey === destinationKey) {
+      return {
+        destObject: undefined,
+        httpStatusCode: 200,
+      }
+    }
+
+    const newVersion = randomUUID()
     const bucketId = this.bucketId
-    const originObject = await this.db.findObject(this.bucketId, sourceKey, 'bucket_id, metadata')
-
-    const newObject = Object.assign({}, originObject, {
-      name: destinationKey,
-      owner,
-    })
-
-    const destObject = await this.createObject(newObject)
-
     const s3SourceKey = `${this.db.tenantId}/${bucketId}/${sourceKey}`
     const s3DestinationKey = `${this.db.tenantId}/${bucketId}/${destinationKey}`
 
-    const copyResult = await this.backend.copyObject(globalS3Bucket, s3SourceKey, s3DestinationKey)
-    const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey)
-
-    await this.db.asSuperUser().updateObjectMetadata(bucketId, destinationKey, metadata)
-
-    await ObjectCreatedCopyEvent.sendWebhook({
-      tenant: this.db.tenant(),
-      name: destinationKey,
-      bucketId: this.bucketId,
-      metadata,
+    await this.db.testPermission(async (db) => {
+      await Promise.all([
+        db.findObject(bucketId, sourceKey, 'id'),
+        db.updateObject(bucketId, sourceKey, {
+          name: sourceKey,
+          version: newVersion,
+        }),
+      ])
     })
 
-    return {
-      destObject,
-      httpStatusCode: copyResult.httpStatusCode,
+    try {
+      const { originObject, destObject } = await this.db.withTransaction(async (db) => {
+        const originObject = await db.findObject(
+          this.bucketId,
+          sourceKey,
+          'bucket_id,metadata,version',
+          {
+            forShare: true,
+          }
+        )
+
+        const newObject = Object.assign({}, originObject, {
+          name: destinationKey,
+          owner,
+        })
+
+        const destObject = await this.findOrCreateObjectForUpload(
+          {
+            objectName: newObject.name,
+            owner: owner,
+            isUpsert: false,
+            version: newVersion,
+          },
+          db
+        )
+
+        return { destObject, originObject }
+      })
+
+      const copyResult = await this.backend.copyObject(
+        globalS3Bucket,
+        s3SourceKey,
+        originObject.version,
+        s3DestinationKey,
+        newVersion
+      )
+
+      const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, newVersion)
+
+      await this.asSuperUser().completeObjectUpload({
+        objectName: destinationKey,
+        owner: owner,
+        isUpsert: false,
+        version: newVersion,
+        objectMetadata: metadata,
+      })
+
+      await ObjectCreatedCopyEvent.sendWebhook({
+        tenant: this.db.tenant(),
+        name: destinationKey,
+        bucketId: this.bucketId,
+        metadata,
+      })
+
+      return {
+        destObject,
+        httpStatusCode: copyResult.httpStatusCode,
+      }
+    } catch (e) {
+      await AdminDeleteObject.send({
+        name: destinationKey,
+        bucketId: this.bucketId,
+        tenant: this.db.tenant(),
+        version: newVersion,
+      })
+      throw e
     }
   }
 
@@ -332,25 +492,72 @@ export class ObjectStorage {
       return
     }
 
-    await this.db.updateObjectName(this.bucketId, sourceObjectName, destinationObjectName)
-
+    const newVersion = randomUUID()
     const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
     const s3DestinationKey = `${this.db.tenantId}/${this.bucketId}/${destinationObjectName}`
 
-    // @todo what happens if one of these fail?
-    await this.backend.copyObject(globalS3Bucket, s3SourceKey, s3DestinationKey)
-    await this.backend.deleteObject(globalS3Bucket, s3SourceKey)
+    await this.db.testPermission((db) => {
+      return Promise.all([
+        db.findObject(this.bucketId, sourceObjectName, 'id'),
+        db.createObject({
+          name: destinationObjectName,
+          bucket_id: this.bucketId,
+          version: newVersion,
+        }),
+      ])
+    })
 
-    const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey)
-    await this.db.asSuperUser().updateObjectMetadata(this.bucketId, destinationObjectName, metadata)
+    const { sourceObj } = await this.db.withTransaction(async (db) => {
+      const sourceObj = await db.findObject(this.bucketId, sourceObjectName, 'id', {
+        forUpdate: true,
+      })
+      const destObject = await this.findOrCreateObjectForUpload(
+        {
+          objectName: destinationObjectName,
+          owner: sourceObj.owner,
+          isUpsert: false,
+          version: newVersion,
+        },
+        db
+      )
 
-    const movedObject = await this.db.findObject(
-      this.bucketId,
-      destinationObjectName,
-      'bucket_id, metadata'
+      return { sourceObj, destObject }
+    })
+
+    await this.backend.copyObject(
+      globalS3Bucket,
+      s3SourceKey,
+      sourceObj.version,
+      s3DestinationKey,
+      newVersion
     )
 
-    await Promise.allSettled([
+    const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, newVersion)
+
+    const obj = await this.completeObjectUpload({
+      objectName: destinationObjectName,
+      objectMetadata: metadata,
+      isUpsert: false,
+    })
+
+    if (!obj) {
+      await AdminDeleteObject.send({
+        name: destinationObjectName,
+        bucketId: this.bucketId,
+        tenant: this.db.tenant(),
+        version: newVersion,
+      })
+      return
+    }
+
+    await AdminDeleteObject.send({
+      name: sourceObjectName,
+      bucketId: this.bucketId,
+      tenant: this.db.tenant(),
+      version: obj.version,
+    })
+
+    await Promise.all([
       ObjectRemovedMove.sendWebhook({
         tenant: this.db.tenant(),
         name: sourceObjectName,
@@ -360,7 +567,7 @@ export class ObjectStorage {
         tenant: this.db.tenant(),
         name: destinationObjectName,
         bucketId: this.bucketId,
-        metadata: movedObject.metadata as ObjectMetadata,
+        metadata: metadata,
         oldObject: {
           name: sourceObjectName,
           bucketId: this.bucketId,
@@ -394,7 +601,7 @@ export class ObjectStorage {
     objectName: string,
     url: string,
     expiresIn: number,
-    metadata?: Record<string, string>
+    metadata?: Record<string, string | object | undefined>
   ) {
     await this.findObject(objectName)
 
@@ -438,7 +645,7 @@ export class ObjectStorage {
         urlParamLength += encodeURIComponent(path).length + 9 // length of '%22%2C%22'
       }
 
-      const objects = await this.findObjects(pathsSubset)
+      const objects = await this.findObjects(pathsSubset, 'name')
       results = results.concat(objects)
     }
 

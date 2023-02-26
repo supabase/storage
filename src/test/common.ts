@@ -31,6 +31,7 @@ export function useMockObject() {
   beforeEach(() => {
     process.env = { ...ENV }
 
+    jest.clearAllMocks()
     jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
       metadata: {
         httpStatusCode: 200,
@@ -75,7 +76,7 @@ export function useMockObject() {
     jest.spyOn(S3Backend.prototype, 'privateAssetUrl').mockResolvedValue('local:///data/sadcat.jpg')
   })
 
-  beforeEach(() => {
+  afterEach(() => {
     jest.clearAllMocks()
   })
 }

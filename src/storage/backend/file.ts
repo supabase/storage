@@ -46,8 +46,13 @@ export class FileBackend implements StorageBackendAdapter {
    * Gets an object body and metadata
    * @param bucketName
    * @param key
+   * @param version
    */
-  async getObject(bucketName: string, key: string): Promise<ObjectResponse> {
+  async getObject(
+    bucketName: string,
+    key: string,
+    version: string | undefined
+  ): Promise<ObjectResponse> {
     const file = path.resolve(this.filePath, `${bucketName}/${key}`)
     const body = await fs.readFile(file)
     const data = await fs.stat(file)
@@ -76,6 +81,7 @@ export class FileBackend implements StorageBackendAdapter {
    * Uploads and store an object
    * @param bucketName
    * @param key
+   * @param version
    * @param body
    * @param contentType
    * @param cacheControl
@@ -83,6 +89,7 @@ export class FileBackend implements StorageBackendAdapter {
   async uploadObject(
     bucketName: string,
     key: string,
+    version: string | undefined,
     body: NodeJS.ReadableStream,
     contentType: string,
     cacheControl: string
@@ -98,7 +105,7 @@ export class FileBackend implements StorageBackendAdapter {
         cacheControl,
       })
 
-      const metadata = await this.headObject(bucketName, key)
+      const metadata = await this.headObject(bucketName, key, version)
 
       return {
         ...metadata,
@@ -113,8 +120,9 @@ export class FileBackend implements StorageBackendAdapter {
    * Deletes an object from the file system
    * @param bucket
    * @param key
+   * @param version
    */
-  async deleteObject(bucket: string, key: string): Promise<void> {
+  async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
     const file = path.resolve(this.filePath, `${bucket}/${key}`)
     await fs.remove(file)
   }
@@ -123,11 +131,13 @@ export class FileBackend implements StorageBackendAdapter {
    * Copies an existing object to the given location
    * @param bucket
    * @param source
+   * @param version
    * @param destination
    */
   async copyObject(
     bucket: string,
     source: string,
+    version: string | undefined,
     destination: string
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode'>> {
     const srcFile = path.resolve(this.filePath, `${bucket}/${source}`)
@@ -158,8 +168,13 @@ export class FileBackend implements StorageBackendAdapter {
    * Returns metadata information of a specific object
    * @param bucket
    * @param key
+   * @param version
    */
-  async headObject(bucket: string, key: string): Promise<ObjectMetadata> {
+  async headObject(
+    bucket: string,
+    key: string,
+    version: string | undefined
+  ): Promise<ObjectMetadata> {
     const file = path.resolve(this.filePath, `${bucket}/${key}`)
     const data = await fs.stat(file)
     const { cacheControl, contentType } = await this.getFileMetadata(file)
@@ -183,8 +198,9 @@ export class FileBackend implements StorageBackendAdapter {
    * Returns a private url that can only be accessed internally by the system
    * @param bucket
    * @param key
+   * @param version
    */
-  async privateAssetUrl(bucket: string, key: string): Promise<string> {
+  async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
     return 'local:///' + path.join(this.filePath, `${bucket}/${key}`)
   }
 

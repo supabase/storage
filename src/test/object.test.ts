@@ -64,7 +64,7 @@ describe('testing GET object', () => {
       },
     })
     expect(response.statusCode).toBe(304)
-    expect(mockGetObject.mock.calls[0][2]).toMatchObject({
+    expect(mockGetObject.mock.calls[0][3]).toMatchObject({
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })
@@ -190,6 +190,7 @@ describe('testing POST object via multipart upload', () => {
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
       authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'x-upsert': 'true',
     })
 
     const response = await app().inject({
@@ -208,6 +209,7 @@ describe('testing POST object via multipart upload', () => {
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
       authorization: `Bearer ${anonKey}`,
+      'x-upsert': 'true',
     })
 
     const response = await app().inject({
@@ -221,8 +223,8 @@ describe('testing POST object via multipart upload', () => {
     expect(response.body).toBe(
       JSON.stringify({
         statusCode: '403',
-        error: '',
-        message: 'new row violates row-level security policy for table "objects"',
+        error: 'Unauthorized',
+        message: 'new row violates row-level security policy',
       })
     )
   })
@@ -382,11 +384,12 @@ describe('testing POST object via multipart upload', () => {
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
       authorization: `Bearer ${anonKey}`,
+      // 'x-upsert': 'true',
     })
 
     const response = await app().inject({
       method: 'POST',
-      url: '/object/bucket2/public/sadcat.jpg',
+      url: '/object/bucket2/public/sadcat55.jpg',
       headers,
       payload: form,
     })
@@ -481,6 +484,7 @@ describe('testing POST object via binary upload', () => {
       authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       'Content-Length': size,
       'Content-Type': 'image/jpeg',
+      'x-upsert': 'true',
     }
 
     const response = await app().inject({
@@ -515,8 +519,8 @@ describe('testing POST object via binary upload', () => {
     expect(response.body).toBe(
       JSON.stringify({
         statusCode: '403',
-        error: '',
-        message: 'new row violates row-level security policy for table "objects"',
+        error: 'Unauthorized',
+        message: 'new row violates row-level security policy',
       })
     )
   })
@@ -733,14 +737,30 @@ describe('testing PUT object', () => {
       authorization: `Bearer ${anonKey}`,
     })
 
+    console.log('===========================================adsdsadads')
+
+    // @ts-ignore
+    global.lol = 'true'
+
     const response = await app().inject({
       method: 'PUT',
       url: '/object/bucket2/authenticated/cat.jpg',
       headers,
       payload: form,
     })
+
+    console.log('===========================================adsdsadads')
+
+    // @ts-ignore
+    console.log(JSON.stringify(await response.json(), null, 2))
     expect(response.statusCode).toBe(400)
-    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+
+    try {
+      expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+    } catch (e) {
+      console.log(e)
+      process.exit(1)
+    }
     // expect(response.body).toBe(`new row violates row-level security policy for table "objects"`)
   })
 
@@ -771,6 +791,7 @@ describe('testing PUT object', () => {
       headers,
       payload: form,
     })
+
     expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -1351,7 +1372,7 @@ describe('testing retrieving signed URL', () => {
       },
     })
     expect(response.statusCode).toBe(304)
-    expect(mockGetObject.mock.calls[0][2]).toMatchObject({
+    expect(mockGetObject.mock.calls[0][3]).toMatchObject({
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })

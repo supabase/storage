@@ -15,7 +15,7 @@ const { urlLengthLimit, globalS3Bucket } = getConfig()
  * to provide a rich management API for any folders and files operations
  */
 export class Storage {
-  constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
+  constructor(public readonly backend: StorageBackendAdapter, public readonly db: Database) {}
 
   /**
    * Creates an object storage operations for a specific bucket
@@ -144,17 +144,23 @@ export class Storage {
    * @param id
    */
   async deleteBucket(id: string) {
-    const countObjects = await this.db.asSuperUser().countObjectsInBucket(id)
+    return this.db.withTransaction(async (db) => {
+      await db.findBucketById(id, 'id', {
+        forUpdate: true,
+      })
 
-    if (countObjects && countObjects > 0) {
-      throw new StorageBackendError(
-        'Storage not empty',
-        400,
-        'Storage must be empty before you can delete it'
-      )
-    }
+      const countObjects = await db.asSuperUser().countObjectsInBucket(id)
 
-    return this.db.deleteBucket(id)
+      if (countObjects && countObjects > 0) {
+        throw new StorageBackendError(
+          'Storage not empty',
+          400,
+          'Storage must be empty before you can delete it'
+        )
+      }
+
+      return db.deleteBucket(id)
+    })
   }
 
   /**

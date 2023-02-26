@@ -8,6 +8,8 @@ export const objectSchema = {
     name: { type: 'string' },
     bucket_id: { type: 'string' },
     owner: { type: 'string' },
+    version: { type: 'string' },
+    upload_state: { type: 'string', enum: ['STARTED', 'COMPLETED'] },
     id: { anyOf: [{ type: 'string' }, { type: 'null' }] },
     updated_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
     created_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },

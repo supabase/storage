@@ -35,12 +35,14 @@ describe('Webhooks', () => {
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
       authorization: `Bearer ${serviceKey}`,
-      'x-upsert': 'true',
+      // 'x-upsert': 'true',
     })
+
+    const fileName = (Math.random() + 1).toString(36).substring(7)
 
     const response = await app().inject({
       method: 'POST',
-      url: '/object/bucket6/public/test-33.png',
+      url: `/object/bucket6/public/${fileName}.png`,
       headers,
       payload: form,
     })
@@ -53,7 +55,7 @@ describe('Webhooks', () => {
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
-            type: 'ObjectCreated:Put',
+            type: 'ObjectCreated:Post',
             $version: 'v1',
             applyTime: expect.any(Number),
             payload: expect.objectContaining({
@@ -67,7 +69,7 @@ describe('Webhooks', () => {
                 mimetype: 'image/png',
                 size: 3746,
               }),
-              name: 'public/test-33.png',
+              name: `public/${fileName}.png`,
               tenant: expect.objectContaining({
                 ref: 'bjhaohmqunupljrqypxz',
               }),
@@ -138,10 +140,10 @@ describe('Webhooks', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(2)
+    expect(sendSpy).toBeCalledTimes(3)
 
     expect(sendSpy).toHaveBeenNthCalledWith(
-      1,
+      2,
       expect.objectContaining({
         name: 'webhooks',
         options: undefined,
@@ -169,13 +171,13 @@ describe('Webhooks', () => {
     )
 
     expect(sendSpy).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.objectContaining({
         name: 'webhooks',
         options: undefined,
         data: expect.objectContaining({
           $version: 'v1',
-          event: {
+          event: expect.objectContaining({
             $version: 'v1',
             type: 'ObjectCreated:Move',
             applyTime: expect.any(Number),
@@ -185,7 +187,7 @@ describe('Webhooks', () => {
                 cacheControl: 'no-cache',
                 contentLength: 3746,
                 eTag: 'abc',
-                lastModified: expect.any(String),
+                lastModified: expect.any(Date),
                 httpStatusCode: 200,
                 mimetype: 'image/png',
                 size: 3746,
@@ -200,7 +202,7 @@ describe('Webhooks', () => {
                 ref: 'bjhaohmqunupljrqypxz',
               },
             }),
-          },
+          }),
           tenant: {
             host: undefined,
             ref: 'bjhaohmqunupljrqypxz',

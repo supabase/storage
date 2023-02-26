@@ -19,6 +19,7 @@ type StorageConfigType = {
   jwtSecret: string
   jwtAlgorithm: string
   multitenantDatabaseUrl?: string
+  databaseUrl?: string
   postgrestURL: string
   postgrestURLSuffix?: string
   postgrestURLScheme?: string
@@ -100,6 +101,7 @@ export function getConfig(): StorageConfigType {
     isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
     jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',
+    databaseUrl: getOptionalConfigFromEnv('DATABASE_URL'),
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
     postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
     postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),

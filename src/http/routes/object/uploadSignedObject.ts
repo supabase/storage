@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { getJwtSecret, getOwner, verifyJWT } from '../../../auth'
+import { getJwtSecret, SignedUploadToken, verifyJWT } from '../../../auth'
 import { StorageBackendError } from '../../../storage'
 
 const uploadSignedObjectParamsSchema = {
@@ -71,8 +71,10 @@ export default async function routes(fastify: FastifyInstance) {
       const { token } = request.query
 
       const jwtSecret = await getJwtSecret(request.tenantId)
+
+      let payload: SignedUploadToken
       try {
-        await verifyJWT(token, jwtSecret)
+        payload = (await verifyJWT(token, jwtSecret)) as SignedUploadToken
       } catch (e) {
         const err = e as Error
         throw new StorageBackendError('Invalid JWT', 400, err.message, err)
@@ -81,16 +83,24 @@ export default async function routes(fastify: FastifyInstance) {
       const contentType = request.headers['content-type']
       request.log.info(`content-type is ${contentType}`)
 
+      const { url, exp, owner } = payload
       const { bucketName } = request.params
       const objectName = request.params['*']
-      const owner = await getOwner(token, jwtSecret)
+
+      if (url !== `${bucketName}/${objectName}`) {
+        throw new StorageBackendError('InvalidSignature', 400, 'The url do not match the signature')
+      }
+
+      if (exp * 1000 < Date.now()) {
+        throw new StorageBackendError('ExpiredSignature', 400, 'The signature has expired')
+      }
 
       const { objectMetadata, path } = await request.storage
         .asSuperUser()
         .from(bucketName)
         .uploadNewObject(request, {
           owner,
-          objectName: objectName,
+          objectName,
         })
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({

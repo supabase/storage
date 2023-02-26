@@ -265,10 +265,14 @@ export class ObjectStorage {
    * Finds an object by name
    * @param objectName
    * @param columns
+   * @param asSuperUser
    */
-  async findObject(objectName: string, columns = 'id') {
+  async findObject(objectName: string, columns = 'id', asSuperUser = false) {
     mustBeValidKey(objectName, 'The object name contains invalid characters')
 
+    if (asSuperUser) {
+      return this.db.asSuperUser().findObject(this.bucketId, objectName, columns)
+    }
     return this.db.findObject(this.bucketId, objectName, columns)
   }
 
@@ -471,21 +475,14 @@ export class ObjectStorage {
    * Generates a signed url for uploading an object
    * @param objectName
    * @param url
-   * @param expiresIn
-   * @param metadata
-   * @returns
+   * @param expiresIn seconds
+   * @param owner
    */
-  async signUploadObjectUrl(
-    objectName: string,
-    url: string,
-    expiresIn: number,
-    metadata?: Record<string, string>
-  ) {
-    await this.db.findBucketById(this.bucketId) // Require bucket to be present
-
+  async signUploadObjectUrl(objectName: string, url: string, expiresIn: number, owner?: string) {
+    // check as super user if the object already exists
     let found
     try {
-      found = await this.findObject(objectName)
+      found = await this.findObject(objectName, 'id', true)
     } catch (e) {
       // Don't do anything, since it will throw an error if the object doesn't exist (but that is what we want.)
     }
@@ -494,10 +491,20 @@ export class ObjectStorage {
       throw new StorageBackendError('Duplicate', 409, 'The resource already exists')
     }
 
+    // check if user has INSERT permissions
+    await this.db.createObject({
+      bucket_id: this.bucketId,
+      name: objectName,
+      owner,
+      metadata: {},
+    })
+    // delete the object we just created
+    await this.db.asSuperUser().deleteObject(this.bucketId, objectName)
+
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(4).join('/'))
     const jwtSecret = await getJwtSecret(this.db.tenantId)
-    const token = await signJWT({ url: urlToSign, ...metadata }, jwtSecret, expiresIn)
+    const token = await signJWT({ owner, url: urlToSign }, jwtSecret, expiresIn)
 
     return `/object/upload/sign/${urlToSign}?token=${token}`
   }

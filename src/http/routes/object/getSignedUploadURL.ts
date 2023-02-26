@@ -55,12 +55,13 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const objectName = request.params['*']
       const { expiresIn } = request.body
+      const owner = request.owner
 
       const urlPath = request.url.split('?').shift()
 
       const signedUploadURL = await request.storage
         .from(bucketName)
-        .signUploadObjectUrl(objectName, urlPath as string, expiresIn)
+        .signUploadObjectUrl(objectName, urlPath as string, expiresIn, owner)
 
       return response.status(200).send({ signedUploadURL })
     }

@@ -8,7 +8,6 @@ import {
   S3Client,
   S3ClientConfig,
 } from '@aws-sdk/client-s3'
-import https from 'https'
 import { Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
 import {
@@ -19,6 +18,10 @@ import {
 } from './generic'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { StorageBackendError } from '../errors'
+import { getConfig } from '../../config'
+import Agent, { HttpsAgent } from 'agentkeepalive'
+
+const { globalS3Protocol, globalS3MaxSockets } = getConfig()
 
 /**
  * S3Backend
@@ -28,15 +31,21 @@ export class S3Backend implements StorageBackendAdapter {
   client: S3Client
 
   constructor(region: string, endpoint?: string | undefined, globalS3ForcePathStyle?: boolean) {
-    const agent = new https.Agent({
-      maxSockets: 50,
+    const agentOptions = {
+      maxSockets: globalS3MaxSockets,
       keepAlive: true,
-    })
+    }
+
+    const agent =
+      globalS3Protocol === 'http'
+        ? { httpAgent: new Agent(agentOptions) }
+        : { httpsAgent: new HttpsAgent(agentOptions) }
+
     const params: S3ClientConfig = {
       region,
       runtime: 'node',
       requestHandler: new NodeHttpHandler({
-        httpsAgent: agent,
+        ...agent,
         socketTimeout: 3000,
       }),
     }

@@ -6,6 +6,7 @@ import { Renderer, RenderOptions } from './renderer'
 import axiosRetry from 'axios-retry'
 import { StorageBackendError } from '../errors'
 import { Stream } from 'stream'
+import Agent from 'agentkeepalive'
 
 /**
  * All the transformations options available
@@ -18,7 +19,13 @@ export interface TransformOptions {
   quality?: number
 }
 
-const { imgLimits, imgProxyURL, imgProxyRequestTimeout } = getConfig()
+const {
+  imgLimits,
+  imgProxyHttpMaxSockets,
+  imgProxyHttpKeepAlive,
+  imgProxyURL,
+  imgProxyRequestTimeout,
+} = getConfig()
 
 const LIMITS = {
   height: {
@@ -34,10 +41,20 @@ const LIMITS = {
 const client = axios.create({
   baseURL: imgProxyURL,
   timeout: imgProxyRequestTimeout * 1000,
+  httpAgent:
+    imgProxyHttpMaxSockets > 0
+      ? new Agent({
+          maxSockets: imgProxyHttpMaxSockets,
+          freeSocketTimeout: 2 * 1000,
+          keepAlive: true,
+          timeout: imgProxyHttpKeepAlive * 1000,
+        })
+      : undefined,
 })
 
 axiosRetry(client, {
-  retries: 10,
+  retries: 5,
+  shouldResetTimeout: true,
   retryDelay: (retryCount, error) => {
     let exponentialTime = 50
 

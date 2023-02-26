@@ -20,4 +20,4 @@ COPY --from=0 /app/node_modules node_modules
 COPY --from=1 /app/dist dist
 EXPOSE 5000
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["pm2-runtime", "ecosystem.config.js"]
+CMD ["node", "dist/server.js"]

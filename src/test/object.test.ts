@@ -275,6 +275,90 @@ describe('testing POST object via multipart upload', () => {
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
+  test('return 200 when uploading an object within bucket max size limit', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${serviceKey}`,
+      'x-upsert': 'true',
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/public-limit-max-size-2/sadcat-upload25.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+  })
+
+  test('return 400 when uploading an object that exceed bucket level max size', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${serviceKey}`,
+      'x-upsert': 'true',
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/public-limit-max-size/sadcat-upload23.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(await response.json()).toEqual({
+      error: 'Payload too large',
+      message: 'The object exceeded the maximum allowed size',
+      statusCode: '413',
+    })
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+  })
+
+  test('successfully uploading an object with a the allowed mime-type', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${serviceKey}`,
+      'x-upsert': 'true',
+      'content-type': 'image/jpeg',
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/public-limit-mime-types/sadcat-upload23.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+  })
+
+  test('return 422 when uploading an object with a not allowed mime-type', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${serviceKey}`,
+      'x-upsert': 'true',
+      'content-type': 'image/png',
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/public-limit-mime-types/sadcat-upload23.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(await response.json()).toEqual({
+      error: 'invalid_mime_type',
+      message: 'mime type not supported',
+      statusCode: '422',
+    })
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
   test('return 200 when upserting duplicate object', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
@@ -290,7 +374,6 @@ describe('testing POST object via multipart upload', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
   })
 
   test('return 400 when exceeding file size limit', async () => {

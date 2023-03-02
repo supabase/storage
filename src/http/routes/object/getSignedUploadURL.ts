@@ -22,14 +22,14 @@ const getSignedUploadURLBodySchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    signedUploadURL: {
+    url: {
       type: 'string',
       examples: [
         '/object/sign/upload/avatars/folder/cat.png?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJhdmF0YXJzL2ZvbGRlci9jYXQucG5nIiwiaWF0IjoxNjE3NzI2MjczLCJleHAiOjE2MTc3MjcyNzN9.s7Gt8ME80iREVxPhH01ZNv8oUn4XtaWsmiQ5csiUHn4',
       ],
     },
   },
-  required: ['signedUploadURL'],
+  required: ['url'],
 }
 interface getSignedURLRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof getSignedUploadURLParamsSchema>
@@ -63,7 +63,7 @@ export default async function routes(fastify: FastifyInstance) {
         .from(bucketName)
         .signUploadObjectUrl(objectName, urlPath as string, expiresIn, owner)
 
-      return response.status(200).send({ signedUploadURL })
+      return response.status(200).send({ url: signedUploadURL })
     }
   )
 }

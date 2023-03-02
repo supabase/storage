@@ -36,6 +36,13 @@ export class ObjectStorage {
   ) {}
 
   /**
+   * Get a new instance of ObjectStorage with super user privileges
+   */
+  asSuperUser() {
+    return new ObjectStorage(this.backend, this.db.asSuperUser(), this.bucketId)
+  }
+
+  /**
    * Upload an new object to a storage
    * @param request
    * @param options
@@ -267,12 +274,9 @@ export class ObjectStorage {
    * @param columns
    * @param asSuperUser
    */
-  async findObject(objectName: string, columns = 'id', asSuperUser = false) {
+  async findObject(objectName: string, columns = 'id') {
     mustBeValidKey(objectName, 'The object name contains invalid characters')
 
-    if (asSuperUser) {
-      return this.db.asSuperUser().findObject(this.bucketId, objectName, columns)
-    }
     return this.db.findObject(this.bucketId, objectName, columns)
   }
 
@@ -482,7 +486,7 @@ export class ObjectStorage {
     // check as super user if the object already exists
     let found
     try {
-      found = await this.findObject(objectName, 'id', true)
+      found = await this.asSuperUser().findObject(objectName)
     } catch (e) {
       // Don't do anything, since it will throw an error if the object doesn't exist (but that is what we want.)
     }
@@ -492,14 +496,12 @@ export class ObjectStorage {
     }
 
     // check if user has INSERT permissions
-    await this.db.createObject({
+    await this.db.canInsertObject({
       bucket_id: this.bucketId,
       name: objectName,
       owner,
       metadata: {},
     })
-    // delete the object we just created
-    await this.db.asSuperUser().deleteObject(this.bucketId, objectName)
 
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(4).join('/'))

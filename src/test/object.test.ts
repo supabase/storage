@@ -1247,7 +1247,7 @@ describe('testing generating signed URL for upload', () => {
     })
     expect(response.statusCode).toBe(200)
     const result = JSON.parse(response.body)
-    expect(result.signedUploadURL).toBeTruthy()
+    expect(result.url).toBeTruthy()
     // Ensure that row does not exist in database.
     const postgrest = getSuperuserPostgrestClient()
     const objectResponse = await postgrest

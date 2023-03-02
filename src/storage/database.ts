@@ -204,7 +204,6 @@ export class Database {
         ],
         {
           onConflict: 'name, bucket_id',
-          returning: 'minimal',
         }
       )
       .single()
@@ -220,21 +219,20 @@ export class Database {
   }
 
   async createObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata'>) {
-    const { error, status } = await this.postgrest
+    const {
+      error,
+      status,
+      data: result,
+    } = await this.postgrest
       .from<Obj>('objects')
-      .insert(
-        [
-          {
-            name: data.name,
-            owner: data.owner,
-            bucket_id: data.bucket_id,
-            metadata: data.metadata,
-          },
-        ],
+      .insert([
         {
-          returning: 'minimal',
-        }
-      )
+          name: data.name,
+          owner: data.owner,
+          bucket_id: data.bucket_id,
+          metadata: data.metadata,
+        },
+      ])
       .single()
 
     if (error) {
@@ -244,7 +242,7 @@ export class Database {
       })
     }
 
-    return null
+    return result as Obj
   }
 
   async deleteObject(bucketId: string, objectName: string) {

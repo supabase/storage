@@ -13,6 +13,10 @@ const updateObjectParamsSchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
+    id: {
+      type: 'string',
+      examples: ['2eb16359-ecd4-4070-8eb1-8408baa42493'],
+    },
     Key: { type: 'string', examples: ['projectref/avatars/folder/cat.png'] },
   },
   required: ['Key'],
@@ -56,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
       const owner = request.owner as string
 
-      const { objectMetadata, path } = await request.storage
+      const { objectMetadata, path, id } = await request.storage
         .from(bucketName)
         .uploadOverridingObject(request, {
           owner,
@@ -65,6 +69,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({
         Key: path,
+        id,
       })
     }
   )

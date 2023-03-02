@@ -1,4 +1,4 @@
-import { StorageBackendAdapter, ObjectMetadata } from './backend'
+import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
 import { getJwtSecret, signJWT } from '../auth'
@@ -44,7 +44,7 @@ export class ObjectStorage {
       .asSuperUser()
       .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
 
-    await this.createObject(
+    const { id } = await this.createObject(
       {
         name: options.objectName,
         owner: options.owner,
@@ -75,7 +75,7 @@ export class ObjectStorage {
         metadata: objectMetadata,
       })
 
-      return { objectMetadata, path }
+      return { objectMetadata, path, id }
     } catch (e) {
       // undo operations as super user
       await this.db.asSuperUser().deleteObject(this.bucketId, options.objectName)
@@ -96,7 +96,7 @@ export class ObjectStorage {
       .asSuperUser()
       .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
 
-    await this.updateObjectOwner(options.objectName, options.owner)
+    const { id } = await this.updateObjectOwner(options.objectName, options.owner)
 
     const path = `${this.bucketId}/${options.objectName}`
     const s3Key = `${this.db.tenantId}/${path}`
@@ -120,7 +120,7 @@ export class ObjectStorage {
         metadata: objectMetadata,
       })
 
-      return { objectMetadata, path }
+      return { objectMetadata, path, id }
     } catch (e) {
       // @todo tricky to handle since we need to undo the s3 upload
       throw e
@@ -139,18 +139,16 @@ export class ObjectStorage {
     mustBeValidKey(data.name, 'The object name contains invalid characters')
 
     if (isUpsert) {
-      await this.upsertObject({
+      return await this.upsertObject({
         name: data.name,
         owner: data.owner,
       })
     } else {
-      await this.db.createObject({
+      return await this.db.createObject({
         bucket_id: this.bucketId,
         ...data,
       })
     }
-
-    return null
   }
 
   /**

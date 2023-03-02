@@ -15,10 +15,12 @@ const copyRequestBodySchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
+    id: { type: 'string', examples: ['2eb16359-ecd4-4070-8eb1-8408baa42493'] },
     Key: { type: 'string', examples: ['folder/destination.png'] },
   },
-  required: ['Key'],
+  required: ['Key', 'id'],
 }
+
 interface copyRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof copyRequestBodySchema>
 }
@@ -52,6 +54,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       return response.status(result.httpStatusCode ?? 200).send({
         Key: `${bucketId}/${destinationKey}`,
+        id: result.destObject.id,
       })
     }
   )

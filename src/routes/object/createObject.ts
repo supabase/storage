@@ -36,7 +36,7 @@ const createObjectParamsSchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    Id: {
+    id: {
       type: 'string',
       examples: ['2eb16359-ecd4-4070-8eb1-8408baa42493'],
     },
@@ -45,7 +45,7 @@ const successResponseSchema = {
       examples: ['avatars/folder/cat.png'],
     },
   },
-  required: ['Id', 'Key'],
+  required: ['id', 'Key'],
 }
 interface createObjectRequestInterface extends RequestGenericInterface {
   Params: FromSchema<typeof createObjectParamsSchema>
@@ -254,7 +254,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       return response.status(uploadResult.httpStatusCode ?? 200).send({
-        Id: updateStatusData?.id,
+        id: updateStatusData?.id,
         Key: path,
       })
 

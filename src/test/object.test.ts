@@ -202,7 +202,7 @@ describe('testing POST object via multipart upload', () => {
     expect(S3Backend.prototype.uploadObject).toBeCalled()
     expect(response.json()).toMatchObject({
       Key: 'bucket2/authenticated/casestudy1.png',
-      Id: expect.any(String),
+      id: expect.any(String),
     })
   })
 
@@ -412,7 +412,7 @@ describe('testing POST object via binary upload', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toBeCalled()
     expect(response.json()).toMatchObject({
-      Id: expect.any(String),
+      id: expect.any(String),
       Key: 'bucket2/authenticated/binary-casestudy1.png',
     })
   })
@@ -647,7 +647,7 @@ describe('testing PUT object', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toBeCalled()
     expect(response.json()).toMatchObject({
-      Id: expect.any(String),
+      id: expect.any(String),
       Key: 'bucket2/authenticated/cat.jpg',
     })
   })
@@ -743,7 +743,7 @@ describe('testing PUT object via binary upload', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toBeCalled()
     expect(response.json()).toMatchObject({
-      Id: expect.any(String),
+      id: expect.any(String),
       Key: 'bucket2/authenticated/cat.jpg',
     })
   })
@@ -848,7 +848,7 @@ describe('testing copy object', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toBeCalled()
     expect(response.json()).toMatchObject({
-      Id: expect.any(String),
+      id: expect.any(String),
       Key: 'bucket2/authenticated/casestudy11.png',
     })
   })

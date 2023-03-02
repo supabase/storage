@@ -29,13 +29,13 @@ const copyRequestBodySchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    Id: {
+    id: {
       type: 'string',
       examples: ['2eb16359-ecd4-4070-8eb1-8408baa42493'],
     },
     Key: { type: 'string', examples: ['folder/destination.png'] },
   },
-  required: ['Key', 'Id'],
+  required: ['Key', 'id'],
 }
 interface copyRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof copyRequestBodySchema>
@@ -129,7 +129,7 @@ export default async function routes(fastify: FastifyInstance) {
         s3DestinationKey
       )
       return response.status(copyResult.httpStatusCode ?? 200).send({
-        Id: results?.id,
+        id: results?.id,
         Key: `${bucketId}/${destinationKey}`,
       })
     }

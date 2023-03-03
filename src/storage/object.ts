@@ -272,7 +272,6 @@ export class ObjectStorage {
    * Finds an object by name
    * @param objectName
    * @param columns
-   * @param asSuperUser
    */
   async findObject(objectName: string, columns = 'id') {
     mustBeValidKey(objectName, 'The object name contains invalid characters')

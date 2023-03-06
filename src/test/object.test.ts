@@ -1241,9 +1241,6 @@ describe('testing generating signed URL for upload', () => {
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
-      payload: {
-        expiresIn: 1000,
-      },
     })
     expect(response.statusCode).toBe(200)
     const result = JSON.parse(response.body)
@@ -1272,9 +1269,6 @@ describe('testing generating signed URL for upload', () => {
       headers: {
         authorization: `Bearer ${anonKey}`,
       },
-      payload: {
-        expiresIn: 1000,
-      },
     })
     expect(response.statusCode).toBe(400)
     expect(response.body).toBe(
@@ -1302,9 +1296,6 @@ describe('testing generating signed URL for upload', () => {
     const response = await app().inject({
       method: 'POST',
       url: '/object/upload/sign/bucket2/authenticated/cat.jpg',
-      payload: {
-        expiresIn: 1000,
-      },
     })
     expect(response.statusCode).toBe(400)
   })
@@ -1315,9 +1306,6 @@ describe('testing generating signed URL for upload', () => {
       url: '/object/upload/sign/notfound/authenticated/cat.jpg',
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
-      },
-      payload: {
-        expiresIn: 1000,
       },
     })
     expect(response.statusCode).toBe(400)
@@ -1330,9 +1318,6 @@ describe('testing generating signed URL for upload', () => {
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
-      payload: {
-        expiresIn: 1000,
-      },
     })
     expect(response.statusCode).toBe(200)
   })
@@ -1343,9 +1328,6 @@ describe('testing generating signed URL for upload', () => {
       url: '/object/upload/sign/bucket2/authenticated/cat.jpg',
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
-      },
-      payload: {
-        expiresIn: 1000,
       },
     })
     expect(response.statusCode).toBe(400)

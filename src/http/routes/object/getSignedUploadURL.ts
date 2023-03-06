@@ -2,6 +2,9 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
+import { getConfig } from '../../../config'
+
+const { signedUploadUrlExpirationTime } = getConfig()
 
 const getSignedUploadURLParamsSchema = {
   type: 'object',
@@ -10,13 +13,6 @@ const getSignedUploadURLParamsSchema = {
     '*': { type: 'string', examples: ['folder/cat.png'] },
   },
   required: ['bucketName', '*'],
-} as const
-const getSignedUploadURLBodySchema = {
-  type: 'object',
-  properties: {
-    expiresIn: { type: 'integer', minimum: 1, examples: [60000] },
-  },
-  required: ['expiresIn'],
 } as const
 
 const successResponseSchema = {
@@ -33,14 +29,12 @@ const successResponseSchema = {
 }
 interface getSignedURLRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof getSignedUploadURLParamsSchema>
-  Body: FromSchema<typeof getSignedUploadURLBodySchema>
 }
 
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Generate a presigned url to upload an object'
 
   const schema = createDefaultSchema(successResponseSchema, {
-    body: getSignedUploadURLBodySchema,
     params: getSignedUploadURLParamsSchema,
     summary,
     tags: ['object'],
@@ -54,14 +48,13 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketName } = request.params
       const objectName = request.params['*']
-      const { expiresIn } = request.body
       const owner = request.owner
 
       const urlPath = request.url.split('?').shift()
 
       const signedUploadURL = await request.storage
         .from(bucketName)
-        .signUploadObjectUrl(objectName, urlPath as string, expiresIn, owner)
+        .signUploadObjectUrl(objectName, urlPath as string, signedUploadUrlExpirationTime, owner)
 
       return response.status(200).send({ url: signedUploadURL })
     }

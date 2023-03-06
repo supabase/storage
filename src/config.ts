@@ -60,6 +60,7 @@ type StorageConfigType = {
   rateLimiterRenderPathMaxReqSec: number
   rateLimiterRedisConnectTimeout: number
   rateLimiterRedisCommandTimeout: number
+  signedUploadUrlExpirationTime: number
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -164,6 +165,9 @@ export function getConfig(): StorageConfigType {
     rateLimiterRedisCommandTimeout: parseInt(
       getOptionalConfigFromEnv('RATE_LIMITER_REDIS_COMMAND_TIMEOUT') || '2',
       10
+    ),
+    signedUploadUrlExpirationTime: parseInt(
+      getOptionalConfigFromEnv('SIGNED_UPLOAD_URL_EXPIRATION_TIME') || '60'
     ),
   }
 }

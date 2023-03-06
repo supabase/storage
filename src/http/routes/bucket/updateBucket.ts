@@ -7,7 +7,7 @@ const updateBucketBodySchema = {
   type: 'object',
   properties: {
     public: { type: 'boolean', examples: [false] },
-    file_size_limit: { anyOf: [{ type: 'string' }, { type: 'integer' }] },
+    file_size_limit: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
     allowed_mime_types: { type: 'array', items: { type: 'string' } },
   },
 } as const

@@ -84,6 +84,56 @@ export class ImageRenderer extends Renderer {
   }
 
   /**
+   * Applies whitelisted transformations with specific limits applied
+   * @param options
+   * @param keepOriginal
+   */
+  static applyTransformation(options: TransformOptions, keepOriginal?: boolean): string[] {
+    const segments = []
+
+    if (options.height) {
+      segments.push(`height:${clamp(options.height, LIMITS.height.min, LIMITS.height.max)}`)
+    }
+
+    if (options.width) {
+      segments.push(`width:${clamp(options.width, LIMITS.width.min, LIMITS.width.max)}`)
+    }
+
+    if (options.width || options.height) {
+      if (keepOriginal) {
+        segments.push(`resize:${options.resize}`)
+      } else {
+        segments.push(`resizing_type:${this.formatResizeType(options.resize)}`)
+      }
+    }
+
+    if (options.quality) {
+      segments.push(`quality:${options.quality}`)
+    }
+
+    if (options.format && options.format !== 'origin') {
+      segments.push(`format:${options.format}`)
+    }
+
+    return segments
+  }
+
+  protected static formatResizeType(resize: TransformOptions['resize']) {
+    const defaultResize = 'fill'
+
+    switch (resize) {
+      case 'cover':
+        return defaultResize
+      case 'contain':
+        return 'fit'
+      case 'fill':
+        return 'force'
+      default:
+        return defaultResize
+    }
+  }
+
+  /**
    * Get the base http client
    */
   getClient() {
@@ -185,51 +235,6 @@ export class ImageRenderer extends Renderer {
       }
 
       throw e
-    }
-  }
-
-  /**
-   * Applies whitelisted transformations with specific limits applied
-   * @param options
-   */
-  static applyTransformation(options: TransformOptions): string[] {
-    const segments = []
-
-    if (options.height) {
-      segments.push(`height:${clamp(options.height, LIMITS.height.min, LIMITS.height.max)}`)
-    }
-
-    if (options.width) {
-      segments.push(`width:${clamp(options.width, LIMITS.width.min, LIMITS.width.max)}`)
-    }
-
-    if (options.width || options.height) {
-      segments.push(`resizing_type:${this.formatResizeType(options.resize)}`)
-    }
-
-    if (options.quality) {
-      segments.push(`quality:${options.quality}`)
-    }
-
-    if (options.format && options.format !== 'origin') {
-      segments.push(`format:${options.format}`)
-    }
-
-    return segments
-  }
-
-  protected static formatResizeType(resize: TransformOptions['resize']) {
-    const defaultResize = 'fill'
-
-    switch (resize) {
-      case 'cover':
-        return defaultResize
-      case 'contain':
-        return 'fit'
-      case 'fill':
-        return 'force'
-      default:
-        return defaultResize
     }
   }
 

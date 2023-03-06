@@ -14,6 +14,7 @@ import {
   ObjectRemovedMove,
   ObjectUpdatedMetadata,
 } from '../queue'
+import { StorageBackendError } from './errors'
 
 export interface UploadObjectOptions {
   objectName: string
@@ -33,6 +34,13 @@ export class ObjectStorage {
     private readonly db: Database,
     private readonly bucketId: string
   ) {}
+
+  /**
+   * Get a new instance of ObjectStorage with super user privileges
+   */
+  asSuperUser() {
+    return new ObjectStorage(this.backend, this.db.asSuperUser(), this.bucketId)
+  }
 
   /**
    * Upload an new object to a storage
@@ -464,5 +472,41 @@ export class ObjectStorage {
         }
       })
     )
+  }
+
+  /**
+   * Generates a signed url for uploading an object
+   * @param objectName
+   * @param url
+   * @param expiresIn seconds
+   * @param owner
+   */
+  async signUploadObjectUrl(objectName: string, url: string, expiresIn: number, owner?: string) {
+    // check as super user if the object already exists
+    let found
+    try {
+      found = await this.asSuperUser().findObject(objectName)
+    } catch (e) {
+      // Don't do anything, since it will throw an error if the object doesn't exist (but that is what we want.)
+    }
+
+    if (found) {
+      throw new StorageBackendError('Duplicate', 409, 'The resource already exists')
+    }
+
+    // check if user has INSERT permissions
+    await this.db.canInsertObject({
+      bucket_id: this.bucketId,
+      name: objectName,
+      owner,
+      metadata: {},
+    })
+
+    const urlParts = url.split('/')
+    const urlToSign = decodeURI(urlParts.splice(4).join('/'))
+    const jwtSecret = await getJwtSecret(this.db.tenantId)
+    const token = await signJWT({ owner, url: urlToSign }, jwtSecret, expiresIn)
+
+    return `/object/upload/sign/${urlToSign}?token=${token}`
   }
 }

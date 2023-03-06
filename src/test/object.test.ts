@@ -1228,6 +1228,222 @@ describe('testing generating signed URL', () => {
 })
 
 /**
+ * POST /upload/sign/:bucketName/*
+ */
+describe('testing generating signed URL for upload', () => {
+  test('check if RLS policies are respected: authenticated user is able to sign upload URL for a resource', async () => {
+    const BUCKET_ID = 'bucket2'
+    const OBJECT_NAME = 'authenticated/cat1.jpg'
+
+    const response = await app().inject({
+      method: 'POST',
+      url: `/object/upload/sign/${BUCKET_ID}/${OBJECT_NAME}`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const result = JSON.parse(response.body)
+    expect(result.url).toBeTruthy()
+    // Ensure that row does not exist in database.
+    const postgrest = getSuperuserPostgrestClient()
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .select()
+      .match({
+        name: OBJECT_NAME,
+        bucket_id: BUCKET_ID,
+      })
+      .maybeSingle()
+    expect(objectResponse.error).toBe(null)
+    expect(objectResponse.data).toBe(null)
+  })
+
+  test('check if RLS policies are respected: anon user is not able to sign upload URL for authenticated resource', async () => {
+    const BUCKET_ID = 'bucket2'
+    const OBJECT_NAME = 'authenticated/cat1.jpg'
+
+    const response = await app().inject({
+      method: 'POST',
+      url: `/object/upload/sign/${BUCKET_ID}/${OBJECT_NAME}`,
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.body).toBe(
+      JSON.stringify({
+        statusCode: '403',
+        error: '',
+        message: 'new row violates row-level security policy for table "objects"',
+      })
+    )
+    // Ensure that row does not exist in database.
+    const postgrest = getSuperuserPostgrestClient()
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .select()
+      .match({
+        name: OBJECT_NAME,
+        bucket_id: BUCKET_ID,
+      })
+      .maybeSingle()
+    expect(objectResponse.error).toBe(null)
+    expect(objectResponse.data).toBe(null)
+  })
+
+  test('user is not able to sign a upload url without Auth header', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/upload/sign/bucket2/authenticated/cat.jpg',
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('return 400 when generating signed upload urls from a non existent bucket', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/upload/sign/notfound/authenticated/cat.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('signing upload url of a non existent key', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/upload/sign/bucket2/authenticated/notfound.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+  })
+
+  test('signing upload url of an existent key', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/upload/sign/bucket2/authenticated/cat.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.body).statusCode).toBe('409')
+  })
+})
+
+/**
+ * PUT /upload/sign/:bucketName/*
+ */
+describe('testing uploading with generated signed upload URL', () => {
+  test('upload object with a token', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      'content-type': 'image/jpeg',
+    })
+
+    const BUCKET_ID = 'bucket2'
+    const OBJECT_NAME = 'public/sadcat-upload1.png'
+    const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
+    const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
+
+    const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, 100)
+    const response = await app().inject({
+      method: 'PUT',
+      url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+
+    // check that row has neccessary data
+    const postgrest = getSuperuserPostgrestClient()
+    const objectResponse = await postgrest
+      .from<Obj>('objects')
+      .select()
+      .match({
+        name: OBJECT_NAME,
+        bucket_id: BUCKET_ID,
+      })
+      .maybeSingle()
+    expect(objectResponse.error).toBe(null)
+    expect(objectResponse.data?.owner).toBe(owner)
+
+    // remove row to not to break other tests
+    await postgrest
+      .from<Obj>('objects')
+      .delete()
+      .match({
+        name: OBJECT_NAME,
+        bucket_id: BUCKET_ID,
+      })
+      .maybeSingle()
+  })
+
+  test('upload object without a token', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      'content-type': 'image/jpeg',
+    })
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: `/object/upload/sign/bucket2/public/sadcat-upload1.png`,
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('upload object with a malformed JWT', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      'content-type': 'image/jpeg',
+    })
+
+    const response = await app().inject({
+      method: 'PUT',
+      url: `/object/upload/sign/bucket2/public/sadcat-upload1.png?token=xxx`,
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('upload object with an expired JWT', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      'content-type': 'image/jpeg',
+    })
+
+    const BUCKET_ID = 'bucket2'
+    const OBJECT_NAME = 'public/sadcat-upload1.png'
+    const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
+    const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
+
+    const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, -1)
+    const response = await app().inject({
+      method: 'PUT',
+      url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+})
+
+/**
  * POST /sign/:bucketName
  */
 describe('testing generating signed URLs', () => {

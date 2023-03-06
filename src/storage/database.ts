@@ -399,4 +399,22 @@ export class Database {
 
     return data as Obj[]
   }
+
+  async canInsertObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata'>) {
+    const { error, status } = await this.postgrest.rpc<void>('can_insert_object', {
+      bucketid: data.bucket_id,
+      name: data.name,
+      owner: data.owner ?? null,
+      metadata: data.metadata,
+    })
+
+    if (error) {
+      throw new DatabaseError('cannot insert object', status, error, {
+        bucketId: data.bucket_id,
+        name: data.name,
+      })
+    }
+
+    return true
+  }
 }

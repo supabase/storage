@@ -86,6 +86,7 @@ export class ImageRenderer extends Renderer {
   /**
    * Applies whitelisted transformations with specific limits applied
    * @param options
+   * @param keepOriginal
    */
   static applyTransformation(options: TransformOptions, keepOriginal?: boolean): string[] {
     const segments = []

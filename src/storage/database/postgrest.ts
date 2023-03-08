@@ -406,4 +406,39 @@ export class StoragePostgrestDB implements Database {
   waitObjectLock(bucketId: string, objectName: string): Promise<boolean> {
     return Promise.resolve(true)
   }
+
+  testPermission<T extends (db: Database) => any>(fn: T): Promise<Awaited<ReturnType<T>>> {
+    return fn(this)
+  }
+
+  async updateObject(
+    bucketId: string,
+    name: string,
+    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'upload_state'>
+  ): Promise<Obj> {
+    const {
+      error,
+      status,
+      data: res,
+    } = await this.postgrest
+      .from<Obj>('objects')
+      .update({
+        name: data.name,
+        owner: data.owner,
+        metadata: data.metadata,
+        version: data.version,
+        upload_state: data.upload_state,
+      })
+      .match({ bucket_id: bucketId, name: name })
+      .single()
+
+    if (error) {
+      throw new DatabaseError('failed updating object name', status, error, {
+        bucketId: bucketId,
+        name: name,
+      })
+    }
+
+    return data as Obj
+  }
 }

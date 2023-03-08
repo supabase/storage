@@ -3,21 +3,29 @@ import http from 'http'
 import { ERRORS } from '@tus/server'
 import { HeadHandler } from '@tus/server/dist/handlers/HeadHandler'
 import { PostHandler } from '@tus/server/dist/handlers/PostHandler'
-import { Storage } from '../../../storage'
+import { isRenderableError, Storage } from '../../../storage'
 import { MultiPartRequest } from './lifecycle'
 import { Database } from '../../../storage/database'
 
 const reExtractFileID = /([^/]+)\/?$/
 
-function lock<T extends (db: Database) => any>(id: string, storage: Storage, fn: T) {
+async function lock<T extends (db: Database) => any>(id: string, storage: Storage, fn: T) {
   const [, bucket, ...objParts] = id.split('/')
   const version = objParts.pop()
   const objectName = objParts.join('/')
 
-  return storage.db.withTransaction(async (db) => {
-    await db.waitObjectLock(bucket, objectName, version)
-    return await fn(db)
-  })
+  try {
+    return await storage.db.withTransaction(async (db) => {
+      await db.mustLockObject(bucket, objectName, version)
+      return await fn(db)
+    })
+  } catch (e) {
+    if (isRenderableError(e)) {
+      ;(e as any).status_code = e.render().statusCode
+    }
+
+    throw e
+  }
 }
 
 export class Patch extends PatchHandler {
@@ -39,8 +47,6 @@ export class Patch extends PatchHandler {
     if (id === false) {
       throw ERRORS.FILE_NOT_FOUND
     }
-
-    console.log('id from patch', id)
 
     return lock(id, req.upload.storage, (db) => {
       req.upload.storage = new Storage(req.upload.storage.backend, db)
@@ -69,7 +75,6 @@ export class Head extends HeadHandler {
       throw ERRORS.FILE_NOT_FOUND
     }
 
-    console.time('patch')
     const result = await lock(id, req.upload.storage, (db) => {
       req.upload.storage = new Storage(req.upload.storage.backend, db)
       return super.send(req, res)

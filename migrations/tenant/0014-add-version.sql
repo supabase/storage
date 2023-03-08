@@ -1,1 +1,1 @@
-alter table storage.objects add column version text default null;
+alter table storage.objects add column if not exists version text default null;

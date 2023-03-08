@@ -47,9 +47,9 @@ export default async function routes(fastify: FastifyInstance) {
   }
   const tusServer = new Server(serverOptions)
 
-  tusServer.handlers.PATCH = new Patch(s3Store, serverOptions)
-  tusServer.handlers.HEAD = new Head(s3Store, serverOptions)
-  tusServer.handlers.POST = new Post(s3Store, serverOptions)
+  // tusServer.handlers.PATCH = new Patch(s3Store, serverOptions)
+  // tusServer.handlers.HEAD = new Head(s3Store, serverOptions)
+  // tusServer.handlers.POST = new Post(s3Store, serverOptions)
 
   fastify.register(async function authorizationContext(fastify) {
     fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>

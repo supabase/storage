@@ -1,5 +1,6 @@
 import { Bucket, Obj } from '../schemas'
 import { ObjectMetadata } from '../backend'
+import { TenantConnection } from '../../database/connection'
 
 export interface SearchObjectOption {
   search?: string
@@ -30,6 +31,14 @@ export interface TransactionOptions {
   isolation?: string
   retry?: number
   readOnly?: boolean
+}
+
+export interface DatabaseOptions<DB, TNX> {
+  tenantId: string
+  host: string
+  superAdmin?: DB
+  tnx?: TNX
+  parentConnection?: TenantConnection
 }
 
 export interface Database {
@@ -78,7 +87,7 @@ export interface Database {
 
   upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>
-  ): Promise<Obj>
+  ): Promise<Omit<Obj, 'id'>>
   updateObject(
     bucketId: string,
     name: string,

@@ -122,6 +122,7 @@ export async function getPostgresConnection(
   const role = verifiedJWT?.role || 'anon'
 
   return await TenantConnection.create(connections.values, {
+    tenantId: options.tenantId as string,
     url: url as string,
     role,
     jwt: verifiedJWT,

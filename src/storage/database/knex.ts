@@ -2,9 +2,9 @@ import { Bucket, Obj } from '../schemas'
 import { RenderableError, StorageBackendError, StorageError } from '../errors'
 import { ObjectMetadata } from '../backend'
 import { Knex } from 'knex'
-import { DatabaseOptions } from './postgrest'
 import {
   Database,
+  DatabaseOptions,
   FindBucketFilters,
   FindObjectFilters,
   SearchObjectOption,
@@ -113,27 +113,25 @@ export class StorageKnexDB implements Database {
       'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types'
     >
   ) {
-    const [bucket] = await this.runQuery(async (knex) => {
-      return knex.from<Bucket>('buckets').insert(
-        {
-          id: data.id,
-          name: data.name,
-          owner: data.owner,
-          public: data.public,
-          allowed_mime_types: data.allowed_mime_types,
-          file_size_limit: data.file_size_limit,
-        },
-        'id'
-      )
+    const bucketData = {
+      id: data.id,
+      name: data.name,
+      owner: data.owner,
+      public: data.public,
+      allowed_mime_types: data.allowed_mime_types,
+      file_size_limit: data.file_size_limit,
+    }
+    const bucket = await this.runQuery(async (knex) => {
+      return knex.from<Bucket>('buckets').insert(bucketData) as Promise<{ rowCount: number }>
     })
 
-    if (!bucket) {
+    if (bucket.rowCount === 0) {
       throw new DBError('Bucket not found', 404, 'Bucket not found', undefined, {
         bucketId: data.id,
       })
     }
 
-    return bucket
+    return bucketData
   }
 
   async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
@@ -182,7 +180,6 @@ export class StorageKnexDB implements Database {
       return knex<Bucket>('buckets')
         .whereIn('id', Array.isArray(bucketId) ? bucketId : [bucketId])
         .delete()
-        .returning('*')
     })
   }
 
@@ -232,24 +229,22 @@ export class StorageKnexDB implements Database {
   }
 
   async upsertObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>) {
-    const [object] = await this.runQuery((knex) => {
-      return knex
-        .from<Obj>('objects')
-        .insert(
-          {
-            name: data.name,
-            owner: data.owner,
-            bucket_id: data.bucket_id,
-            metadata: data.metadata,
-            version: data.version,
-          },
-          'id'
-        )
-        .onConflict(['name', 'bucket_id'])
-        .merge()
+    const objectData = {
+      name: data.name,
+      owner: data.owner,
+      bucket_id: data.bucket_id,
+      metadata: data.metadata,
+      version: data.version,
+    }
+    await this.runQuery((knex) => {
+      return knex.from<Obj>('objects').insert(objectData).onConflict(['name', 'bucket_id']).merge({
+        metadata: data.metadata,
+        version: data.version,
+        owner: data.owner,
+      })
     })
 
-    return object
+    return objectData
   }
 
   async updateObject(
@@ -266,7 +261,7 @@ export class StorageKnexDB implements Database {
           version: data.version,
           upload_state: data.upload_state,
         },
-        'id'
+        '*'
       )
     })
 
@@ -280,18 +275,16 @@ export class StorageKnexDB implements Database {
   async createObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'upload_state'>
   ) {
-    const [object] = await this.runQuery((knex) => {
-      return knex.from<Obj>('objects').insert(
-        {
-          name: data.name,
-          owner: data.owner,
-          bucket_id: data.bucket_id,
-          metadata: data.metadata,
-          version: data.version,
-          upload_state: data.upload_state,
-        },
-        '*'
-      )
+    const object = {
+      name: data.name,
+      owner: data.owner,
+      bucket_id: data.bucket_id,
+      metadata: data.metadata,
+      version: data.version,
+      upload_state: data.upload_state,
+    }
+    await this.runQuery((knex) => {
+      return knex.from<Obj>('objects').insert(object)
     })
 
     return object
@@ -462,61 +455,31 @@ export class StorageKnexDB implements Database {
   ): Promise<Awaited<ReturnType<T>>> {
     let tnx = this.options.tnx
 
-    const needsNewTransaction =
-      !tnx ||
-      Boolean(
-        this.options.parentConnection?.role &&
-          this.connection.role !== this.options.parentConnection?.role
-      )
-
-    // console.log(
-    //   this.connection.role,
-    //   this.options.parentConnection?.role,
-    //   `has parent connection ${Boolean(this.options.parentConnection)} - p_role: ${
-    //     this.options.parentConnection?.role
-    //   }`
-    // )
+    const differentScopes = Boolean(
+      this.options.parentConnection?.role &&
+        this.connection.role !== this.options.parentConnection?.role
+    )
+    const needsNewTransaction = !tnx || differentScopes
 
     if (!tnx || needsNewTransaction) {
       tnx = await this.connection.transaction(isolation, this.options.tnx)()
       tnx.on('query-error', (error: DatabaseError) => {
         throw DBError.fromDBError(error)
       })
-    }
-
-    if (!this.options.tnx && !this.options.parentConnection) {
       await this.connection.setScope(tnx)
-    }
-
-    if (this.options.tnx && !this.options.parentConnection) {
+    } else if (differentScopes) {
       await this.connection.setScope(tnx)
     }
 
     try {
-      if (
-        this.options.tnx &&
-        Boolean(
-          this.options.parentConnection &&
-            this.connection.role !== this.options.parentConnection?.role
-        )
-      ) {
-        await this.connection.setScope(tnx)
-      }
-
       const result: Awaited<ReturnType<T>> = await fn(tnx)
+
+      if (differentScopes) {
+        await this.options.parentConnection?.setScope(tnx)
+      }
 
       if (needsNewTransaction) {
         await tnx.commit()
-      }
-
-      if (
-        Boolean(
-          this.options.parentConnection?.role &&
-            this.connection.role !== this.options.parentConnection?.role
-        ) &&
-        !tnx.isCompleted()
-      ) {
-        await this.options.parentConnection?.setScope(tnx)
       }
 
       return result

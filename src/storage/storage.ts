@@ -18,7 +18,7 @@ export class Storage {
   constructor(public readonly backend: StorageBackendAdapter, public readonly db: Database) {}
 
   /**
-   * Creates an object storage operations for a specific bucket
+   * Access object related functionality on a specific bucket
    * @param bucketId
    */
   from(bucketId: string) {
@@ -50,13 +50,6 @@ export class Storage {
     }
 
     throw new Error(`renderer of type "${type}" not supported`)
-  }
-
-  /**
-   * Creates an uploader instance
-   */
-  uploader() {
-    return new Uploader(this.backend)
   }
 
   /**
@@ -145,7 +138,7 @@ export class Storage {
    */
   async deleteBucket(id: string) {
     return this.db.withTransaction(async (db) => {
-      await db.findBucketById(id, 'id', {
+      await db.asSuperUser().findBucketById(id, 'id', {
         forUpdate: true,
       })
 
@@ -159,7 +152,13 @@ export class Storage {
         )
       }
 
-      return db.deleteBucket(id)
+      const deleted = await db.deleteBucket(id)
+
+      if (!deleted) {
+        throw new StorageBackendError('not_found', 404, 'Bucket Not Found')
+      }
+
+      return deleted
     })
   }
 

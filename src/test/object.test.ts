@@ -737,11 +737,6 @@ describe('testing PUT object', () => {
       authorization: `Bearer ${anonKey}`,
     })
 
-    console.log('===========================================adsdsadads')
-
-    // @ts-ignore
-    global.lol = 'true'
-
     const response = await app().inject({
       method: 'PUT',
       url: '/object/bucket2/authenticated/cat.jpg',
@@ -749,19 +744,9 @@ describe('testing PUT object', () => {
       payload: form,
     })
 
-    console.log('===========================================adsdsadads')
-
-    // @ts-ignore
-    console.log(JSON.stringify(await response.json(), null, 2))
     expect(response.statusCode).toBe(400)
 
-    try {
-      expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
-    } catch (e) {
-      console.log(e)
-      process.exit(1)
-    }
-    // expect(response.body).toBe(`new row violates row-level security policy for table "objects"`)
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('user is not able to update a resource without Auth header', async () => {

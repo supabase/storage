@@ -21,6 +21,8 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { StorageBackendError } from '../errors'
 import { getConfig } from '../../config'
 import Agent, { HttpsAgent } from 'agentkeepalive'
+import { CopyObjectCommandInput } from '@aws-sdk/client-s3/dist-types/commands/CopyObjectCommand'
+import { TUS_RESUMABLE } from '@tus/server'
 
 const { globalS3Protocol, globalS3MaxSockets } = getConfig()
 
@@ -147,6 +149,27 @@ export class S3Backend implements StorageBackendAdapter {
     } catch (err: any) {
       throw StorageBackendError.fromError(err)
     }
+  }
+
+  async updateObjectInfoMetadata(bucketName: string, key: string) {
+    const headObject = new HeadObjectCommand({
+      Bucket: bucketName,
+      Key: `${key}.info`,
+    })
+    const findObjResp = await this.client.send(headObject)
+
+    const copyCmd = new CopyObjectCommand({
+      Bucket: bucketName,
+      CopySource: `${bucketName}/${key}.info`,
+      Key: `${key}.info`,
+      Metadata: {
+        ...findObjResp.Metadata,
+        tus_completed: 'true',
+      },
+      MetadataDirective: 'REPLACE',
+    })
+
+    return this.client.send(copyCmd)
   }
 
   /**

@@ -1,8 +1,11 @@
 import http from 'http'
 import { isRenderableError, Storage } from '../../../storage'
-import { Upload } from '@tus/server'
+import { Metadata, Upload } from '@tus/server'
 import { getConfig } from '../../../config'
 import { randomUUID } from 'crypto'
+import { UploadId } from './upload-id'
+import { Uploader } from '../../../storage/uploader'
+import { UploadCompletedEvent } from '../../../queue'
 
 const { globalS3Bucket } = getConfig()
 
@@ -28,20 +31,20 @@ export function namingFunction(rawReq: http.IncomingMessage) {
     throw new Error('no metadata')
   }
 
-  // TODO: validate params
-  const params = metadataHeader.split(',').reduce((all, param) => {
-    const [k, v] = param.split(' ')
-    const key = k
-    const value = Buffer.from(v, 'base64').toString('utf8')
-    all[key] = value
-    return all
-  }, {} as any)
+  try {
+    const params = Metadata.parse(metadataHeader)
 
-  // const [bucket, ...objNameParts] = req.url.split('/')
+    const version = randomUUID()
 
-  const version = randomUUID()
-
-  return `${req.upload.tenantId}/${params.bucketName}/${params.objectName}/${version}`
+    return new UploadId({
+      tenant: req.upload.tenantId,
+      bucket: params.bucketName || '',
+      objectName: params.objectName || '',
+      version,
+    }).toString()
+  } catch (e) {
+    throw e
+  }
 }
 
 export async function onCreate(
@@ -50,18 +53,19 @@ export async function onCreate(
   upload: Upload
 ): Promise<http.ServerResponse> {
   try {
-    const [, bucket, ...objParts] = upload.id.split('/')
-    const version = objParts.pop()
-    const objectName = objParts.join('/')
+    const uploadID = UploadId.fromString(upload.id)
 
     const req = rawReq as MultiPartRequest
     const isUpsert = req.headers['x-upsert'] === 'true'
     const storage = req.upload.storage
 
-    await storage.from(bucket).findOrCreateObjectForUpload({
-      version,
+    const uploader = new Uploader(storage.backend, storage.db)
+
+    await uploader.prepareUpload({
+      id: uploadID.version,
       owner: req.upload.owner,
-      objectName: objectName,
+      bucketId: uploadID.bucket,
+      objectName: uploadID.objectName,
       isUpsert,
     })
 
@@ -69,6 +73,7 @@ export async function onCreate(
   } catch (e) {
     if (isRenderableError(e)) {
       ;(e as any).status_code = parseInt(e.render().statusCode, 10)
+      ;(e as any).body = e.render().message
     }
     throw e
   }
@@ -79,23 +84,33 @@ export async function onUploadFinish(
   res: http.ServerResponse,
   upload: Upload
 ) {
-  const [, bucket, ...objParts] = upload.id.split('/')
-  const version = objParts.pop()
-  const objectName = objParts.join('/')
-
-  // console.log('on finish', upload)
+  const resourceId = UploadId.fromString(upload.id)
 
   const req = rawReq as MultiPartRequest
 
   try {
-    const s3Key = `${req.upload.tenantId}/${bucket}/${objectName}`
-    const metadata = await req.upload.storage.backend.headObject(globalS3Bucket, s3Key, version)
+    const s3Key = `${req.upload.tenantId}/${resourceId.bucket}/${resourceId.objectName}`
+    const metadata = await req.upload.storage.backend.headObject(
+      globalS3Bucket,
+      s3Key,
+      resourceId.version
+    )
 
-    await req.upload.storage.from(bucket).completeObjectUpload({
-      objectName: objectName,
-      version: version,
+    const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+    await uploader.completeUpload({
+      id: resourceId.version,
+      bucketId: resourceId.bucket,
+      objectName: resourceId.objectName,
       objectMetadata: metadata,
       isUpsert: req.headers['x-upsert'] === 'true',
+      emitEvent: true,
+    })
+
+    await UploadCompletedEvent.send({
+      bucketName: resourceId.bucket,
+      objectName: resourceId.objectName,
+      tenant: req.upload.storage.db.tenant(),
+      version: resourceId.version,
     })
   } catch (e) {
     if (isRenderableError(e)) {

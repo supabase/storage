@@ -5,7 +5,7 @@ export const uploadSchema = {
   $id: 'uploadSchema',
   type: 'object',
   properties: {
-    name: { type: 'string' },
+    object_name: { type: 'string' },
     bucket_id: { type: 'string' },
     owner: { type: 'string' },
     version: { type: 'string' },
@@ -16,8 +16,8 @@ export const uploadSchema = {
     expires_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
     buckets: bucketSchema,
   },
-  required: ['id', 'name', 'bucket_id'],
+  required: ['id', 'object_name', 'bucket_id'],
   additionalProperties: false,
 } as const
 
-export type Upload = FromSchema<typeof uploadSchema>
+export type UploadMetadata = FromSchema<typeof uploadSchema>

@@ -61,6 +61,8 @@ type StorageConfigType = {
   rateLimiterRenderPathMaxReqSec: number
   rateLimiterRedisConnectTimeout: number
   rateLimiterRedisCommandTimeout: number
+
+  multipartUrlExpiryMs: number
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -165,6 +167,10 @@ export function getConfig(): StorageConfigType {
     ),
     rateLimiterRedisCommandTimeout: parseInt(
       getOptionalConfigFromEnv('RATE_LIMITER_REDIS_COMMAND_TIMEOUT') || '2',
+      10
+    ),
+    multipartUrlExpiryMs: parseInt(
+      getOptionalConfigFromEnv('MULTIPART_URL_EXPIRY_MS') || (1000 * 60 * 60).toString(),
       10
     ),
   }

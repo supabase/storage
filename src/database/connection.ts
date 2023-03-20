@@ -12,6 +12,7 @@ pg.types.setTypeParser(20, 'text', parseInt)
 const poolSize = 200 // TODO: dynamic value per tenant
 
 interface TenantConnectionOptions {
+  tenantId: string
   url: string
   role: string
   jwt: JwtPayload
@@ -21,10 +22,11 @@ interface TenantConnectionOptions {
 
 export const connections = {
   leastUsed: undefined,
-  values: new LRU<string, Knex>({
+  values: new LRU<string, Promise<Knex>>({
     max: 200,
     dispose: async (value) => {
-      await value.destroy()
+      const k = await value
+      await k.destroy()
     },
   }),
 }
@@ -33,19 +35,19 @@ export class TenantConnection {
   public readonly role: string
 
   protected constructor(
-    protected readonly pool: Knex,
+    public readonly pool: Knex,
     protected readonly options: TenantConnectionOptions
   ) {
     this.role = options.role
   }
 
-  protected _isExternal = false
+  protected _usesExternalPool = false
 
-  get isExternal() {
-    return this._isExternal
+  get usesExternalPool() {
+    return this._usesExternalPool
   }
 
-  static async create(pool: LRU<string, Knex>, options: TenantConnectionOptions) {
+  static async create(pool: LRU<string, Promise<Knex>>, options: TenantConnectionOptions) {
     const verifiedJWT = await verifyJWT(options.jwtRaw, options.jwtSecret)
 
     if (!verifiedJWT) {
@@ -54,64 +56,44 @@ export class TenantConnection {
 
     options.role = verifiedJWT?.role || 'anon'
 
-    const internalConnectionPool = new ConnectionString(options.url)
-    const externalConnectionPool = new ConnectionString(options.url)
+    const connectionString = new ConnectionString(options.url)
 
-    if (externalConnectionPool.hosts) {
-      externalConnectionPool.hosts[0].port = 6543
+    let knexPool = connections.values.get(connectionString.toString())
+
+    if (knexPool) {
+      return new this(await knexPool, options)
     }
 
-    const connNumber = 2
+    const isExternalPool = connectionString.port === 6543
 
-    let tried = 0
-    let error: unknown | undefined = undefined
-    let connectionPool = externalConnectionPool
+    knexPool = new Promise<Knex>(async (resolve) => {
+      const k = knex({
+        client: 'pg',
+        pool: {
+          min: 0,
+          max: isExternalPool ? 200 : poolSize,
+          idleTimeoutMillis: 5000,
+        },
+        connection: connectionString.toString(),
+        acquireConnectionTimeout: 1000,
+      })
 
-    while (tried !== connNumber) {
-      let knexPool = connections.values.get(connectionPool.toString())
+      await k.raw(`SELECT 1`)
+      resolve(k)
+    })
 
-      if (knexPool) {
-        return new this(knexPool, options)
-      }
-
-      const isExternalPool = connectionPool.port === 6543
-      try {
-        knexPool = knex({
-          client: 'pg',
-          pool: {
-            min: 0,
-            max: isExternalPool ? 200 : poolSize,
-            idleTimeoutMillis: 5000,
-          },
-          connection: connectionPool.toString(),
-          acquireConnectionTimeout: 1000,
-        })
-
-        await knexPool.raw(`SELECT 1`)
-
-        if (!isExternalPool) {
-          connections.values.set(connectionPool.toString(), knexPool)
-        }
-
-        const conn = new this(knexPool, options)
-        conn._isExternal = isExternalPool
-        return conn
-      } catch (e: any) {
-        if ('code' in e && e.code === 'ECONNREFUSED') {
-          tried++
-          connectionPool = internalConnectionPool
-          error = e
-        } else {
-          throw e
-        }
-      }
+    if (!isExternalPool) {
+      connections.values.set(connectionString.toString(), knexPool)
     }
 
-    throw error
+    const conn = new this(await knexPool, options)
+    conn._usesExternalPool = isExternalPool
+
+    return conn
   }
 
   dispose() {
-    if (this.isExternal) {
+    if (this.usesExternalPool) {
       return this.pool.destroy()
     }
   }

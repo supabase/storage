@@ -135,3 +135,7 @@ export abstract class StorageBackendAdapter {
     throw new Error('privateAssetUrl not implemented')
   }
 }
+
+export function withOptionalVersion(key: string, version?: string): string {
+  return version ? `${key}/${version}` : key
+}

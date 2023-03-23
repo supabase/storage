@@ -1,4 +1,4 @@
-import { StorageBackendAdapter, ObjectMetadata } from './backend'
+import { StorageBackendAdapter, ObjectMetadata, withOptionalVersion } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
 import { getJwtSecret, signJWT } from '../auth'
@@ -162,8 +162,8 @@ export class ObjectStorage {
       }
 
       await this.backend.deleteObjects(globalS3Bucket, [
-        `${s3Key}/${obj.version}`,
-        `${s3Key}/${obj.version}.info`,
+        withOptionalVersion(s3Key, obj.version),
+        withOptionalVersion(s3Key, obj.version) + '.info',
       ])
     })
 
@@ -527,5 +527,40 @@ export class ObjectStorage {
         }
       })
     )
+  }
+
+  /**
+   * Generates a signed url for uploading an object
+   * @param objectName
+   * @param url
+   * @param expiresIn seconds
+   * @param owner
+   */
+  async signUploadObjectUrl(objectName: string, url: string, expiresIn: number, owner?: string) {
+    // check as super user if the object already exists
+    const found = await this.asSuperUser().findObject(objectName, 'id', {
+      dontErrorOnEmpty: true,
+    })
+
+    if (found) {
+      throw new StorageBackendError('Duplicate', 409, 'The resource already exists')
+    }
+
+    // check if user has INSERT permissions
+    await this.db.testPermission((db) => {
+      return db.createObject({
+        bucket_id: this.bucketId,
+        name: objectName,
+        owner,
+        metadata: {},
+      })
+    })
+
+    const urlParts = url.split('/')
+    const urlToSign = decodeURI(urlParts.splice(4).join('/'))
+    const jwtSecret = await getJwtSecret(this.db.tenantId)
+    const token = await signJWT({ owner, url: urlToSign }, jwtSecret, expiresIn)
+
+    return `/object/upload/sign/${urlToSign}?token=${token}`
   }
 }

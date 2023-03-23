@@ -19,7 +19,7 @@ type StorageConfigType = {
   jwtSecret: string
   jwtAlgorithm: string
   multitenantDatabaseUrl?: string
-  databaseUrl?: string
+  databaseURL: string
   postgrestURL: string
   postgrestURLSuffix?: string
   postgrestURLScheme?: string
@@ -61,8 +61,9 @@ type StorageConfigType = {
   rateLimiterRenderPathMaxReqSec: number
   rateLimiterRedisConnectTimeout: number
   rateLimiterRedisCommandTimeout: number
-
-  multipartUrlExpiryMs: number
+  signedUploadUrlExpirationTime: number
+  tusUrlExpiryMs: number
+  tusPath: string
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -103,8 +104,8 @@ export function getConfig(): StorageConfigType {
     isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
     jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',
-    databaseUrl: getOptionalConfigFromEnv('DATABASE_URL'),
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
+    databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
     postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
     postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
     postgrestURLScheme: getOptionalConfigFromEnv('POSTGREST_URL_SCHEME') || 'http',
@@ -169,8 +170,13 @@ export function getConfig(): StorageConfigType {
       getOptionalConfigFromEnv('RATE_LIMITER_REDIS_COMMAND_TIMEOUT') || '2',
       10
     ),
-    multipartUrlExpiryMs: parseInt(
-      getOptionalConfigFromEnv('MULTIPART_URL_EXPIRY_MS') || (1000 * 60 * 60).toString(),
+    signedUploadUrlExpirationTime: parseInt(
+      getOptionalConfigFromEnv('SIGNED_UPLOAD_URL_EXPIRATION_TIME') || '60'
+    ),
+
+    tusPath: getOptionalConfigFromEnv('TUS_URL_PATH') || '/multi-part',
+    tusUrlExpiryMs: parseInt(
+      getOptionalConfigFromEnv('TUS_URL_EXPIRY_MS') || (1000 * 60 * 60).toString(),
       10
     ),
   }

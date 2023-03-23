@@ -16,13 +16,12 @@ import {
   BrowserCacheHeaders,
   ObjectMetadata,
   ObjectResponse,
+  withOptionalVersion,
 } from './generic'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { StorageBackendError } from '../errors'
 import { getConfig } from '../../config'
 import Agent, { HttpsAgent } from 'agentkeepalive'
-import { CopyObjectCommandInput } from '@aws-sdk/client-s3/dist-types/commands/CopyObjectCommand'
-import { TUS_RESUMABLE } from '@tus/server'
 
 const { globalS3Protocol, globalS3MaxSockets } = getConfig()
 
@@ -77,7 +76,7 @@ export class S3Backend implements StorageBackendAdapter {
     const input: GetObjectCommandInput = {
       Bucket: bucketName,
       IfNoneMatch: headers?.ifNoneMatch,
-      Key: version ? key + '/' + version : key,
+      Key: withOptionalVersion(key, version),
       Range: headers?.range,
     }
     if (headers?.ifModifiedSince) {
@@ -123,7 +122,7 @@ export class S3Backend implements StorageBackendAdapter {
         client: this.client,
         params: {
           Bucket: bucketName,
-          Key: version ? key + '/' + version : key,
+          Key: withOptionalVersion(key, version),
           /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
           Body: body,
           ContentType: contentType,
@@ -181,7 +180,7 @@ export class S3Backend implements StorageBackendAdapter {
   async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
     const command = new DeleteObjectCommand({
       Bucket: bucket,
-      Key: version ? key + '/' + version : key,
+      Key: withOptionalVersion(key, version),
     })
     await this.client.send(command)
   }
@@ -204,8 +203,8 @@ export class S3Backend implements StorageBackendAdapter {
     try {
       const command = new CopyObjectCommand({
         Bucket: bucket,
-        CopySource: `/${bucket}/${version ? source + '/' + version : source}`,
-        Key: destinationVersion ? `${destination}/${destinationVersion}` : destination,
+        CopySource: withOptionalVersion(source, version),
+        Key: withOptionalVersion(destination, destinationVersion),
       })
       const data = await this.client.send(command)
       return {

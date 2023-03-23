@@ -91,11 +91,11 @@ export interface Database {
   updateObject(
     bucketId: string,
     name: string,
-    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'upload_state'>
+    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name'>
   ): Promise<Obj>
 
   createObject(
-    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'upload_state'>
+    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>
   ): Promise<Obj>
 
   deleteObject(bucketId: string, objectName: string, version?: string): Promise<Obj | undefined>

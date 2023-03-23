@@ -131,7 +131,7 @@ export class Uploader {
 
         const currentObj = await db
           .asSuperUser()
-          .findObject(bucketId, objectName, 'id, version, metadata, upload_state', {
+          .findObject(bucketId, objectName, 'id, version, metadata', {
             forUpdate: true,
             dontErrorOnEmpty: true,
           })

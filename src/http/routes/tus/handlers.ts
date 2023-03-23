@@ -9,6 +9,8 @@ import { Database } from '../../../storage/database'
 import { OptionsHandler } from '@tus/server/handlers/OptionsHandler'
 import { UploadId } from './upload-id'
 import { getFileSizeLimit } from '../../../storage/limits'
+import { logger } from '../../../monitoring'
+import { Uploader } from '../../../storage/uploader'
 
 const reExtractFileID = /([^/]+)\/?$/
 
@@ -72,8 +74,11 @@ export class Head extends HeadHandler {
     const uploadID = UploadId.fromString(id)
 
     try {
-      await req.upload.storage.db.testPermission((db) => {
-        return db.findObject(uploadID.bucket, uploadID.objectName, 'id')
+      const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+      await uploader.canUpload({
+        bucketId: uploadID.bucket,
+        objectName: uploadID.objectName,
+        isUpsert: req.headers['x-upsert'] === 'true',
       })
 
       const result = await lock(
@@ -88,8 +93,9 @@ export class Head extends HeadHandler {
       return result
     } catch (e) {
       if (isRenderableError(e)) {
-        ;(e as any).status_code = parseInt(e.render().statusCode, 10)
-        ;(e as any).body = e.render().message
+        const statusCode = parseInt(e.render().statusCode, 10)
+        ;(e as any).status_code = statusCode
+        ;(e as any).body = statusCode !== 500 ? e.render().message : 'Internal Server Error'
       }
       throw e
     }
@@ -144,6 +150,11 @@ export class Post extends PostHandler {
     const req = rawReq as MultiPartRequest
     id = id.split('/').slice(1).join('/')
 
+    // Enforce https in production
+    if (process.env.NODE_ENV === 'production') {
+      req.headers['x-forwarded-proto'] = 'https'
+    }
+
     return super.generateUrl(req, id)
   }
 }
@@ -152,7 +163,10 @@ export class Options extends OptionsHandler {
   async send(rawReq: http.IncomingMessage, res: http.ServerResponse) {
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.setHeader('Access-Control-Allow-Methods', ALLOWED_METHODS)
-    res.setHeader('Access-Control-Allow-Headers', ALLOWED_HEADERS + ' ,X-Upsert ,Upload-Expires')
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      ALLOWED_HEADERS + ', X-Upsert, Upload-Expires, ApiKey'
+    )
     res.setHeader('Access-Control-Max-Age', MAX_AGE)
     if (this.store.extensions.length > 0) {
       res.setHeader('Tus-Extension', this.store.extensions.join(','))
@@ -215,6 +229,12 @@ async function lock<T extends (db: Database) => any>(
       return await fn(db)
     })
   } catch (e) {
+    logger.error(
+      {
+        error: JSON.stringify(e),
+      },
+      `tus upload failed for id ${id}`
+    )
     if (isRenderableError(e)) {
       ;(e as any).status_code = e.render().statusCode
     }

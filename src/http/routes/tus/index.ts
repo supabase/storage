@@ -13,7 +13,15 @@ import { DataStore } from '@tus/server/models'
 import { getFileSizeLimit } from '../../../storage/limits'
 import { UploadId } from './upload-id'
 
-const { globalS3Bucket, globalS3Endpoint, region, multipartUrlExpiryMs } = getConfig()
+const {
+  globalS3Bucket,
+  globalS3Endpoint,
+  region,
+  tusUrlExpiryMs,
+  tusPath,
+  storageBackendType,
+  fileStoragePath,
+} = getConfig()
 
 type MultiPartRequest = http.IncomingMessage & {
   upload: {
@@ -23,29 +31,35 @@ type MultiPartRequest = http.IncomingMessage & {
   }
 }
 
-function createTusServer() {
-  const s3Store = new S3Store({
-    partSize: 6 * 1024 * 1024, // Each uploaded part will have ~8MB,
-    uploadExpiryMilliseconds: multipartUrlExpiryMs,
-    s3ClientConfig: {
-      bucket: globalS3Bucket,
-      region: region,
-      endpoint: globalS3Endpoint,
-    },
+function createTusStore() {
+  if (storageBackendType === 's3') {
+    return new S3Store({
+      partSize: 6 * 1024 * 1024, // Each uploaded part will have ~8MB,
+      uploadExpiryMilliseconds: tusUrlExpiryMs,
+      s3ClientConfig: {
+        bucket: globalS3Bucket,
+        region: region,
+        endpoint: globalS3Endpoint,
+      },
+    })
+  }
+
+  return new FileStore({
+    directory: fileStoragePath + '/' + globalS3Bucket,
   })
+}
 
-  // const fileStore = new FileStore({
-  //   directory: fileStoragePath + '/' + globalS3Bucket + '/' + tenantId,
-  // })
-
+function createTusServer() {
+  const datastore = createTusStore()
   const serverOptions: ServerOptions & {
     datastore: DataStore
   } = {
-    path: '/multi-part',
-    datastore: s3Store,
+    path: tusPath,
+    datastore: datastore,
     namingFunction: namingFunction,
     onUploadCreate: onCreate,
     onUploadFinish: onUploadFinish,
+    respectForwardedHeaders: true,
     maxFileSize: async (id, rawReq) => {
       const req = rawReq as MultiPartRequest
 
@@ -67,10 +81,10 @@ function createTusServer() {
   }
   const tusServer = new Server(serverOptions)
 
-  tusServer.handlers.PATCH = new Patch(s3Store, serverOptions)
-  tusServer.handlers.HEAD = new Head(s3Store, serverOptions)
-  tusServer.handlers.POST = new Post(s3Store, serverOptions)
-  tusServer.handlers.OPTIONS = new Options(s3Store, serverOptions)
+  tusServer.handlers.PATCH = new Patch(datastore, serverOptions)
+  tusServer.handlers.HEAD = new Head(datastore, serverOptions)
+  tusServer.handlers.POST = new Post(datastore, serverOptions)
+  tusServer.handlers.OPTIONS = new Options(datastore, serverOptions)
 
   return tusServer
 }

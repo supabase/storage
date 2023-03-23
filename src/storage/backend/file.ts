@@ -143,6 +143,7 @@ export class FileBackend implements StorageBackendAdapter {
     const srcFile = path.resolve(this.filePath, `${bucket}/${source}`)
     const destFile = path.resolve(this.filePath, `${bucket}/${destination}`)
 
+    await fs.ensureFile(destFile)
     await fs.copyFile(srcFile, destFile)
 
     await this.setFileMetadata(destFile, await this.getFileMetadata(srcFile))

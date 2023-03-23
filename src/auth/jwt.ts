@@ -15,6 +15,12 @@ export type SignedToken = {
   exp: number
 }
 
+export type SignedUploadToken = {
+  owner: string | undefined
+  url: string
+  exp: number
+}
+
 /**
  * Gets the JWT secret key from the env PGRST_JWT_SECRET when running in single-tenant
  * or querying the multi-tenant database by the given tenantId

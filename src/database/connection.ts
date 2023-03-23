@@ -2,9 +2,7 @@ import pg from 'pg'
 import { ConnectionString } from 'connection-string'
 import LRU from 'lru-cache'
 
-import { StorageBackendError } from '../storage'
 import { Knex, knex } from 'knex'
-import { verifyJWT } from '../auth'
 import { JwtPayload } from 'jsonwebtoken'
 
 pg.types.setTypeParser(20, 'text', parseInt)
@@ -17,7 +15,6 @@ interface TenantConnectionOptions {
   role: string
   jwt: JwtPayload
   jwtRaw: string
-  jwtSecret: string
 }
 
 export const connections = {
@@ -48,14 +45,6 @@ export class TenantConnection {
   }
 
   static async create(pool: LRU<string, Promise<Knex>>, options: TenantConnectionOptions) {
-    const verifiedJWT = await verifyJWT(options.jwtRaw, options.jwtSecret)
-
-    if (!verifiedJWT) {
-      throw new StorageBackendError('invalid_jwt', 403, 'invalid jwt')
-    }
-
-    options.role = verifiedJWT?.role || 'anon'
-
     const connectionString = new ConnectionString(options.url)
 
     let knexPool = connections.values.get(connectionString.toString())
@@ -69,6 +58,7 @@ export class TenantConnection {
     knexPool = new Promise<Knex>(async (resolve) => {
       const k = knex({
         client: 'pg',
+        searchPath: 'storage',
         pool: {
           min: 0,
           max: isExternalPool ? 200 : poolSize,

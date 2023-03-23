@@ -250,7 +250,7 @@ export class StorageKnexDB implements Database {
   async updateObject(
     bucketId: string,
     name: string,
-    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'upload_state'>
+    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name'>
   ) {
     const [object] = await this.runQuery((knex) => {
       return knex.from<Obj>('objects').where('bucket_id', bucketId).where('name', name).update(
@@ -259,7 +259,6 @@ export class StorageKnexDB implements Database {
           owner: data.owner,
           metadata: data.metadata,
           version: data.version,
-          upload_state: data.upload_state,
         },
         '*'
       )
@@ -272,16 +271,13 @@ export class StorageKnexDB implements Database {
     return object
   }
 
-  async createObject(
-    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'upload_state'>
-  ) {
+  async createObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>) {
     const object = {
       name: data.name,
       owner: data.owner,
       bucket_id: data.bucket_id,
       metadata: data.metadata,
       version: data.version,
-      upload_state: data.upload_state,
     }
     await this.runQuery((knex) => {
       return knex.from<Obj>('objects').insert(object)

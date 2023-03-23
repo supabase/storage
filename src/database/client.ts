@@ -1,9 +1,15 @@
-import { PostgrestClient } from '@supabase/postgrest-js'
 import { getConfig } from '../config'
 import { getAnonKey, getTenantConfig } from './tenant'
 import { StorageBackendError } from '../storage'
 import { verifyJWT } from '../auth'
 import { connections, TenantConnection } from './connection'
+import { PostgrestClient } from '@supabase/postgrest-js'
+
+interface ConnectionOptions {
+  host?: string
+  tenantId?: string
+  forwardHeaders?: Record<string, string>
+}
 
 interface PostgrestClientOptions {
   host?: string
@@ -67,12 +73,6 @@ export async function getPostgrestClient(
   })
 }
 
-interface ConnectionOptions {
-  host?: string
-  tenantId?: string
-  forwardHeaders?: Record<string, string>
-}
-
 /**
  * Creates a tenant specific knex client
  * @param jwt
@@ -82,9 +82,9 @@ export async function getPostgresConnection(
   jwt: string,
   options: ConnectionOptions
 ): Promise<TenantConnection> {
-  const { jwtSecret, isMultitenant, databaseUrl, xForwardedHostRegExp } = getConfig()
+  const { jwtSecret, isMultitenant, databaseURL, xForwardedHostRegExp } = getConfig()
 
-  let url = databaseUrl
+  let url = databaseURL
   let jwtSecretKey = jwtSecret
 
   if (isMultitenant && xForwardedHostRegExp) {
@@ -127,6 +127,5 @@ export async function getPostgresConnection(
     role,
     jwt: verifiedJWT,
     jwtRaw: jwt,
-    jwtSecret,
   })
 }

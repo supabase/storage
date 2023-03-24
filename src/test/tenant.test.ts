@@ -9,6 +9,8 @@ dotenv.config({ path: '.env.test' })
 const payload = {
   anonKey: 'a',
   databaseUrl: 'b',
+  databasePoolUrl: 'v',
+  maxConnections: 12,
   fileSizeLimit: 1,
   jwtSecret: 'c',
   serviceKey: 'd',
@@ -22,6 +24,8 @@ const payload = {
 const payload2 = {
   anonKey: 'e',
   databaseUrl: 'f',
+  databasePoolUrl: 'm',
+  maxConnections: 14,
   fileSizeLimit: 2,
   jwtSecret: 'g',
   serviceKey: 'h',

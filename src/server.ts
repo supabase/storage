@@ -61,10 +61,10 @@ const exposeDocs = true
     console.log(`Server listening at ${address}`)
   })
 
-  // process.on('uncaughtException', (e) => {
-  //   console.error(e)
-  //   console.error(e.stack)
-  // })
+  process.on('uncaughtException', (e) => {
+    console.error(e)
+    console.error(e.stack)
+  })
 
   process.on('SIGTERM', async () => {
     try {

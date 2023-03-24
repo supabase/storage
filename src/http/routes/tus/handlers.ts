@@ -16,14 +16,7 @@ const reExtractFileID = /([^/]+)\/?$/
 
 export class Patch extends PatchHandler {
   getFileIdFromRequest(rawRwq: http.IncomingMessage) {
-    const req = rawRwq as MultiPartRequest
-    const match = reExtractFileID.exec(req.url as string)
-
-    if (!match || this.options.path.includes(match[1])) {
-      return false
-    }
-
-    return decodeURIComponent(req.upload.tenantId + '/' + match[1])
+    return getFileIdFromRequest(rawRwq, this.options.path)
   }
 
   async send(rawReq: http.IncomingMessage, res: http.ServerResponse) {
@@ -44,23 +37,21 @@ export class Patch extends PatchHandler {
       })
     })
 
-    return lock(uploadID, req.upload.storage, (db) => {
-      req.upload.storage = new Storage(req.upload.storage.backend, db)
-      return super.send(req, res)
-    })
+    return lock(
+      uploadID,
+      req.upload.storage,
+      (db) => {
+        req.upload.storage = new Storage(req.upload.storage.backend, db)
+        return super.send(req, res)
+      },
+      'PatchHandler'
+    )
   }
 }
 
 export class Head extends HeadHandler {
   getFileIdFromRequest(rawRwq: http.IncomingMessage) {
-    const req = rawRwq as MultiPartRequest
-    const match = reExtractFileID.exec(req.url as string)
-
-    if (!match || this.options.path.includes(match[1])) {
-      return false
-    }
-
-    return decodeURIComponent(req.upload.tenantId + '/' + match[1])
+    return getFileIdFromRequest(rawRwq, this.options.path)
   }
 
   async send(rawReq: http.IncomingMessage, res: http.ServerResponse) {
@@ -73,45 +64,29 @@ export class Head extends HeadHandler {
 
     const uploadID = UploadId.fromString(id)
 
-    try {
-      const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
-      await uploader.canUpload({
-        bucketId: uploadID.bucket,
-        objectName: uploadID.objectName,
-        isUpsert: req.headers['x-upsert'] === 'true',
-      })
+    const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+    await uploader.canUpload({
+      bucketId: uploadID.bucket,
+      objectName: uploadID.objectName,
+      isUpsert: req.headers['x-upsert'] === 'true',
+    })
 
-      const result = await lock(
-        uploadID,
-        req.upload.storage,
-        (db) => {
-          req.upload.storage = new Storage(req.upload.storage.backend, db)
-          return super.send(req, res)
-        },
-        true
-      )
-      return result
-    } catch (e) {
-      if (isRenderableError(e)) {
-        const statusCode = parseInt(e.render().statusCode, 10)
-        ;(e as any).status_code = statusCode
-        ;(e as any).body = statusCode !== 500 ? e.render().message : 'Internal Server Error'
-      }
-      throw e
-    }
+    return await lock(
+      uploadID,
+      req.upload.storage,
+      (db) => {
+        req.upload.storage = new Storage(req.upload.storage.backend, db)
+        return super.send(req, res)
+      },
+      'HeadHandler',
+      true
+    )
   }
 }
 
 export class Post extends PostHandler {
   getFileIdFromRequest(rawRwq: http.IncomingMessage) {
-    const req = rawRwq as MultiPartRequest
-    const match = reExtractFileID.exec(req.url as string)
-
-    if (!match || this.options.path.includes(match[1])) {
-      return false
-    }
-
-    return decodeURIComponent(req.upload.tenantId + '/' + match[1])
+    return getFileIdFromRequest(rawRwq, this.options.path)
   }
 
   async send(rawReq: http.IncomingMessage, res: http.ServerResponse) {
@@ -130,20 +105,18 @@ export class Post extends PostHandler {
       throw ERRORS.UNSUPPORTED_CREATION_DEFER_LENGTH_EXTENSION
     }
 
-    try {
-      const id = this.options.namingFunction(req)
+    const id = this.options.namingFunction(req)
+    const uploadID = UploadId.fromString(id)
 
-      const uploadID = UploadId.fromString(id)
-
-      const result = await lock(uploadID, req.upload.storage, (db) => {
+    return await lock(
+      uploadID,
+      req.upload.storage,
+      (db) => {
         req.upload.storage = new Storage(req.upload.storage.backend, db)
         return super.send(req, res)
-      })
-
-      return result
-    } catch (error) {
-      throw error
-    }
+      },
+      'PostHandler'
+    )
   }
 
   generateUrl(rawReq: http.IncomingMessage, id: string) {
@@ -155,11 +128,16 @@ export class Post extends PostHandler {
       req.headers['x-forwarded-proto'] = 'https'
     }
 
+    id = Buffer.from(id, 'utf-8').toString('base64url')
     return super.generateUrl(req, id)
   }
 }
 
 export class Options extends OptionsHandler {
+  getFileIdFromRequest(rawRwq: http.IncomingMessage) {
+    return getFileIdFromRequest(rawRwq, this.options.path)
+  }
+
   async send(rawReq: http.IncomingMessage, res: http.ServerResponse) {
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.setHeader('Access-Control-Allow-Methods', ALLOWED_METHODS)
@@ -184,7 +162,7 @@ export class Options extends OptionsHandler {
         throw ERRORS.FILE_NOT_FOUND
       }
 
-      uploadID = UploadId.fromString(req.upload.tenantId + '/' + id)
+      uploadID = UploadId.fromString(id)
     }
 
     const fileSizeLimit = await getFileSizeLimit(req.upload.tenantId)
@@ -213,10 +191,23 @@ export class Options extends OptionsHandler {
   }
 }
 
+function getFileIdFromRequest(rawRwq: http.IncomingMessage, path: string) {
+  const req = rawRwq as MultiPartRequest
+  const match = reExtractFileID.exec(req.url as string)
+
+  if (!match || path.includes(match[1])) {
+    return false
+  }
+
+  const idMatch = Buffer.from(match[1], 'base64url').toString('utf-8')
+  return req.upload.tenantId + '/' + idMatch
+}
+
 async function lock<T extends (db: Database) => any>(
   id: UploadId,
   storage: Storage,
   fn: T,
+  tusMethod: string,
   wait?: boolean
 ) {
   try {
@@ -233,10 +224,12 @@ async function lock<T extends (db: Database) => any>(
       {
         error: JSON.stringify(e),
       },
-      `tus upload failed for id ${id}`
+      `[${tusMethod}] tus upload failed for id ${id}`
     )
     if (isRenderableError(e)) {
-      ;(e as any).status_code = e.render().statusCode
+      const statusCode = parseInt(e.render().statusCode, 10)
+      ;(e as any).status_code = statusCode
+      ;(e as any).body = statusCode !== 500 ? e.render().message : 'Internal Server Error'
     }
 
     throw e

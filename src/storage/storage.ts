@@ -1,9 +1,8 @@
-import { StorageBackendAdapter } from './backend'
+import { StorageBackendAdapter, withOptionalVersion } from './backend'
 import { Database, FindBucketFilters } from './database'
 import { StorageBackendError } from './errors'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from './limits'
-import { Uploader } from './uploader'
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
 
@@ -187,9 +186,12 @@ export class Storage {
       )
 
       if (deleted && deleted.length > 0) {
-        const params = deleted.map(({ name }) => {
-          return `${this.db.tenantId}/${bucketId}/${name}`
-        })
+        const params = deleted.reduce((all, { name, version }) => {
+          const fileName = withOptionalVersion(`${this.db.tenantId}/${bucketId}/${name}`, version)
+          all.push(fileName)
+          all.push(fileName + '.info')
+          return all
+        }, [] as string[])
         // delete files from s3 asynchronously
         this.backend.deleteObjects(globalS3Bucket, params)
       }

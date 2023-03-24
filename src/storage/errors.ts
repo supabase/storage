@@ -1,5 +1,4 @@
 import { S3ServiceException } from '@aws-sdk/client-s3'
-import { PostgrestError } from '@supabase/postgrest-js'
 
 export type StorageError = {
   statusCode: string
@@ -14,58 +13,6 @@ export type StorageError = {
 export interface RenderableError {
   render(): StorageError
   getOriginalError(): unknown
-}
-
-/**
- * A specific database error
- */
-export class DatabaseError extends Error implements RenderableError {
-  constructor(
-    message: string,
-    public readonly status: number,
-    public readonly postgresError: PostgrestError,
-    public readonly metadata?: Record<string, any>
-  ) {
-    super(message)
-    Object.setPrototypeOf(this, DatabaseError.prototype)
-  }
-
-  render(): StorageError {
-    let { message, details: type, code } = this.postgresError
-    const responseStatus = this.status
-
-    if (responseStatus === 406) {
-      code = '404'
-      message = 'The resource was not found'
-      type = 'Not found'
-    } else if (responseStatus === 401) {
-      code = '401'
-      type = 'Invalid JWT'
-    } else if (responseStatus === 409) {
-      const relationNotPresent = type?.includes('not present')
-
-      code = relationNotPresent ? '404' : '409'
-      type = relationNotPresent ? 'Not Found' : 'Duplicate'
-      message = relationNotPresent
-        ? 'The parent resource is not found'
-        : 'The resource already exists'
-    } else if (responseStatus === 403) {
-      code = '403'
-    } else {
-      code = '500'
-      type = 'Database Error'
-    }
-
-    return {
-      statusCode: code,
-      error: type,
-      message,
-    }
-  }
-
-  getOriginalError() {
-    return this.postgresError
-  }
 }
 
 /**

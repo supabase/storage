@@ -1,6 +1,5 @@
 import { FastifyInstance } from 'fastify'
 import { Server } from '@tus/server'
-import { FileStore } from '@tus/file-store'
 import { jwt, storage, db, dbSuperUser } from '../../plugins'
 import { getConfig } from '../../../config'
 import * as http from 'http'
@@ -12,10 +11,13 @@ import { ServerOptions } from '@tus/server/types'
 import { DataStore } from '@tus/server/models'
 import { getFileSizeLimit } from '../../../storage/limits'
 import { UploadId } from './upload-id'
+import { FileStore } from './file-store'
 
 const {
   globalS3Bucket,
   globalS3Endpoint,
+  globalS3Protocol,
+  globalS3ForcePathStyle,
   region,
   tusUrlExpiryMs,
   tusPath,
@@ -40,6 +42,8 @@ function createTusStore() {
         bucket: globalS3Bucket,
         region: region,
         endpoint: globalS3Endpoint,
+        sslEnabled: globalS3Protocol !== 'http',
+        s3ForcePathStyle: globalS3ForcePathStyle,
       },
     })
   }

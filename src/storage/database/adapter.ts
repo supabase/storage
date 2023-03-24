@@ -42,7 +42,7 @@ export interface DatabaseOptions<DB, TNX> {
 }
 
 export interface Database {
-  host: string
+  tenantHost: string
   tenantId: string
   role?: string
 

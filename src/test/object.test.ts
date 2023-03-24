@@ -6,24 +6,21 @@ import fs from 'fs'
 import app from '../app'
 import { getConfig } from '../config'
 import { S3Backend } from '../storage/backend'
-import { PostgrestClient } from '@supabase/postgrest-js'
 import { Obj } from '../storage/schemas'
 import { signJWT } from '../auth'
 import { StorageBackendError } from '../storage'
 import { useMockObject, useMockQueue } from './common'
+import { getPostgresConnection } from '../database'
 
 dotenv.config({ path: '.env.test' })
 
-const { anonKey, jwtSecret, serviceKey, postgrestURL } = getConfig()
+const { anonKey, jwtSecret, serviceKey } = getConfig()
 
-function getSuperuserPostgrestClient() {
-  return new PostgrestClient(postgrestURL, {
-    headers: {
-      apiKey: anonKey,
-      Authorization: `Bearer ${serviceKey}`,
-    },
-    schema: 'storage',
-  })
+async function getSuperuserPostgrestClient() {
+  const conn = await getPostgresConnection(serviceKey, {})
+  const tnx = await conn.pool
+
+  return tnx
 }
 
 useMockObject()
@@ -457,17 +454,17 @@ describe('testing POST object via multipart upload', () => {
     })
 
     // Ensure that row does not exist in database.
-    const postgrest = getSuperuserPostgrestClient()
-    const objectResponse = await postgrest
+    const db = await getSuperuserPostgrestClient()
+    const objectResponse = await db
       .from<Obj>('objects')
-      .select()
-      .match({
+      .select('*')
+      .where({
         name: OBJECT_NAME,
         bucket_id: BUCKET_ID,
       })
-      .maybeSingle()
-    expect(objectResponse.error).toBe(null)
-    expect(objectResponse.data).toBe(null)
+      .first()
+
+    expect(objectResponse).toBe(undefined)
   })
 })
 
@@ -693,17 +690,16 @@ describe('testing POST object via binary upload', () => {
     })
 
     // Ensure that row does not exist in database.
-    const postgrest = getSuperuserPostgrestClient()
-    const objectResponse = await postgrest
+    const db = await getSuperuserPostgrestClient()
+    const objectResponse = await db
       .from<Obj>('objects')
-      .select()
-      .match({
+      .select('*')
+      .where({
         name: OBJECT_NAME,
         bucket_id: BUCKET_ID,
       })
-      .maybeSingle()
-    expect(objectResponse.error).toBe(null)
-    expect(objectResponse.data).toBe(null)
+      .first()
+    expect(objectResponse).toBe(undefined)
   })
 })
 
@@ -1006,7 +1002,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObject).toBeCalled()
+    expect(S3Backend.prototype.deleteObjects).toBeCalled()
   })
 
   test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {
@@ -1252,17 +1248,16 @@ describe('testing generating signed URL for upload', () => {
     const result = JSON.parse(response.body)
     expect(result.url).toBeTruthy()
     // Ensure that row does not exist in database.
-    const postgrest = getSuperuserPostgrestClient()
-    const objectResponse = await postgrest
+    const db = await getSuperuserPostgrestClient()
+    const objectResponse = await db
       .from<Obj>('objects')
-      .select()
-      .match({
+      .select('*')
+      .where({
         name: OBJECT_NAME,
         bucket_id: BUCKET_ID,
       })
-      .maybeSingle()
-    expect(objectResponse.error).toBe(null)
-    expect(objectResponse.data).toBe(null)
+      .first()
+    expect(objectResponse).toBe(undefined)
   })
 
   test('check if RLS policies are respected: anon user is not able to sign upload URL for authenticated resource', async () => {
@@ -1280,22 +1275,21 @@ describe('testing generating signed URL for upload', () => {
     expect(response.body).toBe(
       JSON.stringify({
         statusCode: '403',
-        error: '',
-        message: 'new row violates row-level security policy for table "objects"',
+        error: 'Unauthorized',
+        message: 'new row violates row-level security policy',
       })
     )
     // Ensure that row does not exist in database.
-    const postgrest = getSuperuserPostgrestClient()
-    const objectResponse = await postgrest
+    const db = await getSuperuserPostgrestClient()
+    const objectResponse = await db
       .from<Obj>('objects')
-      .select()
-      .match({
+      .select('*')
+      .where({
         name: OBJECT_NAME,
         bucket_id: BUCKET_ID,
       })
-      .maybeSingle()
-    expect(objectResponse.error).toBe(null)
-    expect(objectResponse.data).toBe(null)
+      .first()
+    expect(objectResponse).toBe(undefined)
   })
 
   test('user is not able to sign a upload url without Auth header', async () => {
@@ -1368,27 +1362,25 @@ describe('testing uploading with generated signed upload URL', () => {
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
 
     // check that row has neccessary data
-    const postgrest = getSuperuserPostgrestClient()
-    const objectResponse = await postgrest
+    const db = await getSuperuserPostgrestClient()
+    const objectResponse = await db
       .from<Obj>('objects')
-      .select()
-      .match({
+      .select('*')
+      .where({
         name: OBJECT_NAME,
         bucket_id: BUCKET_ID,
       })
-      .maybeSingle()
-    expect(objectResponse.error).toBe(null)
-    expect(objectResponse.data?.owner).toBe(owner)
+      .first()
+    expect(objectResponse?.owner).toBe(owner)
 
     // remove row to not to break other tests
-    await postgrest
+    await db
       .from<Obj>('objects')
-      .delete()
-      .match({
+      .where({
         name: OBJECT_NAME,
         bucket_id: BUCKET_ID,
       })
-      .maybeSingle()
+      .delete()
   })
 
   test('upload object without a token', async () => {
@@ -1622,7 +1614,7 @@ describe('testing move object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
-    expect(S3Backend.prototype.deleteObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
   })
 
   test('check if RLS policies are respected: anon user is not able to move an authenticated object', async () => {

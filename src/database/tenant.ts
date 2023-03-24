@@ -8,6 +8,8 @@ import { StorageBackendError } from '../storage'
 interface TenantConfig {
   anonKey: string
   databaseUrl: string
+  databasePoolUrl?: string
+  maxConnections?: number
   fileSizeLimit: number
   features: Features
   jwtSecret: string
@@ -80,14 +82,18 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
     jwt_secret,
     service_key,
     feature_image_transformation,
+    database_pool_url,
+    max_connections,
   } = tenant
 
   const config = {
     anonKey: decrypt(anon_key),
     databaseUrl: decrypt(database_url),
+    databasePoolUrl: decrypt(database_pool_url),
     fileSizeLimit: Number(file_size_limit),
     jwtSecret: decrypt(jwt_secret),
     serviceKey: decrypt(service_key),
+    maxConnections: max_connections,
     features: {
       imageTransformation: {
         enabled: feature_image_transformation,

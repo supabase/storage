@@ -40,10 +40,20 @@ services:
     ports:
       - '6379:6379'
 
+  minio:
+    image: minio/minio
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    environment:
+      MINIO_ROOT_USER: supa-storage
+      MINIO_ROOT_PASSWORD: secret1234
+    command: server --console-address ":9001" /data
+
   imgproxy:
     image: darthsim/imgproxy
     ports:
-      - 50020:8080
+      - '50020:8080'
     volumes:
       - ./data:/images/data
     environment:

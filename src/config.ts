@@ -20,9 +20,8 @@ type StorageConfigType = {
   jwtAlgorithm: string
   multitenantDatabaseUrl?: string
   databaseURL: string
-  postgrestURL: string
-  postgrestURLSuffix?: string
-  postgrestURLScheme?: string
+  databasePoolURL?: string
+  databaseMaxConnections?: number
   region: string
   requestIdHeader?: string
   serviceKey: string
@@ -64,6 +63,7 @@ type StorageConfigType = {
   signedUploadUrlExpirationTime: number
   tusUrlExpiryMs: number
   tusPath: string
+  tusUseFileVersionSeparator: boolean
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -106,9 +106,11 @@ export function getConfig(): StorageConfigType {
     jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
-    postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
-    postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
-    postgrestURLScheme: getOptionalConfigFromEnv('POSTGREST_URL_SCHEME') || 'http',
+    databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
+    databaseMaxConnections: parseInt(
+      getOptionalConfigFromEnv('DATABASE_MAX_CONNECTIONS') || '20',
+      10
+    ),
     region: getConfigFromEnv('REGION'),
     requestIdHeader: getOptionalConfigFromEnv('REQUEST_ID_HEADER'),
     serviceKey: getOptionalIfMultitenantConfigFromEnv('SERVICE_KEY') || '',
@@ -179,5 +181,7 @@ export function getConfig(): StorageConfigType {
       getOptionalConfigFromEnv('TUS_URL_EXPIRY_MS') || (1000 * 60 * 60).toString(),
       10
     ),
+    tusUseFileVersionSeparator:
+      getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
   }
 }

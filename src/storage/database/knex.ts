@@ -18,7 +18,7 @@ import { TenantConnection } from '../../database/connection'
  * the only source of truth for interacting with the storage database
  */
 export class StorageKnexDB implements Database {
-  public readonly host: string
+  public readonly tenantHost: string
   public readonly tenantId: string
   public readonly role?: string
 
@@ -26,7 +26,7 @@ export class StorageKnexDB implements Database {
     public readonly connection: TenantConnection,
     private readonly options: DatabaseOptions<TenantConnection, Knex.Transaction>
   ) {
-    this.host = options.host
+    this.tenantHost = options.host
     this.tenantId = options.tenantId
     this.role = connection?.role
   }
@@ -77,7 +77,7 @@ export class StorageKnexDB implements Database {
   tenant() {
     return {
       ref: this.tenantId,
-      host: this.host,
+      host: this.tenantHost,
     }
   }
 

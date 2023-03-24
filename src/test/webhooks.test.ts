@@ -1,3 +1,5 @@
+import { TenantConnection } from '../database/connection'
+
 process.env.ENABLE_QUEUE_EVENTS = 'true'
 
 import { mockQueue, useMockObject } from './common'
@@ -6,18 +8,20 @@ import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
 import { getConfig } from '../config'
-import { getPostgrestClient } from '../database'
-import { PostgrestClient } from '@supabase/postgrest-js'
+import { getPostgresConnection } from '../database'
 import { Obj } from '../storage/schemas'
+import { randomUUID } from 'crypto'
 
 const { serviceKey } = getConfig()
 
 describe('Webhooks', () => {
   useMockObject()
 
-  let pg: PostgrestClient
+  let pg: TenantConnection
   beforeAll(async () => {
-    pg = await getPostgrestClient(serviceKey, {})
+    pg = await getPostgresConnection(serviceKey, {
+      tenantId: '1234',
+    })
   })
 
   let sendSpy: jest.SpyInstance
@@ -35,7 +39,6 @@ describe('Webhooks', () => {
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
       authorization: `Bearer ${serviceKey}`,
-      // 'x-upsert': 'true',
     })
 
     const fileName = (Math.random() + 1).toString(36).substring(7)
@@ -94,8 +97,23 @@ describe('Webhooks', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(1)
-    expect(sendSpy).toHaveBeenCalledWith(
+    expect(sendSpy).toBeCalledTimes(2)
+    expect(sendSpy).toHaveBeenNthCalledWith(1, {
+      data: {
+        $version: 'v1',
+        bucketId: 'bucket6',
+        name: obj.name,
+        tenant: {
+          host: undefined,
+          ref: 'bjhaohmqunupljrqypxz',
+        },
+        version: expect.any(String),
+      },
+      name: 'object:admin:delete',
+      options: {},
+    })
+    expect(sendSpy).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         name: 'webhooks',
         options: undefined,
@@ -269,14 +287,17 @@ describe('Webhooks', () => {
   })
 })
 
-async function createObject(pg: PostgrestClient, bucketId: string) {
+async function createObject(pg: TenantConnection, bucketId: string) {
   const objectName = Date.now()
-  const { data, error } = await pg
+  const tnx = pg.pool
+
+  const [data] = await tnx
     .from<Obj>('objects')
     .insert([
       {
         name: objectName.toString(),
         bucket_id: bucketId,
+        version: randomUUID(),
         metadata: {
           cacheControl: 'no-cache',
           contentLength: 3746,
@@ -288,12 +309,7 @@ async function createObject(pg: PostgrestClient, bucketId: string) {
         },
       },
     ])
-    .single()
-
-  if (error) {
-    console.error(error)
-    throw error
-  }
+    .returning('*')
 
   return data as Obj
 }

@@ -134,7 +134,6 @@ export class S3Backend implements StorageBackendAdapter {
 
       const metadata = await this.headObject(bucketName, key, version)
 
-      // body.
       return {
         httpStatusCode: data.$metadata.httpStatusCode || metadata.httpStatusCode,
         cacheControl: cacheControl,
@@ -252,7 +251,7 @@ export class S3Backend implements StorageBackendAdapter {
     try {
       const command = new HeadObjectCommand({
         Bucket: bucket,
-        Key: version ? key + '/' + version : key,
+        Key: withOptionalVersion(key, version),
       })
       const data = await this.client.send(command)
       return {
@@ -278,7 +277,7 @@ export class S3Backend implements StorageBackendAdapter {
   async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
     const input: GetObjectCommandInput = {
       Bucket: bucket,
-      Key: version ? key + '/' + version : key,
+      Key: withOptionalVersion(key, version),
     }
 
     const command = new GetObjectCommand(input)

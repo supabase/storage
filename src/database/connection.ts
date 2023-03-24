@@ -1,32 +1,23 @@
 import pg from 'pg'
-import { ConnectionString } from 'connection-string'
-import LRU from 'lru-cache'
-
 import { Knex, knex } from 'knex'
 import { JwtPayload } from 'jsonwebtoken'
+import { getConfig } from '../config'
 
 pg.types.setTypeParser(20, 'text', parseInt)
 
-const poolSize = 200 // TODO: dynamic value per tenant
+const { databaseMaxConnections } = getConfig()
 
 interface TenantConnectionOptions {
   tenantId: string
-  url: string
+  dbUrl: string
   role: string
   jwt: JwtPayload
   jwtRaw: string
+  isExternalPool?: boolean
+  maxConnections?: number
 }
 
-export const connections = {
-  leastUsed: undefined,
-  values: new LRU<string, Promise<Knex>>({
-    max: 200,
-    dispose: async (value) => {
-      const k = await value
-      await k.destroy()
-    },
-  }),
-}
+export const connections = new Map<string, Knex>()
 
 export class TenantConnection {
   public readonly role: string
@@ -41,42 +32,40 @@ export class TenantConnection {
   protected _usesExternalPool = false
 
   get usesExternalPool() {
-    return this._usesExternalPool
+    return Boolean(this.options.isExternalPool)
   }
 
-  static async create(pool: LRU<string, Promise<Knex>>, options: TenantConnectionOptions) {
-    const connectionString = new ConnectionString(options.url)
+  static async create(options: TenantConnectionOptions) {
+    const connectionString = options.dbUrl
 
-    let knexPool = connections.values.get(connectionString.toString())
+    let knexPool = connections.get(connectionString)
 
     if (knexPool) {
       return new this(await knexPool, options)
     }
 
-    const isExternalPool = connectionString.port === 6543
+    const isExternalPool = Boolean(options.isExternalPool)
 
-    knexPool = new Promise<Knex>(async (resolve) => {
-      const k = knex({
-        client: 'pg',
-        searchPath: 'storage',
-        pool: {
-          min: 0,
-          max: isExternalPool ? 200 : poolSize,
-          idleTimeoutMillis: 5000,
-        },
-        connection: connectionString.toString(),
-        acquireConnectionTimeout: 1000,
-      })
-
-      await k.raw(`SELECT 1`)
-      resolve(k)
+    knexPool = knex({
+      client: 'pg',
+      searchPath: 'storage',
+      pool: {
+        min: 0,
+        max: isExternalPool ? undefined : options.maxConnections || databaseMaxConnections,
+        idleTimeoutMillis: 5000,
+      },
+      connection: connectionString,
+      acquireConnectionTimeout: 1000,
     })
 
     if (!isExternalPool) {
-      connections.values.set(connectionString.toString(), knexPool)
+      knexPool.on('poolDestroySuccess', () => {
+        connections.delete(connectionString)
+      })
+      connections.set(connectionString, knexPool)
     }
 
-    const conn = new this(await knexPool, options)
+    const conn = new this(knexPool, options)
     conn._usesExternalPool = isExternalPool
 
     return conn

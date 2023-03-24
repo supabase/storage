@@ -5,7 +5,12 @@ import fileChecksum from 'md5-file'
 import { promisify } from 'util'
 import stream from 'stream'
 import { getConfig } from '../../config'
-import { StorageBackendAdapter, ObjectMetadata, ObjectResponse } from './generic'
+import {
+  StorageBackendAdapter,
+  ObjectMetadata,
+  ObjectResponse,
+  withOptionalVersion,
+} from './generic'
 import { StorageBackendError } from '../errors'
 const pipeline = promisify(stream.pipeline)
 
@@ -53,8 +58,8 @@ export class FileBackend implements StorageBackendAdapter {
     key: string,
     version: string | undefined
   ): Promise<ObjectResponse> {
-    const file = path.resolve(this.filePath, `${bucketName}/${key}`)
-    const body = await fs.readFile(file)
+    const file = path.resolve(this.filePath, withOptionalVersion(`${bucketName}/${key}`, version))
+    const body = fs.createReadStream(file)
     const data = await fs.stat(file)
     const { cacheControl, contentType } = await this.getFileMetadata(file)
     const lastModified = new Date(0)
@@ -95,7 +100,7 @@ export class FileBackend implements StorageBackendAdapter {
     cacheControl: string
   ): Promise<ObjectMetadata> {
     try {
-      const file = path.resolve(this.filePath, `${bucketName}/${key}`)
+      const file = path.resolve(this.filePath, withOptionalVersion(`${bucketName}/${key}`, version))
       await fs.ensureFile(file)
       const destFile = fs.createWriteStream(file)
       await pipeline(body, destFile)
@@ -123,8 +128,17 @@ export class FileBackend implements StorageBackendAdapter {
    * @param version
    */
   async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
-    const file = path.resolve(this.filePath, `${bucket}/${key}`)
-    await fs.remove(file)
+    try {
+      const file = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
+      await fs.remove(file)
+    } catch (e) {
+      if (e instanceof Error && 'code' in e) {
+        if ((e as any).code === 'ENOENT') {
+          return
+        }
+        throw e
+      }
+    }
   }
 
   /**
@@ -133,15 +147,20 @@ export class FileBackend implements StorageBackendAdapter {
    * @param source
    * @param version
    * @param destination
+   * @param destinationVersion
    */
   async copyObject(
     bucket: string,
     source: string,
     version: string | undefined,
-    destination: string
+    destination: string,
+    destinationVersion: string
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode'>> {
-    const srcFile = path.resolve(this.filePath, `${bucket}/${source}`)
-    const destFile = path.resolve(this.filePath, `${bucket}/${destination}`)
+    const srcFile = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${source}`, version))
+    const destFile = path.resolve(
+      this.filePath,
+      withOptionalVersion(`${bucket}/${destination}`, destinationVersion)
+    )
 
     await fs.ensureFile(destFile)
     await fs.copyFile(srcFile, destFile)
@@ -162,7 +181,16 @@ export class FileBackend implements StorageBackendAdapter {
     const promises = prefixes.map((prefix) => {
       return fs.rm(path.resolve(this.filePath, bucket, prefix))
     })
-    await Promise.all(promises)
+    const results = await Promise.allSettled(promises)
+
+    results.forEach((result) => {
+      if (result.status === 'rejected') {
+        if (result.reason.code === 'ENOENT') {
+          return
+        }
+        throw result.reason
+      }
+    })
   }
 
   /**
@@ -176,7 +204,8 @@ export class FileBackend implements StorageBackendAdapter {
     key: string,
     version: string | undefined
   ): Promise<ObjectMetadata> {
-    const file = path.resolve(this.filePath, `${bucket}/${key}`)
+    const file = path.join(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
+
     const data = await fs.stat(file)
     const { cacheControl, contentType } = await this.getFileMetadata(file)
     const lastModified = new Date(0)
@@ -202,7 +231,15 @@ export class FileBackend implements StorageBackendAdapter {
    * @param version
    */
   async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
-    return 'local:///' + path.join(this.filePath, `${bucket}/${key}`)
+    return 'local:///' + path.join(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
+  }
+
+  async setFileMetadata(file: string, { contentType, cacheControl }: FileMetadata) {
+    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+    await Promise.all([
+      this.setMetadataAttr(file, METADATA_ATTR_KEYS[platform]['cache-control'], cacheControl),
+      this.setMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type'], contentType),
+    ])
   }
 
   protected async getFileMetadata(file: string) {
@@ -216,14 +253,6 @@ export class FileBackend implements StorageBackendAdapter {
       cacheControl,
       contentType,
     } as FileMetadata
-  }
-
-  protected async setFileMetadata(file: string, { contentType, cacheControl }: FileMetadata) {
-    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
-    await Promise.all([
-      this.setMetadataAttr(file, METADATA_ATTR_KEYS[platform]['cache-control'], cacheControl),
-      this.setMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type'], contentType),
-    ])
   }
 
   protected getMetadataAttr(file: string, attribute: string): Promise<string | undefined> {

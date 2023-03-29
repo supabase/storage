@@ -1,6 +1,6 @@
 {
   "name": "supa-storage",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Supabase storage middleend",
   "main": "index.js",
   "scripts": {

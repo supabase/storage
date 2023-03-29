@@ -4,8 +4,14 @@ import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { getConfig } from '../config'
 import { StorageBackendError } from './errors'
 import { Database } from './database'
-import { ObjectAdminDelete } from '../queue'
+import {
+  MultiPartUploadCompleted,
+  ObjectAdminDelete,
+  ObjectCreatedPostEvent,
+  ObjectCreatedPutEvent,
+} from '../queue'
 import { randomUUID } from 'crypto'
+import { FileUploadedSuccess, FileUploadStarted } from '../monitoring/metrics'
 
 interface UploaderOptions extends UploadObjectOptions {
   fileSizeLimit?: number
@@ -20,6 +26,7 @@ export interface UploadObjectOptions {
   id?: string
   owner?: string
   isUpsert?: boolean
+  isMultipart?: boolean
 }
 
 /**
@@ -60,6 +67,10 @@ export class Uploader {
    */
   async prepareUpload(options: UploadObjectOptions) {
     await this.canUpload(options)
+    FileUploadStarted.inc({
+      tenant_id: this.db.tenantId,
+      is_multipart: Boolean(options.isMultipart).toString(),
+    })
 
     return randomUUID()
   }
@@ -124,7 +135,14 @@ export class Uploader {
     objectName,
     owner,
     objectMetadata,
-  }: UploadObjectOptions & { objectMetadata: ObjectMetadata; id: string; emitEvent?: boolean }) {
+    isMultipart,
+    isUpsert,
+  }: UploadObjectOptions & {
+    objectMetadata: ObjectMetadata
+    id: string
+    emitEvent?: boolean
+    isMultipart?: boolean
+  }) {
     try {
       return await this.db.withTransaction(async (db) => {
         await db.waitObjectLock(bucketId, objectName)
@@ -136,6 +154,8 @@ export class Uploader {
             dontErrorOnEmpty: true,
           })
 
+        const isNew = !Boolean(currentObj)
+
         // update object
         const newObject = await db.asSuperUser().upsertObject({
           bucket_id: bucketId,
@@ -145,17 +165,50 @@ export class Uploader {
           owner,
         })
 
+        const events: Promise<any>[] = []
+
         // schedule the deletion of the previous file
         if (currentObj && currentObj.version !== id) {
-          await ObjectAdminDelete.send({
-            name: objectName,
-            bucketId: bucketId,
-            tenant: this.db.tenant(),
-            version: currentObj.version,
-          })
+          events.push(
+            ObjectAdminDelete.send({
+              name: objectName,
+              bucketId: bucketId,
+              tenant: this.db.tenant(),
+              version: currentObj.version,
+            })
+          )
         }
 
-        return { obj: newObject, isNew: !Boolean(currentObj), metadata: objectMetadata }
+        const event = isUpsert && !isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
+
+        events.push(
+          event.sendWebhook({
+            tenant: this.db.tenant(),
+            name: objectName,
+            bucketId: bucketId,
+            metadata: objectMetadata,
+          })
+        )
+
+        if (isMultipart) {
+          events.push(
+            MultiPartUploadCompleted.send({
+              tenant: this.db.tenant(),
+              objectName: objectName,
+              bucketName: bucketId,
+              version: id,
+            })
+          )
+        }
+
+        await Promise.all(events)
+
+        FileUploadedSuccess.inc({
+          tenant_id: db.tenantId,
+          is_multipart: Boolean(isMultipart).toString(),
+        })
+
+        return { obj: newObject, isNew, metadata: objectMetadata }
       })
     } catch (e) {
       await ObjectAdminDelete.send({

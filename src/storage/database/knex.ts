@@ -12,6 +12,7 @@ import {
 } from './adapter'
 import { DatabaseError } from 'pg'
 import { TenantConnection } from '../../database/connection'
+import { DbQueryPerformance } from '../../monitoring/metrics'
 
 /**
  * Database
@@ -121,7 +122,7 @@ export class StorageKnexDB implements Database {
       allowed_mime_types: data.allowed_mime_types,
       file_size_limit: data.file_size_limit,
     }
-    const bucket = await this.runQuery(async (knex) => {
+    const bucket = await this.runQuery('CreateBucket', async (knex) => {
       return knex.from<Bucket>('buckets').insert(bucketData) as Promise<{ rowCount: number }>
     })
 
@@ -135,7 +136,7 @@ export class StorageKnexDB implements Database {
   }
 
   async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
-    const result = await this.runQuery(async (knex) => {
+    const result = await this.runQuery('FindBucketById', async (knex) => {
       const query = knex.from<Bucket>('buckets').select(columns.split(',')).where('id', bucketId)
 
       if (typeof filters?.isPublic !== 'undefined') {
@@ -163,7 +164,7 @@ export class StorageKnexDB implements Database {
   }
 
   async countObjectsInBucket(bucketId: string) {
-    const result = await this.runQuery((knex) => {
+    const result = await this.runQuery('CountObjectsInBucket', (knex) => {
       return knex
         .from<{ count: number }>('objects')
         .where('bucket_id', bucketId)
@@ -176,7 +177,7 @@ export class StorageKnexDB implements Database {
   }
 
   async deleteBucket(bucketId: string | string[]) {
-    return await this.runQuery((knex) => {
+    return await this.runQuery('DeleteBucket', (knex) => {
       return knex<Bucket>('buckets')
         .whereIn('id', Array.isArray(bucketId) ? bucketId : [bucketId])
         .delete()
@@ -184,7 +185,7 @@ export class StorageKnexDB implements Database {
   }
 
   async listObjects(bucketId: string, columns = 'id', limit = 10) {
-    const data = await this.runQuery((knex) => {
+    const data = await this.runQuery('ListObjects', (knex) => {
       return knex
         .from<Obj>('objects')
         .select(columns.split(','))
@@ -196,7 +197,7 @@ export class StorageKnexDB implements Database {
   }
 
   async listBuckets(columns = 'id') {
-    const data = await this.runQuery((knex) => {
+    const data = await this.runQuery('ListBuckets', (knex) => {
       return knex.from<Bucket>('buckets').select(columns.split(','))
     })
 
@@ -207,7 +208,7 @@ export class StorageKnexDB implements Database {
     bucketId: string,
     fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
   ) {
-    const [bucket] = await this.runQuery((knex) => {
+    const [bucket] = await this.runQuery('UpdateBucket', (knex) => {
       return knex
         .from<Bucket>('buckets')
         .update({
@@ -236,7 +237,7 @@ export class StorageKnexDB implements Database {
       metadata: data.metadata,
       version: data.version,
     }
-    await this.runQuery((knex) => {
+    await this.runQuery('UpsertObject', (knex) => {
       return knex.from<Obj>('objects').insert(objectData).onConflict(['name', 'bucket_id']).merge({
         metadata: data.metadata,
         version: data.version,
@@ -252,7 +253,7 @@ export class StorageKnexDB implements Database {
     name: string,
     data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name'>
   ) {
-    const [object] = await this.runQuery((knex) => {
+    const [object] = await this.runQuery('UpdateObject', (knex) => {
       return knex.from<Obj>('objects').where('bucket_id', bucketId).where('name', name).update(
         {
           name: data.name,
@@ -279,7 +280,7 @@ export class StorageKnexDB implements Database {
       metadata: data.metadata,
       version: data.version,
     }
-    await this.runQuery((knex) => {
+    await this.runQuery('CreateObject', (knex) => {
       return knex.from<Obj>('objects').insert(object)
     })
 
@@ -287,7 +288,7 @@ export class StorageKnexDB implements Database {
   }
 
   async deleteObject(bucketId: string, objectName: string, version?: string) {
-    const [data] = await this.runQuery((knex) => {
+    const [data] = await this.runQuery('Delete Object', (knex) => {
       return knex
         .from<Obj>('objects')
         .delete()
@@ -303,7 +304,7 @@ export class StorageKnexDB implements Database {
   }
 
   async deleteObjects(bucketId: string, objectNames: string[], by: keyof Obj = 'name') {
-    const objects = await this.runQuery((knex) => {
+    const objects = await this.runQuery('DeleteObjects', (knex) => {
       return knex
         .from<Obj>('objects')
         .delete()
@@ -316,7 +317,7 @@ export class StorageKnexDB implements Database {
   }
 
   async updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata) {
-    const [object] = await this.runQuery((knex) => {
+    const [object] = await this.runQuery('UpdateObjectMetadata', (knex) => {
       return knex
         .from<Obj>('objects')
         .update({
@@ -330,7 +331,7 @@ export class StorageKnexDB implements Database {
   }
 
   async updateObjectOwner(bucketId: string, objectName: string, owner?: string) {
-    const [object] = await this.runQuery((knex) => {
+    const [object] = await this.runQuery('UpdateObjectOwner', (knex) => {
       return knex
         .from<Obj>('objects')
         .update({
@@ -356,7 +357,7 @@ export class StorageKnexDB implements Database {
     columns = 'id',
     filters?: FindObjectFilters
   ) {
-    const object = await this.runQuery((knex) => {
+    const object = await this.runQuery('FindObject', (knex) => {
       const query = knex.from<Obj>('objects').select(columns.split(',')).where({
         name: objectName,
         bucket_id: bucketId,
@@ -395,7 +396,7 @@ export class StorageKnexDB implements Database {
   }
 
   async findObjects(bucketId: string, objectNames: string[], columns = 'id') {
-    const objects = await this.runQuery((knex) => {
+    const objects = await this.runQuery('FindObjects', (knex) => {
       return knex
         .from<Obj>('objects')
         .select(columns)
@@ -407,7 +408,7 @@ export class StorageKnexDB implements Database {
   }
 
   async mustLockObject(bucketId: string, objectName: string, version?: string) {
-    return this.runQuery(async (knex) => {
+    return this.runQuery('MustLockObject', async (knex) => {
       const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
       const result = await knex.raw<any>(`SELECT pg_try_advisory_xact_lock(${hash});`)
       const lockAcquired = result.rows.shift()?.pg_try_advisory_xact_lock || false
@@ -421,7 +422,7 @@ export class StorageKnexDB implements Database {
   }
 
   async waitObjectLock(bucketId: string, objectName: string, version?: string) {
-    return this.runQuery(async (knex) => {
+    return this.runQuery('WaitObjectLock', async (knex) => {
       const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
       await knex.raw<any>(`SELECT pg_advisory_xact_lock(${hash});`)
       return true
@@ -429,7 +430,7 @@ export class StorageKnexDB implements Database {
   }
 
   async searchObjects(bucketId: string, prefix: string, options: SearchObjectOption) {
-    return this.runQuery(async (knex) => {
+    return this.runQuery('SearchObjects', async (knex) => {
       const result = await knex.raw('select * from storage.search(?,?,?,?,?,?,?,?)', [
         prefix,
         bucketId,
@@ -446,9 +447,15 @@ export class StorageKnexDB implements Database {
   }
 
   protected async runQuery<T extends (db: Knex.Transaction) => Promise<any>>(
+    queryName: string,
     fn: T,
     isolation?: Knex.IsolationLevels
   ): Promise<Awaited<ReturnType<T>>> {
+    const timer = DbQueryPerformance.startTimer({
+      name: queryName,
+      tenant_id: this.options.tenantId,
+    })
+
     let tnx = this.options.tnx
 
     const differentScopes = Boolean(
@@ -478,11 +485,14 @@ export class StorageKnexDB implements Database {
         await tnx.commit()
       }
 
+      timer()
+
       return result
     } catch (e) {
       if (needsNewTransaction) {
         await tnx.rollback()
       }
+      timer()
       throw e
     }
   }

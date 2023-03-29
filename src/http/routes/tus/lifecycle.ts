@@ -5,7 +5,11 @@ import { getConfig } from '../../../config'
 import { randomUUID } from 'crypto'
 import { UploadId } from './upload-id'
 import { Uploader } from '../../../storage/uploader'
-import { UploadCompletedEvent } from '../../../queue'
+import {
+  MultiPartUploadCompleted,
+  ObjectCreatedPostEvent,
+  ObjectCreatedPutEvent,
+} from '../../../queue'
 
 const { globalS3Bucket } = getConfig()
 
@@ -67,6 +71,7 @@ export async function onCreate(
       bucketId: uploadID.bucket,
       objectName: uploadID.objectName,
       isUpsert,
+      isMultipart: true,
     })
 
     return res
@@ -84,9 +89,9 @@ export async function onUploadFinish(
   res: http.ServerResponse,
   upload: Upload
 ) {
-  const resourceId = UploadId.fromString(upload.id)
-
   const req = rawReq as MultiPartRequest
+  const resourceId = UploadId.fromString(upload.id)
+  const isUpsert = req.headers['x-upsert'] === 'true'
 
   try {
     const s3Key = `${req.upload.tenantId}/${resourceId.bucket}/${resourceId.objectName}`
@@ -97,21 +102,17 @@ export async function onUploadFinish(
     )
 
     const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+
     await uploader.completeUpload({
       id: resourceId.version,
       bucketId: resourceId.bucket,
       objectName: resourceId.objectName,
       objectMetadata: metadata,
-      isUpsert: req.headers['x-upsert'] === 'true',
-      emitEvent: true,
+      isUpsert: isUpsert,
+      isMultipart: true,
     })
 
-    await UploadCompletedEvent.send({
-      bucketName: resourceId.bucket,
-      objectName: resourceId.objectName,
-      tenant: req.upload.storage.db.tenant(),
-      version: resourceId.version,
-    })
+    return res
   } catch (e) {
     if (isRenderableError(e)) {
       ;(e as any).status_code = parseInt(e.render().statusCode, 10)
@@ -119,6 +120,4 @@ export async function onUploadFinish(
     }
     throw e
   }
-
-  return res
 }

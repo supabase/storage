@@ -9,8 +9,6 @@ import {
   ObjectAdminDelete,
   ObjectCreatedCopyEvent,
   ObjectCreatedMove,
-  ObjectCreatedPostEvent,
-  ObjectCreatedPutEvent,
   ObjectRemoved,
   ObjectRemovedMove,
   ObjectUpdatedMetadata,
@@ -66,23 +64,11 @@ export class ObjectStorage {
 
     const uploader = new Uploader(this.backend, this.db)
 
-    const { obj, isNew, metadata } = await uploader.upload(request, {
+    const { metadata } = await uploader.upload(request, {
       ...options,
       bucketId: this.bucketId,
       fileSizeLimit: bucket.file_size_limit,
       allowedMimeTypes: bucket.allowed_mime_types,
-    })
-
-    if (!obj) {
-      return { objectMetadata: metadata, path }
-    }
-
-    const event = options.isUpsert && !isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
-    await event.sendWebhook({
-      tenant: this.db.tenant(),
-      name: options.objectName,
-      bucketId: this.bucketId,
-      metadata,
     })
 
     return { objectMetadata: metadata, path }
@@ -107,26 +93,13 @@ export class ObjectStorage {
 
     const uploader = new Uploader(this.backend, this.db)
 
-    const { obj, metadata } = await uploader.upload(request, {
+    const { metadata } = await uploader.upload(request, {
       ...options,
       bucketId: this.bucketId,
       fileSizeLimit: bucket.file_size_limit,
       allowedMimeTypes: bucket.allowed_mime_types,
       isUpsert: true,
     })
-
-    if (!obj) {
-      return { objectMetadata: metadata, path }
-    }
-
-    await Promise.allSettled([
-      ObjectCreatedPutEvent.sendWebhook({
-        tenant: this.db.tenant(),
-        name: options.objectName,
-        bucketId: this.bucketId,
-        metadata,
-      }),
-    ])
 
     return { objectMetadata: metadata, path }
   }
@@ -188,9 +161,17 @@ export class ObjectStorage {
           results = results.concat(data)
 
           // if successfully deleted, delete from s3 too
-          const prefixesToDelete = data.map(({ name, version }) =>
-            withOptionalVersion(`${db.tenantId}/${this.bucketId}/${name}`, version)
-          )
+          // todo: consider moving this to a queue
+          const prefixesToDelete = data.reduce((all, { name, version }) => {
+            all.push(withOptionalVersion(`${db.tenantId}/${this.bucketId}/${name}`, version))
+
+            if (version) {
+              all.push(
+                withOptionalVersion(`${db.tenantId}/${this.bucketId}/${name}`, version) + '.info'
+              )
+            }
+            return all
+          }, [] as string[])
 
           await this.backend.deleteObjects(globalS3Bucket, prefixesToDelete)
 
@@ -281,6 +262,7 @@ export class ObjectStorage {
     const s3SourceKey = `${this.db.tenantId}/${bucketId}/${sourceKey}`
     const s3DestinationKey = `${this.db.tenantId}/${bucketId}/${destinationKey}`
 
+    // Test if the source object exists and if the destination object can be created
     await this.db.testPermission(async (db) => {
       await Promise.all([
         db.findObject(bucketId, sourceKey, 'id'),
@@ -292,6 +274,7 @@ export class ObjectStorage {
     })
 
     try {
+      // We check if the user has permission to copy the object to the destination key
       const { originObject } = await this.db.withTransaction(async (db) => {
         const originObject = await db.findObject(
           this.bucketId,
@@ -377,7 +360,9 @@ export class ObjectStorage {
       ])
     })
 
-    const sourceObj = await this.db.asSuperUser().findObject(this.bucketId, sourceObjectName, 'id')
+    const sourceObj = await this.db
+      .asSuperUser()
+      .findObject(this.bucketId, sourceObjectName, 'id, version')
 
     try {
       await this.backend.copyObject(
@@ -398,6 +383,8 @@ export class ObjectStorage {
           owner: sourceObj.owner,
           metadata,
         })
+
+        await db.deleteObject(this.bucketId, sourceObjectName, sourceObj.version)
 
         await Promise.all([
           ObjectAdminDelete.send({

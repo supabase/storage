@@ -1,10 +1,8 @@
-import { Registry } from 'prom-client'
-
 import app from '../admin-app'
 import { S3Backend } from '../storage/backend'
 import { Queue } from '../queue'
 
-export const adminApp = app({}, { register: new Registry() })
+export const adminApp = app({})
 
 const ENV = process.env
 

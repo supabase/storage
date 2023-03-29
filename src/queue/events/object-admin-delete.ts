@@ -1,7 +1,8 @@
 import { BaseEvent, BasePayload } from './base-event'
 import { getConfig } from '../../config'
-import { Job, SendOptions } from 'pg-boss'
+import { Job } from 'pg-boss'
 import { withOptionalVersion } from '../../storage/backend'
+import { logger } from '../../monitoring'
 
 export interface ObjectDeleteEvent extends BasePayload {
   name: string
@@ -14,11 +15,9 @@ const { globalS3Bucket } = getConfig()
 export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
   static queueName = 'object:admin:delete'
 
-  static getQueueOptions(): SendOptions | undefined {
-    return {}
-  }
-
   static async handle(job: Job<ObjectDeleteEvent>) {
+    logger.info({ job: JSON.stringify(job) }, 'Handling ObjectAdminDelete')
+
     try {
       const storage = await this.createStorage(job.data)
       const version = job.data.version
@@ -31,6 +30,12 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
       ])
     } catch (e) {
       console.error(e)
+      logger.error(
+        {
+          error: JSON.stringify(e),
+        },
+        'Error Deleting files from queue'
+      )
       throw e
     }
   }

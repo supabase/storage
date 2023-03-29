@@ -5,7 +5,8 @@ import { getConfig } from '../config'
 
 pg.types.setTypeParser(20, 'text', parseInt)
 
-const { databaseMaxConnections } = getConfig()
+const { databaseMaxConnections, databaseFreePoolAfterInactivity, databaseConnectionTimeout } =
+  getConfig()
 
 interface TenantConnectionOptions {
   tenantId: string
@@ -35,6 +36,15 @@ export class TenantConnection {
     return Boolean(this.options.isExternalPool)
   }
 
+  static stop() {
+    const promises: Promise<void>[] = []
+    for (const [connectionString, pool] of connections) {
+      promises.push(pool.destroy())
+      connections.delete(connectionString)
+    }
+    return Promise.allSettled(promises)
+  }
+
   static async create(options: TenantConnectionOptions) {
     const connectionString = options.dbUrl
 
@@ -48,19 +58,45 @@ export class TenantConnection {
 
     knexPool = knex({
       client: 'pg',
-      searchPath: 'storage',
+      searchPath: ['public', 'storage'],
       pool: {
         min: 0,
         max: isExternalPool ? undefined : options.maxConnections || databaseMaxConnections,
-        idleTimeoutMillis: 5000,
       },
       connection: connectionString,
-      acquireConnectionTimeout: 1000,
+      acquireConnectionTimeout: databaseConnectionTimeout,
     })
 
     if (!isExternalPool) {
-      knexPool.on('poolDestroySuccess', () => {
-        connections.delete(connectionString)
+      let freePoolIntervalFn: NodeJS.Timeout | undefined
+
+      knexPool.client.pool.on('poolDestroySuccess', () => {
+        if (freePoolIntervalFn) {
+          clearTimeout(freePoolIntervalFn)
+        }
+
+        if (connections.get(connectionString) === knexPool) {
+          connections.delete(connectionString)
+        }
+      })
+
+      knexPool.client.pool.on('stopReaping', () => {
+        if (freePoolIntervalFn) {
+          clearTimeout(freePoolIntervalFn)
+        }
+
+        freePoolIntervalFn = setTimeout(async () => {
+          connections.delete(connectionString)
+          await knexPool?.destroy()
+          clearTimeout(freePoolIntervalFn)
+        }, databaseFreePoolAfterInactivity)
+      })
+
+      knexPool.client.pool.on('startReaping', () => {
+        if (freePoolIntervalFn) {
+          clearTimeout(freePoolIntervalFn)
+          freePoolIntervalFn = undefined
+        }
       })
       connections.set(connectionString, knexPool)
     }

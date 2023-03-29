@@ -117,7 +117,12 @@ export default async function routes(fastify: FastifyInstance) {
       return {
         anonKey: decrypt(anon_key),
         databaseUrl: decrypt(database_url),
-        databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
+        databasePoolUrl:
+          typeof database_pool_url === null
+            ? null
+            : database_pool_url
+            ? decrypt(database_pool_url)
+            : undefined,
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),

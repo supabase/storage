@@ -6,6 +6,7 @@ import { Storage } from '../../storage'
 import { StorageKnexDB } from '../../storage/database'
 import { createStorageBackend } from '../../storage/backend'
 import { getConfig } from '../../config'
+import { QueueJobScheduled } from '../../monitoring/metrics'
 
 export interface BasePayload {
   $version: string
@@ -96,7 +97,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     return new Storage(storageBackend, db)
   }
 
-  send() {
+  async send() {
     const constructor = this.constructor as typeof BaseEvent
 
     if (!enableQueueEvents) {
@@ -110,7 +111,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
       })
     }
 
-    return Queue.getInstance().send({
+    const res = await Queue.getInstance().send({
       name: constructor.getQueueName(),
       data: {
         ...this.payload,
@@ -118,5 +119,12 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
       },
       options: constructor.getQueueOptions(),
     })
+
+    await QueueJobScheduled.inc({
+      name: constructor.getQueueName(),
+      tenant_id: this.payload.tenant.ref,
+    })
+
+    return res
   }
 }

@@ -48,7 +48,6 @@ export class S3Backend implements StorageBackendAdapter {
       runtime: 'node',
       requestHandler: new NodeHttpHandler({
         ...agent,
-        socketTimeout: 3000,
       }),
     }
     if (endpoint) {
@@ -202,7 +201,7 @@ export class S3Backend implements StorageBackendAdapter {
     try {
       const command = new CopyObjectCommand({
         Bucket: bucket,
-        CopySource: withOptionalVersion(source, version),
+        CopySource: `${bucket}/${withOptionalVersion(source, version)}`,
         Key: withOptionalVersion(destination, destinationVersion),
       })
       const data = await this.client.send(command)

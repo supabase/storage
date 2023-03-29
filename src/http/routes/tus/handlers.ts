@@ -37,15 +37,16 @@ export class Patch extends PatchHandler {
       })
     })
 
-    return lock(
-      uploadID,
-      req.upload.storage,
-      (db) => {
+    try {
+      return await lock(uploadID, req.upload.storage, (db) => {
         req.upload.storage = new Storage(req.upload.storage.backend, db)
         return super.send(req, res)
-      },
-      'PatchHandler'
-    )
+      })
+    } catch (e) {
+      ;(res as any).executionError = e
+      ;(res as any).internalHandler = 'PatchHandler'
+      throw e
+    }
   }
 }
 
@@ -71,16 +72,21 @@ export class Head extends HeadHandler {
       isUpsert: req.headers['x-upsert'] === 'true',
     })
 
-    return await lock(
-      uploadID,
-      req.upload.storage,
-      (db) => {
-        req.upload.storage = new Storage(req.upload.storage.backend, db)
-        return super.send(req, res)
-      },
-      'HeadHandler',
-      true
-    )
+    try {
+      return await lock(
+        uploadID,
+        req.upload.storage,
+        (db) => {
+          req.upload.storage = new Storage(req.upload.storage.backend, db)
+          return super.send(req, res)
+        },
+        true
+      )
+    } catch (e) {
+      ;(res as any).executionError = e
+      ;(res as any).internalHandler = 'HeadHandler'
+      throw e
+    }
   }
 }
 
@@ -108,15 +114,16 @@ export class Post extends PostHandler {
     const id = this.options.namingFunction(req)
     const uploadID = UploadId.fromString(id)
 
-    return await lock(
-      uploadID,
-      req.upload.storage,
-      (db) => {
+    try {
+      return await lock(uploadID, req.upload.storage, (db) => {
         req.upload.storage = new Storage(req.upload.storage.backend, db)
         return super.send(req, res)
-      },
-      'PostHandler'
-    )
+      })
+    } catch (e) {
+      ;(res as any).executionError = e
+      ;(res as any).internalHandler = 'PostHandler'
+      throw e
+    }
   }
 
   generateUrl(rawReq: http.IncomingMessage, id: string) {
@@ -139,55 +146,68 @@ export class Options extends OptionsHandler {
   }
 
   async send(rawReq: http.IncomingMessage, res: http.ServerResponse) {
-    res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Access-Control-Allow-Methods', ALLOWED_METHODS)
-    res.setHeader(
-      'Access-Control-Allow-Headers',
-      ALLOWED_HEADERS + ', X-Upsert, Upload-Expires, ApiKey'
-    )
-    res.setHeader('Access-Control-Max-Age', MAX_AGE)
-    if (this.store.extensions.length > 0) {
-      res.setHeader('Tus-Extension', this.store.extensions.join(','))
-    }
-
-    const req = rawReq as MultiPartRequest
-    let uploadID: UploadId | undefined
-
-    const urlParts = rawReq.url?.split('/') || []
-
-    if (urlParts.length >= 3 && urlParts[2]) {
-      const id = this.getFileIdFromRequest(rawReq)
-
-      if (!id) {
-        throw ERRORS.FILE_NOT_FOUND
+    try {
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      res.setHeader('Access-Control-Allow-Methods', ALLOWED_METHODS)
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        ALLOWED_HEADERS + ', X-Upsert, Upload-Expires, ApiKey'
+      )
+      res.setHeader('Access-Control-Max-Age', MAX_AGE)
+      if (this.store.extensions.length > 0) {
+        res.setHeader('Tus-Extension', this.store.extensions.join(','))
       }
 
-      uploadID = UploadId.fromString(id)
-    }
+      const req = rawReq as MultiPartRequest
+      let uploadID: UploadId | undefined
 
-    const fileSizeLimit = await getFileSizeLimit(req.upload.tenantId)
+      const urlParts = rawReq.url?.split('/') || []
 
-    if (!uploadID) {
+      if (urlParts.length >= 3 && urlParts[2]) {
+        const id = this.getFileIdFromRequest(rawReq)
+
+        if (!id) {
+          throw ERRORS.FILE_NOT_FOUND
+        }
+
+        uploadID = UploadId.fromString(id)
+      }
+
+      const fileSizeLimit = await getFileSizeLimit(req.upload.tenantId)
+
+      if (!uploadID) {
+        res.setHeader('Tus-Max-Size', fileSizeLimit.toString())
+        return this.write(res, 204)
+      }
+
+      const bucket = await req.upload.storage
+        .asSuperUser()
+        .findBucket(uploadID.bucket, 'id, file_size_limit')
+
+      if (bucket.file_size_limit && bucket.file_size_limit > fileSizeLimit) {
+        res.setHeader('Tus-Max-Size', fileSizeLimit.toString())
+        return this.write(res, 204)
+      }
+
+      if (bucket.file_size_limit) {
+        res.setHeader('Tus-Max-Size', bucket.file_size_limit.toString())
+        return this.write(res, 204)
+      }
+
       res.setHeader('Tus-Max-Size', fileSizeLimit.toString())
       return this.write(res, 204)
+    } catch (e) {
+      ;(res as any).executionError = e
+      ;(res as any).internalHandler = 'OptionHandler'
+
+      if (isRenderableError(e)) {
+        const statusCode = parseInt(e.render().statusCode, 10)
+        ;(e as any).status_code = statusCode
+        ;(e as any).body = statusCode !== 500 ? e.render().message : 'Internal Server Error'
+      }
+
+      throw e
     }
-
-    const bucket = await req.upload.storage
-      .asSuperUser()
-      .findBucket(uploadID.bucket, 'id, file_size_limit')
-
-    if (bucket.file_size_limit && bucket.file_size_limit > fileSizeLimit) {
-      res.setHeader('Tus-Max-Size', fileSizeLimit.toString())
-      return this.write(res, 204)
-    }
-
-    if (bucket.file_size_limit) {
-      res.setHeader('Tus-Max-Size', bucket.file_size_limit.toString())
-      return this.write(res, 204)
-    }
-
-    res.setHeader('Tus-Max-Size', fileSizeLimit.toString())
-    return this.write(res, 204)
   }
 }
 
@@ -207,7 +227,6 @@ async function lock<T extends (db: Database) => any>(
   id: UploadId,
   storage: Storage,
   fn: T,
-  tusMethod: string,
   wait?: boolean
 ) {
   try {
@@ -220,12 +239,6 @@ async function lock<T extends (db: Database) => any>(
       return await fn(db)
     })
   } catch (e) {
-    logger.error(
-      {
-        error: JSON.stringify(e),
-      },
-      `[${tusMethod}] tus upload failed for id ${id}`
-    )
     if (isRenderableError(e)) {
       const statusCode = parseInt(e.render().statusCode, 10)
       ;(e as any).status_code = statusCode

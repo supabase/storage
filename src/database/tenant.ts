@@ -89,11 +89,11 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   const config = {
     anonKey: decrypt(anon_key),
     databaseUrl: decrypt(database_url),
-    databasePoolUrl: decrypt(database_pool_url),
+    databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
     fileSizeLimit: Number(file_size_limit),
     jwtSecret: decrypt(jwt_secret),
     serviceKey: decrypt(service_key),
-    maxConnections: max_connections,
+    maxConnections: max_connections ? Number(max_connections) : undefined,
     features: {
       imageTransformation: {
         enabled: feature_image_transformation,

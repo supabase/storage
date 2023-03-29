@@ -22,6 +22,8 @@ type StorageConfigType = {
   databaseURL: string
   databasePoolURL?: string
   databaseMaxConnections?: number
+  databaseFreePoolAfterInactivity: number
+  databaseConnectionTimeout: number
   region: string
   requestIdHeader?: string
   serviceKey: string
@@ -109,6 +111,14 @@ export function getConfig(): StorageConfigType {
     databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
     databaseMaxConnections: parseInt(
       getOptionalConfigFromEnv('DATABASE_MAX_CONNECTIONS') || '20',
+      10
+    ),
+    databaseFreePoolAfterInactivity: parseInt(
+      getOptionalConfigFromEnv('DATABASE_FREE_POOL_AFTER_INACTIVITY') || (1000 * 60).toString(),
+      10
+    ),
+    databaseConnectionTimeout: parseInt(
+      getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '10000',
       10
     ),
     region: getConfigFromEnv('REGION'),

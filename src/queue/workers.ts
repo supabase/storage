@@ -1,8 +1,8 @@
 import { Queue } from './queue'
-import { ObjectAdminDelete, UploadCompletedEvent, Webhook } from './events'
+import { ObjectAdminDelete, MultiPartUploadCompleted, Webhook } from './events'
 
 export function registerWorkers() {
   Queue.register(Webhook)
   Queue.register(ObjectAdminDelete)
-  Queue.register(UploadCompletedEvent)
+  Queue.register(MultiPartUploadCompleted)
 }

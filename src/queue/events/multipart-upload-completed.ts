@@ -12,8 +12,8 @@ interface UploadCompleted extends BasePayload {
 
 const { globalS3Bucket } = getConfig()
 
-export class UploadCompletedEvent extends BaseEvent<UploadCompleted> {
-  static queueName = 'object-uploaded'
+export class MultiPartUploadCompleted extends BaseEvent<UploadCompleted> {
+  static queueName = 'multipart:upload:completed'
 
   static async handle(job: Job<UploadCompleted>) {
     try {

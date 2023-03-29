@@ -1,5 +1,6 @@
 import fastifyPlugin from 'fastify-plugin'
 import { redactQueryParamFromRequest } from '../../monitoring'
+import { normalizeRawError } from '../../storage'
 
 interface RequestLoggerOptions {
   excludeUrls?: string[]
@@ -24,12 +25,18 @@ export const logRequest = (options: RequestLoggerOptions) =>
       const rId = req.id
       const cIP = req.ip
       const statusCode = reply.statusCode
-      const error = reply.executionError
+      const error = (reply.raw as any).executionError || reply.executionError
 
       const buildLogMessage = `${rMeth} | ${statusCode} | ${cIP} | ${rId} | ${rUrl} | ${uAgent}`
 
       req.log.info(
-        { req, res: reply, responseTime: reply.getResponseTime(), error },
+        {
+          req,
+          res: reply,
+          responseTime: reply.getResponseTime(),
+          error,
+          rawError: normalizeRawError(error),
+        },
         buildLogMessage
       )
     })

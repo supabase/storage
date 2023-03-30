@@ -61,6 +61,7 @@ type StorageConfigType = {
   rateLimiterRedisConnectTimeout: number
   rateLimiterRedisCommandTimeout: number
   signedUploadUrlExpirationTime: number
+  tusUseFileVersionSeparator: boolean
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -169,5 +170,7 @@ export function getConfig(): StorageConfigType {
     signedUploadUrlExpirationTime: parseInt(
       getOptionalConfigFromEnv('SIGNED_UPLOAD_URL_EXPIRATION_TIME') || '60'
     ),
+    tusUseFileVersionSeparator:
+      getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
   }
 }

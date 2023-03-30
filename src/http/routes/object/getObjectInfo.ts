@@ -3,6 +3,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import { IncomingMessage, Server, ServerResponse } from 'http'
 import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../request'
+import { Obj } from '../../../storage/schemas'
 
 const { globalS3Bucket } = getConfig()
 
@@ -35,15 +36,17 @@ async function requestHandler(
 
   const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
 
+  let obj: Obj
   if (publicRoute) {
-    await request.storage.asSuperUser().from(bucketName).findObject(objectName)
+    obj = await request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id,version')
   } else {
-    await request.storage.from(bucketName).findObject(objectName)
+    obj = await request.storage.from(bucketName).findObject(objectName, 'id,version')
   }
 
   return request.storage.renderer('head').render(request, response, {
     bucket: globalS3Bucket,
     key: s3Key,
+    version: obj.version,
   })
 }
 

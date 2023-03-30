@@ -1,6 +1,6 @@
 {
   "name": "supa-storage",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Supabase storage middleend",
   "main": "index.js",
   "scripts": {
@@ -31,7 +31,7 @@
     "@fastify/multipart": "^7.1.0",
     "@fastify/rate-limit": "^7.6.0",
     "@fastify/swagger": "^7.4.1",
-    "@supabase/postgrest-js": "^0.36.0",
+    "@supabase/postgrest-js": "0.36.2",
     "agentkeepalive": "^4.2.1",
     "axios": "^0.27.2",
     "axios-retry": "^3.3.1",

@@ -186,8 +186,8 @@ export class ImageRenderer extends Renderer {
    */
   async getAsset(request: FastifyRequest, options: RenderOptions) {
     const [privateURL, headObj] = await Promise.all([
-      this.backend.privateAssetUrl(options.bucket, options.key),
-      this.backend.headObject(options.bucket, options.key),
+      this.backend.privateAssetUrl(options.bucket, options.key, options.version),
+      this.backend.headObject(options.bucket, options.key, options.version),
     ])
     const transformations = ImageRenderer.applyTransformation(this.transformOptions || {})
 

@@ -1,4 +1,5 @@
 import { Readable } from 'stream'
+import { getConfig } from '../../config'
 
 /**
  * Browser cache headers
@@ -49,6 +50,7 @@ export abstract class StorageBackendAdapter {
   async getObject(
     bucketName: string,
     key: string,
+    version: string | undefined,
     headers?: BrowserCacheHeaders
   ): Promise<ObjectResponse> {
     throw new Error('getObject not implemented')
@@ -65,6 +67,7 @@ export abstract class StorageBackendAdapter {
   async uploadObject(
     bucketName: string,
     key: string,
+    version: string | undefined,
     body: NodeJS.ReadableStream,
     contentType: string,
     cacheControl: string
@@ -76,8 +79,9 @@ export abstract class StorageBackendAdapter {
    * Deletes an object
    * @param bucket
    * @param key
+   * @param version
    */
-  async deleteObject(bucket: string, key: string): Promise<void> {
+  async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
     throw new Error('deleteObject not implemented')
   }
 
@@ -85,12 +89,16 @@ export abstract class StorageBackendAdapter {
    * Copies an existing object to the given location
    * @param bucket
    * @param source
+   * @param version
    * @param destination
+   * @param destinationVersion
    */
   async copyObject(
     bucket: string,
     source: string,
-    destination: string
+    version: string | undefined,
+    destination: string,
+    destinationVersion: string | undefined
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode'>> {
     throw new Error('copyObject not implemented')
   }
@@ -108,8 +116,13 @@ export abstract class StorageBackendAdapter {
    * Returns metadata information of a specific object
    * @param bucket
    * @param key
+   * @param version
    */
-  async headObject(bucket: string, key: string): Promise<ObjectMetadata> {
+  async headObject(
+    bucket: string,
+    key: string,
+    version: string | undefined
+  ): Promise<ObjectMetadata> {
     throw new Error('headObject not implemented')
   }
 
@@ -117,8 +130,19 @@ export abstract class StorageBackendAdapter {
    * Returns a private url that can only be accessed internally by the system
    * @param bucket
    * @param key
+   * @param version
    */
-  async privateAssetUrl(bucket: string, key: string): Promise<string> {
+  async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
     throw new Error('privateAssetUrl not implemented')
   }
+}
+
+const { tusUseFileVersionSeparator } = getConfig()
+
+export const PATH_SEPARATOR = '/'
+export const FILE_VERSION_SEPARATOR = '-$v-'
+export const SEPARATOR = tusUseFileVersionSeparator ? FILE_VERSION_SEPARATOR : PATH_SEPARATOR
+
+export function withOptionalVersion(key: string, version?: string): string {
+  return version ? `${key}${SEPARATOR}${version}` : key
 }

@@ -284,11 +284,17 @@ export class Database {
     return data as Obj[]
   }
 
-  async updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata) {
+  async updateObjectMetadata(
+    bucketId: string,
+    objectName: string,
+    metadata: ObjectMetadata,
+    resetVersion?: boolean
+  ) {
     const { error, status, data } = await this.postgrest
       .from<Obj>('objects')
       .update({
         metadata,
+        ...(resetVersion ? { version: null as any } : {}),
       })
       .match({ bucket_id: bucketId, name: objectName })
       .single()

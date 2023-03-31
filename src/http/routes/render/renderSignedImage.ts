@@ -68,12 +68,19 @@ export default async function routes(fastify: FastifyInstance) {
       const s3Key = `${request.tenantId}/${url}`
       request.log.info(s3Key)
 
+      const [bucketName, ...objParts] = url.split('/')
+      const obj = await request.storage
+        .asSuperUser()
+        .from(bucketName)
+        .findObject(objParts.join('/'), 'id,version')
+
       const renderer = request.storage.renderer('image') as ImageRenderer
       return renderer
         .setTransformationsFromString(transformations || '')
         .render(request, response, {
           bucket: globalS3Bucket,
           key: s3Key,
+          version: obj.version,
           download,
           expires: new Date(exp * 1000).toUTCString(),
         })

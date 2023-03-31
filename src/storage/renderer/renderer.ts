@@ -5,6 +5,7 @@ import { Readable } from 'stream'
 export interface RenderOptions {
   bucket: string
   key: string
+  version?: string
   download?: string
   expires?: string
 }

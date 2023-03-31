@@ -1,4 +1,5 @@
 import {
+  CompleteMultipartUploadCommandOutput,
   CopyObjectCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
@@ -15,6 +16,7 @@ import {
   BrowserCacheHeaders,
   ObjectMetadata,
   ObjectResponse,
+  withOptionalVersion,
 } from './generic'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { StorageBackendError } from '../errors'
@@ -46,7 +48,6 @@ export class S3Backend implements StorageBackendAdapter {
       runtime: 'node',
       requestHandler: new NodeHttpHandler({
         ...agent,
-        socketTimeout: 3000,
       }),
     }
     if (endpoint) {
@@ -62,17 +63,19 @@ export class S3Backend implements StorageBackendAdapter {
    * Gets an object body and metadata
    * @param bucketName
    * @param key
+   * @param version
    * @param headers
    */
   async getObject(
     bucketName: string,
     key: string,
+    version: string | undefined,
     headers?: BrowserCacheHeaders
   ): Promise<ObjectResponse> {
     const input: GetObjectCommandInput = {
       Bucket: bucketName,
       IfNoneMatch: headers?.ifNoneMatch,
-      Key: key,
+      Key: withOptionalVersion(key, version),
       Range: headers?.range,
     }
     if (headers?.ifModifiedSince) {
@@ -100,6 +103,7 @@ export class S3Backend implements StorageBackendAdapter {
    * Uploads and store an object
    * @param bucketName
    * @param key
+   * @param version
    * @param body
    * @param contentType
    * @param cacheControl
@@ -107,6 +111,7 @@ export class S3Backend implements StorageBackendAdapter {
   async uploadObject(
     bucketName: string,
     key: string,
+    version: string | undefined,
     body: NodeJS.ReadableStream,
     contentType: string,
     cacheControl: string
@@ -116,7 +121,7 @@ export class S3Backend implements StorageBackendAdapter {
         client: this.client,
         params: {
           Bucket: bucketName,
-          Key: key,
+          Key: withOptionalVersion(key, version),
           /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
           Body: body,
           ContentType: contentType,
@@ -124,12 +129,13 @@ export class S3Backend implements StorageBackendAdapter {
         },
       })
 
-      const data = await paralellUploadS3.done()
-      const metadata = await this.headObject(bucketName, key)
+      const data = (await paralellUploadS3.done()) as CompleteMultipartUploadCommandOutput
+
+      const metadata = await this.headObject(bucketName, key, version)
 
       return {
         httpStatusCode: data.$metadata.httpStatusCode || metadata.httpStatusCode,
-        cacheControl: metadata.cacheControl,
+        cacheControl: cacheControl,
         eTag: metadata.eTag,
         mimetype: metadata.mimetype,
         contentLength: metadata.contentLength,
@@ -146,11 +152,12 @@ export class S3Backend implements StorageBackendAdapter {
    * Deletes an object
    * @param bucket
    * @param key
+   * @param version
    */
-  async deleteObject(bucket: string, key: string): Promise<void> {
+  async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
     const command = new DeleteObjectCommand({
       Bucket: bucket,
-      Key: key,
+      Key: withOptionalVersion(key, version),
     })
     await this.client.send(command)
   }
@@ -159,18 +166,22 @@ export class S3Backend implements StorageBackendAdapter {
    * Copies an existing object to the given location
    * @param bucket
    * @param source
+   * @param version
    * @param destination
+   * @param destinationVersion
    */
   async copyObject(
     bucket: string,
     source: string,
-    destination: string
+    version: string | undefined,
+    destination: string,
+    destinationVersion: string | undefined
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode'>> {
     try {
       const command = new CopyObjectCommand({
         Bucket: bucket,
-        CopySource: `/${bucket}/${source}`,
-        Key: destination,
+        CopySource: `${bucket}/${withOptionalVersion(source, version)}`,
+        Key: withOptionalVersion(destination, destinationVersion),
       })
       const data = await this.client.send(command)
       return {
@@ -208,12 +219,17 @@ export class S3Backend implements StorageBackendAdapter {
    * Returns metadata information of a specific object
    * @param bucket
    * @param key
+   * @param version
    */
-  async headObject(bucket: string, key: string): Promise<ObjectMetadata> {
+  async headObject(
+    bucket: string,
+    key: string,
+    version: string | undefined
+  ): Promise<ObjectMetadata> {
     try {
       const command = new HeadObjectCommand({
         Bucket: bucket,
-        Key: key,
+        Key: withOptionalVersion(key, version),
       })
       const data = await this.client.send(command)
       return {
@@ -234,11 +250,12 @@ export class S3Backend implements StorageBackendAdapter {
    * Returns a private url that can only be accessed internally by the system
    * @param bucket
    * @param key
+   * @param version
    */
-  async privateAssetUrl(bucket: string, key: string): Promise<string> {
+  async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
     const input: GetObjectCommandInput = {
       Bucket: bucket,
-      Key: key,
+      Key: withOptionalVersion(key, version),
     }
 
     const command = new GetObjectCommand(input)

@@ -1,4 +1,4 @@
-import { StorageBackendAdapter, ObjectMetadata } from './backend'
+import { StorageBackendAdapter, ObjectMetadata, withOptionalVersion } from './backend'
 import { Database, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
 import { getJwtSecret, signJWT } from '../auth'
@@ -180,10 +180,10 @@ export class ObjectStorage {
    * @param objectName
    */
   async deleteObject(objectName: string) {
-    await this.db.deleteObject(this.bucketId, objectName)
+    const obj = await this.db.deleteObject(this.bucketId, objectName)
     const s3Key = `${this.db.tenantId}/${this.bucketId}/${objectName}`
 
-    const result = await this.backend.deleteObject(globalS3Bucket, s3Key)
+    const result = await this.backend.deleteObject(globalS3Bucket, s3Key, obj.version)
 
     await ObjectRemoved.sendWebhook({
       tenant: this.db.tenant(),
@@ -228,8 +228,8 @@ export class ObjectStorage {
         )
 
         // if successfully deleted, delete from s3 too
-        const prefixesToDelete = data.map(
-          ({ name }) => `${this.db.tenantId}/${this.bucketId}/${name}`
+        const prefixesToDelete = data.map(({ name, version }) =>
+          withOptionalVersion(`${this.db.tenantId}/${this.bucketId}/${name}`, version)
         )
 
         await this.backend.deleteObjects(globalS3Bucket, prefixesToDelete)
@@ -298,11 +298,16 @@ export class ObjectStorage {
     mustBeValidKey(destinationKey, 'The destination object name contains invalid characters')
 
     const bucketId = this.bucketId
-    const originObject = await this.db.findObject(this.bucketId, sourceKey, 'bucket_id, metadata')
+    const originObject = await this.db.findObject(
+      this.bucketId,
+      sourceKey,
+      'bucket_id, metadata, version'
+    )
 
     const newObject = Object.assign({}, originObject, {
       name: destinationKey,
       owner,
+      version: null,
     })
 
     const destObject = await this.createObject(newObject)
@@ -310,10 +315,16 @@ export class ObjectStorage {
     const s3SourceKey = `${this.db.tenantId}/${bucketId}/${sourceKey}`
     const s3DestinationKey = `${this.db.tenantId}/${bucketId}/${destinationKey}`
 
-    const copyResult = await this.backend.copyObject(globalS3Bucket, s3SourceKey, s3DestinationKey)
-    const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey)
+    const copyResult = await this.backend.copyObject(
+      globalS3Bucket,
+      s3SourceKey,
+      originObject.version,
+      s3DestinationKey,
+      undefined
+    )
+    const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, undefined)
 
-    await this.db.asSuperUser().updateObjectMetadata(bucketId, destinationKey, metadata)
+    await this.db.asSuperUser().updateObjectMetadata(bucketId, destinationKey, metadata, true)
 
     await ObjectCreatedCopyEvent.sendWebhook({
       tenant: this.db.tenant(),
@@ -340,17 +351,29 @@ export class ObjectStorage {
       return
     }
 
-    await this.db.updateObjectName(this.bucketId, sourceObjectName, destinationObjectName)
+    const sourceObj = await this.db.updateObjectName(
+      this.bucketId,
+      sourceObjectName,
+      destinationObjectName
+    )
 
     const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
     const s3DestinationKey = `${this.db.tenantId}/${this.bucketId}/${destinationObjectName}`
 
     // @todo what happens if one of these fail?
-    await this.backend.copyObject(globalS3Bucket, s3SourceKey, s3DestinationKey)
-    await this.backend.deleteObject(globalS3Bucket, s3SourceKey)
+    await this.backend.copyObject(
+      globalS3Bucket,
+      s3SourceKey,
+      sourceObj.version,
+      s3DestinationKey,
+      undefined
+    )
+    await this.backend.deleteObject(globalS3Bucket, s3SourceKey, sourceObj.version)
 
-    const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey)
-    await this.db.asSuperUser().updateObjectMetadata(this.bucketId, destinationObjectName, metadata)
+    const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, undefined)
+    await this.db
+      .asSuperUser()
+      .updateObjectMetadata(this.bucketId, destinationObjectName, metadata, true)
 
     const movedObject = await this.db.findObject(
       this.bucketId,

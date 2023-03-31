@@ -37,6 +37,7 @@ export class Uploader {
     const objectMetadata = await this.backend.uploadObject(
       globalS3Bucket,
       options.key,
+      undefined,
       file.body,
       file.mimeType,
       file.cacheControl

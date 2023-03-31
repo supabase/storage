@@ -64,7 +64,7 @@ describe('testing GET object', () => {
       },
     })
     expect(response.statusCode).toBe(304)
-    expect(mockGetObject.mock.calls[0][2]).toMatchObject({
+    expect(mockGetObject.mock.calls[0][3]).toMatchObject({
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })
@@ -1567,7 +1567,7 @@ describe('testing retrieving signed URL', () => {
       },
     })
     expect(response.statusCode).toBe(304)
-    expect(mockGetObject.mock.calls[0][2]).toMatchObject({
+    expect(mockGetObject.mock.calls[0][3]).toMatchObject({
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })

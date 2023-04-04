@@ -3,6 +3,8 @@ import aws from 'aws-sdk'
 import fs from 'node:fs'
 import { Readable } from 'node:stream'
 import { TUS_RESUMABLE, Upload } from '@tus/server'
+import { S3UploadPart } from '../../../monitoring/metrics'
+import { UploadId } from './upload-id'
 
 interface Options {
   partSize?: number
@@ -41,6 +43,23 @@ export class S3Store extends BaseS3Store {
         },
       })
       .promise()
+  }
+
+  protected async uploadPart(
+    metadata: { file: Upload; upload_id: string; tus_version: string },
+    readStream: fs.ReadStream | Readable,
+    partNumber: number
+  ): Promise<string> {
+    const timer = S3UploadPart.startTimer()
+
+    const result = await super.uploadPart(metadata, readStream, partNumber)
+    const resource = UploadId.fromString(metadata.file.id)
+
+    timer({
+      tenant_id: resource.tenant,
+    })
+
+    return result
   }
 
   protected async uploadIncompletePart(

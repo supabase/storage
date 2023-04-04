@@ -19,6 +19,7 @@ export const db = fastifyPlugin(async (fastify) => {
     request.db = await getPostgresConnection(request.jwt, {
       tenantId: request.tenantId,
       host: request.headers['x-forwarded-host'] as string | undefined,
+      forwardHeaders: request.headers,
     })
   })
 

@@ -5,11 +5,6 @@ import { getConfig } from '../../../config'
 import { randomUUID } from 'crypto'
 import { UploadId } from './upload-id'
 import { Uploader } from '../../../storage/uploader'
-import {
-  MultiPartUploadCompleted,
-  ObjectCreatedPostEvent,
-  ObjectCreatedPutEvent,
-} from '../../../queue'
 
 const { globalS3Bucket } = getConfig()
 

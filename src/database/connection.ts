@@ -2,7 +2,9 @@ import pg from 'pg'
 import { Knex, knex } from 'knex'
 import { JwtPayload } from 'jsonwebtoken'
 import { getConfig } from '../config'
+import { logger } from '../monitoring'
 
+// https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)
 
 const { databaseMaxConnections, databaseFreePoolAfterInactivity, databaseConnectionTimeout } =
@@ -15,7 +17,8 @@ interface TenantConnectionOptions {
   jwt: JwtPayload
   jwtRaw: string
   isExternalPool?: boolean
-  maxConnections?: number
+  maxConnections: number
+  headers?: Record<string, string | undefined | string[]>
 }
 
 export const connections = new Map<string, Knex>()
@@ -61,7 +64,9 @@ export class TenantConnection {
       searchPath: ['public', 'storage'],
       pool: {
         min: 0,
-        max: isExternalPool ? undefined : options.maxConnections || databaseMaxConnections,
+        max: isExternalPool
+          ? options.maxConnections * 3
+          : options.maxConnections || databaseMaxConnections,
       },
       connection: connectionString,
       acquireConnectionTimeout: databaseConnectionTimeout,
@@ -87,7 +92,9 @@ export class TenantConnection {
 
         freePoolIntervalFn = setTimeout(async () => {
           connections.delete(connectionString)
-          await knexPool?.destroy()
+          knexPool?.destroy().catch((e) => {
+            logger.error(e, 'Error destroying pool')
+          })
           clearTimeout(freePoolIntervalFn)
         }, databaseFreePoolAfterInactivity)
       })
@@ -120,12 +127,25 @@ export class TenantConnection {
   }
 
   async setScope(tnx: Knex) {
-    await tnx.raw(`
-      SET LOCAL ROLE ${this.options.role};
-      SET LOCAL request.jwt.claim.role='${this.options.role}';
-      SET LOCAL request.jwt='${this.options.jwtRaw}';
-      SET LOCAL request.jwt.claim.sub='${this.options.jwt.sub || ''}';
-      SET LOCAL request.jwt.claims='${JSON.stringify(this.options.jwt)}';
-    `)
+    const headers = JSON.stringify(this.options.headers || {})
+    await tnx.raw(
+      `
+        SELECT
+          set_config('role', ?, true),
+          set_config('request.jwt.claim.role', ?, true),
+          set_config('request.jwt', ?, true),
+          set_config('request.jwt.claim.sub', ?, true),
+          set_config('request.jwt.claims', ?, true),
+          set_config('request.headers', ?, true);
+    `,
+      [
+        this.options.role || 'anon',
+        this.options.role || 'anon',
+        this.options.jwtRaw || '',
+        this.options.jwt.sub || '',
+        JSON.stringify(this.options.jwt),
+        headers,
+      ]
+    )
   }
 }

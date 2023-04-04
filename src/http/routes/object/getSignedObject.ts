@@ -84,8 +84,8 @@ export default async function routes(fastify: FastifyInstance) {
       return request.storage.renderer('asset').render(request, response, {
         bucket: globalS3Bucket,
         key: s3Key,
-        download,
         version: obj.version,
+        download,
         expires: new Date(exp * 1000).toUTCString(),
       })
     }

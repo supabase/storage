@@ -27,6 +27,12 @@ export const RequestErrors = new client.Gauge({
   help: 'Response Errors',
 })
 
+export const QueueJobSchedulingTime = new client.Histogram({
+  name: 'storage_api_queue_job_scheduled_time',
+  help: 'Time taken to schedule a job in the queue',
+  labelNames: ['region', 'name', 'tenant_id'],
+})
+
 export const QueueJobScheduled = new client.Gauge({
   name: 'storage_api_queue_job_scheduled',
   help: 'Current number of pending messages in the queue',
@@ -49,4 +55,10 @@ export const QueueJobError = new client.Gauge({
   name: 'storage_api_queue_job_error',
   help: 'Current number of errored messages in the queue',
   labelNames: ['tenant_id', 'region', 'name'],
+})
+
+export const S3UploadPart = new client.Histogram({
+  name: 'storage_api_s3_upload_part',
+  help: 'S3 upload part performance',
+  labelNames: ['tenant_id', 'region'],
 })

@@ -6,7 +6,7 @@ import { Storage } from '../../storage'
 import { StorageKnexDB } from '../../storage/database'
 import { createStorageBackend } from '../../storage/backend'
 import { getConfig } from '../../config'
-import { QueueJobScheduled } from '../../monitoring/metrics'
+import { QueueJobScheduled, QueueJobSchedulingTime } from '../../monitoring/metrics'
 
 export interface BasePayload {
   $version: string
@@ -111,6 +111,8 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
       })
     }
 
+    const timer = QueueJobSchedulingTime.startTimer()
+
     const res = await Queue.getInstance().send({
       name: constructor.getQueueName(),
       data: {
@@ -120,7 +122,12 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
       options: constructor.getQueueOptions(),
     })
 
-    await QueueJobScheduled.inc({
+    timer({
+      name: constructor.getQueueName(),
+      tenant_id: this.payload.tenant.ref,
+    })
+
+    QueueJobScheduled.inc({
       name: constructor.getQueueName(),
       tenant_id: this.payload.tenant.ref,
     })

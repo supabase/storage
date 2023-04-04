@@ -21,7 +21,7 @@ type StorageConfigType = {
   multitenantDatabaseUrl?: string
   databaseURL: string
   databasePoolURL?: string
-  databaseMaxConnections?: number
+  databaseMaxConnections: number
   databaseFreePoolAfterInactivity: number
   databaseConnectionTimeout: number
   region: string
@@ -66,6 +66,7 @@ type StorageConfigType = {
   tusUrlExpiryMs: number
   tusPath: string
   tusUseFileVersionSeparator: boolean
+  enableDefaultMetrics: boolean
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -186,12 +187,13 @@ export function getConfig(): StorageConfigType {
       getOptionalConfigFromEnv('SIGNED_UPLOAD_URL_EXPIRATION_TIME') || '60'
     ),
 
-    tusPath: getOptionalConfigFromEnv('TUS_URL_PATH') || '/multi-part',
+    tusPath: getOptionalConfigFromEnv('TUS_URL_PATH') || '/upload/resumable',
     tusUrlExpiryMs: parseInt(
       getOptionalConfigFromEnv('TUS_URL_EXPIRY_MS') || (1000 * 60 * 60).toString(),
       10
     ),
     tusUseFileVersionSeparator:
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
+    enableDefaultMetrics: getOptionalConfigFromEnv('ENABLE_DEFAULT_METRICS') === 'true',
   }
 }

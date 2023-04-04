@@ -148,7 +148,7 @@ export class S3Backend implements StorageBackendAdapter {
     }
   }
 
-  async updateObjectInfoMetadata(bucketName: string, key: string) {
+  async setMetadataToCompleted(bucketName: string, key: string) {
     const headObject = new HeadObjectCommand({
       Bucket: bucketName,
       Key: `${key}.info`,

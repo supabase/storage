@@ -79,7 +79,7 @@ describe('Tus multipart', () => {
 
     const result = await new Promise((resolve, reject) => {
       const upload = new tus.Upload(oneChunkFile, {
-        endpoint: `${localServerAddress}/multi-part`,
+        endpoint: `${localServerAddress}/upload/resumable`,
         onShouldRetry: () => false,
         uploadDataDuringCreation: false,
         headers: {
@@ -143,7 +143,7 @@ describe('Tus multipart', () => {
       try {
         await new Promise((resolve, reject) => {
           const upload = new tus.Upload(oneChunkFile, {
-            endpoint: `${localServerAddress}/multi-part`,
+            endpoint: `${localServerAddress}/upload/resumable`,
             onShouldRetry: () => false,
             uploadDataDuringCreation: false,
             headers: {
@@ -191,7 +191,7 @@ describe('Tus multipart', () => {
       try {
         await new Promise((resolve, reject) => {
           const upload = new tus.Upload(oneChunkFile, {
-            endpoint: `${localServerAddress}/multi-part`,
+            endpoint: `${localServerAddress}/upload/resumable`,
             onShouldRetry: () => false,
             uploadDataDuringCreation: false,
             headers: {

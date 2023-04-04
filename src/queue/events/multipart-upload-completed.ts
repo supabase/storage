@@ -23,7 +23,7 @@ export class MultiPartUploadCompleted extends BaseEvent<UploadCompleted> {
       const s3Key = `${job.data.tenant.ref}/${job.data.bucketName}/${job.data.objectName}/${version}`
 
       if (storage.backend instanceof S3Backend) {
-        await storage.backend.updateObjectInfoMetadata(globalS3Bucket, s3Key)
+        await storage.backend.setMetadataToCompleted(globalS3Bucket, s3Key)
       }
     } catch (e) {
       if (isS3Error(e) && e.$metadata.httpStatusCode === 404) {

@@ -110,7 +110,7 @@ describe('Webhooks', () => {
         version: expect.any(String),
       },
       name: 'object:admin:delete',
-      options: {},
+      options: undefined,
     })
     expect(sendSpy).toHaveBeenNthCalledWith(
       2,

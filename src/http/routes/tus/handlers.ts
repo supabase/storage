@@ -9,7 +9,6 @@ import { Database } from '../../../storage/database'
 import { OptionsHandler } from '@tus/server/handlers/OptionsHandler'
 import { UploadId } from './upload-id'
 import { getFileSizeLimit } from '../../../storage/limits'
-import { logger } from '../../../monitoring'
 import { Uploader } from '../../../storage/uploader'
 
 const reExtractFileID = /([^/]+)\/?$/
@@ -29,12 +28,11 @@ export class Patch extends PatchHandler {
 
     const uploadID = UploadId.fromString(id)
 
-    await req.upload.storage.db.testPermission((db) => {
-      return db.upsertObject({
-        name: uploadID.objectName,
-        version: uploadID.version,
-        bucket_id: uploadID.bucket,
-      })
+    const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+    await uploader.canUpload({
+      bucketId: uploadID.bucket,
+      objectName: uploadID.objectName,
+      isUpsert: req.headers['x-upsert'] === 'true',
     })
 
     try {

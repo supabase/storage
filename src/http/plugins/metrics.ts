@@ -3,7 +3,7 @@ import { MetricsRegistrar, RequestErrors } from '../../monitoring/metrics'
 import fastifyMetrics from 'fastify-metrics'
 import { getConfig } from '../../config'
 
-const { region } = getConfig()
+const { region, enableDefaultMetrics } = getConfig()
 
 interface MetricsOptions {
   enabledEndpoint?: boolean
@@ -14,7 +14,7 @@ export const metrics = ({ enabledEndpoint }: MetricsOptions) =>
     fastify.register(fastifyMetrics, {
       endpoint: enabledEndpoint ? '/metrics' : null,
       defaultMetrics: {
-        enabled: true,
+        enabled: enableDefaultMetrics,
         register: MetricsRegistrar,
         prefix: 'storage_api_',
         labels: {
@@ -22,7 +22,7 @@ export const metrics = ({ enabledEndpoint }: MetricsOptions) =>
         },
       },
       routeMetrics: {
-        enabled: true,
+        enabled: enableDefaultMetrics,
         overrides: {
           summary: {
             name: 'storage_api_http_request_summary_seconds',

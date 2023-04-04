@@ -410,7 +410,7 @@ export class StorageKnexDB implements Database {
   async mustLockObject(bucketId: string, objectName: string, version?: string) {
     return this.runQuery('MustLockObject', async (knex) => {
       const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
-      const result = await knex.raw<any>(`SELECT pg_try_advisory_xact_lock(${hash});`)
+      const result = await knex.raw<any>(`SELECT pg_try_advisory_xact_lock(?);`, [hash])
       const lockAcquired = result.rows.shift()?.pg_try_advisory_xact_lock || false
 
       if (!lockAcquired) {
@@ -424,7 +424,7 @@ export class StorageKnexDB implements Database {
   async waitObjectLock(bucketId: string, objectName: string, version?: string) {
     return this.runQuery('WaitObjectLock', async (knex) => {
       const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
-      await knex.raw<any>(`SELECT pg_advisory_xact_lock(${hash});`)
+      await knex.raw<any>(`SELECT pg_advisory_xact_lock(?)`, [hash])
       return true
     })
   }

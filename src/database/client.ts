@@ -2,12 +2,12 @@ import { getConfig } from '../config'
 import { getTenantConfig } from './tenant'
 import { StorageBackendError } from '../storage'
 import { verifyJWT } from '../auth'
-import { connections, TenantConnection } from './connection'
+import { TenantConnection } from './connection'
 
 interface ConnectionOptions {
   host?: string
   tenantId?: string
-  forwardHeaders?: Record<string, string>
+  forwardHeaders?: Record<string, string | undefined | string[]>
 }
 
 /**
@@ -77,5 +77,6 @@ export async function getPostgresConnection(
     role,
     jwt: verifiedJWT,
     jwtRaw: jwt,
+    headers: options.forwardHeaders,
   })
 }

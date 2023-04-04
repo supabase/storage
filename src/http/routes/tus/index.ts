@@ -36,7 +36,7 @@ type MultiPartRequest = http.IncomingMessage & {
 function createTusStore() {
   if (storageBackendType === 's3') {
     return new S3Store({
-      partSize: 6 * 1024 * 1024, // Each uploaded part will have ~8MB,
+      partSize: 6 * 1024 * 1024, // Each uploaded part will have ~6MB,
       uploadExpiryMilliseconds: tusUrlExpiryMs,
       s3ClientConfig: {
         bucket: globalS3Bucket,

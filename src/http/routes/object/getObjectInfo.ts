@@ -35,8 +35,8 @@ async function requestHandler(
   const objectName = request.params['*']
 
   const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
-  let obj: Obj
 
+  let obj: Obj
   if (publicRoute) {
     obj = await request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id,version')
   } else {

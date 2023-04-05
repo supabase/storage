@@ -8,7 +8,7 @@ interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
 }
 
-const { keepAliveTimeout, headersTimeout } = getConfig()
+const { keepAliveTimeout, headersTimeout, isMultitenant } = getConfig()
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
   const app = fastify(opts)
@@ -53,8 +53,10 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.addSchema(schemas.errorSchema)
 
   app.register(plugins.tenantId)
+  app.register(plugins.metrics({ enabledEndpoint: !isMultitenant }))
   app.register(plugins.logTenantId)
-  app.register(plugins.logRequest({ excludeUrls: ['/status'] }))
+  app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics'] }))
+  app.register(routes.multiPart, { prefix: 'upload/resumable' })
   app.register(routes.bucket, { prefix: 'bucket' })
   app.register(routes.object, { prefix: 'object' })
   app.register(routes.render, { prefix: 'render/image' })

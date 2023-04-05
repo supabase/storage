@@ -1,5 +1,5 @@
 import { S3ServiceException } from '@aws-sdk/client-s3'
-import { PostgrestError } from '@supabase/postgrest-js'
+import { logger } from '../monitoring'
 
 export type StorageError = {
   statusCode: string
@@ -14,58 +14,6 @@ export type StorageError = {
 export interface RenderableError {
   render(): StorageError
   getOriginalError(): unknown
-}
-
-/**
- * A specific database error
- */
-export class DatabaseError extends Error implements RenderableError {
-  constructor(
-    message: string,
-    public readonly status: number,
-    public readonly postgresError: PostgrestError,
-    public readonly metadata?: Record<string, any>
-  ) {
-    super(message)
-    Object.setPrototypeOf(this, DatabaseError.prototype)
-  }
-
-  render(): StorageError {
-    let { message, details: type, code } = this.postgresError
-    const responseStatus = this.status
-
-    if (responseStatus === 406) {
-      code = '404'
-      message = 'The resource was not found'
-      type = 'Not found'
-    } else if (responseStatus === 401) {
-      code = '401'
-      type = 'Invalid JWT'
-    } else if (responseStatus === 409) {
-      const relationNotPresent = type?.includes('not present')
-
-      code = relationNotPresent ? '404' : '409'
-      type = relationNotPresent ? 'Not Found' : 'Duplicate'
-      message = relationNotPresent
-        ? 'The parent resource is not found'
-        : 'The resource already exists'
-    } else if (responseStatus === 403) {
-      code = '403'
-    } else {
-      code = '500'
-      type = 'Database Error'
-    }
-
-    return {
-      statusCode: code,
-      error: type,
-      message,
-    }
-  }
-
-  getOriginalError() {
-    return this.postgresError
-  }
 }
 
 /**
@@ -132,5 +80,26 @@ export class StorageBackendError extends Error implements RenderableError {
 
   getOriginalError() {
     return this.originalError
+  }
+}
+
+export function normalizeRawError(error: any) {
+  if (error instanceof Error) {
+    return JSON.stringify({
+      _error: error,
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    })
+  }
+
+  if (error instanceof Object) {
+    return error.toString()
+  }
+
+  try {
+    return JSON.stringify(error)
+  } catch (e) {
+    logger.error(e, 'Failed to stringify error')
   }
 }

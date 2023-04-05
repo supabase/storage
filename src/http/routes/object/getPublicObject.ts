@@ -51,7 +51,7 @@ export default async function routes(fastify: FastifyInstance) {
         request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
           isPublic: true,
         }),
-        request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id, version'),
+        request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id,version'),
       ])
 
       // send the object from s3
@@ -60,8 +60,8 @@ export default async function routes(fastify: FastifyInstance) {
 
       return request.storage.renderer('asset').render(request, response, {
         bucket: globalS3Bucket,
-        version: obj.version,
         key: s3Key,
+        version: obj.version,
         download,
       })
     }

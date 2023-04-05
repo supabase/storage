@@ -1,13 +1,10 @@
 'use strict'
-jest.mock('@supabase/postgrest-js')
-
 import { adminApp } from './common'
 import dotenv from 'dotenv'
 import * as migrate from '../database/migrate'
 import { knex } from '../database/multitenant-db'
 import app from '../app'
 import * as tenant from '../database/tenant'
-import { PostgrestClient } from '@supabase/postgrest-js'
 
 dotenv.config({ path: '.env.test' })
 
@@ -67,18 +64,7 @@ describe('with X-Forwarded-Host header', () => {
         'x-forwarded-host': 'abcdefghijklmnopqrst.supabase.co',
       },
     })
-    expect(PostgrestClient).toHaveBeenNthCalledWith(
-      1,
-      'http://abcdefghijklmnopqrst.supabase.co/rest/v1',
-      {
-        headers: {
-          apiKey: 'a',
-          Authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
-        },
-        schema: 'storage',
-      }
-    )
-
+    expect(response.statusCode).toBe(200)
     await adminApp.inject({
       method: 'DELETE',
       url: '/tenants/abcdefghijklmnopqrst',

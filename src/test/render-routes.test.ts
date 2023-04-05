@@ -75,6 +75,7 @@ describe('image rendering routes', () => {
         transform: {
           width: 100,
           height: 100,
+          resize: 'contain',
         },
       },
       headers: {
@@ -96,7 +97,7 @@ describe('image rendering routes', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
-      '/public/height:100/width:100/resizing_type:fill/plain/local:///data/sadcat.jpg',
+      '/public/height:100/width:100/resizing_type:fit/plain/local:///data/sadcat.jpg',
       { responseType: 'stream' }
     )
   })

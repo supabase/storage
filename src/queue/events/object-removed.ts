@@ -6,7 +6,7 @@ export interface ObjectRemovedEvent extends BasePayload {
 }
 
 export class ObjectRemoved extends BaseEvent<ObjectRemovedEvent> {
-  protected static queueName = 'object-deleted'
+  protected static queueName = 'object:deleted'
 
   static eventName() {
     return `ObjectRemoved:Delete`

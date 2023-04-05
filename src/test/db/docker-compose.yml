@@ -25,6 +25,18 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_PORT: 5432
+
+  pg_bouncer:
+    image: bitnami/pgbouncer:latest
+    ports:
+      - '6453:6432'
+    environment:
+      POSTGRESQL_USERNAME: postgres
+      POSTGRESQL_HOST: db
+      POSTGRESQL_PASSWORD: postgres
+    depends_on:
+      - db
+
   multitenant_db:
     image: postgres:13
     ports:
@@ -40,13 +52,26 @@ services:
     ports:
       - '6379:6379'
 
+  minio:
+    image: minio/minio
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    environment:
+      MINIO_ROOT_USER: supa-storage
+      MINIO_ROOT_PASSWORD: secret1234
+    command: server --console-address ":9001" /data
+
   imgproxy:
     image: darthsim/imgproxy
     ports:
-      - 50020:8080
+      - '50020:8080'
     volumes:
       - ./data:/images/data
     environment:
+      - IMGPROXY_WRITE_TIMEOUT=20
+      - IMGPROXY_READ_TIMEOUT=20
+      - IMGPROXY_REQUESTS_QUEUE_SIZE=24
       - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/images
       - IMGPROXY_USE_ETAG=true
       - IMGPROXY_ENABLE_WEBP_DETECTION=true

@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
-import { bucketSchema } from '../../../storage/schemas/bucket'
+import { bucketSchema } from '../../../storage/schemas'
 
 const successResponseSchema = {
   type: 'array',

@@ -34,6 +34,7 @@ async function connectAndMigrate(databaseUrl: string | undefined, migrationsDire
   const dbConfig = {
     connectionString: databaseUrl,
     connectionTimeoutMillis: 10_000,
+    options: '-c search_path=storage,public',
   }
   const client = new Client(dbConfig)
   try {

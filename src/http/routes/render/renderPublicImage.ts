@@ -60,8 +60,8 @@ export default async function routes(fastify: FastifyInstance) {
 
       return renderer.setTransformations(request.query).render(request, response, {
         bucket: globalS3Bucket,
-        version: obj.version,
         key: s3Key,
+        version: obj.version,
         download,
       })
     }

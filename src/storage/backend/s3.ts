@@ -148,6 +148,27 @@ export class S3Backend implements StorageBackendAdapter {
     }
   }
 
+  async setMetadataToCompleted(bucketName: string, key: string) {
+    const headObject = new HeadObjectCommand({
+      Bucket: bucketName,
+      Key: `${key}.info`,
+    })
+    const findObjResp = await this.client.send(headObject)
+
+    const copyCmd = new CopyObjectCommand({
+      Bucket: bucketName,
+      CopySource: `${bucketName}/${key}.info`,
+      Key: `${key}.info`,
+      Metadata: {
+        ...findObjResp.Metadata,
+        tus_completed: 'true',
+      },
+      MetadataDirective: 'REPLACE',
+    })
+
+    return this.client.send(copyCmd)
+  }
+
   /**
    * Deletes an object
    * @param bucket

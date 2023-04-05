@@ -1,23 +1,79 @@
 import { FastifyRequest } from 'fastify'
 import { getFileSizeLimit } from './limits'
-import { StorageBackendAdapter } from './backend'
+import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { getConfig } from '../config'
 import { StorageBackendError } from './errors'
+import { Database } from './database'
+import {
+  MultiPartUploadCompleted,
+  ObjectAdminDelete,
+  ObjectCreatedPostEvent,
+  ObjectCreatedPutEvent,
+} from '../queue'
+import { randomUUID } from 'crypto'
+import { FileUploadedSuccess, FileUploadStarted } from '../monitoring/metrics'
 
-interface UploaderOptions {
-  key: string
+interface UploaderOptions extends UploadObjectOptions {
   fileSizeLimit?: number
   allowedMimeTypes?: string[] | null
 }
 
 const { globalS3Bucket } = getConfig()
 
+export interface UploadObjectOptions {
+  bucketId: string
+  objectName: string
+  id?: string
+  owner?: string
+  isUpsert?: boolean
+  isMultipart?: boolean
+}
+
 /**
  * Uploader
  * Handles the upload of a multi-part request or binary body
  */
 export class Uploader {
-  constructor(private readonly backend: StorageBackendAdapter) {}
+  constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
+
+  canUpload(options: Pick<UploadObjectOptions, 'bucketId' | 'objectName' | 'isUpsert'>) {
+    return this.db.withTransaction(async (db) => {
+      const shouldCreateObject = !options.isUpsert
+
+      if (shouldCreateObject) {
+        await db.testPermission((db) => {
+          return db.createObject({
+            bucket_id: options.bucketId,
+            name: options.objectName,
+            version: '1',
+          })
+        })
+      } else {
+        await db.testPermission((db) => {
+          return db.upsertObject({
+            bucket_id: options.bucketId,
+            name: options.objectName,
+            version: '1',
+          })
+        })
+      }
+    })
+  }
+
+  /**
+   * Returns the upload version for the incoming file.
+   * We check RLS policies before proceeding
+   * @param options
+   */
+  async prepareUpload(options: UploadObjectOptions) {
+    await this.canUpload(options)
+    FileUploadStarted.inc({
+      tenant_id: this.db.tenantId,
+      is_multipart: Boolean(options.isMultipart).toString(),
+    })
+
+    return randomUUID()
+  }
 
   /**
    * Extracts file information from the request and upload the buffer
@@ -26,32 +82,143 @@ export class Uploader {
    * @param options
    */
   async upload(request: FastifyRequest, options: UploaderOptions) {
-    const file = await this.incomingFileInfo(request, options)
+    const version = await this.prepareUpload(options)
 
-    if (options.allowedMimeTypes && options.allowedMimeTypes.length > 0) {
-      if (!options.allowedMimeTypes.includes(file.mimeType)) {
-        throw new StorageBackendError('invalid_mime_type', 422, 'mime type not supported')
+    try {
+      const file = await this.incomingFileInfo(request, options)
+
+      if (options.allowedMimeTypes && options.allowedMimeTypes.length > 0) {
+        if (!options.allowedMimeTypes.includes(file.mimeType)) {
+          throw new StorageBackendError('invalid_mime_type', 422, 'mime type not supported')
+        }
       }
-    }
 
-    const objectMetadata = await this.backend.uploadObject(
-      globalS3Bucket,
-      options.key,
-      undefined,
-      file.body,
-      file.mimeType,
-      file.cacheControl
-    )
+      const path = `${options.bucketId}/${options.objectName}`
+      const s3Key = `${this.db.tenantId}/${path}`
 
-    if (file.isTruncated()) {
-      throw new StorageBackendError(
-        'Payload too large',
-        413,
-        'The object exceeded the maximum allowed size'
+      const objectMetadata = await this.backend.uploadObject(
+        globalS3Bucket,
+        s3Key,
+        version,
+        file.body,
+        file.mimeType,
+        file.cacheControl
       )
-    }
 
-    return objectMetadata
+      if (file.isTruncated()) {
+        throw new StorageBackendError(
+          'Payload too large',
+          413,
+          'The object exceeded the maximum allowed size'
+        )
+      }
+
+      return this.completeUpload({
+        ...options,
+        id: version,
+        objectMetadata: objectMetadata,
+      })
+    } catch (e) {
+      await ObjectAdminDelete.send({
+        name: options.objectName,
+        bucketId: options.bucketId,
+        tenant: this.db.tenant(),
+        version: version,
+      })
+      throw e
+    }
+  }
+
+  async completeUpload({
+    id,
+    bucketId,
+    objectName,
+    owner,
+    objectMetadata,
+    isMultipart,
+    isUpsert,
+  }: UploadObjectOptions & {
+    objectMetadata: ObjectMetadata
+    id: string
+    emitEvent?: boolean
+    isMultipart?: boolean
+  }) {
+    try {
+      return await this.db.withTransaction(async (db) => {
+        await db.waitObjectLock(bucketId, objectName)
+
+        const currentObj = await db
+          .asSuperUser()
+          .findObject(bucketId, objectName, 'id, version, metadata', {
+            forUpdate: true,
+            dontErrorOnEmpty: true,
+          })
+
+        const isNew = !Boolean(currentObj)
+
+        // update object
+        const newObject = await db.asSuperUser().upsertObject({
+          bucket_id: bucketId,
+          name: objectName,
+          metadata: objectMetadata,
+          version: id,
+          owner,
+        })
+
+        const events: Promise<any>[] = []
+
+        // schedule the deletion of the previous file
+        if (currentObj && currentObj.version !== id) {
+          events.push(
+            ObjectAdminDelete.send({
+              name: objectName,
+              bucketId: bucketId,
+              tenant: this.db.tenant(),
+              version: currentObj.version,
+            })
+          )
+        }
+
+        const event = isUpsert && !isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
+
+        events.push(
+          event.sendWebhook({
+            tenant: this.db.tenant(),
+            name: objectName,
+            bucketId: bucketId,
+            metadata: objectMetadata,
+          })
+        )
+
+        if (isMultipart) {
+          events.push(
+            MultiPartUploadCompleted.send({
+              tenant: this.db.tenant(),
+              objectName: objectName,
+              bucketName: bucketId,
+              version: id,
+            })
+          )
+        }
+
+        await Promise.all(events)
+
+        FileUploadedSuccess.inc({
+          tenant_id: db.tenantId,
+          is_multipart: Boolean(isMultipart).toString(),
+        })
+
+        return { obj: newObject, isNew, metadata: objectMetadata }
+      })
+    } catch (e) {
+      await ObjectAdminDelete.send({
+        name: objectName,
+        bucketId: bucketId,
+        tenant: this.db.tenant(),
+        version: id,
+      })
+      throw e
+    }
   }
 
   protected async incomingFileInfo(
@@ -73,15 +240,24 @@ export class Uploader {
 
     let cacheControl: string
     if (contentType?.startsWith('multipart/form-data')) {
-      const formData = await request.file({ limits: { fileSize: fileSizeLimit } })
-      // https://github.com/fastify/fastify-multipart/issues/162
-      /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-      const cacheTime = formData.fields.cacheControl?.value
+      try {
+        const formData = await request.file({ limits: { fileSize: fileSizeLimit } })
 
-      body = formData.file
-      mimeType = formData.mimetype
-      cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
-      isTruncated = () => formData.file.truncated
+        if (!formData) {
+          throw new StorageBackendError(`no_file_provided`, 400, 'No file provided')
+        }
+
+        // https://github.com/fastify/fastify-multipart/issues/162
+        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+        const cacheTime = formData.fields.cacheControl?.value
+
+        body = formData.file
+        mimeType = formData.mimetype
+        cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
+        isTruncated = () => formData.file.truncated
+      } catch (e) {
+        throw new StorageBackendError('empty_file', 400, 'Unexpected empty file received', e)
+      }
     } else {
       // just assume its a binary file
       body = request.raw

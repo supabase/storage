@@ -1,9 +1,8 @@
-import { StorageBackendAdapter } from './backend'
+import { StorageBackendAdapter, withOptionalVersion } from './backend'
 import { Database, FindBucketFilters } from './database'
 import { StorageBackendError } from './errors'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from './limits'
-import { Uploader } from './uploader'
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
 
@@ -15,10 +14,10 @@ const { urlLengthLimit, globalS3Bucket } = getConfig()
  * to provide a rich management API for any folders and files operations
  */
 export class Storage {
-  constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
+  constructor(public readonly backend: StorageBackendAdapter, public readonly db: Database) {}
 
   /**
-   * Creates an object storage operations for a specific bucket
+   * Access object related functionality on a specific bucket
    * @param bucketId
    */
   from(bucketId: string) {
@@ -50,13 +49,6 @@ export class Storage {
     }
 
     throw new Error(`renderer of type "${type}" not supported`)
-  }
-
-  /**
-   * Creates an uploader instance
-   */
-  uploader() {
-    return new Uploader(this.backend)
   }
 
   /**
@@ -144,17 +136,29 @@ export class Storage {
    * @param id
    */
   async deleteBucket(id: string) {
-    const countObjects = await this.db.asSuperUser().countObjectsInBucket(id)
+    return this.db.withTransaction(async (db) => {
+      await db.asSuperUser().findBucketById(id, 'id', {
+        forUpdate: true,
+      })
 
-    if (countObjects && countObjects > 0) {
-      throw new StorageBackendError(
-        'Storage not empty',
-        400,
-        'Storage must be empty before you can delete it'
-      )
-    }
+      const countObjects = await db.asSuperUser().countObjectsInBucket(id)
 
-    return this.db.deleteBucket(id)
+      if (countObjects && countObjects > 0) {
+        throw new StorageBackendError(
+          'Storage not empty',
+          400,
+          'Storage must be empty before you can delete it'
+        )
+      }
+
+      const deleted = await db.deleteBucket(id)
+
+      if (!deleted) {
+        throw new StorageBackendError('not_found', 404, 'Bucket Not Found')
+      }
+
+      return deleted
+    })
   }
 
   /**
@@ -182,9 +186,12 @@ export class Storage {
       )
 
       if (deleted && deleted.length > 0) {
-        const params = deleted.map(({ name }) => {
-          return `${this.db.tenantId}/${bucketId}/${name}`
-        })
+        const params = deleted.reduce((all, { name, version }) => {
+          const fileName = withOptionalVersion(`${this.db.tenantId}/${bucketId}/${name}`, version)
+          all.push(fileName)
+          all.push(fileName + '.info')
+          return all
+        }, [] as string[])
         // delete files from s3 asynchronously
         this.backend.deleteObjects(globalS3Bucket, params)
       }

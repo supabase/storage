@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import renderPublicImage from './renderPublicImage'
 import renderAuthenticatedImage from './renderAuthenticatedImage'
 import renderSignedImage from './renderSignedImage'
-import { jwt, postgrest, superUserPostgrest, storage, requireTenantFeature } from '../../plugins'
+import { jwt, storage, requireTenantFeature, db, dbSuperUser } from '../../plugins'
 import { getConfig } from '../../../config'
 import { rateLimiter } from './rate-limiter'
 
@@ -21,8 +21,8 @@ export default async function routes(fastify: FastifyInstance) {
     }
 
     fastify.register(jwt)
-    fastify.register(postgrest)
-    fastify.register(superUserPostgrest)
+    fastify.register(db)
+    fastify.register(dbSuperUser)
     fastify.register(storage)
     fastify.register(renderAuthenticatedImage)
   })
@@ -34,7 +34,7 @@ export default async function routes(fastify: FastifyInstance) {
       fastify.register(rateLimiter)
     }
 
-    fastify.register(superUserPostgrest)
+    fastify.register(dbSuperUser)
     fastify.register(storage)
     fastify.register(renderSignedImage)
     fastify.register(renderPublicImage)

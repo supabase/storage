@@ -9,7 +9,7 @@ interface ObjectCreatedEvent extends BasePayload {
 }
 
 abstract class ObjectCreated extends BaseEvent<ObjectCreatedEvent> {
-  protected static queueName = 'object-created'
+  protected static queueName = 'object:created'
 }
 
 export class ObjectCreatedPutEvent extends ObjectCreated {

@@ -1,10 +1,8 @@
-import { Registry } from 'prom-client'
-
 import app from '../admin-app'
 import { S3Backend } from '../storage/backend'
 import { Queue } from '../queue'
 
-export const adminApp = app({}, { register: new Registry() })
+export const adminApp = app({})
 
 const ENV = process.env
 
@@ -31,6 +29,7 @@ export function useMockObject() {
   beforeEach(() => {
     process.env = { ...ENV }
 
+    jest.clearAllMocks()
     jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
       metadata: {
         httpStatusCode: 200,
@@ -75,7 +74,7 @@ export function useMockObject() {
     jest.spyOn(S3Backend.prototype, 'privateAssetUrl').mockResolvedValue('local:///data/sadcat.jpg')
   })
 
-  beforeEach(() => {
+  afterEach(() => {
     jest.clearAllMocks()
   })
 }

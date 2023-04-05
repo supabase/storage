@@ -1,3 +1,5 @@
+import { TenantConnection } from '../database/connection'
+
 process.env.ENABLE_QUEUE_EVENTS = 'true'
 
 import { mockQueue, useMockObject } from './common'
@@ -6,18 +8,20 @@ import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
 import { getConfig } from '../config'
-import { getPostgrestClient } from '../database'
-import { PostgrestClient } from '@supabase/postgrest-js'
+import { getPostgresConnection } from '../database'
 import { Obj } from '../storage/schemas'
+import { randomUUID } from 'crypto'
 
 const { serviceKey } = getConfig()
 
 describe('Webhooks', () => {
   useMockObject()
 
-  let pg: PostgrestClient
+  let pg: TenantConnection
   beforeAll(async () => {
-    pg = await getPostgrestClient(serviceKey, {})
+    pg = await getPostgresConnection(serviceKey, {
+      tenantId: '1234',
+    })
   })
 
   let sendSpy: jest.SpyInstance
@@ -35,12 +39,13 @@ describe('Webhooks', () => {
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
       authorization: `Bearer ${serviceKey}`,
-      'x-upsert': 'true',
     })
+
+    const fileName = (Math.random() + 1).toString(36).substring(7)
 
     const response = await app().inject({
       method: 'POST',
-      url: '/object/bucket6/public/test-33.png',
+      url: `/object/bucket6/public/${fileName}.png`,
       headers,
       payload: form,
     })
@@ -53,7 +58,7 @@ describe('Webhooks', () => {
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
-            type: 'ObjectCreated:Put',
+            type: 'ObjectCreated:Post',
             $version: 'v1',
             applyTime: expect.any(Number),
             payload: expect.objectContaining({
@@ -67,7 +72,7 @@ describe('Webhooks', () => {
                 mimetype: 'image/png',
                 size: 3746,
               }),
-              name: 'public/test-33.png',
+              name: `public/${fileName}.png`,
               tenant: expect.objectContaining({
                 ref: 'bjhaohmqunupljrqypxz',
               }),
@@ -92,8 +97,23 @@ describe('Webhooks', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(1)
-    expect(sendSpy).toHaveBeenCalledWith(
+    expect(sendSpy).toBeCalledTimes(2)
+    expect(sendSpy).toHaveBeenNthCalledWith(1, {
+      data: {
+        $version: 'v1',
+        bucketId: 'bucket6',
+        name: obj.name,
+        tenant: {
+          host: undefined,
+          ref: 'bjhaohmqunupljrqypxz',
+        },
+        version: expect.any(String),
+      },
+      name: 'object:admin:delete',
+      options: undefined,
+    })
+    expect(sendSpy).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         name: 'webhooks',
         options: undefined,
@@ -138,10 +158,10 @@ describe('Webhooks', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(2)
+    expect(sendSpy).toBeCalledTimes(3)
 
     expect(sendSpy).toHaveBeenNthCalledWith(
-      1,
+      2,
       expect.objectContaining({
         name: 'webhooks',
         options: undefined,
@@ -169,13 +189,13 @@ describe('Webhooks', () => {
     )
 
     expect(sendSpy).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.objectContaining({
         name: 'webhooks',
         options: undefined,
         data: expect.objectContaining({
           $version: 'v1',
-          event: {
+          event: expect.objectContaining({
             $version: 'v1',
             type: 'ObjectCreated:Move',
             applyTime: expect.any(Number),
@@ -185,7 +205,7 @@ describe('Webhooks', () => {
                 cacheControl: 'no-cache',
                 contentLength: 3746,
                 eTag: 'abc',
-                lastModified: expect.any(String),
+                lastModified: expect.any(Date),
                 httpStatusCode: 200,
                 mimetype: 'image/png',
                 size: 3746,
@@ -200,7 +220,7 @@ describe('Webhooks', () => {
                 ref: 'bjhaohmqunupljrqypxz',
               },
             }),
-          },
+          }),
           tenant: {
             host: undefined,
             ref: 'bjhaohmqunupljrqypxz',
@@ -267,14 +287,17 @@ describe('Webhooks', () => {
   })
 })
 
-async function createObject(pg: PostgrestClient, bucketId: string) {
+async function createObject(pg: TenantConnection, bucketId: string) {
   const objectName = Date.now()
-  const { data, error } = await pg
+  const tnx = pg.pool
+
+  const [data] = await tnx
     .from<Obj>('objects')
     .insert([
       {
         name: objectName.toString(),
         bucket_id: bucketId,
+        version: randomUUID(),
         metadata: {
           cacheControl: 'no-cache',
           contentLength: 3746,
@@ -286,12 +309,7 @@ async function createObject(pg: PostgrestClient, bucketId: string) {
         },
       },
     ])
-    .single()
-
-  if (error) {
-    console.error(error)
-    throw error
-  }
+    .returning('*')
 
   return data as Obj
 }

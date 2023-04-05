@@ -1,7 +1,7 @@
 import fastifyPlugin from 'fastify-plugin'
 import { StorageBackendAdapter, createStorageBackend } from '../../storage/backend'
 import { Storage } from '../../storage'
-import { Database } from '../../storage/database'
+import { StorageKnexDB } from '../../storage/database'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -15,10 +15,10 @@ export const storage = fastifyPlugin(async (fastify) => {
 
   fastify.decorateRequest('storage', undefined)
   fastify.addHook('preHandler', async (request) => {
-    const database = new Database(request.postgrest, {
+    const database = new StorageKnexDB(request.db, {
       tenantId: request.tenantId,
       host: request.headers['x-forwarded-host'] as string,
-      superAdmin: request.superUserPostgrest,
+      superAdmin: request.dbSuperUser,
     })
     request.backend = storageBackend
     request.storage = new Storage(storageBackend, database)

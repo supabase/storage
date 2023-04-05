@@ -1,16 +1,18 @@
-import PgBoss from 'pg-boss'
+import PgBoss, { Job } from 'pg-boss'
 import { getConfig } from '../config'
 import { registerWorkers } from './workers'
-import { BaseEvent } from './events'
+import { BaseEvent, BasePayload } from './events'
+import { QueueJobRetryFailed, QueueJobCompleted, QueueJobError } from '../monitoring/metrics'
+import { logger } from '../monitoring'
+import { normalizeRawError } from '../storage'
 
 type SubclassOfBaseClass = (new (payload: any) => BaseEvent<any>) & {
   [K in keyof typeof BaseEvent]: typeof BaseEvent[K]
 }
 
 export abstract class Queue {
-  private static pgBoss?: PgBoss
-
   protected static events: SubclassOfBaseClass[] = []
+  private static pgBoss?: PgBoss
 
   static async init() {
     if (Queue.pgBoss) {
@@ -34,6 +36,7 @@ export abstract class Queue {
       retryBackoff: true,
       retryLimit: 20,
       expireInHours: 48,
+      monitorStateIntervalSeconds: 30,
     })
 
     registerWorkers()
@@ -42,18 +45,6 @@ export abstract class Queue {
     await Queue.startWorkers()
 
     return Queue.pgBoss
-  }
-
-  protected static startWorkers() {
-    const workers: Promise<string>[] = []
-
-    Queue.events.forEach((event) => {
-      workers.push(
-        Queue.getInstance().work(event.getQueueName(), event.getWorkerOptions(), event.handle)
-      )
-    })
-
-    return Promise.all(workers)
   }
 
   static getInstance() {
@@ -66,5 +57,69 @@ export abstract class Queue {
 
   static register<T extends SubclassOfBaseClass>(event: T) {
     Queue.events.push(event)
+  }
+
+  static async stop() {
+    if (!this.pgBoss) {
+      return
+    }
+
+    await this.pgBoss.stop()
+  }
+
+  protected static startWorkers() {
+    const workers: Promise<string>[] = []
+
+    Queue.events.forEach((event) => {
+      workers.push(
+        Queue.getInstance().work(
+          event.getQueueName(),
+          event.getWorkerOptions(),
+          async (job: Job<BasePayload>) => {
+            try {
+              const res = await event.handle(job)
+
+              QueueJobCompleted.inc({
+                tenant_id: job.data.tenant.ref,
+                name: event.getQueueName(),
+              })
+
+              return res
+            } catch (e) {
+              QueueJobRetryFailed.inc({
+                tenant_id: job.data.tenant.ref,
+                name: event.getQueueName(),
+              })
+
+              Queue.getInstance()
+                .getJobById(job.id)
+                .then((dbJob) => {
+                  if (!dbJob) {
+                    return
+                  }
+                  if (dbJob.retrycount === dbJob.retrylimit) {
+                    QueueJobError.inc({
+                      tenant_id: job.data.tenant.ref,
+                      name: event.getQueueName(),
+                    })
+                  }
+                })
+
+              logger.error(
+                {
+                  job: JSON.stringify(job),
+                  rawError: normalizeRawError(e),
+                },
+                'Error while processing job'
+              )
+
+              throw e
+            }
+          }
+        )
+      )
+    })
+
+    return Promise.all(workers)
   }
 }

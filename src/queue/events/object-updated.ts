@@ -8,7 +8,7 @@ interface ObjectUpdatedMetadataEvent extends BasePayload {
 }
 
 export class ObjectUpdatedMetadata extends BaseEvent<ObjectUpdatedMetadataEvent> {
-  protected static queueName = 'object-updated'
+  protected static queueName = 'object:updated'
 
   static eventName() {
     return `ObjectUpdated:Metadata`

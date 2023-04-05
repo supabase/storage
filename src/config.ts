@@ -19,9 +19,11 @@ type StorageConfigType = {
   jwtSecret: string
   jwtAlgorithm: string
   multitenantDatabaseUrl?: string
-  postgrestURL: string
-  postgrestURLSuffix?: string
-  postgrestURLScheme?: string
+  databaseURL: string
+  databasePoolURL?: string
+  databaseMaxConnections: number
+  databaseFreePoolAfterInactivity: number
+  databaseConnectionTimeout: number
   region: string
   requestIdHeader?: string
   serviceKey: string
@@ -61,7 +63,10 @@ type StorageConfigType = {
   rateLimiterRedisConnectTimeout: number
   rateLimiterRedisCommandTimeout: number
   signedUploadUrlExpirationTime: number
+  tusUrlExpiryMs: number
+  tusPath: string
   tusUseFileVersionSeparator: boolean
+  enableDefaultMetrics: boolean
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -103,9 +108,20 @@ export function getConfig(): StorageConfigType {
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
     jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
-    postgrestURL: getOptionalIfMultitenantConfigFromEnv('POSTGREST_URL') || '',
-    postgrestURLSuffix: getOptionalConfigFromEnv('POSTGREST_URL_SUFFIX'),
-    postgrestURLScheme: getOptionalConfigFromEnv('POSTGREST_URL_SCHEME') || 'http',
+    databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
+    databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
+    databaseMaxConnections: parseInt(
+      getOptionalConfigFromEnv('DATABASE_MAX_CONNECTIONS') || '20',
+      10
+    ),
+    databaseFreePoolAfterInactivity: parseInt(
+      getOptionalConfigFromEnv('DATABASE_FREE_POOL_AFTER_INACTIVITY') || (1000 * 60).toString(),
+      10
+    ),
+    databaseConnectionTimeout: parseInt(
+      getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '10000',
+      10
+    ),
     region: getConfigFromEnv('REGION'),
     requestIdHeader: getOptionalConfigFromEnv('REQUEST_ID_HEADER'),
     serviceKey: getOptionalIfMultitenantConfigFromEnv('SERVICE_KEY') || '',
@@ -170,7 +186,14 @@ export function getConfig(): StorageConfigType {
     signedUploadUrlExpirationTime: parseInt(
       getOptionalConfigFromEnv('SIGNED_UPLOAD_URL_EXPIRATION_TIME') || '60'
     ),
+
+    tusPath: getOptionalConfigFromEnv('TUS_URL_PATH') || '/upload/resumable',
+    tusUrlExpiryMs: parseInt(
+      getOptionalConfigFromEnv('TUS_URL_EXPIRY_MS') || (1000 * 60 * 60).toString(),
+      10
+    ),
     tusUseFileVersionSeparator:
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
+    enableDefaultMetrics: getOptionalConfigFromEnv('ENABLE_DEFAULT_METRICS') === 'true',
   }
 }

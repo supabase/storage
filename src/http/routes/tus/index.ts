@@ -149,6 +149,10 @@ export default async function routes(fastify: FastifyInstance) {
       }
     })
 
+    fastify.options('/', (req, res) => {
+      tusServer.handle(req.raw, res.raw)
+    })
+
     fastify.options('/*', (req, res) => {
       tusServer.handle(req.raw, res.raw)
     })

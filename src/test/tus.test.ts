@@ -113,7 +113,7 @@ describe('Tus multipart', () => {
       id: expect.any(String),
       last_accessed_at: expect.any(Date),
       metadata: {
-        cacheControl: '3600',
+        cacheControl: 'max-age=3600',
         contentLength: 29526,
         eTag: '"53e1323c929d57b09b95fbe6d531865c-1"',
         httpStatusCode: 200,

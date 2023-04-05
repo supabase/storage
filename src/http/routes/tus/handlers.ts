@@ -43,6 +43,13 @@ export class Patch extends PatchHandler {
     } catch (e) {
       ;(res as any).executionError = e
       ;(res as any).internalHandler = 'PatchHandler'
+
+      if (isRenderableError(e)) {
+        const statusCode = parseInt(e.render().statusCode, 10)
+        ;(e as any).status_code = statusCode
+        ;(e as any).body = statusCode !== 500 ? e.render().message : 'Internal Server Error'
+      }
+
       throw e
     }
   }
@@ -83,6 +90,12 @@ export class Head extends HeadHandler {
     } catch (e) {
       ;(res as any).executionError = e
       ;(res as any).internalHandler = 'HeadHandler'
+
+      if (isRenderableError(e)) {
+        const statusCode = parseInt(e.render().statusCode, 10)
+        ;(e as any).status_code = statusCode
+        ;(e as any).body = statusCode !== 500 ? e.render().message : 'Internal Server Error'
+      }
       throw e
     }
   }
@@ -109,10 +122,10 @@ export class Post extends PostHandler {
       throw ERRORS.UNSUPPORTED_CREATION_DEFER_LENGTH_EXTENSION
     }
 
-    const id = this.options.namingFunction(req)
-    const uploadID = UploadId.fromString(id)
-
     try {
+      const id = this.options.namingFunction(req)
+      const uploadID = UploadId.fromString(id)
+
       return await lock(uploadID, req.upload.storage, (db) => {
         req.upload.storage = new Storage(req.upload.storage.backend, db)
         return super.send(req, res)
@@ -120,6 +133,13 @@ export class Post extends PostHandler {
     } catch (e) {
       ;(res as any).executionError = e
       ;(res as any).internalHandler = 'PostHandler'
+
+      if (isRenderableError(e)) {
+        const statusCode = parseInt(e.render().statusCode, 10)
+        ;(e as any).status_code = statusCode
+        ;(e as any).body = statusCode !== 500 ? e.render().message : 'Internal Server Error'
+      }
+
       throw e
     }
   }
@@ -160,8 +180,9 @@ export class Options extends OptionsHandler {
       let uploadID: UploadId | undefined
 
       const urlParts = rawReq.url?.split('/') || []
+      const pathParts = this.options.path.split('/')
 
-      if (urlParts.length >= 3 && urlParts[2]) {
+      if (urlParts.length > pathParts.length) {
         const id = this.getFileIdFromRequest(rawReq)
 
         if (!id) {

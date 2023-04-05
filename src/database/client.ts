@@ -8,6 +8,8 @@ interface ConnectionOptions {
   host?: string
   tenantId?: string
   forwardHeaders?: Record<string, string | undefined | string[]>
+  method?: string
+  path?: string
 }
 
 /**
@@ -78,5 +80,7 @@ export async function getPostgresConnection(
     jwt: verifiedJWT,
     jwtRaw: jwt,
     headers: options.forwardHeaders,
+    method: options.method,
+    path: options.path,
   })
 }

@@ -20,6 +20,8 @@ export const db = fastifyPlugin(async (fastify) => {
       tenantId: request.tenantId,
       host: request.headers['x-forwarded-host'] as string | undefined,
       forwardHeaders: request.headers,
+      path: request.url,
+      method: request.method,
     })
   })
 
@@ -39,6 +41,8 @@ export const dbSuperUser = fastifyPlugin(async (fastify) => {
     request.dbSuperUser = await getPostgresConnection(jwt, {
       tenantId: request.tenantId,
       host: request.headers['x-forwarded-host'] as string,
+      path: request.url,
+      method: request.method,
     })
   })
 

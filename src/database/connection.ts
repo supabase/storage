@@ -19,6 +19,8 @@ interface TenantConnectionOptions {
   isExternalPool?: boolean
   maxConnections: number
   headers?: Record<string, string | undefined | string[]>
+  method?: string
+  path?: string
 }
 
 export const connections = new Map<string, Knex>()
@@ -31,12 +33,6 @@ export class TenantConnection {
     protected readonly options: TenantConnectionOptions
   ) {
     this.role = options.role
-  }
-
-  protected _usesExternalPool = false
-
-  get usesExternalPool() {
-    return Boolean(this.options.isExternalPool)
   }
 
   static stop() {
@@ -108,14 +104,11 @@ export class TenantConnection {
       connections.set(connectionString, knexPool)
     }
 
-    const conn = new this(knexPool, options)
-    conn._usesExternalPool = isExternalPool
-
-    return conn
+    return new this(knexPool, options)
   }
 
   dispose() {
-    if (this.usesExternalPool) {
+    if (this.options.isExternalPool) {
       return this.pool.destroy()
     }
   }
@@ -136,7 +129,9 @@ export class TenantConnection {
           set_config('request.jwt', ?, true),
           set_config('request.jwt.claim.sub', ?, true),
           set_config('request.jwt.claims', ?, true),
-          set_config('request.headers', ?, true);
+          set_config('request.headers', ?, true),
+          set_config('request.method', ?, true),
+          set_config('request.path', ?, true);
     `,
       [
         this.options.role || 'anon',
@@ -145,6 +140,8 @@ export class TenantConnection {
         this.options.jwt.sub || '',
         JSON.stringify(this.options.jwt),
         headers,
+        this.options.method || '',
+        this.options.path || '',
       ]
     )
   }

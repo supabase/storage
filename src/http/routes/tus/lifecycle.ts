@@ -69,6 +69,12 @@ export async function onCreate(
       isMultipart: true,
     })
 
+    if (upload.metadata && /^-?\d+$/.test(upload.metadata.cacheControl || '')) {
+      upload.metadata.cacheControl = `max-age=${upload.metadata.cacheControl}`
+    } else if (upload.metadata) {
+      upload.metadata.cacheControl = 'no-cache'
+    }
+
     return res
   } catch (e) {
     if (isRenderableError(e)) {

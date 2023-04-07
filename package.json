@@ -48,7 +48,7 @@
     "fs-extra": "^10.0.1",
     "fs-xattr": "^0.3.1",
     "ioredis": "^5.2.4",
-    "jsonwebtoken": "^8.5.1",
+    "jsonwebtoken": "^9.0.0",
     "knex": "^2.4.2",
     "md5-file": "^5.0.0",
     "pg": "^8.10.0",

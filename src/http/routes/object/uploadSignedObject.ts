@@ -28,7 +28,7 @@ const uploadSignedObjectQSSchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    Key: { type: 'string', examples: ['projectref/avatars/folder/cat.png'] },
+    Key: { type: 'string', examples: ['avatars/folder/cat.png'] },
   },
   required: ['Key'],
 }

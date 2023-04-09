@@ -47,6 +47,7 @@ jobs:
           PGOPTIONS: -c search_path=storage,public
           FILE_SIZE_LIMIT: '52428800'
           STORAGE_BACKEND: s3
+          ENABLE_IMAGE_TRANSFORMATION: true
 
       - name: Generate Swagger UI
         uses: Legion2/swagger-ui-action@v1

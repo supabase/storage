@@ -10,7 +10,6 @@ const renderPublicImageParamsSchema = {
   type: 'object',
   properties: {
     bucketName: { type: 'string', examples: ['avatars'] },
-    download: { type: 'string' },
     '*': { type: 'string', examples: ['folder/cat.png'] },
   },
   required: ['bucketName', '*'],
@@ -20,7 +19,7 @@ const renderImageQuerySchema = {
   type: 'object',
   properties: {
     ...transformationOptionsSchema,
-    download: { type: 'string' },
+    download: { type: 'string', examples: ['filename.png'] },
   },
 } as const
 

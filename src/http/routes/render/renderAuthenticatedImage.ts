@@ -19,7 +19,7 @@ const renderImageQuerySchema = {
   type: 'object',
   properties: {
     ...transformationOptionsSchema,
-    download: { type: 'string' },
+    download: { type: 'string', examples: ['filename.png'] },
   },
 } as const
 

@@ -19,8 +19,13 @@ const renderAuthenticatedImageParamsSchema = {
 const renderImageQuerySchema = {
   type: 'object',
   properties: {
-    token: { type: 'string' },
-    download: { type: 'string' },
+    token: {
+      type: 'string',
+      examples: [
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJidWNrZXQyL3B1YmxpYy9zYWRjYXQtdXBsb2FkMjMucG5nIiwiaWF0IjoxNjE3NzI2MjczLCJleHAiOjE2MTc3MjcyNzN9.uBQcXzuvXxfw-9WgzWMBfE_nR3VOgpvfZe032sfLSSk',
+      ],
+    },
+    download: { type: 'string', examples: ['filename.png'] },
   },
   required: ['token'],
 } as const

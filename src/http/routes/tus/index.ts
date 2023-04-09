@@ -114,23 +114,43 @@ export default async function routes(fastify: FastifyInstance) {
       }
     })
 
-    fastify.post('/', (req, res) => {
-      tusServer.handle(req.raw, res.raw)
-    })
+    fastify.post(
+      '/',
+      { schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['object'] } },
+      (req, res) => {
+        tusServer.handle(req.raw, res.raw)
+      }
+    )
 
-    fastify.post('/*', (req, res) => {
-      tusServer.handle(req.raw, res.raw)
-    })
+    fastify.post(
+      '/*',
+      { schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['object'] } },
+      (req, res) => {
+        tusServer.handle(req.raw, res.raw)
+      }
+    )
 
-    fastify.put('/*', (req, res) => {
-      tusServer.handle(req.raw, res.raw)
-    })
-    fastify.patch('/*', (req, res) => {
-      tusServer.handle(req.raw, res.raw)
-    })
-    fastify.head('/*', (req, res) => {
-      tusServer.handle(req.raw, res.raw)
-    })
+    fastify.put(
+      '/*',
+      { schema: { summary: 'Handle PUT request for TUS Resumable uploads', tags: ['object'] } },
+      (req, res) => {
+        tusServer.handle(req.raw, res.raw)
+      }
+    )
+    fastify.patch(
+      '/*',
+      { schema: { summary: 'Handle PATCH request for TUS Resumable uploads', tags: ['object'] } },
+      (req, res) => {
+        tusServer.handle(req.raw, res.raw)
+      }
+    )
+    fastify.head(
+      '/*',
+      { schema: { summary: 'Handle HEAD request for TUS Resumable uploads', tags: ['object'] } },
+      (req, res) => {
+        tusServer.handle(req.raw, res.raw)
+      }
+    )
   })
 
   fastify.register(async function authorizationContext(fastify) {
@@ -149,12 +169,32 @@ export default async function routes(fastify: FastifyInstance) {
       }
     })
 
-    fastify.options('/', (req, res) => {
-      tusServer.handle(req.raw, res.raw)
-    })
+    fastify.options(
+      '/',
+      {
+        schema: {
+          tags: ['object'],
+          summary: 'Handle OPTIONS request for TUS Resumable uploads',
+          description: 'Handle OPTIONS request for TUS Resumable uploads',
+        },
+      },
+      (req, res) => {
+        tusServer.handle(req.raw, res.raw)
+      }
+    )
 
-    fastify.options('/*', (req, res) => {
-      tusServer.handle(req.raw, res.raw)
-    })
+    fastify.options(
+      '/*',
+      {
+        schema: {
+          tags: ['object'],
+          summary: 'Handle OPTIONS request for TUS Resumable uploads',
+          description: 'Handle OPTIONS request for TUS Resumable uploads',
+        },
+      },
+      (req, res) => {
+        tusServer.handle(req.raw, res.raw)
+      }
+    )
   })
 }

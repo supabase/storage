@@ -12,6 +12,9 @@ const successResponseSchema = {
         id: 'bucket2',
         name: 'bucket2',
         owner: '4d56e902-f0a0-4662-8448-a4d9e643c142',
+        public: false,
+        file_size_limit: 1000000,
+        allowed_mime_types: ['image/png', 'image/jpeg'],
         created_at: '2021-02-17T04:43:32.770206+00:00',
         updated_at: '2021-02-17T04:43:32.770206+00:00',
       },
@@ -33,7 +36,7 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       const results = await request.storage.listBuckets(
-        'id, name, public, owner, created_at, updated_at'
+        'id, name, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types'
       )
 
       request.log.info({ results }, 'results')

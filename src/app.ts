@@ -1,6 +1,7 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import fastifyMultipart from '@fastify/multipart'
 import fastifySwagger from '@fastify/swagger'
+import fastifySwaggerUi from '@fastify/swagger-ui'
 import { routes, schemas, plugins, setErrorHandler } from './http'
 import { getConfig } from './config'
 
@@ -32,7 +33,6 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
 
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {
-      exposeRoute: true,
       openapi: {
         info: {
           title: 'Supabase Storage API',
@@ -45,6 +45,9 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
           { name: 'deprecated', description: 'Deprecated end-points' },
         ],
       },
+    })
+    app.register(fastifySwaggerUi, {
+      routePrefix: '/documentation',
     })
   }
 

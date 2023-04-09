@@ -48,7 +48,13 @@ describe('testing GET bucket', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.id).toBe(bucketId)
+    expect(responseJSON).toMatchObject({
+      id: bucketId,
+      name: bucketId,
+      public: false,
+      file_size_limit: 0,
+      allowed_mime_types: null,
+    })
   })
 
   test('checking RLS: anon user is not able to get bucket details', async () => {
@@ -98,6 +104,13 @@ describe('testing GET all buckets', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON.length).toBe(10)
+    expect(responseJSON[0]).toMatchObject({
+      id: expect.any(String),
+      name: expect.any(String),
+      public: expect.any(Boolean),
+      file_size_limit: expect.any(Number),
+      allowed_mime_types: null,
+    })
   })
 
   test('checking RLS: anon user is not able to get all buckets', async () => {

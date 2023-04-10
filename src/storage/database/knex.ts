@@ -219,7 +219,6 @@ export class StorageKnexDB implements Database {
         })
     })
 
-    console.log(bucket, 'dasdsadsa')
     if (bucket === 0) {
       throw new DBError('Bucket not found', 404, 'Bucket not found', undefined, {
         bucketId,

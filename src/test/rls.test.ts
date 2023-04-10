@@ -83,17 +83,15 @@ describe('RLS policies', () => {
   let storage: Storage
   let db: Knex
   beforeEach(async () => {
-    const knexInstance = knex({
+    db = knex({
       connection: databaseURL,
       client: 'pg',
     })
 
-    db = await knexInstance
-
     userId = randomUUID()
     jwt = (await signJWT({ sub: userId, role: 'authenticated' }, jwtSecret, '1h')) as string
 
-    await knexInstance.table('auth.users').insert({
+    await db.table('auth.users').insert({
       instance_id: '00000000-0000-0000-0000-000000000000',
       id: userId,
       aud: 'authenticated',
@@ -119,7 +117,7 @@ describe('RLS policies', () => {
 
   afterAll(async () => {
     await db.destroy()
-    await (storage.db as StorageKnexDB).connection.dispose()
+    await (storage.db as StorageKnexDB).connection.pool.destroy()
   })
 
   testSpec.tests.forEach((_test, index) => {
@@ -196,11 +194,9 @@ describe('RLS policies', () => {
           return acc
         }, [] as { name: string; table: string }[])
 
-        await Promise.all(
-          policiesToDelete.map(async (policy) => {
-            return db.raw(`DROP POLICY IF EXISTS "${policy.name}" ON ${policy.table};`)
-          })
-        )
+        for (const policy of policiesToDelete) {
+          await db.raw(`DROP POLICY IF EXISTS "${policy.name}" ON ${policy.table};`)
+        }
       }
     })
   })

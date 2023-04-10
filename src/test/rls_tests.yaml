@@ -1,9 +1,8 @@
-
 policies:
   - name: read_only_all_buckets
-    tables: [ 'storage.buckets' ]
-    roles: [ 'authenticated' ]
-    permissions: [ 'select' ]
+    tables: ['storage.buckets']
+    roles: ['authenticated']
+    permissions: ['select']
     content: "USING(auth.uid() = '{{uid}}')"
 
   - name: read_only_all_objects
@@ -13,200 +12,332 @@ policies:
     content: "USING(auth.uid() = '{{uid}}')"
 
   - name: insert_only_all_objects
-    tables: [ 'storage.objects' ]
-    roles: [ 'authenticated' ]
-    permissions: [ 'insert' ]
+    tables: ['storage.objects']
+    roles: ['authenticated']
+    permissions: ['insert']
     content: "WITH CHECK(auth.uid() = '{{uid}}')"
 
   - name: insert_only_all_buckets
-    tables: [ 'storage.buckets' ]
-    roles: [ 'authenticated' ]
-    permissions: [ 'insert' ]
+    tables: ['storage.buckets']
+    roles: ['authenticated']
+    permissions: ['insert']
     content: "WITH CHECK(auth.uid() = '{{uid}}')"
 
-  - name: update_only_all_buckets
-    tables: [ 'storage.buckets' ]
-    roles: [ 'authenticated' ]
-    permissions: [ 'update' ]
+  - name: update_only_all_objects
+    tables: ['storage.objects']
+    roles: ['authenticated']
+    permissions: ['update']
     content: "USING(auth.uid() = '{{uid}}')"
 
+  - name: update_only_all_buckets
+    tables: ['storage.buckets']
+    roles: ['authenticated']
+    permissions: ['update']
+    content: "USING(auth.uid() = '{{uid}}')"
+
+  - name: delete_only_all_buckets
+    tables: ['storage.buckets']
+    roles: ['authenticated']
+    permissions: ['delete']
+    content: "USING(auth.uid() = '{{uid}}')"
+
+  - name: delete_only_all_objects
+    tables: ['storage.objects']
+    roles: ['authenticated']
+    permissions: ['delete']
+    content: "USING(auth.uid() = '{{uid}}')"
 
 tests:
-#  - description: "Will only able to read objects"
-#    policies:
-#      - read_only_all_objects
-#    asserts:
-#      - operation: upload
-#        status: 400
-#        error: "new row violates row-level security policy"
-#
-#      - operation: upload.upsert
-#        status: 400
-#        message: 'new row violates row-level security policy'
-#
-#      - operation: bucket.create
-#        status: 400
-#        error: "new row violates row-level security policy"
-#
-#      - operation: bucket.delete
-#        status: 400
-#        error: "Bucket Not Found"
-#
-#      - operation: bucket.update
-#        status: 400
-#        error: "Bucket not found"
-#
-#      - operation: bucket.get
-#        status: 400
-#        error: "Bucket not found"
-#
-#      - operation: upload
-#        role: service
-#        status: 200
-#
-#      - operation: object.get
-#        role: authenticated
-#        status: 200
-#
-#      - operation: object.delete
-#        role: authenticated
-#        status: 400
-#        message: 'Object not found'
-#
-#  - description: "Will only able to read buckets"
-#    policies:
-#      - read_only_all_buckets
-#    asserts:
-#      - operation: upload
-#        status: 400
-#        error: "new row violates row-level security policy"
-#
-#      - operation: upload.upsert
-#        status: 400
-#        message: 'new row violates row-level security policy'
-#
-#      - operation: bucket.create
-#        status: 400
-#        error: "new row violates row-level security policy"
-#
-#      - operation: bucket.delete
-#        status: 400
-#        error: "Bucket Not Found"
-#
-#      - operation: bucket.update
-#        status: 400
-#        error: "Bucket not found"
-#
-#      - operation: bucket.get
-#        status: 200
-#
-#      - operation: bucket.list
-#        status: 200
-#
-#      - operation: upload
-#        role: service
-#        status: 200
-#
-#      - operation: object.get
-#        role: authenticated
-#        status: 400
-#        message: 'Object not found'
-#
-#      - operation: object.delete
-#        role: authenticated
-#        status: 400
-#        message: 'Object not found'
-#
-#  - description: "Will only able to insert objects when authenticated"
-#    policies:
-#      - insert_only_all_objects
-#    asserts:
-#      - operation: bucket.create
-#        status: 400
-#
-#      - operation: bucket.delete
-#        status: 400
-#        error: "Bucket Not Found"
-#
-#      - operation: bucket.update
-#        status: 400
-#        error: "Bucket not found"
-#
-#      - operation: upload
-#        status: 200
-#
-#      - operation: upload.upsert
-#        status: 400
-#        message: 'Object not found'
-#
-#      - operation: object.get
-#        status: 400
-#
-#      - operation: object.delete
-#        status: 400
-#
-#  - description: "Will only able to create buckets when authenticated"
-#    policies:
-#      - insert_only_all_buckets
-#    setup:
-#      create_bucket: false
-#    asserts:
-#      - operation: bucket.create
-#        status: 200
-#
-#      - operation: bucket.delete
-#        status: 400
-#        error: "Bucket Not Found"
-#
-#      - operation: bucket.update
-#        status: 400
-#        error: "Bucket not found"
-#
-#      - operation: upload
-#        status: 400
-#        error: "new row violates row-level security policy"
-#
-#      - operation: upload.upsert
-#        status: 400
-#        message: 'new row violates row-level security policy'
-#
-#      - operation: upload
-#        role: service
-#        status: 200
-#
-#      - operation: object.get
-#        status: 400
-#
-#      - operation: object.delete
-#        status: 400
+  - description: 'Will only able to read objects'
+    policies:
+      - read_only_all_objects
+    asserts:
+      - operation: upload
+        status: 400
+        error: 'new row violates row-level security policy'
 
-  - description: "Will only able to update buckets when authenticated"
+      - operation: upload.upsert
+        status: 400
+        message: 'new row violates row-level security policy'
+
+      - operation: bucket.create
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: bucket.delete
+        status: 400
+        error: 'Bucket Not Found'
+
+      - operation: bucket.update
+        status: 400
+        error: 'Bucket not found'
+
+      - operation: bucket.get
+        status: 400
+        error: 'Bucket not found'
+
+      - operation: upload
+        role: service
+        status: 200
+
+      - operation: object.get
+        role: authenticated
+        status: 200
+
+      - operation: object.delete
+        role: authenticated
+        status: 400
+        message: 'Object not found'
+
+  - description: 'Will only able to read buckets'
+    policies:
+      - read_only_all_buckets
+    asserts:
+      - operation: upload
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: upload.upsert
+        status: 400
+        message: 'new row violates row-level security policy'
+
+      - operation: bucket.create
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: bucket.delete
+        status: 400
+        error: 'Bucket Not Found'
+
+      - operation: bucket.update
+        status: 400
+        error: 'Bucket not found'
+
+      - operation: bucket.get
+        status: 200
+
+      - operation: bucket.list
+        status: 200
+
+      - operation: upload
+        role: service
+        status: 200
+
+      - operation: object.get
+        role: authenticated
+        status: 400
+        message: 'Object not found'
+
+      - operation: object.delete
+        role: authenticated
+        status: 400
+        message: 'Object not found'
+
+  - description: 'Will only able to insert objects when authenticated'
+    policies:
+      - insert_only_all_objects
+    asserts:
+      - operation: bucket.create
+        status: 400
+
+      - operation: bucket.delete
+        status: 400
+        error: 'Bucket Not Found'
+
+      - operation: bucket.update
+        status: 400
+        error: 'Bucket not found'
+
+      - operation: upload
+        status: 200
+
+      - operation: upload.upsert
+        status: 400
+        message: 'Object not found'
+
+      - operation: object.get
+        status: 400
+
+      - operation: object.delete
+        status: 400
+
+  - description: 'Will only able to create buckets when authenticated'
+    policies:
+      - insert_only_all_buckets
+    setup:
+      create_bucket: false
+    asserts:
+      - operation: bucket.create
+        status: 200
+
+      - operation: bucket.delete
+        status: 400
+        error: 'Bucket Not Found'
+
+      - operation: bucket.update
+        status: 400
+        error: 'Bucket not found'
+
+      - operation: upload
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: upload.upsert
+        status: 400
+        message: 'new row violates row-level security policy'
+
+      - operation: upload
+        role: service
+        status: 200
+
+      - operation: object.get
+        status: 400
+
+      - operation: object.delete
+        status: 400
+
+  - description: 'Will only able to update buckets when authenticated'
     policies:
       - update_only_all_buckets
+      - read_only_all_buckets
     asserts:
-#      - operation: bucket.create
-#        status: 400
-#        error: "new row violates row-level security policy"
-#
-#      - operation: upload
-#        status: 400
-#        error: "new row violates row-level security policy"
-#
-#      - operation: upload.upsert
-#        status: 400
-#        message: 'new row violates row-level security policy'
-#
-#      - operation: upload
-#        role: service
-#        status: 200
-#
-#      - operation: object.get
-#        status: 400
-#        error: "Object not found"
-#
-#      - operation: object.delete
-#        status: 400
-#        error: "Object Not Found"
+      - operation: bucket.create
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: bucket.delete
+        status: 400
+        error: 'Bucket Not Found'
+
+      - operation: upload
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: upload.upsert
+        status: 400
+        message: 'new row violates row-level security policy'
+
+      - operation: upload
+        role: service
+        status: 200
+
+      - operation: object.get
+        status: 400
+        error: 'Object not found'
+
+      - operation: object.delete
+        status: 400
+        error: 'Object Not Found'
 
       - operation: bucket.update
         status: 200
+
+      - operation: bucket.get
+        status: 200
+
+  - description: 'Will only able to update objects when authenticated'
+    policies:
+      - insert_only_all_objects
+      - update_only_all_objects
+      - read_only_all_objects
+    asserts:
+      - operation: bucket.create
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: bucket.delete
+        status: 400
+        error: 'Bucket Not Found'
+
+      - operation: upload.upsert
+        role: service
+        status: 200
+
+      - operation: upload.upsert
+        status: 200
+
+      - operation: object.get
+        status: 200
+
+      - operation: object.delete
+        status: 400
+        error: 'Object Not Found'
+
+      - operation: bucket.update
+        status: 400
+        message: 'Bucket not found'
+
+      - operation: bucket.get
+        status: 400
+        message: 'Bucket not found'
+
+  - description: 'Will only able to delete buckets when authenticated'
+    policies:
+      - delete_only_all_buckets
+      - read_only_all_buckets
+    asserts:
+      - operation: bucket.get
+        status: 200
+
+      - operation: bucket.create
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: upload
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: upload.upsert
+        status: 400
+        message: 'new row violates row-level security policy'
+
+      - operation: upload
+        role: service
+        status: 200
+
+      - operation: object.get
+        status: 400
+        error: 'Object not found'
+
+      - operation: object.delete
+        status: 400
+        error: 'Object Not Found'
+
+      - operation: object.delete
+        role: service
+        status: 200
+
+      - operation: bucket.delete
+        status: 200
+
+  - description: 'Will only able to delete objects when authenticated'
+    policies:
+      - delete_only_all_objects
+      - read_only_all_objects
+    asserts:
+      - operation: bucket.get
+        status: 400
+        error: 'Bucket not found'
+
+      - operation: bucket.create
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: upload
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: upload.upsert
+        status: 400
+        message: 'new row violates row-level security policy'
+
+      - operation: upload
+        role: service
+        status: 200
+
+      - operation: object.delete
+        status: 200
+
+      - operation: bucket.delete
+        status: 400
+        error: 'Bucket Not Found'

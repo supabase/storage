@@ -1,6 +1,8 @@
 import app from '../admin-app'
 import { S3Backend } from '../storage/backend'
 import { Queue } from '../queue'
+import { HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import { isS3Error } from '../storage'
 
 export const adminApp = app({})
 
@@ -77,4 +79,22 @@ export function useMockObject() {
   afterEach(() => {
     jest.clearAllMocks()
   })
+}
+
+export const checkBucketExists = async (client: S3Client, bucket: string) => {
+  const options = {
+    Bucket: bucket,
+  }
+
+  try {
+    await client.send(new HeadBucketCommand(options))
+    return true
+  } catch (error) {
+    const err = error as Error
+
+    if (err && isS3Error(err) && err.$metadata.httpStatusCode === 404) {
+      return false
+    }
+    throw error
+  }
 }

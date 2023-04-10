@@ -83,7 +83,7 @@ export interface Database {
   updateBucket(
     bucketId: string,
     fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
-  ): Promise<Bucket>
+  ): Promise<void>
 
   upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>

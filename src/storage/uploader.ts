@@ -6,7 +6,7 @@ import { StorageBackendError } from './errors'
 
 interface UploaderOptions {
   key: string
-  fileSizeLimit?: number
+  fileSizeLimit?: number | null
   allowedMimeTypes?: string[] | null
 }
 
@@ -28,10 +28,8 @@ export class Uploader {
   async upload(request: FastifyRequest, options: UploaderOptions) {
     const file = await this.incomingFileInfo(request, options)
 
-    if (options.allowedMimeTypes && options.allowedMimeTypes.length > 0) {
-      if (!options.allowedMimeTypes.includes(file.mimeType)) {
-        throw new StorageBackendError('invalid_mime_type', 422, 'mime type not supported')
-      }
+    if (options.allowedMimeTypes) {
+      this.validateMimeType(file.mimeType, options.allowedMimeTypes)
     }
 
     const objectMetadata = await this.backend.uploadObject(
@@ -54,6 +52,34 @@ export class Uploader {
     return objectMetadata
   }
 
+  validateMimeType(mimeType: string, allowedMimeTypes: string[]) {
+    const requestedMime = mimeType.split('/')
+
+    if (requestedMime.length < 2) {
+      throw new StorageBackendError('invalid_mime_type', 422, 'mime type is not formatted properly')
+    }
+
+    const [type, ext] = requestedMime
+
+    for (const allowedMimeType of allowedMimeTypes) {
+      const allowedMime = allowedMimeType.split('/')
+
+      if (requestedMime.length < 2) {
+        continue
+      }
+
+      if (allowedMime[0] === type && allowedMime[1] === '*') {
+        return true
+      }
+
+      if (allowedMime[0] === type && allowedMime[1] === ext) {
+        return true
+      }
+    }
+
+    throw new StorageBackendError('invalid_mime_type', 422, 'mime type not supported')
+  }
+
   protected async incomingFileInfo(
     request: FastifyRequest,
     options?: Pick<UploaderOptions, 'fileSizeLimit'>
@@ -61,7 +87,7 @@ export class Uploader {
     const contentType = request.headers['content-type']
     let fileSizeLimit = await getFileSizeLimit(request.tenantId)
 
-    if (options?.fileSizeLimit) {
+    if (typeof options?.fileSizeLimit === 'number') {
       if (options.fileSizeLimit <= fileSizeLimit) {
         fileSizeLimit = options.fileSizeLimit
       }

@@ -173,7 +173,7 @@ export class Database {
       .update({
         public: fields.public,
         file_size_limit: fields.file_size_limit,
-        allowed_mime_types: fields.allowed_mime_types === null ? [] : fields.allowed_mime_types,
+        allowed_mime_types: fields.allowed_mime_types,
       })
       .match({ id: bucketId })
       .single()

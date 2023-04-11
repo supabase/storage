@@ -94,10 +94,17 @@ export class Storage {
 
     const bucketData: Parameters<Database['createBucket']>[0] = data
 
-    if (data.fileSizeLimit) {
-      bucketData.file_size_limit = await this.validateMaxSizeLimit(data.fileSizeLimit)
+    if (typeof data.fileSizeLimit === 'number' || typeof data.fileSizeLimit === 'string') {
+      bucketData.file_size_limit = await this.parseMaxSizeLimit(data.fileSizeLimit)
     }
 
+    if (data.fileSizeLimit === null) {
+      bucketData.file_size_limit = null
+    }
+
+    if (data.allowedMimeTypes) {
+      this.validateMimeType(data.allowedMimeTypes)
+    }
     bucketData.allowed_mime_types = data.allowedMimeTypes
 
     return this.db.createBucket(bucketData)
@@ -122,10 +129,17 @@ export class Storage {
 
     const bucketData: Parameters<Database['updateBucket']>[1] = data
 
-    if (data.fileSizeLimit) {
-      bucketData.file_size_limit = await this.validateMaxSizeLimit(data.fileSizeLimit)
+    if (typeof data.fileSizeLimit === 'number' || typeof data.fileSizeLimit === 'string') {
+      bucketData.file_size_limit = await this.parseMaxSizeLimit(data.fileSizeLimit)
     }
 
+    if (data.fileSizeLimit === null) {
+      bucketData.file_size_limit = null
+    }
+
+    if (data.allowedMimeTypes) {
+      this.validateMimeType(data.allowedMimeTypes)
+    }
     bucketData.allowed_mime_types = data.allowedMimeTypes
 
     return this.db.updateBucket(id, bucketData)
@@ -206,7 +220,28 @@ export class Storage {
     }
   }
 
-  protected async validateMaxSizeLimit(maxFileLimit: number | string) {
+  validateMimeType(mimeType: string[]) {
+    for (const type of mimeType) {
+      if (type.length > 1000) {
+        throw new StorageBackendError(
+          'invalid_mime_type',
+          422,
+          `the requested mime type "${type}" is invalid`
+        )
+      }
+
+      if (!type.match(/^[a-zA-Z0-9\-\+]+\/([a-zA-Z0-9\-\+\.]+$)|\*$/)) {
+        throw new StorageBackendError(
+          'invalid_mime_type',
+          422,
+          `the requested mime type "${type} is invalid`
+        )
+      }
+    }
+    return true
+  }
+
+  protected async parseMaxSizeLimit(maxFileLimit: number | string) {
     if (typeof maxFileLimit === 'string') {
       maxFileLimit = parseFileSizeToBytes(maxFileLimit)
     }

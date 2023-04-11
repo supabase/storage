@@ -9,8 +9,17 @@ const createBucketBodySchema = {
     name: { type: 'string', examples: ['avatars'] },
     id: { type: 'string', examples: ['avatars'] },
     public: { type: 'boolean', examples: [false] },
-    file_size_limit: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
-    allowed_mime_types: { type: 'array', items: { type: 'string' } },
+    file_size_limit: {
+      anyOf: [
+        { type: 'integer', examples: [1000], nullable: true, minimum: 0 },
+        { type: 'string', examples: ['100MB'], nullable: true },
+      ],
+    },
+    allowed_mime_types: {
+      type: 'array',
+      nullable: true,
+      items: { type: 'string' },
+    },
   },
   required: ['name'],
 } as const
@@ -56,7 +65,9 @@ export default async function routes(fastify: FastifyInstance) {
         owner,
         public: isPublic ?? false,
         fileSizeLimit: file_size_limit,
-        allowedMimeTypes: allowed_mime_types,
+        allowedMimeTypes: allowed_mime_types
+          ? allowed_mime_types?.filter((mime) => mime)
+          : allowed_mime_types,
       })
 
       request.log.info({ results: bucket }, 'results')

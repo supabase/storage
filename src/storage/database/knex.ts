@@ -214,7 +214,7 @@ export class StorageKnexDB implements Database {
         .update({
           public: fields.public,
           file_size_limit: fields.file_size_limit,
-          allowed_mime_types: fields.allowed_mime_types === null ? [] : fields.allowed_mime_types,
+          allowed_mime_types: fields.allowed_mime_types,
         })
         .where('id', bucketId)
         .returning('*')

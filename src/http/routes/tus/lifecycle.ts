@@ -58,6 +58,10 @@ export async function onCreate(
     const isUpsert = req.headers['x-upsert'] === 'true'
     const storage = req.upload.storage
 
+    const bucket = await storage
+      .asSuperUser()
+      .findBucket(uploadID.bucket, 'id, file_size_limit, allowed_mime_types')
+
     const uploader = new Uploader(storage.backend, storage.db)
 
     await uploader.prepareUpload({
@@ -73,6 +77,10 @@ export async function onCreate(
       upload.metadata.cacheControl = `max-age=${upload.metadata.cacheControl}`
     } else if (upload.metadata) {
       upload.metadata.cacheControl = 'no-cache'
+    }
+
+    if (upload.metadata?.contentType && bucket.allowed_mime_types) {
+      uploader.validateMimeType(upload.metadata.contentType, bucket.allowed_mime_types)
     }
 
     return res

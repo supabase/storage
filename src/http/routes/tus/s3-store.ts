@@ -1,5 +1,5 @@
 import { S3Store as BaseS3Store } from '@tus/s3-store'
-import aws from 'aws-sdk'
+import type { S3 } from 'aws-sdk'
 import fs from 'node:fs'
 import { Readable } from 'node:stream'
 import { TUS_RESUMABLE, Upload } from '@tus/server'
@@ -8,7 +8,7 @@ import { UploadId } from './upload-id'
 
 interface Options {
   partSize?: number
-  s3ClientConfig: aws.S3.Types.ClientConfiguration & {
+  s3ClientConfig: S3.Types.ClientConfiguration & {
     bucket: string
   }
   uploadExpiryMilliseconds?: number

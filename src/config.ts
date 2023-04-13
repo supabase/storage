@@ -40,6 +40,7 @@ type StorageConfigType = {
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
+  webhookQueueBatchSize: number
   enableImageTransformation: boolean
   imgProxyURL?: string
   imgProxyRequestTimeout: number
@@ -143,6 +144,7 @@ export function getConfig(): StorageConfigType {
     webhookQueuePullInterval: parseInt(
       getOptionalConfigFromEnv('WEBHOOK_QUEUE_PULL_INTERVAL') || '700'
     ),
+    webhookQueueBatchSize: parseInt(getOptionalConfigFromEnv('WEBHOOK_QUEUE_BATCH_SIZE') || '100'),
     enableImageTransformation: getOptionalConfigFromEnv('ENABLE_IMAGE_TRANSFORMATION') === 'true',
     imgProxyRequestTimeout: parseInt(
       getOptionalConfigFromEnv('IMGPROXY_REQUEST_TIMEOUT') || '15',

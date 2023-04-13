@@ -71,50 +71,68 @@ export abstract class Queue {
     const workers: Promise<string>[] = []
 
     Queue.events.forEach((event) => {
+      const options = event.getWorkerOptions()
+
       workers.push(
         Queue.getInstance().work(
           event.getQueueName(),
-          event.getWorkerOptions(),
-          async (job: Job<BasePayload>) => {
-            try {
-              const res = await event.handle(job)
-
-              QueueJobCompleted.inc({
-                tenant_id: job.data.tenant.ref,
-                name: event.getQueueName(),
-              })
-
-              return res
-            } catch (e) {
-              QueueJobRetryFailed.inc({
-                tenant_id: job.data.tenant.ref,
-                name: event.getQueueName(),
-              })
-
-              Queue.getInstance()
-                .getJobById(job.id)
-                .then((dbJob) => {
-                  if (!dbJob) {
-                    return
-                  }
-                  if (dbJob.retrycount === dbJob.retrylimit) {
-                    QueueJobError.inc({
-                      tenant_id: job.data.tenant.ref,
-                      name: event.getQueueName(),
-                    })
-                  }
-                })
-
-              logger.error(
-                {
-                  job: JSON.stringify(job),
-                  rawError: normalizeRawError(e),
-                },
-                'Error while processing job'
-              )
-
-              throw e
+          options,
+          async (job: Job<BasePayload> | Job<BasePayload>[]) => {
+            if (!Array.isArray(job)) {
+              job = [job]
             }
+
+            await Promise.all(
+              job.map(async (j) => {
+                try {
+                  const res = await event.handle(j)
+
+                  if (options.batchSize) {
+                    await event.ack(j)
+                  }
+
+                  QueueJobCompleted.inc({
+                    tenant_id: j.data.tenant.ref,
+                    name: event.getQueueName(),
+                  })
+
+                  return res
+                } catch (e) {
+                  QueueJobRetryFailed.inc({
+                    tenant_id: j.data.tenant.ref,
+                    name: event.getQueueName(),
+                  })
+
+                  Queue.getInstance()
+                    .getJobById(j.id)
+                    .then((dbJob) => {
+                      if (!dbJob) {
+                        return
+                      }
+                      if (dbJob.retrycount === dbJob.retrylimit) {
+                        QueueJobError.inc({
+                          tenant_id: j.data.tenant.ref,
+                          name: event.getQueueName(),
+                        })
+                      }
+                    })
+
+                  logger.error(
+                    {
+                      job: JSON.stringify(j),
+                      rawError: normalizeRawError(e),
+                    },
+                    'Error while processing job'
+                  )
+
+                  if (!options.batchSize) {
+                    throw e
+                  }
+
+                  await event.fail(j)
+                }
+              })
+            )
           }
         )
       )

@@ -3,8 +3,11 @@ import { Job, WorkOptions } from 'pg-boss'
 import axios from 'axios'
 import { getConfig } from '../../config'
 import { logger } from '../../monitoring'
+import rateLimit from 'axios-rate-limit'
 
-const { webhookURL, webhookApiKey, webhookQueuePullInterval } = getConfig()
+const { webhookURL, webhookApiKey, webhookQueuePullInterval, webhookQueueBatchSize } = getConfig()
+
+const httpClient = rateLimit(axios.create(), { maxRPS: 100 })
 
 interface WebhookEvent {
   event: {
@@ -26,6 +29,7 @@ export class Webhook extends BaseEvent<WebhookEvent> {
   static getWorkerOptions(): WorkOptions {
     return {
       newJobCheckInterval: webhookQueuePullInterval,
+      batchSize: webhookQueueBatchSize,
     }
   }
 
@@ -38,7 +42,7 @@ export class Webhook extends BaseEvent<WebhookEvent> {
     logger.info({ job }, 'handling webhook')
 
     try {
-      await axios.post(
+      await httpClient.post(
         webhookURL,
         {
           type: 'Webhook',

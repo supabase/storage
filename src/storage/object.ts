@@ -86,7 +86,9 @@ export class ObjectStorage {
       return { objectMetadata, path }
     } catch (e) {
       // undo operations as super user
-      await this.db.asSuperUser().deleteObject(this.bucketId, options.objectName)
+      if (!options.isUpsert) {
+        await this.db.asSuperUser().deleteObject(this.bucketId, options.objectName)
+      }
       throw e
     }
   }

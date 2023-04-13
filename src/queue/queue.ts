@@ -8,9 +8,8 @@ type SubclassOfBaseClass = (new (payload: any) => BaseEvent<any>) & {
 }
 
 export abstract class Queue {
-  private static pgBoss?: PgBoss
-
   protected static events: SubclassOfBaseClass[] = []
+  private static pgBoss?: PgBoss
 
   static async init() {
     if (Queue.pgBoss) {
@@ -44,18 +43,6 @@ export abstract class Queue {
     return Queue.pgBoss
   }
 
-  protected static startWorkers() {
-    const workers: Promise<string>[] = []
-
-    Queue.events.forEach((event) => {
-      workers.push(
-        Queue.getInstance().work(event.getQueueName(), event.getWorkerOptions(), event.handle)
-      )
-    })
-
-    return Promise.all(workers)
-  }
-
   static getInstance() {
     if (!this.pgBoss) {
       throw new Error('pg boss not initialised')
@@ -66,5 +53,22 @@ export abstract class Queue {
 
   static register<T extends SubclassOfBaseClass>(event: T) {
     Queue.events.push(event)
+  }
+
+  protected static startWorkers() {
+    const workers: Promise<string>[] = []
+
+    Queue.events.forEach((event) => {
+      event.setQueue(this)
+      workers.push(
+        Queue.getInstance().work(
+          event.getQueueName(),
+          event.getWorkerOptions(),
+          event.handle.bind(event)
+        )
+      )
+    })
+
+    return Promise.all(workers)
   }
 }

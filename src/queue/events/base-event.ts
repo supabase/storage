@@ -21,13 +21,18 @@ const { enableQueueEvents } = getConfig()
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   public static readonly version: string = 'v1'
+  protected static queueName = ''
+
+  protected static queue: typeof Queue
 
   constructor(public readonly payload: T & BasePayload) {}
 
-  protected static queueName = ''
-
   static eventName() {
     return this.name
+  }
+
+  static setQueue(queue: typeof Queue) {
+    this.queue = queue
   }
 
   static getQueueName() {
@@ -69,7 +74,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     })
   }
 
-  static handle(job: Job<BaseEvent<any>['payload']>) {
+  static handle(job: Job<BaseEvent<any>['payload']> | Job<BaseEvent<any>['payload']>[]) {
     throw new Error('not implemented')
   }
 

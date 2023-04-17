@@ -60,9 +60,7 @@ export class TenantConnection {
       searchPath: ['public', 'storage'],
       pool: {
         min: 0,
-        max: isExternalPool
-          ? options.maxConnections * 3
-          : options.maxConnections || databaseMaxConnections,
+        max: isExternalPool ? 1 : options.maxConnections || databaseMaxConnections,
       },
       connection: connectionString,
       acquireConnectionTimeout: databaseConnectionTimeout,

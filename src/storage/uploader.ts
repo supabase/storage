@@ -36,28 +36,26 @@ export interface UploadObjectOptions {
 export class Uploader {
   constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
 
-  canUpload(options: Pick<UploadObjectOptions, 'bucketId' | 'objectName' | 'isUpsert'>) {
-    return this.db.withTransaction(async (db) => {
-      const shouldCreateObject = !options.isUpsert
+  async canUpload(options: Pick<UploadObjectOptions, 'bucketId' | 'objectName' | 'isUpsert'>) {
+    const shouldCreateObject = !options.isUpsert
 
-      if (shouldCreateObject) {
-        await db.testPermission((db) => {
-          return db.createObject({
-            bucket_id: options.bucketId,
-            name: options.objectName,
-            version: '1',
-          })
+    if (shouldCreateObject) {
+      await this.db.testPermission((db) => {
+        return db.createObject({
+          bucket_id: options.bucketId,
+          name: options.objectName,
+          version: '1',
         })
-      } else {
-        await db.testPermission((db) => {
-          return db.upsertObject({
-            bucket_id: options.bucketId,
-            name: options.objectName,
-            version: '1',
-          })
+      })
+    } else {
+      await this.db.testPermission((db) => {
+        return db.upsertObject({
+          bucket_id: options.bucketId,
+          name: options.objectName,
+          version: '1',
         })
-      }
-    })
+      })
+    }
   }
 
   /**

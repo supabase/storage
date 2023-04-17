@@ -34,6 +34,7 @@ services:
       POSTGRESQL_USERNAME: postgres
       POSTGRESQL_HOST: db
       POSTGRESQL_PASSWORD: postgres
+      PGBOUNCER_POOL_MODE: transaction
     depends_on:
       - db
 

@@ -12,7 +12,6 @@ RUN npm ci
 RUN npm run build
 
 FROM node:18-alpine
-RUN npm install -g pm2
 WORKDIR /app
 COPY migrations migrations
 COPY ecosystem.config.js package.json ./

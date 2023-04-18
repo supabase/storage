@@ -60,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
         querystring: uploadSignedObjectQSSchema,
         summary,
         response: {
-          200: { description: 'Succesful response', ...successResponseSchema },
+          200: { description: 'Successful response', ...successResponseSchema },
           '4xx': { $ref: 'errorSchema#', description: 'Error response' },
         },
         tags: ['object'],

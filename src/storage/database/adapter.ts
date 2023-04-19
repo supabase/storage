@@ -33,11 +33,11 @@ export interface TransactionOptions {
   readOnly?: boolean
 }
 
-export interface DatabaseOptions<DB, TNX> {
+export interface DatabaseOptions<TNX> {
   tenantId: string
   host: string
-  superAdmin?: DB
   tnx?: TNX
+  parentTnx?: TNX
   parentConnection?: TenantConnection
 }
 

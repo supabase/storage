@@ -11,16 +11,21 @@ import { getConfig } from '../config'
 import { getPostgresConnection } from '../database'
 import { Obj } from '../storage/schemas'
 import { randomUUID } from 'crypto'
+import { getServiceKeyJwtSettings } from '../database/tenant'
 
-const { serviceKey } = getConfig()
+const { serviceKey, tenantId } = getConfig()
 
 describe('Webhooks', () => {
   useMockObject()
 
   let pg: TenantConnection
   beforeAll(async () => {
-    pg = await getPostgresConnection(serviceKey, {
-      tenantId: '1234',
+    const superUser = await getServiceKeyJwtSettings(tenantId)
+    pg = await getPostgresConnection({
+      tenantId,
+      superUser,
+      user: superUser,
+      host: 'localhost',
     })
   })
 

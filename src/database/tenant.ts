@@ -1,9 +1,10 @@
 import createSubscriber from 'pg-listen'
 import { getConfig } from '../config'
-import { decrypt } from '../auth'
+import { decrypt, verifyJWT } from '../auth'
 import { runMigrationsOnTenant } from './migrate'
 import { knex } from './multitenant-db'
 import { StorageBackendError } from '../storage'
+import { JwtPayload } from 'jsonwebtoken'
 
 interface TenantConfig {
   anonKey: string
@@ -14,6 +15,9 @@ interface TenantConfig {
   features: Features
   jwtSecret: string
   serviceKey: string
+  serviceKeyPayload: {
+    role: string
+  }
 }
 
 export interface Features {
@@ -22,9 +26,11 @@ export interface Features {
   }
 }
 
-const { multitenantDatabaseUrl } = getConfig()
+const { multitenantDatabaseUrl, isMultitenant, serviceKey, jwtSecret } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
+
+let singleTenantServiceKeyPayload: ({ role: string } & JwtPayload) | undefined = undefined
 
 /**
  * Runs migrations in a specific tenant
@@ -86,13 +92,19 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
     max_connections,
   } = tenant
 
+  const serviceKey = decrypt(service_key)
+  const jwtSecret = decrypt(jwt_secret)
+
+  const serviceKeyPayload = await verifyJWT<{ role: string }>(serviceKey, jwtSecret)
+
   const config = {
     anonKey: decrypt(anon_key),
     databaseUrl: decrypt(database_url),
     databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
     fileSizeLimit: Number(file_size_limit),
-    jwtSecret: decrypt(jwt_secret),
-    serviceKey: decrypt(service_key),
+    jwtSecret: jwtSecret,
+    serviceKey: serviceKey,
+    serviceKeyPayload,
     maxConnections: max_connections ? Number(max_connections) : undefined,
     features: {
       imageTransformation: {
@@ -111,6 +123,37 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
 export async function getAnonKey(tenantId: string): Promise<string> {
   const { anonKey } = await getTenantConfig(tenantId)
   return anonKey
+}
+
+export async function getServiceKeyJwtSettings(tenantId: string) {
+  let serviceKeyPayload: { role?: string } | undefined
+  let tenantJwtSecret = jwtSecret
+  let tenantServiceKey = serviceKey
+
+  if (isMultitenant) {
+    const tenant = await getTenantConfig(tenantId)
+    serviceKeyPayload = tenant.serviceKeyPayload
+    tenantJwtSecret = tenant.jwtSecret
+    tenantServiceKey = tenant.serviceKey
+  } else {
+    serviceKeyPayload = await getSingleTenantServiceKeyPayload()
+  }
+
+  return {
+    jwt: tenantServiceKey,
+    payload: serviceKeyPayload,
+    jwtSecret: tenantJwtSecret,
+  }
+}
+
+export async function getSingleTenantServiceKeyPayload() {
+  if (singleTenantServiceKeyPayload) {
+    return singleTenantServiceKeyPayload
+  }
+
+  singleTenantServiceKeyPayload = await verifyJWT(serviceKey, jwtSecret)
+
+  return singleTenantServiceKeyPayload
 }
 
 /**

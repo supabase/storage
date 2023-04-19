@@ -17,6 +17,13 @@ beforeAll(async () => {
     anonKey: process.env.ANON_KEY || '',
     databaseUrl: process.env.DATABASE_URL || '',
     serviceKey: process.env.SERVICE_KEY || '',
+    serviceKeyPayload: {
+      alg: 'HS256',
+      typ: 'JWT',
+      role: 'service_role',
+      iat: 1613531985,
+      exp: 1929107985,
+    },
     jwtSecret: process.env.PGRST_JWT_SECRET || '',
     fileSizeLimit: parseInt(process.env.FILE_SIZE_LIMIT || '1000'),
     features: {

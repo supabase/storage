@@ -23,7 +23,6 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.register(async function authorizationContext(fastify) {
     fastify.register(jwt)
     fastify.register(db)
-    fastify.register(dbSuperUser)
     fastify.register(storage)
 
     fastify.register(deleteObject)

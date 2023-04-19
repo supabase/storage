@@ -25,7 +25,7 @@ export class StorageKnexDB implements Database {
 
   constructor(
     public readonly connection: TenantConnection,
-    private readonly options: DatabaseOptions<TenantConnection, Knex.Transaction>
+    private readonly options: DatabaseOptions<Knex.Transaction>
   ) {
     this.tenantHost = options.host
     this.tenantId = options.tenantId
@@ -83,13 +83,10 @@ export class StorageKnexDB implements Database {
   }
 
   asSuperUser() {
-    if (!this.options.superAdmin) {
-      throw new Error('super admin client not instantiated')
-    }
-
-    return new StorageKnexDB(this.options.superAdmin, {
+    return new StorageKnexDB(this.connection.asSuperUser(), {
       ...this.options,
       parentConnection: this.connection,
+      parentTnx: this.options.tnx,
     })
   }
 
@@ -477,12 +474,14 @@ export class StorageKnexDB implements Database {
     try {
       const result: Awaited<ReturnType<T>> = await fn(tnx)
 
-      if (differentScopes) {
-        await this.options.parentConnection?.setScope(tnx)
-      }
-
       if (needsNewTransaction) {
         await tnx.commit()
+      }
+
+      if (this.options.parentTnx && !this.options.parentTnx.isCompleted()) {
+        if (differentScopes) {
+          await this.options.parentConnection?.setScope(this.options.parentTnx)
+        }
       }
 
       timer()

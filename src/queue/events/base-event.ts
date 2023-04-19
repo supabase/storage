@@ -1,6 +1,6 @@
 import { Queue } from '../queue'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
-import { getServiceKey } from '../../database/tenant'
+import { getServiceKeyJwtSettings } from '../../database/tenant'
 import { getPostgresConnection } from '../../database'
 import { Storage } from '../../storage'
 import { StorageKnexDB } from '../../storage/database'
@@ -18,7 +18,7 @@ export interface BasePayload {
 
 export type StaticThis<T> = { new (...args: any): T }
 
-const { enableQueueEvents, isMultitenant, serviceKey } = getConfig()
+const { enableQueueEvents } = getConfig()
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   public static readonly version: string = 'v1'
@@ -80,8 +80,11 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   }
 
   protected static async createStorage(payload: BasePayload) {
-    const masterServiceKey = isMultitenant ? await getServiceKey(payload.tenant.ref) : serviceKey
-    const client = await getPostgresConnection(masterServiceKey, {
+    const adminUser = await getServiceKeyJwtSettings(payload.tenant.ref)
+
+    const client = await getPostgresConnection({
+      user: adminUser,
+      superUser: adminUser,
       host: payload.tenant.host,
       tenantId: payload.tenant.ref,
     })
@@ -89,7 +92,6 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     const db = new StorageKnexDB(client, {
       tenantId: payload.tenant.ref,
       host: payload.tenant.host,
-      superAdmin: client,
     })
 
     const storageBackend = createStorageBackend()

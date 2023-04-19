@@ -15,6 +15,7 @@ import { createStorageBackend } from '../storage/backend'
 import { CreateBucketCommand, HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import { logger } from '../monitoring'
 import { DetailedError } from 'tus-js-client'
+import { getServiceKeyJwtSettings } from '../database/tenant'
 
 const { serviceKey, tenantId, globalS3Bucket } = getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
@@ -55,8 +56,12 @@ describe('Tus multipart', () => {
   })
 
   beforeEach(async () => {
-    const pg = await getPostgresConnection(serviceKey, {
+    const superUser = await getServiceKeyJwtSettings(tenantId)
+    const pg = await getPostgresConnection({
+      superUser,
+      user: superUser,
       tenantId: tenantId,
+      host: 'localhost',
     })
 
     db = new StorageKnexDB(pg, {

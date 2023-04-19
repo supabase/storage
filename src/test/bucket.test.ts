@@ -52,7 +52,7 @@ describe('testing GET bucket', () => {
       id: bucketId,
       name: bucketId,
       public: false,
-      file_size_limit: 0,
+      file_size_limit: null,
       allowed_mime_types: null,
     })
   })
@@ -108,7 +108,7 @@ describe('testing GET all buckets', () => {
       id: expect.any(String),
       name: expect.any(String),
       public: expect.any(Boolean),
-      file_size_limit: expect.any(Number),
+      file_size_limit: null,
       allowed_mime_types: null,
     })
   })

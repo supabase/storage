@@ -39,10 +39,7 @@ export async function getJwtSecret(tenantId: string): Promise<string> {
  * @param token
  * @param secret
  */
-export function verifyJWT<T>(
-  token: string,
-  secret: string
-): Promise<(jwt.JwtPayload & T) | undefined> {
+export function verifyJWT<T>(token: string, secret: string): Promise<jwt.JwtPayload & T> {
   return new Promise((resolve, reject) => {
     jwt.verify(token, secret, { algorithms: [jwtAlgorithm as jwt.Algorithm] }, (err, decoded) => {
       if (err) return reject(err)

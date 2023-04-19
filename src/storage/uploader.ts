@@ -14,7 +14,7 @@ import { randomUUID } from 'crypto'
 import { FileUploadedSuccess, FileUploadStarted } from '../monitoring/metrics'
 
 interface UploaderOptions extends UploadObjectOptions {
-  fileSizeLimit?: number
+  fileSizeLimit?: number | null
   allowedMimeTypes?: string[] | null
 }
 
@@ -36,28 +36,26 @@ export interface UploadObjectOptions {
 export class Uploader {
   constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
 
-  canUpload(options: Pick<UploadObjectOptions, 'bucketId' | 'objectName' | 'isUpsert'>) {
-    return this.db.withTransaction(async (db) => {
-      const shouldCreateObject = !options.isUpsert
+  async canUpload(options: Pick<UploadObjectOptions, 'bucketId' | 'objectName' | 'isUpsert'>) {
+    const shouldCreateObject = !options.isUpsert
 
-      if (shouldCreateObject) {
-        await db.testPermission((db) => {
-          return db.createObject({
-            bucket_id: options.bucketId,
-            name: options.objectName,
-            version: '1',
-          })
+    if (shouldCreateObject) {
+      await this.db.testPermission((db) => {
+        return db.createObject({
+          bucket_id: options.bucketId,
+          name: options.objectName,
+          version: '1',
         })
-      } else {
-        await db.testPermission((db) => {
-          return db.upsertObject({
-            bucket_id: options.bucketId,
-            name: options.objectName,
-            version: '1',
-          })
+      })
+    } else {
+      await this.db.testPermission((db) => {
+        return db.upsertObject({
+          bucket_id: options.bucketId,
+          name: options.objectName,
+          version: '1',
         })
-      }
-    })
+      })
+    }
   }
 
   /**
@@ -87,10 +85,8 @@ export class Uploader {
     try {
       const file = await this.incomingFileInfo(request, options)
 
-      if (options.allowedMimeTypes && options.allowedMimeTypes.length > 0) {
-        if (!options.allowedMimeTypes.includes(file.mimeType)) {
-          throw new StorageBackendError('invalid_mime_type', 422, 'mime type not supported')
-        }
+      if (options.allowedMimeTypes) {
+        this.validateMimeType(file.mimeType, options.allowedMimeTypes)
       }
 
       const path = `${options.bucketId}/${options.objectName}`
@@ -221,6 +217,34 @@ export class Uploader {
     }
   }
 
+  validateMimeType(mimeType: string, allowedMimeTypes: string[]) {
+    const requestedMime = mimeType.split('/')
+
+    if (requestedMime.length < 2) {
+      throw new StorageBackendError('invalid_mime_type', 422, 'mime type is not formatted properly')
+    }
+
+    const [type, ext] = requestedMime
+
+    for (const allowedMimeType of allowedMimeTypes) {
+      const allowedMime = allowedMimeType.split('/')
+
+      if (requestedMime.length < 2) {
+        continue
+      }
+
+      if (allowedMime[0] === type && allowedMime[1] === '*') {
+        return true
+      }
+
+      if (allowedMime[0] === type && allowedMime[1] === ext) {
+        return true
+      }
+    }
+
+    throw new StorageBackendError('invalid_mime_type', 422, 'mime type not supported')
+  }
+
   protected async incomingFileInfo(
     request: FastifyRequest,
     options?: Pick<UploaderOptions, 'fileSizeLimit'>
@@ -228,7 +252,7 @@ export class Uploader {
     const contentType = request.headers['content-type']
     let fileSizeLimit = await getFileSizeLimit(request.tenantId)
 
-    if (options?.fileSizeLimit) {
+    if (typeof options?.fileSizeLimit === 'number') {
       if (options.fileSizeLimit <= fileSizeLimit) {
         fileSizeLimit = options.fileSizeLimit
       }

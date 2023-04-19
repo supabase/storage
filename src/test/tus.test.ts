@@ -16,6 +16,7 @@ import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import { logger } from '../monitoring'
 import { DetailedError } from 'tus-js-client'
 import { checkBucketExists } from './common'
+import { getServiceKeyJwtSettings } from '../database/tenant'
 
 const { serviceKey, tenantId, globalS3Bucket } = getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
@@ -56,8 +57,13 @@ describe('Tus multipart', () => {
   })
 
   beforeEach(async () => {
-    const pg = await getPostgresConnection(serviceKey, {
-      tenantId: tenantId,
+    const adminUser = await getServiceKeyJwtSettings(tenantId)
+
+    const pg = await getPostgresConnection({
+      tenantId,
+      user: adminUser,
+      superUser: adminUser,
+      host: 'localhost',
     })
 
     db = new StorageKnexDB(pg, {

@@ -3,6 +3,7 @@ import { Knex, knex } from 'knex'
 import { JwtPayload } from 'jsonwebtoken'
 import { getConfig } from '../config'
 import { logger } from '../monitoring'
+import { StorageBackendError } from '../storage'
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)
@@ -11,16 +12,21 @@ const { databaseMaxConnections, databaseFreePoolAfterInactivity, databaseConnect
   getConfig()
 
 interface TenantConnectionOptions {
+  user: Role
+  superUser: Role
+
   tenantId: string
   dbUrl: string
-  role: string
-  jwt: JwtPayload
-  jwtRaw: string
   isExternalPool?: boolean
   maxConnections: number
   headers?: Record<string, string | undefined | string[]>
   method?: string
   path?: string
+}
+
+export interface Role {
+  jwt: string
+  payload: { role?: string } & JwtPayload
 }
 
 export const connections = new Map<string, Knex>()
@@ -32,7 +38,7 @@ export class TenantConnection {
     public readonly pool: Knex,
     protected readonly options: TenantConnectionOptions
   ) {
-    this.role = options.role
+    this.role = options.user.payload.role || 'anon'
   }
 
   static stop() {
@@ -60,9 +66,7 @@ export class TenantConnection {
       searchPath: ['public', 'storage'],
       pool: {
         min: 0,
-        max: isExternalPool
-          ? options.maxConnections * 3
-          : options.maxConnections || databaseMaxConnections,
+        max: isExternalPool ? 1 : options.maxConnections || databaseMaxConnections,
       },
       connection: connectionString,
       acquireConnectionTimeout: databaseConnectionTimeout,
@@ -119,6 +123,13 @@ export class TenantConnection {
     })
   }
 
+  asSuperUser() {
+    return new TenantConnection(this.pool, {
+      ...this.options,
+      user: this.options.superUser,
+    })
+  }
+
   async setScope(tnx: Knex) {
     const headers = JSON.stringify(this.options.headers || {})
     await tnx.raw(
@@ -134,11 +145,11 @@ export class TenantConnection {
           set_config('request.path', ?, true);
     `,
       [
-        this.options.role || 'anon',
-        this.options.role || 'anon',
-        this.options.jwtRaw || '',
-        this.options.jwt.sub || '',
-        JSON.stringify(this.options.jwt),
+        this.role,
+        this.role,
+        this.options.user.jwt || '',
+        this.options.user.payload.sub || '',
+        JSON.stringify(this.options.user.payload),
         headers,
         this.options.method || '',
         this.options.path || '',

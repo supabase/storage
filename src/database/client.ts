@@ -1,28 +1,33 @@
 import { getConfig } from '../config'
 import { getTenantConfig } from './tenant'
 import { StorageBackendError } from '../storage'
-import { verifyJWT } from '../auth'
-import { TenantConnection } from './connection'
+import { Role, TenantConnection } from './connection'
 
 interface ConnectionOptions {
-  host?: string
-  tenantId?: string
+  host: string
+  tenantId: string
   forwardHeaders?: Record<string, string | undefined | string[]>
   method?: string
   path?: string
+  user: Role
+  superUser: Role
 }
 
 /**
  * Creates a tenant specific knex client
- * @param jwt
  * @param options
  */
-export async function getPostgresConnection(
-  jwt: string,
-  options: ConnectionOptions
-): Promise<TenantConnection> {
+export async function getPostgresConnection(options: ConnectionOptions): Promise<TenantConnection> {
+  const dbCredentials = await getDbCredentials(options.tenantId, options.host)
+
+  return await TenantConnection.create({
+    ...dbCredentials,
+    ...options,
+  })
+}
+
+async function getDbCredentials(tenantId: string, host: string | undefined) {
   const {
-    jwtSecret,
     isMultitenant,
     databasePoolURL,
     databaseURL,
@@ -31,12 +36,16 @@ export async function getPostgresConnection(
   } = getConfig()
 
   let dbUrl = databasePoolURL || databaseURL
-  let jwtSecretKey = jwtSecret
   let maxConnections = databaseMaxConnections
   let isExternalPool = Boolean(databasePoolURL)
 
   if (isMultitenant && xForwardedHostRegExp) {
-    const xForwardedHost = options.host
+    if (!tenantId) {
+      throw new StorageBackendError('Invalid Tenant Id', 400, 'Tenant id not provided')
+    }
+
+    const xForwardedHost = host
+
     if (typeof xForwardedHost !== 'string') {
       throw new StorageBackendError(
         'Invalid Header',
@@ -52,35 +61,15 @@ export async function getPostgresConnection(
       )
     }
 
-    if (!options.tenantId) {
-      throw new StorageBackendError('Invalid Tenant Id', 400, 'Tenant id not provided')
-    }
-
-    const tenant = await getTenantConfig(options.tenantId)
+    const tenant = await getTenantConfig(tenantId)
     dbUrl = tenant.databasePoolUrl || tenant.databaseUrl
     isExternalPool = Boolean(tenant.databasePoolUrl)
     maxConnections = tenant.maxConnections ?? maxConnections
-    jwtSecretKey = tenant.jwtSecret
   }
 
-  const verifiedJWT = await verifyJWT(jwt, jwtSecretKey)
-
-  if (!verifiedJWT) {
-    throw new StorageBackendError('invalid_jwt', 403, 'invalid jwt')
-  }
-
-  const role = verifiedJWT?.role || 'anon'
-
-  return await TenantConnection.create({
-    tenantId: options.tenantId as string,
+  return {
     dbUrl,
     isExternalPool,
     maxConnections,
-    role,
-    jwt: verifiedJWT,
-    jwtRaw: jwt,
-    headers: options.forwardHeaders,
-    method: options.method,
-    path: options.path,
-  })
+  }
 }

@@ -14,6 +14,7 @@ import { getPostgresConnection } from '../database'
 import FormData from 'form-data'
 import yaml from 'js-yaml'
 import Mustache from 'mustache'
+import { getServiceKeyJwtSettings } from '../database/tenant'
 
 interface Policy {
   name: string
@@ -99,8 +100,13 @@ describe('RLS policies', () => {
       email: userId + '@supabase.io',
     })
 
-    const pg = await getPostgresConnection(serviceKey, {
-      tenantId: tenantId,
+    const adminUser = await getServiceKeyJwtSettings(tenantId)
+
+    const pg = await getPostgresConnection({
+      tenantId,
+      user: adminUser,
+      superUser: adminUser,
+      host: 'localhost',
     })
 
     const knexDB = new StorageKnexDB(pg, {

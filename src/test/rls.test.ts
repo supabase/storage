@@ -1,0 +1,366 @@
+import { randomUUID } from 'crypto'
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import { StorageKnexDB } from '../storage/database'
+import app from '../app'
+import { getConfig } from '../config'
+import { checkBucketExists } from './common'
+import { createStorageBackend } from '../storage/backend'
+import { Knex, knex } from 'knex'
+import { signJWT } from '../auth'
+import fs from 'fs'
+import path from 'path'
+import { Storage } from '../storage'
+import { getPostgresConnection } from '../database'
+import FormData from 'form-data'
+import yaml from 'js-yaml'
+import Mustache from 'mustache'
+import { getServiceKeyUser } from '../database/tenant'
+
+interface Policy {
+  name: string
+  permissions: string | string[]
+  roles: string | string[]
+  content: string
+  tables: string | string[]
+}
+
+interface TestCase {
+  description: string
+  policies: string[]
+  asserts: TestCaseAssert[]
+  setup?: {
+    create_bucket?: boolean
+  }
+}
+
+interface TestCaseAssert {
+  operation:
+    | 'upload'
+    | 'upload.upsert'
+    | 'bucket.create'
+    | 'bucket.get'
+    | 'bucket.list'
+    | 'bucket.delete'
+    | 'bucket.update'
+    | 'object.delete'
+    | 'object.get'
+    | 'object.list'
+
+  role?: string
+  status: number
+  error?: string
+}
+
+interface RlsTestSpec {
+  policies: Policy[]
+  tests: TestCase[]
+}
+
+const testSpec = yaml.load(
+  fs.readFileSync(path.resolve(__dirname, 'rls_tests.yaml'), 'utf8')
+) as RlsTestSpec
+
+const { serviceKey, tenantId, jwtSecret, databaseURL, globalS3Bucket } = getConfig()
+const backend = createStorageBackend()
+const client = backend.client
+
+describe('RLS policies', () => {
+  beforeAll(async () => {
+    // parse yaml file
+    if (client instanceof S3Client) {
+      const bucketExists = await checkBucketExists(client, globalS3Bucket)
+
+      if (!bucketExists) {
+        const createBucketCommand = new CreateBucketCommand({
+          Bucket: globalS3Bucket,
+        })
+        await client.send(createBucketCommand)
+      }
+    }
+  })
+
+  let userId: string
+  let jwt: string
+  let storage: Storage
+  let db: Knex
+  beforeEach(async () => {
+    db = knex({
+      connection: databaseURL,
+      client: 'pg',
+    })
+
+    userId = randomUUID()
+    jwt = (await signJWT({ sub: userId, role: 'authenticated' }, jwtSecret, '1h')) as string
+
+    await db.table('auth.users').insert({
+      instance_id: '00000000-0000-0000-0000-000000000000',
+      id: userId,
+      aud: 'authenticated',
+      role: 'authenticated',
+      email: userId + '@supabase.io',
+    })
+
+    const adminUser = await getServiceKeyUser(tenantId)
+
+    const pg = await getPostgresConnection({
+      tenantId,
+      user: adminUser,
+      superUser: adminUser,
+      host: 'localhost',
+    })
+
+    const knexDB = new StorageKnexDB(pg, {
+      host: 'localhost',
+      tenantId,
+    })
+
+    storage = new Storage(backend, knexDB)
+  })
+
+  afterEach(async () => {
+    jest.clearAllMocks()
+  })
+
+  afterAll(async () => {
+    await db.destroy()
+    await (storage.db as StorageKnexDB).connection.pool.destroy()
+  })
+
+  testSpec.tests.forEach((_test, index) => {
+    it(_test.description, async () => {
+      const content = fs.readFileSync(path.resolve(__dirname, 'rls_tests.yaml'), 'utf8')
+
+      const bucketName = randomUUID()
+      const objectName = randomUUID()
+
+      const testScopedSpec = yaml.load(
+        Mustache.render(content, {
+          uid: userId,
+          bucketName,
+          objectName,
+        })
+      ) as RlsTestSpec
+
+      const test = testScopedSpec.tests[index]
+
+      // Create requested policies
+      const allPolicies = await Promise.all(
+        test.policies.map(async (policyName) => {
+          const policy = testScopedSpec.policies.find((policy) => policy.name === policyName)
+
+          if (!policy) {
+            throw new Error(`Policy ${policyName} not found`)
+          }
+
+          console.log(`Creating policy ${policyName}`)
+          return await createPolicy(db, policy)
+        })
+      )
+
+      // Prepare
+      console.log(test.setup)
+      if (test.setup?.create_bucket !== false) {
+        await storage.createBucket({
+          name: bucketName,
+          id: bucketName,
+        })
+        console.log(`Created bucket ${bucketName}`)
+      }
+
+      try {
+        // Run Operations
+        for (const assert of test.asserts) {
+          console.log(
+            `Running operation ${assert.operation} with role ${assert.role || 'authenticated'}`
+          )
+
+          const response = await runOperation(assert.operation, {
+            bucket: bucketName,
+            objectName: objectName,
+            jwt: assert.role === 'service' ? serviceKey : jwt,
+          })
+          console.log(
+            `Operation ${assert.operation} with role ${assert.role} returned ${response.statusCode}`
+          )
+
+          expect(response.statusCode).toBe(assert.status)
+
+          if (assert.error) {
+            const body = await response.json()
+
+            expect(body.message).toBe(assert.error)
+          }
+        }
+      } catch (e) {
+        throw e
+      } finally {
+        await sleep(2000)
+        const policiesToDelete = allPolicies.reduce((acc, policy) => {
+          acc.push(...policy)
+          return acc
+        }, [] as { name: string; table: string }[])
+
+        for (const policy of policiesToDelete) {
+          await db.raw(`DROP POLICY IF EXISTS "${policy.name}" ON ${policy.table};`)
+        }
+      }
+    })
+  })
+})
+
+async function runOperation(
+  operation: TestCaseAssert['operation'],
+  options: { bucket: string; jwt: string; objectName: string }
+) {
+  const { jwt, bucket, objectName } = options
+
+  switch (operation) {
+    case 'upload':
+      return uploadFile(bucket, objectName, jwt)
+    case 'upload.upsert':
+      return uploadFile(bucket, objectName, jwt, true)
+    case 'bucket.list':
+      return app().inject({
+        method: 'GET',
+        url: `/bucket`,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+      })
+    case 'bucket.get':
+      return app().inject({
+        method: 'GET',
+        url: `/bucket/${bucket}`,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+      })
+    case 'bucket.create':
+      return app().inject({
+        method: 'POST',
+        url: `/bucket`,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+        payload: {
+          name: bucket,
+        },
+      })
+    case 'bucket.update':
+      console.log(`updating bucket ${bucket}`)
+      return app().inject({
+        method: 'PUT',
+        url: `/bucket/${bucket}`,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+        payload: {
+          public: true,
+        },
+      })
+    case 'bucket.delete':
+      return app().inject({
+        method: 'DELETE',
+        url: `/bucket/${bucket}`,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+      })
+    case 'object.delete':
+      return app().inject({
+        method: 'DELETE',
+        url: `/object/${bucket}/${objectName}`,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+      })
+    case 'object.get':
+      return app().inject({
+        method: 'GET',
+        url: `/object/authenticated/${bucket}/${objectName}`,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+      })
+    case 'object.list':
+      return app().inject({
+        method: 'POST',
+        url: `/object/list/${bucket}`,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+        payload: {
+          prefix: '',
+          sortBy: {
+            column: 'name',
+            order: 'asc',
+          },
+        },
+      })
+    default:
+      throw new Error(`Operation ${operation} not supported`)
+  }
+}
+
+async function createPolicy(db: Knex, policy: Policy) {
+  const { name, content } = policy
+  let { tables, roles, permissions } = policy
+
+  if (!Array.isArray(roles)) {
+    roles = [roles]
+  }
+
+  if (!Array.isArray(tables)) {
+    tables = [tables]
+  }
+
+  if (!Array.isArray(permissions)) {
+    permissions = [permissions]
+  }
+
+  const created: Promise<{ table: string; name: string }>[] = []
+
+  tables.forEach((table) => {
+    ;(roles as string[]).forEach((role) => {
+      ;(permissions as string[]).forEach((permission) => {
+        console.log(
+          'RUNNING QUERY ' +
+            `CREATE POLICY "${name}_${permission}" ON ${table} FOR ${permission} TO "${role}" ${content}`
+        )
+        created.push(
+          db
+            .raw(
+              `CREATE POLICY "${name}_${permission}" ON ${table} AS PERMISSIVE FOR ${permission} TO "${role}" ${content}`
+            )
+            .then(() => ({
+              name: `${name}_${permission}`,
+              table,
+            }))
+        )
+      })
+    })
+  })
+
+  return Promise.all(created)
+}
+
+async function uploadFile(bucket: string, fileName: string, jwt: string, upsert?: boolean) {
+  const testFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
+  const form = new FormData()
+  form.append('file', testFile)
+  const headers = Object.assign({}, form.getHeaders(), {
+    authorization: `Bearer ${jwt}`,
+    ...(upsert ? { 'x-upsert': 'true' } : {}),
+  })
+
+  return app().inject({
+    method: 'POST',
+    url: `/object/${bucket}/${fileName}`,
+    headers,
+    payload: form,
+  })
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}

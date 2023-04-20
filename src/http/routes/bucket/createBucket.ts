@@ -17,8 +17,8 @@ const createBucketBodySchema = {
     },
     allowed_mime_types: {
       type: 'array',
+      nullable: true,
       items: { type: 'string' },
-      examples: [['image/png', 'image/jpg']],
     },
   },
   required: ['name'],

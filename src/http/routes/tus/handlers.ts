@@ -10,6 +10,7 @@ import { OptionsHandler } from '@tus/server/handlers/OptionsHandler'
 import { UploadId } from './upload-id'
 import { getFileSizeLimit } from '../../../storage/limits'
 import { Uploader } from '../../../storage/uploader'
+import { logger } from '../../../monitoring'
 
 const reExtractFileID = /([^/]+)\/?$/
 
@@ -51,6 +52,10 @@ export class Patch extends PatchHandler {
       }
 
       throw e
+    } finally {
+      await req.upload.db.dispose().catch(() => {
+        logger.error('failed disposing connection')
+      })
     }
   }
 }
@@ -97,6 +102,10 @@ export class Head extends HeadHandler {
         ;(e as any).body = statusCode !== 500 ? e.render().message : 'Internal Server Error'
       }
       throw e
+    } finally {
+      await req.upload.db.dispose().catch(() => {
+        logger.error('failed disposing connection')
+      })
     }
   }
 }
@@ -141,6 +150,10 @@ export class Post extends PostHandler {
       }
 
       throw e
+    } finally {
+      await req.upload.db.dispose().catch(() => {
+        logger.error('failed disposing connection')
+      })
     }
   }
 
@@ -164,6 +177,8 @@ export class Options extends OptionsHandler {
   }
 
   async send(rawReq: http.IncomingMessage, res: http.ServerResponse) {
+    const req = rawReq as MultiPartRequest
+
     try {
       res.setHeader('Access-Control-Allow-Origin', '*')
       res.setHeader('Access-Control-Allow-Methods', ALLOWED_METHODS)
@@ -176,7 +191,6 @@ export class Options extends OptionsHandler {
         res.setHeader('Tus-Extension', this.store.extensions.join(','))
       }
 
-      const req = rawReq as MultiPartRequest
       let uploadID: UploadId | undefined
 
       const urlParts = rawReq.url?.split('/') || []
@@ -226,6 +240,10 @@ export class Options extends OptionsHandler {
       }
 
       throw e
+    } finally {
+      await req.upload.db.dispose().catch(() => {
+        logger.error('failed disposing connection')
+      })
     }
   }
 }

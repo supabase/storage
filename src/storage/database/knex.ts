@@ -119,6 +119,7 @@ export class StorageKnexDB implements Database {
       allowed_mime_types: data.allowed_mime_types,
       file_size_limit: data.file_size_limit,
     }
+
     const bucket = await this.runQuery('CreateBucket', async (knex) => {
       return knex.from<Bucket>('buckets').insert(bucketData) as Promise<{ rowCount: number }>
     })

@@ -62,3 +62,15 @@ export const S3UploadPart = new client.Histogram({
   help: 'S3 upload part performance',
   labelNames: ['tenant_id', 'region'],
 })
+
+export const DbActivePool = new client.Gauge({
+  name: 'storage_api_db_pool',
+  help: 'Number of database pools created',
+  labelNames: ['tenant_id', 'region', 'is_external'],
+})
+
+export const DbActiveConnection = new client.Gauge({
+  name: 'storage_api_db_connections',
+  help: 'Number of database connections',
+  labelNames: ['tenant_id', 'region', 'is_external'],
+})

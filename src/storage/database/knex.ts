@@ -46,16 +46,16 @@ export class StorageKnexDB implements Database {
           this.options.tnx
         )()
 
-        await this.connection.setScope(tnx)
-
-        tnx.on('query-error', (error) => {
-          throw DBError.fromDBError(error)
-        })
-
-        const opts = { ...this.options, tnx }
-        const storageWithTnx = new StorageKnexDB(this.connection, opts)
-
         try {
+          await this.connection.setScope(tnx)
+
+          tnx.on('query-error', (error) => {
+            throw DBError.fromDBError(error)
+          })
+
+          const opts = { ...this.options, tnx }
+          const storageWithTnx = new StorageKnexDB(this.connection, opts)
+
           const result: Awaited<ReturnType<T>> = await fn(storageWithTnx)
           await tnx.commit()
           return result
@@ -467,12 +467,13 @@ export class StorageKnexDB implements Database {
       tnx.on('query-error', (error: DatabaseError) => {
         throw DBError.fromDBError(error)
       })
-      await this.connection.setScope(tnx)
-    } else if (differentScopes) {
-      await this.connection.setScope(tnx)
     }
 
     try {
+      if (needsNewTransaction || differentScopes) {
+        await this.connection.setScope(tnx)
+      }
+
       const result: Awaited<ReturnType<T>> = await fn(tnx)
 
       if (needsNewTransaction) {

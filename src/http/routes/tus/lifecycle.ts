@@ -5,12 +5,14 @@ import { getConfig } from '../../../config'
 import { randomUUID } from 'crypto'
 import { UploadId } from './upload-id'
 import { Uploader } from '../../../storage/uploader'
+import { TenantConnection } from '../../../database/connection'
 
 const { globalS3Bucket } = getConfig()
 
 export type MultiPartRequest = http.IncomingMessage & {
   upload: {
     storage: Storage
+    db: TenantConnection
     owner?: string
     tenantId: string
     isNew: boolean

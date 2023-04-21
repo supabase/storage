@@ -125,7 +125,7 @@ export async function getAnonKey(tenantId: string): Promise<string> {
   return anonKey
 }
 
-export async function getServiceKeyJwtSettings(tenantId: string) {
+export async function getServiceKeyUser(tenantId: string) {
   let serviceKeyPayload: { role?: string } | undefined
   let tenantJwtSecret = jwtSecret
   let tenantServiceKey = serviceKey

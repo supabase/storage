@@ -11,14 +11,14 @@ import { signJWT } from '../auth'
 import { StorageBackendError } from '../storage'
 import { useMockObject, useMockQueue } from './common'
 import { getPostgresConnection } from '../database'
-import { getServiceKeyJwtSettings } from '../database/tenant'
+import { getServiceKeyUser } from '../database/tenant'
 
 dotenv.config({ path: '.env.test' })
 
 const { anonKey, jwtSecret, serviceKey, tenantId } = getConfig()
 
 async function getSuperuserPostgrestClient() {
-  const superUser = await getServiceKeyJwtSettings(tenantId)
+  const superUser = await getServiceKeyUser(tenantId)
 
   const conn = await getPostgresConnection({
     superUser,

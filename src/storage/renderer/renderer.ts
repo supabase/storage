@@ -44,7 +44,7 @@ export abstract class Renderer {
 
       if (err.$metadata?.httpStatusCode === 404) {
         response.header('cache-control', 'no-store')
-        return response.status(400).send({
+        return response.status(404).send({
           error: 'Not found',
           message: 'The resource was not found',
           statusCode: '404',

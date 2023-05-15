@@ -24,7 +24,7 @@ export const db = fastifyPlugin(async (fastify) => {
       superUser: adminUser,
       tenantId: request.tenantId,
       host: request.headers['x-forwarded-host'] as string,
-      forwardHeaders: request.headers,
+      headers: request.headers,
       path: request.url,
       method: request.method,
     })
@@ -65,6 +65,7 @@ export const dbSuperUser = fastifyPlugin(async (fastify) => {
       host: request.headers['x-forwarded-host'] as string,
       path: request.url,
       method: request.method,
+      headers: request.headers,
     })
   })
 

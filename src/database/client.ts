@@ -6,7 +6,7 @@ import { User, TenantConnection } from './connection'
 interface ConnectionOptions {
   host: string
   tenantId: string
-  forwardHeaders?: Record<string, string | undefined | string[]>
+  headers?: Record<string, string | undefined | string[]>
   method?: string
   path?: string
   user: User

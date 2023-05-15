@@ -22,7 +22,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm ci
+          npm i conventional-changelog-conventionalcommits -g
 
       - name: Semantic Release
         id: semantic

@@ -63,7 +63,7 @@ export class TenantConnection {
 
     knexPool = knex({
       client: 'pg',
-      searchPath: ['public', 'storage'],
+      searchPath: ['public', 'storage', 'extensions'],
       pool: {
         min: 0,
         max: isExternalPool ? 1 : options.maxConnections || databaseMaxConnections,

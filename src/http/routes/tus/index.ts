@@ -12,6 +12,7 @@ import { DataStore } from '@tus/server/models'
 import { getFileSizeLimit } from '../../../storage/limits'
 import { UploadId } from './upload-id'
 import { FileStore } from './file-store'
+import { TenantConnection } from '../../../database/connection'
 
 const {
   globalS3Bucket,
@@ -30,6 +31,7 @@ type MultiPartRequest = http.IncomingMessage & {
     storage: Storage
     owner?: string
     tenantId: string
+    db: TenantConnection
   }
 }
 
@@ -110,6 +112,7 @@ export default async function routes(fastify: FastifyInstance) {
         storage: req.storage,
         owner: req.owner,
         tenantId: req.tenantId,
+        db: req.db,
       }
     })
 
@@ -165,6 +168,7 @@ export default async function routes(fastify: FastifyInstance) {
         storage: req.storage,
         owner: req.owner,
         tenantId: req.tenantId,
+        db: req.db,
       }
     })
 

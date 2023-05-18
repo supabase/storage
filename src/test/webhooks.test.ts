@@ -11,7 +11,7 @@ import { getConfig } from '../config'
 import { getPostgresConnection } from '../database'
 import { Obj } from '../storage/schemas'
 import { randomUUID } from 'crypto'
-import { getServiceKeyJwtSettings } from '../database/tenant'
+import { getServiceKeyUser } from '../database/tenant'
 
 const { serviceKey, tenantId } = getConfig()
 
@@ -20,7 +20,7 @@ describe('Webhooks', () => {
 
   let pg: TenantConnection
   beforeAll(async () => {
-    const superUser = await getServiceKeyJwtSettings(tenantId)
+    const superUser = await getServiceKeyUser(tenantId)
     pg = await getPostgresConnection({
       tenantId,
       superUser,

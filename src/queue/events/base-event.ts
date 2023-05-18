@@ -1,6 +1,6 @@
 import { Queue } from '../queue'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
-import { getServiceKeyJwtSettings } from '../../database/tenant'
+import { getServiceKeyUser } from '../../database/tenant'
 import { getPostgresConnection } from '../../database'
 import { Storage } from '../../storage'
 import { StorageKnexDB } from '../../storage/database'
@@ -80,7 +80,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   }
 
   protected static async createStorage(payload: BasePayload) {
-    const adminUser = await getServiceKeyJwtSettings(payload.tenant.ref)
+    const adminUser = await getServiceKeyUser(payload.tenant.ref)
 
     const client = await getPostgresConnection({
       user: adminUser,

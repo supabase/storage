@@ -3,7 +3,7 @@ import { Knex, knex } from 'knex'
 import { JwtPayload } from 'jsonwebtoken'
 import { getConfig } from '../config'
 import { logger } from '../monitoring'
-import { StorageBackendError } from '../storage'
+import { DbActiveConnection, DbActivePool } from '../monitoring/metrics'
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)
@@ -12,8 +12,8 @@ const { databaseMaxConnections, databaseFreePoolAfterInactivity, databaseConnect
   getConfig()
 
 interface TenantConnectionOptions {
-  user: Role
-  superUser: Role
+  user: User
+  superUser: User
 
   tenantId: string
   dbUrl: string
@@ -24,7 +24,7 @@ interface TenantConnectionOptions {
   path?: string
 }
 
-export interface Role {
+export interface User {
   jwt: string
   payload: { role?: string } & JwtPayload
 }
@@ -63,13 +63,35 @@ export class TenantConnection {
 
     knexPool = knex({
       client: 'pg',
-      searchPath: ['public', 'storage'],
+      searchPath: ['public', 'storage', 'extensions'],
       pool: {
         min: 0,
         max: isExternalPool ? 1 : options.maxConnections || databaseMaxConnections,
+        propagateCreateError: false,
+        acquireTimeoutMillis: databaseConnectionTimeout,
       },
       connection: connectionString,
       acquireConnectionTimeout: databaseConnectionTimeout,
+    })
+
+    DbActivePool.inc({ tenant_id: options.tenantId, is_external: isExternalPool.toString() })
+
+    knexPool.client.pool.on('createSuccess', () => {
+      DbActiveConnection.inc({
+        tenant_id: options.tenantId,
+        is_external: isExternalPool.toString(),
+      })
+    })
+
+    knexPool.client.pool.on('destroySuccess', () => {
+      DbActiveConnection.dec({
+        tenant_id: options.tenantId,
+        is_external: isExternalPool.toString(),
+      })
+    })
+
+    knexPool.client.pool.on('poolDestroySuccess', () => {
+      DbActivePool.dec({ tenant_id: options.tenantId, is_external: isExternalPool.toString() })
     })
 
     if (!isExternalPool) {
@@ -111,7 +133,7 @@ export class TenantConnection {
     return new this(knexPool, options)
   }
 
-  dispose() {
+  async dispose() {
     if (this.options.isExternalPool) {
       return this.pool.destroy()
     }

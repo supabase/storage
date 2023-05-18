@@ -1,16 +1,16 @@
 import { getConfig } from '../config'
 import { getTenantConfig } from './tenant'
 import { StorageBackendError } from '../storage'
-import { Role, TenantConnection } from './connection'
+import { User, TenantConnection } from './connection'
 
 interface ConnectionOptions {
   host: string
   tenantId: string
-  forwardHeaders?: Record<string, string | undefined | string[]>
+  headers?: Record<string, string | undefined | string[]>
   method?: string
   path?: string
-  user: Role
-  superUser: Role
+  user: User
+  superUser: User
 }
 
 /**

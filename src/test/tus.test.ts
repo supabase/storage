@@ -10,13 +10,13 @@ import * as tus from 'tus-js-client'
 import fs from 'fs'
 import app from '../app'
 import { FastifyInstance } from 'fastify'
-import { Storage } from '../storage'
+import { isS3Error, Storage } from '../storage'
 import { createStorageBackend } from '../storage/backend'
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import { logger } from '../monitoring'
 import { DetailedError } from 'tus-js-client'
+import { getServiceKeyUser } from '../database/tenant'
 import { checkBucketExists } from './common'
-import { getServiceKeyJwtSettings } from '../database/tenant'
 
 const { serviceKey, tenantId, globalS3Bucket } = getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
@@ -57,12 +57,11 @@ describe('Tus multipart', () => {
   })
 
   beforeEach(async () => {
-    const adminUser = await getServiceKeyJwtSettings(tenantId)
-
+    const superUser = await getServiceKeyUser(tenantId)
     const pg = await getPostgresConnection({
-      tenantId,
-      user: adminUser,
-      superUser: adminUser,
+      superUser,
+      user: superUser,
+      tenantId: tenantId,
       host: 'localhost',
     })
 

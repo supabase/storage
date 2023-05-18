@@ -119,7 +119,7 @@ export function getConfig(): StorageConfigType {
       10
     ),
     databaseConnectionTimeout: parseInt(
-      getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '10000',
+      getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '30000',
       10
     ),
     region: getConfigFromEnv('REGION'),

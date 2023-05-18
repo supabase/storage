@@ -14,7 +14,7 @@ import { getPostgresConnection } from '../database'
 import FormData from 'form-data'
 import yaml from 'js-yaml'
 import Mustache from 'mustache'
-import { getServiceKeyJwtSettings } from '../database/tenant'
+import { getServiceKeyUser } from '../database/tenant'
 
 interface Policy {
   name: string
@@ -64,6 +64,8 @@ const { serviceKey, tenantId, jwtSecret, databaseURL, globalS3Bucket } = getConf
 const backend = createStorageBackend()
 const client = backend.client
 
+jest.setTimeout(10000)
+
 describe('RLS policies', () => {
   beforeAll(async () => {
     // parse yaml file
@@ -100,7 +102,7 @@ describe('RLS policies', () => {
       email: userId + '@supabase.io',
     })
 
-    const adminUser = await getServiceKeyJwtSettings(tenantId)
+    const adminUser = await getServiceKeyUser(tenantId)
 
     const pg = await getPostgresConnection({
       tenantId,

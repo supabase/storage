@@ -12,10 +12,11 @@ import app from '../app'
 import { FastifyInstance } from 'fastify'
 import { isS3Error, Storage } from '../storage'
 import { createStorageBackend } from '../storage/backend'
-import { CreateBucketCommand, HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import { logger } from '../monitoring'
 import { DetailedError } from 'tus-js-client'
 import { getServiceKeyUser } from '../database/tenant'
+import { checkBucketExists } from './common'
 
 const { serviceKey, tenantId, globalS3Bucket } = getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
@@ -232,21 +233,3 @@ describe('Tus multipart', () => {
     })
   })
 })
-
-const checkBucketExists = async (client: S3Client, bucket: string) => {
-  const options = {
-    Bucket: bucket,
-  }
-
-  try {
-    await client.send(new HeadBucketCommand(options))
-    return true
-  } catch (error) {
-    const err = error as Error
-
-    if (err && isS3Error(err) && err.$metadata.httpStatusCode === 404) {
-      return false
-    }
-    throw error
-  }
-}

@@ -206,25 +206,21 @@ export class StorageKnexDB implements Database {
     bucketId: string,
     fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
   ) {
-    const [bucket] = await this.runQuery('UpdateBucket', (knex) => {
-      return knex
-        .from<Bucket>('buckets')
-        .update({
-          public: fields.public,
-          file_size_limit: fields.file_size_limit,
-          allowed_mime_types: fields.allowed_mime_types,
-        })
-        .where('id', bucketId)
-        .returning('*')
+    const bucket = await this.runQuery('UpdateBucket', (knex) => {
+      return knex.from('buckets').where('id', bucketId).update({
+        public: fields.public,
+        file_size_limit: fields.file_size_limit,
+        allowed_mime_types: fields.allowed_mime_types,
+      })
     })
 
-    if (!bucket) {
+    if (bucket === 0) {
       throw new DBError('Bucket not found', 404, 'Bucket not found', undefined, {
         bucketId,
       })
     }
 
-    return bucket
+    return
   }
 
   async upsertObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>) {

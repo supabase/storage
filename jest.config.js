@@ -1,5 +1,6 @@
 module.exports = {
   preset: 'ts-jest',
+  testSequencer: './jest.sequencer.js',
   transform: {
     '^.+\\.(t|j)sx?$': 'ts-jest',
   },

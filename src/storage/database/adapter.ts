@@ -87,7 +87,7 @@ export interface Database {
 
   upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>
-  ): Promise<Omit<Obj, 'id'>>
+  ): Promise<Obj>
   updateObject(
     bucketId: string,
     name: string,

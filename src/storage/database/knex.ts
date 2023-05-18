@@ -235,15 +235,20 @@ export class StorageKnexDB implements Database {
       metadata: data.metadata,
       version: data.version,
     }
-    await this.runQuery('UpsertObject', (knex) => {
-      return knex.from<Obj>('objects').insert(objectData).onConflict(['name', 'bucket_id']).merge({
-        metadata: data.metadata,
-        version: data.version,
-        owner: data.owner,
-      })
+    const [object] = await this.runQuery('UpsertObject', (knex) => {
+      return knex
+        .from<Obj>('objects')
+        .insert(objectData)
+        .onConflict(['name', 'bucket_id'])
+        .merge({
+          metadata: data.metadata,
+          version: data.version,
+          owner: data.owner,
+        })
+        .returning('*')
     })
 
-    return objectData
+    return object
   }
 
   async updateObject(

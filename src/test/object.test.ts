@@ -206,7 +206,12 @@ describe('testing POST object via multipart upload', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toBeCalled()
-    expect(response.body).toBe(`{"Key":"bucket2/authenticated/casestudy1.png"}`)
+    expect(await response.json()).toEqual(
+      expect.objectContaining({
+        Id: expect.any(String),
+        Key: 'bucket2/authenticated/casestudy1.png',
+      })
+    )
   })
 
   test('check if RLS policies are respected: anon user is not able to upload authenticated resource', async () => {
@@ -500,7 +505,12 @@ describe('testing POST object via binary upload', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toBeCalled()
-    expect(response.body).toBe(`{"Key":"bucket2/authenticated/binary-casestudy1.png"}`)
+    expect(await response.json()).toEqual(
+      expect.objectContaining({
+        Id: expect.any(String),
+        Key: 'bucket2/authenticated/binary-casestudy1.png',
+      })
+    )
   })
 
   test('check if RLS policies are respected: anon user is not able to upload authenticated resource', async () => {
@@ -731,7 +741,12 @@ describe('testing PUT object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toBeCalled()
-    expect(response.body).toBe(`{"Key":"bucket2/authenticated/cat.jpg"}`)
+    expect(await response.json()).toEqual(
+      expect.objectContaining({
+        Id: expect.any(String),
+        Key: 'bucket2/authenticated/cat.jpg',
+      })
+    )
   })
 
   test('check if RLS policies are respected: anon user is not able to update authenticated resource', async () => {
@@ -826,7 +841,12 @@ describe('testing PUT object via binary upload', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toBeCalled()
-    expect(response.body).toBe(`{"Key":"bucket2/authenticated/cat.jpg"}`)
+    expect(await response.json()).toEqual(
+      expect.objectContaining({
+        Id: expect.any(String),
+        Key: 'bucket2/authenticated/cat.jpg',
+      })
+    )
   })
 
   test('check if RLS policies are respected: anon user is not able to update authenticated resource', async () => {

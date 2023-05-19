@@ -13,6 +13,9 @@ const createObjectParamsSchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
+    Id: {
+      type: 'string',
+    },
     Key: {
       type: 'string',
       examples: ['avatars/folder/cat.png'],
@@ -61,7 +64,7 @@ export default async function routes(fastify: FastifyInstance) {
       const isUpsert = request.headers['x-upsert'] === 'true'
       const owner = request.owner as string
 
-      const { objectMetadata, path } = await request.storage
+      const { objectMetadata, path, id } = await request.storage
         .from(bucketName)
         .uploadNewObject(request, {
           objectName,
@@ -70,6 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
         })
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({
+        Id: id,
         Key: path,
       })
     }

@@ -64,14 +64,14 @@ export class ObjectStorage {
 
     const uploader = new Uploader(this.backend, this.db)
 
-    const { metadata } = await uploader.upload(request, {
+    const { metadata, obj } = await uploader.upload(request, {
       ...options,
       bucketId: this.bucketId,
       fileSizeLimit: bucket.file_size_limit,
       allowedMimeTypes: bucket.allowed_mime_types,
     })
 
-    return { objectMetadata: metadata, path }
+    return { objectMetadata: metadata, path, id: obj.id }
   }
 
   public async uploadOverridingObject(request: FastifyRequest, options: UploadObjectOptions) {
@@ -93,7 +93,7 @@ export class ObjectStorage {
 
     const uploader = new Uploader(this.backend, this.db)
 
-    const { metadata } = await uploader.upload(request, {
+    const { metadata, obj } = await uploader.upload(request, {
       ...options,
       bucketId: this.bucketId,
       fileSizeLimit: bucket.file_size_limit,
@@ -101,7 +101,7 @@ export class ObjectStorage {
       isUpsert: true,
     })
 
-    return { objectMetadata: metadata, path }
+    return { objectMetadata: metadata, path, id: obj.id }
   }
 
   /**

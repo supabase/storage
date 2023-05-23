@@ -4,6 +4,8 @@ import { Registry } from 'prom-client'
 
 const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): FastifyInstance => {
   const app = fastify(opts)
+  app.register(plugins.adminTenantId)
+  app.register(plugins.logTenantId)
   app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics'] }))
   app.register(routes.tenant, { prefix: 'tenants' })
 

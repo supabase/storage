@@ -14,11 +14,9 @@ export const logger = pino({
   },
   serializers: {
     res(reply) {
-      // console.log(reply)
       return {
         statusCode: reply.statusCode,
-        contentLength: reply.headers['content-length'],
-        contentType: reply.headers['content-type'],
+        headers: whitelistHeaders(reply.getHeaders()),
       }
     },
     req(request) {
@@ -71,6 +69,7 @@ const whitelistHeaders = (headers: Record<string, unknown>) => {
     'x-client-info',
     'x-forwarded-user-agent',
     'x-client-trace-id',
+    'x-upsert',
   ]
   const allowlistedResponseHeaders = [
     'cf-cache-status',

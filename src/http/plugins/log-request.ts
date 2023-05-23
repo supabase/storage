@@ -26,8 +26,9 @@ export const logRequest = (options: RequestLoggerOptions) =>
       const cIP = req.ip
       const statusCode = reply.statusCode
       const error = (reply.raw as any).executionError || reply.executionError
+      const tenantId = req.tenantId
 
-      const buildLogMessage = `${rMeth} | ${statusCode} | ${cIP} | ${rId} | ${rUrl} | ${uAgent}`
+      const buildLogMessage = `${tenantId} | ${rMeth} | ${statusCode} | ${cIP} | ${rId} | ${rUrl} | ${uAgent}`
 
       req.log.info(
         {

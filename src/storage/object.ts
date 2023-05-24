@@ -269,6 +269,7 @@ export class ObjectStorage {
         db.updateObject(bucketId, sourceKey, {
           name: sourceKey,
           version: newVersion,
+          owner: owner,
         }),
       ])
     })
@@ -337,8 +338,9 @@ export class ObjectStorage {
    * Moves an existing remote object to a given location
    * @param sourceObjectName
    * @param destinationObjectName
+   * @param owner
    */
-  async moveObject(sourceObjectName: string, destinationObjectName: string) {
+  async moveObject(sourceObjectName: string, destinationObjectName: string, owner?: string) {
     mustBeValidKey(destinationObjectName, 'The destination object name contains invalid characters')
 
     if (sourceObjectName === destinationObjectName) {
@@ -356,6 +358,7 @@ export class ObjectStorage {
           name: destinationObjectName,
           bucket_id: this.bucketId,
           version: '1',
+          owner,
         }),
       ])
     })

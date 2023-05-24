@@ -47,6 +47,7 @@ interface TestCaseAssert {
     | 'object.list'
 
   role?: string
+  policies?: string[]
   status: number
   error?: string
 }
@@ -160,11 +161,12 @@ describe('RLS policies', () => {
       )
 
       // Prepare
-      console.log(test.setup)
       if (test.setup?.create_bucket !== false) {
         await storage.createBucket({
           name: bucketName,
           id: bucketName,
+          public: false,
+          owner: userId,
         })
         console.log(`Created bucket ${bucketName}`)
       }
@@ -172,6 +174,22 @@ describe('RLS policies', () => {
       try {
         // Run Operations
         for (const assert of test.asserts) {
+          let localPolicies: { name: string; table: string }[][] = []
+          if (assert.policies && assert.policies.length > 0) {
+            localPolicies = await Promise.all(
+              assert.policies.map(async (policyName) => {
+                const policy = testScopedSpec.policies.find((policy) => policy.name === policyName)
+
+                if (!policy) {
+                  throw new Error(`Policy ${policyName} not found`)
+                }
+
+                console.log(`Creating inline policy ${policyName}`)
+                return await createPolicy(db, policy)
+              })
+            )
+          }
+
           console.log(
             `Running operation ${assert.operation} with role ${assert.role || 'authenticated'}`
           )
@@ -181,11 +199,29 @@ describe('RLS policies', () => {
             objectName: objectName,
             jwt: assert.role === 'service' ? serviceKey : jwt,
           })
+
           console.log(
-            `Operation ${assert.operation} with role ${assert.role} returned ${response.statusCode}`
+            `Operation ${assert.operation} with role ${assert.role || 'authenticated'} returned ${
+              response.statusCode
+            }`
           )
 
-          expect(response.statusCode).toBe(assert.status)
+          await Promise.all([
+            ...localPolicies.map((policies) => {
+              return Promise.all(
+                policies.map(async (policy) => {
+                  await db.raw(`DROP POLICY IF EXISTS "${policy.name}" ON ${policy.table};`)
+                })
+              )
+            }),
+          ])
+
+          try {
+            expect(response.statusCode).toBe(assert.status)
+          } catch (e) {
+            console.log(`Operation ${assert.operation} failed`)
+            throw e
+          }
 
           if (assert.error) {
             const body = await response.json()

@@ -3,13 +3,13 @@ policies:
     tables: ['storage.buckets']
     roles: ['authenticated']
     permissions: ['select']
-    content: "USING(auth.uid() = '{{uid}}')"
+    content: "USING(owner = '{{uid}}')"
 
   - name: read_only_all_objects
     tables: ['storage.objects']
     roles: ['authenticated']
     permissions: ['select']
-    content: "USING(auth.uid() = '{{uid}}')"
+    content: "USING(owner = '{{uid}}')"
 
   - name: insert_only_all_objects
     tables: ['storage.objects']
@@ -33,19 +33,19 @@ policies:
     tables: ['storage.buckets']
     roles: ['authenticated']
     permissions: ['update']
-    content: "USING(auth.uid() = '{{uid}}')"
+    content: "USING(owner = '{{uid}}')"
 
   - name: delete_only_all_buckets
     tables: ['storage.buckets']
     roles: ['authenticated']
     permissions: ['delete']
-    content: "USING(auth.uid() = '{{uid}}')"
+    content: "USING(owner = '{{uid}}')"
 
   - name: delete_only_all_objects
     tables: ['storage.objects']
     roles: ['authenticated']
     permissions: ['delete']
-    content: "USING(auth.uid() = '{{uid}}')"
+    content: "USING(owner = '{{uid}}')"
 
 tests:
   - description: 'Will only able to read objects'
@@ -77,8 +77,9 @@ tests:
         error: 'Bucket not found'
 
       - operation: upload
-        role: service
         status: 200
+        policies:
+          - insert_only_all_objects
 
       - operation: object.get
         role: authenticated
@@ -120,7 +121,8 @@ tests:
         status: 200
 
       - operation: upload
-        role: service
+        policies:
+          - insert_only_all_objects
         status: 200
 
       - operation: object.get
@@ -187,7 +189,8 @@ tests:
         message: 'new row violates row-level security policy'
 
       - operation: upload
-        role: service
+        policies:
+          - insert_only_all_objects
         status: 200
 
       - operation: object.get
@@ -218,7 +221,8 @@ tests:
         message: 'new row violates row-level security policy'
 
       - operation: upload
-        role: service
+        policies:
+          - insert_only_all_objects
         status: 200
 
       - operation: object.get
@@ -249,8 +253,7 @@ tests:
         status: 400
         error: 'Bucket Not Found'
 
-      - operation: upload.upsert
-        role: service
+      - operation: upload
         status: 200
 
       - operation: upload.upsert
@@ -292,7 +295,8 @@ tests:
         message: 'new row violates row-level security policy'
 
       - operation: upload
-        role: service
+        policies:
+          - insert_only_all_objects
         status: 200
 
       - operation: object.get
@@ -332,7 +336,8 @@ tests:
         message: 'new row violates row-level security policy'
 
       - operation: upload
-        role: service
+        policies:
+          - insert_only_all_objects
         status: 200
 
       - operation: object.delete

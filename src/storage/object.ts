@@ -62,9 +62,7 @@ export class ObjectStorage {
       .asSuperUser()
       .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
 
-    const uploader = new Uploader(this.backend, this.db)
-
-    const { metadata, obj } = await uploader.upload(request, {
+    const { metadata, obj } = await this.uploader.upload(request, {
       ...options,
       bucketId: this.bucketId,
       fileSizeLimit: bucket.file_size_limit,
@@ -91,9 +89,7 @@ export class ObjectStorage {
       })
     })
 
-    const uploader = new Uploader(this.backend, this.db)
-
-    const { metadata, obj } = await uploader.upload(request, {
+    const { metadata, obj } = await this.uploader.upload(request, {
       ...options,
       bucketId: this.bucketId,
       fileSizeLimit: bucket.file_size_limit,
@@ -262,37 +258,18 @@ export class ObjectStorage {
     const s3SourceKey = `${this.db.tenantId}/${bucketId}/${sourceKey}`
     const s3DestinationKey = `${this.db.tenantId}/${bucketId}/${destinationKey}`
 
-    // Test if the source object exists and if the destination object can be created
-    await this.db.testPermission(async (db) => {
-      await Promise.all([
-        db.findObject(bucketId, sourceKey, 'id'),
-        db.updateObject(bucketId, sourceKey, {
-          name: sourceKey,
-          version: newVersion,
-          owner: owner,
-        }),
-      ])
-    })
-
     try {
       // We check if the user has permission to copy the object to the destination key
-      const { originObject } = await this.db.withTransaction(async (db) => {
-        const originObject = await db.findObject(
-          this.bucketId,
-          sourceKey,
-          'bucket_id,metadata,version',
-          {
-            forShare: true,
-          }
-        )
+      const originObject = await this.db.findObject(
+        this.bucketId,
+        sourceKey,
+        'bucket_id,metadata,version'
+      )
 
-        await new Uploader(this.backend, db).canUpload({
-          bucketId: this.bucketId,
-          objectName: destinationKey,
-          isUpsert: false,
-        })
-
-        return { originObject }
+      await this.uploader.canUpload({
+        bucketId: this.bucketId,
+        objectName: destinationKey,
+        isUpsert: false,
       })
 
       const copyResult = await this.backend.copyObject(
@@ -305,7 +282,7 @@ export class ObjectStorage {
 
       const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, newVersion)
 
-      const destObject = this.db.createObject({
+      const destObject = await this.db.createObject({
         ...originObject,
         name: destinationKey,
         owner,
@@ -354,10 +331,17 @@ export class ObjectStorage {
     await this.db.testPermission((db) => {
       return Promise.all([
         db.findObject(this.bucketId, sourceObjectName, 'id'),
-        db.createObject({
-          name: destinationObjectName,
-          bucket_id: this.bucketId,
+        db.updateObject(this.bucketId, sourceObjectName, {
+          name: sourceObjectName,
           version: '1',
+          owner,
+        }),
+        // We also check if we can create the destination object
+        // before starting the move
+        db.asSuperUser().createObject({
+          name: destinationObjectName,
+          version: newVersion,
+          bucket_id: this.bucketId,
           owner,
         }),
       ])
@@ -378,7 +362,7 @@ export class ObjectStorage {
 
       const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, newVersion)
 
-      await this.db.withTransaction(async (db) => {
+      await this.db.asSuperUser().withTransaction(async (db) => {
         await db.createObject({
           name: destinationObjectName,
           version: newVersion,

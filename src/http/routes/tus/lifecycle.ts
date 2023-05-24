@@ -121,6 +121,7 @@ export async function onUploadFinish(
       objectMetadata: metadata,
       isUpsert: isUpsert,
       isMultipart: true,
+      owner: req.upload.owner,
     })
 
     return res

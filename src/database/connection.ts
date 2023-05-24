@@ -69,6 +69,8 @@ export class TenantConnection {
         max: isExternalPool ? 1 : options.maxConnections || databaseMaxConnections,
         propagateCreateError: false,
         acquireTimeoutMillis: databaseConnectionTimeout,
+        idleTimeoutMillis: isExternalPool ? 100 : undefined,
+        reapIntervalMillis: isExternalPool ? 110 : undefined,
       },
       connection: connectionString,
       acquireConnectionTimeout: databaseConnectionTimeout,

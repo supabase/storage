@@ -27,7 +27,7 @@ policies:
     tables: ['storage.objects']
     roles: ['authenticated']
     permissions: ['update']
-    content: "USING(auth.uid() = '{{uid}}')"
+    content: "USING(owner = '{{uid}}')"
 
   - name: update_only_all_buckets
     tables: ['storage.buckets']
@@ -89,6 +89,23 @@ tests:
         role: authenticated
         status: 400
         message: 'Object not found'
+
+      - operation: upload
+        bucketName: 'bucket_{{runId}}'
+        objectName: 'object_{{runId}}.txt'
+        policies:
+          - insert_only_all_objects
+        status: 200
+
+      - operation: object.copy
+        useExistingBucketName: 'bucket_{{runId}}'
+        objectName: 'object_{{runId}}.txt'
+        status: 400
+
+      - operation: object.move
+        useExistingBucketName: 'bucket_{{runId}}'
+        objectName: 'object_{{runId}}.txt'
+        status: 400
 
   - description: 'Will only able to read buckets'
     policies:
@@ -199,6 +216,23 @@ tests:
       - operation: object.delete
         status: 400
 
+      - operation: upload
+        bucketName: 'bucket_{{runId}}'
+        objectName: 'object_{{runId}}.txt'
+        policies:
+          - insert_only_all_objects
+        status: 200
+
+      - operation: object.copy
+        useExistingBucketName: 'bucket_{{runId}}'
+        objectName: 'object_{{runId}}.txt'
+        status: 400
+
+      - operation: object.move
+        useExistingBucketName: 'bucket_{{runId}}'
+        objectName: 'object_{{runId}}.txt'
+        status: 400
+
   - description: 'Will only able to update buckets when authenticated'
     policies:
       - update_only_all_buckets
@@ -254,9 +288,13 @@ tests:
         error: 'Bucket Not Found'
 
       - operation: upload
+        bucketName: 'bucket_{{runId}}'
+        objectName: 'to_upsert.txt'
         status: 200
 
       - operation: upload.upsert
+        existingBucketName: 'bucket_{{runId}}'
+        objectName: 'to_upsert.txt'
         status: 200
 
       - operation: object.get
@@ -313,7 +351,7 @@ tests:
 
       - operation: bucket.delete
         status: 200
-
+  #
   - description: 'Will only able to delete objects when authenticated'
     policies:
       - delete_only_all_objects
@@ -336,12 +374,103 @@ tests:
         message: 'new row violates row-level security policy'
 
       - operation: upload
+        bucketName: 'bucket_delete_test_{{runId}}'
+        objectName: 'object_{{runId}}'
         policies:
           - insert_only_all_objects
         status: 200
 
       - operation: object.delete
+        useExistingBucketName: 'bucket_delete_test_{{runId}}'
+        objectName: 'object_{{runId}}'
         status: 200
+
+      - operation: object.get
+        useExistingBucketName: 'bucket_delete_test_{{runId}}'
+        objectName: 'object_{{runId}}'
+        status: 400
+        error: 'Object not found'
+
+      - operation: bucket.delete
+        status: 400
+        error: 'Bucket Not Found'
+
+  - description: 'Will only able to move objects when authenticated'
+    policies:
+      - read_only_all_objects
+      - update_only_all_objects
+    asserts:
+      - operation: bucket.get
+        status: 400
+        error: 'Bucket not found'
+
+      - operation: bucket.create
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: upload
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: upload.upsert
+        status: 400
+        message: 'new row violates row-level security policy'
+
+      - operation: upload
+        bucketName: 'bucket_to_move_{{runId}}'
+        objectName: 'object_to_move_{{runId}}.txt'
+        policies:
+          - insert_only_all_objects
+        status: 200
+
+      - operation: object.move
+        useExistingBucketName: 'bucket_to_move_{{runId}}'
+        objectName: 'object_to_move_{{runId}}.txt'
+        status: 200
+
+      - operation: object.delete
+        status: 400
+
+      - operation: bucket.delete
+        status: 400
+        error: 'Bucket Not Found'
+
+  - description: 'Will only able to copy owned objects when authenticated'
+    policies:
+      - read_only_all_objects
+      - insert_only_all_objects
+    asserts:
+      - operation: bucket.get
+        status: 400
+        error: 'Bucket not found'
+
+      - operation: bucket.create
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: upload
+        bucketName: 'bucket_{{runId}}'
+        objectName: 'object_{{runId}}.txt'
+        status: 200
+
+      - operation: upload.upsert
+        useExistingBucketName: 'bucket_{{runId}}'
+        objectName: 'object_{{runId}}.txt'
+        status: 400
+        message: 'new row violates row-level security policy'
+
+      - operation: upload
+        bucketName: 'bucket_to_copy_{{runId}}'
+        objectName: 'object_to_copy_{{runId}}.txt'
+        status: 200
+
+      - operation: object.copy
+        useExistingBucketName: 'bucket_to_copy_{{runId}}'
+        objectName: 'object_to_copy_{{runId}}.txt'
+        status: 200
+
+      - operation: object.delete
+        status: 400
 
       - operation: bucket.delete
         status: 400

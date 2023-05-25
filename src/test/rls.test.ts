@@ -45,8 +45,14 @@ interface TestCaseAssert {
     | 'object.delete'
     | 'object.get'
     | 'object.list'
+    | 'object.move'
+    | 'object.copy'
 
+  objectName?: string
+  bucketName?: string
+  useExistingBucketName?: string
   role?: string
+  policies?: string[]
   status: number
   error?: string
 }
@@ -67,6 +73,8 @@ const client = backend.client
 jest.setTimeout(10000)
 
 describe('RLS policies', () => {
+  let db: Knex
+
   beforeAll(async () => {
     // parse yaml file
     if (client instanceof S3Client) {
@@ -79,18 +87,17 @@ describe('RLS policies', () => {
         await client.send(createBucketCommand)
       }
     }
+
+    db = knex({
+      connection: databaseURL,
+      client: 'pg',
+    })
   })
 
   let userId: string
   let jwt: string
   let storage: Storage
-  let db: Knex
   beforeEach(async () => {
-    db = knex({
-      connection: databaseURL,
-      client: 'pg',
-    })
-
     userId = randomUUID()
     jwt = (await signJWT({ sub: userId, role: 'authenticated' }, jwtSecret, '1h')) as string
 
@@ -132,14 +139,17 @@ describe('RLS policies', () => {
     it(_test.description, async () => {
       const content = fs.readFileSync(path.resolve(__dirname, 'rls_tests.yaml'), 'utf8')
 
-      const bucketName = randomUUID()
-      const objectName = randomUUID()
+      const runId = randomUUID()
+      let bucketName = randomUUID()
+      let objectName = randomUUID()
+      const originalBucketName = bucketName
 
       const testScopedSpec = yaml.load(
         Mustache.render(content, {
           uid: userId,
           bucketName,
           objectName,
+          runId,
         })
       ) as RlsTestSpec
 
@@ -160,11 +170,12 @@ describe('RLS policies', () => {
       )
 
       // Prepare
-      console.log(test.setup)
       if (test.setup?.create_bucket !== false) {
         await storage.createBucket({
           name: bucketName,
           id: bucketName,
+          public: false,
+          owner: userId,
         })
         console.log(`Created bucket ${bucketName}`)
       }
@@ -172,6 +183,41 @@ describe('RLS policies', () => {
       try {
         // Run Operations
         for (const assert of test.asserts) {
+          if (assert.bucketName) {
+            bucketName = assert.bucketName
+            await storage.createBucket({
+              name: bucketName,
+              id: bucketName,
+              public: false,
+              owner: userId,
+            })
+            console.log(`Created bucket ${bucketName}`)
+          }
+
+          if (assert.useExistingBucketName) {
+            bucketName = assert.useExistingBucketName
+          }
+
+          if (assert.objectName) {
+            objectName = assert.objectName
+          }
+
+          let localPolicies: { name: string; table: string }[][] = []
+          if (assert.policies && assert.policies.length > 0) {
+            localPolicies = await Promise.all(
+              assert.policies.map(async (policyName) => {
+                const policy = testScopedSpec.policies.find((policy) => policy.name === policyName)
+
+                if (!policy) {
+                  throw new Error(`Policy ${policyName} not found`)
+                }
+
+                console.log(`Creating inline policy ${policyName}`)
+                return await createPolicy(db, policy)
+              })
+            )
+          }
+
           console.log(
             `Running operation ${assert.operation} with role ${assert.role || 'authenticated'}`
           )
@@ -181,11 +227,31 @@ describe('RLS policies', () => {
             objectName: objectName,
             jwt: assert.role === 'service' ? serviceKey : jwt,
           })
+
           console.log(
-            `Operation ${assert.operation} with role ${assert.role} returned ${response.statusCode}`
+            `Operation ${assert.operation} with role ${assert.role || 'authenticated'} returned ${
+              response.statusCode
+            }`
           )
 
-          expect(response.statusCode).toBe(assert.status)
+          await Promise.all([
+            ...localPolicies.map((policies) => {
+              return Promise.all(
+                policies.map(async (policy) => {
+                  await db.raw(`DROP POLICY IF EXISTS "${policy.name}" ON ${policy.table};`)
+                })
+              )
+            }),
+          ])
+
+          bucketName = originalBucketName
+
+          try {
+            expect(response.statusCode).toBe(assert.status)
+          } catch (e) {
+            console.log(`Operation ${assert.operation} failed`)
+            throw e
+          }
 
           if (assert.error) {
             const body = await response.json()
@@ -297,6 +363,32 @@ async function runOperation(
             column: 'name',
             order: 'asc',
           },
+        },
+      })
+    case 'object.move':
+      return app().inject({
+        method: 'POST',
+        url: `/object/move`,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+        payload: {
+          bucketId: bucket,
+          sourceKey: objectName,
+          destinationKey: 'moved_' + objectName,
+        },
+      })
+    case 'object.copy':
+      return app().inject({
+        method: 'POST',
+        url: `/object/copy`,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+        payload: {
+          bucketId: bucket,
+          sourceKey: objectName,
+          destinationKey: 'copied_' + objectName,
         },
       })
     default:

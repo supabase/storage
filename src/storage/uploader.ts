@@ -36,7 +36,9 @@ export interface UploadObjectOptions {
 export class Uploader {
   constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
 
-  async canUpload(options: Pick<UploadObjectOptions, 'bucketId' | 'objectName' | 'isUpsert'>) {
+  async canUpload(
+    options: Pick<UploadObjectOptions, 'bucketId' | 'objectName' | 'isUpsert' | 'owner'>
+  ) {
     const shouldCreateObject = !options.isUpsert
 
     if (shouldCreateObject) {
@@ -45,6 +47,7 @@ export class Uploader {
           bucket_id: options.bucketId,
           name: options.objectName,
           version: '1',
+          owner: options.owner,
         })
       })
     } else {
@@ -53,6 +56,7 @@ export class Uploader {
           bucket_id: options.bucketId,
           name: options.objectName,
           version: '1',
+          owner: options.owner,
         })
       })
     }

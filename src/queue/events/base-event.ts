@@ -7,6 +7,7 @@ import { StorageKnexDB } from '../../storage/database'
 import { createStorageBackend } from '../../storage/backend'
 import { getConfig } from '../../config'
 import { QueueJobScheduled, QueueJobSchedulingTime } from '../../monitoring/metrics'
+import { logger } from '../../monitoring'
 
 export interface BasePayload {
   $version: string
@@ -63,16 +64,32 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   ) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { Webhook } = require('./webhook')
+    const eventType = (this as any).eventName()
 
-    await Webhook.send({
-      event: {
-        type: (this as any).eventName(),
-        $version: (this as any).version,
-        applyTime: Date.now(),
-        payload,
-      },
-      tenant: payload.tenant,
-    })
+    try {
+      await Webhook.send({
+        event: {
+          type: eventType,
+          $version: (this as any).version,
+          applyTime: Date.now(),
+          payload,
+        },
+        tenant: payload.tenant,
+      })
+    } catch (e) {
+      logger.error(
+        {
+          event: {
+            type: eventType,
+            $version: (this as any).version,
+            applyTime: Date.now(),
+            payload,
+          },
+          tenant: payload.tenant,
+        },
+        `error sending webhook: ${eventType}`
+      )
+    }
   }
 
   static handle(job: Job<BaseEvent<any>['payload']>) {

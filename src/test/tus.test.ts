@@ -129,6 +129,7 @@ describe('Tus multipart', () => {
       },
       name: objectName,
       owner: null,
+      owner_id: null,
       path_tokens: [objectName],
       updated_at: expect.any(Date),
       version: expect.any(String),

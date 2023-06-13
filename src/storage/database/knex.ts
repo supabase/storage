@@ -13,6 +13,7 @@ import {
 import { DatabaseError } from 'pg'
 import { TenantConnection } from '../../database/connection'
 import { DbQueryPerformance } from '../../monitoring/metrics'
+import { isUuid } from '../limits'
 
 /**
  * Database
@@ -114,7 +115,8 @@ export class StorageKnexDB implements Database {
     const bucketData = {
       id: data.id,
       name: data.name,
-      owner: data.owner,
+      owner: isUuid(data.owner || '') ? data.owner : undefined,
+      owner_id: data.owner,
       public: data.public,
       allowed_mime_types: data.allowed_mime_types,
       file_size_limit: data.file_size_limit,
@@ -226,7 +228,8 @@ export class StorageKnexDB implements Database {
   async upsertObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>) {
     const objectData = {
       name: data.name,
-      owner: data.owner,
+      owner: isUuid(data.owner || '') ? data.owner : undefined,
+      owner_id: data.owner,
       bucket_id: data.bucket_id,
       metadata: data.metadata,
       version: data.version,
@@ -239,7 +242,8 @@ export class StorageKnexDB implements Database {
         .merge({
           metadata: data.metadata,
           version: data.version,
-          owner: data.owner,
+          owner: isUuid(data.owner || '') ? data.owner : undefined,
+          owner_id: data.owner,
         })
         .returning('*')
     })
@@ -253,15 +257,20 @@ export class StorageKnexDB implements Database {
     data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name'>
   ) {
     const [object] = await this.runQuery('UpdateObject', (knex) => {
-      return knex.from<Obj>('objects').where('bucket_id', bucketId).where('name', name).update(
-        {
-          name: data.name,
-          owner: data.owner,
-          metadata: data.metadata,
-          version: data.version,
-        },
-        '*'
-      )
+      return knex
+        .from<Obj>('objects')
+        .where('bucket_id', bucketId)
+        .where('name', name)
+        .update(
+          {
+            name: data.name,
+            owner: isUuid(data.owner || '') ? data.owner : undefined,
+            owner_id: data.owner,
+            metadata: data.metadata,
+            version: data.version,
+          },
+          '*'
+        )
     })
 
     if (!object) {
@@ -274,7 +283,8 @@ export class StorageKnexDB implements Database {
   async createObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>) {
     const object = {
       name: data.name,
-      owner: data.owner,
+      owner: isUuid(data.owner || '') ? data.owner : undefined,
+      owner_id: data.owner,
       bucket_id: data.bucket_id,
       metadata: data.metadata,
       version: data.version,
@@ -335,7 +345,8 @@ export class StorageKnexDB implements Database {
         .from<Obj>('objects')
         .update({
           last_accessed_at: new Date().toISOString(),
-          owner,
+          owner: isUuid(owner || '') ? owner : undefined,
+          owner_id: owner,
         })
         .returning('*')
         .where({ bucket_id: bucketId, name: objectName })

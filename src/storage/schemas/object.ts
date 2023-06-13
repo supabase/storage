@@ -8,6 +8,7 @@ export const objectSchema = {
     name: { type: 'string' },
     bucket_id: { type: 'string' },
     owner: { type: 'string' },
+    owner_id: { type: 'string' },
     version: { type: 'string' },
     id: { anyOf: [{ type: 'string' }, { type: 'null' }] },
     updated_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },

@@ -30,13 +30,14 @@ export class Patch extends PatchHandler {
     const uploadID = UploadId.fromString(id)
 
     const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
-    await uploader.canUpload({
-      bucketId: uploadID.bucket,
-      objectName: uploadID.objectName,
-      isUpsert: req.headers['x-upsert'] === 'true',
-    })
 
     try {
+      await uploader.canUpload({
+        bucketId: uploadID.bucket,
+        objectName: uploadID.objectName,
+        isUpsert: req.headers['x-upsert'] === 'true',
+      })
+
       return await lock(uploadID, req.upload.storage, (db) => {
         req.upload.storage = new Storage(req.upload.storage.backend, db)
         return super.send(req, res)
@@ -76,13 +77,14 @@ export class Head extends HeadHandler {
     const uploadID = UploadId.fromString(id)
 
     const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
-    await uploader.canUpload({
-      bucketId: uploadID.bucket,
-      objectName: uploadID.objectName,
-      isUpsert: req.headers['x-upsert'] === 'true',
-    })
 
     try {
+      await uploader.canUpload({
+        bucketId: uploadID.bucket,
+        objectName: uploadID.objectName,
+        isUpsert: req.headers['x-upsert'] === 'true',
+      })
+
       return await lock(
         uploadID,
         req.upload.storage,

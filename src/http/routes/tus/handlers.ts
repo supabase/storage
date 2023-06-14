@@ -35,6 +35,7 @@ export class Patch extends PatchHandler {
       await uploader.canUpload({
         bucketId: uploadID.bucket,
         objectName: uploadID.objectName,
+        owner: req.upload.owner,
         isUpsert: req.headers['x-upsert'] === 'true',
       })
 
@@ -82,6 +83,7 @@ export class Head extends HeadHandler {
       await uploader.canUpload({
         bucketId: uploadID.bucket,
         objectName: uploadID.objectName,
+        owner: req.upload.owner,
         isUpsert: req.headers['x-upsert'] === 'true',
       })
 

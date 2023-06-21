@@ -23,7 +23,7 @@ export interface UploadObjectOptions {
   version?: string
 }
 
-const { urlLengthLimit, globalS3Bucket } = getConfig()
+const { urlLengthLimit } = getConfig()
 
 /**
  * ObjectStorage
@@ -159,17 +159,15 @@ export class ObjectStorage {
           // if successfully deleted, delete from s3 too
           // todo: consider moving this to a queue
           const prefixesToDelete = data.reduce((all, { name, version }) => {
-            all.push(withOptionalVersion(`${db.tenantId}/${this.bucketId}/${name}`, version))
+            all.push(withOptionalVersion(`${this.bucketId}/${name}`, version))
 
             if (version) {
-              all.push(
-                withOptionalVersion(`${db.tenantId}/${this.bucketId}/${name}`, version) + '.info'
-              )
+              all.push(withOptionalVersion(`${this.bucketId}/${name}`, version) + '.info')
             }
             return all
           }, [] as string[])
 
-          await this.backend.deleteObjects(globalS3Bucket, prefixesToDelete)
+          await this.backend.deleteObjects(prefixesToDelete)
 
           await Promise.allSettled(
             data.map((object) =>
@@ -255,38 +253,38 @@ export class ObjectStorage {
 
     const newVersion = randomUUID()
     const bucketId = this.bucketId
-    const s3SourceKey = `${this.db.tenantId}/${bucketId}/${sourceKey}`
-    const s3DestinationKey = `${this.db.tenantId}/${bucketId}/${destinationKey}`
+    const s3SourceKey = `${bucketId}/${sourceKey}`
+    const s3DestinationKey = `${bucketId}/${destinationKey}`
+
+    // We check if the user has permission to copy the object to the destination key
+    const originObject = await this.db.findObject(
+      this.bucketId,
+      sourceKey,
+      'bucket_id,metadata,version'
+    )
+
+    await this.uploader.canUpload({
+      bucketId: this.bucketId,
+      objectName: destinationKey,
+      isUpsert: false,
+    })
 
     try {
-      // We check if the user has permission to copy the object to the destination key
-      const originObject = await this.db.findObject(
-        this.bucketId,
-        sourceKey,
-        'bucket_id,metadata,version'
-      )
-
-      await this.uploader.canUpload({
-        bucketId: this.bucketId,
-        objectName: destinationKey,
-        isUpsert: false,
-      })
-
       const copyResult = await this.backend.copyObject(
-        globalS3Bucket,
         s3SourceKey,
         originObject.version,
         s3DestinationKey,
         newVersion
       )
 
-      const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, newVersion)
+      const metadata = await this.backend.headObject(s3DestinationKey, newVersion)
 
       const destObject = await this.db.createObject({
         ...originObject,
         name: destinationKey,
         owner,
         metadata,
+        version: newVersion,
       })
 
       await ObjectCreatedCopyEvent.sendWebhook({
@@ -325,8 +323,8 @@ export class ObjectStorage {
     }
 
     const newVersion = randomUUID()
-    const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
-    const s3DestinationKey = `${this.db.tenantId}/${this.bucketId}/${destinationObjectName}`
+    const s3SourceKey = `${this.bucketId}/${sourceObjectName}`
+    const s3DestinationKey = `${this.bucketId}/${destinationObjectName}`
 
     await this.db.testPermission((db) => {
       return Promise.all([
@@ -352,15 +350,9 @@ export class ObjectStorage {
       .findObject(this.bucketId, sourceObjectName, 'id, version')
 
     try {
-      await this.backend.copyObject(
-        globalS3Bucket,
-        s3SourceKey,
-        sourceObj.version,
-        s3DestinationKey,
-        newVersion
-      )
+      await this.backend.copyObject(s3SourceKey, sourceObj.version, s3DestinationKey, newVersion)
 
-      const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, newVersion)
+      const metadata = await this.backend.headObject(s3DestinationKey, newVersion)
 
       await this.db.asSuperUser().withTransaction(async (db) => {
         await db.createObject({
@@ -372,14 +364,14 @@ export class ObjectStorage {
         })
 
         await db.deleteObject(this.bucketId, sourceObjectName, sourceObj.version)
+        await ObjectAdminDelete.send({
+          name: sourceObjectName,
+          bucketId: this.bucketId,
+          tenant: this.db.tenant(),
+          version: sourceObj.version,
+        })
 
-        await Promise.all([
-          ObjectAdminDelete.send({
-            name: sourceObjectName,
-            bucketId: this.bucketId,
-            tenant: this.db.tenant(),
-            version: sourceObj.version,
-          }),
+        await Promise.allSettled([
           ObjectRemovedMove.sendWebhook({
             tenant: this.db.tenant(),
             name: sourceObjectName,

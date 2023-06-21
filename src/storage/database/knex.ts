@@ -108,7 +108,13 @@ export class StorageKnexDB implements Database {
   async createBucket(
     data: Pick<
       Bucket,
-      'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types'
+      | 'id'
+      | 'name'
+      | 'public'
+      | 'owner'
+      | 'file_size_limit'
+      | 'allowed_mime_types'
+      | 'external_credential_id'
     >
   ) {
     const bucketData = {
@@ -118,6 +124,7 @@ export class StorageKnexDB implements Database {
       public: data.public,
       allowed_mime_types: data.allowed_mime_types,
       file_size_limit: data.file_size_limit,
+      external_credential_id: data.external_credential_id,
     }
 
     const bucket = await this.runQuery('CreateBucket', async (knex) => {
@@ -204,13 +211,17 @@ export class StorageKnexDB implements Database {
 
   async updateBucket(
     bucketId: string,
-    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
+    fields: Pick<
+      Bucket,
+      'public' | 'file_size_limit' | 'allowed_mime_types' | 'external_credential_id'
+    >
   ) {
     const bucket = await this.runQuery('UpdateBucket', (knex) => {
       return knex.from('buckets').where('id', bucketId).update({
         public: fields.public,
         file_size_limit: fields.file_size_limit,
         allowed_mime_types: fields.allowed_mime_types,
+        external_credential_id: fields.external_credential_id,
       })
     })
 

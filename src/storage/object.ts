@@ -287,6 +287,7 @@ export class ObjectStorage {
         name: destinationKey,
         owner,
         metadata,
+        version: newVersion,
       })
 
       await ObjectCreatedCopyEvent.sendWebhook({

@@ -269,6 +269,7 @@ export class ObjectStorage {
       await this.uploader.canUpload({
         bucketId: this.bucketId,
         objectName: destinationKey,
+        owner,
         isUpsert: false,
       })
 

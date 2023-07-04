@@ -5,6 +5,7 @@ import { runMigrationsOnTenant } from './migrate'
 import { knex } from './multitenant-db'
 import { StorageBackendError } from '../storage'
 import { JwtPayload } from 'jsonwebtoken'
+import { logger } from '../monitoring'
 
 interface TenantConfig {
   anonKey: string
@@ -217,6 +218,11 @@ async function cacheTenantConfigAndRunMigrations(
   config: TenantConfig,
   logOnError = false
 ): Promise<void> {
-  await runMigrations(tenantId, config.databaseUrl, logOnError)
-  tenantConfigCache.set(tenantId, config)
+  try {
+    await runMigrations(tenantId, config.databaseUrl, logOnError)
+    tenantConfigCache.set(tenantId, config)
+  } catch (e) {
+    logger.error(`Error running migrations for tenant ${tenantId}`, { error: e })
+    throw e
+  }
 }

@@ -2,7 +2,6 @@ import pg from 'pg'
 import { Knex, knex } from 'knex'
 import { JwtPayload } from 'jsonwebtoken'
 import { getConfig } from '../config'
-import { logger } from '../monitoring'
 import { DbActiveConnection, DbActivePool } from '../monitoring/metrics'
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
@@ -30,6 +29,7 @@ export interface User {
 }
 
 export const connections = new Map<string, Knex>()
+const searchPath = ['storage', 'public', 'extensions']
 
 export class TenantConnection {
   public readonly role: string
@@ -63,13 +63,13 @@ export class TenantConnection {
 
     knexPool = knex({
       client: 'pg',
-      searchPath: ['public', 'storage', 'extensions'],
+      searchPath: isExternalPool ? undefined : searchPath,
       pool: {
         min: 0,
         max: isExternalPool ? 1 : options.maxConnections || databaseMaxConnections,
         propagateCreateError: false,
         acquireTimeoutMillis: databaseConnectionTimeout,
-        idleTimeoutMillis: isExternalPool ? 100 : undefined,
+        idleTimeoutMillis: isExternalPool ? 100 : databaseFreePoolAfterInactivity,
         reapIntervalMillis: isExternalPool ? 110 : undefined,
       },
       connection: connectionString,
@@ -97,38 +97,12 @@ export class TenantConnection {
     })
 
     if (!isExternalPool) {
-      let freePoolIntervalFn: NodeJS.Timeout | undefined
-
       knexPool.client.pool.on('poolDestroySuccess', () => {
-        if (freePoolIntervalFn) {
-          clearTimeout(freePoolIntervalFn)
-        }
-
         if (connections.get(connectionString) === knexPool) {
           connections.delete(connectionString)
         }
       })
 
-      knexPool.client.pool.on('stopReaping', () => {
-        if (freePoolIntervalFn) {
-          clearTimeout(freePoolIntervalFn)
-        }
-
-        freePoolIntervalFn = setTimeout(async () => {
-          connections.delete(connectionString)
-          knexPool?.destroy().catch((e) => {
-            logger.error(e, 'Error destroying pool')
-          })
-          clearTimeout(freePoolIntervalFn)
-        }, databaseFreePoolAfterInactivity)
-      })
-
-      knexPool.client.pool.on('startReaping', () => {
-        if (freePoolIntervalFn) {
-          clearTimeout(freePoolIntervalFn)
-          freePoolIntervalFn = undefined
-        }
-      })
       connections.set(connectionString, knexPool)
     }
 
@@ -141,10 +115,16 @@ export class TenantConnection {
     }
   }
 
-  transaction(isolation?: Knex.IsolationLevels, instance?: Knex) {
-    return (instance || this.pool).transactionProvider({
-      isolationLevel: isolation,
-    })
+  transaction(instance?: Knex): Knex.TransactionProvider {
+    return async () => {
+      const pool = instance || this.pool
+      const tnx = await pool.transaction()
+
+      if (!instance) {
+        await tnx.raw(`set search_path to ${searchPath.join(', ')}`)
+      }
+      return tnx
+    }
   }
 
   asSuperUser() {

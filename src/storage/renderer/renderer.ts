@@ -3,7 +3,6 @@ import { ObjectMetadata } from '../backend'
 import { Readable } from 'stream'
 
 export interface RenderOptions {
-  bucket: string
   key: string
   version: string | undefined
   download?: string

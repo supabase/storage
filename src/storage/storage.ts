@@ -1,12 +1,14 @@
-import { StorageBackendAdapter, withOptionalVersion } from './backend'
+import { S3Backend, StorageBackendAdapter, withOptionalVersion } from './backend'
 import { Database, FindBucketFilters } from './database'
 import { StorageBackendError } from './errors'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from './limits'
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
+import { Bucket } from './schemas'
+import { logger } from '../monitoring'
 
-const { urlLengthLimit, globalS3Bucket } = getConfig()
+const { urlLengthLimit } = getConfig()
 
 /**
  * Storage
@@ -18,12 +20,16 @@ export class Storage {
 
   /**
    * Access object related functionality on a specific bucket
-   * @param bucketId
+   * @param bucket
    */
-  from(bucketId: string) {
-    mustBeValidBucketName(bucketId, 'The bucketId name contains invalid characters')
+  from(bucket: Bucket) {
+    return new ObjectStorage(this.backend, this.db, bucket)
+  }
 
-    return new ObjectStorage(this.backend, this.db, bucketId)
+  async fromBucketId(bucketId: string) {
+    mustBeValidBucketName(bucketId, 'The bucketId name contains invalid characters')
+    const bucket = await this.db.asSuperUser().findBucketById(bucketId, '*')
+    return this.from(bucket)
   }
 
   /**
@@ -80,6 +86,7 @@ export class Storage {
     > & {
       fileSizeLimit?: number | string | null
       allowedMimeTypes?: null | string[]
+      credentialId?: string
     }
   ) {
     mustBeValidBucketName(data.name, 'Bucket name invalid')
@@ -97,7 +104,18 @@ export class Storage {
     if (data.allowedMimeTypes) {
       this.validateMimeType(data.allowedMimeTypes)
     }
+
     bucketData.allowed_mime_types = data.allowedMimeTypes
+
+    if (this.backend instanceof S3Backend && data.credentialId) {
+      const backend = this.backend as S3Backend
+      bucketData.credential_id = data.credentialId
+
+      return this.db.withTransaction(async (db) => {
+        await backend.createBucketIfDoesntExists(data.name)
+        return db.createBucket(bucketData)
+      })
+    }
 
     return this.db.createBucket(bucketData)
   }
@@ -115,6 +133,7 @@ export class Storage {
     > & {
       fileSizeLimit?: number | string | null
       allowedMimeTypes?: null | string[]
+      credentialId?: string
     }
   ) {
     mustBeValidBucketName(id, 'Bucket name invalid')
@@ -133,6 +152,28 @@ export class Storage {
       this.validateMimeType(data.allowedMimeTypes)
     }
     bucketData.allowed_mime_types = data.allowedMimeTypes
+
+    if (this.backend instanceof S3Backend && data.credentialId) {
+      const backend = this.backend as S3Backend
+      bucketData.credential_id = data.credentialId
+
+      return this.db.withTransaction(async (db) => {
+        const bucket = await db.findBucketById(id, 'id,name,credential_id', {
+          forUpdate: true,
+        })
+
+        if (!bucket.credential_id) {
+          throw new StorageBackendError(
+            'update_credential_error',
+            400,
+            'cannot add credentials to an existing bucket'
+          )
+        }
+
+        await backend.createBucketIfDoesntExists(bucket.name)
+        return db.updateBucket(id, bucketData)
+      })
+    }
 
     return this.db.updateBucket(id, bucketData)
   }
@@ -180,7 +221,8 @@ export class Storage {
    * @param bucketId
    */
   async emptyBucket(bucketId: string) {
-    await this.findBucket(bucketId, 'name')
+    const bucket = await this.findBucket(bucketId, '*')
+    const objectStore = this.from(bucket)
 
     while (true) {
       const objects = await this.db.listObjects(
@@ -201,13 +243,17 @@ export class Storage {
 
       if (deleted && deleted.length > 0) {
         const params = deleted.reduce((all, { name, version }) => {
-          const fileName = withOptionalVersion(`${this.db.tenantId}/${bucketId}/${name}`, version)
+          // TODO: fix this
+          const path = objectStore.computeObjectPath(name)
+          const fileName = withOptionalVersion(path, version)
           all.push(fileName)
           all.push(fileName + '.info')
           return all
         }, [] as string[])
         // delete files from s3 asynchronously
-        this.backend.deleteObjects(globalS3Bucket, params)
+        this.backend.deleteObjects(params).catch((err) => {
+          logger.error(err, 'Error deleting objects from s3')
+        })
       }
 
       if (deleted?.length !== objects.length) {
@@ -225,6 +271,29 @@ export class Storage {
         )
       }
     }
+  }
+
+  /**
+   * List credentials
+   */
+  listCredentials() {
+    return this.db.listCredentials()
+  }
+
+  /**
+   * Create credential for external access
+   * @param credential
+   */
+  createCredential(credential: Parameters<Database['createCredential']>[0]) {
+    return this.db.createCredential(credential)
+  }
+
+  /**
+   * Delete credential
+   * @param credentialId
+   */
+  deleteCredential(credentialId: string) {
+    return this.db.deleteCredential(credentialId)
   }
 
   validateMimeType(mimeType: string[]) {

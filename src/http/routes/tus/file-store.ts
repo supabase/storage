@@ -3,6 +3,7 @@ import { Upload } from '@tus/server'
 import fsExtra from 'fs-extra'
 import path from 'path'
 import { FileBackend } from '../../../storage/backend'
+import { getConfig } from '../../../config'
 
 type Store = {
   get(key: string): Upload | undefined
@@ -17,12 +18,16 @@ type FileStoreOptions = {
   expirationPeriodInMilliseconds?: number
 }
 
+const { globalS3Bucket } = getConfig()
+
 export class FileStore extends TusFileStore {
   protected fileAdapter: FileBackend
 
   constructor(protected readonly options: FileStoreOptions) {
     super(options)
-    this.fileAdapter = new FileBackend()
+    this.fileAdapter = new FileBackend({
+      bucket: globalS3Bucket,
+    })
   }
 
   async create(file: Upload): Promise<Upload> {

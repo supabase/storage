@@ -4,10 +4,11 @@ import { getServiceKeyUser } from '../../database/tenant'
 import { getPostgresConnection } from '../../database'
 import { Storage } from '../../storage'
 import { StorageKnexDB } from '../../storage/database'
-import { createStorageBackend } from '../../storage/backend'
+import { createStorageBackend, S3Backend, StorageBackendAdapter } from '../../storage/backend'
 import { getConfig } from '../../config'
 import { QueueJobScheduled, QueueJobSchedulingTime } from '../../monitoring/metrics'
 import { logger } from '../../monitoring'
+import { decrypt } from '../../auth'
 
 export interface BasePayload {
   $version: string
@@ -19,7 +20,7 @@ export interface BasePayload {
 
 export type StaticThis<T> = { new (...args: any): T }
 
-const { enableQueueEvents } = getConfig()
+const { enableQueueEvents, globalS3Bucket } = getConfig()
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   public static readonly version: string = 'v1'
@@ -96,22 +97,54 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     throw new Error('not implemented')
   }
 
+  static getBucketId(payload: any): string | undefined {
+    return
+  }
+
   protected static async createStorage(payload: BasePayload) {
     const adminUser = await getServiceKeyUser(payload.tenant.ref)
 
-    const client = await getPostgresConnection({
+    const connection = await getPostgresConnection({
       user: adminUser,
       superUser: adminUser,
       host: payload.tenant.host,
       tenantId: payload.tenant.ref,
     })
 
-    const db = new StorageKnexDB(client, {
+    const db = new StorageKnexDB(connection, {
       tenantId: payload.tenant.ref,
       host: payload.tenant.host,
     })
 
-    const storageBackend = createStorageBackend()
+    let storageBackend: StorageBackendAdapter | undefined
+    const bucketId = this.getBucketId(payload)
+
+    if (bucketId) {
+      const bucket = await db.asSuperUser().findBucketById(bucketId, 'name,credential_id', {
+        includeCredentials: true,
+      })
+
+      if (bucket.credential_id) {
+        storageBackend = new S3Backend({
+          bucket: bucket.name,
+          client: {
+            role: bucket.role,
+            endpoint: bucket.endpoint,
+            region: bucket.region,
+            forcePathStyle: bucket.force_path_style,
+            accessKey: bucket.access_key ? decrypt(bucket.access_key) : undefined,
+            secretKey: bucket.secret_key ? decrypt(bucket.secret_key) : undefined,
+          },
+        })
+      }
+    }
+
+    if (!storageBackend) {
+      storageBackend = createStorageBackend({
+        prefix: payload.tenant.ref,
+        bucket: globalS3Bucket,
+      })
+    }
 
     return new Storage(storageBackend, db)
   }

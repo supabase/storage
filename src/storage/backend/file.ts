@@ -10,6 +10,7 @@ import {
   ObjectMetadata,
   ObjectResponse,
   withOptionalVersion,
+  withPrefixAndVersion,
 } from './generic'
 import { StorageBackendError } from '../errors'
 const pipeline = promisify(stream.pipeline)
@@ -31,6 +32,11 @@ const METADATA_ATTR_KEYS = {
   },
 }
 
+export interface FileBackendOptions {
+  bucket: string
+  prefix?: string
+}
+
 /**
  * FileBackend
  * Interacts with the file system with this FileBackend adapter
@@ -38,27 +44,27 @@ const METADATA_ATTR_KEYS = {
 export class FileBackend implements StorageBackendAdapter {
   client = null
   filePath: string
+  protected prefix?: string
 
-  constructor() {
+  constructor(private readonly options: FileBackendOptions) {
     const { fileStoragePath } = getConfig()
     if (!fileStoragePath) {
       throw new Error('FILE_STORAGE_BACKEND_PATH env variable not set')
     }
     this.filePath = fileStoragePath
+    this.prefix = options.prefix
   }
 
   /**
    * Gets an object body and metadata
-   * @param bucketName
    * @param key
    * @param version
    */
-  async getObject(
-    bucketName: string,
-    key: string,
-    version: string | undefined
-  ): Promise<ObjectResponse> {
-    const file = path.resolve(this.filePath, withOptionalVersion(`${bucketName}/${key}`, version))
+  async getObject(key: string, version: string | undefined): Promise<ObjectResponse> {
+    const file = path.resolve(
+      this.filePath,
+      withPrefixAndVersion(`${this.options.bucket}/${key}`, this.prefix, version)
+    )
     const body = fs.createReadStream(file)
     const data = await fs.stat(file)
     const { cacheControl, contentType } = await this.getFileMetadata(file)
@@ -84,7 +90,6 @@ export class FileBackend implements StorageBackendAdapter {
 
   /**
    * Uploads and store an object
-   * @param bucketName
    * @param key
    * @param version
    * @param body
@@ -92,7 +97,6 @@ export class FileBackend implements StorageBackendAdapter {
    * @param cacheControl
    */
   async uploadObject(
-    bucketName: string,
     key: string,
     version: string | undefined,
     body: NodeJS.ReadableStream,
@@ -100,7 +104,10 @@ export class FileBackend implements StorageBackendAdapter {
     cacheControl: string
   ): Promise<ObjectMetadata> {
     try {
-      const file = path.resolve(this.filePath, withOptionalVersion(`${bucketName}/${key}`, version))
+      const file = path.resolve(
+        this.filePath,
+        withPrefixAndVersion(`${this.options.bucket}/${key}`, this.prefix, version)
+      )
       await fs.ensureFile(file)
       const destFile = fs.createWriteStream(file)
       await pipeline(body, destFile)
@@ -110,7 +117,7 @@ export class FileBackend implements StorageBackendAdapter {
         cacheControl,
       })
 
-      const metadata = await this.headObject(bucketName, key, version)
+      const metadata = await this.headObject(key, version)
 
       return {
         ...metadata,
@@ -123,13 +130,15 @@ export class FileBackend implements StorageBackendAdapter {
 
   /**
    * Deletes an object from the file system
-   * @param bucket
    * @param key
    * @param version
    */
-  async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
+  async deleteObject(key: string, version: string | undefined): Promise<void> {
     try {
-      const file = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
+      const file = path.resolve(
+        this.filePath,
+        withPrefixAndVersion(`${this.options.bucket}/${key}`, this.prefix, version)
+      )
       await fs.remove(file)
     } catch (e) {
       if (e instanceof Error && 'code' in e) {
@@ -143,23 +152,24 @@ export class FileBackend implements StorageBackendAdapter {
 
   /**
    * Copies an existing object to the given location
-   * @param bucket
    * @param source
    * @param version
    * @param destination
    * @param destinationVersion
    */
   async copyObject(
-    bucket: string,
     source: string,
     version: string | undefined,
     destination: string,
     destinationVersion: string
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode'>> {
-    const srcFile = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${source}`, version))
+    const srcFile = path.resolve(
+      this.filePath,
+      withOptionalVersion(`${this.options.bucket}/${source}`, version)
+    )
     const destFile = path.resolve(
       this.filePath,
-      withOptionalVersion(`${bucket}/${destination}`, destinationVersion)
+      withOptionalVersion(`${this.options.bucket}/${destination}`, destinationVersion)
     )
 
     await fs.ensureFile(destFile)
@@ -174,12 +184,16 @@ export class FileBackend implements StorageBackendAdapter {
 
   /**
    * Deletes multiple objects
-   * @param bucket
    * @param prefixes
    */
-  async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
+  async deleteObjects(prefixes: string[]): Promise<void> {
     const promises = prefixes.map((prefix) => {
-      return fs.rm(path.resolve(this.filePath, bucket, prefix))
+      return fs.rm(
+        path.resolve(
+          this.filePath,
+          withPrefixAndVersion(path.join(this.options.bucket, prefix), this.prefix)
+        )
+      )
     })
     const results = await Promise.allSettled(promises)
 
@@ -195,16 +209,14 @@ export class FileBackend implements StorageBackendAdapter {
 
   /**
    * Returns metadata information of a specific object
-   * @param bucket
    * @param key
    * @param version
    */
-  async headObject(
-    bucket: string,
-    key: string,
-    version: string | undefined
-  ): Promise<ObjectMetadata> {
-    const file = path.join(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
+  async headObject(key: string, version: string | undefined): Promise<ObjectMetadata> {
+    const file = path.join(
+      this.filePath,
+      withPrefixAndVersion(`${this.options.bucket}/${key}`, this.prefix, version)
+    )
 
     const data = await fs.stat(file)
     const { cacheControl, contentType } = await this.getFileMetadata(file)
@@ -226,12 +238,17 @@ export class FileBackend implements StorageBackendAdapter {
 
   /**
    * Returns a private url that can only be accessed internally by the system
-   * @param bucket
    * @param key
    * @param version
    */
-  async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
-    return 'local:///' + path.join(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
+  async privateAssetUrl(key: string, version: string | undefined): Promise<string> {
+    return (
+      'local:///' +
+      path.join(
+        this.filePath,
+        withPrefixAndVersion(`${this.options.bucket}/${key}`, this.prefix, version)
+      )
+    )
   }
 
   async setFileMetadata(file: string, { contentType, cacheControl }: FileMetadata) {

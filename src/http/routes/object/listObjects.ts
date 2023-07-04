@@ -1,4 +1,4 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
@@ -54,12 +54,15 @@ export default async function routes(fastify: FastifyInstance) {
     '/list/:bucketName',
     {
       schema,
+      config: {
+        getParentBucketId: (request: FastifyRequest<searchRequestInterface>) =>
+          request.params.bucketName,
+      },
     },
     async (request, response) => {
-      const { bucketName } = request.params
       const { limit, offset, sortBy, search, prefix } = request.body
 
-      const results = await request.storage.from(bucketName).searchObjects(prefix, {
+      const results = await request.storage.from(request.bucket).searchObjects(prefix, {
         limit,
         offset,
         search,

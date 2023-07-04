@@ -63,6 +63,8 @@ const whitelistHeaders = (headers: Record<string, unknown>) => {
     'host',
     'user-agent',
     'x-forwarded-proto',
+    'x-forwarded-host',
+    'x-forwarded-port',
     'referer',
     'content-length',
     'x-real-ip',

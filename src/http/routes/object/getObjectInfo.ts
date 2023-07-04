@@ -5,8 +5,6 @@ import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../request'
 import { Obj } from '../../../storage/schemas'
 
-const { globalS3Bucket } = getConfig()
-
 const getObjectParamsSchema = {
   type: 'object',
   properties: {
@@ -31,20 +29,21 @@ async function requestHandler(
   >,
   publicRoute = false
 ) {
-  const { bucketName } = request.params
   const objectName = request.params['*']
 
-  const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
+  const s3Key = request.storage.from(request.bucket).computeObjectPath(objectName)
 
   let obj: Obj
   if (publicRoute) {
-    obj = await request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id,version')
+    obj = await request.storage
+      .asSuperUser()
+      .from(request.bucket)
+      .findObject(objectName, 'id,version')
   } else {
-    obj = await request.storage.from(bucketName).findObject(objectName, 'id,version')
+    obj = await request.storage.from(request.bucket).findObject(objectName, 'id,version')
   }
 
   return request.storage.renderer('head').render(request, response, {
-    bucket: globalS3Bucket,
     key: s3Key,
     version: obj.version,
   })
@@ -60,6 +59,11 @@ export async function publicRoutes(fastify: FastifyInstance) {
         description: 'returns object info',
         tags: ['object'],
         response: { '4xx': { $ref: 'errorSchema#' } },
+      },
+      config: {
+        getParentBucketId: (request: FastifyRequest<getObjectRequestInterface>) => {
+          return request.params.bucketName
+        },
       },
     },
     async (request, response) => {
@@ -77,6 +81,11 @@ export async function publicRoutes(fastify: FastifyInstance) {
         description: 'returns object info',
         tags: ['object'],
         response: { '4xx': { $ref: 'errorSchema#' } },
+      },
+      config: {
+        getParentBucketId: (request: FastifyRequest<getObjectRequestInterface>) => {
+          return request.params.bucketName
+        },
       },
     },
     async (request, response) => {
@@ -97,6 +106,11 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },
+      config: {
+        getParentBucketId: (request: FastifyRequest<getObjectRequestInterface>) => {
+          return request.params.bucketName
+        },
+      },
     },
     async (request, response) => {
       return requestHandler(request, response)
@@ -112,6 +126,11 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
+      },
+      config: {
+        getParentBucketId: (request: FastifyRequest<getObjectRequestInterface>) => {
+          return request.params.bucketName
+        },
       },
     },
     async (request, response) => {
@@ -146,6 +165,11 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         description: 'use HEAD /object/authenticated/{bucketName} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
         tags: ['deprecated'],
+      },
+      config: {
+        getParentBucketId: (request: FastifyRequest<getObjectRequestInterface>) => {
+          return request.params.bucketName
+        },
       },
     },
     async (request, response) => {

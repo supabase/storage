@@ -1,6 +1,9 @@
 import { FastifyInstance } from 'fastify'
 import { isRenderableError } from '../storage'
 import { FastifyError } from '@fastify/error'
+import { getConfig } from '../config'
+
+const { tusPath } = getConfig()
 
 /**
  * The global error handler for all the uncaught exceptions within a request.
@@ -20,7 +23,8 @@ export const setErrorHandler = (app: FastifyInstance) => {
 
     if (isRenderableError(error)) {
       const renderableError = error.render()
-      return reply.status(renderableError.statusCode === '500' ? 500 : 400).send(renderableError)
+      const body = request.routerPath.includes(tusPath) ? renderableError.error : renderableError
+      return reply.status(renderableError.statusCode === '500' ? 500 : 400).send(body)
     }
 
     // Fastify errors

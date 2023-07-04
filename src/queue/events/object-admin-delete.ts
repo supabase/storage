@@ -1,5 +1,4 @@
 import { BaseEvent, BasePayload } from './base-event'
-import { getConfig } from '../../config'
 import { Job } from 'pg-boss'
 import { withOptionalVersion } from '../../storage/backend'
 import { logger } from '../../monitoring'
@@ -10,21 +9,25 @@ export interface ObjectDeleteEvent extends BasePayload {
   version?: string
 }
 
-const { globalS3Bucket } = getConfig()
-
 export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
   static queueName = 'object:admin:delete'
+
+  static getBucketId(payload: ObjectDeleteEvent): string | undefined {
+    return payload.bucketId
+  }
 
   static async handle(job: Job<ObjectDeleteEvent>) {
     logger.info({ job: JSON.stringify(job) }, 'Handling ObjectAdminDelete')
 
     try {
       const storage = await this.createStorage(job.data)
+      const bucketStore = await storage.fromBucketId(job.data.bucketId)
+
       const version = job.data.version
 
-      const s3Key = `${job.data.tenant.ref}/${job.data.bucketId}/${job.data.name}`
+      const s3Key = bucketStore.computeObjectPath(job.data.name)
 
-      await storage.backend.deleteObjects(globalS3Bucket, [
+      await storage.backend.deleteObjects([
         withOptionalVersion(s3Key, version),
         withOptionalVersion(s3Key, version) + '.info',
       ])

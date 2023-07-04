@@ -1,4 +1,4 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema, createResponse } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
@@ -34,12 +34,16 @@ export default async function routes(fastify: FastifyInstance) {
     '/:bucketName/*',
     {
       schema,
+      config: {
+        getParentBucketId: (request: FastifyRequest<deleteObjectRequestInterface>) => {
+          return request.params.bucketName
+        },
+      },
     },
     async (request, response) => {
-      const { bucketName } = request.params
       const objectName = request.params['*']
 
-      await request.storage.from(bucketName).deleteObject(objectName)
+      await request.storage.from(request.bucket).deleteObject(objectName)
 
       return response.status(200).send(createResponse('Successfully deleted'))
     }

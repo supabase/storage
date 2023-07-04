@@ -1,8 +1,6 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { getConfig } from '../../../config'
-
-const { globalS3Bucket } = getConfig()
+import { StorageBackendError } from '../../../storage'
 
 const getPublicObjectParamsSchema = {
   type: 'object',
@@ -41,25 +39,29 @@ export default async function routes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },
+      config: {
+        getParentBucketId: (request: FastifyRequest<getObjectRequestInterface>) => {
+          return request.params.bucketName
+        },
+      },
     },
     async (request, response) => {
-      const { bucketName } = request.params
       const objectName = request.params['*']
       const { download } = request.query
 
-      const [, obj] = await Promise.all([
-        request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
-          isPublic: true,
-        }),
-        request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id,version'),
-      ])
+      if (!request.bucket.public) {
+        throw new StorageBackendError('not_found', 400, 'Object not found')
+      }
+
+      const obj = await request.storage
+        .asSuperUser()
+        .from(request.bucket)
+        .findObject(objectName, 'id,version')
 
       // send the object from s3
-      const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
-      request.log.info(s3Key)
+      const s3Key = request.storage.from(request.bucket).computeObjectPath(objectName)
 
       return request.storage.renderer('asset').render(request, response, {
-        bucket: globalS3Bucket,
         key: s3Key,
         version: obj.version,
         download,

@@ -12,7 +12,6 @@ CREATE TABLE "storage"."buckets" (
     "owner" uuid,
     "created_at" timestamptz DEFAULT now(),
     "updated_at" timestamptz DEFAULT now(),
-    CONSTRAINT "buckets_owner_fkey" FOREIGN KEY ("owner") REFERENCES "auth"."users"("id"),
     PRIMARY KEY ("id")
 );
 CREATE UNIQUE INDEX "bname" ON "storage"."buckets" USING BTREE ("name");
@@ -28,7 +27,6 @@ CREATE TABLE "storage"."objects" (
     "last_accessed_at" timestamptz DEFAULT now(),
     "metadata" jsonb,
     CONSTRAINT "objects_bucketId_fkey" FOREIGN KEY ("bucket_id") REFERENCES "storage"."buckets"("id"),
-    CONSTRAINT "objects_owner_fkey" FOREIGN KEY ("owner") REFERENCES "auth"."users"("id"),
     PRIMARY KEY ("id")
 );
 CREATE UNIQUE INDEX "bucketid_objname" ON "storage"."objects" USING BTREE ("bucket_id","name");

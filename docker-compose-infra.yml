@@ -3,16 +3,26 @@
 version: '3'
 services:
   db:
-    image: postgres:13
+    image: postgres:15
     ports:
       - '5432:5432'
     volumes:
-      - ./src/test/db:/docker-entrypoint-initdb.d/
+      - ./migrations/base:/docker-entrypoint-initdb.d/
+    shm_size: 1g
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_PORT: 5432
+
+  multitenant_db:
+    image: postgres:15
+    ports:
+      - '5433:5432'
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
 
   pg_bouncer:
     image: bitnami/pgbouncer:latest
@@ -27,15 +37,6 @@ services:
       PGBOUNCER_STATS_USERS: postgres
     depends_on:
       - db
-
-  multitenant_db:
-    image: postgres:13
-    ports:
-      - '5433:5432'
-    environment:
-      POSTGRES_DB: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
 
   redis:
     image: redis:6.2-alpine
@@ -53,14 +54,16 @@ services:
       MINIO_ROOT_PASSWORD: secret1234
     command: server --console-address ":9001" /data
 
-  createbuckets:
+  create_default_bucket:
     image: minio/mc
     depends_on:
       - minio
+    environment:
+      BUCKET_NAME: ${GLOBAL_S3_BUCKET:-local-bucket}
     entrypoint: >
       /bin/sh -c "
       /usr/bin/mc alias set supa-minio http://minio:9000 supa-storage secret1234;
-      /usr/bin/mc mb supa-minio/supa-storage-staging-ap-southeast-1;
+      /usr/bin/mc mb "supa-minio/$${BUCKET_NAME}";
       exit 0;
       "
 

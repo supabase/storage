@@ -1,4 +1,4 @@
-import { Bucket, Obj } from '../schemas'
+import { Bucket, Obj, BucketWithCredentials, Credential } from '../schemas'
 import { ObjectMetadata } from '../backend'
 import { TenantConnection } from '../../database/connection'
 
@@ -17,6 +17,7 @@ export interface FindBucketFilters {
   forUpdate?: boolean
   forShare?: boolean
   dontErrorOnEmpty?: boolean
+  includeCredentials?: boolean
 }
 
 export interface FindObjectFilters {
@@ -28,7 +29,6 @@ export interface FindObjectFilters {
 }
 
 export interface TransactionOptions {
-  isolation?: string
   retry?: number
   readOnly?: boolean
 }
@@ -40,6 +40,8 @@ export interface DatabaseOptions<TNX> {
   parentTnx?: TNX
   parentConnection?: TenantConnection
 }
+
+type MaybeType<Condition, T> = Condition extends true ? T | undefined : T
 
 export interface Database {
   tenantHost: string
@@ -60,15 +62,31 @@ export interface Database {
   createBucket(
     data: Pick<
       Bucket,
-      'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types'
+      | 'id'
+      | 'name'
+      | 'public'
+      | 'owner'
+      | 'file_size_limit'
+      | 'allowed_mime_types'
+      | 'credential_id'
     >
   ): Promise<Pick<Bucket, 'id'>>
 
-  findBucketById<Filters extends FindBucketFilters = FindObjectFilters>(
+  findBucketById<Filters extends FindBucketFilters = FindBucketFilters>(
     bucketId: string,
     columns: string,
     filters?: Filters
-  ): Promise<Filters['dontErrorOnEmpty'] extends true ? Bucket | undefined : Bucket>
+  ): Promise<
+    Filters['dontErrorOnEmpty'] extends true
+      ? Filters['includeCredentials'] extends true
+        ? BucketWithCredentials | undefined
+        : Bucket | undefined
+      : Filters['includeCredentials'] extends true
+      ? BucketWithCredentials
+      : Bucket
+  >
+
+  listBucketByExternalCredential(credentialId: string, columns: string): Promise<Bucket[]>
 
   countObjectsInBucket(bucketId: string): Promise<number>
 
@@ -82,7 +100,7 @@ export interface Database {
 
   updateBucket(
     bucketId: string,
-    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
+    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types' | 'credential_id'>
   ): Promise<void>
 
   upsertObject(
@@ -115,4 +133,8 @@ export interface Database {
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Obj | undefined : Obj>
 
   searchObjects(bucketId: string, prefix: string, options: SearchObjectOption): Promise<Obj[]>
+
+  listCredentials(): Promise<Pick<Credential, 'id' | 'name'>[]>
+  createCredential(credential: Omit<Credential, 'id'>): Promise<Pick<Credential, 'id'>>
+  deleteCredential(credentialId: string): Promise<Pick<Credential, 'id'>>
 }

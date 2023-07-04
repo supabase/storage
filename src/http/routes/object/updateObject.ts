@@ -1,4 +1,4 @@
-import { FastifyInstance, RequestGenericInterface } from 'fastify'
+import { FastifyInstance, FastifyRequest, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 
@@ -50,17 +50,21 @@ export default async function routes(fastify: FastifyInstance) {
     '/:bucketName/*',
     {
       schema,
+      config: {
+        getParentBucketId: (request: FastifyRequest<updateObjectRequestInterface>) => {
+          return request.params.bucketName
+        },
+      },
     },
     async (request, response) => {
       const contentType = request.headers['content-type']
       request.log.info(`content-type is ${contentType}`)
 
-      const { bucketName } = request.params
       const objectName = request.params['*']
       const owner = request.owner as string
 
       const { objectMetadata, path, id } = await request.storage
-        .from(bucketName)
+        .from(request.bucket)
         .uploadOverridingObject(request, {
           owner,
           objectName: objectName,

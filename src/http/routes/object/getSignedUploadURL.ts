@@ -1,4 +1,4 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
@@ -44,16 +44,19 @@ export default async function routes(fastify: FastifyInstance) {
     '/upload/sign/:bucketName/*',
     {
       schema,
+      config: {
+        getParentBucketId: (request: FastifyRequest<getSignedURLRequestInterface>) =>
+          request.params.bucketName,
+      },
     },
     async (request, response) => {
-      const { bucketName } = request.params
       const objectName = request.params['*']
       const owner = request.owner
 
       const urlPath = request.url.split('?').shift()
 
       const signedUploadURL = await request.storage
-        .from(bucketName)
+        .from(request.bucket)
         .signUploadObjectUrl(objectName, urlPath as string, signedUploadUrlExpirationTime, owner)
 
       return response.status(200).send({ url: signedUploadURL })

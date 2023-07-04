@@ -1,4 +1,4 @@
-import { Bucket, Obj } from '../schemas'
+import { Bucket, BucketWithCredentials, Credential, Obj } from '../schemas'
 import { RenderableError, StorageBackendError, StorageError } from '../errors'
 import { ObjectMetadata } from '../backend'
 import { Knex } from 'knex'
@@ -13,6 +13,8 @@ import {
 import { DatabaseError } from 'pg'
 import { TenantConnection } from '../../database/connection'
 import { DbQueryPerformance } from '../../monitoring/metrics'
+import { isUuid } from '../limits'
+import { encrypt } from '../../auth'
 
 /**
  * Database
@@ -36,42 +38,28 @@ export class StorageKnexDB implements Database {
     fn: T,
     transactionOptions?: TransactionOptions
   ) {
-    let retryLeft = transactionOptions?.retry || 1
-    let error: Error | undefined | unknown
+    try {
+      const tnx = await this.connection.transaction(this.options.tnx)()
 
-    while (retryLeft > 0) {
       try {
-        const tnx = await this.connection.transaction(
-          transactionOptions?.isolation as Knex.IsolationLevels,
-          this.options.tnx
-        )()
+        await this.connection.setScope(tnx)
 
-        try {
-          await this.connection.setScope(tnx)
+        tnx.on('query-error', (error) => {
+          throw DBError.fromDBError(error)
+        })
 
-          tnx.on('query-error', (error) => {
-            throw DBError.fromDBError(error)
-          })
+        const opts = { ...this.options, tnx }
+        const storageWithTnx = new StorageKnexDB(this.connection, opts)
 
-          const opts = { ...this.options, tnx }
-          const storageWithTnx = new StorageKnexDB(this.connection, opts)
-
-          const result: Awaited<ReturnType<T>> = await fn(storageWithTnx)
-          await tnx.commit()
-          return result
-        } catch (e) {
-          await tnx.rollback()
-          throw e
-        }
+        const result: Awaited<ReturnType<T>> = await fn(storageWithTnx)
+        await tnx.commit()
+        return result
       } catch (e) {
-        error = e
-      } finally {
-        retryLeft--
+        await tnx.rollback()
+        throw e
       }
-    }
-
-    if (error) {
-      throw error
+    } catch (e) {
+      throw e
     }
   }
 
@@ -114,17 +102,18 @@ export class StorageKnexDB implements Database {
       | 'owner'
       | 'file_size_limit'
       | 'allowed_mime_types'
-      | 'external_credential_id'
+      | 'credential_id'
     >
   ) {
     const bucketData = {
       id: data.id,
       name: data.name,
-      owner: data.owner,
+      owner: isUuid(data.owner || '') ? data.owner : undefined,
+      owner_id: data.owner,
       public: data.public,
       allowed_mime_types: data.allowed_mime_types,
       file_size_limit: data.file_size_limit,
-      external_credential_id: data.external_credential_id,
+      credential_id: data.credential_id,
     }
 
     const bucket = await this.runQuery('CreateBucket', async (knex) => {
@@ -140,9 +129,31 @@ export class StorageKnexDB implements Database {
     return bucketData
   }
 
-  async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
+  async findBucketById<Filters extends FindBucketFilters = FindBucketFilters>(
+    bucketId: string,
+    columns = 'id',
+    filters?: Filters
+  ) {
     const result = await this.runQuery('FindBucketById', async (knex) => {
-      const query = knex.from<Bucket>('buckets').select(columns.split(',')).where('id', bucketId)
+      let fields = columns.split(',')
+
+      if (filters?.includeCredentials) {
+        fields = fields.map((field) => {
+          if (field.startsWith('buckets.')) {
+            return field
+          }
+          return `buckets.${field}`
+        })
+
+        fields.push('bucket_credentials.access_key')
+        fields.push('bucket_credentials.secret_key')
+        fields.push('bucket_credentials.region')
+        fields.push('bucket_credentials.role')
+        fields.push('bucket_credentials.force_path_style')
+        fields.push('bucket_credentials.endpoint')
+      }
+
+      const query = knex.from<Bucket>('buckets').select(fields).where('buckets.id', bucketId)
 
       if (typeof filters?.isPublic !== 'undefined') {
         query.where('public', filters.isPublic)
@@ -156,7 +167,13 @@ export class StorageKnexDB implements Database {
         query.forShare()
       }
 
-      return query.first() as Promise<Bucket>
+      if (filters?.includeCredentials) {
+        query.leftJoin('bucket_credentials', 'bucket_credentials.id', 'buckets.credential_id')
+      }
+
+      return query.first() as Promise<
+        Filters['includeCredentials'] extends true ? BucketWithCredentials : Bucket
+      >
     })
 
     if (!result && !filters?.dontErrorOnEmpty) {
@@ -166,6 +183,15 @@ export class StorageKnexDB implements Database {
     }
 
     return result
+  }
+
+  async listBucketByExternalCredential(credentialId: string, columns = 'id') {
+    return this.runQuery('FindBucketByExternalCredentialId', async (knex) => {
+      return knex
+        .from<Bucket>('buckets')
+        .select(columns.split(','))
+        .where('credential_id', credentialId) as Promise<Bucket[]>
+    })
   }
 
   async countObjectsInBucket(bucketId: string) {
@@ -211,17 +237,14 @@ export class StorageKnexDB implements Database {
 
   async updateBucket(
     bucketId: string,
-    fields: Pick<
-      Bucket,
-      'public' | 'file_size_limit' | 'allowed_mime_types' | 'external_credential_id'
-    >
+    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types' | 'credential_id'>
   ) {
     const bucket = await this.runQuery('UpdateBucket', (knex) => {
       return knex.from('buckets').where('id', bucketId).update({
         public: fields.public,
         file_size_limit: fields.file_size_limit,
         allowed_mime_types: fields.allowed_mime_types,
-        external_credential_id: fields.external_credential_id,
+        credential_id: fields.credential_id,
       })
     })
 
@@ -237,7 +260,8 @@ export class StorageKnexDB implements Database {
   async upsertObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>) {
     const objectData = {
       name: data.name,
-      owner: data.owner,
+      owner: isUuid(data.owner || '') ? data.owner : undefined,
+      owner_id: data.owner,
       bucket_id: data.bucket_id,
       metadata: data.metadata,
       version: data.version,
@@ -250,7 +274,8 @@ export class StorageKnexDB implements Database {
         .merge({
           metadata: data.metadata,
           version: data.version,
-          owner: data.owner,
+          owner: isUuid(data.owner || '') ? data.owner : undefined,
+          owner_id: data.owner,
         })
         .returning('*')
     })
@@ -264,15 +289,20 @@ export class StorageKnexDB implements Database {
     data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name'>
   ) {
     const [object] = await this.runQuery('UpdateObject', (knex) => {
-      return knex.from<Obj>('objects').where('bucket_id', bucketId).where('name', name).update(
-        {
-          name: data.name,
-          owner: data.owner,
-          metadata: data.metadata,
-          version: data.version,
-        },
-        '*'
-      )
+      return knex
+        .from<Obj>('objects')
+        .where('bucket_id', bucketId)
+        .where('name', name)
+        .update(
+          {
+            name: data.name,
+            owner: isUuid(data.owner || '') ? data.owner : undefined,
+            owner_id: data.owner,
+            metadata: data.metadata,
+            version: data.version,
+          },
+          '*'
+        )
     })
 
     if (!object) {
@@ -285,7 +315,8 @@ export class StorageKnexDB implements Database {
   async createObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>) {
     const object = {
       name: data.name,
-      owner: data.owner,
+      owner: isUuid(data.owner || '') ? data.owner : undefined,
+      owner_id: data.owner,
       bucket_id: data.bucket_id,
       metadata: data.metadata,
       version: data.version,
@@ -346,7 +377,8 @@ export class StorageKnexDB implements Database {
         .from<Obj>('objects')
         .update({
           last_accessed_at: new Date().toISOString(),
-          owner,
+          owner: isUuid(owner || '') ? owner : undefined,
+          owner_id: owner,
         })
         .returning('*')
         .where({ bucket_id: bucketId, name: objectName })
@@ -361,11 +393,11 @@ export class StorageKnexDB implements Database {
     return object
   }
 
-  async findObject(
+  async findObject<Filters extends FindObjectFilters = FindObjectFilters>(
     bucketId: string,
     objectName: string,
     columns = 'id',
-    filters?: FindObjectFilters
+    filters?: Filters
   ) {
     const object = await this.runQuery('FindObject', (knex) => {
       const query = knex.from<Obj>('objects').select(columns.split(',')).where({
@@ -399,7 +431,7 @@ export class StorageKnexDB implements Database {
     }
 
     return object as typeof filters extends FindObjectFilters
-      ? typeof filters['dontErrorOnEmpty'] extends true
+      ? Filters['dontErrorOnEmpty'] extends true
         ? Obj | undefined
         : Obj
       : Obj
@@ -456,10 +488,49 @@ export class StorageKnexDB implements Database {
     })
   }
 
+  async listCredentials() {
+    return this.runQuery('CreateCredential', async (knex) => {
+      const result = await knex<Credential>('bucket_credentials').select('id', 'name')
+      return result as Pick<Credential, 'id' | 'name'>[]
+    })
+  }
+
+  async createCredential(credential: Omit<Credential, 'id'>) {
+    return this.runQuery('CreateCredential', async (knex) => {
+      const [result] = await knex<Credential>('bucket_credentials')
+        .insert({
+          name: credential.name,
+          access_key: credential.access_key ? encrypt(credential.access_key) : undefined,
+          secret_key: credential.secret_key ? encrypt(credential.secret_key) : undefined,
+          role: credential.role,
+          endpoint: credential.endpoint,
+          region: credential.region,
+          force_path_style: Boolean(credential.force_path_style),
+        })
+        .returning('id')
+
+      return result
+    })
+  }
+
+  async deleteCredential(credentialId: string) {
+    return this.runQuery('CreateCredential', async (knex) => {
+      const [result] = await knex<Credential>('bucket_credentials')
+        .where({ id: credentialId })
+        .delete()
+        .returning('id')
+
+      if (!result) {
+        throw new StorageBackendError('Credential not found', 404, 'not_found')
+      }
+
+      return result
+    })
+  }
+
   protected async runQuery<T extends (db: Knex.Transaction) => Promise<any>>(
     queryName: string,
-    fn: T,
-    isolation?: Knex.IsolationLevels
+    fn: T
   ): Promise<Awaited<ReturnType<T>>> {
     const timer = DbQueryPerformance.startTimer({
       name: queryName,
@@ -475,7 +546,7 @@ export class StorageKnexDB implements Database {
     const needsNewTransaction = !tnx || differentScopes
 
     if (!tnx || needsNewTransaction) {
-      tnx = await this.connection.transaction(isolation, this.options.tnx)()
+      tnx = await this.connection.transaction(this.options.tnx)()
       tnx.on('query-error', (error: DatabaseError) => {
         throw DBError.fromDBError(error)
       })

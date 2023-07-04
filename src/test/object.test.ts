@@ -69,7 +69,7 @@ describe('testing GET object', () => {
       },
     })
     expect(response.statusCode).toBe(304)
-    expect(mockGetObject.mock.calls[0][3]).toMatchObject({
+    expect(mockGetObject.mock.calls[0][2]).toMatchObject({
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })
@@ -86,7 +86,7 @@ describe('testing GET object', () => {
     expect(response.statusCode).toBe(200)
     expect(response.headers['etag']).toBe('abc')
     expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
-    expect(response.headers['content-length']).toBe(3746)
+    expect(response.headers['content-length']).toBe('3746')
     expect(response.headers['cache-control']).toBe('no-cache')
     expect(S3Backend.prototype.headObject).toBeCalled()
   })
@@ -102,7 +102,7 @@ describe('testing GET object', () => {
     expect(response.statusCode).toBe(200)
     expect(response.headers['etag']).toBe('abc')
     expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
-    expect(response.headers['content-length']).toBe(3746)
+    expect(response.headers['content-length']).toBe('3746')
     expect(response.headers['cache-control']).toBe('no-cache')
     expect(S3Backend.prototype.headObject).toBeCalled()
   })
@@ -1143,7 +1143,7 @@ describe('testing deleting multiple objects', () => {
         prefixes: ['authenticated/delete-multiple3.png', 'authenticated/delete-multiple4.png'],
       },
     })
-    expect(response.statusCode).toBe(200)
+    expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
   })
 
@@ -1531,9 +1531,9 @@ describe('testing generating signed URLs', () => {
         paths: [...Array(10001).keys()].map((i) => `authenticated/${i}`),
       },
     })
-    expect(response.statusCode).toBe(200)
+    expect(response.statusCode).toBe(400)
     const result = JSON.parse(response.body)
-    expect(result[0].error).toBe('Either the object does not exist or you do not have access to it')
+    expect(result.error).toBe('Bucket not found')
   })
 
   test('signing url of a non existent key', async () => {
@@ -1548,9 +1548,9 @@ describe('testing generating signed URLs', () => {
         paths: ['authenticated/notfound.jpg'],
       },
     })
-    expect(response.statusCode).toBe(200)
+    expect(response.statusCode).toBe(400)
     const result = JSON.parse(response.body)
-    expect(result[0].error).toBe('Either the object does not exist or you do not have access to it')
+    expect(result.error).toBe('Bucket not found')
   })
 })
 
@@ -1593,7 +1593,7 @@ describe('testing retrieving signed URL', () => {
       },
     })
     expect(response.statusCode).toBe(304)
-    expect(mockGetObject.mock.calls[0][3]).toMatchObject({
+    expect(mockGetObject.mock.calls[0][2]).toMatchObject({
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })

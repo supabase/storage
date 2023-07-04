@@ -10,7 +10,7 @@ import * as tus from 'tus-js-client'
 import fs from 'fs'
 import app from '../app'
 import { FastifyInstance } from 'fastify'
-import { isS3Error, Storage } from '../storage'
+import { Storage } from '../storage'
 import { createStorageBackend } from '../storage/backend'
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import { logger } from '../monitoring'
@@ -18,11 +18,15 @@ import { DetailedError } from 'tus-js-client'
 import { getServiceKeyUser } from '../database/tenant'
 import { checkBucketExists } from './common'
 
-const { serviceKey, tenantId, globalS3Bucket } = getConfig()
+const { serviceKey, tenantId, globalS3Bucket, globalS3Endpoint, globalS3ForcePathStyle, region } =
+  getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
 const localServerAddress = 'http://127.0.0.1:8999'
 
-const backend = createStorageBackend()
+const backend = createStorageBackend({
+  prefix: tenantId,
+  bucket: globalS3Bucket,
+})
 const client = backend.client
 
 describe('Tus multipart', () => {
@@ -112,7 +116,9 @@ describe('Tus multipart', () => {
 
     expect(result).toEqual(true)
 
-    const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+    const bucketStore = await storage.fromBucketId(bucket.id)
+    const dbAsset = await bucketStore.findObject(objectName, '*')
+
     expect(dbAsset).toEqual({
       bucket_id: bucket.id,
       created_at: expect.any(Date),
@@ -129,6 +135,7 @@ describe('Tus multipart', () => {
       },
       name: objectName,
       owner: null,
+      owner_id: null,
       path_tokens: [objectName],
       updated_at: expect.any(Date),
       version: expect.any(String),
@@ -180,7 +187,7 @@ describe('Tus multipart', () => {
 
         const err = e as DetailedError
         expect(err.originalResponse.getBody()).toEqual('Bucket not found')
-        expect(err.originalResponse.getStatus()).toEqual(404)
+        expect(err.originalResponse.getStatus()).toEqual(400)
       }
     })
 

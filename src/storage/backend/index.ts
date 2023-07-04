@@ -1,22 +1,27 @@
-import { StorageBackendAdapter } from './generic'
-import { FileBackend } from './file'
-import { S3Backend } from './s3'
+import { FileBackend, FileBackendOptions } from './file'
+import { getS3DefaultClient, S3Backend, S3Options } from './s3'
 import { getConfig } from '../../config'
 
 export * from './s3'
 export * from './file'
 export * from './generic'
 
-const { region, globalS3Endpoint, globalS3ForcePathStyle, storageBackendType } = getConfig()
+const { globalS3Bucket, storageBackendType } = getConfig()
 
-export function createStorageBackend() {
-  let storageBackend: StorageBackendAdapter
-
-  if (storageBackendType === 'file') {
-    storageBackend = new FileBackend()
-  } else {
-    storageBackend = new S3Backend(region, globalS3Endpoint, globalS3ForcePathStyle)
+export function createStorageBackend(options: S3Options | FileBackendOptions) {
+  switch (storageBackendType) {
+    case 'file':
+      return new FileBackend({
+        prefix: options.prefix,
+        bucket: globalS3Bucket,
+      })
+    case 's3':
+      const s3Options = options as S3Options
+      return new S3Backend({
+        ...s3Options,
+        client: s3Options.client ?? getS3DefaultClient(),
+      })
+    default:
+      throw new Error(`unknown storage backend type ${storageBackendType}`)
   }
-
-  return storageBackend
 }

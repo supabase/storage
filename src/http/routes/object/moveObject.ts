@@ -1,4 +1,4 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema, createResponse } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
@@ -36,11 +36,18 @@ export default async function routes(fastify: FastifyInstance) {
     '/move',
     {
       schema,
+      config: {
+        getParentBucketId: (request: FastifyRequest<moveObjectRequestInterface>) => {
+          return request.body.bucketId
+        },
+      },
     },
     async (request, response) => {
-      const { destinationKey, sourceKey, bucketId } = request.body
+      const { destinationKey, sourceKey } = request.body
 
-      await request.storage.from(bucketId).moveObject(sourceKey, destinationKey, request.owner)
+      await request.storage
+        .from(request.bucket)
+        .moveObject(sourceKey, destinationKey, request.owner)
 
       return response.status(200).send(createResponse('Successfully moved'))
     }

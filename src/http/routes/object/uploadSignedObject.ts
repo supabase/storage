@@ -1,4 +1,4 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getJwtSecret, SignedUploadToken, verifyJWT } from '../../../auth'
 import { StorageBackendError } from '../../../storage'
@@ -65,6 +65,11 @@ export default async function routes(fastify: FastifyInstance) {
         },
         tags: ['object'],
       },
+      config: {
+        getParentBucketId: (request: FastifyRequest<UploadSignedObjectRequestInterface>) => {
+          return request.params.bucketName
+        },
+      },
     },
     async (request, response) => {
       // Validate sender
@@ -97,7 +102,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       const { objectMetadata, path } = await request.storage
         .asSuperUser()
-        .from(bucketName)
+        .from(request.bucket)
         .uploadNewObject(request, {
           owner,
           objectName,

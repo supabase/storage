@@ -1,4 +1,4 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
@@ -57,9 +57,13 @@ export default async function routes(fastify: FastifyInstance) {
     '/sign/:bucketName/*',
     {
       schema,
+      config: {
+        getParentBucketId: (request: FastifyRequest<getSignedURLRequestInterface>) => {
+          return request.params.bucketName
+        },
+      },
     },
     async (request, response) => {
-      const { bucketName } = request.params
       const objectName = request.params['*']
       const { expiresIn } = request.body
 
@@ -77,7 +81,7 @@ export default async function routes(fastify: FastifyInstance) {
         : undefined
 
       const signedURL = await request.storage
-        .from(bucketName)
+        .from(request.bucket)
         .signObjectUrl(objectName, urlPath as string, expiresIn, transformationOptions)
 
       return response.status(200).send({ signedURL })

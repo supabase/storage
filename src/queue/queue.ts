@@ -7,7 +7,7 @@ import { logger } from '../monitoring'
 import { normalizeRawError } from '../storage'
 
 type SubclassOfBaseClass = (new (payload: any) => BaseEvent<any>) & {
-  [K in keyof typeof BaseEvent]: typeof BaseEvent[K]
+  [K in keyof typeof BaseEvent]: (typeof BaseEvent)[K]
 }
 
 export abstract class Queue {

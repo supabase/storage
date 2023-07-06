@@ -42,10 +42,7 @@ export class StorageKnexDB implements Database {
 
     while (retryLeft > 0) {
       try {
-        const tnx = await this.connection.transaction(
-          transactionOptions?.isolation as Knex.IsolationLevels,
-          this.options.tnx
-        )()
+        const tnx = await this.connection.transactionProvider(this.options.tnx)()
 
         try {
           await this.connection.setScope(tnx)
@@ -475,7 +472,7 @@ export class StorageKnexDB implements Database {
     const needsNewTransaction = !tnx || differentScopes
 
     if (!tnx || needsNewTransaction) {
-      tnx = await this.connection.transaction(isolation, this.options.tnx)()
+      tnx = await this.connection.transactionProvider(this.options.tnx)()
       tnx.on('query-error', (error: DatabaseError) => {
         throw DBError.fromDBError(error)
       })

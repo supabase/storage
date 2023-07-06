@@ -294,7 +294,7 @@ describe('Webhooks', () => {
 
 async function createObject(pg: TenantConnection, bucketId: string) {
   const objectName = Date.now()
-  const tnx = pg.pool
+  const tnx = await pg.transaction()
 
   const [data] = await tnx
     .from<Obj>('objects')
@@ -315,6 +315,8 @@ async function createObject(pg: TenantConnection, bucketId: string) {
       },
     ])
     .returning('*')
+
+  await tnx.commit()
 
   return data as Obj
 }

@@ -35,7 +35,7 @@ export class TenantConnection {
   public readonly role: string
 
   protected constructor(
-    public readonly pool: Knex,
+    protected readonly pool: Knex,
     protected readonly options: TenantConnectionOptions
   ) {
     this.role = options.user.payload.role || 'anon'
@@ -56,7 +56,7 @@ export class TenantConnection {
     let knexPool = connections.get(connectionString)
 
     if (knexPool) {
-      return new this(await knexPool, options)
+      return new this(knexPool, options)
     }
 
     const isExternalPool = Boolean(options.isExternalPool)
@@ -67,7 +67,6 @@ export class TenantConnection {
       pool: {
         min: 0,
         max: isExternalPool ? 1 : options.maxConnections || databaseMaxConnections,
-        propagateCreateError: false,
         acquireTimeoutMillis: databaseConnectionTimeout,
         idleTimeoutMillis: isExternalPool ? 100 : databaseFreePoolAfterInactivity,
         reapIntervalMillis: isExternalPool ? 110 : undefined,
@@ -115,15 +114,19 @@ export class TenantConnection {
     }
   }
 
-  transaction(instance?: Knex): Knex.TransactionProvider {
-    return async () => {
-      const pool = instance || this.pool
-      const tnx = await pool.transaction()
+  async transaction(instance?: Knex) {
+    const pool = instance || this.pool
+    const tnx = await pool.transaction()
 
-      if (!instance) {
-        await tnx.raw(`set search_path to ${searchPath.join(', ')}`)
-      }
-      return tnx
+    if (!instance && this.options.isExternalPool) {
+      await tnx.raw(`SELECT set_config('search_path', ?, true)`, [searchPath.join(', ')])
+    }
+    return tnx
+  }
+
+  transactionProvider(instance?: Knex): Knex.TransactionProvider {
+    return async () => {
+      return this.transaction(instance)
     }
   }
 

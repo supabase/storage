@@ -127,7 +127,7 @@ describe('RLS policies', () => {
 
   afterAll(async () => {
     await db.destroy()
-    await (storage.db as StorageKnexDB).connection.pool.destroy()
+    await (storage.db as StorageKnexDB).connection.dispose()
   })
 
   testSpec.tests.forEach((_test, index) => {

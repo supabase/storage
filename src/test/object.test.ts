@@ -12,11 +12,13 @@ import { StorageBackendError } from '../storage'
 import { useMockObject, useMockQueue } from './common'
 import { getPostgresConnection } from '../database'
 import { getServiceKeyUser } from '../database/tenant'
+import { Knex } from 'knex'
 
 dotenv.config({ path: '.env.test' })
 
 const { anonKey, jwtSecret, serviceKey, tenantId } = getConfig()
 
+let tnx: Knex.Transaction | undefined
 async function getSuperuserPostgrestClient() {
   const superUser = await getServiceKeyUser(tenantId)
 
@@ -26,13 +28,18 @@ async function getSuperuserPostgrestClient() {
     tenantId,
     host: 'localhost',
   })
-  const tnx = await conn.pool
-
+  tnx = await conn.transaction()
   return tnx
 }
 
 useMockObject()
 useMockQueue()
+
+afterEach(async () => {
+  if (tnx) {
+    await tnx.commit()
+  }
+})
 
 /*
  * GET /object/:id

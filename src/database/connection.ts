@@ -1,8 +1,10 @@
-import pg from 'pg'
+import pg, { DatabaseError } from 'pg'
 import { Knex, knex } from 'knex'
 import { JwtPayload } from 'jsonwebtoken'
+import retry from 'async-retry'
 import { getConfig } from '../config'
 import { DbActiveConnection, DbActivePool } from '../monitoring/metrics'
+import { StorageBackendError } from '../storage'
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)
@@ -115,12 +117,40 @@ export class TenantConnection {
   }
 
   async transaction(instance?: Knex) {
-    const pool = instance || this.pool
-    const tnx = await pool.transaction()
+    const tnx = await retry(
+      async (bail) => {
+        try {
+          const pool = instance || this.pool
+          return await pool.transaction()
+        } catch (e) {
+          if (
+            e instanceof DatabaseError &&
+            e.code === '08P01' &&
+            e.message.includes('no more connections allowed')
+          ) {
+            throw e
+          }
+
+          bail(e as Error)
+          return
+        }
+      },
+      {
+        minTimeout: 50,
+        maxTimeout: 500,
+        maxRetryTime: 2000,
+        retries: 10,
+      }
+    )
+
+    if (!tnx) {
+      throw new StorageBackendError('Could not create transaction', 500, 'transaction_failed')
+    }
 
     if (!instance && this.options.isExternalPool) {
       await tnx.raw(`SELECT set_config('search_path', ?, true)`, [searchPath.join(', ')])
     }
+
     return tnx
   }
 

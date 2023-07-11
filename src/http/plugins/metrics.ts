@@ -23,6 +23,7 @@ export const metrics = ({ enabledEndpoint }: MetricsOptions) =>
       },
       routeMetrics: {
         enabled: enableDefaultMetrics,
+        routeBlacklist: ['/metrics', '/status'],
         overrides: {
           summary: {
             name: 'storage_api_http_request_summary_seconds',

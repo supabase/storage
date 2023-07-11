@@ -35,8 +35,28 @@ services:
       PGBOUNCER_POOL_MODE: transaction
       PGBOUNCER_IGNORE_STARTUP_PARAMETERS: "extra_float_digits, options"
       PGBOUNCER_STATS_USERS: postgres
+      PGBOUNCER_DEFAULT_POOL_SIZE: 50
+      PGBOUNCER_MAX_CLIENT_CONN: 2000
+    ulimits:
+      nofile:
+        soft: 655360
+        hard: 655360
     depends_on:
       - db
+
+  pg_bouncer_exporter:
+    image: spreaker/prometheus-pgbouncer-exporter
+    environment:
+      PGBOUNCER_EXPORTER_HOST: 0.0.0.0
+      PGBOUNCER_EXPORTER_PORT: 9127
+      PGBOUNCER_HOST: pg_bouncer
+      PGBOUNCER_PORT: 6432
+      PGBOUNCER_USER: postgres
+      PGBOUNCER_PASS: postgres
+    depends_on:
+      - pg_bouncer
+    ports:
+      - 9127:9127
 
   redis:
     image: redis:6.2-alpine
@@ -80,3 +100,27 @@ services:
       - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/images
       - IMGPROXY_USE_ETAG=true
       - IMGPROXY_ENABLE_WEBP_DETECTION=true
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - 9090:9090
+    restart: unless-stopped
+    volumes:
+      - ./dashboard/prometheus:/etc/prometheus
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - 3000:3000
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=grafana
+    volumes:
+      - ./dashboard/grafana/config:/etc/grafana/provisioning
+      - ./dashboard/grafana/dashboards:/var/lib/grafana/dashboards

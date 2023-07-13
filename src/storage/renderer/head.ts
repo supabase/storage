@@ -17,6 +17,7 @@ export class HeadRenderer extends Renderer {
 
     return {
       metadata,
+      version: options.version,
       transformations: ImageRenderer.applyTransformation(request.query as TransformOptions),
     }
   }

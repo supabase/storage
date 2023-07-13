@@ -4,7 +4,7 @@ import dotenv from 'dotenv'
 import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
-import { getConfig } from '../config'
+import { getConfig, setConfig } from '../config'
 import { S3Backend } from '../storage/backend'
 import { Obj } from '../storage/schemas'
 import { signJWT } from '../auth'
@@ -40,6 +40,10 @@ afterEach(async () => {
   if (tnx) {
     await tnx.commit()
   }
+})
+
+beforeEach(() => {
+  getConfig({ reload: true })
 })
 
 /*
@@ -397,7 +401,7 @@ describe('testing POST object via multipart upload', () => {
   })
 
   test('return 400 when exceeding file size limit', async () => {
-    process.env.FILE_SIZE_LIMIT = '1'
+    getConfig().fileSizeLimit = 1
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
@@ -629,7 +633,7 @@ describe('testing POST object via binary upload', () => {
   })
 
   test('return 400 when exceeding file size limit', async () => {
-    process.env.FILE_SIZE_LIMIT = '1'
+    getConfig().fileSizeLimit = 1
     const path = './src/test/assets/sadcat.jpg'
     const { size } = fs.statSync(path)
 

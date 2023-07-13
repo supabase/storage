@@ -23,7 +23,94 @@ import { StorageBackendError } from '../errors'
 import { getConfig } from '../../config'
 import Agent, { HttpsAgent } from 'agentkeepalive'
 
-const { globalS3Protocol, globalS3MaxSockets } = getConfig()
+const { storageS3MaxSockets, storageProviders } = getConfig()
+
+export interface S3ClientOptions {
+  endpoint?: string
+  region?: string
+  forcePathStyle?: boolean
+  accessKey?: string
+  secretKey?: string
+  role?: string
+}
+
+export interface S3Options {
+  bucket: string
+  prefix?: string
+  client: S3Client | S3ClientOptions
+}
+
+const defaultHttpAgent = createAgent('http')
+const defaultHttpsAgent = createAgent('https')
+const defaultS3Clients: Record<string, S3Client> = {}
+
+/**
+ * Get a client for a given provider and cache it for subsequent calls
+ * @param provider
+ */
+export function getClient(provider: keyof typeof storageProviders) {
+  if (defaultS3Clients[provider]) {
+    return defaultS3Clients[provider]
+  }
+
+  const options = storageProviders[provider]
+
+  if (!options) {
+    throw new StorageBackendError(
+      'invalid_storage_provider',
+      400,
+      `invalid storage provider ${provider}`
+    )
+  }
+
+  const client = createS3Client(options)
+  defaultS3Clients[provider] = client
+  return client
+}
+
+/**
+ * Creates an agent for the given protocol
+ * @param protocol
+ */
+function createAgent(protocol: 'http' | 'https') {
+  const agentOptions = {
+    maxSockets: storageS3MaxSockets,
+    keepAlive: true,
+  }
+
+  return protocol === 'http'
+    ? { httpAgent: new Agent(agentOptions) }
+    : { httpsAgent: new HttpsAgent(agentOptions) }
+}
+
+export function createS3Client(options: S3ClientOptions): S3Client {
+  const agent = options.endpoint?.startsWith('http://') ? defaultHttpAgent : defaultHttpsAgent
+  const params: S3ClientConfig = {
+    region: options.region,
+    runtime: 'node',
+    requestHandler: new NodeHttpHandler({
+      ...agent,
+    }),
+  }
+  if (options.endpoint) {
+    params.endpoint = options.endpoint
+  }
+  if (options.forcePathStyle) {
+    params.forcePathStyle = true
+  }
+  if (options.accessKey && options.secretKey) {
+    params.credentials = {
+      accessKeyId: options.accessKey,
+      secretAccessKey: options.secretKey,
+    }
+  }
+
+  if (options.role) {
+    // TODO: assume role
+  }
+
+  return new S3Client(params)
+}
 
 /**
  * S3Backend
@@ -32,31 +119,9 @@ const { globalS3Protocol, globalS3MaxSockets } = getConfig()
 export class S3Backend implements StorageBackendAdapter {
   client: S3Client
 
-  constructor(region: string, endpoint?: string | undefined, globalS3ForcePathStyle?: boolean) {
-    const agentOptions = {
-      maxSockets: globalS3MaxSockets,
-      keepAlive: true,
-    }
-
-    const agent =
-      globalS3Protocol === 'http'
-        ? { httpAgent: new Agent(agentOptions) }
-        : { httpsAgent: new HttpsAgent(agentOptions) }
-
-    const params: S3ClientConfig = {
-      region,
-      runtime: 'node',
-      requestHandler: new NodeHttpHandler({
-        ...agent,
-      }),
-    }
-    if (endpoint) {
-      params.endpoint = endpoint
-    }
-    if (globalS3ForcePathStyle) {
-      params.forcePathStyle = true
-    }
-    this.client = new S3Client(params)
+  constructor(private readonly options: S3Options) {
+    this.client =
+      options.client instanceof S3Client ? options.client : createS3Client(options.client)
   }
 
   /**

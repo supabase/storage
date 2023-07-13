@@ -7,7 +7,7 @@ import { UploadId } from './upload-id'
 import { Uploader } from '../../../storage/uploader'
 import { TenantConnection } from '../../../database/connection'
 
-const { globalS3Bucket } = getConfig()
+const { storageS3Bucket } = getConfig()
 
 export type MultiPartRequest = http.IncomingMessage & {
   upload: {
@@ -107,7 +107,7 @@ export async function onUploadFinish(
   try {
     const s3Key = `${req.upload.tenantId}/${resourceId.bucket}/${resourceId.objectName}`
     const metadata = await req.upload.storage.backend.headObject(
-      globalS3Bucket,
+      storageS3Bucket,
       s3Key,
       resourceId.version
     )

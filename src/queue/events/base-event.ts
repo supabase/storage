@@ -17,7 +17,21 @@ export interface BasePayload {
   }
 }
 
-export type StaticThis<T> = { new (...args: any): T }
+type StaticThis<T extends BaseEvent<any>> = BaseEventConstructor<T>
+
+interface BaseEventConstructor<Base extends BaseEvent<any>> {
+  version: string
+
+  new (...args: any): Base
+
+  send(
+    this: StaticThis<Base>,
+    payload: Omit<Base['payload'], '$version'>
+  ): Promise<string | void | null>
+
+  eventName(): string
+  beforeSend(payload: Omit<Base['payload'], '$version'>): Promise<Base['payload']>
+}
 
 const { enableQueueEvents } = getConfig()
 
@@ -39,6 +53,10 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     return this.queueName
   }
 
+  static async beforeSend<T extends BaseEvent<any>>(payload: Omit<T['payload'], '$version'>) {
+    return payload
+  }
+
   static getQueueOptions(): SendOptions | undefined {
     return undefined
   }
@@ -47,14 +65,16 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     return {}
   }
 
-  static send<T extends BaseEvent<any>>(
+  static async send<T extends BaseEvent<any>>(
     this: StaticThis<T>,
     payload: Omit<T['payload'], '$version'>
   ) {
     if (!payload.$version) {
-      ;(payload as any).$version = (this as any).version
+      ;(payload as T['payload']).$version = this.version
     }
-    const that = new this(payload)
+    const newPayload = await this.beforeSend(payload)
+
+    const that = new this(newPayload)
     return that.send()
   }
 
@@ -64,28 +84,29 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   ) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { Webhook } = require('./webhook')
-    const eventType = (this as any).eventName()
+    const eventType = this.eventName()
+    const newPayload = await this.beforeSend(payload)
 
     try {
       await Webhook.send({
         event: {
           type: eventType,
-          $version: (this as any).version,
+          $version: this.version,
           applyTime: Date.now(),
-          payload,
+          payload: newPayload,
         },
-        tenant: payload.tenant,
+        tenant: newPayload.tenant,
       })
     } catch (e) {
       logger.error(
         {
           event: {
             type: eventType,
-            $version: (this as any).version,
+            $version: this.version,
             applyTime: Date.now(),
-            payload,
+            payload: newPayload,
           },
-          tenant: payload.tenant,
+          tenant: newPayload.tenant,
         },
         `error sending webhook: ${eventType}`
       )
@@ -111,7 +132,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
       host: payload.tenant.host,
     })
 
-    const storageBackend = createStorageBackend()
+    const storageBackend = await createStorageBackend(payload.tenant.ref)
 
     return new Storage(storageBackend, db)
   }

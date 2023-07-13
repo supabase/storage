@@ -1,14 +1,18 @@
+import dotenv from 'dotenv'
+import path from 'path'
+
+dotenv.config({ path: path.resolve(__dirname, '..', '..', '.env.test'), override: false })
+
 import { randomUUID } from 'crypto'
-import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import { CreateBucketCommand } from '@aws-sdk/client-s3'
 import { StorageKnexDB } from '../storage/database'
 import app from '../app'
 import { getConfig } from '../config'
 import { checkBucketExists } from './common'
-import { createStorageBackend } from '../storage/backend'
+import { createStorageBackend, S3Backend, StorageBackendAdapter } from '../storage/backend'
 import { Knex, knex } from 'knex'
 import { signJWT } from '../auth'
 import fs from 'fs'
-import path from 'path'
 import { Storage } from '../storage'
 import { getPostgresConnection } from '../database'
 import FormData from 'form-data'
@@ -66,23 +70,27 @@ const testSpec = yaml.load(
   fs.readFileSync(path.resolve(__dirname, 'rls_tests.yaml'), 'utf8')
 ) as RlsTestSpec
 
-const { serviceKey, tenantId, jwtSecret, databaseURL, globalS3Bucket } = getConfig()
-const backend = createStorageBackend()
-const client = backend.client
+const { serviceKey, tenantId, jwtSecret, databaseURL, storageS3Bucket } = getConfig({
+  reload: true,
+})
 
 jest.setTimeout(10000)
 
 describe('RLS policies', () => {
   let db: Knex
+  let backend: StorageBackendAdapter
 
   beforeAll(async () => {
+    backend = await createStorageBackend(tenantId)
+
     // parse yaml file
-    if (client instanceof S3Client) {
-      const bucketExists = await checkBucketExists(client, globalS3Bucket)
+    if (backend instanceof S3Backend) {
+      const client = backend.client
+      const bucketExists = await checkBucketExists(client, storageS3Bucket)
 
       if (!bucketExists) {
         const createBucketCommand = new CreateBucketCommand({
-          Bucket: globalS3Bucket,
+          Bucket: storageS3Bucket,
         })
         await client.send(createBucketCommand)
       }

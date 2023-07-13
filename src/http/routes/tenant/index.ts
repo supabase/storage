@@ -4,6 +4,9 @@ import apiKey from '../../plugins/apikey'
 import { decrypt, encrypt } from '../../../auth'
 import { knex } from '../../../database/multitenant-db'
 import { deleteTenantConfig, runMigrations } from '../../../database/tenant'
+import { getConfig } from '../../../config'
+
+const { storageProviders } = getConfig()
 
 const patchSchema = {
   body: {
@@ -16,6 +19,7 @@ const patchSchema = {
       fileSizeLimit: { type: 'number' },
       jwtSecret: { type: 'string' },
       serviceKey: { type: 'string' },
+      s3Provider: { type: 'string' },
       features: {
         type: 'object',
         properties: {
@@ -62,6 +66,7 @@ interface tenantDBInterface {
   service_key: string
   file_size_limit?: number
   feature_image_transformation?: boolean
+  s3_provider?: string
 }
 
 export default async function routes(fastify: FastifyInstance) {
@@ -69,6 +74,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.get('/', async () => {
     const tenants = await knex('tenants').select()
+
     return tenants.map(
       ({
         id,
@@ -80,6 +86,7 @@ export default async function routes(fastify: FastifyInstance) {
         jwt_secret,
         service_key,
         feature_image_transformation,
+        s3_provider,
       }) => ({
         id,
         anonKey: decrypt(anon_key),
@@ -89,6 +96,7 @@ export default async function routes(fastify: FastifyInstance) {
         fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),
         serviceKey: decrypt(service_key),
+        s3Provider: s3_provider,
         features: {
           imageTransformation: {
             enabled: feature_image_transformation,
@@ -112,6 +120,7 @@ export default async function routes(fastify: FastifyInstance) {
         jwt_secret,
         service_key,
         feature_image_transformation,
+        s3_provider,
       } = tenant
 
       return {
@@ -127,6 +136,7 @@ export default async function routes(fastify: FastifyInstance) {
         fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),
         serviceKey: decrypt(service_key),
+        s3Provider: s3_provider || undefined,
         features: {
           imageTransformation: {
             enabled: feature_image_transformation,
@@ -147,9 +157,20 @@ export default async function routes(fastify: FastifyInstance) {
       features,
       databasePoolUrl,
       maxConnections,
+      s3Provider,
     } = request.body
 
     await runMigrations(tenantId, databaseUrl)
+
+    if (s3Provider) {
+      if (!validateS3Provider(s3Provider)) {
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message: `Invalid s3 provider.`,
+        })
+      }
+    }
+
     await knex('tenants').insert({
       id: tenantId,
       anon_key: encrypt(anonKey),
@@ -160,6 +181,7 @@ export default async function routes(fastify: FastifyInstance) {
       jwt_secret: encrypt(jwtSecret),
       service_key: encrypt(serviceKey),
       feature_image_transformation: features?.imageTransformation?.enabled ?? false,
+      s3_provider: s3Provider || undefined,
     })
     reply.code(201).send()
   })
@@ -177,11 +199,22 @@ export default async function routes(fastify: FastifyInstance) {
         features,
         databasePoolUrl,
         maxConnections,
+        s3Provider,
       } = request.body
       const { tenantId } = request.params
       if (databaseUrl) {
         await runMigrations(tenantId, databaseUrl)
       }
+
+      if (s3Provider) {
+        if (!validateS3Provider(s3Provider)) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: `Invalid s3 provider.`,
+          })
+        }
+      }
+
       await knex('tenants')
         .update({
           anon_key: anonKey !== undefined ? encrypt(anonKey) : undefined,
@@ -192,6 +225,7 @@ export default async function routes(fastify: FastifyInstance) {
           jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,
           service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
           feature_image_transformation: features?.imageTransformation?.enabled,
+          s3_provider: s3Provider,
         })
         .where('id', tenantId)
       reply.code(204).send()
@@ -208,6 +242,7 @@ export default async function routes(fastify: FastifyInstance) {
       features,
       databasePoolUrl,
       maxConnections,
+      s3Provider,
     } = request.body
     const { tenantId } = request.params
     await runMigrations(tenantId, databaseUrl)
@@ -218,6 +253,16 @@ export default async function routes(fastify: FastifyInstance) {
       database_url: encrypt(databaseUrl),
       jwt_secret: encrypt(jwtSecret),
       service_key: encrypt(serviceKey),
+      s3_provider: s3Provider,
+    }
+
+    if (s3Provider) {
+      if (!validateS3Provider(s3Provider)) {
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message: `Invalid s3 provider.`,
+        })
+      }
     }
 
     if (fileSizeLimit) {
@@ -245,4 +290,11 @@ export default async function routes(fastify: FastifyInstance) {
     deleteTenantConfig(request.params.tenantId)
     reply.code(204).send()
   })
+}
+
+function validateS3Provider(s3Provider: string) {
+  const providerExists = Object.keys(storageProviders).find(
+    (provider) => provider === s3Provider.toLowerCase()
+  )
+  return Boolean(providerExists)
 }

@@ -13,13 +13,11 @@ import { getFileSizeLimit } from '../../../storage/limits'
 import { UploadId } from './upload-id'
 import { FileStore } from './file-store'
 import { TenantConnection } from '../../../database/connection'
+import { getTenantBackendProvider } from '../../../database/tenant'
 
 const {
-  globalS3Bucket,
-  globalS3Endpoint,
-  globalS3Protocol,
-  globalS3ForcePathStyle,
-  region,
+  storageS3Bucket,
+  storageProviders,
   tusUrlExpiryMs,
   tusPath,
   storageBackendType,
@@ -35,28 +33,45 @@ type MultiPartRequest = http.IncomingMessage & {
   }
 }
 
-function createTusStore() {
+const s3Providers: Record<keyof typeof storageProviders, S3Store> = {}
+
+async function createTusStore(tenantId: string) {
   if (storageBackendType === 's3') {
+    const backendProvider = await getTenantBackendProvider(tenantId)
+
+    if (s3Providers[backendProvider]) {
+      return s3Providers[backendProvider]
+    }
+
+    const { region, endpoint, forcePathStyle, accessKey, secretKey } =
+      storageProviders[backendProvider]
+
     return new S3Store({
       partSize: 6 * 1024 * 1024, // Each uploaded part will have ~6MB,
       uploadExpiryMilliseconds: tusUrlExpiryMs,
       s3ClientConfig: {
-        bucket: globalS3Bucket,
+        bucket: storageS3Bucket,
         region: region,
-        endpoint: globalS3Endpoint,
-        sslEnabled: globalS3Protocol !== 'http',
-        s3ForcePathStyle: globalS3ForcePathStyle,
+        endpoint: endpoint,
+        sslEnabled: !endpoint?.startsWith('http://'),
+        s3ForcePathStyle: forcePathStyle,
+        credentials:
+          accessKey && secretKey
+            ? {
+                accessKeyId: accessKey,
+                secretAccessKey: secretKey,
+              }
+            : undefined,
       },
     })
   }
 
   return new FileStore({
-    directory: fileStoragePath + '/' + globalS3Bucket,
+    directory: fileStoragePath + '/' + storageS3Bucket,
   })
 }
 
-function createTusServer() {
-  const datastore = createTusStore()
+function createTusServer(datastore: DataStore) {
   const serverOptions: ServerOptions & {
     datastore: DataStore
   } = {
@@ -96,8 +111,6 @@ function createTusServer() {
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  const tusServer = createTusServer()
-
   fastify.register(async function authorizationContext(fastify) {
     fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>
       done(null)
@@ -119,38 +132,53 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.post(
       '/',
       { schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['object'] } },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
+      async (req, res) => {
+        const datastore = await createTusStore(req.tenantId)
+        const tusServer = createTusServer(datastore)
+
+        await tusServer.handle(req.raw, res.raw)
       }
     )
 
     fastify.post(
       '/*',
       { schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['object'] } },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
+      async (req, res) => {
+        const datastore = await createTusStore(req.tenantId)
+        const tusServer = createTusServer(datastore)
+
+        await tusServer.handle(req.raw, res.raw)
       }
     )
 
     fastify.put(
       '/*',
       { schema: { summary: 'Handle PUT request for TUS Resumable uploads', tags: ['object'] } },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
+      async (req, res) => {
+        const datastore = await createTusStore(req.tenantId)
+        const tusServer = createTusServer(datastore)
+
+        await tusServer.handle(req.raw, res.raw)
       }
     )
     fastify.patch(
       '/*',
       { schema: { summary: 'Handle PATCH request for TUS Resumable uploads', tags: ['object'] } },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
+      async (req, res) => {
+        const datastore = await createTusStore(req.tenantId)
+        const tusServer = createTusServer(datastore)
+
+        await tusServer.handle(req.raw, res.raw)
       }
     )
     fastify.head(
       '/*',
       { schema: { summary: 'Handle HEAD request for TUS Resumable uploads', tags: ['object'] } },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
+      async (req, res) => {
+        const datastore = await createTusStore(req.tenantId)
+        const tusServer = createTusServer(datastore)
+
+        await tusServer.handle(req.raw, res.raw)
       }
     )
   })
@@ -181,8 +209,11 @@ export default async function routes(fastify: FastifyInstance) {
           description: 'Handle OPTIONS request for TUS Resumable uploads',
         },
       },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
+      async (req, res) => {
+        const datastore = await createTusStore(req.tenantId)
+        const tusServer = createTusServer(datastore)
+
+        await tusServer.handle(req.raw, res.raw)
       }
     )
 
@@ -195,8 +226,11 @@ export default async function routes(fastify: FastifyInstance) {
           description: 'Handle OPTIONS request for TUS Resumable uploads',
         },
       },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
+      async (req, res) => {
+        const datastore = await createTusStore(req.tenantId)
+        const tusServer = createTusServer(datastore)
+
+        await tusServer.handle(req.raw, res.raw)
       }
     )
   })

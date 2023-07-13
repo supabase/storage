@@ -10,7 +10,7 @@ interface UploadCompleted extends BasePayload {
   version: string
 }
 
-const { globalS3Bucket } = getConfig()
+const { storageS3Bucket } = getConfig()
 
 export class MultiPartUploadCompleted extends BaseEvent<UploadCompleted> {
   static queueName = 'multipart:upload:completed'
@@ -23,7 +23,7 @@ export class MultiPartUploadCompleted extends BaseEvent<UploadCompleted> {
       const s3Key = `${job.data.tenant.ref}/${job.data.bucketName}/${job.data.objectName}/${version}`
 
       if (storage.backend instanceof S3Backend) {
-        await storage.backend.setMetadataToCompleted(globalS3Bucket, s3Key)
+        await storage.backend.setMetadataToCompleted(storageS3Bucket, s3Key)
       }
     } catch (e) {
       if (isS3Error(e) && e.$metadata.httpStatusCode === 404) {

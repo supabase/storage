@@ -1,6 +1,7 @@
 import { FastifyReply, FastifyRequest } from 'fastify'
 import { ObjectMetadata } from '../backend'
 import { Readable } from 'stream'
+import { getConfig } from '../../config'
 
 export interface RenderOptions {
   bucket: string
@@ -13,8 +14,11 @@ export interface RenderOptions {
 export interface AssetResponse {
   body?: Readable | ReadableStream<any> | Blob | Buffer
   metadata: ObjectMetadata
+  version?: string
   transformations?: string[]
 }
+
+const { storageBackendType, sMaxAge } = getConfig()
 
 /**
  * Renderer
@@ -34,7 +38,7 @@ export abstract class Renderer {
     try {
       const data = await this.getAsset(request, options)
 
-      await this.setHeaders(response, data, options)
+      await this.setHeaders(request, response, data, options)
 
       return response.send(data.body)
     } catch (err: any) {
@@ -55,7 +59,12 @@ export abstract class Renderer {
     }
   }
 
-  protected setHeaders(response: FastifyReply<any>, data: AssetResponse, options: RenderOptions) {
+  protected setHeaders(
+    request: FastifyRequest<any>,
+    response: FastifyReply<any>,
+    data: AssetResponse,
+    options: RenderOptions
+  ) {
     response
       .status(data.metadata.httpStatusCode ?? 200)
       .header('Accept-Ranges', 'bytes')
@@ -67,7 +76,7 @@ export abstract class Renderer {
     if (options.expires) {
       response.header('Expires', options.expires)
     } else {
-      response.header('Cache-Control', data.metadata.cacheControl)
+      this.handleCacheControl(request, response, data.metadata)
     }
 
     if (data.metadata.contentRange) {
@@ -78,7 +87,32 @@ export abstract class Renderer {
       response.header('X-Transformations', data.transformations.join(','))
     }
 
+    if (data.version) {
+      response.header('X-Version', data.version)
+    }
+
     this.handleDownload(response, options.download)
+  }
+
+  protected handleCacheControl(
+    request: FastifyRequest<any>,
+    response: FastifyReply<any>,
+    metadata: ObjectMetadata
+  ) {
+    const cacheBuster = request.headers[`x-cache-buster`]
+
+    const cacheControl = [metadata.cacheControl]
+
+    if (cacheBuster) {
+      if (cacheBuster !== metadata.eTag) {
+        cacheControl.push(`s-maxage=${sMaxAge}`)
+        cacheControl.push('stale-while-revalidate=30')
+      } else {
+        cacheControl.push(`s-maxage=${sMaxAge}`)
+      }
+    }
+
+    response.header('Cache-Control', cacheControl.join(', '))
   }
 
   protected handleDownload(response: FastifyReply<any>, download?: string) {

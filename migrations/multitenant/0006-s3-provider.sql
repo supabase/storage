@@ -1,0 +1,1 @@
+ALTER table tenants ADD COLUMN s3_provider TEXT DEFAULT NULL;

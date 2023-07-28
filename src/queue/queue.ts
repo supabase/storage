@@ -26,6 +26,7 @@ export abstract class Queue {
     if (isMultitenant) {
       url = pgQueueConnectionURL ?? multitenantDatabaseUrl
     }
+
     Queue.pgBoss = new PgBoss({
       connectionString: url,
       max: 4,

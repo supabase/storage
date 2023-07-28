@@ -9,8 +9,12 @@ import { StorageBackendError } from '../storage'
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)
 
-const { databaseMaxConnections, databaseFreePoolAfterInactivity, databaseConnectionTimeout } =
-  getConfig()
+const {
+  databaseSSLRootCert,
+  databaseMaxConnections,
+  databaseFreePoolAfterInactivity,
+  databaseConnectionTimeout,
+} = getConfig()
 
 interface TenantConnectionOptions {
   user: User
@@ -73,7 +77,10 @@ export class TenantConnection {
         idleTimeoutMillis: isExternalPool ? 100 : databaseFreePoolAfterInactivity,
         reapIntervalMillis: isExternalPool ? 110 : undefined,
       },
-      connection: connectionString,
+      connection: {
+        connectionString: connectionString,
+        ...this.sslSettings(),
+      },
       acquireConnectionTimeout: databaseConnectionTimeout,
     })
 
@@ -110,6 +117,13 @@ export class TenantConnection {
     return new this(knexPool, options)
   }
 
+  protected static sslSettings() {
+    if (databaseSSLRootCert) {
+      return { ssl: { ca: databaseSSLRootCert } }
+    }
+    return {}
+  }
+
   async dispose() {
     if (this.options.isExternalPool) {
       return this.pool.destroy()
@@ -137,8 +151,8 @@ export class TenantConnection {
       },
       {
         minTimeout: 50,
-        maxTimeout: 500,
-        maxRetryTime: 2000,
+        maxTimeout: 200,
+        maxRetryTime: 3000,
         retries: 10,
       }
     )

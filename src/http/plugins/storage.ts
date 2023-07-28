@@ -11,10 +11,12 @@ declare module 'fastify' {
 }
 
 export const storage = fastifyPlugin(async (fastify) => {
-  const storageBackend = createStorageBackend()
-
   fastify.decorateRequest('storage', undefined)
+  fastify.decorateRequest('backend', undefined)
+
   fastify.addHook('preHandler', async (request) => {
+    const storageBackend = await createStorageBackend(request.tenantId)
+
     const database = new StorageKnexDB(request.db, {
       tenantId: request.tenantId,
       host: request.headers['x-forwarded-host'] as string,

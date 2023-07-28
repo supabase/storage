@@ -6,7 +6,7 @@ import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from '.
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
 
-const { urlLengthLimit, globalS3Bucket } = getConfig()
+const { urlLengthLimit, storageS3Bucket } = getConfig()
 
 /**
  * Storage
@@ -207,7 +207,7 @@ export class Storage {
           return all
         }, [] as string[])
         // delete files from s3 asynchronously
-        this.backend.deleteObjects(globalS3Bucket, params)
+        this.backend.deleteObjects(storageS3Bucket, params)
       }
 
       if (deleted?.length !== objects.length) {

@@ -1,6 +1,5 @@
 import dotenv from 'dotenv'
 import path from 'path'
-dotenv.config({ path: path.resolve(__dirname, '..', '..', '.env.test') })
 
 import { getPostgresConnection } from '../database'
 import { getConfig } from '../config'
@@ -10,28 +9,31 @@ import * as tus from 'tus-js-client'
 import fs from 'fs'
 import app from '../app'
 import { FastifyInstance } from 'fastify'
-import { isS3Error, Storage } from '../storage'
-import { createStorageBackend } from '../storage/backend'
+import { Storage } from '../storage'
+import { createStorageBackend, StorageBackendAdapter } from '../storage/backend'
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import { logger } from '../monitoring'
 import { DetailedError } from 'tus-js-client'
 import { getServiceKeyUser } from '../database/tenant'
 import { checkBucketExists } from './common'
 
-const { serviceKey, tenantId, globalS3Bucket } = getConfig()
+dotenv.config({ path: path.resolve(__dirname, '..', '..', '.env.test'), override: false })
+
+const { serviceKey, tenantId, storageS3Bucket } = getConfig({ reload: true })
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
 const localServerAddress = 'http://127.0.0.1:8999'
-
-const backend = createStorageBackend()
-const client = backend.client
 
 describe('Tus multipart', () => {
   let db: StorageKnexDB
   let storage: Storage
   let server: FastifyInstance
+  let backend: StorageBackendAdapter
   let bucketName: string
 
   beforeAll(async () => {
+    backend = await createStorageBackend(tenantId)
+    const client = backend.client
+
     server = await app({
       logger: logger,
     })
@@ -41,11 +43,11 @@ describe('Tus multipart', () => {
     })
 
     if (client instanceof S3Client) {
-      const bucketExists = await checkBucketExists(client, globalS3Bucket)
+      const bucketExists = await checkBucketExists(client, storageS3Bucket)
 
       if (!bucketExists) {
         const createBucketCommand = new CreateBucketCommand({
-          Bucket: globalS3Bucket,
+          Bucket: storageS3Bucket,
         })
         await client.send(createBucketCommand)
       }

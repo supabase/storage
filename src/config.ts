@@ -1,6 +1,22 @@
 import dotenv from 'dotenv'
 
 type StorageBackendType = 'file' | 's3'
+
+export interface StorageProviderConfig {
+  name: string
+  endpoint?: string
+  region?: string
+  forcePathStyle?: boolean
+  accessKey?: string
+  secretKey?: string
+  isDefault: boolean
+}
+
+export interface StorageProviders {
+  default: StorageProviderConfig
+  [key: string]: StorageProviderConfig
+}
+
 type StorageConfigType = {
   keepAliveTimeout: number
   headersTimeout: number
@@ -10,11 +26,10 @@ type StorageConfigType = {
   encryptionKey: string
   fileSizeLimit: number
   fileStoragePath?: string
-  globalS3Protocol?: 'http' | 'https' | string
-  globalS3MaxSockets?: number
-  globalS3Bucket: string
-  globalS3Endpoint?: string
-  globalS3ForcePathStyle?: boolean
+  storageS3MaxSockets?: number
+  storageS3Bucket: string
+  storageS3Protocol?: 'http' | 'https' | string
+  storageProviders: StorageProviders
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: string
@@ -67,30 +82,51 @@ type StorageConfigType = {
   tusPath: string
   tusUseFileVersionSeparator: boolean
   enableDefaultMetrics: boolean
+  sMaxAge: string
 }
 
-function getOptionalConfigFromEnv(key: string): string | undefined {
-  return process.env[key]
+function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
+  const envValue = process.env[key]
+
+  if (!envValue && fallback) {
+    return getOptionalConfigFromEnv(fallback)
+  }
+
+  return envValue
 }
 
-function getConfigFromEnv(key: string): string {
+function getConfigFromEnv(key: string, fallbackEnv?: string): string {
   const value = getOptionalConfigFromEnv(key)
   if (!value) {
+    if (fallbackEnv) {
+      return getConfigFromEnv(fallbackEnv)
+    }
+
     throw new Error(`${key} is undefined`)
   }
   return value
 }
 
-function getOptionalIfMultitenantConfigFromEnv(key: string): string | undefined {
+function getOptionalIfMultitenantConfigFromEnv(key: string, fallback?: string): string | undefined {
   return getOptionalConfigFromEnv('IS_MULTITENANT') === 'true'
-    ? getOptionalConfigFromEnv(key)
-    : getConfigFromEnv(key)
+    ? getOptionalConfigFromEnv(key, fallback)
+    : getConfigFromEnv(key, fallback)
 }
 
-export function getConfig(): StorageConfigType {
+let config: StorageConfigType | undefined
+
+export function setConfig(newConfig: StorageConfigType) {
+  config = newConfig
+}
+
+export function getConfig(options?: { reload?: boolean }): StorageConfigType {
+  if (config && !options?.reload) {
+    return config
+  }
+
   dotenv.config()
 
-  return {
+  config = {
     keepAliveTimeout: parseInt(getOptionalConfigFromEnv('SERVER_KEEP_ALIVE_TIMEOUT') || '61', 10),
     headersTimeout: parseInt(getOptionalConfigFromEnv('SERVER_HEADERS_TIMEOUT') || '65', 10),
     adminApiKeys: getOptionalConfigFromEnv('ADMIN_API_KEYS') || '',
@@ -99,14 +135,16 @@ export function getConfig(): StorageConfigType {
     encryptionKey: getOptionalConfigFromEnv('ENCRYPTION_KEY') || '',
     fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
-    globalS3MaxSockets: parseInt(getOptionalConfigFromEnv('GLOBAL_S3_MAX_SOCKETS') || '200', 10),
-    globalS3Protocol: getOptionalConfigFromEnv('GLOBAL_S3_PROTOCOL') || 'https',
-    globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
-    globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
-    globalS3ForcePathStyle: getOptionalConfigFromEnv('GLOBAL_S3_FORCE_PATH_STYLE') === 'true',
+    storageProviders: loadStorageS3ProviderFromEnv(),
+    storageS3MaxSockets: parseInt(
+      getOptionalConfigFromEnv('STORAGE_S3_MAX_SOCKETS', 'GLOBAL_S3_MAX_SOCKETS') || '200',
+      10
+    ),
+    storageS3Protocol: getOptionalConfigFromEnv('GLOBAL_S3_PROTOCOL') || 'https',
+    storageS3Bucket: getConfigFromEnv('STORAGE_S3_BUCKET', 'GLOBAL_S3_BUCKET'),
     isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
-    jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
-    jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',
+    jwtSecret: getOptionalIfMultitenantConfigFromEnv('AUTH_JWT_SECRET', 'PGRST_JWT_SECRET') || '',
+    jwtAlgorithm: getOptionalConfigFromEnv('AUTH_JWT_ALGORITHM', 'PGRST_JWT_ALGORITHM') || 'HS256',
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
     databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
@@ -159,7 +197,7 @@ export function getConfig(): StorageConfigType {
     imgProxyURL: getOptionalConfigFromEnv('IMGPROXY_URL'),
     imgLimits: {
       size: {
-        min: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MIN_SIZE') || '1', 10),
+        min: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MIN_SIZE') || '0', 10),
         max: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MAX_SIZE') || '2000', 10),
       },
     },
@@ -195,5 +233,118 @@ export function getConfig(): StorageConfigType {
     tusUseFileVersionSeparator:
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
     enableDefaultMetrics: getOptionalConfigFromEnv('ENABLE_DEFAULT_METRICS') === 'true',
+    sMaxAge: getOptionalConfigFromEnv('S_MAXAGE') || '31536000',
   }
+
+  return config
+}
+
+/**
+ * Load S3 storage providers from env variables
+ * The convention is STORAGE_S3_PROVIDER_{PROVIDER_NAME}_{CONFIGURATION}
+ * When specifying more than one provider you must also specify the default provider using STORAGE_S3_PROVIDER_{PROVIDER_NAME}_DEFAULT=true
+ *
+ * Example Minio provider:
+ *
+ * STORAGE_S3_PROVIDER_MINIO_DEFAULT=true
+ * STORAGE_S3_PROVIDER_MINIO_ENDPOINT=http://127.0.0.1:9000
+ * STORAGE_S3_PROVIDER_MINIO_FORCE_PATH_STYLE=true
+ * STORAGE_S3_PROVIDER_MINIO_ACCESS_KEY_ID=supa-storage
+ * STORAGE_S3_PROVIDER_MINIO_SECRET_ACCESS_KEY=secret1234
+ * STORAGE_S3_PROVIDER_MINIO_REGION=us-east-1
+ */
+function loadStorageS3ProviderFromEnv() {
+  const providersENV = Object.keys(process.env).filter((key) =>
+    key.startsWith('STORAGE_S3_PROVIDER_')
+  )
+
+  const providers = providersENV.reduce((all, providerEnv) => {
+    const providerRegex = new RegExp('(STORAGE_S3_PROVIDER)_([A-Z0-9]+)_(.*)', 'gi')
+    const matches = providerRegex.exec(providerEnv)
+
+    if (matches?.length !== 4) {
+      throw new Error(
+        `Invalid storage provider env variable: ${providerEnv} format is STORAGE_PROVIDER_<provider name>_<config>`
+      )
+    }
+
+    const providerName = matches[2].toLowerCase()
+    const configName = matches[3].toLowerCase()
+
+    if (!all[providerName]) {
+      all[providerName] = {
+        name: providerName,
+        isDefault: false,
+      }
+    }
+
+    switch (configName) {
+      case 'region':
+        all[providerName].region = process.env[providerEnv] || ''
+        break
+      case 'endpoint':
+        all[providerName].endpoint = process.env[providerEnv] || ''
+        break
+      case 'access_key_id':
+        all[providerName].accessKey = process.env[providerEnv] || ''
+        break
+      case 'secret_access_key':
+        all[providerName].secretKey = process.env[providerEnv] || ''
+        break
+      case 'force_path_style':
+        all[providerName].forcePathStyle = process.env[providerEnv] === 'true'
+        break
+      case 'default':
+        all[providerName].isDefault = process.env[providerEnv] === 'true'
+        break
+      default:
+        throw new Error(`Invalid storage provider config: ${configName}`)
+    }
+
+    return all
+  }, {} as Record<string, StorageProviderConfig>)
+
+  const providersNumber = Object.keys(providers).length
+
+  // If multiple providers are configured we check if one is default
+  if (providersNumber > 1) {
+    const defaultProviderName = Object.keys(providers).find((providerName) => {
+      return providers[providerName].isDefault
+    })
+
+    if (!defaultProviderName) {
+      throw new Error(
+        `Missing default storage provider config please provide STORAGE_PROVIDER_<name>_DEFAULT=true`
+      )
+    }
+
+    providers.default = providers[defaultProviderName]
+  }
+
+  // Only 1 provider specified, we set it as default
+  if (providersNumber === 1) {
+    providers.default = Object.values(providers)[0]
+  }
+
+  if (providersNumber === 0) {
+    // Backwards compatibility with old env variables
+    const endpoint = getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT')
+    const pathStyle = getOptionalConfigFromEnv('GLOBAL_S3_FORCE_PATH_STYLE')
+
+    if (endpoint || pathStyle) {
+      providers.default = {
+        isDefault: true,
+        name: 'default',
+        endpoint,
+        forcePathStyle: pathStyle === 'true',
+        region: getOptionalConfigFromEnv('AWS_DEFAULT_REGION', 'REGION'),
+        accessKey: getOptionalConfigFromEnv('AWS_ACCESS_KEY_ID'),
+        secretKey: getOptionalConfigFromEnv('AWS_SECRET_ACCESS_KEY'),
+      }
+    } else if (getConfigFromEnv('STORAGE_BACKEND') === 's3') {
+      throw new Error('Missing storage provider config please provide STORAGE_PROVIDER_*')
+    }
+  }
+
+  return providers as StorageProviders
 }

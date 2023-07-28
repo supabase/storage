@@ -13,6 +13,7 @@ interface TenantConfig {
   maxConnections?: number
   fileSizeLimit: number
   features: Features
+  s3Provider?: string
   jwtSecret: string
   serviceKey: string
   serviceKeyPayload: {
@@ -26,7 +27,8 @@ export interface Features {
   }
 }
 
-const { multitenantDatabaseUrl, isMultitenant, serviceKey, jwtSecret } = getConfig()
+const { multitenantDatabaseUrl, isMultitenant, serviceKey, jwtSecret, storageProviders } =
+  getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
 
@@ -90,6 +92,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
     feature_image_transformation,
     database_pool_url,
     max_connections,
+    s3_provider,
   } = tenant
 
   const serviceKey = decrypt(service_key)
@@ -105,6 +108,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
     jwtSecret: jwtSecret,
     serviceKey: serviceKey,
     serviceKeyPayload,
+    s3Provider: s3_provider,
     maxConnections: max_connections ? Number(max_connections) : undefined,
     features: {
       imageTransformation: {
@@ -114,6 +118,15 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   }
   await cacheTenantConfigAndRunMigrations(tenantId, config)
   return config
+}
+
+export async function getTenantBackendProvider(tenantId: string) {
+  if (!isMultitenant) {
+    return 'default'
+  }
+
+  const tenantConfig = await getTenantConfig(tenantId)
+  return tenantConfig.s3Provider || 'default'
 }
 
 /**

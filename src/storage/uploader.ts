@@ -18,7 +18,7 @@ interface UploaderOptions extends UploadObjectOptions {
   allowedMimeTypes?: string[] | null
 }
 
-const { globalS3Bucket } = getConfig()
+const { storageS3Bucket } = getConfig()
 
 export interface UploadObjectOptions {
   bucketId: string
@@ -97,7 +97,7 @@ export class Uploader {
       const s3Key = `${this.db.tenantId}/${path}`
 
       const objectMetadata = await this.backend.uploadObject(
-        globalS3Bucket,
+        storageS3Bucket,
         s3Key,
         version,
         file.body,
@@ -187,6 +187,7 @@ export class Uploader {
             name: objectName,
             bucketId: bucketId,
             metadata: objectMetadata,
+            version: id,
           })
         )
 

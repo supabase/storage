@@ -138,7 +138,7 @@ export class TenantConnection {
       {
         minTimeout: 50,
         maxTimeout: 500,
-        maxRetryTime: 2000,
+        maxRetryTime: 4000,
         retries: 10,
       }
     )

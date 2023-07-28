@@ -23,7 +23,7 @@ export interface UploadObjectOptions {
   version?: string
 }
 
-const { urlLengthLimit, globalS3Bucket } = getConfig()
+const { urlLengthLimit, storageS3Bucket } = getConfig()
 
 /**
  * ObjectStorage
@@ -169,7 +169,7 @@ export class ObjectStorage {
             return all
           }, [] as string[])
 
-          await this.backend.deleteObjects(globalS3Bucket, prefixesToDelete)
+          await this.backend.deleteObjects(storageS3Bucket, prefixesToDelete)
 
           await Promise.allSettled(
             data.map((object) =>
@@ -202,6 +202,7 @@ export class ObjectStorage {
       name: objectName,
       bucketId: this.bucketId,
       metadata,
+      version: result.version,
     })
 
     return result
@@ -274,14 +275,14 @@ export class ObjectStorage {
       })
 
       const copyResult = await this.backend.copyObject(
-        globalS3Bucket,
+        storageS3Bucket,
         s3SourceKey,
         originObject.version,
         s3DestinationKey,
         newVersion
       )
 
-      const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, newVersion)
+      const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
 
       const destObject = await this.db.createObject({
         ...originObject,
@@ -291,11 +292,13 @@ export class ObjectStorage {
         version: newVersion,
       })
 
+      const tenant = this.db.tenant()
       await ObjectCreatedCopyEvent.sendWebhook({
-        tenant: this.db.tenant(),
+        tenant,
         name: destinationKey,
         bucketId: this.bucketId,
         metadata,
+        version: newVersion,
       })
 
       return {
@@ -355,14 +358,14 @@ export class ObjectStorage {
 
     try {
       await this.backend.copyObject(
-        globalS3Bucket,
+        storageS3Bucket,
         s3SourceKey,
         sourceObj.version,
         s3DestinationKey,
         newVersion
       )
 
-      const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, newVersion)
+      const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
 
       await this.db.asSuperUser().withTransaction(async (db) => {
         await db.createObject({
@@ -392,6 +395,7 @@ export class ObjectStorage {
             name: destinationObjectName,
             bucketId: this.bucketId,
             metadata: metadata,
+            version: newVersion,
             oldObject: {
               name: sourceObjectName,
               bucketId: this.bucketId,

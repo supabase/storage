@@ -3,8 +3,11 @@ import dotenv from 'dotenv'
 import * as migrate from '../database/migrate'
 import { knex } from '../database/multitenant-db'
 import { adminApp } from './common'
+import { getConfig } from '../config'
 
-dotenv.config({ path: '.env.test' })
+dotenv.config({ path: '.env.test', override: false })
+
+getConfig({ reload: true })
 
 const payload = {
   anonKey: 'a',
@@ -19,6 +22,7 @@ const payload = {
       enabled: true,
     },
   },
+  s3Provider: 'default',
 }
 
 const payload2 = {
@@ -34,6 +38,7 @@ const payload2 = {
       enabled: false,
     },
   },
+  s3Provider: 'default',
 }
 
 beforeAll(async () => {

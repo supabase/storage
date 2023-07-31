@@ -1,6 +1,7 @@
 import dotenv from 'dotenv'
 
 type StorageBackendType = 'file' | 's3'
+
 type StorageConfigType = {
   keepAliveTimeout: number
   headersTimeout: number
@@ -20,6 +21,7 @@ type StorageConfigType = {
   jwtAlgorithm: string
   multitenantDatabaseUrl?: string
   databaseURL: string
+  databaseSSLRootCert?: string
   databasePoolURL?: string
   databaseMaxConnections: number
   databaseFreePoolAfterInactivity: number
@@ -108,6 +110,7 @@ export function getConfig(): StorageConfigType {
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
     jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
+    databaseSSLRootCert: getOptionalConfigFromEnv('DATABASE_SSL_ROOT_CERT'),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
     databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
     databaseMaxConnections: parseInt(

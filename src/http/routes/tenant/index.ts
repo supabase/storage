@@ -186,7 +186,7 @@ export default async function routes(fastify: FastifyInstance) {
         .update({
           anon_key: anonKey !== undefined ? encrypt(anonKey) : undefined,
           database_url: databaseUrl !== undefined ? encrypt(databaseUrl) : undefined,
-          database_pool_url: databasePoolUrl ? encrypt(databasePoolUrl) : undefined,
+          database_pool_url: databasePoolUrl !== undefined ? encrypt(databasePoolUrl) : undefined,
           max_connections: maxConnections ? Number(maxConnections) : undefined,
           file_size_limit: fileSizeLimit,
           jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,

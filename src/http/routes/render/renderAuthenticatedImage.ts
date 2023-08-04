@@ -1,10 +1,7 @@
-import { getConfig } from '../../../config'
 import { FromSchema } from 'json-schema-to-ts'
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { ImageRenderer } from '../../../storage/renderer'
 import { transformationOptionsSchema } from '../../schemas/transformations'
-
-const { globalS3Bucket } = getConfig()
 
 const renderAuthenticatedImageParamsSchema = {
   type: 'object',
@@ -40,20 +37,24 @@ export default async function routes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },
+      config: {
+        getParentBucketId: (request: FastifyRequest<renderImageRequestInterface>) => {
+          return request.params.bucketName
+        },
+      },
     },
     async (request, response) => {
       const { download } = request.query
       const { bucketName } = request.params
       const objectName = request.params['*']
 
-      const obj = await request.storage.from(bucketName).findObject(objectName, 'id,version')
+      const obj = await request.storage.from(request.bucket).findObject(objectName, 'id,version')
 
       const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
 
       const renderer = request.storage.renderer('image') as ImageRenderer
 
       return renderer.setTransformations(request.query).render(request, response, {
-        bucket: globalS3Bucket,
         key: s3Key,
         version: obj.version,
         download,

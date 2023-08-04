@@ -2,6 +2,8 @@ import { mustBeValidBucketName, mustBeValidKey } from '../../../storage/limits'
 import { StorageBackendError } from '../../../storage'
 import { getConfig } from '../../../config'
 import { FILE_VERSION_SEPARATOR, PATH_SEPARATOR, SEPARATOR } from '../../../storage/backend'
+import http from 'http'
+import { MultiPartRequest } from './lifecycle'
 
 interface ResourceIDOptions {
   tenant: string
@@ -11,6 +13,8 @@ interface ResourceIDOptions {
 }
 
 const { tusUseFileVersionSeparator } = getConfig()
+
+const reExtractFileID = /([^/]+)\/?$/
 
 export class UploadId {
   public tenant: string
@@ -46,6 +50,37 @@ export class UploadId {
     const separator = tusUseFileVersionSeparator ? FILE_VERSION_SEPARATOR : PATH_SEPARATOR
     return `${this.tenant}/${this.bucket}/${this.objectName}${separator}${this.version}`
   }
+}
+
+export function extractIdFromRequest(rawRwq: http.IncomingMessage, path: string) {
+  const req = rawRwq as MultiPartRequest
+  const match = reExtractFileID.exec(req.url as string)
+
+  if (!match || path.includes(match[1])) {
+    return false
+  }
+
+  return Buffer.from(match[1], 'base64url').toString('utf-8')
+}
+
+export function getFileIdFromRequest(
+  rawRwq: http.IncomingMessage,
+  path: string,
+  options?: { isExternalBucket?: boolean }
+) {
+  const req = rawRwq as MultiPartRequest
+
+  const idMatch = extractIdFromRequest(rawRwq, path)
+
+  if (!idMatch) {
+    return false
+  }
+
+  if (options?.isExternalBucket) {
+    return idMatch.split('/').slice(1).join('/')
+  }
+
+  return req.upload.tenantId + '/' + idMatch
 }
 
 function fromPathSeparator(id: string) {

@@ -7,22 +7,24 @@ import { isRenderableError, Storage } from '../../../storage'
 import { MultiPartRequest } from './lifecycle'
 import { Database } from '../../../storage/database'
 import { OptionsHandler } from '@tus/server/handlers/OptionsHandler'
-import { UploadId } from './upload-id'
+import { UploadId, getFileIdFromRequest } from './upload-id'
 import { getFileSizeLimit } from '../../../storage/limits'
 import { Uploader } from '../../../storage/uploader'
 import { logger } from '../../../monitoring'
 
-const reExtractFileID = /([^/]+)\/?$/
-
 export class Patch extends PatchHandler {
   getFileIdFromRequest(rawRwq: http.IncomingMessage) {
-    return getFileIdFromRequest(rawRwq, this.options.path)
+    const req = rawRwq as MultiPartRequest
+    return getFileIdFromRequest(rawRwq, this.options.path, {
+      isExternalBucket: Boolean(req.upload.bucket?.credential_id),
+    })
   }
 
   async send(rawReq: http.IncomingMessage, res: http.ServerResponse) {
     const req = rawReq as MultiPartRequest
 
-    const id = this.getFileIdFromRequest(req)
+    const id = getFileIdFromRequest(req, this.options.path)
+
     if (id === false) {
       throw ERRORS.FILE_NOT_FOUND
     }
@@ -64,13 +66,16 @@ export class Patch extends PatchHandler {
 
 export class Head extends HeadHandler {
   getFileIdFromRequest(rawRwq: http.IncomingMessage) {
-    return getFileIdFromRequest(rawRwq, this.options.path)
+    const req = rawRwq as MultiPartRequest
+    return getFileIdFromRequest(rawRwq, this.options.path, {
+      isExternalBucket: Boolean(req.upload.bucket?.credential_id),
+    })
   }
 
   async send(rawReq: http.IncomingMessage, res: http.ServerResponse) {
     const req = rawReq as MultiPartRequest
 
-    const id = this.getFileIdFromRequest(req)
+    const id = getFileIdFromRequest(req, this.options.path)
     if (id === false) {
       throw ERRORS.FILE_NOT_FOUND
     }
@@ -116,7 +121,10 @@ export class Head extends HeadHandler {
 
 export class Post extends PostHandler {
   getFileIdFromRequest(rawRwq: http.IncomingMessage) {
-    return getFileIdFromRequest(rawRwq, this.options.path)
+    const req = rawRwq as MultiPartRequest
+    return getFileIdFromRequest(rawRwq, this.options.path, {
+      isExternalBucket: Boolean(req.upload.bucket?.credential_id),
+    })
   }
 
   async send(rawReq: http.IncomingMessage, res: http.ServerResponse) {
@@ -137,7 +145,9 @@ export class Post extends PostHandler {
 
     try {
       const id = this.options.namingFunction(req)
-      const uploadID = UploadId.fromString(id)
+      const uploadID = req.upload.bucket.credential_id
+        ? UploadId.fromString(`${req.upload.tenantId}/${req.upload.bucket.id}/${id}`)
+        : UploadId.fromString(id)
 
       return await lock(uploadID, req.upload.storage, (db) => {
         req.upload.storage = new Storage(req.upload.storage.backend, db)
@@ -163,11 +173,18 @@ export class Post extends PostHandler {
 
   generateUrl(rawReq: http.IncomingMessage, id: string) {
     const req = rawReq as MultiPartRequest
-    id = id.split('/').slice(1).join('/')
 
     // Enforce https in production
     if (process.env.NODE_ENV === 'production') {
       req.headers['x-forwarded-proto'] = 'https'
+    }
+
+    if (req.upload.bucket.credential_id) {
+      // add bucket id
+      id = `${req.upload.bucket.id}/${id}`
+    } else {
+      // remove tenant id
+      id = id.split('/').slice(1).join('/')
     }
 
     id = Buffer.from(id, 'utf-8').toString('base64url')
@@ -177,7 +194,10 @@ export class Post extends PostHandler {
 
 export class Options extends OptionsHandler {
   getFileIdFromRequest(rawRwq: http.IncomingMessage) {
-    return getFileIdFromRequest(rawRwq, this.options.path)
+    const req = rawRwq as MultiPartRequest
+    return getFileIdFromRequest(rawRwq, this.options.path, {
+      isExternalBucket: Boolean(req.upload.bucket?.credential_id),
+    })
   }
 
   async send(rawReq: http.IncomingMessage, res: http.ServerResponse) {
@@ -201,7 +221,7 @@ export class Options extends OptionsHandler {
       const pathParts = this.options.path.split('/')
 
       if (urlParts.length > pathParts.length) {
-        const id = this.getFileIdFromRequest(rawReq)
+        const id = getFileIdFromRequest(rawReq, this.options.path)
 
         if (!id) {
           throw ERRORS.FILE_NOT_FOUND
@@ -217,9 +237,7 @@ export class Options extends OptionsHandler {
         return this.write(res, 204)
       }
 
-      const bucket = await req.upload.storage
-        .asSuperUser()
-        .findBucket(uploadID.bucket, 'id, file_size_limit')
+      const bucket = await req.upload.bucket
 
       if (bucket.file_size_limit && bucket.file_size_limit > fileSizeLimit) {
         res.setHeader('Tus-Max-Size', fileSizeLimit.toString())
@@ -250,18 +268,6 @@ export class Options extends OptionsHandler {
       })
     }
   }
-}
-
-function getFileIdFromRequest(rawRwq: http.IncomingMessage, path: string) {
-  const req = rawRwq as MultiPartRequest
-  const match = reExtractFileID.exec(req.url as string)
-
-  if (!match || path.includes(match[1])) {
-    return false
-  }
-
-  const idMatch = Buffer.from(match[1], 'base64url').toString('utf-8')
-  return req.upload.tenantId + '/' + idMatch
 }
 
 async function lock<T extends (db: Database) => any>(

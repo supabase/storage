@@ -2,5 +2,10 @@ import dotenv from 'dotenv'
 import { runMigrations } from '../database/migrate'
 dotenv.config()
 ;(async () => {
-  await runMigrations()
+  try {
+    await runMigrations()
+  } catch (e) {
+    console.error(e)
+    process.exit(1)
+  }
 })()

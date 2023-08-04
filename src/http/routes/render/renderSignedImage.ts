@@ -1,11 +1,8 @@
-import { getConfig } from '../../../config'
 import { FromSchema } from 'json-schema-to-ts'
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { ImageRenderer } from '../../../storage/renderer'
 import { getJwtSecret, SignedToken, verifyJWT } from '../../../auth'
 import { StorageBackendError } from '../../../storage'
-
-const { globalS3Bucket } = getConfig()
 
 const renderAuthenticatedImageParamsSchema = {
   type: 'object',
@@ -47,6 +44,11 @@ export default async function routes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },
+      config: {
+        getParentBucketId: (request: FastifyRequest<renderImageRequestInterface>) => {
+          return request.params.bucketName
+        },
+      },
     },
     async (request, response) => {
       const { token } = request.query
@@ -70,20 +72,18 @@ export default async function routes(fastify: FastifyInstance) {
         throw new StorageBackendError('InvalidSignature', 400, 'The url do not match the signature')
       }
 
-      const s3Key = `${request.tenantId}/${url}`
-      request.log.info(s3Key)
-
-      const [bucketName, ...objParts] = url.split('/')
+      const objectName = request.params['*']
       const obj = await request.storage
         .asSuperUser()
-        .from(bucketName)
-        .findObject(objParts.join('/'), 'id,version')
+        .from(request.bucket)
+        .findObject(objectName, 'id,version')
+
+      const s3Key = request.storage.from(request.bucket).computeObjectPath(obj.name)
 
       const renderer = request.storage.renderer('image') as ImageRenderer
       return renderer
         .setTransformationsFromString(transformations || '')
         .render(request, response, {
-          bucket: globalS3Bucket,
           key: s3Key,
           version: obj.version,
           download,

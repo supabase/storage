@@ -4,8 +4,6 @@ import { IncomingMessage, Server, ServerResponse } from 'http'
 import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../request'
 
-const { globalS3Bucket } = getConfig()
-
 const getObjectParamsSchema = {
   type: 'object',
   properties: {
@@ -37,18 +35,15 @@ async function requestHandler(
     unknown
   >
 ) {
-  const { bucketName } = request.params
   const { download } = request.query
   const objectName = request.params['*']
 
-  const obj = await request.storage.from(bucketName).findObject(objectName, 'id, version')
+  const obj = await request.storage.from(request.bucket).findObject(objectName, 'id, version')
 
   // send the object from s3
-  const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
-  request.log.info(s3Key)
+  const s3Key = request.storage.from(request.bucket).computeObjectPath(objectName)
 
   return request.storage.renderer('asset').render(request, response, {
-    bucket: globalS3Bucket,
     key: s3Key,
     version: obj.version,
     download,
@@ -69,6 +64,11 @@ export default async function routes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },
+      config: {
+        getParentBucketId: (request: FastifyRequest<getObjectRequestInterface>) => {
+          return request.params.bucketName
+        },
+      },
     },
     async (request, response) => {
       return requestHandler(request, response)
@@ -87,6 +87,11 @@ export default async function routes(fastify: FastifyInstance) {
         description: 'use GET /object/authenticated/{bucketName} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
         tags: ['deprecated'],
+      },
+      config: {
+        getParentBucketId: (request: FastifyRequest<getObjectRequestInterface>) => {
+          return request.params.bucketName
+        },
       },
     },
     async (request, response) => {

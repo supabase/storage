@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
+import { mustBeServiceKey } from '../../../auth'
 
 const createBucketBodySchema = {
   type: 'object',
@@ -9,6 +10,7 @@ const createBucketBodySchema = {
     name: { type: 'string', examples: ['avatars'] },
     id: { type: 'string', examples: ['avatars'] },
     public: { type: 'boolean', examples: [false] },
+    credential_id: { type: 'string' },
     file_size_limit: {
       anyOf: [
         { type: 'integer', examples: [1000], nullable: true, minimum: 0 },
@@ -58,7 +60,12 @@ export default async function routes(fastify: FastifyInstance) {
         id,
         allowed_mime_types,
         file_size_limit,
+        credential_id,
       } = request.body
+
+      if (credential_id) {
+        await mustBeServiceKey(request.tenantId, request.jwt)
+      }
 
       const bucket = await request.storage.createBucket({
         id: id ?? bucketName,
@@ -66,6 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
         owner,
         public: isPublic ?? false,
         fileSizeLimit: file_size_limit,
+        credentialId: credential_id,
         allowedMimeTypes: allowed_mime_types
           ? allowed_mime_types?.filter((mime) => mime)
           : allowed_mime_types,

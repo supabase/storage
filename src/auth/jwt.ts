@@ -1,8 +1,10 @@
-import { getJwtSecret as getJwtSecretForTenant } from '../database/tenant'
+import { getJwtSecret as getJwtSecretForTenant, getTenantConfig } from '../database/tenant'
 import jwt from 'jsonwebtoken'
+import crypto from 'crypto'
 import { getConfig } from '../config'
+import { StorageBackendError } from '../storage'
 
-const { isMultitenant, jwtSecret, jwtAlgorithm } = getConfig()
+const { isMultitenant, jwtSecret, jwtAlgorithm, serviceKey } = getConfig()
 
 interface jwtInterface {
   sub?: string
@@ -19,6 +21,21 @@ export type SignedUploadToken = {
   owner: string | undefined
   url: string
   exp: number
+}
+
+export async function compareServiceKey(tenantId: string, jwt: string) {
+  if (isMultitenant) {
+    const { serviceKey } = await getTenantConfig(tenantId)
+    return crypto.timingSafeEqual(Buffer.from(serviceKey), Buffer.from(jwt))
+  }
+
+  return crypto.timingSafeEqual(Buffer.from(serviceKey), Buffer.from(jwt))
+}
+
+export async function mustBeServiceKey(tenantId: string, jwt: string) {
+  if (!(await compareServiceKey(tenantId, jwt))) {
+    throw new StorageBackendError('unauthorized', 401, 'Unauthorized')
+  }
 }
 
 /**

@@ -1,0 +1,31 @@
+global:
+  scrape_interval: 1s
+  scrape_timeout: 1s
+  evaluation_interval: 15s
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+      scheme: http
+      timeout: 15s
+      api_version: v1
+scrape_configs:
+  - job_name: storage_api
+    honor_timestamps: true
+    scrape_interval: 1s
+    scrape_timeout: 1s
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - host.docker.internal:5000
+
+  - job_name: pg_bouncer_exporter
+    honor_timestamps: true
+    scrape_interval: 1s
+    scrape_timeout: 1s
+    metrics_path: /
+    scheme: http
+    static_configs:
+      - targets:
+          - pg_bouncer_exporter:9127

@@ -1,8 +1,15 @@
--- insert users
-INSERT INTO "auth"."users" ("instance_id", "id", "aud", "role", "email", "encrypted_password", "confirmed_at", "invited_at", "confirmation_token", "confirmation_sent_at", "recovery_token", "recovery_sent_at", "email_change_token", "email_change", "email_change_sent_at", "last_sign_in_at", "raw_app_meta_data", "raw_user_meta_data", "is_super_admin", "created_at", "updated_at") VALUES
-('00000000-0000-0000-0000-000000000000', '317eadce-631a-4429-a0bb-f19a7a517b4a', 'authenticated', 'authenticated', 'inian+user2@supabase.io', '', NULL, '2021-02-17 04:41:13.408828+00', '541rn7rTZPGeGCYsp0a38g', '2021-02-17 04:41:13.408828+00', '', NULL, '', '', NULL, NULL, '{"provider": "email"}', 'null', 'f', '2021-02-17 04:41:13.406912+00', '2021-02-17 04:41:13.406919+00'),
-('00000000-0000-0000-0000-000000000000', '4d56e902-f0a0-4662-8448-a4d9e643c142', 'authenticated', 'authenticated', 'inian+user1@supabase.io', '', NULL, '2021-02-17 04:40:58.570482+00', 'U1HvzExEO3l7JzP-4tTxJA', '2021-02-17 04:40:58.570482+00', '', NULL, '', '', NULL, NULL, '{"provider": "email"}', 'null', 'f', '2021-02-17 04:40:58.568637+00', '2021-02-17 04:40:58.568642+00'),
-('00000000-0000-0000-0000-000000000000', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', 'authenticated', 'authenticated', 'inian+admin@supabase.io', '', NULL, '2021-02-17 04:40:42.901743+00', '3EG99GjT_e3NC4eGEBXOjw', '2021-02-17 04:40:42.901743+00', '', NULL, '', '', NULL, NULL, '{"provider": "email"}', 'null', 'f', '2021-02-17 04:40:42.890632+00', '2021-02-17 04:40:42.890637+00');
+CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_admin;
+
+-- Gets the User ID from the request cookie
+create or replace function auth.uid() returns uuid as $$
+select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+$$ language sql stable;
+
+-- Gets the User ID from the request cookie
+create or replace function auth.role() returns text as $$
+select nullif(current_setting('request.jwt.claim.role', true), '')::text;
+$$ language sql stable;
+
 
 -- insert buckets
 INSERT INTO "storage"."buckets" ("id", "name", "owner", "created_at", "updated_at", "public", "file_size_limit", "allowed_mime_types") VALUES

@@ -84,8 +84,6 @@ export class TenantConnection {
       acquireConnectionTimeout: databaseConnectionTimeout,
     })
 
-    DbActivePool.inc({ tenant_id: options.tenantId, is_external: isExternalPool.toString() })
-
     knexPool.client.pool.on('createSuccess', () => {
       DbActiveConnection.inc({
         tenant_id: options.tenantId,
@@ -100,7 +98,11 @@ export class TenantConnection {
       })
     })
 
-    knexPool.client.pool.on('poolDestroySuccess', () => {
+    knexPool.client.pool.on('acquireSuccess', () => {
+      DbActivePool.inc({ tenant_id: options.tenantId, is_external: isExternalPool.toString() })
+    })
+
+    knexPool.client.pool.on('release', () => {
       DbActivePool.dec({ tenant_id: options.tenantId, is_external: isExternalPool.toString() })
     })
 
@@ -136,7 +138,7 @@ export class TenantConnection {
         try {
           const pool = instance || this.pool
           return await pool.transaction()
-        } catch (e) {
+        } catch (e: any) {
           if (
             e instanceof DatabaseError &&
             e.code === '08P01' &&

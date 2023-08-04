@@ -9,7 +9,6 @@ import axios from 'axios'
 import { useMockObject } from './common'
 
 dotenv.config({ path: '.env.test' })
-const ENV = process.env
 const { imgProxyURL } = getConfig()
 
 describe('image rendering routes', () => {

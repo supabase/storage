@@ -43,12 +43,10 @@ export abstract class StorageBackendAdapter {
 
   /**
    * Gets an object body and metadata
-   * @param bucketName
    * @param key
    * @param headers
    */
   async getObject(
-    bucketName: string,
     key: string,
     version: string | undefined,
     headers?: BrowserCacheHeaders
@@ -65,7 +63,6 @@ export abstract class StorageBackendAdapter {
    * @param cacheControl
    */
   async uploadObject(
-    bucketName: string,
     key: string,
     version: string | undefined,
     body: NodeJS.ReadableStream,
@@ -77,24 +74,21 @@ export abstract class StorageBackendAdapter {
 
   /**
    * Deletes an object
-   * @param bucket
    * @param key
    * @param version
    */
-  async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
+  async deleteObject(key: string, version: string | undefined): Promise<void> {
     throw new Error('deleteObject not implemented')
   }
 
   /**
    * Copies an existing object to the given location
-   * @param bucket
    * @param source
    * @param version
    * @param destination
    * @param destinationVersion
    */
   async copyObject(
-    bucket: string,
     source: string,
     version: string | undefined,
     destination: string,
@@ -105,34 +99,27 @@ export abstract class StorageBackendAdapter {
 
   /**
    * Deletes multiple objects
-   * @param bucket
    * @param prefixes
    */
-  async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
+  async deleteObjects(prefixes: string[]): Promise<void> {
     throw new Error('deleteObjects not implemented')
   }
 
   /**
    * Returns metadata information of a specific object
-   * @param bucket
    * @param key
    * @param version
    */
-  async headObject(
-    bucket: string,
-    key: string,
-    version: string | undefined
-  ): Promise<ObjectMetadata> {
+  async headObject(key: string, version: string | undefined): Promise<ObjectMetadata> {
     throw new Error('headObject not implemented')
   }
 
   /**
    * Returns a private url that can only be accessed internally by the system
-   * @param bucket
    * @param key
    * @param version
    */
-  async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
+  async privateAssetUrl(key: string, version: string | undefined): Promise<string> {
     throw new Error('privateAssetUrl not implemented')
   }
 }
@@ -145,4 +132,8 @@ export const SEPARATOR = tusUseFileVersionSeparator ? FILE_VERSION_SEPARATOR : P
 
 export function withOptionalVersion(key: string, version?: string): string {
   return version ? `${key}${SEPARATOR}${version}` : key
+}
+
+export function withPrefixAndVersion(key: string, prefix?: string, version?: string): string {
+  return `${prefix ? prefix + '/' : ''}${withOptionalVersion(key, version)}`
 }

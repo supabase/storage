@@ -60,7 +60,7 @@ export const QueueJobError = new client.Gauge({
 export const S3UploadPart = new client.Histogram({
   name: 'storage_api_s3_upload_part',
   help: 'S3 upload part performance',
-  labelNames: ['tenant_id', 'region'],
+  labelNames: ['region'],
 })
 
 export const DbActivePool = new client.Gauge({

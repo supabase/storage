@@ -2,11 +2,13 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema, createResponse } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
+import { mustBeServiceKey } from '../../../auth'
 
 const updateBucketBodySchema = {
   type: 'object',
   properties: {
     public: { type: 'boolean', examples: [false] },
+    credential_id: { type: 'string' },
     file_size_limit: {
       anyOf: [
         { type: 'integer', examples: [1000], nullable: true, minimum: 0 },
@@ -55,7 +57,11 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketId } = request.params
 
-      const { public: isPublic, file_size_limit, allowed_mime_types } = request.body
+      const { public: isPublic, file_size_limit, allowed_mime_types, credential_id } = request.body
+
+      if (credential_id) {
+        await mustBeServiceKey(request.tenantId, request.jwt)
+      }
 
       await request.storage.updateBucket(bucketId, {
         public: isPublic,
@@ -63,6 +69,7 @@ export default async function routes(fastify: FastifyInstance) {
         allowedMimeTypes: allowed_mime_types
           ? allowed_mime_types?.filter((mime) => mime)
           : allowed_mime_types,
+        credentialId: credential_id,
       })
 
       return response.status(200).send(createResponse('Successfully updated'))

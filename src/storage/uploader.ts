@@ -1,7 +1,6 @@
 import { FastifyRequest } from 'fastify'
 import { getFileSizeLimit } from './limits'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
-import { getConfig } from '../config'
 import { StorageBackendError } from './errors'
 import { Database } from './database'
 import {
@@ -18,13 +17,12 @@ interface UploaderOptions extends UploadObjectOptions {
   allowedMimeTypes?: string[] | null
 }
 
-const { globalS3Bucket } = getConfig()
-
 export interface UploadObjectOptions {
   bucketId: string
   objectName: string
+  uploadPath: string
   id?: string
-  owner?: string
+  owner: string | undefined
   isUpsert?: boolean
   isMultipart?: boolean
 }
@@ -67,7 +65,7 @@ export class Uploader {
    * We check RLS policies before proceeding
    * @param options
    */
-  async prepareUpload(options: UploadObjectOptions) {
+  async prepareUpload(options: Omit<UploadObjectOptions, 'uploadPath'>) {
     await this.canUpload(options)
     FileUploadStarted.inc({
       tenant_id: this.db.tenantId,
@@ -93,11 +91,9 @@ export class Uploader {
         this.validateMimeType(file.mimeType, options.allowedMimeTypes)
       }
 
-      const path = `${options.bucketId}/${options.objectName}`
-      const s3Key = `${this.db.tenantId}/${path}`
+      const s3Key = options.uploadPath
 
       const objectMetadata = await this.backend.uploadObject(
-        globalS3Bucket,
         s3Key,
         version,
         file.body,
@@ -137,7 +133,7 @@ export class Uploader {
     objectMetadata,
     isMultipart,
     isUpsert,
-  }: UploadObjectOptions & {
+  }: Omit<UploadObjectOptions, 'uploadPath'> & {
     objectMetadata: ObjectMetadata
     id: string
     emitEvent?: boolean

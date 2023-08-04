@@ -256,7 +256,7 @@ describe('testing public bucket functionality', () => {
       },
     })
     expect(notModifiedResponse.statusCode).toBe(304)
-    expect(mockGetObject.mock.calls[1][3]).toMatchObject({
+    expect(mockGetObject.mock.calls[1][2]).toMatchObject({
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })

@@ -67,7 +67,10 @@ const testSpec = yaml.load(
 ) as RlsTestSpec
 
 const { serviceKey, tenantId, jwtSecret, databaseURL, globalS3Bucket } = getConfig()
-const backend = createStorageBackend()
+const backend = createStorageBackend({
+  prefix: tenantId,
+  bucket: globalS3Bucket,
+})
 const client = backend.client
 
 jest.setTimeout(10000)
@@ -101,14 +104,6 @@ describe('RLS policies', () => {
     userId = randomUUID()
     jwt = (await signJWT({ sub: userId, role: 'authenticated' }, jwtSecret, '1h')) as string
 
-    await db.table('auth.users').insert({
-      instance_id: '00000000-0000-0000-0000-000000000000',
-      id: userId,
-      aud: 'authenticated',
-      role: 'authenticated',
-      email: userId + '@supabase.io',
-    })
-
     const adminUser = await getServiceKeyUser(tenantId)
 
     const pg = await getPostgresConnection({
@@ -139,9 +134,9 @@ describe('RLS policies', () => {
     it(_test.description, async () => {
       const content = fs.readFileSync(path.resolve(__dirname, 'rls_tests.yaml'), 'utf8')
 
-      const runId = randomUUID()
-      let bucketName = randomUUID()
-      let objectName = randomUUID()
+      const runId: string = randomUUID()
+      let bucketName: string = randomUUID()
+      let objectName: string = randomUUID()
       const originalBucketName = bucketName
 
       const testScopedSpec = yaml.load(

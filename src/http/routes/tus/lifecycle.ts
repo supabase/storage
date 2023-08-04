@@ -1,13 +1,11 @@
 import http from 'http'
 import { isRenderableError, Storage } from '../../../storage'
 import { Metadata, Upload } from '@tus/server'
-import { getConfig } from '../../../config'
 import { randomUUID } from 'crypto'
 import { UploadId } from './upload-id'
 import { Uploader } from '../../../storage/uploader'
 import { TenantConnection } from '../../../database/connection'
-
-const { globalS3Bucket } = getConfig()
+import { BucketWithCredentials } from '../../../storage/schemas'
 
 export type MultiPartRequest = http.IncomingMessage & {
   upload: {
@@ -16,6 +14,7 @@ export type MultiPartRequest = http.IncomingMessage & {
     owner?: string
     tenantId: string
     isNew: boolean
+    bucket: BucketWithCredentials
   }
 }
 
@@ -37,12 +36,18 @@ export function namingFunction(rawReq: http.IncomingMessage) {
 
     const version = randomUUID()
 
-    return new UploadId({
+    const uploadId = new UploadId({
       tenant: req.upload.tenantId,
       bucket: params.bucketName || '',
       objectName: params.objectName || '',
       version,
     }).toString()
+
+    if (req.upload.bucket?.credential_id) {
+      return uploadId.split('/').slice(2).join('/')
+    }
+
+    return uploadId
   } catch (e) {
     throw e
   }
@@ -54,15 +59,18 @@ export async function onCreate(
   upload: Upload
 ): Promise<http.ServerResponse> {
   try {
-    const uploadID = UploadId.fromString(upload.id)
-
     const req = rawReq as MultiPartRequest
+
+    const id = req.upload.bucket.credential_id
+      ? `${req.upload.tenantId}/${req.upload.bucket.id}/${upload.id}`
+      : upload.id
+
+    const uploadID = UploadId.fromString(id)
+
     const isUpsert = req.headers['x-upsert'] === 'true'
     const storage = req.upload.storage
 
-    const bucket = await storage
-      .asSuperUser()
-      .findBucket(uploadID.bucket, 'id, file_size_limit, allowed_mime_types')
+    const bucket = await req.upload.bucket
 
     const uploader = new Uploader(storage.backend, storage.db)
 
@@ -101,16 +109,19 @@ export async function onUploadFinish(
   upload: Upload
 ) {
   const req = rawReq as MultiPartRequest
-  const resourceId = UploadId.fromString(upload.id)
+  const id = req.upload.bucket.credential_id
+    ? `${req.upload.tenantId}/${req.upload.bucket.id}/${upload.id}`
+    : upload.id
+
+  const resourceId = UploadId.fromString(id)
   const isUpsert = req.headers['x-upsert'] === 'true'
 
   try {
-    const s3Key = `${req.upload.tenantId}/${resourceId.bucket}/${resourceId.objectName}`
-    const metadata = await req.upload.storage.backend.headObject(
-      globalS3Bucket,
-      s3Key,
-      resourceId.version
-    )
+    const s3Key = req.upload.storage
+      .from(req.upload.bucket)
+      .computeObjectPath(resourceId.objectName)
+
+    const metadata = await req.upload.storage.backend.headObject(s3Key, resourceId.version)
 
     const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
 

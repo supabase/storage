@@ -13,7 +13,7 @@ export class HeadRenderer extends Renderer {
   }
 
   async getAsset(request: FastifyRequest, options: RenderOptions): Promise<AssetResponse> {
-    const metadata = await this.backend.headObject(options.bucket, options.key, options.version)
+    const metadata = await this.backend.headObject(options.key, options.version)
 
     return {
       metadata,

@@ -21,6 +21,7 @@ type StorageConfigType = {
   jwtAlgorithm: string
   multitenantDatabaseUrl?: string
   databaseURL: string
+  databaseForceSSL: boolean
   databaseSSLRootCert?: string
   databasePoolURL?: string
   databaseMaxConnections: number
@@ -111,6 +112,7 @@ export function getConfig(): StorageConfigType {
     jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
     databaseSSLRootCert: getOptionalConfigFromEnv('DATABASE_SSL_ROOT_CERT'),
+    databaseForceSSL: getOptionalConfigFromEnv('DATABASE_SSL_FORCE') === 'true',
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
     databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
     databaseMaxConnections: parseInt(

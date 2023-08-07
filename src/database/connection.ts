@@ -5,12 +5,14 @@ import retry from 'async-retry'
 import { getConfig } from '../config'
 import { DbActiveConnection, DbActivePool } from '../monitoring/metrics'
 import { StorageBackendError } from '../storage'
+import { parse } from 'pg-connection-string'
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)
 
 const {
   databaseSSLRootCert,
+  databaseForceSSL,
   databaseMaxConnections,
   databaseFreePoolAfterInactivity,
   databaseConnectionTimeout,
@@ -57,7 +59,7 @@ export class TenantConnection {
   }
 
   static async create(options: TenantConnectionOptions) {
-    const connectionString = options.dbUrl
+    const connectionString = formatConnectionString(options.dbUrl)
 
     let knexPool = connections.get(connectionString)
 
@@ -207,4 +209,14 @@ export class TenantConnection {
       ]
     )
   }
+}
+
+export function formatConnectionString(connectionString: string) {
+  if (!databaseForceSSL || !databaseSSLRootCert) {
+    return connectionString
+  }
+
+  const connection = parse(connectionString)
+  connection.ssl = undefined
+  return connection.toString()
 }

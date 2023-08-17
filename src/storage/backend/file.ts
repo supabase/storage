@@ -10,6 +10,7 @@ import {
   ObjectMetadata,
   ObjectResponse,
   withOptionalVersion,
+  BrowserCacheHeaders,
 } from './generic'
 import { StorageBackendError } from '../errors'
 const pipeline = promisify(stream.pipeline)
@@ -52,33 +53,58 @@ export class FileBackend implements StorageBackendAdapter {
    * @param bucketName
    * @param key
    * @param version
+   * @param headers
    */
   async getObject(
     bucketName: string,
     key: string,
-    version: string | undefined
+    version: string | undefined,
+    headers?: BrowserCacheHeaders
   ): Promise<ObjectResponse> {
+    // 'Range: bytes=#######-######
     const file = path.resolve(this.filePath, withOptionalVersion(`${bucketName}/${key}`, version))
-    const body = fs.createReadStream(file)
     const data = await fs.stat(file)
+    const checksum = await fileChecksum(file)
+    const fileSize = data.size
     const { cacheControl, contentType } = await this.getFileMetadata(file)
     const lastModified = new Date(0)
     lastModified.setUTCMilliseconds(data.mtimeMs)
 
-    const checksum = await fileChecksum(file)
+    if (headers?.range) {
+      const parts = headers.range.replace(/bytes=/, '').split('-')
+      const startRange = parseInt(parts[0], 10)
+      const endRange = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
+      const size = endRange - startRange
+      const chunkSize = size + 1
+      const body = fs.createReadStream(file, { start: startRange, end: endRange })
 
-    return {
-      metadata: {
-        cacheControl: cacheControl || 'no-cache',
-        mimetype: contentType || 'application/octet-stream',
-        lastModified: lastModified,
-        // contentRange: data.ContentRange, @todo: support range requests
-        httpStatusCode: 200,
-        size: data.size,
-        eTag: checksum,
-        contentLength: data.size,
-      },
-      body,
+      return {
+        metadata: {
+          cacheControl: cacheControl || 'no-cache',
+          mimetype: contentType || 'application/octet-stream',
+          lastModified: lastModified,
+          contentRange: `bytes ${startRange}-${endRange}/${fileSize}`,
+          httpStatusCode: 206,
+          size: size,
+          eTag: checksum,
+          contentLength: chunkSize,
+        },
+        body,
+      }
+    } else {
+      const body = fs.createReadStream(file)
+      return {
+        metadata: {
+          cacheControl: cacheControl || 'no-cache',
+          mimetype: contentType || 'application/octet-stream',
+          lastModified: lastModified,
+          httpStatusCode: 200,
+          size: data.size,
+          eTag: checksum,
+          contentLength: fileSize,
+        },
+        body,
+      }
     }
   }
 

@@ -15,6 +15,7 @@ interface TenantConfig {
   features: Features
   jwtSecret: string
   serviceKey: string
+  disableEvents?: string[]
   serviceKeyPayload: {
     role: string
   }
@@ -90,6 +91,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
     feature_image_transformation,
     database_pool_url,
     max_connections,
+    disable_events,
   } = tenant
 
   const serviceKey = decrypt(service_key)
@@ -111,6 +113,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
         enabled: feature_image_transformation,
       },
     },
+    disableEvents: disable_events,
   }
   await cacheTenantConfigAndRunMigrations(tenantId, config)
   return config

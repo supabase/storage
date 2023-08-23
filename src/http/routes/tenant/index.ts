@@ -16,6 +16,7 @@ const patchSchema = {
       fileSizeLimit: { type: 'number' },
       jwtSecret: { type: 'string' },
       serviceKey: { type: 'string' },
+      disableEvents: { type: 'array', items: { type: 'string' }, nullable: true },
       features: {
         type: 'object',
         properties: {
@@ -62,6 +63,7 @@ interface tenantDBInterface {
   service_key: string
   file_size_limit?: number
   feature_image_transformation?: boolean
+  disable_events?: string[]
 }
 
 export default async function routes(fastify: FastifyInstance) {
@@ -80,6 +82,7 @@ export default async function routes(fastify: FastifyInstance) {
         jwt_secret,
         service_key,
         feature_image_transformation,
+        disable_events,
       }) => ({
         id,
         anonKey: decrypt(anon_key),
@@ -89,6 +92,7 @@ export default async function routes(fastify: FastifyInstance) {
         fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),
         serviceKey: decrypt(service_key),
+        disableEvents: disable_events,
         features: {
           imageTransformation: {
             enabled: feature_image_transformation,
@@ -112,6 +116,7 @@ export default async function routes(fastify: FastifyInstance) {
         jwt_secret,
         service_key,
         feature_image_transformation,
+        disable_events,
       } = tenant
 
       return {
@@ -127,6 +132,7 @@ export default async function routes(fastify: FastifyInstance) {
         fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),
         serviceKey: decrypt(service_key),
+        disableEvents: disable_events,
         features: {
           imageTransformation: {
             enabled: feature_image_transformation,
@@ -192,6 +198,7 @@ export default async function routes(fastify: FastifyInstance) {
           jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,
           service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
           feature_image_transformation: features?.imageTransformation?.enabled,
+          disable_events: request.body.disableEvents,
         })
         .where('id', tenantId)
       reply.code(204).send()
@@ -208,6 +215,7 @@ export default async function routes(fastify: FastifyInstance) {
       features,
       databasePoolUrl,
       maxConnections,
+      disableEvents,
     } = request.body
     const { tenantId } = request.params
     await runMigrations(tenantId, databaseUrl)
@@ -218,6 +226,10 @@ export default async function routes(fastify: FastifyInstance) {
       database_url: encrypt(databaseUrl),
       jwt_secret: encrypt(jwtSecret),
       service_key: encrypt(serviceKey),
+    }
+
+    if (disableEvents) {
+      tenantInfo.disable_events = disableEvents
     }
 
     if (fileSizeLimit) {

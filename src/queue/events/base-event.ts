@@ -1,6 +1,6 @@
 import { Queue } from '../queue'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
-import { getServiceKeyUser } from '../../database/tenant'
+import { getServiceKeyUser, getTenantConfig } from '../../database/tenant'
 import { getPostgresConnection } from '../../database'
 import { Storage } from '../../storage'
 import { StorageKnexDB } from '../../storage/database'
@@ -31,6 +31,20 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     return this.name
   }
 
+  static async shouldSend<T extends BaseEvent<any>>(
+    this: StaticThis<T>,
+    payload: Omit<T['payload'], '$version'>
+  ) {
+    const { disableEvents } = await getTenantConfig(payload.tenant.ref)
+
+    if (!disableEvents) {
+      return true
+    }
+
+    const isDisabled = disableEvents.includes((this as any).eventName())
+    return !isDisabled
+  }
+
   static getQueueName() {
     if (!this.queueName) {
       throw new Error(`Queue name not set on ${this.constructor.name}`)
@@ -47,10 +61,18 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     return {}
   }
 
-  static send<T extends BaseEvent<any>>(
+  static async send<T extends BaseEvent<any>>(
     this: StaticThis<T>,
     payload: Omit<T['payload'], '$version'>
   ) {
+    const shouldSend = await (this as any).shouldSend(payload)
+
+    if (!shouldSend) {
+      const eventType = (this as any).eventName()
+      logger.info(payload, `skipped sending event ${eventType}`)
+      return
+    }
+
     if (!payload.$version) {
       ;(payload as any).$version = (this as any).version
     }
@@ -62,9 +84,16 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     this: StaticThis<T>,
     payload: Omit<T['payload'], '$version'>
   ) {
+    const shouldSend = await (this as any).shouldSend(payload)
+    const eventType = (this as any).eventName()
+
+    if (!shouldSend) {
+      logger.info(payload, `skipped sending webhook ${eventType}`)
+      return
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { Webhook } = require('./webhook')
-    const eventType = (this as any).eventName()
 
     try {
       await Webhook.send({

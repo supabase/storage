@@ -5,6 +5,7 @@ import retry from 'async-retry'
 import { getConfig } from '../config'
 import { DbActiveConnection, DbActivePool } from '../monitoring/metrics'
 import { StorageBackendError } from '../storage'
+import KnexTimeoutError = knex.KnexTimeoutError
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)
@@ -131,41 +132,69 @@ export class TenantConnection {
   }
 
   async transaction(instance?: Knex) {
-    const tnx = await retry(
-      async (bail) => {
-        try {
-          const pool = instance || this.pool
-          return await pool.transaction()
-        } catch (e) {
-          if (
-            e instanceof DatabaseError &&
-            e.code === '08P01' &&
-            e.message.includes('no more connections allowed')
-          ) {
-            throw e
+    try {
+      const tnx = await retry(
+        async (bail) => {
+          try {
+            const pool = instance || this.pool
+            return await pool.transaction()
+          } catch (e) {
+            if (
+              e instanceof DatabaseError &&
+              e.code === '08P01' &&
+              e.message.includes('no more connections allowed')
+            ) {
+              throw e
+            }
+
+            bail(e as Error)
+            return
           }
-
-          bail(e as Error)
-          return
+        },
+        {
+          minTimeout: 50,
+          maxTimeout: 200,
+          maxRetryTime: 3000,
+          retries: 10,
         }
-      },
-      {
-        minTimeout: 50,
-        maxTimeout: 200,
-        maxRetryTime: 3000,
-        retries: 10,
+      )
+
+      if (!tnx) {
+        throw new StorageBackendError('Could not create transaction', 500, 'transaction_failed')
       }
-    )
 
-    if (!tnx) {
-      throw new StorageBackendError('Could not create transaction', 500, 'transaction_failed')
+      if (!instance && this.options.isExternalPool) {
+        await tnx.raw(`SELECT set_config('search_path', ?, true)`, [searchPath.join(', ')])
+      }
+
+      return tnx
+    } catch (e) {
+      if (e instanceof KnexTimeoutError) {
+        throw StorageBackendError.withStatusCode(
+          'database_timeout',
+          544,
+          'The connection to the database timed out',
+          e
+        )
+      }
+
+      if (
+        e instanceof DatabaseError &&
+        [
+          'remaining connection slots are reserved for non-replication superuser connections',
+          'no more connections allowed',
+        ].some((msg) => (e as DatabaseError).message.includes(msg))
+      ) {
+        throw StorageBackendError.withStatusCode(
+          'too_many_connections',
+          429,
+          'Too many connections issued to the database',
+          e
+        )
+      }
+
+      throw e
     }
-
-    if (!instance && this.options.isExternalPool) {
-      await tnx.raw(`SELECT set_config('search_path', ?, true)`, [searchPath.join(', ')])
-    }
-
-    return tnx
   }
 
   transactionProvider(instance?: Knex): Knex.TransactionProvider {

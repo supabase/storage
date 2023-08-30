@@ -12,6 +12,7 @@ export type StorageError = {
  *  that we want to display to our users
  */
 export interface RenderableError {
+  userStatusCode?: number
   render(): StorageError
   getOriginalError(): unknown
 }
@@ -38,14 +39,27 @@ export function isS3Error(error: unknown): error is S3ServiceException {
 export class StorageBackendError extends Error implements RenderableError {
   httpStatusCode: number
   originalError: unknown
+  userStatusCode: number
 
   constructor(name: string, httpStatusCode: number, message: string, originalError?: unknown) {
     super(message)
     this.name = name
     this.httpStatusCode = httpStatusCode
+    this.userStatusCode = httpStatusCode === 500 ? 500 : 400
     this.message = message
     this.originalError = originalError
     Object.setPrototypeOf(this, StorageBackendError.prototype)
+  }
+
+  static withStatusCode(
+    name: string,
+    statusCode: number,
+    message: string,
+    originalError?: unknown
+  ) {
+    const error = new StorageBackendError(name, statusCode, message, originalError)
+    error.userStatusCode = statusCode
+    return error
   }
 
   static fromError(error?: unknown) {

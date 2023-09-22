@@ -20,7 +20,12 @@ export const setErrorHandler = (app: FastifyInstance) => {
 
     if (isRenderableError(error)) {
       const renderableError = error.render()
-      return reply.status(renderableError.statusCode === '500' ? 500 : 400).send(renderableError)
+      const statusCode = error.userStatusCode
+        ? error.userStatusCode
+        : renderableError.error === '500'
+        ? 500
+        : 400
+      return reply.status(statusCode).send(renderableError)
     }
 
     // Fastify errors

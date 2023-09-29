@@ -71,7 +71,6 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const s3Key = `${request.tenantId}/${url}`
-      request.log.info(s3Key)
 
       const [bucketName, ...objParts] = url.split('/')
       const obj = await request.storage

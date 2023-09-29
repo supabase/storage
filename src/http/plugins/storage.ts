@@ -18,6 +18,7 @@ export const storage = fastifyPlugin(async (fastify) => {
     const database = new StorageKnexDB(request.db, {
       tenantId: request.tenantId,
       host: request.headers['x-forwarded-host'] as string,
+      reqId: request.id,
     })
     request.backend = storageBackend
     request.storage = new Storage(storageBackend, database)

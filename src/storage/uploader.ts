@@ -124,6 +124,7 @@ export class Uploader {
         bucketId: options.bucketId,
         tenant: this.db.tenant(),
         version: version,
+        reqId: this.db.reqId,
       })
       throw e
     }
@@ -175,6 +176,7 @@ export class Uploader {
               bucketId: bucketId,
               tenant: this.db.tenant(),
               version: currentObj.version,
+              reqId: this.db.reqId,
             })
           )
         }
@@ -187,6 +189,7 @@ export class Uploader {
             name: objectName,
             bucketId: bucketId,
             metadata: objectMetadata,
+            reqId: this.db.reqId,
           })
         )
 
@@ -197,6 +200,7 @@ export class Uploader {
               objectName: objectName,
               bucketName: bucketId,
               version: id,
+              reqId: this.db.reqId,
             })
           )
         }
@@ -216,6 +220,7 @@ export class Uploader {
         bucketId: bucketId,
         tenant: this.db.tenant(),
         version: id,
+        reqId: this.db.reqId,
       })
       throw e
     }

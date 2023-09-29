@@ -1,7 +1,8 @@
-import pino from 'pino'
+import pino, { BaseLogger } from 'pino'
 import { getConfig } from '../config'
-import { FastifyRequest } from 'fastify'
+import { FastifyReply, FastifyRequest } from 'fastify'
 import { URL } from 'url'
+import { normalizeRawError } from '../storage'
 
 const { logLevel } = getConfig()
 
@@ -13,6 +14,9 @@ export const logger = pino({
     },
   },
   serializers: {
+    error(error) {
+      return normalizeRawError(error)
+    },
     res(reply) {
       return {
         statusCode: reply.statusCode,
@@ -21,6 +25,7 @@ export const logger = pino({
     },
     req(request) {
       return {
+        traceId: request.id,
         method: request.method,
         url: redactQueryParamFromRequest(request, ['token']),
         headers: whitelistHeaders(request.headers),
@@ -33,6 +38,39 @@ export const logger = pino({
   level: logLevel,
   timestamp: pino.stdTimeFunctions.isoTime,
 })
+
+export interface RequestLog {
+  type: 'request'
+  req: FastifyRequest
+  res: FastifyReply
+  responseTime: number
+  error?: Error | unknown
+  owner?: string
+}
+
+export interface EventLog {
+  jodId: string
+  type: 'event'
+  event: string
+  payload: string
+  objectPath: string
+  tenantId: string
+  project: string
+  reqId?: string
+}
+
+interface ErrorLog {
+  type: string
+  error?: Error | unknown
+}
+
+export const logSchema = {
+  request: (logger: BaseLogger, message: string, log: RequestLog) => {
+    logger.info(log, message)
+  },
+  error: (logger: BaseLogger, message: string, log: ErrorLog) => logger.error(log, message),
+  event: (logger: BaseLogger, message: string, log: EventLog) => logger.info(log, message),
+}
 
 export function buildTransport(): pino.TransportSingleOptions | undefined {
   const { logflareApiKey, logflareSourceToken, logflareEnabled } = getConfig()
@@ -72,6 +110,12 @@ const whitelistHeaders = (headers: Record<string, unknown>) => {
     'x-forwarded-user-agent',
     'x-client-trace-id',
     'x-upsert',
+    'content-type',
+    'if-none-match',
+    'if-modified-since',
+    'upload-metadata',
+    'upload-length',
+    'tus-resumable',
   ]
   const allowlistedResponseHeaders = [
     'cf-cache-status',

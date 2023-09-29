@@ -35,6 +35,7 @@ export interface TransactionOptions {
 
 export interface DatabaseOptions<TNX> {
   tenantId: string
+  reqId?: string
   host: string
   tnx?: TNX
   parentTnx?: TNX
@@ -44,6 +45,7 @@ export interface DatabaseOptions<TNX> {
 export interface Database {
   tenantHost: string
   tenantId: string
+  reqId?: string
   role?: string
 
   tenant(): { ref: string; host: string }

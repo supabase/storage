@@ -3,6 +3,7 @@ import { Job } from 'pg-boss'
 import { getConfig } from '../../config'
 import { S3Backend } from '../../storage/backend'
 import { isS3Error } from '../../storage'
+import { logger } from '../../monitoring'
 
 interface UploadCompleted extends BasePayload {
   bucketName: string
@@ -29,6 +30,7 @@ export class MultiPartUploadCompleted extends BaseEvent<UploadCompleted> {
       if (isS3Error(e) && e.$metadata.httpStatusCode === 404) {
         return
       }
+      logger.error({ error: e }, 'multi part uploaded completed failed')
       throw e
     }
   }

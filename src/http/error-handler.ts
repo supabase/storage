@@ -14,10 +14,6 @@ export const setErrorHandler = (app: FastifyInstance) => {
     // it will be logged in the request log plugin
     reply.executionError = error
 
-    if (process.env.NODE_ENV !== 'production') {
-      console.error(error)
-    }
-
     if (isRenderableError(error)) {
       const renderableError = error.render()
       const statusCode = error.userStatusCode

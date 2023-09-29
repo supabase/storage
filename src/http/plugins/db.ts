@@ -3,6 +3,7 @@ import { TenantConnection } from '../../database/connection'
 import { getServiceKeyUser } from '../../database/tenant'
 import { getPostgresConnection } from '../../database'
 import { verifyJWT } from '../../auth'
+import { logSchema } from '../../monitoring'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -33,7 +34,10 @@ export const db = fastifyPlugin(async (fastify) => {
   fastify.addHook('onSend', async (request, reply, payload) => {
     if (request.db) {
       request.db.dispose().catch((e) => {
-        request.log.error(e, 'Error disposing db connection')
+        logSchema.error(request.log, 'Error disposing db connection', {
+          type: 'db-connection',
+          error: e,
+        })
       })
     }
     return payload
@@ -41,13 +45,27 @@ export const db = fastifyPlugin(async (fastify) => {
 
   fastify.addHook('onTimeout', async (request) => {
     if (request.db) {
-      await request.db.dispose()
+      try {
+        await request.db.dispose()
+      } catch (e) {
+        logSchema.error(request.log, 'Error disposing db connection', {
+          type: 'db-connection',
+          error: e,
+        })
+      }
     }
   })
 
   fastify.addHook('onRequestAbort', async (request) => {
     if (request.db) {
-      await request.db.dispose()
+      try {
+        await request.db.dispose()
+      } catch (e) {
+        logSchema.error(request.log, 'Error disposing db connection', {
+          type: 'db-connection',
+          error: e,
+        })
+      }
     }
   })
 })
@@ -72,7 +90,10 @@ export const dbSuperUser = fastifyPlugin(async (fastify) => {
   fastify.addHook('onSend', async (request, reply, payload) => {
     if (request.db) {
       request.db.dispose().catch((e) => {
-        request.log.error(e, 'Error disposing db connection')
+        logSchema.error(request.log, 'Error disposing db connection', {
+          type: 'db-connection',
+          error: e,
+        })
       })
     }
 
@@ -81,13 +102,27 @@ export const dbSuperUser = fastifyPlugin(async (fastify) => {
 
   fastify.addHook('onTimeout', async (request) => {
     if (request.db) {
-      await request.db.dispose()
+      try {
+        await request.db.dispose()
+      } catch (e) {
+        logSchema.error(request.log, 'Error disposing db connection', {
+          type: 'db-connection',
+          error: e,
+        })
+      }
     }
   })
 
   fastify.addHook('onRequestAbort', async (request) => {
     if (request.db) {
-      await request.db.dispose()
+      try {
+        await request.db.dispose()
+      } catch (e) {
+        logSchema.error(request.log, 'Error disposing db connection', {
+          type: 'db-connection',
+          error: e,
+        })
+      }
     }
   })
 })

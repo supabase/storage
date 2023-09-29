@@ -60,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
         file_size_limit,
       } = request.body
 
-      const bucket = await request.storage.createBucket({
+      await request.storage.createBucket({
         id: id ?? bucketName,
         name: bucketName,
         owner,
@@ -70,8 +70,6 @@ export default async function routes(fastify: FastifyInstance) {
           ? allowed_mime_types?.filter((mime) => mime)
           : allowed_mime_types,
       })
-
-      request.log.info({ results: bucket }, 'results')
 
       return response.status(200).send({
         name: bucketName,

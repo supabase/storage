@@ -37,8 +37,6 @@ export default async function routes(fastify: FastifyInstance) {
         'id, name, owner, public, created_at, updated_at, file_size_limit, allowed_mime_types'
       )
 
-      request.log.info({ results }, 'results')
-
       response.send(results)
     }
   )

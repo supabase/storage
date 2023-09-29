@@ -22,6 +22,7 @@ import { isUuid } from '../limits'
 export class StorageKnexDB implements Database {
   public readonly tenantHost: string
   public readonly tenantId: string
+  public readonly reqId: string | undefined
   public readonly role?: string
 
   constructor(
@@ -30,6 +31,7 @@ export class StorageKnexDB implements Database {
   ) {
     this.tenantHost = options.host
     this.tenantId = options.tenantId
+    this.reqId = options.reqId
     this.role = connection?.role
   }
 

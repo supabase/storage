@@ -1,5 +1,4 @@
 import { S3ServiceException } from '@aws-sdk/client-s3'
-import { logger } from '../monitoring'
 
 export type StorageError = {
   statusCode: string
@@ -99,21 +98,21 @@ export class StorageBackendError extends Error implements RenderableError {
 
 export function normalizeRawError(error: any) {
   if (error instanceof Error) {
-    return JSON.stringify({
-      _error: error,
+    return {
+      raw: JSON.stringify(error),
       name: error.name,
       message: error.message,
       stack: error.stack,
-    })
-  }
-
-  if (error instanceof Object) {
-    return error.toString()
+    }
   }
 
   try {
-    return JSON.stringify(error)
+    return {
+      raw: JSON.stringify(error),
+    }
   } catch (e) {
-    logger.error(e, 'Failed to stringify error')
+    return {
+      raw: 'Failed to stringify error',
+    }
   }
 }

@@ -11,6 +11,7 @@ import { logger } from '../../monitoring'
 
 export interface BasePayload {
   $version: string
+  reqId?: string
   tenant: {
     ref: string
     host: string

@@ -1,6 +1,6 @@
 import { BaseEvent, BasePayload } from './base-event'
 import { getConfig } from '../../config'
-import { Job } from 'pg-boss'
+import { Job, WorkOptions } from 'pg-boss'
 import { withOptionalVersion } from '../../storage/backend'
 import { logger } from '../../monitoring'
 
@@ -10,10 +10,17 @@ export interface ObjectDeleteEvent extends BasePayload {
   version?: string
 }
 
-const { globalS3Bucket } = getConfig()
+const { globalS3Bucket, adminDeleteQueueTeamSize, adminDeleteConcurrency } = getConfig()
 
 export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
   static queueName = 'object:admin:delete'
+
+  static getWorkerOptions(): WorkOptions {
+    return {
+      teamSize: adminDeleteQueueTeamSize,
+      teamConcurrency: adminDeleteConcurrency,
+    }
+  }
 
   static async handle(job: Job<ObjectDeleteEvent>) {
     logger.info({ job: JSON.stringify(job) }, 'Handling ObjectAdminDelete')

@@ -55,9 +55,6 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      const contentType = request.headers['content-type']
-      request.log.info(`content-type is ${contentType}`)
-
       const { bucketName } = request.params
       const objectName = request.params['*']
 

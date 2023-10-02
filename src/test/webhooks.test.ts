@@ -112,11 +112,13 @@ describe('Webhooks', () => {
           host: undefined,
           ref: 'bjhaohmqunupljrqypxz',
         },
+        reqId: expect.any(String),
         version: expect.any(String),
       },
       name: 'object:admin:delete',
       options: undefined,
     })
+
     expect(sendSpy).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
@@ -135,6 +137,7 @@ describe('Webhooks', () => {
                 host: undefined,
                 ref: 'bjhaohmqunupljrqypxz',
               },
+              reqId: expect.any(String),
             }),
           }),
           tenant: {
@@ -183,6 +186,7 @@ describe('Webhooks', () => {
                 host: undefined,
                 ref: 'bjhaohmqunupljrqypxz',
               },
+              reqId: expect.any(String),
             }),
           }),
           tenant: {
@@ -219,11 +223,13 @@ describe('Webhooks', () => {
               oldObject: {
                 bucketId: 'bucket6',
                 name: obj.name,
+                reqId: expect.any(String),
               },
               tenant: {
                 host: undefined,
                 ref: 'bjhaohmqunupljrqypxz',
               },
+              reqId: expect.any(String),
             }),
           }),
           tenant: {

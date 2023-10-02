@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
 
+import { defaultPreparePayload } from 'pino-logflare'
+
 const dotenv = require('dotenv')
 const { createWriteStream: createLogFlareWriteStream } = require('pino-logflare')
 
@@ -20,5 +22,10 @@ export default function () {
   return createLogFlareWriteStream({
     apiKey: logflareApiKey,
     sourceToken: logflareSourceToken,
+    onPreparePayload: (payload: any, meta: any) => {
+      const item = defaultPreparePayload(payload, meta)
+      item.project = payload.project
+      return item
+    },
   })
 }

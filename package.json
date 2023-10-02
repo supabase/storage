@@ -4,7 +4,7 @@
   "description": "Supabase storage middleend",
   "main": "index.js",
   "scripts": {
-    "dev": "ts-node-dev --log-error --files ./src/server.ts --stack_trace_limit=100 -r trace -r clarify",
+    "dev": "ts-node-dev --log-error --files ./src/server.ts --stack_trace_limit=100 -r trace -r clarify | pino-pretty",
     "build": "tsc -p tsconfig.json",
     "start": "NODE_ENV=production node dist/server.js",
     "migration:run": "ts-node-dev ./src/scripts/migrate-call.ts",
@@ -58,7 +58,7 @@
     "pg-boss": "^8.1.1",
     "pg-listen": "^1.7.0",
     "pino": "^8.2.0",
-    "pino-logflare": "^0.3.12",
+    "pino-logflare": "^0.4.2",
     "postgres-migrations": "^5.3.0",
     "prom-client": "^14.0.1"
   },

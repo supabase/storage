@@ -69,8 +69,6 @@ export default async function routes(fastify: FastifyInstance) {
         },
       })
 
-      request.log.info({ results }, 'results')
-
       response.status(200).send(results)
     }
   )

@@ -1,4 +1,4 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import { Server } from '@tus/server'
 import { jwt, storage, db, dbSuperUser } from '../../plugins'
 import { getConfig } from '../../../config'
@@ -27,6 +27,7 @@ const {
 } = getConfig()
 
 type MultiPartRequest = http.IncomingMessage & {
+  log: FastifyBaseLogger
   upload: {
     storage: Storage
     owner?: string
@@ -108,6 +109,7 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(storage)
 
     fastify.addHook('preHandler', async (req) => {
+      ;(req.raw as MultiPartRequest).log = req.log
       ;(req.raw as MultiPartRequest).upload = {
         storage: req.storage,
         owner: req.owner,
@@ -164,6 +166,7 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(storage)
 
     fastify.addHook('preHandler', async (req) => {
+      ;(req.raw as MultiPartRequest).log = req.log
       ;(req.raw as MultiPartRequest).upload = {
         storage: req.storage,
         owner: req.owner,

@@ -6,10 +6,12 @@ import { randomUUID } from 'crypto'
 import { UploadId } from './upload-id'
 import { Uploader } from '../../../storage/uploader'
 import { TenantConnection } from '../../../database/connection'
+import { BaseLogger } from 'pino'
 
 const { globalS3Bucket } = getConfig()
 
 export type MultiPartRequest = http.IncomingMessage & {
+  log: BaseLogger
   upload: {
     storage: Storage
     db: TenantConnection

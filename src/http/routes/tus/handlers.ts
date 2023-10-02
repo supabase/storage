@@ -10,7 +10,6 @@ import { OptionsHandler } from '@tus/server/handlers/OptionsHandler'
 import { UploadId } from './upload-id'
 import { getFileSizeLimit } from '../../../storage/limits'
 import { Uploader } from '../../../storage/uploader'
-import { logger } from '../../../monitoring'
 
 const reExtractFileID = /([^/]+)\/?$/
 
@@ -56,7 +55,7 @@ export class Patch extends PatchHandler {
       throw e
     } finally {
       await req.upload.db.dispose().catch(() => {
-        logger.error('failed disposing connection')
+        req.log.error('failed disposing connection')
       })
     }
   }
@@ -108,7 +107,7 @@ export class Head extends HeadHandler {
       throw e
     } finally {
       await req.upload.db.dispose().catch(() => {
-        logger.error('failed disposing connection')
+        req.log.error('failed disposing connection')
       })
     }
   }
@@ -156,7 +155,7 @@ export class Post extends PostHandler {
       throw e
     } finally {
       await req.upload.db.dispose().catch(() => {
-        logger.error('failed disposing connection')
+        req.log.error('failed disposing connection')
       })
     }
   }
@@ -246,7 +245,7 @@ export class Options extends OptionsHandler {
       throw e
     } finally {
       await req.upload.db.dispose().catch(() => {
-        logger.error('failed disposing connection')
+        req.log.error('failed disposing connection')
       })
     }
   }

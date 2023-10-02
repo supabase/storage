@@ -5,6 +5,7 @@ export const logTenantId = fastifyPlugin(async (fastify) => {
     reply.log = request.log = request.log.child({
       tenantId: request.tenantId,
       project: request.tenantId,
+      reqId: request.id,
     })
   })
 })

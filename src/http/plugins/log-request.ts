@@ -1,6 +1,5 @@
 import fastifyPlugin from 'fastify-plugin'
-import { redactQueryParamFromRequest } from '../../monitoring'
-import { normalizeRawError } from '../../storage'
+import { logSchema, redactQueryParamFromRequest } from '../../monitoring'
 
 interface RequestLoggerOptions {
   excludeUrls?: string[]
@@ -30,15 +29,13 @@ export const logRequest = (options: RequestLoggerOptions) =>
 
       const buildLogMessage = `${tenantId} | ${rMeth} | ${statusCode} | ${cIP} | ${rId} | ${rUrl} | ${uAgent}`
 
-      req.log.info(
-        {
-          req,
-          res: reply,
-          responseTime: reply.getResponseTime(),
-          error,
-          rawError: normalizeRawError(error),
-        },
-        buildLogMessage
-      )
+      logSchema.request(req.log, buildLogMessage, {
+        type: 'request',
+        req,
+        res: reply,
+        responseTime: reply.getResponseTime(),
+        error: error,
+        owner: req.owner,
+      })
     })
   })

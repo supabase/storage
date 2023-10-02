@@ -6,9 +6,8 @@ import buildAdmin from './admin-app'
 import { getConfig } from './config'
 import { runMultitenantMigrations, runMigrations } from './database/migrate'
 import { listenForTenantUpdate } from './database/tenant'
-import { logger } from './monitoring'
+import { logger, logSchema } from './monitoring'
 import { Queue } from './queue'
-import { normalizeRawError } from './storage'
 import { TenantConnection } from './database/connection'
 
 const exposeDocs = true
@@ -44,10 +43,14 @@ const exposeDocs = true
 
   app.listen({ port, host }, (err, address) => {
     if (err) {
-      console.error(err)
+      logSchema.error(logger, `Server failed to start`, {
+        type: 'serverStartError',
+        error: err,
+      })
       process.exit(1)
     }
-    console.log(`Server listening at ${address}`)
+
+    logger.info(`Server listening at ${address}`)
   })
 
   if (isMultitenant) {
@@ -63,18 +66,19 @@ const exposeDocs = true
     try {
       await adminApp.listen({ port: adminPort, host })
     } catch (err) {
-      adminApp.log.error(err)
+      logSchema.error(adminApp.log, 'Failed to start admin app', {
+        type: 'adminAppStartError',
+        error: err,
+      })
       process.exit(1)
     }
   }
 
   process.on('uncaughtException', (e) => {
-    logger.error(
-      {
-        error: normalizeRawError(e),
-      },
-      'uncaught exception'
-    )
+    logSchema.error(logger, 'uncaught exception', {
+      type: 'uncaughtException',
+      error: e,
+    })
     process.exit(1)
   })
 
@@ -84,7 +88,10 @@ const exposeDocs = true
       await Promise.allSettled([Queue.stop(), TenantConnection.stop()])
       process.exit(0)
     } catch (e) {
-      logger.error('shutdown error', { error: e })
+      logSchema.error(logger, 'shutdown error', {
+        type: 'SIGTERM',
+        error: e,
+      })
       process.exit(1)
     }
   })

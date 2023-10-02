@@ -122,6 +122,7 @@ export class ObjectStorage {
         name: objectName,
         bucketId: this.bucketId,
         version: obj.version,
+        reqId: this.db.reqId,
       })
     })
 
@@ -129,6 +130,7 @@ export class ObjectStorage {
       tenant: this.db.tenant(),
       name: objectName,
       bucketId: this.bucketId,
+      reqId: this.db.reqId,
     })
   }
 
@@ -177,6 +179,7 @@ export class ObjectStorage {
                 tenant: db.tenant(),
                 name: object.name,
                 bucketId: this.bucketId,
+                reqId: this.db.reqId,
               })
             )
           )
@@ -202,6 +205,7 @@ export class ObjectStorage {
       name: objectName,
       bucketId: this.bucketId,
       metadata,
+      reqId: this.db.reqId,
     })
 
     return result
@@ -296,6 +300,7 @@ export class ObjectStorage {
         name: destinationKey,
         bucketId: this.bucketId,
         metadata,
+        reqId: this.db.reqId,
       })
 
       return {
@@ -308,6 +313,7 @@ export class ObjectStorage {
         bucketId: this.bucketId,
         tenant: this.db.tenant(),
         version: newVersion,
+        reqId: this.db.reqId,
       })
       throw e
     }
@@ -374,18 +380,20 @@ export class ObjectStorage {
         })
 
         await db.deleteObject(this.bucketId, sourceObjectName, sourceObj.version)
+        await ObjectAdminDelete.send({
+          name: sourceObjectName,
+          bucketId: this.bucketId,
+          tenant: this.db.tenant(),
+          version: sourceObj.version,
+          reqId: this.db.reqId,
+        })
 
-        await Promise.all([
-          ObjectAdminDelete.send({
-            name: sourceObjectName,
-            bucketId: this.bucketId,
-            tenant: this.db.tenant(),
-            version: sourceObj.version,
-          }),
+        await Promise.allSettled([
           ObjectRemovedMove.sendWebhook({
             tenant: this.db.tenant(),
             name: sourceObjectName,
             bucketId: this.bucketId,
+            reqId: this.db.reqId,
           }),
           ObjectCreatedMove.sendWebhook({
             tenant: this.db.tenant(),
@@ -395,7 +403,9 @@ export class ObjectStorage {
             oldObject: {
               name: sourceObjectName,
               bucketId: this.bucketId,
+              reqId: this.db.reqId,
             },
+            reqId: this.db.reqId,
           }),
         ])
       })
@@ -405,6 +415,7 @@ export class ObjectStorage {
         bucketId: this.bucketId,
         tenant: this.db.tenant(),
         version: newVersion,
+        reqId: this.db.reqId,
       })
       throw e
     }

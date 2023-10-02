@@ -47,6 +47,20 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     return {}
   }
 
+  static ack(job: Job<BaseEvent<any>['payload']> | Job<BaseEvent<any>['payload']>[]) {
+    if (enableQueueEvents) {
+      const jobs = Array.isArray(job) ? job : [job]
+      return Promise.all(jobs.map((job) => Queue.getInstance().complete(job.id)))
+    }
+  }
+
+  static fail(job: Job<BaseEvent<any>['payload']> | Job<BaseEvent<any>['payload']>[]) {
+    if (enableQueueEvents) {
+      const jobs = Array.isArray(job) ? job : [job]
+      return Promise.all(jobs.map((job) => Queue.getInstance().fail(job.id)))
+    }
+  }
+
   static send<T extends BaseEvent<any>>(
     this: StaticThis<T>,
     payload: Omit<T['payload'], '$version'>
@@ -92,7 +106,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     }
   }
 
-  static handle(job: Job<BaseEvent<any>['payload']>) {
+  static handle(job: Job<BaseEvent<any>['payload']> | Job<BaseEvent<any>['payload']>[]) {
     throw new Error('not implemented')
   }
 
@@ -120,6 +134,21 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     const constructor = this.constructor as typeof BaseEvent
 
     if (!enableQueueEvents) {
+      const options = constructor.getWorkerOptions()
+
+      if (options.batchSize) {
+        return constructor.handle([
+          {
+            id: '',
+            name: constructor.getQueueName(),
+            data: {
+              ...this.payload,
+              $version: constructor.version,
+            },
+          },
+        ])
+      }
+
       return constructor.handle({
         id: '',
         name: constructor.getQueueName(),

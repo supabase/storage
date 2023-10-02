@@ -376,12 +376,6 @@ export class ObjectStorage {
         await db.deleteObject(this.bucketId, sourceObjectName, sourceObj.version)
 
         await Promise.all([
-          ObjectAdminDelete.send({
-            name: sourceObjectName,
-            bucketId: this.bucketId,
-            tenant: this.db.tenant(),
-            version: sourceObj.version,
-          }),
           ObjectRemovedMove.sendWebhook({
             tenant: this.db.tenant(),
             name: sourceObjectName,
@@ -396,6 +390,12 @@ export class ObjectStorage {
               name: sourceObjectName,
               bucketId: this.bucketId,
             },
+          }),
+          ObjectAdminDelete.send({
+            name: sourceObjectName,
+            bucketId: this.bucketId,
+            tenant: this.db.tenant(),
+            version: sourceObj.version,
           }),
         ])
       })

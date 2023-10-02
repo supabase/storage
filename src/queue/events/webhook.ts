@@ -4,7 +4,13 @@ import axios from 'axios'
 import { getConfig } from '../../config'
 import { logger } from '../../monitoring'
 
-const { webhookURL, webhookApiKey, webhookQueuePullInterval } = getConfig()
+const {
+  webhookURL,
+  webhookApiKey,
+  webhookQueuePullInterval,
+  webhookQueueTeamSize,
+  webhookQueueConcurrency,
+} = getConfig()
 
 interface WebhookEvent {
   event: {
@@ -26,6 +32,8 @@ export class Webhook extends BaseEvent<WebhookEvent> {
   static getWorkerOptions(): WorkOptions {
     return {
       newJobCheckInterval: webhookQueuePullInterval,
+      teamSize: webhookQueueTeamSize,
+      teamConcurrency: webhookQueueConcurrency,
     }
   }
 

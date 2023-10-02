@@ -42,6 +42,10 @@ type StorageConfigType = {
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
+  webhookQueueTeamSize?: number
+  webhookQueueConcurrency?: number
+  adminDeleteQueueTeamSize?: number
+  adminDeleteConcurrency?: number
   enableImageTransformation: boolean
   imgProxyURL?: string
   imgProxyRequestTimeout: number
@@ -146,6 +150,11 @@ export function getConfig(): StorageConfigType {
     webhookQueuePullInterval: parseInt(
       getOptionalConfigFromEnv('WEBHOOK_QUEUE_PULL_INTERVAL') || '700'
     ),
+    webhookQueueTeamSize: parseInt('QUEUE_WEBHOOKS_TEAM_SIZE') || 50,
+    webhookQueueConcurrency: parseInt('QUEUE_WEBHOOK_CONCURRENCY') || 5,
+    adminDeleteQueueTeamSize: parseInt('QUEUE_ADMIN_DELETE_TEAM_SIZE') || 50,
+    adminDeleteConcurrency: parseInt('QUEUE_ADMIN_DELETE_CONCURRENCY') || 5,
+
     enableImageTransformation: getOptionalConfigFromEnv('ENABLE_IMAGE_TRANSFORMATION') === 'true',
     imgProxyRequestTimeout: parseInt(
       getOptionalConfigFromEnv('IMGPROXY_REQUEST_TIMEOUT') || '15',

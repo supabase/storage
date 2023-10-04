@@ -8,11 +8,6 @@ const { logLevel } = getConfig()
 
 export const logger = pino({
   transport: buildTransport(),
-  formatters: {
-    level(label) {
-      return { level: label }
-    },
-  },
   serializers: {
     error(error) {
       return normalizeRawError(error)
@@ -72,7 +67,7 @@ export const logSchema = {
   event: (logger: BaseLogger, message: string, log: EventLog) => logger.info(log, message),
 }
 
-export function buildTransport(): pino.TransportSingleOptions | undefined {
+export function buildTransport(): pino.TransportMultiOptions | undefined {
   const { logflareApiKey, logflareSourceToken, logflareEnabled } = getConfig()
 
   if (!logflareEnabled) {
@@ -88,7 +83,18 @@ export function buildTransport(): pino.TransportSingleOptions | undefined {
   }
 
   return {
-    target: './logflare',
+    targets: [
+      {
+        level: logLevel || 'info',
+        target: './logflare',
+        options: {},
+      },
+      {
+        level: logLevel || 'info',
+        target: 'pino/file',
+        options: {},
+      },
+    ],
   }
 }
 

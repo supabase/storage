@@ -21,7 +21,7 @@ export const tenantId = fastifyPlugin(async (fastify) => {
 })
 
 export const adminTenantId = fastifyPlugin(async (fastify) => {
-  fastify.decorateRequest('tenantId', tenantId)
+  fastify.register(tenantId)
   fastify.addHook('onRequest', async (request) => {
     const tenantId = (request.params as Record<string, undefined | string>).tenantId
     if (!tenantId) return

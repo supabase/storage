@@ -12,6 +12,8 @@ RUN npm ci
 RUN npm run build
 
 FROM node:18-alpine
+ARG VERSION
+ENV VERSION=$VERSION
 WORKDIR /app
 COPY migrations migrations
 COPY ecosystem.config.js package.json ./

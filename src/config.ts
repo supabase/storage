@@ -3,6 +3,7 @@ import dotenv from 'dotenv'
 type StorageBackendType = 'file' | 's3'
 
 type StorageConfigType = {
+  version: string
   keepAliveTimeout: number
   headersTimeout: number
   adminApiKeys: string
@@ -97,6 +98,7 @@ export function getConfig(): StorageConfigType {
   dotenv.config()
 
   return {
+    version: getOptionalConfigFromEnv('VERSION') || '0.0.0',
     keepAliveTimeout: parseInt(getOptionalConfigFromEnv('SERVER_KEEP_ALIVE_TIMEOUT') || '61', 10),
     headersTimeout: parseInt(getOptionalConfigFromEnv('SERVER_HEADERS_TIMEOUT') || '65', 10),
     adminApiKeys: getOptionalConfigFromEnv('ADMIN_API_KEYS') || '',

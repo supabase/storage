@@ -9,7 +9,7 @@ interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
 }
 
-const { keepAliveTimeout, headersTimeout, isMultitenant } = getConfig()
+const { version, keepAliveTimeout, headersTimeout, isMultitenant } = getConfig()
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
   const app = fastify(opts)
@@ -66,6 +66,9 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
 
   setErrorHandler(app)
 
+  app.get('/version', (_, reply) => {
+    reply.send(version)
+  })
   app.get('/status', async (request, response) => response.status(200).send())
 
   return app

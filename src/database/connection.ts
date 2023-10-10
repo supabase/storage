@@ -178,21 +178,6 @@ export class TenantConnection {
         )
       }
 
-      if (
-        e instanceof DatabaseError &&
-        [
-          'remaining connection slots are reserved for non-replication superuser connections',
-          'no more connections allowed',
-        ].some((msg) => (e as DatabaseError).message.includes(msg))
-      ) {
-        throw StorageBackendError.withStatusCode(
-          'too_many_connections',
-          429,
-          'Too many connections issued to the database',
-          e
-        )
-      }
-
       throw e
     }
   }

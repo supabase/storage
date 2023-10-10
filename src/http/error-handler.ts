@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { isRenderableError } from '../storage'
 import { FastifyError } from '@fastify/error'
+import { DatabaseError } from 'pg'
 
 /**
  * The global error handler for all the uncaught exceptions within a request.
@@ -22,6 +23,22 @@ export const setErrorHandler = (app: FastifyInstance) => {
         ? 500
         : 400
       return reply.status(statusCode).send(renderableError)
+    }
+
+    // database error
+    if (
+      error instanceof DatabaseError &&
+      [
+        'remaining connection slots are reserved for non-replication superuser connections',
+        'no more connections allowed',
+        'sorry, too many clients already',
+      ].some((msg) => (error as DatabaseError).message.includes(msg))
+    ) {
+      return reply.status(429).send({
+        statusCode: `429`,
+        error: 'too_many_connections',
+        message: 'Too many connections issued to the database',
+      })
     }
 
     // Fastify errors

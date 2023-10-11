@@ -32,6 +32,7 @@ export const setErrorHandler = (app: FastifyInstance) => {
         'remaining connection slots are reserved for non-replication superuser connections',
         'no more connections allowed',
         'sorry, too many clients already',
+        'server login has been failing, try again later',
       ].some((msg) => (error as DatabaseError).message.includes(msg))
     ) {
       return reply.status(429).send({

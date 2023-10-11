@@ -40,6 +40,9 @@ type StorageConfigType = {
   logflareSourceToken?: string
   enableQueueEvents: boolean
   pgQueueConnectionURL?: string
+  pgQueueDeleteAfterDays?: number
+  pgQueueArchiveCompletedAfterSeconds?: number
+  pgQueueRetentionDays?: number
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
@@ -147,6 +150,15 @@ export function getConfig(): StorageConfigType {
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
     enableQueueEvents: getOptionalConfigFromEnv('ENABLE_QUEUE_EVENTS') === 'true',
     pgQueueConnectionURL: getOptionalConfigFromEnv('PG_QUEUE_CONNECTION_URL'),
+    pgQueueDeleteAfterDays: parseInt(
+      getOptionalConfigFromEnv('PG_QUEUE_DELETE_AFTER_DAYS') || '2',
+      10
+    ),
+    pgQueueArchiveCompletedAfterSeconds: parseInt(
+      getOptionalConfigFromEnv('PG_QUEUE_ARCHIVE_COMPLETED_AFTER_SECONDS') || '7200',
+      10
+    ),
+    pgQueueRetentionDays: parseInt(getOptionalConfigFromEnv('PG_QUEUE_RETENTION_DAYS') || '2', 10),
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),
     webhookApiKey: getOptionalConfigFromEnv('WEBHOOK_API_KEY'),
     webhookQueuePullInterval: parseInt(

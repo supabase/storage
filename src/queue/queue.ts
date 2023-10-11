@@ -19,7 +19,14 @@ export abstract class Queue {
       return Queue.pgBoss
     }
 
-    const { isMultitenant, multitenantDatabaseUrl, pgQueueConnectionURL } = getConfig()
+    const {
+      isMultitenant,
+      multitenantDatabaseUrl,
+      pgQueueConnectionURL,
+      pgQueueDeleteAfterDays,
+      pgQueueArchiveCompletedAfterSeconds,
+      pgQueueRetentionDays,
+    } = getConfig()
 
     let url = pgQueueConnectionURL ?? process.env.DATABASE_URL
 
@@ -31,13 +38,12 @@ export abstract class Queue {
       connectionString: url,
       max: 4,
       application_name: 'storage-pgboss',
-      deleteAfterDays: 7,
-      archiveCompletedAfterSeconds: 14_400,
-      retentionDays: 7,
+      deleteAfterDays: pgQueueDeleteAfterDays,
+      archiveCompletedAfterSeconds: pgQueueArchiveCompletedAfterSeconds,
+      retentionDays: pgQueueRetentionDays,
       retryBackoff: true,
       retryLimit: 20,
       expireInHours: 48,
-      monitorStateIntervalSeconds: 30,
     })
 
     registerWorkers()

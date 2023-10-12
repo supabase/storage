@@ -455,6 +455,12 @@ export class StorageKnexDB implements Database {
     })
   }
 
+  healthcheck() {
+    return this.runQuery('Healthcheck', (knex) => {
+      return knex.raw('SELECT id from storage.buckets limit 1')
+    })
+  }
+
   protected async runQuery<T extends (db: Knex.Transaction) => Promise<any>>(
     queryName: string,
     fn: T,

@@ -11,6 +11,7 @@ interface ConnectionOptions {
   path?: string
   user: User
   superUser: User
+  disableHostCheck?: boolean
 }
 
 /**
@@ -18,7 +19,9 @@ interface ConnectionOptions {
  * @param options
  */
 export async function getPostgresConnection(options: ConnectionOptions): Promise<TenantConnection> {
-  const dbCredentials = await getDbCredentials(options.tenantId, options.host)
+  const dbCredentials = await getDbCredentials(options.tenantId, options.host, {
+    disableHostCheck: options.disableHostCheck,
+  })
 
   return await TenantConnection.create({
     ...dbCredentials,
@@ -26,7 +29,11 @@ export async function getPostgresConnection(options: ConnectionOptions): Promise
   })
 }
 
-async function getDbCredentials(tenantId: string, host: string | undefined) {
+async function getDbCredentials(
+  tenantId: string,
+  host: string | undefined,
+  options?: { disableHostCheck?: boolean }
+) {
   const {
     isMultitenant,
     databasePoolURL,
@@ -39,26 +46,28 @@ async function getDbCredentials(tenantId: string, host: string | undefined) {
   let maxConnections = databaseMaxConnections
   let isExternalPool = Boolean(databasePoolURL)
 
-  if (isMultitenant && xForwardedHostRegExp) {
+  if (isMultitenant) {
     if (!tenantId) {
       throw new StorageBackendError('Invalid Tenant Id', 400, 'Tenant id not provided')
     }
 
-    const xForwardedHost = host
+    if (xForwardedHostRegExp && !options?.disableHostCheck) {
+      const xForwardedHost = host
 
-    if (typeof xForwardedHost !== 'string') {
-      throw new StorageBackendError(
-        'Invalid Header',
-        400,
-        'X-Forwarded-Host header is not a string'
-      )
-    }
-    if (!new RegExp(xForwardedHostRegExp).test(xForwardedHost)) {
-      throw new StorageBackendError(
-        'Invalid Header',
-        400,
-        'X-Forwarded-Host header does not match regular expression'
-      )
+      if (typeof xForwardedHost !== 'string') {
+        throw new StorageBackendError(
+          'Invalid Header',
+          400,
+          'X-Forwarded-Host header is not a string'
+        )
+      }
+      if (!new RegExp(xForwardedHostRegExp).test(xForwardedHost)) {
+        throw new StorageBackendError(
+          'Invalid Header',
+          400,
+          'X-Forwarded-Host header does not match regular expression'
+        )
+      }
     }
 
     const tenant = await getTenantConfig(tenantId)

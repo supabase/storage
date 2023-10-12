@@ -6,7 +6,7 @@ const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): 
   const app = fastify(opts)
   app.register(plugins.adminTenantId)
   app.register(plugins.logTenantId)
-  app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics'] }))
+  app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health'] }))
   app.register(routes.tenant, { prefix: 'tenants' })
 
   let registriesToMerge: Registry[] = []
@@ -36,6 +36,7 @@ const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): 
   }
 
   app.get('/status', async (_, response) => response.status(200).send())
+
   return app
 }
 

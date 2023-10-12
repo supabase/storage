@@ -3,18 +3,8 @@ import { FromSchema } from 'json-schema-to-ts'
 import apiKey from '../../plugins/apikey'
 import { decrypt, encrypt } from '../../../auth'
 import { knex } from '../../../database/multitenant-db'
-import {
-  deleteTenantConfig,
-  getServiceKeyUser,
-  getTenantConfig,
-  runMigrations,
-} from '../../../database/tenant'
-import { TenantConnection } from '../../../database/connection'
-import { Knex } from 'knex'
-import { getConfig } from '../../../config'
-import { StorageBackendError } from '../../../storage'
-
-const { databaseMaxConnections } = getConfig()
+import { deleteTenantConfig, runMigrations } from '../../../database/tenant'
+import { dbSuperUser, storage } from '../../plugins'
 
 const patchSchema = {
   body: {
@@ -257,54 +247,22 @@ export default async function routes(fastify: FastifyInstance) {
     reply.code(204).send()
   })
 
-  fastify.get<tenantRequestInterface>('/:tenantId/health', async (req, res) => {
-    let isExternalPool = false
-    let connection: TenantConnection | undefined
-    let tx: Knex.Transaction | undefined
+  fastify.register(async (fastify) => {
+    fastify.register(dbSuperUser, {
+      disableHostCheck: true,
+    })
+    fastify.register(storage)
 
-    try {
-      const { databasePoolUrl, databaseUrl } = await getTenantConfig(req.params.tenantId)
-      const adminUser = await getServiceKeyUser(req.params.tenantId)
-
-      isExternalPool = Boolean(databasePoolUrl)
-      connection = await TenantConnection.create({
-        tenantId: req.params.tenantId,
-        headers: {},
-        maxConnections: isExternalPool ? 1 : databaseMaxConnections,
-        dbUrl: databasePoolUrl || databaseUrl,
-        isExternalPool,
-        user: adminUser,
-        superUser: adminUser,
-      })
-    } catch (e) {
-      if (e instanceof StorageBackendError) {
-        res.status(200).send({ healthy: false, error: e.message })
-        return
+    fastify.get<tenantRequestInterface>('/:tenantId/health', async (req, res) => {
+      try {
+        await req.storage.healthcheck()
+        res.send({ healthy: true })
+      } catch (e) {
+        if (e instanceof Error) {
+          res.executionError = e
+        }
+        res.send({ healthy: false })
       }
-      res.status(200).send({ healthy: false, error: 'Could not create connection' })
-      return
-    }
-
-    try {
-      tx = await connection.transaction()
-    } catch (e) {
-      res.status(500).send({ healthy: false, error: 'Could not acquire connection' })
-      return
-    }
-
-    try {
-      await tx.raw('SELECT id from storage.buckets limit 1')
-      await tx.commit()
-      res.send({ healthy: true })
-    } catch (e) {
-      await tx.rollback(e)
-      res.status(200).send({ healthy: false })
-    } finally {
-      if (isExternalPool && connection) {
-        connection.dispose().catch(() => {
-          // ignore
-        })
-      }
-    }
+    })
   })
 }

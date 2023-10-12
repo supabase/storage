@@ -248,6 +248,10 @@ export class Storage {
     return true
   }
 
+  healthcheck() {
+    return this.db.asSuperUser().healthcheck()
+  }
+
   protected async parseMaxSizeLimit(maxFileLimit: number | string) {
     if (typeof maxFileLimit === 'string') {
       maxFileLimit = parseFileSizeToBytes(maxFileLimit)

@@ -22,7 +22,7 @@ const patchSchema = {
     properties: {
       anonKey: { type: 'string' },
       databaseUrl: { type: 'string' },
-      databasePoolUrl: { type: 'string' },
+      databasePoolUrl: { type: 'string', nullable: true },
       maxConnections: { type: 'number' },
       fileSizeLimit: { type: 'number' },
       jwtSecret: { type: 'string' },
@@ -193,11 +193,16 @@ export default async function routes(fastify: FastifyInstance) {
       if (databaseUrl) {
         await runMigrations(tenantId, databaseUrl)
       }
+      console.log(databasePoolUrl, databasePoolUrl === null)
       await knex('tenants')
         .update({
           anon_key: anonKey !== undefined ? encrypt(anonKey) : undefined,
           database_url: databaseUrl !== undefined ? encrypt(databaseUrl) : undefined,
-          database_pool_url: databasePoolUrl !== undefined ? encrypt(databasePoolUrl) : undefined,
+          database_pool_url: databasePoolUrl
+            ? encrypt(databasePoolUrl)
+            : databasePoolUrl === null
+            ? null
+            : undefined,
           max_connections: maxConnections ? Number(maxConnections) : undefined,
           file_size_limit: fileSizeLimit,
           jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,

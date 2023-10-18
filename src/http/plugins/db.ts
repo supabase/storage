@@ -70,7 +70,11 @@ export const db = fastifyPlugin(async (fastify) => {
   })
 })
 
-export const dbSuperUser = fastifyPlugin(async (fastify) => {
+interface DbSuperUserPluginOptions {
+  disableHostCheck?: boolean
+}
+
+export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(async (fastify, opts) => {
   fastify.decorateRequest('db', null)
 
   fastify.addHook('preHandler', async (request) => {
@@ -84,6 +88,7 @@ export const dbSuperUser = fastifyPlugin(async (fastify) => {
       path: request.url,
       method: request.method,
       headers: request.headers,
+      disableHostCheck: opts.disableHostCheck,
     })
   })
 

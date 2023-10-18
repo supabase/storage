@@ -117,4 +117,5 @@ export interface Database {
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Obj | undefined : Obj>
 
   searchObjects(bucketId: string, prefix: string, options: SearchObjectOption): Promise<Obj[]>
+  healthcheck(): Promise<void>
 }

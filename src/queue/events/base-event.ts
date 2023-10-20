@@ -80,11 +80,12 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     } catch (e) {
       logger.error(
         {
+          error: e,
           event: {
             type: eventType,
             $version: (this as any).version,
             applyTime: Date.now(),
-            payload,
+            payload: JSON.stringify(payload),
           },
           tenant: payload.tenant,
         },

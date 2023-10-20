@@ -16,11 +16,10 @@ interface WebhookEvent {
   event: {
     $version: string
     type: string
-    payload: object
+    payload: object & { reqId?: string }
     applyTime: number
   }
   sentAt: string
-  traceId?: string
   tenant: {
     ref: string
     host: string
@@ -55,7 +54,7 @@ export class Webhook extends BaseEvent<WebhookEvent> {
       objectPath: path,
       tenantId: job.data.tenant.ref,
       project: job.data.tenant.ref,
-      reqId: job.data.traceId,
+      reqId: job.data.event.payload.reqId,
     })
 
     try {
@@ -74,7 +73,20 @@ export class Webhook extends BaseEvent<WebhookEvent> {
         }
       )
     } catch (e) {
-      logger.error({ error: e }, 'Webhook failed')
+      logger.error(
+        {
+          error: e,
+          jodId: job.id,
+          type: 'event',
+          event: job.data.event.type,
+          payload: JSON.stringify(job.data.event.payload),
+          objectPath: path,
+          tenantId: job.data.tenant.ref,
+          project: job.data.tenant.ref,
+          reqId: job.data.event.payload.reqId,
+        },
+        `[Lifecycle]: ${job.data.event.type} ${path} - FAILED`
+      )
       throw e
     }
 

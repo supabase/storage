@@ -170,6 +170,7 @@ export class Uploader {
 
         // schedule the deletion of the previous file
         if (currentObj && currentObj.version !== id) {
+          console.log('deleted')
           events.push(
             ObjectAdminDelete.send({
               name: objectName,
@@ -205,7 +206,8 @@ export class Uploader {
           )
         }
 
-        await Promise.all(events)
+        console.log(events)
+        console.log(await Promise.all(events))
 
         FileUploadedSuccess.inc({
           tenant_id: db.tenantId,

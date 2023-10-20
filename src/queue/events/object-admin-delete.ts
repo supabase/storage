@@ -45,11 +45,21 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
         withOptionalVersion(s3Key, version) + '.info',
       ])
     } catch (e) {
+      const s3Key = `${job.data.tenant.ref}/${job.data.bucketId}/${job.data.name}`
+
       logger.error(
         {
           error: e,
+          jodId: job.id,
+          type: 'event',
+          event: 'ObjectAdminDelete',
+          payload: JSON.stringify(job.data),
+          objectPath: s3Key,
+          tenantId: job.data.tenant.ref,
+          project: job.data.tenant.ref,
+          reqId: job.data.reqId,
         },
-        'Error Deleting files from queue'
+        `[Admin]: ObjectAdminDelete ${s3Key} - FAILED`
       )
       throw e
     }

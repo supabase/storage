@@ -49,7 +49,7 @@ export class StorageKnexDB implements Database {
         try {
           await this.connection.setScope(tnx)
 
-          tnx.on('query-error', (error) => {
+          tnx.once('query-error', (error) => {
             throw DBError.fromDBError(error)
           })
 
@@ -62,6 +62,8 @@ export class StorageKnexDB implements Database {
         } catch (e) {
           await tnx.rollback()
           throw e
+        } finally {
+          tnx.removeAllListeners()
         }
       } catch (e) {
         error = e
@@ -463,8 +465,7 @@ export class StorageKnexDB implements Database {
 
   protected async runQuery<T extends (db: Knex.Transaction) => Promise<any>>(
     queryName: string,
-    fn: T,
-    isolation?: Knex.IsolationLevels
+    fn: T
   ): Promise<Awaited<ReturnType<T>>> {
     const timer = DbQueryPerformance.startTimer({
       name: queryName,
@@ -481,7 +482,7 @@ export class StorageKnexDB implements Database {
 
     if (!tnx || needsNewTransaction) {
       tnx = await this.connection.transactionProvider(this.options.tnx)()
-      tnx.on('query-error', (error: DatabaseError) => {
+      tnx.once('query-error', (error: DatabaseError) => {
         throw DBError.fromDBError(error)
       })
     }
@@ -512,6 +513,10 @@ export class StorageKnexDB implements Database {
       }
       timer()
       throw e
+    } finally {
+      if (needsNewTransaction) {
+        tnx.removeAllListeners()
+      }
     }
   }
 }

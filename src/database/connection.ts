@@ -88,6 +88,7 @@ export class TenantConnection {
     DbActivePool.inc({ tenant_id: options.tenantId, is_external: isExternalPool.toString() })
 
     knexPool.client.pool.on('createSuccess', () => {
+      console.log('successs')
       DbActiveConnection.inc({
         tenant_id: options.tenantId,
         is_external: isExternalPool.toString(),
@@ -127,7 +128,8 @@ export class TenantConnection {
 
   async dispose() {
     if (this.options.isExternalPool) {
-      return this.pool.destroy()
+      await this.pool.destroy()
+      this.pool.client.removeAllListeners()
     }
   }
 

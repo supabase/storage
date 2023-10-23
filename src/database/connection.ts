@@ -127,7 +127,8 @@ export class TenantConnection {
 
   async dispose() {
     if (this.options.isExternalPool) {
-      return this.pool.destroy()
+      await this.pool.destroy()
+      this.pool.client.removeAllListeners()
     }
   }
 

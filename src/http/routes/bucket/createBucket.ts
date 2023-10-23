@@ -61,7 +61,7 @@ export default async function routes(fastify: FastifyInstance) {
       } = request.body
 
       await request.storage.createBucket({
-        id: id ?? bucketName,
+        id: id || bucketName,
         name: bucketName,
         owner,
         public: isPublic ?? false,

@@ -4,7 +4,7 @@ import { getServiceKeyUser } from '../../database/tenant'
 import { getPostgresConnection } from '../../database'
 import { Storage } from '../../storage'
 import { StorageKnexDB } from '../../storage/database'
-import { createStorageBackend } from '../../storage/backend'
+import { createAgent, createStorageBackend } from '../../storage/backend'
 import { getConfig } from '../../config'
 import { QueueJobScheduled, QueueJobSchedulingTime } from '../../monitoring/metrics'
 import { logger } from '../../monitoring'
@@ -20,7 +20,8 @@ export interface BasePayload {
 
 export type StaticThis<T> = { new (...args: any): T }
 
-const { enableQueueEvents } = getConfig()
+const { enableQueueEvents, storageBackendType, globalS3Protocol } = getConfig()
+const httpAgent = createAgent(globalS3Protocol)
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   public static readonly version: string = 'v1'
@@ -113,7 +114,9 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
       host: payload.tenant.host,
     })
 
-    const storageBackend = createStorageBackend()
+    const storageBackend = createStorageBackend(storageBackendType, {
+      httpAgent,
+    })
 
     return new Storage(storageBackend, db)
   }
@@ -145,12 +148,10 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
 
     timer({
       name: constructor.getQueueName(),
-      tenant_id: this.payload.tenant.ref,
     })
 
     QueueJobScheduled.inc({
       name: constructor.getQueueName(),
-      tenant_id: this.payload.tenant.ref,
     })
 
     return res

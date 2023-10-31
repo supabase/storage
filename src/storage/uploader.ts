@@ -70,7 +70,6 @@ export class Uploader {
   async prepareUpload(options: UploadObjectOptions) {
     await this.canUpload(options)
     FileUploadStarted.inc({
-      tenant_id: this.db.tenantId,
       is_multipart: Boolean(options.isMultipart).toString(),
     })
 
@@ -208,7 +207,6 @@ export class Uploader {
         await Promise.all(events)
 
         FileUploadedSuccess.inc({
-          tenant_id: db.tenantId,
           is_multipart: Boolean(isMultipart).toString(),
         })
 

@@ -18,11 +18,11 @@ import { DetailedError } from 'tus-js-client'
 import { getServiceKeyUser } from '../database/tenant'
 import { checkBucketExists } from './common'
 
-const { serviceKey, tenantId, globalS3Bucket } = getConfig()
+const { serviceKey, tenantId, globalS3Bucket, storageBackendType } = getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
 const localServerAddress = 'http://127.0.0.1:8999'
 
-const backend = createStorageBackend()
+const backend = createStorageBackend(storageBackendType)
 const client = backend.client
 
 describe('Tus multipart', () => {

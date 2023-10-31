@@ -85,24 +85,22 @@ export class TenantConnection {
       acquireConnectionTimeout: databaseConnectionTimeout,
     })
 
-    DbActivePool.inc({ tenant_id: options.tenantId, is_external: isExternalPool.toString() })
+    DbActivePool.inc({ is_external: isExternalPool.toString() })
 
     knexPool.client.pool.on('createSuccess', () => {
       DbActiveConnection.inc({
-        tenant_id: options.tenantId,
         is_external: isExternalPool.toString(),
       })
     })
 
     knexPool.client.pool.on('destroySuccess', () => {
       DbActiveConnection.dec({
-        tenant_id: options.tenantId,
         is_external: isExternalPool.toString(),
       })
     })
 
     knexPool.client.pool.on('poolDestroySuccess', () => {
-      DbActivePool.dec({ tenant_id: options.tenantId, is_external: isExternalPool.toString() })
+      DbActivePool.dec({ is_external: isExternalPool.toString() })
     })
 
     if (!isExternalPool) {

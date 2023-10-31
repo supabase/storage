@@ -2,6 +2,7 @@ import fastifyPlugin from 'fastify-plugin'
 import { StorageBackendAdapter, createStorageBackend } from '../../storage/backend'
 import { Storage } from '../../storage'
 import { StorageKnexDB } from '../../storage/database'
+import { getConfig } from '../../config'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -10,8 +11,10 @@ declare module 'fastify' {
   }
 }
 
+const { storageBackendType } = getConfig()
+
 export const storage = fastifyPlugin(async (fastify) => {
-  const storageBackend = createStorageBackend()
+  const storageBackend = createStorageBackend(storageBackendType)
 
   fastify.decorateRequest('storage', undefined)
   fastify.addHook('preHandler', async (request) => {

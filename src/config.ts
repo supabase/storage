@@ -1,6 +1,6 @@
 import dotenv from 'dotenv'
 
-type StorageBackendType = 'file' | 's3'
+export type StorageBackendType = 'file' | 's3'
 
 type StorageConfigType = {
   version: string
@@ -12,7 +12,7 @@ type StorageConfigType = {
   encryptionKey: string
   fileSizeLimit: number
   fileStoragePath?: string
-  globalS3Protocol?: 'http' | 'https' | string
+  globalS3Protocol: 'http' | 'https'
   globalS3MaxSockets?: number
   globalS3Bucket: string
   globalS3Endpoint?: string
@@ -111,7 +111,9 @@ export function getConfig(): StorageConfigType {
     fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
     globalS3MaxSockets: parseInt(getOptionalConfigFromEnv('GLOBAL_S3_MAX_SOCKETS') || '200', 10),
-    globalS3Protocol: getOptionalConfigFromEnv('GLOBAL_S3_PROTOCOL') || 'https',
+    globalS3Protocol: (getOptionalConfigFromEnv('GLOBAL_S3_PROTOCOL') || 'https') as
+      | 'http'
+      | 'https',
     globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
     globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
     globalS3ForcePathStyle: getOptionalConfigFromEnv('GLOBAL_S3_FORCE_PATH_STYLE') === 'true',

@@ -66,8 +66,9 @@ const testSpec = yaml.load(
   fs.readFileSync(path.resolve(__dirname, 'rls_tests.yaml'), 'utf8')
 ) as RlsTestSpec
 
-const { serviceKey, tenantId, jwtSecret, databaseURL, globalS3Bucket } = getConfig()
-const backend = createStorageBackend()
+const { serviceKey, tenantId, jwtSecret, databaseURL, globalS3Bucket, storageBackendType } =
+  getConfig()
+const backend = createStorageBackend(storageBackendType)
 const client = backend.client
 
 jest.setTimeout(10000)

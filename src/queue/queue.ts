@@ -87,14 +87,12 @@ export abstract class Queue {
               const res = await event.handle(job)
 
               QueueJobCompleted.inc({
-                tenant_id: job.data.tenant.ref,
                 name: event.getQueueName(),
               })
 
               return res
             } catch (e) {
               QueueJobRetryFailed.inc({
-                tenant_id: job.data.tenant.ref,
                 name: event.getQueueName(),
               })
 
@@ -106,7 +104,6 @@ export abstract class Queue {
                   }
                   if (dbJob.retrycount === dbJob.retrylimit) {
                     QueueJobError.inc({
-                      tenant_id: job.data.tenant.ref,
                       name: event.getQueueName(),
                     })
                   }

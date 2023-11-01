@@ -1,5 +1,5 @@
 import fastifyPlugin from 'fastify-plugin'
-import { MetricsRegistrar, RequestErrors } from '../../monitoring/metrics'
+import { MetricsRegistrar } from '../../monitoring/metrics'
 import fastifyMetrics from 'fastify-metrics'
 import { getConfig } from '../../config'
 
@@ -33,26 +33,6 @@ export const metrics = ({ enabledEndpoint }: MetricsOptions) =>
         },
         registeredRoutesOnly: true,
         groupStatusCodes: true,
-        customLabels: {
-          tenant_id: (req) => {
-            return req.tenantId
-          },
-        },
       },
-    })
-
-    // Errors
-    fastify.addHook('onResponse', async (request, reply) => {
-      const error = (reply.raw as any).executionError || reply.executionError
-
-      if (error) {
-        RequestErrors.inc({
-          name: error.name || error.constructor.name,
-          tenant_id: request.tenantId,
-          path: request.routerPath,
-          method: request.routerMethod,
-          status: reply.statusCode,
-        })
-      }
     })
   })

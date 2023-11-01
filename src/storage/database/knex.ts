@@ -469,7 +469,6 @@ export class StorageKnexDB implements Database {
   ): Promise<Awaited<ReturnType<T>>> {
     const timer = DbQueryPerformance.startTimer({
       name: queryName,
-      tenant_id: this.options.tenantId,
     })
 
     let tnx = this.options.tnx

@@ -26,34 +26,51 @@ import Agent, { HttpsAgent } from 'agentkeepalive'
 const { globalS3Protocol, globalS3MaxSockets } = getConfig()
 
 /**
+ * Creates an agent for the given protocol
+ * @param protocol
+ */
+export function createAgent(protocol: 'http' | 'https') {
+  const agentOptions = {
+    maxSockets: globalS3MaxSockets,
+    keepAlive: true,
+  }
+
+  return protocol === 'http'
+    ? { httpAgent: new Agent(agentOptions) }
+    : { httpsAgent: new HttpsAgent(agentOptions) }
+}
+
+export interface S3ClientOptions {
+  endpoint?: string
+  region?: string
+  forcePathStyle?: boolean
+  accessKey?: string
+  secretKey?: string
+  role?: string
+  httpAgent?: { httpAgent: Agent } | { httpsAgent: HttpsAgent }
+}
+
+/**
  * S3Backend
  * Interacts with an s3-compatible file system with this S3Adapter
  */
 export class S3Backend implements StorageBackendAdapter {
   client: S3Client
 
-  constructor(region: string, endpoint?: string | undefined, globalS3ForcePathStyle?: boolean) {
-    const agentOptions = {
-      maxSockets: globalS3MaxSockets,
-      keepAlive: true,
-    }
-
-    const agent =
-      globalS3Protocol === 'http'
-        ? { httpAgent: new Agent(agentOptions) }
-        : { httpsAgent: new HttpsAgent(agentOptions) }
+  constructor(options: S3ClientOptions) {
+    const agent = options.httpAgent ? options.httpAgent : createAgent(globalS3Protocol)
 
     const params: S3ClientConfig = {
-      region,
+      region: options.region,
       runtime: 'node',
       requestHandler: new NodeHttpHandler({
         ...agent,
       }),
     }
-    if (endpoint) {
-      params.endpoint = endpoint
+    if (options.endpoint) {
+      params.endpoint = options.endpoint
     }
-    if (globalS3ForcePathStyle) {
+    if (options.forcePathStyle) {
       params.forcePathStyle = true
     }
     this.client = new S3Client(params)

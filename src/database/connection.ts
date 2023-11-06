@@ -2,6 +2,7 @@ import pg, { DatabaseError } from 'pg'
 import { Knex, knex } from 'knex'
 import { JwtPayload } from 'jsonwebtoken'
 import retry from 'async-retry'
+import TTLCache from '@isaacs/ttlcache'
 import { getConfig } from '../config'
 import { DbActiveConnection, DbActivePool } from '../monitoring/metrics'
 import { StorageBackendError } from '../storage'
@@ -11,6 +12,7 @@ import KnexTimeoutError = knex.KnexTimeoutError
 pg.types.setTypeParser(20, 'text', parseInt)
 
 const {
+  isMultitenant,
   databaseSSLRootCert,
   databaseMaxConnections,
   databaseFreePoolAfterInactivity,
@@ -35,7 +37,19 @@ export interface User {
   payload: { role?: string } & JwtPayload
 }
 
-export const connections = new Map<string, Knex>()
+const multiTenantLRUConfig = {
+  ttl: 1000 * 10,
+  updateAgeOnGet: true,
+  checkAgeOnGet: true,
+}
+export const connections = new TTLCache<string, Knex>({
+  ...(isMultitenant ? multiTenantLRUConfig : { max: 1, ttl: Infinity }),
+  dispose: async (pool) => {
+    if (!pool) return
+    await pool.destroy()
+    pool.client.removeAllListeners()
+  },
+})
 const searchPath = ['storage', 'public', 'extensions']
 
 export class TenantConnection {
@@ -50,10 +64,12 @@ export class TenantConnection {
 
   static stop() {
     const promises: Promise<void>[] = []
+
     for (const [connectionString, pool] of connections) {
       promises.push(pool.destroy())
       connections.delete(connectionString)
     }
+
     return Promise.allSettled(promises)
   }
 
@@ -104,12 +120,6 @@ export class TenantConnection {
     })
 
     if (!isExternalPool) {
-      knexPool.client.pool.on('poolDestroySuccess', () => {
-        if (connections.get(connectionString) === knexPool) {
-          connections.delete(connectionString)
-        }
-      })
-
       connections.set(connectionString, knexPool)
     }
 

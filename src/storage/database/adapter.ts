@@ -118,4 +118,6 @@ export interface Database {
 
   searchObjects(bucketId: string, prefix: string, options: SearchObjectOption): Promise<Obj[]>
   healthcheck(): Promise<void>
+
+  destroyConnection(): Promise<void>
 }

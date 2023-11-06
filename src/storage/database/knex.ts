@@ -463,6 +463,10 @@ export class StorageKnexDB implements Database {
     })
   }
 
+  destroyConnection() {
+    return this.connection.dispose()
+  }
+
   protected async runQuery<T extends (db: Knex.Transaction) => Promise<any>>(
     queryName: string,
     fn: T

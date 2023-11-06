@@ -3,6 +3,7 @@ import { getConfig } from '../../config'
 import { Job, WorkOptions } from 'pg-boss'
 import { withOptionalVersion } from '../../storage/backend'
 import { logger, logSchema } from '../../monitoring'
+import { Storage } from '../../storage'
 
 export interface ObjectDeleteEvent extends BasePayload {
   name: string
@@ -23,8 +24,10 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
   }
 
   static async handle(job: Job<ObjectDeleteEvent>) {
+    let storage: Storage | undefined = undefined
+
     try {
-      const storage = await this.createStorage(job.data)
+      storage = await this.createStorage(job.data)
       const version = job.data.version
 
       const s3Key = `${job.data.tenant.ref}/${job.data.bucketId}/${job.data.name}`
@@ -62,6 +65,21 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
         `[Admin]: ObjectAdminDelete ${s3Key} - FAILED`
       )
       throw e
+    } finally {
+      if (storage) {
+        const tenant = storage.db.tenant()
+        storage.db
+          .destroyConnection()
+          .then(() => {
+            // no-op
+          })
+          .catch((e) => {
+            logger.error(
+              { error: e },
+              `[Admin]: ObjectAdminDelete ${tenant.ref} - FAILED DISPOSING CONNECTION`
+            )
+          })
+      }
     }
   }
 }

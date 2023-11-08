@@ -1,5 +1,5 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
-import { routes, plugins } from './http'
+import { routes, plugins, setErrorHandler } from './http'
 import { Registry } from 'prom-client'
 
 const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): FastifyInstance => {
@@ -36,6 +36,8 @@ const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): 
   }
 
   app.get('/status', async (_, response) => response.status(200).send())
+
+  setErrorHandler(app)
 
   return app
 }

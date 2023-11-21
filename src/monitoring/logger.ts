@@ -20,7 +20,7 @@ export const logger = pino({
     },
     req(request) {
       return {
-        traceId: request.id,
+        traceId: request.version,
         method: request.method,
         url: redactQueryParamFromRequest(request, ['token']),
         headers: whitelistHeaders(request.headers),

@@ -1,23 +1,30 @@
 import { FastifyBaseLogger, FastifyInstance } from 'fastify'
-import { Server } from '@tus/server'
+import { MemoryLocker, Server } from '@tus/server'
 import { jwt, storage, db, dbSuperUser } from '../../plugins'
 import { getConfig } from '../../../config'
 import * as http from 'http'
 import { Storage } from '../../../storage'
-import { S3Store } from './s3-store'
-import { Head, Options, Patch, Post } from './handlers'
-import { namingFunction, onCreate, onUploadFinish } from './lifecycle'
+import {
+  namingFunction,
+  onCreate,
+  onIncomingRequest,
+  onResponseError,
+  onUploadFinish,
+} from './lifecycle'
 import { ServerOptions } from '@tus/server/types'
 import { DataStore } from '@tus/server/models'
 import { getFileSizeLimit } from '../../../storage/limits'
 import { UploadId } from './upload-id'
 import { FileStore } from './file-store'
 import { TenantConnection } from '../../../database/connection'
+import { S3Store } from '@tus/s3-store'
+import { PostgresLocker } from './postgres-locker'
+import { TusURLGenerator } from './url-generator'
+import { TusOptionsHandler } from './handlers'
 
 const {
   globalS3Bucket,
   globalS3Endpoint,
-  globalS3Protocol,
   globalS3ForcePathStyle,
   region,
   tusUrlExpiryMs,
@@ -26,7 +33,7 @@ const {
   fileStoragePath,
 } = getConfig()
 
-type MultiPartRequest = http.IncomingMessage & {
+interface MultiPartRequest extends http.IncomingMessage {
   log: FastifyBaseLogger
   upload: {
     storage: Storage
@@ -40,13 +47,12 @@ function createTusStore() {
   if (storageBackendType === 's3') {
     return new S3Store({
       partSize: 6 * 1024 * 1024, // Each uploaded part will have ~6MB,
-      uploadExpiryMilliseconds: tusUrlExpiryMs,
+      expirationPeriodInMilliseconds: tusUrlExpiryMs,
       s3ClientConfig: {
         bucket: globalS3Bucket,
         region: region,
         endpoint: globalS3Endpoint,
-        sslEnabled: globalS3Protocol !== 'http',
-        s3ForcePathStyle: globalS3ForcePathStyle,
+        forcePathStyle: globalS3ForcePathStyle,
       },
     })
   }
@@ -63,20 +69,35 @@ function createTusServer() {
   } = {
     path: tusPath,
     datastore: datastore,
+    onIncomingRequest: onIncomingRequest,
     namingFunction: namingFunction,
     onUploadCreate: onCreate,
     onUploadFinish: onUploadFinish,
-    respectForwardedHeaders: true,
-    maxFileSize: async (id, rawReq) => {
+    onResponseError: onResponseError,
+    uploadIdGenerator: new TusURLGenerator({
+      path: tusPath,
+      respectForwardedHeaders: true,
+    }),
+    locker: (req: http.IncomingMessage) =>
+      new PostgresLocker((req as MultiPartRequest).upload.storage.db, {
+        shouldWait: ['HEAD'].includes(req.method as string),
+        req,
+        trace: req.headers['x-trace-id'] as string,
+      }),
+    maxSize: async (rawReq, id) => {
       const req = rawReq as MultiPartRequest
+
+      const globalFileLimit = await getFileSizeLimit(req.upload.tenantId)
+
+      if (!id) {
+        return globalFileLimit
+      }
 
       const resourceId = UploadId.fromString(id)
 
       const bucket = await req.upload.storage
         .asSuperUser()
         .findBucket(resourceId.bucket, 'id,file_size_limit')
-
-      const globalFileLimit = await getFileSizeLimit(req.upload.tenantId)
 
       const fileSizeLimit = bucket.file_size_limit || globalFileLimit
       if (fileSizeLimit > globalFileLimit) {
@@ -87,12 +108,7 @@ function createTusServer() {
     },
   }
   const tusServer = new Server(serverOptions)
-
-  tusServer.handlers.PATCH = new Patch(datastore, serverOptions)
-  tusServer.handlers.HEAD = new Head(datastore, serverOptions)
-  tusServer.handlers.POST = new Post(datastore, serverOptions)
-  tusServer.handlers.OPTIONS = new Options(datastore, serverOptions)
-
+  tusServer.handlers.OPTIONS = new TusOptionsHandler(datastore, serverOptions)
   return tusServer
 }
 

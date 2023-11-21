@@ -69,7 +69,7 @@ export class ObjectStorage {
       allowedMimeTypes: bucket.allowed_mime_types,
     })
 
-    return { objectMetadata: metadata, path, id: obj.id }
+    return { objectMetadata: metadata, path, id: obj.version }
   }
 
   public async uploadOverridingObject(request: FastifyRequest, options: UploadObjectOptions) {
@@ -97,7 +97,7 @@ export class ObjectStorage {
       isUpsert: true,
     })
 
-    return { objectMetadata: metadata, path, id: obj.id }
+    return { objectMetadata: metadata, path, id: obj.version }
   }
 
   /**

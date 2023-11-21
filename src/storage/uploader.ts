@@ -23,7 +23,6 @@ const { globalS3Bucket } = getConfig()
 export interface UploadObjectOptions {
   bucketId: string
   objectName: string
-  id?: string
   owner?: string
   isUpsert?: boolean
   isMultipart?: boolean
@@ -114,7 +113,7 @@ export class Uploader {
 
       return this.completeUpload({
         ...options,
-        id: version,
+        version,
         objectMetadata: objectMetadata,
       })
     } catch (e) {
@@ -130,7 +129,7 @@ export class Uploader {
   }
 
   async completeUpload({
-    id,
+    version,
     bucketId,
     objectName,
     owner,
@@ -139,7 +138,7 @@ export class Uploader {
     isUpsert,
   }: UploadObjectOptions & {
     objectMetadata: ObjectMetadata
-    id: string
+    version: string
     emitEvent?: boolean
     isMultipart?: boolean
   }) {
@@ -161,14 +160,14 @@ export class Uploader {
           bucket_id: bucketId,
           name: objectName,
           metadata: objectMetadata,
-          version: id,
+          version,
           owner,
         })
 
         const events: Promise<any>[] = []
 
         // schedule the deletion of the previous file
-        if (currentObj && currentObj.version !== id) {
+        if (currentObj && currentObj.version !== version) {
           events.push(
             ObjectAdminDelete.send({
               name: objectName,
@@ -198,7 +197,7 @@ export class Uploader {
               tenant: this.db.tenant(),
               objectName: objectName,
               bucketName: bucketId,
-              version: id,
+              version,
               reqId: this.db.reqId,
             })
           )
@@ -217,7 +216,7 @@ export class Uploader {
         name: objectName,
         bucketId: bucketId,
         tenant: this.db.tenant(),
-        version: id,
+        version,
         reqId: this.db.reqId,
       })
       throw e

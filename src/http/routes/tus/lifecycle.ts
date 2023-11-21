@@ -21,6 +21,35 @@ export type MultiPartRequest = http.IncomingMessage & {
   }
 }
 
+export async function onIncomingRequest(
+  rawReq: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string
+) {
+  if (rawReq.method === 'OPTIONS') {
+    return
+  }
+
+  const req = rawReq as MultiPartRequest
+  const uploadID = UploadId.fromString(id)
+
+  res.on('finish', () => {
+    req.upload.db.dispose().catch((e) => {
+      req.log.error({ error: e }, 'Error disposing db connection')
+    })
+  })
+
+  const isUpsert = req.headers['x-upsert'] === 'true'
+
+  const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+  await uploader.canUpload({
+    owner: req.upload.owner,
+    bucketId: uploadID.bucket,
+    objectName: uploadID.objectName,
+    isUpsert,
+  })
+}
+
 export function namingFunction(rawReq: http.IncomingMessage) {
   const req = rawReq as MultiPartRequest
 
@@ -59,7 +88,6 @@ export async function onCreate(
     const uploadID = UploadId.fromString(upload.id)
 
     const req = rawReq as MultiPartRequest
-    const isUpsert = req.headers['x-upsert'] === 'true'
     const storage = req.upload.storage
 
     const bucket = await storage
@@ -67,15 +95,6 @@ export async function onCreate(
       .findBucket(uploadID.bucket, 'id, file_size_limit, allowed_mime_types')
 
     const uploader = new Uploader(storage.backend, storage.db)
-
-    await uploader.prepareUpload({
-      id: uploadID.version,
-      owner: req.upload.owner,
-      bucketId: uploadID.bucket,
-      objectName: uploadID.objectName,
-      isUpsert,
-      isMultipart: true,
-    })
 
     if (upload.metadata && /^-?\d+$/.test(upload.metadata.cacheControl || '')) {
       upload.metadata.cacheControl = `max-age=${upload.metadata.cacheControl}`
@@ -117,7 +136,7 @@ export async function onUploadFinish(
     const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
 
     await uploader.completeUpload({
-      id: resourceId.version,
+      version: resourceId.version,
       bucketId: resourceId.bucket,
       objectName: resourceId.objectName,
       objectMetadata: metadata,
@@ -134,4 +153,18 @@ export async function onUploadFinish(
     }
     throw e
   }
+}
+
+type TusError = { status_code: number; body: string }
+
+export function onResponseError(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  error: TusError,
+  write: (error: TusError) => http.ServerResponse
+) {
+  if (error.status_code === 409) {
+    res.setHeader('Connection', 'close')
+  }
+  return write(error)
 }

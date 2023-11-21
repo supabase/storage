@@ -32,6 +32,7 @@ export const db = fastifyPlugin(async (fastify) => {
   })
 
   fastify.addHook('onSend', async (request, reply, payload) => {
+    console.log('onSend DB')
     if (request.db) {
       request.db.dispose().catch((e) => {
         logSchema.error(request.log, 'Error disposing db connection', {

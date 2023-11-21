@@ -21,7 +21,7 @@ export interface BasePayload {
 export type StaticThis<T> = { new (...args: any): T }
 
 const { enableQueueEvents, storageBackendType, globalS3Protocol } = getConfig()
-const httpAgent = createAgent(globalS3Protocol)
+// const httpAgent = createAgent(globalS3Protocol)
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   public static readonly version: string = 'v1'
@@ -115,7 +115,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     })
 
     const storageBackend = createStorageBackend(storageBackendType, {
-      httpAgent,
+      // httpAgent,
     })
 
     return new Storage(storageBackend, db)

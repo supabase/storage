@@ -17,6 +17,7 @@ import { logger } from '../monitoring'
 import { DetailedError } from 'tus-js-client'
 import { getServiceKeyUser } from '../database/tenant'
 import { checkBucketExists } from './common'
+import { PostgresLocker } from '../http/routes/tus/postgres-locker'
 
 const { serviceKey, tenantId, globalS3Bucket, storageBackendType } = getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
@@ -24,6 +25,21 @@ const localServerAddress = 'http://127.0.0.1:8999'
 
 const backend = createStorageBackend(storageBackendType)
 const client = backend.client
+
+async function createDB() {
+  const superUser = await getServiceKeyUser(tenantId)
+  const pg = await getPostgresConnection({
+    superUser,
+    user: superUser,
+    tenantId: tenantId,
+    host: 'localhost',
+  })
+
+  return new StorageKnexDB(pg, {
+    host: 'localhost',
+    tenantId,
+  })
+}
 
 describe('Tus multipart', () => {
   let db: StorageKnexDB
@@ -57,18 +73,7 @@ describe('Tus multipart', () => {
   })
 
   beforeEach(async () => {
-    const superUser = await getServiceKeyUser(tenantId)
-    const pg = await getPostgresConnection({
-      superUser,
-      user: superUser,
-      tenantId: tenantId,
-      host: 'localhost',
-    })
-
-    db = new StorageKnexDB(pg, {
-      host: 'localhost',
-      tenantId,
-    })
+    db = await createDB()
 
     bucketName = randomUUID()
     storage = new Storage(backend, db)
@@ -231,6 +236,109 @@ describe('Tus multipart', () => {
         expect(err.originalResponse.getBody()).toEqual('Request Entity Too Large\n')
         expect(err.originalResponse.getStatus()).toEqual(413)
       }
+    })
+  })
+
+  describe('Postgres locker', () => {
+    it('will hold the lock for subsequent calls until released', async () => {
+      const locker = new PostgresLocker(db)
+      const lockId = 'tenant/bucket/file/version'
+
+      const date = new Date()
+      await locker.lock(lockId)
+      setTimeout(() => {
+        locker.unlock(lockId)
+      }, 300)
+      await locker.lock(lockId) // will wait until the other lock is released
+      await locker.unlock(lockId)
+      const endDate = new Date().valueOf() - date.valueOf()
+      expect(endDate >= 300).toEqual(true)
+    })
+
+    it('locking a locked lock should not resolve', async () => {
+      const locker = new PostgresLocker(db)
+      const lockId = 'tenant/bucket/file/version'
+
+      await locker.lock(lockId)
+
+      const p1 = locker.lock(lockId)
+      const p2 = new Promise((resolve) => setTimeout(resolve, 500, 'timeout'))
+
+      expect(await Promise.race([p1, p2])).toEqual('timeout')
+
+      // clean up
+      await locker.unlock(lockId)
+      await p1
+      await locker.unlock(lockId)
+    })
+
+    it('unlocking a lock should resolve only one pending lock', async () => {
+      const locker = new PostgresLocker(db)
+      const lockId = 'tenant/bucket/file/version'
+
+      const spy = jest.fn()
+      const locks: Promise<void>[] = []
+
+      await locker.lock(lockId)
+
+      locks.push(
+        locker.lock(lockId).then(() => {
+          spy('2')
+        })
+      )
+
+      locks.push(
+        locker.lock(lockId).then(() => {
+          spy('3')
+          return locker.unlock(lockId)
+        })
+      )
+
+      locks.push(
+        locker.lock(lockId).then(() => {
+          spy('4')
+          return locker.unlock(lockId)
+        })
+      )
+
+      locks.push(
+        locker.lock(lockId).then(() => {
+          spy('5')
+          return locker.unlock(lockId)
+        })
+      )
+
+      await locker.unlock(lockId)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(spy).toBeCalledTimes(1)
+
+      await locker.unlock(lockId)
+
+      // cleanup
+      for (const lock of locks) {
+        await lock
+      }
+    })
+
+    it('unlocking a lock should first resolve unlock promise and then pending lock promise', async () => {
+      const locker = new PostgresLocker(db)
+      const lockId = 'tenant/bucket/file/version'
+
+      await locker.lock(lockId)
+
+      const resolveOrder = new Array<number>()
+      const p1 = locker.lock(lockId).then(() => {
+        resolveOrder.push(2)
+      })
+      const p2 = locker.unlock(lockId).then(() => {
+        resolveOrder.push(1)
+      })
+
+      await Promise.all([p1, p2])
+      expect(resolveOrder).toEqual([1, 2])
+
+      // cleanup
+      await locker.unlock(lockId)
     })
   })
 })

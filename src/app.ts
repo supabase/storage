@@ -72,6 +72,15 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   })
   app.get('/status', async (request, response) => response.status(200).send())
 
+  process.on('uncaughtException', (e) => {
+    console.trace('unhandled exception', e)
+  })
+
+  process.on('unhandledRejection', (e, promise) => {
+    console.trace('unhandled promised', e)
+    process.exit(1)
+  })
+
   return app
 }
 

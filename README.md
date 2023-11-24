@@ -1,4 +1,4 @@
-# Supabase Storage Middleware
+# Supabase Storage Engine
 
 [![Coverage Status](https://coveralls.io/repos/github/supabase/storage-api/badge.svg?branch=master)](https://coveralls.io/github/supabase/storage-api?branch=master)
 

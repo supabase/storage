@@ -340,16 +340,8 @@ export class ObjectStorage {
       return Promise.all([
         db.findObject(this.bucketId, sourceObjectName, 'id'),
         db.updateObject(this.bucketId, sourceObjectName, {
-          name: sourceObjectName,
-          version: '1',
-          owner,
-        }),
-        // We also check if we can create the destination object
-        // before starting the move
-        db.asSuperUser().createObject({
           name: destinationObjectName,
           version: newVersion,
-          bucket_id: this.bucketId,
           owner,
         }),
       ])
@@ -371,15 +363,15 @@ export class ObjectStorage {
       const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, newVersion)
 
       await this.db.asSuperUser().withTransaction(async (db) => {
-        await db.createObject({
+        await db.findObject(this.bucketId, sourceObjectName, 'id', { forUpdate: true })
+
+        await db.updateObject(this.bucketId, sourceObjectName, {
           name: destinationObjectName,
           version: newVersion,
-          bucket_id: this.bucketId,
           owner: sourceObj.owner,
           metadata,
         })
 
-        await db.deleteObject(this.bucketId, sourceObjectName, sourceObj.version)
         await ObjectAdminDelete.send({
           name: sourceObjectName,
           bucketId: this.bucketId,

@@ -249,7 +249,7 @@ export class Uploader {
       }
     }
 
-    throw new StorageBackendError('invalid_mime_type', 422, 'mime type not supported')
+    throw new StorageBackendError('invalid_mime_type', 415, 'mime type not supported')
   }
 
   protected async incomingFileInfo(

@@ -8,7 +8,8 @@ import { Uploader } from '../../../storage/uploader'
 import { TenantConnection } from '../../../database/connection'
 import { BaseLogger } from 'pino'
 
-const { globalS3Bucket } = getConfig()
+const { globalS3Bucket, tusPath } = getConfig()
+const reExtractFileID = /([^/]+)\/?$/
 
 export type MultiPartRequest = http.IncomingMessage & {
   log: BaseLogger
@@ -19,6 +20,63 @@ export type MultiPartRequest = http.IncomingMessage & {
     tenantId: string
     isNew: boolean
   }
+}
+
+export async function onIncomingRequest(
+  rawReq: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string
+) {
+  if (rawReq.method === 'OPTIONS') {
+    return
+  }
+
+  const req = rawReq as MultiPartRequest
+  const uploadID = UploadId.fromString(id)
+
+  res.on('finish', () => {
+    req.upload.db.dispose().catch((e) => {
+      req.log.error({ error: e }, 'Error disposing db connection')
+    })
+  })
+
+  const isUpsert = req.headers['x-upsert'] === 'true'
+
+  const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+  await uploader.canUpload({
+    owner: req.upload.owner,
+    bucketId: uploadID.bucket,
+    objectName: uploadID.objectName,
+    isUpsert,
+  })
+}
+
+export function generateUrl(
+  _: http.IncomingMessage,
+  {
+    proto,
+    host,
+    baseUrl,
+    path,
+    id,
+  }: { proto: string; host: string; baseUrl: string; path: string; id: string }
+) {
+  proto = process.env.NODE_ENV === 'production' ? 'https' : proto
+  id = id.split('/').slice(1).join('/')
+  id = Buffer.from(id, 'utf-8').toString('base64url')
+  return `${proto}://${host}${path}/${id}`
+}
+
+export function getFileIdFromRequest(rawRwq: http.IncomingMessage) {
+  const req = rawRwq as MultiPartRequest
+  const match = reExtractFileID.exec(req.url as string)
+
+  if (!match || tusPath.includes(match[1])) {
+    return
+  }
+
+  const idMatch = Buffer.from(match[1], 'base64url').toString('utf-8')
+  return req.upload.tenantId + '/' + idMatch
 }
 
 export function namingFunction(rawReq: http.IncomingMessage) {
@@ -55,46 +113,28 @@ export async function onCreate(
   res: http.ServerResponse,
   upload: Upload
 ): Promise<http.ServerResponse> {
-  try {
-    const uploadID = UploadId.fromString(upload.id)
+  const uploadID = UploadId.fromString(upload.id)
 
-    const req = rawReq as MultiPartRequest
-    const isUpsert = req.headers['x-upsert'] === 'true'
-    const storage = req.upload.storage
+  const req = rawReq as MultiPartRequest
+  const storage = req.upload.storage
 
-    const bucket = await storage
-      .asSuperUser()
-      .findBucket(uploadID.bucket, 'id, file_size_limit, allowed_mime_types')
+  const bucket = await storage
+    .asSuperUser()
+    .findBucket(uploadID.bucket, 'id, file_size_limit, allowed_mime_types')
 
-    const uploader = new Uploader(storage.backend, storage.db)
+  const uploader = new Uploader(storage.backend, storage.db)
 
-    await uploader.prepareUpload({
-      id: uploadID.version,
-      owner: req.upload.owner,
-      bucketId: uploadID.bucket,
-      objectName: uploadID.objectName,
-      isUpsert,
-      isMultipart: true,
-    })
-
-    if (upload.metadata && /^-?\d+$/.test(upload.metadata.cacheControl || '')) {
-      upload.metadata.cacheControl = `max-age=${upload.metadata.cacheControl}`
-    } else if (upload.metadata) {
-      upload.metadata.cacheControl = 'no-cache'
-    }
-
-    if (upload.metadata?.contentType && bucket.allowed_mime_types) {
-      uploader.validateMimeType(upload.metadata.contentType, bucket.allowed_mime_types)
-    }
-
-    return res
-  } catch (e) {
-    if (isRenderableError(e)) {
-      ;(e as any).status_code = parseInt(e.render().statusCode, 10)
-      ;(e as any).body = e.render().message
-    }
-    throw e
+  if (upload.metadata && /^-?\d+$/.test(upload.metadata.cacheControl || '')) {
+    upload.metadata.cacheControl = `max-age=${upload.metadata.cacheControl}`
+  } else if (upload.metadata) {
+    upload.metadata.cacheControl = 'no-cache'
   }
+
+  if (upload.metadata?.contentType && bucket.allowed_mime_types) {
+    uploader.validateMimeType(upload.metadata.contentType, bucket.allowed_mime_types)
+  }
+
+  return res
 }
 
 export async function onUploadFinish(
@@ -117,7 +157,7 @@ export async function onUploadFinish(
     const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
 
     await uploader.completeUpload({
-      id: resourceId.version,
+      version: resourceId.version,
       bucketId: resourceId.bucket,
       objectName: resourceId.objectName,
       objectMetadata: metadata,
@@ -133,5 +173,25 @@ export async function onUploadFinish(
       ;(e as any).body = e.render().message
     }
     throw e
+  }
+}
+
+type TusError = { status_code: number; body: string }
+
+export function onResponseError(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  e: TusError | Error
+) {
+  console.error(e)
+  if (e instanceof Error) {
+    ;(res as any).executionError = e
+  }
+
+  if (isRenderableError(e)) {
+    return {
+      status_code: parseInt(e.render().statusCode, 10),
+      body: e.render().message,
+    }
   }
 }

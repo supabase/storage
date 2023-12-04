@@ -1,76 +1,75 @@
 import { S3Store as BaseS3Store } from '@tus/s3-store'
-import type { S3 } from 'aws-sdk'
-import fs from 'node:fs'
-import { Readable } from 'node:stream'
-import { TUS_RESUMABLE, Upload } from '@tus/server'
-import { S3UploadPart } from '../../../monitoring/metrics'
-import { UploadId } from './upload-id'
+import { Upload } from '@tus/server'
+import { S3 } from '@aws-sdk/client-s3'
 
-interface Options {
-  partSize?: number
-  s3ClientConfig: S3.Types.ClientConfiguration & {
-    bucket: string
-  }
-  uploadExpiryMilliseconds?: number
+type MetadataValue = {
+  file: Upload
+  'upload-id': string
+  'tus-version': string
 }
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore - overwriting private getMetadata function for backwards compatibility
+// TODO: remove this class after all tenants are migrated to the new tus server version
 export class S3Store extends BaseS3Store {
-  constructor(protected readonly options: Options) {
-    super(options)
-  }
-
-  getExpiration(): number {
-    return this.options.uploadExpiryMilliseconds || 0
-  }
-
   /**
-   * Saves upload metadata to a `${file_id}.info` file on S3.
-   * Please note that the file is empty and the metadata is saved
-   * on the S3 object's `Metadata` field, so that only a `headObject`
-   * is necessary to retrieve the data.
+   * Get the metadata for a file.
+   * It keeps backwards compatibility from version 0.9 to 1.0.0
+   * @param id
    */
-  protected async saveMetadata(upload: Upload, upload_id: string) {
-    await this.client
-      .putObject({
-        Bucket: this.bucket,
-        Key: `${upload.id}.info`,
-        Body: '',
-        Metadata: {
-          file: JSON.stringify(upload),
-          upload_id,
-          tus_version: TUS_RESUMABLE,
-          tus_completed: 'false',
-        },
+  private async getMetadata(id: string): Promise<MetadataValue> {
+    /* eslint-disable @typescript-eslint/ban-ts-comment */
+    // @ts-ignore private property
+    const cache = this.cache as Map<string, MetadataValue>
+    // @ts-ignore private property
+    const bucket = this.bucket as string
+    // @ts-ignore private property
+    const client = this.client as S3
+    /* eslint-enable */
+
+    const cached = cache.get(id)
+    if (cached?.file) {
+      return cached
+    }
+
+    console.log('getMetadata', id, bucket, cache)
+
+    const { Metadata, Body } = await client.getObject({
+      Bucket: bucket,
+      Key: id + '.info',
+    })
+
+    if (Metadata?.file) {
+      // OLD Implementation
+      const file = JSON.parse(Metadata.file as string)
+      cache.set(id, {
+        'tus-version': Metadata?.['tus_version'] as string,
+        'upload-id': Metadata?.['upload_id'] as string,
+        file: new Upload({
+          id,
+          size: file.size ? Number.parseInt(file.size, 10) : undefined,
+          offset: Number.parseInt(file.offset, 10),
+          metadata: file.metadata,
+          creation_date: Metadata?.['creation_date'] || undefined,
+        }),
       })
-      .promise()
-  }
 
-  protected async uploadPart(
-    metadata: { file: Upload; upload_id: string; tus_version: string },
-    readStream: fs.ReadStream | Readable,
-    partNumber: number
-  ): Promise<string> {
-    const timer = S3UploadPart.startTimer()
+      return cache.get(id) as MetadataValue
+    }
 
-    const result = await super.uploadPart(metadata, readStream, partNumber)
+    const file = JSON.parse((await Body?.transformToString()) as string)
 
-    timer()
-
-    return result
-  }
-
-  protected async uploadIncompletePart(
-    id: string,
-    readStream: fs.ReadStream | Readable
-  ): Promise<string> {
-    const data = await this.client
-      .putObject({
-        Bucket: this.bucket,
-        Key: id,
-        Body: readStream,
-        Tagging: 'tus_completed=false',
-      })
-      .promise()
-    return data.ETag as string
+    cache.set(id, {
+      'tus-version': Metadata?.['tus-version'] as string,
+      'upload-id': Metadata?.['upload-id'] as string,
+      file: new Upload({
+        id,
+        size: file.size ? Number.parseInt(file.size, 10) : undefined,
+        offset: Number.parseInt(file.offset, 10),
+        metadata: file.metadata,
+        creation_date: file.creation_date,
+      }),
+    })
+    return cache.get(id) as MetadataValue
   }
 }

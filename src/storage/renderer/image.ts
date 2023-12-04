@@ -125,16 +125,29 @@ export class ImageRenderer extends Renderer {
           break
         }
         case 'fp': {
-          if (!(options.x_offset && options.y_offset && 
-                options.x_offset <= 1 && options.y_offset <= 1 && 
-                options.x_offset >= -1 && options.y_offset >= -1)) {
-            throw new StorageBackendError('Invalid focus point', 400, 'Focal point requires x and y coordinates within 0-1 range')
+          if (
+            !(
+              options.x_offset &&
+              options.y_offset &&
+              options.x_offset <= 1 &&
+              options.y_offset <= 1 &&
+              options.x_offset >= -1 &&
+              options.y_offset >= -1
+            )
+          ) {
+            throw new StorageBackendError(
+              'Invalid focus point',
+              400,
+              'Focal point requires x and y coordinates within 0-1 range'
+            )
           }
           segments.push(`gravity:${options.gravity}:${options.x_offset}:${options.y_offset}`)
           break
         }
         default: {
-          segments.push(`gravity:${options.gravity}:${options.x_offset ?? 0}:${options.y_offset ?? 0}`)
+          segments.push(
+            `gravity:${options.gravity}:${options.x_offset ?? 0}:${options.y_offset ?? 0}`
+          )
         }
       }
     }

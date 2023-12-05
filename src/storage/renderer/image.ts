@@ -131,8 +131,8 @@ export class ImageRenderer extends Renderer {
               options.y_offset &&
               options.x_offset <= 1 &&
               options.y_offset <= 1 &&
-              options.x_offset >= -1 &&
-              options.y_offset >= -1
+              options.x_offset >= 0 &&
+              options.y_offset >= 0
             )
           ) {
             throw new StorageBackendError(

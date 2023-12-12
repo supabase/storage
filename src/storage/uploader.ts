@@ -228,7 +228,7 @@ export class Uploader {
     const requestedMime = mimeType.split('/')
 
     if (requestedMime.length < 2) {
-      throw new StorageBackendError('invalid_mime_type', 422, 'mime type is not formatted properly')
+      throw new StorageBackendError('invalid_mime_type', 422, `mime type ${mimeType} is not formatted properly`)
     }
 
     const [type, ext] = requestedMime
@@ -249,7 +249,7 @@ export class Uploader {
       }
     }
 
-    throw new StorageBackendError('invalid_mime_type', 422, 'mime type not supported')
+    throw new StorageBackendError('invalid_mime_type', 422, `mime type ${mimeType} is not supported`)
   }
 
   protected async incomingFileInfo(

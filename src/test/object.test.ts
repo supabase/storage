@@ -373,7 +373,31 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
     expect(await response.json()).toEqual({
       error: 'invalid_mime_type',
-      message: 'mime type not supported',
+      message: `mime type image/png is not supported`,
+      statusCode: '422',
+    })
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 422 when uploading an object with a malformed mime-type', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${serviceKey}`,
+      'x-upsert': 'true',
+      'content-type': 'thisisnotarealmimetype',
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/public-limit-mime-types/sadcat-upload23.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(await response.json()).toEqual({
+      error: 'invalid_mime_type',
+      message: `mime type thisisnotarealmimetype is not formatted properly`,
       statusCode: '422',
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()

@@ -37,8 +37,6 @@ jobs:
 
       - name: Prettier checks
         run: |
-          npm run format
-          git diff
           npm run prettier:check
 
       - name: ESLint checks

@@ -1,6 +1,6 @@
 import { S3Store as BaseS3Store } from '@tus/s3-store'
-import { Upload } from '@tus/server'
-import { S3 } from '@aws-sdk/client-s3'
+import { TUS_RESUMABLE, Upload } from '@tus/server'
+import AWS, { S3 } from '@aws-sdk/client-s3'
 
 type MetadataValue = {
   file: Upload
@@ -10,11 +10,41 @@ type MetadataValue = {
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore - overwriting private getMetadata function for backwards compatibility
-// TODO: remove this class after all tenants are migrated to the new tus server version
 export class S3Store extends BaseS3Store {
+  public async create(upload: Upload) {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    const bucket = this.bucket as string
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    const client = this.client as S3
+
+    const request: AWS.CreateMultipartUploadCommandInput = {
+      Bucket: bucket,
+      Key: upload.id,
+      Metadata: { 'tus-version': TUS_RESUMABLE },
+    }
+
+    if (upload.metadata?.contentType) {
+      request.ContentType = upload.metadata.contentType
+    }
+
+    if (upload.metadata?.cacheControl) {
+      request.CacheControl = upload.metadata.cacheControl
+    }
+
+    upload.creation_date = new Date().toISOString()
+
+    const res = await client.createMultipartUpload(request)
+    await (this as any).saveMetadata(upload, res.UploadId as string)
+
+    return upload
+  }
+
   /**
    * Get the metadata for a file.
    * It keeps backwards compatibility from version 0.9 to 1.0.0
+   * TODO: remove this after all tenants are migrated to the new tus server version
    * @param id
    */
   private async getMetadata(id: string): Promise<MetadataValue> {

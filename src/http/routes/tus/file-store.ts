@@ -3,7 +3,7 @@ import { Upload } from '@tus/server'
 import fsExtra from 'fs-extra'
 import path from 'path'
 import { FileBackend } from '../../../storage/backend'
-import { Configstore } from '@tus/file-store/configstores'
+import { Configstore } from '@tus/file-store'
 
 type FileStoreOptions = {
   directory: string

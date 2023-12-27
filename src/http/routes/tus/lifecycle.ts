@@ -183,7 +183,6 @@ export function onResponseError(
   res: http.ServerResponse,
   e: TusError | Error
 ) {
-  console.error(e)
   if (e instanceof Error) {
     ;(res as any).executionError = e
   }

@@ -13,15 +13,15 @@ import {
   generateUrl,
   getFileIdFromRequest,
 } from './lifecycle'
-import { ServerOptions } from '@tus/server/types'
-import { DataStore } from '@tus/server/models'
+import { ServerOptions, DataStore } from '@tus/server'
 import { getFileSizeLimit } from '../../../storage/limits'
 import { UploadId } from './upload-id'
 import { FileStore } from './file-store'
 import { TenantConnection } from '../../../database/connection'
-import { LockManager, PostgresLocker } from './postgres-locker'
+import { PgLocker, LockNotifier } from './postgres-locker'
 import { PubSub } from '../../../database/pubsub'
 import { S3Store } from './s3-store'
+import { DeleteHandler } from './handlers'
 
 const {
   globalS3Bucket,
@@ -63,7 +63,7 @@ function createTusStore() {
   })
 }
 
-function createTusServer(lockManager: LockManager) {
+function createTusServer(lockNotifier: LockNotifier) {
   const datastore = createTusStore()
   const serverOptions: ServerOptions & {
     datastore: DataStore
@@ -72,7 +72,7 @@ function createTusServer(lockManager: LockManager) {
     datastore: datastore,
     locker: (rawReq: http.IncomingMessage) => {
       const req = rawReq as MultiPartRequest
-      return new PostgresLocker(lockManager, req.upload.storage.db)
+      return new PgLocker(req.upload.storage.db, lockNotifier)
     },
     namingFunction: namingFunction,
     onUploadCreate: onCreate,
@@ -106,12 +106,16 @@ function createTusServer(lockManager: LockManager) {
       return fileSizeLimit
     },
   }
-  return new Server(serverOptions)
+  const server = new Server(serverOptions)
+  server.handlers.DELETE = new DeleteHandler(datastore, serverOptions)
+  return server
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  const lockManager = new LockManager(PubSub)
-  const tusServer = createTusServer(lockManager)
+  const lockNotifier = new LockNotifier(PubSub)
+  await lockNotifier.subscribe()
+
+  const tusServer = createTusServer(lockNotifier)
 
   fastify.register(async function authorizationContext(fastify) {
     fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>
@@ -165,6 +169,13 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.head(
       '/*',
       { schema: { summary: 'Handle HEAD request for TUS Resumable uploads', tags: ['object'] } },
+      (req, res) => {
+        tusServer.handle(req.raw, res.raw)
+      }
+    )
+    fastify.delete(
+      '/*',
+      { schema: { summary: 'Handle DELETE request for TUS Resumable uploads', tags: ['object'] } },
       (req, res) => {
         tusServer.handle(req.raw, res.raw)
       }

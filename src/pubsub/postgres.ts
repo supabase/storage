@@ -32,9 +32,10 @@ export class PostgresPubSub implements PubSubAdapter {
   }
 
   async subscribe(channel: string, cb: (payload: any) => void): Promise<void> {
+    const listenerCount = this.subscriber.notifications.listenerCount(channel)
     this.subscriber.notifications.on(channel, cb)
 
-    if (this.isConnected && this.subscriber.notifications.listenerCount(channel) === 0) {
+    if (this.isConnected && listenerCount === 0) {
       await this.subscriber.listenTo(channel)
     }
   }

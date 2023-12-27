@@ -6,8 +6,9 @@ import { QueueJobRetryFailed, QueueJobCompleted, QueueJobError } from '../monito
 import { logger } from '../monitoring'
 import { normalizeRawError } from '../storage'
 
+//eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SubclassOfBaseClass = (new (payload: any) => BaseEvent<any>) & {
-  [K in keyof typeof BaseEvent]: typeof BaseEvent[K]
+  [K in keyof typeof BaseEvent]: (typeof BaseEvent)[K]
 }
 
 export abstract class Queue {

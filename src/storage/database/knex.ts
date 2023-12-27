@@ -35,6 +35,7 @@ export class StorageKnexDB implements Database {
     this.role = connection?.role
   }
 
+  //eslint-disable-next-line @typescript-eslint/no-explicit-any
   async withTransaction<T extends (db: Database) => Promise<any>>(
     fn: T,
     transactionOptions?: TransactionOptions
@@ -400,7 +401,7 @@ export class StorageKnexDB implements Database {
     }
 
     return object as typeof filters extends FindObjectFilters
-      ? typeof filters['dontErrorOnEmpty'] extends true
+      ? (typeof filters)['dontErrorOnEmpty'] extends true
         ? Obj | undefined
         : Obj
       : Obj

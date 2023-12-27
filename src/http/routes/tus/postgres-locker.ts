@@ -1,66 +1,60 @@
-import { Locker } from '@tus/server'
+import { Lock, Locker, RequestRelease } from '@tus/server'
 import { Database, DBError } from '../../../storage/database'
 import { PubSubAdapter } from '../../../pubsub'
 import { UploadId } from './upload-id'
-import { RequestRelease } from '@tus/server/models/Locker'
 import { clearTimeout } from 'timers'
-
-class Lock {
-  tnxResolver?: () => void
-  requestRelease?: RequestRelease
-}
+import EventEmitter from 'events'
 
 const REQUEST_LOCK_RELEASE_MESSAGE = 'REQUEST_LOCK_RELEASE'
 
-export class LockManager {
-  readonly listener: Promise<void>
-  private locks: Map<string, Lock> = new Map()
+export class LockNotifier {
+  protected events = new EventEmitter()
+  constructor(private readonly pubSub: PubSubAdapter) {}
 
-  constructor(private readonly pubSub: PubSubAdapter) {
-    this.listener = this.listenForMessages()
-  }
-
-  releaseExistingLock(id: string) {
+  release(id: string) {
     return this.pubSub.publish(REQUEST_LOCK_RELEASE_MESSAGE, { id })
   }
 
-  addLock(id: string, lock: Lock) {
-    this.locks.set(id, lock)
+  onRelease(id: string, callback: () => void) {
+    this.events.once(`release:${id}`, callback)
   }
 
-  deleteLock(id: string) {
-    const lock = this.locks.get(id)
-    if (!lock) {
-      throw new Error('unlocking not existing lock')
-    }
-
-    lock.tnxResolver && lock.tnxResolver()
-    this.locks.delete(id)
+  removeListeners(id: string) {
+    this.events.removeAllListeners(`release:${id}`)
   }
 
-  protected async listenForMessages() {
-    await this.pubSub.subscribe(REQUEST_LOCK_RELEASE_MESSAGE, async ({ id }: { id: string }) => {
-      const lock = this.locks.get(id)
-      if (lock) {
-        await lock.requestRelease?.()
-      }
+  async subscribe() {
+    await this.pubSub.subscribe(REQUEST_LOCK_RELEASE_MESSAGE, ({ id }) => {
+      this.events.emit(`release:${id}`)
     })
   }
 }
 
-export class PostgresLocker implements Locker {
-  constructor(private readonly manager: LockManager, private readonly db: Database) {}
+export class PgLocker implements Locker {
+  constructor(private readonly db: Database, private readonly notifier: LockNotifier) {}
 
-  async lock(id: string, cancel: RequestRelease): Promise<void> {
-    await this.manager.listener
+  newLock(id: string): Lock {
+    return new PgLock(id, this.db, this.notifier)
+  }
+}
 
+export class PgLock implements Lock {
+  tnxResolver?: () => void
+
+  constructor(
+    private readonly id: string,
+    private readonly db: Database,
+    private readonly notifier: LockNotifier
+  ) {}
+
+  async lock(cancelReq: RequestRelease): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       this.db
         .withTransaction(async (db) => {
           const abortController = new AbortController()
           const acquired = await Promise.race([
             this.waitTimeout(15000, abortController.signal),
-            this.acquireLock(db, id, abortController.signal),
+            this.acquireLock(db, this.id, abortController.signal),
           ])
 
           abortController.abort()
@@ -70,19 +64,22 @@ export class PostgresLocker implements Locker {
           }
 
           await new Promise<void>((innerResolve) => {
-            const lock = new Lock()
-            lock.tnxResolver = innerResolve
-            lock.requestRelease = cancel
-            this.manager.addLock(id, lock)
+            this.tnxResolver = innerResolve
             resolve()
           })
         })
         .catch(reject)
     })
+
+    this.notifier.onRelease(this.id, () => {
+      cancelReq()
+    })
   }
 
-  async unlock(id: string): Promise<void> {
-    this.manager.deleteLock(id)
+  async unlock(): Promise<void> {
+    this.notifier.removeListeners(this.id)
+    this.tnxResolver?.()
+    this.tnxResolver = undefined
   }
 
   protected async acquireLock(db: Database, id: string, signal: AbortSignal) {
@@ -94,7 +91,7 @@ export class PostgresLocker implements Locker {
         return true
       } catch (e) {
         if (e instanceof DBError && e.message === 'resource_locked') {
-          await this.manager.releaseExistingLock(id)
+          await this.notifier.release(id)
           await new Promise((resolve) => {
             setTimeout(resolve, 100)
           })

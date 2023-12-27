@@ -159,7 +159,7 @@ export class Uploader {
           owner,
         })
 
-        const events: Promise<any>[] = []
+        const events: Promise<unknown>[] = []
 
         // schedule the deletion of the previous file
         if (currentObj && currentObj.version !== version) {
@@ -272,7 +272,7 @@ export class Uploader {
         throw new StorageBackendError('empty_file', 400, 'Unexpected empty file received', e)
       }
     } else {
-      // just assume its a binary file
+      // just assume it's a binary file
       body = request.raw
       mimeType = request.headers['content-type'] || 'application/octet-stream'
       cacheControl = request.headers['cache-control'] ?? 'no-cache'

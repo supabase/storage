@@ -32,8 +32,6 @@ export class S3Store extends BaseS3Store {
       return cached
     }
 
-    console.log('getMetadata', id, bucket, cache)
-
     const { Metadata, Body } = await client.getObject({
       Bucket: bucket,
       Key: id + '.info',

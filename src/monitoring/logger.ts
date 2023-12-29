@@ -121,6 +121,7 @@ const whitelistHeaders = (headers: Record<string, unknown>) => {
     'if-modified-since',
     'upload-metadata',
     'upload-length',
+    'upload-offset',
     'tus-resumable',
   ]
   const allowlistedResponseHeaders = [

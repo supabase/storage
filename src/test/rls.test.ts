@@ -223,44 +223,51 @@ describe('RLS policies', () => {
             `Running operation ${assert.operation} with role ${assert.role || 'authenticated'}`
           )
 
-          const response = await runOperation(assert.operation, {
-            bucket: bucketName,
-            objectName: objectName,
-            jwt: assert.role === 'service' ? serviceKey : jwt,
-          })
-
-          console.log(
-            `Operation ${assert.operation} with role ${assert.role || 'authenticated'} returned ${
-              response.statusCode
-            }`
-          )
-
-          await Promise.all([
-            ...localPolicies.map((policies) => {
-              return Promise.all(
-                policies.map(async (policy) => {
-                  await db.raw(`DROP POLICY IF EXISTS "${policy.name}" ON ${policy.table};`)
-                })
-              )
-            }),
-          ])
-
-          bucketName = originalBucketName
-
           try {
-            expect(response.statusCode).toBe(assert.status)
-          } catch (e) {
-            console.log(`Operation ${assert.operation} failed`)
-            throw e
-          }
+            const response = await runOperation(assert.operation, {
+              bucket: bucketName,
+              objectName: objectName,
+              jwt: assert.role === 'service' ? serviceKey : jwt,
+            })
 
-          if (assert.error) {
-            const body = await response.json()
+            console.log(
+              `Operation ${assert.operation} with role ${assert.role || 'authenticated'} returned ${
+                response.statusCode
+              }`
+            )
 
-            expect(body.message).toBe(assert.error)
+            bucketName = originalBucketName
+
+            try {
+              expect(response.statusCode).toBe(assert.status)
+            } catch (e) {
+              console.log(`Operation ${assert.operation} failed`, response.body)
+              throw e
+            }
+
+            if (assert.error) {
+              const body = await response.json()
+
+              expect(body.message).toBe(assert.error)
+            }
+          } finally {
+            console.log('deleting local policies')
+            await Promise.all([
+              ...localPolicies.map((policies) => {
+                return Promise.all(
+                  policies.map(async (policy) => {
+                    console.log(
+                      `RUNNING QUERY DROP POLICY IF EXISTS "${policy.name}" ON ${policy.table};`
+                    )
+                    await db.raw(`DROP POLICY "${policy.name}" ON ${policy.table};`)
+                  })
+                )
+              }),
+            ])
           }
         }
       } catch (e) {
+        console.error('error', e)
         throw e
       } finally {
         await sleep(2000)

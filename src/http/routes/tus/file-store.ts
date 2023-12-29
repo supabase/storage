@@ -3,17 +3,11 @@ import { Upload } from '@tus/server'
 import fsExtra from 'fs-extra'
 import path from 'path'
 import { FileBackend } from '../../../storage/backend'
-
-type Store = {
-  get(key: string): Upload | undefined
-  set(key: string, value: Upload): void
-  delete(key: string): void
-  all: Record<string, Upload>
-}
+import { Configstore } from '@tus/file-store'
 
 type FileStoreOptions = {
   directory: string
-  configstore?: Store
+  configstore?: Configstore
   expirationPeriodInMilliseconds?: number
 }
 
@@ -33,7 +27,7 @@ export class FileStore extends TusFileStore {
       cacheControl: file.metadata?.cacheControl || '',
       contentType: file.metadata?.contentType || '',
     })
-    this.configstore.set(file.id, file)
+    await this.configstore.set(file.id, file)
     return file
   }
 }

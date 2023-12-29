@@ -4,20 +4,28 @@ import { jwt, storage, db, dbSuperUser } from '../../plugins'
 import { getConfig } from '../../../config'
 import * as http from 'http'
 import { Storage } from '../../../storage'
-import { S3Store } from './s3-store'
-import { Head, Options, Patch, Post } from './handlers'
-import { namingFunction, onCreate, onUploadFinish } from './lifecycle'
-import { ServerOptions } from '@tus/server/types'
-import { DataStore } from '@tus/server/models'
+import {
+  namingFunction,
+  onCreate,
+  onResponseError,
+  onIncomingRequest,
+  onUploadFinish,
+  generateUrl,
+  getFileIdFromRequest,
+} from './lifecycle'
+import { ServerOptions, DataStore } from '@tus/server'
 import { getFileSizeLimit } from '../../../storage/limits'
 import { UploadId } from './upload-id'
 import { FileStore } from './file-store'
 import { TenantConnection } from '../../../database/connection'
+import { PgLocker, LockNotifier } from './postgres-locker'
+import { PubSub } from '../../../database/pubsub'
+import { S3Store } from './s3-store'
+import { DeleteHandler } from './handlers'
 
 const {
   globalS3Bucket,
   globalS3Endpoint,
-  globalS3Protocol,
   globalS3ForcePathStyle,
   region,
   tusUrlExpiryMs,
@@ -40,13 +48,12 @@ function createTusStore() {
   if (storageBackendType === 's3') {
     return new S3Store({
       partSize: 6 * 1024 * 1024, // Each uploaded part will have ~6MB,
-      uploadExpiryMilliseconds: tusUrlExpiryMs,
+      expirationPeriodInMilliseconds: tusUrlExpiryMs,
       s3ClientConfig: {
         bucket: globalS3Bucket,
         region: region,
         endpoint: globalS3Endpoint,
-        sslEnabled: globalS3Protocol !== 'http',
-        s3ForcePathStyle: globalS3ForcePathStyle,
+        forcePathStyle: globalS3ForcePathStyle,
       },
     })
   }
@@ -56,21 +63,34 @@ function createTusStore() {
   })
 }
 
-function createTusServer() {
+function createTusServer(lockNotifier: LockNotifier) {
   const datastore = createTusStore()
   const serverOptions: ServerOptions & {
     datastore: DataStore
   } = {
     path: tusPath,
     datastore: datastore,
+    locker: (rawReq: http.IncomingMessage) => {
+      const req = rawReq as MultiPartRequest
+      return new PgLocker(req.upload.storage.db, lockNotifier)
+    },
     namingFunction: namingFunction,
     onUploadCreate: onCreate,
     onUploadFinish: onUploadFinish,
+    onIncomingRequest: onIncomingRequest,
+    generateUrl: generateUrl,
+    getFileIdFromRequest: getFileIdFromRequest,
+    onResponseError: onResponseError,
     respectForwardedHeaders: true,
-    maxFileSize: async (id, rawReq) => {
+    allowedHeaders: ['Authorization', 'X-Upsert', 'Upload-Expires', 'ApiKey'],
+    maxSize: async (rawReq, uploadId) => {
       const req = rawReq as MultiPartRequest
 
-      const resourceId = UploadId.fromString(id)
+      if (!uploadId) {
+        return getFileSizeLimit(req.upload.tenantId)
+      }
+
+      const resourceId = UploadId.fromString(uploadId)
 
       const bucket = await req.upload.storage
         .asSuperUser()
@@ -86,18 +106,16 @@ function createTusServer() {
       return fileSizeLimit
     },
   }
-  const tusServer = new Server(serverOptions)
-
-  tusServer.handlers.PATCH = new Patch(datastore, serverOptions)
-  tusServer.handlers.HEAD = new Head(datastore, serverOptions)
-  tusServer.handlers.POST = new Post(datastore, serverOptions)
-  tusServer.handlers.OPTIONS = new Options(datastore, serverOptions)
-
-  return tusServer
+  const server = new Server(serverOptions)
+  server.handlers.DELETE = new DeleteHandler(datastore, serverOptions)
+  return server
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  const tusServer = createTusServer()
+  const lockNotifier = new LockNotifier(PubSub)
+  await lockNotifier.subscribe()
+
+  const tusServer = createTusServer(lockNotifier)
 
   fastify.register(async function authorizationContext(fastify) {
     fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>
@@ -151,6 +169,13 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.head(
       '/*',
       { schema: { summary: 'Handle HEAD request for TUS Resumable uploads', tags: ['object'] } },
+      (req, res) => {
+        tusServer.handle(req.raw, res.raw)
+      }
+    )
+    fastify.delete(
+      '/*',
+      { schema: { summary: 'Handle DELETE request for TUS Resumable uploads', tags: ['object'] } },
       (req, res) => {
         tusServer.handle(req.raw, res.raw)
       }

@@ -1,6 +1,7 @@
 import { Client, ClientConfig } from 'pg'
 import { migrate } from 'postgres-migrations'
 import { getConfig } from '../config'
+import { logger } from '../monitoring'
 
 const { multitenantDatabaseUrl, databaseSSLRootCert } = getConfig()
 
@@ -8,23 +9,23 @@ const { multitenantDatabaseUrl, databaseSSLRootCert } = getConfig()
  * Runs tenant migrations
  */
 export async function runMigrations(): Promise<void> {
-  console.log('running migrations')
+  logger.info('running migrations')
   let ssl: ClientConfig['ssl'] | undefined = undefined
 
   if (databaseSSLRootCert) {
     ssl = { ca: databaseSSLRootCert }
   }
   await connectAndMigrate(process.env.DATABASE_URL, './migrations/tenant', ssl)
-  console.log('finished migrations')
+  logger.info('finished migrations')
 }
 
 /**
  * Runs multi-tenant migrations
  */
 export async function runMultitenantMigrations(): Promise<void> {
-  console.log('running multitenant migrations')
+  logger.info('running multitenant migrations')
   await connectAndMigrate(multitenantDatabaseUrl, './migrations/multitenant')
-  console.log('finished multitenant migrations')
+  logger.info('finished multitenant migrations')
 }
 
 /**

@@ -9,6 +9,7 @@ import { listenForTenantUpdate } from './database/tenant'
 import { logger, logSchema } from './monitoring'
 import { Queue } from './queue'
 import { TenantConnection } from './database/connection'
+import { PubSub } from './database/pubsub'
 
 const exposeDocs = true
 
@@ -25,7 +26,7 @@ const exposeDocs = true
 
   if (isMultitenant) {
     await runMultitenantMigrations()
-    await listenForTenantUpdate()
+    await listenForTenantUpdate(PubSub)
   } else {
     await runMigrations()
   }
@@ -41,6 +42,8 @@ const exposeDocs = true
     requestIdHeader,
   })
 
+  await PubSub.connect()
+
   app.listen({ port, host }, (err, address) => {
     if (err) {
       logSchema.error(logger, `Server failed to start`, {
@@ -49,8 +52,6 @@ const exposeDocs = true
       })
       process.exit(1)
     }
-
-    logger.info(`Server listening at ${address}`)
   })
 
   if (isMultitenant) {
@@ -85,7 +86,7 @@ const exposeDocs = true
   process.on('SIGTERM', async () => {
     try {
       await app.close()
-      await Promise.allSettled([Queue.stop(), TenantConnection.stop()])
+      await Promise.allSettled([Queue.stop(), TenantConnection.stop(), PubSub.close()])
       process.exit(0)
     } catch (e) {
       logSchema.error(logger, 'shutdown error', {

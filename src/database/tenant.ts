@@ -1,10 +1,10 @@
-import createSubscriber from 'pg-listen'
 import { getConfig } from '../config'
 import { decrypt, verifyJWT } from '../auth'
 import { runMigrationsOnTenant } from './migrate'
 import { knex } from './multitenant-db'
 import { StorageBackendError } from '../storage'
 import { JwtPayload } from 'jsonwebtoken'
+import { PubSubAdapter } from '../pubsub'
 
 interface TenantConfig {
   anonKey: string
@@ -26,7 +26,7 @@ export interface Features {
   }
 }
 
-const { multitenantDatabaseUrl, isMultitenant, serviceKey, jwtSecret } = getConfig()
+const { isMultitenant, serviceKey, jwtSecret } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
 
@@ -197,19 +197,10 @@ const TENANTS_UPDATE_CHANNEL = 'tenants_update'
 /**
  * Keeps the in memory config cache up to date
  */
-export async function listenForTenantUpdate(): Promise<void> {
-  const subscriber = createSubscriber({ connectionString: multitenantDatabaseUrl })
-
-  subscriber.notifications.on(TENANTS_UPDATE_CHANNEL, (tenantId) => {
+export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void> {
+  await pubSub.subscribe(TENANTS_UPDATE_CHANNEL, (tenantId) => {
     tenantConfigCache.delete(tenantId)
   })
-
-  subscriber.events.on('error', (error) => {
-    console.error('Postgres notification subscription error:', error)
-  })
-
-  await subscriber.connect()
-  await subscriber.listenTo(TENANTS_UPDATE_CHANNEL)
 }
 
 async function cacheTenantConfigAndRunMigrations(

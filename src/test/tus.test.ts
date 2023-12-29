@@ -228,7 +228,7 @@ describe('Tus multipart', () => {
         expect(e).toBeInstanceOf(DetailedError)
 
         const err = e as DetailedError
-        expect(err.originalResponse.getBody()).toEqual('Request Entity Too Large\n')
+        expect(err.originalResponse.getBody()).toEqual('Maximum size exceeded\n')
         expect(err.originalResponse.getStatus()).toEqual(413)
       }
     })

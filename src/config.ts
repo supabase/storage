@@ -21,6 +21,7 @@ type StorageConfigType = {
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: string
+  jwtJWKS?: { keys: { kid?: string; kty: string }[] }
   multitenantDatabaseUrl?: string
   dbAnonRole: string
   dbAuthenticatedRole: string
@@ -346,6 +347,17 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       expiresIn: '10y',
       algorithm: config.jwtAlgorithm as jwt.Algorithm,
     })
+  }
+
+  const jwtJWKS = getOptionalConfigFromEnv('JWT_JWKS') || null
+
+  if (jwtJWKS) {
+    try {
+      const parsed = JSON.parse(jwtJWKS)
+      config.jwtJWKS = parsed
+    } catch (e: any) {
+      throw new Error('Unable to parse JWT_JWKS value to JSON')
+    }
   }
 
   return config

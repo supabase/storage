@@ -16,6 +16,7 @@ const patchSchema = {
       maxConnections: { type: 'number' },
       fileSizeLimit: { type: 'number' },
       jwtSecret: { type: 'string' },
+      jwks: { type: 'object', nullable: true },
       serviceKey: { type: 'string' },
       features: {
         type: 'object',
@@ -60,6 +61,9 @@ interface tenantDBInterface {
   database_pool_url?: string
   max_connections?: number
   jwt_secret: string
+  jwks: {
+    keys?: any[]
+  } | null
   service_key: string
   file_size_limit?: number
   feature_image_transformation?: boolean
@@ -79,6 +83,7 @@ export default async function routes(fastify: FastifyInstance) {
         max_connections,
         file_size_limit,
         jwt_secret,
+        jwks,
         service_key,
         feature_image_transformation,
       }) => ({
@@ -89,6 +94,7 @@ export default async function routes(fastify: FastifyInstance) {
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),
+        jwks,
         serviceKey: decrypt(service_key),
         features: {
           imageTransformation: {
@@ -111,6 +117,7 @@ export default async function routes(fastify: FastifyInstance) {
         max_connections,
         file_size_limit,
         jwt_secret,
+        jwks,
         service_key,
         feature_image_transformation,
       } = tenant
@@ -127,6 +134,7 @@ export default async function routes(fastify: FastifyInstance) {
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),
+        jwks,
         serviceKey: decrypt(service_key),
         features: {
           imageTransformation: {
@@ -144,6 +152,7 @@ export default async function routes(fastify: FastifyInstance) {
       databaseUrl,
       fileSizeLimit,
       jwtSecret,
+      jwks,
       serviceKey,
       features,
       databasePoolUrl,
@@ -159,6 +168,7 @@ export default async function routes(fastify: FastifyInstance) {
       max_connections: maxConnections ? Number(maxConnections) : undefined,
       file_size_limit: fileSizeLimit,
       jwt_secret: encrypt(jwtSecret),
+      jwks,
       service_key: encrypt(serviceKey),
       feature_image_transformation: features?.imageTransformation?.enabled ?? false,
     })
@@ -174,6 +184,7 @@ export default async function routes(fastify: FastifyInstance) {
         databaseUrl,
         fileSizeLimit,
         jwtSecret,
+        jwks,
         serviceKey,
         features,
         databasePoolUrl,
@@ -196,6 +207,7 @@ export default async function routes(fastify: FastifyInstance) {
           max_connections: maxConnections ? Number(maxConnections) : undefined,
           file_size_limit: fileSizeLimit,
           jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,
+          jwks,
           service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
           feature_image_transformation: features?.imageTransformation?.enabled,
         })
@@ -210,6 +222,7 @@ export default async function routes(fastify: FastifyInstance) {
       databaseUrl,
       fileSizeLimit,
       jwtSecret,
+      jwks,
       serviceKey,
       features,
       databasePoolUrl,
@@ -223,6 +236,7 @@ export default async function routes(fastify: FastifyInstance) {
       anon_key: encrypt(anonKey),
       database_url: encrypt(databaseUrl),
       jwt_secret: encrypt(jwtSecret),
+      jwks: jwks || null,
       service_key: encrypt(serviceKey),
     }
 

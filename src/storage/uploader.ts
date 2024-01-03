@@ -13,7 +13,7 @@ interface UploaderOptions extends UploadObjectOptions {
   allowedMimeTypes?: string[] | null
 }
 
-const { globalS3Bucket } = getConfig()
+const { globalS3Bucket, fileSizeLimitStandardUpload } = getConfig()
 
 export interface UploadObjectOptions {
   bucketId: string
@@ -247,13 +247,7 @@ export class Uploader {
     options?: Pick<UploaderOptions, 'fileSizeLimit'>
   ) {
     const contentType = request.headers['content-type']
-    let fileSizeLimit = await getFileSizeLimit(request.tenantId)
-
-    if (typeof options?.fileSizeLimit === 'number') {
-      if (options.fileSizeLimit <= fileSizeLimit) {
-        fileSizeLimit = options.fileSizeLimit
-      }
-    }
+    const fileSizeLimit = await this.getFileSizeLimit(request.tenantId, options?.fileSizeLimit)
 
     let body: NodeJS.ReadableStream
     let mimeType: string
@@ -296,5 +290,19 @@ export class Uploader {
       cacheControl,
       isTruncated,
     }
+  }
+
+  protected async getFileSizeLimit(tenantId: string, bucketSizeLimit?: number | null) {
+    let globalFileSizeLimit = await getFileSizeLimit(tenantId)
+
+    if (typeof bucketSizeLimit === 'number') {
+      globalFileSizeLimit = Math.min(bucketSizeLimit, globalFileSizeLimit)
+    }
+
+    if (fileSizeLimitStandardUpload && fileSizeLimitStandardUpload > 0) {
+      globalFileSizeLimit = Math.min(fileSizeLimitStandardUpload, globalFileSizeLimit)
+    }
+
+    return globalFileSizeLimit
   }
 }

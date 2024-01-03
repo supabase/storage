@@ -11,6 +11,7 @@ type StorageConfigType = {
   anonKey: string
   encryptionKey: string
   fileSizeLimit: number
+  fileSizeLimitStandardUpload?: number
   fileStoragePath?: string
   globalS3Protocol: 'http' | 'https'
   globalS3MaxSockets?: number
@@ -109,6 +110,9 @@ export function getConfig(): StorageConfigType {
     anonKey: getOptionalIfMultitenantConfigFromEnv('ANON_KEY') || '',
     encryptionKey: getOptionalConfigFromEnv('ENCRYPTION_KEY') || '',
     fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
+    fileSizeLimitStandardUpload: parseInt(
+      getOptionalConfigFromEnv('FILE_SIZE_LIMIT_STANDARD_UPLOAD') || '0'
+    ),
     fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
     globalS3MaxSockets: parseInt(getOptionalConfigFromEnv('GLOBAL_S3_MAX_SOCKETS') || '200', 10),
     globalS3Protocol: (getOptionalConfigFromEnv('GLOBAL_S3_PROTOCOL') || 'https') as

@@ -15,8 +15,8 @@
     "prettier:check": "prettier -v && prettier -c src/**",
     "format": "prettier -c --write src/**",
     "eslint:check": "eslint 'src/**'",
-    "infra:stop": "docker-compose --project-directory . -f src/test/db/docker-compose.yml down --remove-orphans",
-    "infra:start": "docker-compose --project-directory . -f src/test/db/docker-compose.yml up -d && sleep 5 && npm run migration:run",
+    "infra:stop": "docker-compose --project-directory . -f docker-compose.yml down --remove-orphans",
+    "infra:start": "docker-compose --project-directory . -f docker-compose.yml up -d && sleep 5 && npm run migration:run",
     "infra:restart": "npm run infra:stop && npm run infra:start"
   },
   "author": "Supabase",

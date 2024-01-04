@@ -486,8 +486,8 @@ export class StorageKnexDB implements Database {
 
     if (!tnx || needsNewTransaction) {
       tnx = await this.connection.transactionProvider(this.options.tnx)()
-      tnx.once('query-error', (error: DatabaseError) => {
-        throw DBError.fromDBError(error)
+      tnx.once('query-error', (error: DatabaseError, q) => {
+        throw DBError.fromDBError(error, q.sql)
       })
     }
 
@@ -531,14 +531,16 @@ export class DBError extends Error implements RenderableError {
     public readonly statusCode: number,
     public readonly error: string,
     public readonly originalError?: Error,
-    public readonly metadata?: Record<string, any>
+    public readonly metadata?: Record<string, any>,
+    public readonly details?: string,
+    public readonly query?: string
   ) {
     super(message)
     this.message = message
     Object.setPrototypeOf(this, DBError.prototype)
   }
 
-  static fromDBError(pgError: DatabaseError) {
+  static fromDBError(pgError: DatabaseError, query?: string) {
     let message = 'Internal Server Error'
     let statusCode = 500
     let error = 'internal'
@@ -567,7 +569,7 @@ export class DBError extends Error implements RenderableError {
         break
     }
 
-    return new DBError(message, statusCode, error, pgError)
+    return new DBError(message, statusCode, error, pgError, undefined, pgError.message, query)
   }
 
   render(): StorageError {

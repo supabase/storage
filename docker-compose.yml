@@ -6,8 +6,11 @@ services:
     image: postgres:13
     ports:
       - '5432:5432'
-    volumes:
-      - ./src/test/db:/docker-entrypoint-initdb.d/
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready", "-d", "postgres" ]
+      interval: 50s
+      timeout: 60s
+      retries: 5
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres

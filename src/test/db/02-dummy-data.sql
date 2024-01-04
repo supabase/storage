@@ -1,3 +1,7 @@
+CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION postgres;
+
+
+
 -- insert users
 INSERT INTO "auth"."users" ("instance_id", "id", "aud", "role", "email", "encrypted_password", "confirmed_at", "invited_at", "confirmation_token", "confirmation_sent_at", "recovery_token", "recovery_sent_at", "email_change_token", "email_change", "email_change_sent_at", "last_sign_in_at", "raw_app_meta_data", "raw_user_meta_data", "is_super_admin", "created_at", "updated_at") VALUES
 ('00000000-0000-0000-0000-000000000000', '317eadce-631a-4429-a0bb-f19a7a517b4a', 'authenticated', 'authenticated', 'inian+user2@supabase.io', '', NULL, '2021-02-17 04:41:13.408828+00', '541rn7rTZPGeGCYsp0a38g', '2021-02-17 04:41:13.408828+00', '', NULL, '', '', NULL, NULL, '{"provider": "email"}', 'null', 'f', '2021-02-17 04:41:13.406912+00', '2021-02-17 04:41:13.406919+00'),

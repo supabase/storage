@@ -1,0 +1,59 @@
+name: Update Cli Repository
+
+on:
+  release:
+    types: [published]
+
+env:
+  service_to_update: 'storage-api'
+  cli_repo_owner: supabase
+  cli_repo: cli
+  cli_repo_main_branch: 'main'
+  cli_repo_pr_title: 'fix(storage): update storage image version to '
+  github_user: 'Supa CLI Bot'
+  github_user_email: 'fabri.feno@gmail.com'
+
+jobs:
+  update-remote-repo:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Git config
+        run: |
+          git config --global user.name '${{ env.github_user }}'
+          git config --global user.email '${{ env.github_user_email }}'
+
+      - name: Checkout remote repository
+        uses: actions/checkout@v2
+        with:
+          repository: '${{ env.cli_repo_owner }}/${{ env.cli_repo }}'
+          token: ${{ secrets.CLI_PR_USER_ACCESS_TOKEN }}
+          path: '${{ env.cli_repo }}'
+
+      - name: Create a new branch
+        run: |
+          cd '${{ env.cli_repo }}'
+          git checkout -b '${{ env.service_to_update }}/${{ github.ref_name }}'
+
+      - name: Update file
+        run: |
+          cd '${{ env.cli_repo }}'
+          sed -i 's/${{ env.cli_repo_owner }}\/${{ env.service_to_update }}:v[0-9]*\.[0-9]*\.[0-9]*/${{ env.cli_repo_owner }}\/${{ env.service_to_update }}:${{ github.ref_name }}/' internal/utils/misc.go
+
+      - name: Commit changes
+        run: |
+          cd '${{ env.cli_repo }}'
+          git add .
+          git commit -m "Update ${{ env.service_to_update }} version to ${{ github.ref_name }}"
+
+      - name: Push changes
+        run: |
+          cd '${{ env.cli_repo }}'
+          git push origin '${{ env.service_to_update }}/${{ github.ref_name }}'
+
+      - name: Create Pull Request
+        run: |
+          cd '${{ env.cli_repo }}'
+          gh pr create --base '${{ env.cli_repo_main_branch }}' --title "${{ env.cli_repo_pr_title }} ${{ github.ref_name }}" --body "New version of ${{ env.service_to_update }} ${{ github.ref_name }} is now available!"
+        env:
+          GH_TOKEN: ${{ secrets.CLI_PR_USER_ACCESS_TOKEN }}

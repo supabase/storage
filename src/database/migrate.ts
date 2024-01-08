@@ -16,6 +16,7 @@ const {
   dbSuperUser,
   dbServiceRole,
   dbInstallRoles,
+  dbRefreshMigrationHashesOnMismatch,
 } = getConfig()
 
 const loadMigrationFilesCached = memoizePromise(loadMigrationFiles)
@@ -117,7 +118,7 @@ function runMigrations(migrationsDirectory: string, shouldCreateStorageSchema = 
         appliedMigrations = rows
 
         if (rows.length > 0) {
-          appliedMigrations = await refreshMigrations(
+          appliedMigrations = await refreshMigrationPosition(
             client,
             migrationTableName,
             appliedMigrations,
@@ -131,7 +132,20 @@ function runMigrations(migrationsDirectory: string, shouldCreateStorageSchema = 
         }
       }
 
-      validateMigrationHashes(intendedMigrations, appliedMigrations)
+      try {
+        validateMigrationHashes(intendedMigrations, appliedMigrations)
+      } catch (e) {
+        if (!dbRefreshMigrationHashesOnMismatch) {
+          throw e
+        }
+
+        await refreshMigrationHash(
+          client,
+          migrationTableName,
+          intendedMigrations,
+          appliedMigrations
+        )
+      }
 
       const migrationsToRun = filterMigrations(intendedMigrations, appliedMigrations)
       const completedMigrations = []
@@ -197,9 +211,10 @@ async function doesTableExist(client: BasicPgClient, tableName: string) {
  */
 async function doesSchemaExists(client: BasicPgClient, schemaName: string) {
   const result = await client.query(SQL`SELECT EXISTS (
-  SELECT 1
-  FROM information_schema.schemata WHERE schema_name = '${schemaName}'
- );`)
+      SELECT 1
+      FROM information_schema.schemata
+      WHERE schema_name = ${schemaName}
+  );`)
 
   return result.rows.length > 0 && result.rows[0].exists === 'true'
 }
@@ -241,6 +256,41 @@ function withAdvisoryLock<T>(
   }
 }
 
+async function refreshMigrationHash(
+  client: BasicPgClient,
+  migrationTableName: string,
+  intendedMigrations: Migration[],
+  appliedMigrations: Migration[]
+) {
+  const invalidHash = (migration: Migration) => {
+    const appliedMigration = appliedMigrations[migration.id]
+    return appliedMigration != null && appliedMigration.hash !== migration.hash
+  }
+
+  // Assert migration hashes are still same
+  const invalidHashes = intendedMigrations.filter(invalidHash)
+
+  if (invalidHashes.length > 0) {
+    await client.query('BEGIN')
+
+    try {
+      await Promise.all(
+        invalidHashes.map((migration) => {
+          const query = SQL`UPDATE `
+            .append(migrationTableName)
+            .append(SQL` SET hash = ${migration.hash} WHERE id = ${migration.id}`)
+
+          return client.query(query)
+        })
+      )
+      await client.query('COMMIT')
+    } catch (e) {
+      await client.query('ROLLBACK')
+      throw e
+    }
+  }
+}
+
 /**
  * Backports migrations that were added after the initial release
  *
@@ -249,7 +299,7 @@ function withAdvisoryLock<T>(
  * @param appliedMigrations
  * @param intendedMigrations
  */
-async function refreshMigrations(
+async function refreshMigrationPosition(
   client: BasicPgClient,
   migrationTableName: string,
   appliedMigrations: Migration[],
@@ -264,6 +314,7 @@ async function refreshMigrations(
     if (!existingMigration || (existingMigration && existingMigration.name !== migration.from)) {
       return
     }
+
     // slice till the migration we want to backport
     const migrations = newMigrations.slice(0, migration.index)
 

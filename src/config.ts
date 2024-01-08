@@ -26,6 +26,7 @@ type StorageConfigType = {
   dbAuthenticatedRole: string
   dbServiceRole: string
   dbInstallRoles: boolean
+  dbRefreshMigrationHashesOnMismatch: boolean
   dbSuperUser: string
   dbSearchPath: string
   databaseURL: string
@@ -134,6 +135,9 @@ export function getConfig(): StorageConfigType {
     dbServiceRole: getOptionalConfigFromEnv('DB_SERVICE_ROLE') || 'service_role',
     dbAuthenticatedRole: getOptionalConfigFromEnv('DB_AUTHENTICATED_ROLE') || 'authenticated',
     dbInstallRoles: !(getOptionalConfigFromEnv('DB_INSTALL_ROLES') === 'false'),
+    dbRefreshMigrationHashesOnMismatch: !(
+      getOptionalConfigFromEnv('DB_ALLOW_MIGRATION_REFRESH') === 'false'
+    ),
     dbSuperUser: getOptionalConfigFromEnv('DB_SUPER_USER') || 'postgres',
     dbSearchPath: getOptionalConfigFromEnv('DB_SEARCH_PATH') || '',
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),

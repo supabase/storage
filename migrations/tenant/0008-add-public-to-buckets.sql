@@ -1,1 +1,1 @@
-ALTER TABLE storage.buckets ADD COLUMN "public" boolean default false;
+ALTER TABLE storage.buckets ADD COLUMN if not exists "public" boolean default false;

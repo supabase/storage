@@ -1,1 +1,1 @@
-alter table storage.buckets add column avif_autodetection bool default false;
+alter table storage.buckets add column if not exists avif_autodetection bool default false;

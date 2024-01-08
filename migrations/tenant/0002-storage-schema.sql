@@ -74,6 +74,7 @@ CREATE INDEX IF NOT EXISTS name_prefix_search ON storage.objects(name text_patte
 
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 
+drop function if exists storage.foldername;
 CREATE OR REPLACE FUNCTION storage.foldername(name text)
  RETURNS text[]
  LANGUAGE plpgsql
@@ -86,6 +87,7 @@ BEGIN
 END
 $function$;
 
+drop function if exists storage.filename;
 CREATE OR REPLACE FUNCTION storage.filename(name text)
  RETURNS text
  LANGUAGE plpgsql
@@ -98,6 +100,7 @@ BEGIN
 END
 $function$;
 
+drop function if exists storage.extension;
 CREATE OR REPLACE FUNCTION storage.extension(name text)
  RETURNS text
  LANGUAGE plpgsql
@@ -114,6 +117,7 @@ END
 $function$;
 
 -- @todo can this query be optimised further?
+drop function if exists storage.search;
 CREATE OR REPLACE FUNCTION storage.search(prefix text, bucketname text, limits int DEFAULT 100, levels int DEFAULT 1, offsets int DEFAULT 0)
  RETURNS TABLE (
     name text,

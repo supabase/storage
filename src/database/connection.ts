@@ -17,6 +17,7 @@ const {
   databaseMaxConnections,
   databaseFreePoolAfterInactivity,
   databaseConnectionTimeout,
+  dbSearchPath,
 } = getConfig()
 
 interface TenantConnectionOptions {
@@ -50,7 +51,10 @@ export const connections = new TTLCache<string, Knex>({
     pool.client.removeAllListeners()
   },
 })
-const searchPath = ['storage', 'public', 'extensions']
+
+export const searchPath = ['storage', 'public', 'extensions', ...dbSearchPath.split(',')].filter(
+  Boolean
+)
 
 export class TenantConnection {
   public readonly role: string

@@ -19,9 +19,10 @@ export const setErrorHandler = (app: FastifyInstance) => {
       const renderableError = error.render()
       const statusCode = error.userStatusCode
         ? error.userStatusCode
-        : renderableError.error === '500'
+        : renderableError.statusCode === '500'
         ? 500
         : 400
+
       return reply.status(statusCode).send(renderableError)
     }
 

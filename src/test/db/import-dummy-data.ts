@@ -1,15 +1,23 @@
 import { promises as fs } from 'fs'
 import path from 'path'
 import { Client } from 'pg'
-;(async () => {
-  const dummyDataFile = path.resolve(__dirname, './04-dummy-data.sql.sample')
-  const data = await fs.readFile(dummyDataFile, 'utf-8')
 
+const migrations = ['01-auth-schema.sql', '02-dummy-data.sql']
+
+;(async () => {
   const dbConfig = {
     connectionString: process.env.DATABASE_URL,
   }
   const client = new Client(dbConfig)
   await client.connect()
-  await client.query(data)
-  await client.end()
+
+  try {
+    for (const migrationName of migrations) {
+      const dummyDataFile = path.resolve(__dirname, migrationName)
+      const data = await fs.readFile(dummyDataFile, 'utf-8')
+      await client.query(data)
+    }
+  } finally {
+    await client.end()
+  }
 })()

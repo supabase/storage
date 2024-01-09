@@ -4,7 +4,7 @@ import { IncomingMessage, Server, ServerResponse } from 'http'
 import build from './app'
 import buildAdmin from './admin-app'
 import { getConfig } from './config'
-import { runMultitenantMigrations, runMigrations } from './database/migrate'
+import { runMultitenantMigrations, runMigrationsOnTenant } from './database/migrate'
 import { listenForTenantUpdate } from './database/tenant'
 import { logger, logSchema } from './monitoring'
 import { Queue } from './queue'
@@ -15,6 +15,7 @@ const exposeDocs = true
 
 ;(async () => {
   const {
+    databaseURL,
     isMultitenant,
     requestIdHeader,
     adminRequestIdHeader,
@@ -28,7 +29,7 @@ const exposeDocs = true
     await runMultitenantMigrations()
     await listenForTenantUpdate(PubSub)
   } else {
-    await runMigrations()
+    await runMigrationsOnTenant(databaseURL)
   }
 
   if (enableQueueEvents) {

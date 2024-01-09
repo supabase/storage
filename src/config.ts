@@ -22,6 +22,13 @@ type StorageConfigType = {
   jwtSecret: string
   jwtAlgorithm: string
   multitenantDatabaseUrl?: string
+  dbAnonRole: string
+  dbAuthenticatedRole: string
+  dbServiceRole: string
+  dbInstallRoles: boolean
+  dbRefreshMigrationHashesOnMismatch: boolean
+  dbSuperUser: string
+  dbSearchPath: string
   databaseURL: string
   databaseSSLRootCert?: string
   databasePoolURL?: string
@@ -124,6 +131,15 @@ export function getConfig(): StorageConfigType {
     isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
     jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',
+    dbAnonRole: getOptionalConfigFromEnv('DB_ANON_ROLE') || 'anon',
+    dbServiceRole: getOptionalConfigFromEnv('DB_SERVICE_ROLE') || 'service_role',
+    dbAuthenticatedRole: getOptionalConfigFromEnv('DB_AUTHENTICATED_ROLE') || 'authenticated',
+    dbInstallRoles: !(getOptionalConfigFromEnv('DB_INSTALL_ROLES') === 'false'),
+    dbRefreshMigrationHashesOnMismatch: !(
+      getOptionalConfigFromEnv('DB_ALLOW_MIGRATION_REFRESH') === 'false'
+    ),
+    dbSuperUser: getOptionalConfigFromEnv('DB_SUPER_USER') || 'postgres',
+    dbSearchPath: getOptionalConfigFromEnv('DB_SEARCH_PATH') || '',
     multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
     databaseSSLRootCert: getOptionalConfigFromEnv('DATABASE_SSL_ROOT_CERT'),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',

@@ -1,6 +1,7 @@
 import { FastifyReply, FastifyRequest } from 'fastify'
 import { ObjectMetadata } from '../backend'
 import { Readable } from 'stream'
+import { getConfig } from '../../config'
 
 export interface RenderOptions {
   bucket: string
@@ -16,12 +17,16 @@ export interface AssetResponse {
   transformations?: string[]
 }
 
+const { etagHeaders, sMaxAge } = getConfig()
+
 /**
  * Renderer
  * a generic renderer that respond to a request with an asset content
  * and all the important headers
  */
 export abstract class Renderer {
+  protected sMaxAge = sMaxAge
+
   abstract getAsset(request: FastifyRequest, options: RenderOptions): Promise<AssetResponse>
 
   /**
@@ -34,7 +39,7 @@ export abstract class Renderer {
     try {
       const data = await this.getAsset(request, options)
 
-      await this.setHeaders(response, data, options)
+      this.setHeaders(request, response, data, options)
 
       return response.send(data.body)
     } catch (err: any) {
@@ -55,7 +60,12 @@ export abstract class Renderer {
     }
   }
 
-  protected setHeaders(response: FastifyReply<any>, data: AssetResponse, options: RenderOptions) {
+  protected setHeaders(
+    request: FastifyRequest<any>,
+    response: FastifyReply<any>,
+    data: AssetResponse,
+    options: RenderOptions
+  ) {
     response
       .status(data.metadata.httpStatusCode ?? 200)
       .header('Accept-Ranges', 'bytes')
@@ -67,7 +77,7 @@ export abstract class Renderer {
     if (options.expires) {
       response.header('Expires', options.expires)
     } else {
-      response.header('Cache-Control', data.metadata.cacheControl)
+      this.handleCacheControl(request, response, data.metadata)
     }
 
     if (data.metadata.contentRange) {
@@ -92,6 +102,40 @@ export abstract class Renderer {
           'Content-Disposition',
           `attachment; filename=${encodedFileName}; filename*=UTF-8''${encodedFileName};`
         )
+      }
+    }
+  }
+
+  protected handleCacheControl(
+    request: FastifyRequest<any>,
+    response: FastifyReply<any>,
+    metadata: ObjectMetadata
+  ) {
+    const etag = this.findEtagHeader(request)
+
+    const cacheControl = [metadata.cacheControl]
+
+    if (!etag) {
+      response.header('Cache-Control', cacheControl.join(', '))
+      return
+    }
+
+    if (this.sMaxAge > 0) {
+      cacheControl.push(`s-maxage=${this.sMaxAge}`)
+    }
+
+    if (etag !== metadata.eTag) {
+      cacheControl.push('stale-while-revalidate=30')
+    }
+
+    response.header('Cache-Control', cacheControl.join(', '))
+  }
+
+  protected findEtagHeader(request: FastifyRequest<any>) {
+    for (const header of etagHeaders) {
+      const etag = request.headers[header]
+      if (etag) {
+        return etag
       }
     }
   }

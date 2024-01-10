@@ -85,6 +85,8 @@ type StorageConfigType = {
   tusPath: string
   tusUseFileVersionSeparator: boolean
   enableDefaultMetrics: boolean
+  sMaxAge: number
+  etagHeaders: string[]
 }
 
 function getOptionalConfigFromEnv(key: string): string | undefined {
@@ -246,5 +248,7 @@ export function getConfig(): StorageConfigType {
     tusUseFileVersionSeparator:
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
     enableDefaultMetrics: getOptionalConfigFromEnv('ENABLE_DEFAULT_METRICS') === 'true',
+    sMaxAge: parseInt(getOptionalConfigFromEnv('S_MAXAGE') || '0', 10),
+    etagHeaders: getOptionalConfigFromEnv('ETAG_HEADERS')?.trim().split(',') || ['if-none-match'],
   }
 }

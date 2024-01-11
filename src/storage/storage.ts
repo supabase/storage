@@ -237,7 +237,9 @@ export class Storage {
         )
       }
 
-      if (!type.match(/^[a-zA-Z0-9\-\+]+\/([a-zA-Z0-9\-\+\.]+$)|\*$/)) {
+      if (
+        !type.match(/^([a-zA-Z0-9\-+.]+)\/([a-zA-Z0-9\-+.]+)(;\s*charset=[a-zA-Z0-9\-]+)?$|\*$/)
+      ) {
         throw new StorageBackendError(
           'invalid_mime_type',
           422,

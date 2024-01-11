@@ -226,11 +226,13 @@ export class Uploader {
         continue
       }
 
-      if (allowedMime[0] === type && allowedMime[1] === '*') {
+      const [allowedType, allowedExtension] = allowedMime
+
+      if (allowedType === type && allowedExtension === '*') {
         return true
       }
 
-      if (allowedMime[0] === type && allowedMime[1] === ext) {
+      if (allowedType === type && allowedExtension === ext) {
         return true
       }
     }
@@ -267,7 +269,8 @@ export class Uploader {
         const cacheTime = formData.fields.cacheControl?.value
 
         body = formData.file
-        mimeType = formData.mimetype
+        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+        mimeType = formData.fields.contentType?.value || formData.mimetype
         cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
         isTruncated = () => formData.file.truncated
       } catch (e) {

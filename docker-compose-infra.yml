@@ -1,0 +1,88 @@
+# docker-compose.yml
+
+version: '3'
+services:
+  tenant_db:
+    image: postgres:15
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready", "-d", "postgres" ]
+      interval: 50s
+      timeout: 60s
+      retries: 5
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_PORT: 5432
+
+  pg_bouncer:
+    image: bitnami/pgbouncer:latest
+    ports:
+      - '6453:6432'
+    environment:
+      POSTGRESQL_USERNAME: postgres
+      POSTGRESQL_HOST: tenant_db
+      POSTGRESQL_PASSWORD: postgres
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_IGNORE_STARTUP_PARAMETERS: "extra_float_digits, options"
+      PGBOUNCER_STATS_USERS: postgres
+    depends_on:
+      tenant_db:
+        condition: service_healthy
+
+  multitenant_db:
+    image: postgres:15
+    ports:
+      - '5433:5432'
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready", "-d", "postgres" ]
+      interval: 50s
+      timeout: 60s
+      retries: 5
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+
+  redis:
+    image: redis:6.2-alpine
+    restart: always
+    ports:
+      - '6379:6379'
+
+  minio:
+    image: minio/minio
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    environment:
+      MINIO_ROOT_USER: supa-storage
+      MINIO_ROOT_PASSWORD: secret1234
+    command: server --console-address ":9001" /data
+
+  minio_setup:
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set supa-minio http://minio:9000 supa-storage secret1234;
+      /usr/bin/mc mb supa-minio/supa-storage-bucket;
+      exit 0;
+      "
+
+  imgproxy:
+    image: darthsim/imgproxy
+    ports:
+      - '50020:8080'
+    volumes:
+      - ./data:/images/data
+    environment:
+      - IMGPROXY_WRITE_TIMEOUT=20
+      - IMGPROXY_READ_TIMEOUT=20
+      - IMGPROXY_REQUESTS_QUEUE_SIZE=24
+      - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/images
+      - IMGPROXY_USE_ETAG=true
+      - IMGPROXY_ENABLE_WEBP_DETECTION=true

@@ -2,81 +2,100 @@
 
 version: '3'
 services:
-  db:
-    image: postgres:13
+  storage:
+    image: supabase/storage-api:latest
+#    build:
+#      context: .
     ports:
-      - '5432:5432'
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready", "-d", "postgres" ]
-      interval: 50s
-      timeout: 60s
-      retries: 5
+      - '5000:5000'
+      - '5001:5001'
+    depends_on:
+      tenant_db:
+        condition: service_healthy
+      multitenant_db:
+        condition: service_healthy
+      pg_bouncer:
+          condition: service_started
+      minio_setup:
+          condition: service_completed_successfully
     environment:
-      POSTGRES_DB: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_PORT: 5432
+      # Server
+      SERVER_PORT: 5000
+      SERVER_REGION: local
+      # Auth
+      AUTH_JWT_SECRET: f023d3db-39dc-4ac9-87b2-b2be72e9162b
+      AUTH_JWT_ALGORITHM: HS256
+      AUTH_ENCRYPTION_KEY: encryptionkey
+      # Single tenant Mode
+      TENANT_ID: bjwdssmqcnupljrqypxz
+      ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlhdCI6MTYxMzUzMTk4NSwiZXhwIjoxOTI5MTA3OTg1fQ.mqfi__KnQB4v6PkIjkhzfwWrYyF94MEbSC6LnuvVniE
+      SERVICE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaWF0IjoxNjEzNTMxOTg1LCJleHAiOjE5MjkxMDc5ODV9.th84OKK0Iz8QchDyXZRrojmKSEZ-OuitQm_5DvLiSIc
+      DATABASE_URL: postgres://postgres:postgres@tenant_db:5432/postgres
+      DATABASE_POOL_URL: postgresql://postgres:postgres@pg_bouncer:6432/postgres
+      # Migrations
+      DB_INSTALL_ROLES: true # set to false if you want to manage roles yourself
+      DB_ANON_ROLE: anon
+      DB_SERVICE_ROLE: service_role
+      DB_AUTHENTICATED_ROLE: authenticated
+      DB_SUPER_USER: postgres
+      DB_ALLOW_MIGRATION_REFRESH: true
+      # Storage
+      STORAGE_BACKEND: s3
+      STORAGE_S3_BUCKET: supa-storage-bucket  # name of s3 bucket where you want to store objects
+      STORAGE_S3_ENDPOINT: http://minio:9000
+      STORAGE_S3_FORCE_PATH_STYLE: "true"
+      STORAGE_S3_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: supa-storage
+      AWS_SECRET_ACCESS_KEY: secret1234
+      # Upload
+      UPLOAD_FILE_SIZE_LIMIT: 524288000
+      UPLOAD_FILE_SIZE_LIMIT_STANDARD: 52428800
+      UPLOAD_SIGNED_URL_EXPIRATION_TIME: 120
+      TUS_URL_PATH: /upload/resumable
+      TUS_URL_EXPIRY_MS: 3600000
+      # Image Tranformation
+      IMAGE_TRANSFORMATION_ENABLED: "true"
+      IMGPROXY_URL: http://imgproxy:8080
+      IMGPROXY_REQUEST_TIMEOUT: 15
+      # Multi tenant Mode (uncomment to run in multi-tenant mode)
+      # MULTI_TENANT: true
+      # DATABASE_MULTITENANT_URL: postgresql://postgres:postgres@multitenant_db:5432/postgres
+      # SERVER_ADMIN_API_KEYS: apikey
+      # SERVER_ADMIN_PORT: 5001
+
+  tenant_db:
+    extends:
+      service: tenant_db
+      file: docker-compose-infra.yml
 
   pg_bouncer:
-    image: bitnami/pgbouncer:latest
-    ports:
-      - '6453:6432'
-    environment:
-      POSTGRESQL_USERNAME: postgres
-      POSTGRESQL_HOST: db
-      POSTGRESQL_PASSWORD: postgres
-      PGBOUNCER_POOL_MODE: transaction
-      PGBOUNCER_IGNORE_STARTUP_PARAMETERS: "extra_float_digits, options"
-      PGBOUNCER_STATS_USERS: postgres
-    depends_on:
-      - db
+    extends:
+      service: pg_bouncer
+      file: docker-compose-infra.yml
 
   multitenant_db:
-    image: postgres:13
-    ports:
-      - '5433:5432'
-    environment:
-      POSTGRES_DB: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+    extends:
+      service: multitenant_db
+      file: docker-compose-infra.yml
 
   redis:
-    image: redis:6.2-alpine
-    restart: always
-    ports:
-      - '6379:6379'
+    extends:
+      service: redis
+      file: docker-compose-infra.yml
 
   minio:
-    image: minio/minio
-    ports:
-      - '9000:9000'
-      - '9001:9001'
-    environment:
-      MINIO_ROOT_USER: supa-storage
-      MINIO_ROOT_PASSWORD: secret1234
-    command: server --console-address ":9001" /data
+    extends:
+      service: minio
+      file: docker-compose-infra.yml
 
-  createbuckets:
-    image: minio/mc
+  minio_setup:
+    extends:
+      service: minio_setup
+      file: docker-compose-infra.yml
     depends_on:
       - minio
-    entrypoint: >
-      /bin/sh -c "
-      /usr/bin/mc alias set supa-minio http://minio:9000 supa-storage secret1234;
-      /usr/bin/mc mb supa-minio/supa-storage-staging-ap-southeast-1;
-      exit 0;
-      "
 
   imgproxy:
-    image: darthsim/imgproxy
-    ports:
-      - '50020:8080'
-    volumes:
-      - ./data:/images/data
-    environment:
-      - IMGPROXY_WRITE_TIMEOUT=20
-      - IMGPROXY_READ_TIMEOUT=20
-      - IMGPROXY_REQUESTS_QUEUE_SIZE=24
-      - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/images
-      - IMGPROXY_USE_ETAG=true
-      - IMGPROXY_ENABLE_WEBP_DETECTION=true
+    extends:
+      service: imgproxy
+      file: docker-compose-infra.yml

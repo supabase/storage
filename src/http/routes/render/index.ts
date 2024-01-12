@@ -6,17 +6,17 @@ import { jwt, storage, requireTenantFeature, db, dbSuperUser } from '../../plugi
 import { getConfig } from '../../../config'
 import { rateLimiter } from './rate-limiter'
 
-const { enableImageTransformation, enableRateLimiter } = getConfig()
+const { imageTransformationEnabled, rateLimiterEnabled } = getConfig()
 
 export default async function routes(fastify: FastifyInstance) {
-  if (!enableImageTransformation) {
+  if (!imageTransformationEnabled) {
     return
   }
 
   fastify.register(async function authorizationContext(fastify) {
     fastify.register(requireTenantFeature('imageTransformation'))
 
-    if (enableRateLimiter) {
+    if (rateLimiterEnabled) {
       fastify.register(rateLimiter)
     }
 
@@ -29,7 +29,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.register(async (fastify) => {
     fastify.register(requireTenantFeature('imageTransformation'))
 
-    if (enableRateLimiter) {
+    if (rateLimiterEnabled) {
       fastify.register(rateLimiter)
     }
 

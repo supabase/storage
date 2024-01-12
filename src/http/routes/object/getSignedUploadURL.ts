@@ -4,7 +4,7 @@ import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
 import { getConfig } from '../../../config'
 
-const { signedUploadUrlExpirationTime } = getConfig()
+const { uploadSignedUrlExpirationTime } = getConfig()
 
 const getSignedUploadURLParamsSchema = {
   type: 'object',
@@ -54,7 +54,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       const signedUploadURL = await request.storage
         .from(bucketName)
-        .signUploadObjectUrl(objectName, urlPath as string, signedUploadUrlExpirationTime, owner)
+        .signUploadObjectUrl(objectName, urlPath as string, uploadSignedUrlExpirationTime, owner)
 
       return response.status(200).send({ url: signedUploadURL })
     }

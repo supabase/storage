@@ -40,11 +40,11 @@ export class FileBackend implements StorageBackendAdapter {
   filePath: string
 
   constructor() {
-    const { fileStoragePath } = getConfig()
-    if (!fileStoragePath) {
+    const { storageFilePath } = getConfig()
+    if (!storageFilePath) {
       throw new Error('FILE_STORAGE_BACKEND_PATH env variable not set')
     }
-    this.filePath = fileStoragePath
+    this.filePath = storageFilePath
   }
 
   /**

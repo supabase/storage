@@ -20,8 +20,9 @@ export interface BasePayload {
 
 export type StaticThis<T> = { new (...args: any): T }
 
-const { enableQueueEvents, storageBackendType, globalS3Protocol } = getConfig()
-const httpAgent = createAgent(globalS3Protocol)
+const { pgQueueEnable, storageBackendType, storageS3Endpoint } = getConfig()
+const storageS3Protocol = storageS3Endpoint?.includes('http://') ? 'http' : 'https'
+const httpAgent = createAgent(storageS3Protocol)
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   public static readonly version: string = 'v1'
@@ -124,7 +125,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   async send() {
     const constructor = this.constructor as typeof BaseEvent
 
-    if (!enableQueueEvents) {
+    if (!pgQueueEnable) {
       return constructor.handle({
         id: '',
         name: constructor.getQueueName(),

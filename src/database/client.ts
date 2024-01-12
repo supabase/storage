@@ -39,7 +39,7 @@ async function getDbCredentials(
     databasePoolURL,
     databaseURL,
     databaseMaxConnections,
-    xForwardedHostRegExp,
+    requestXForwardedHostRegExp,
   } = getConfig()
 
   let dbUrl = databasePoolURL || databaseURL
@@ -51,7 +51,7 @@ async function getDbCredentials(
       throw new StorageBackendError('Invalid Tenant Id', 400, 'Tenant id not provided')
     }
 
-    if (xForwardedHostRegExp && !options?.disableHostCheck) {
+    if (requestXForwardedHostRegExp && !options?.disableHostCheck) {
       const xForwardedHost = host
 
       if (typeof xForwardedHost !== 'string') {
@@ -61,7 +61,7 @@ async function getDbCredentials(
           'X-Forwarded-Host header is not a string'
         )
       }
-      if (!new RegExp(xForwardedHostRegExp).test(xForwardedHost)) {
+      if (!new RegExp(requestXForwardedHostRegExp).test(xForwardedHost)) {
         throw new StorageBackendError(
           'Invalid Header',
           400,

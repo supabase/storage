@@ -22,6 +22,7 @@ export abstract class Queue {
 
     const {
       isMultitenant,
+      databaseURL,
       multitenantDatabaseUrl,
       pgQueueConnectionURL,
       pgQueueDeleteAfterDays,
@@ -29,10 +30,15 @@ export abstract class Queue {
       pgQueueRetentionDays,
     } = getConfig()
 
-    let url = pgQueueConnectionURL ?? process.env.DATABASE_URL
+    let url = pgQueueConnectionURL ?? databaseURL
 
-    if (isMultitenant) {
-      url = pgQueueConnectionURL ?? multitenantDatabaseUrl
+    if (isMultitenant && !pgQueueConnectionURL) {
+      if (!multitenantDatabaseUrl) {
+        throw new Error(
+          'running storage in multi-tenant but DB_MULTITENANT_DATABASE_URL is not set'
+        )
+      }
+      url = multitenantDatabaseUrl
     }
 
     Queue.pgBoss = new PgBoss({

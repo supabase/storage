@@ -11,7 +11,7 @@ export interface ObjectDeleteEvent extends BasePayload {
   version?: string
 }
 
-const { globalS3Bucket, adminDeleteQueueTeamSize, adminDeleteConcurrency } = getConfig()
+const { storageS3Bucket, adminDeleteQueueTeamSize, adminDeleteConcurrency } = getConfig()
 
 export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
   static queueName = 'object:admin:delete'
@@ -43,7 +43,7 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
         reqId: job.data.reqId,
       })
 
-      await storage.backend.deleteObjects(globalS3Bucket, [
+      await storage.backend.deleteObjects(storageS3Bucket, [
         withOptionalVersion(s3Key, version),
         withOptionalVersion(s3Key, version) + '.info',
       ])

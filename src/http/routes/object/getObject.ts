@@ -4,7 +4,7 @@ import { IncomingMessage, Server, ServerResponse } from 'http'
 import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../request'
 
-const { globalS3Bucket } = getConfig()
+const { storageS3Bucket } = getConfig()
 
 const getObjectParamsSchema = {
   type: 'object',
@@ -48,7 +48,7 @@ async function requestHandler(
   request.log.info(s3Key)
 
   return request.storage.renderer('asset').render(request, response, {
-    bucket: globalS3Bucket,
+    bucket: storageS3Bucket,
     key: s3Key,
     version: obj.version,
     download,

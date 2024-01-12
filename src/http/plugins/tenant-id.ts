@@ -8,13 +8,13 @@ declare module 'fastify' {
 }
 
 export const tenantId = fastifyPlugin(async (fastify) => {
-  const { isMultitenant, tenantId, xForwardedHostRegExp } = getConfig()
+  const { isMultitenant, tenantId, requestXForwardedHostRegExp } = getConfig()
   fastify.decorateRequest('tenantId', tenantId)
   fastify.addHook('onRequest', async (request) => {
-    if (!isMultitenant || !xForwardedHostRegExp) return
+    if (!isMultitenant || !requestXForwardedHostRegExp) return
     const xForwardedHost = request.headers['x-forwarded-host']
     if (typeof xForwardedHost !== 'string') return
-    const result = xForwardedHost.match(xForwardedHostRegExp)
+    const result = xForwardedHost.match(requestXForwardedHostRegExp)
     if (!result) return
     request.tenantId = result[1]
   })

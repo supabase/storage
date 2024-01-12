@@ -17,12 +17,12 @@ const exposeDocs = true
   const {
     databaseURL,
     isMultitenant,
-    requestIdHeader,
+    requestTraceHeader,
     adminRequestIdHeader,
     adminPort,
     port,
     host,
-    enableQueueEvents,
+    pgQueueEnable,
   } = getConfig()
 
   if (isMultitenant) {
@@ -32,7 +32,7 @@ const exposeDocs = true
     await runMigrationsOnTenant(databaseURL)
   }
 
-  if (enableQueueEvents) {
+  if (pgQueueEnable) {
     await Queue.init()
   }
 
@@ -40,7 +40,7 @@ const exposeDocs = true
     logger,
     disableRequestLogging: true,
     exposeDocs,
-    requestIdHeader,
+    requestIdHeader: requestTraceHeader,
   })
 
   await PubSub.connect()

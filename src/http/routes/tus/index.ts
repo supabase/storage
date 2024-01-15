@@ -27,7 +27,7 @@ const {
   storageS3Bucket,
   storageS3Endpoint,
   storageS3ForcePathStyle,
-  region,
+  storageS3Region,
   tusUrlExpiryMs,
   tusPath,
   storageBackendType,
@@ -51,7 +51,7 @@ function createTusStore() {
       expirationPeriodInMilliseconds: tusUrlExpiryMs,
       s3ClientConfig: {
         bucket: storageS3Bucket,
-        region: region,
+        region: storageS3Region,
         endpoint: storageS3Endpoint,
         forcePathStyle: storageS3ForcePathStyle,
       },

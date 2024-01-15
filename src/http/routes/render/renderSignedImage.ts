@@ -1,9 +1,10 @@
-import { getConfig } from '../../../config'
 import { FromSchema } from 'json-schema-to-ts'
 import { FastifyInstance } from 'fastify'
+import { getConfig } from '../../../config'
 import { ImageRenderer } from '../../../storage/renderer'
-import { getJwtSecret, SignedToken, verifyJWT } from '../../../auth'
+import { SignedToken, verifyJWT } from '../../../auth'
 import { StorageBackendError } from '../../../storage'
+import { getJwtSecret } from '../../../database/tenant'
 
 const { storageS3Bucket } = getConfig()
 

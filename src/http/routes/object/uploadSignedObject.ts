@@ -1,7 +1,8 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { getJwtSecret, SignedUploadToken, verifyJWT } from '../../../auth'
+import { SignedUploadToken, verifyJWT } from '../../../auth'
 import { StorageBackendError } from '../../../storage'
+import { getJwtSecret } from '../../../database/tenant'
 
 const uploadSignedObjectParamsSchema = {
   type: 'object',

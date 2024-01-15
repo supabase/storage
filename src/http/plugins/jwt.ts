@@ -1,6 +1,7 @@
 import fastifyPlugin from 'fastify-plugin'
 import { createResponse } from '../generic-routes'
-import { getJwtSecret, getOwner } from '../../auth'
+import { getOwner } from '../../auth'
+import { getJwtSecret } from '../../database/tenant'
 
 declare module 'fastify' {
   interface FastifyRequest {

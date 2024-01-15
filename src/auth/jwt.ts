@@ -1,8 +1,7 @@
-import { getJwtSecret as getJwtSecretForTenant } from '../database/tenant'
 import jwt from 'jsonwebtoken'
 import { getConfig } from '../config'
 
-const { isMultitenant, jwtSecret, jwtAlgorithm } = getConfig()
+const { jwtAlgorithm } = getConfig()
 
 interface jwtInterface {
   sub?: string
@@ -19,19 +18,6 @@ export type SignedUploadToken = {
   owner: string | undefined
   url: string
   exp: number
-}
-
-/**
- * Gets the JWT secret key from the env PGRST_JWT_SECRET when running in single-tenant
- * or querying the multi-tenant database by the given tenantId
- * @param tenantId
- */
-export async function getJwtSecret(tenantId: string): Promise<string> {
-  let secret = jwtSecret
-  if (isMultitenant) {
-    secret = await getJwtSecretForTenant(tenantId)
-  }
-  return secret
 }
 
 /**

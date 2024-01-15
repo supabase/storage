@@ -1,11 +1,10 @@
 'use strict'
 import dotenv from 'dotenv'
 import app from '../app'
-import { getConfig } from '../config'
 import { S3Backend } from '../storage/backend'
 
 dotenv.config({ path: '.env.test' })
-const { anonKey } = getConfig()
+const anonKey = process.env.ANON_KEY || ''
 
 beforeAll(() => {
   jest.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {

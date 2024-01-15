@@ -16,7 +16,8 @@ import { Knex } from 'knex'
 
 dotenv.config({ path: '.env.test' })
 
-const { anonKey, jwtSecret, serviceKey, tenantId } = getConfig()
+const { jwtSecret, serviceKey, tenantId } = getConfig()
+const anonKey = process.env.ANON_KEY || ''
 
 let tnx: Knex.Transaction | undefined
 async function getSuperuserPostgrestClient() {

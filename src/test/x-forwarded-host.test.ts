@@ -5,6 +5,7 @@ import * as migrate from '../database/migrate'
 import { knex } from '../database/multitenant-db'
 import app from '../app'
 import * as tenant from '../database/tenant'
+import { getConfig, mergeConfig } from '../config'
 
 dotenv.config({ path: '.env.test' })
 
@@ -39,9 +40,14 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  process.env = { ...ENV }
-  process.env.IS_MULTITENANT = 'true'
-  process.env.X_FORWARDED_HOST_REGEXP = '^([a-z]{20})\\.supabase\\.(?:co|in|net)$'
+  mergeConfig({
+    isMultitenant: true,
+    requestXForwardedHostRegExp: '^([a-z]{20})\\.supabase\\.(?:co|in|net)$',
+  })
+})
+
+afterEach(() => {
+  getConfig({ reload: true })
 })
 
 afterAll(async () => {

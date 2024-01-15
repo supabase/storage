@@ -10,14 +10,14 @@ type StorageConfigType = {
   adminRequestIdHeader?: string
   anonKey: string
   encryptionKey: string
-  fileSizeLimit: number
-  fileSizeLimitStandardUpload?: number
-  fileStoragePath?: string
-  globalS3Protocol: 'http' | 'https'
-  globalS3MaxSockets?: number
-  globalS3Bucket: string
-  globalS3Endpoint?: string
-  globalS3ForcePathStyle?: boolean
+  uploadFileSizeLimit: number
+  uploadFileSizeLimitStandard?: number
+  storageFilePath?: string
+  storageS3MaxSockets?: number
+  storageS3Bucket: string
+  storageS3Endpoint?: string
+  storageS3ForcePathStyle?: boolean
+  storageS3Region: string
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: string
@@ -36,17 +36,17 @@ type StorageConfigType = {
   databaseFreePoolAfterInactivity: number
   databaseConnectionTimeout: number
   region: string
-  requestIdHeader?: string
+  requestTraceHeader?: string
   serviceKey: string
   storageBackendType: StorageBackendType
   tenantId: string
-  urlLengthLimit: number
-  xForwardedHostRegExp?: string
+  requestUrlLengthLimit: number
+  requestXForwardedHostRegExp?: string
   logLevel?: string
   logflareEnabled?: boolean
   logflareApiKey?: string
   logflareSourceToken?: string
-  enableQueueEvents: boolean
+  pgQueueEnable: boolean
   pgQueueConnectionURL?: string
   pgQueueDeleteAfterDays?: number
   pgQueueArchiveCompletedAfterSeconds?: number
@@ -58,7 +58,7 @@ type StorageConfigType = {
   webhookQueueConcurrency?: number
   adminDeleteQueueTeamSize?: number
   adminDeleteConcurrency?: number
-  enableImageTransformation: boolean
+  imageTransformationEnabled: boolean
   imgProxyURL?: string
   imgProxyRequestTimeout: number
   imgProxyHttpMaxSockets: number
@@ -73,64 +73,144 @@ type StorageConfigType = {
   adminPort: number
   port: number
   host: string
-  enableRateLimiter: boolean
+  rateLimiterEnabled: boolean
   rateLimiterDriver: 'memory' | 'redis' | string
   rateLimiterRedisUrl?: string
   rateLimiterSkipOnError?: boolean
   rateLimiterRenderPathMaxReqSec: number
   rateLimiterRedisConnectTimeout: number
   rateLimiterRedisCommandTimeout: number
-  signedUploadUrlExpirationTime: number
+  uploadSignedUrlExpirationTime: number
   tusUrlExpiryMs: number
   tusPath: string
   tusUseFileVersionSeparator: boolean
-  enableDefaultMetrics: boolean
+  defaultMetricsEnabled: boolean
 }
 
-function getOptionalConfigFromEnv(key: string): string | undefined {
-  return process.env[key]
+function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
+  const envValue = process.env[key]
+
+  if (!envValue && fallback) {
+    return getOptionalConfigFromEnv(fallback)
+  }
+
+  return envValue
 }
 
-function getConfigFromEnv(key: string): string {
+function getConfigFromEnv(key: string, fallbackEnv?: string): string {
   const value = getOptionalConfigFromEnv(key)
   if (!value) {
+    if (fallbackEnv) {
+      return getConfigFromEnv(fallbackEnv)
+    }
+
     throw new Error(`${key} is undefined`)
   }
   return value
 }
 
-function getOptionalIfMultitenantConfigFromEnv(key: string): string | undefined {
-  return getOptionalConfigFromEnv('IS_MULTITENANT') === 'true'
-    ? getOptionalConfigFromEnv(key)
-    : getConfigFromEnv(key)
+function getOptionalIfMultitenantConfigFromEnv(key: string, fallback?: string): string | undefined {
+  return getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
+    ? getOptionalConfigFromEnv(key, fallback)
+    : getConfigFromEnv(key, fallback)
 }
 
-export function getConfig(): StorageConfigType {
+let config: StorageConfigType | undefined
+
+export function mergeConfig(newConfig: Partial<StorageConfigType>) {
+  config = { ...config, ...(newConfig as Required<StorageConfigType>) }
+}
+
+export function getConfig(options?: { reload?: boolean }): StorageConfigType {
+  if (config && !options?.reload) {
+    return config
+  }
+
   dotenv.config()
 
-  return {
+  config = {
+    // Tenant
+    tenantId:
+      getOptionalConfigFromEnv('PROJECT_REF') ||
+      getOptionalIfMultitenantConfigFromEnv('TENANT_ID') ||
+      '',
+    isMultitenant: getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true',
+
+    // Server
+    region: getConfigFromEnv('SERVER_REGION', 'REGION'),
     version: getOptionalConfigFromEnv('VERSION') || '0.0.0',
     keepAliveTimeout: parseInt(getOptionalConfigFromEnv('SERVER_KEEP_ALIVE_TIMEOUT') || '61', 10),
     headersTimeout: parseInt(getOptionalConfigFromEnv('SERVER_HEADERS_TIMEOUT') || '65', 10),
-    adminApiKeys: getOptionalConfigFromEnv('ADMIN_API_KEYS') || '',
-    adminRequestIdHeader: getOptionalConfigFromEnv('ADMIN_REQUEST_ID_HEADER'),
-    anonKey: getOptionalIfMultitenantConfigFromEnv('ANON_KEY') || '',
-    encryptionKey: getOptionalConfigFromEnv('ENCRYPTION_KEY') || '',
-    fileSizeLimit: Number(getConfigFromEnv('FILE_SIZE_LIMIT')),
-    fileSizeLimitStandardUpload: parseInt(
-      getOptionalConfigFromEnv('FILE_SIZE_LIMIT_STANDARD_UPLOAD') || '0'
+    host: getOptionalConfigFromEnv('SERVER_HOST', 'HOST') || '0.0.0.0',
+    port: Number(getOptionalConfigFromEnv('SERVER_PORT', 'PORT')) || 5000,
+    adminPort: Number(getOptionalConfigFromEnv('SERVER_ADMIN_PORT', 'ADMIN_PORT')) || 5001,
+
+    // Request
+    requestXForwardedHostRegExp: getOptionalConfigFromEnv(
+      'REQUEST_X_FORWARDED_HOST_REGEXP',
+      'X_FORWARDED_HOST_REGEXP'
     ),
-    fileStoragePath: getOptionalConfigFromEnv('FILE_STORAGE_BACKEND_PATH'),
-    globalS3MaxSockets: parseInt(getOptionalConfigFromEnv('GLOBAL_S3_MAX_SOCKETS') || '200', 10),
-    globalS3Protocol: (getOptionalConfigFromEnv('GLOBAL_S3_PROTOCOL') || 'https') as
-      | 'http'
-      | 'https',
-    globalS3Bucket: getConfigFromEnv('GLOBAL_S3_BUCKET'),
-    globalS3Endpoint: getOptionalConfigFromEnv('GLOBAL_S3_ENDPOINT'),
-    globalS3ForcePathStyle: getOptionalConfigFromEnv('GLOBAL_S3_FORCE_PATH_STYLE') === 'true',
-    isMultitenant: getOptionalConfigFromEnv('IS_MULTITENANT') === 'true',
-    jwtSecret: getOptionalIfMultitenantConfigFromEnv('PGRST_JWT_SECRET') || '',
-    jwtAlgorithm: getOptionalConfigFromEnv('PGRST_JWT_ALGORITHM') || 'HS256',
+    requestUrlLengthLimit:
+      Number(getOptionalConfigFromEnv('REQUEST_URL_LENGTH_LIMIT', 'URL_LENGTH_LIMIT')) || 7_500,
+    requestTraceHeader: getOptionalConfigFromEnv('REQUEST_TRACE_HEADER', 'REQUEST_ID_HEADER'),
+
+    // Admin
+    adminApiKeys: getOptionalConfigFromEnv('SERVER_ADMIN_API_KEYS', 'ADMIN_API_KEYS') || '',
+    adminRequestIdHeader: getOptionalConfigFromEnv(
+      'REQUEST_TRACE_HEADER',
+      'REQUEST_ADMIN_TRACE_HEADER'
+    ),
+
+    // Auth
+    anonKey: getOptionalIfMultitenantConfigFromEnv('ANON_KEY') || '',
+    serviceKey: getOptionalIfMultitenantConfigFromEnv('SERVICE_KEY') || '',
+    encryptionKey: getOptionalConfigFromEnv('AUTH_ENCRYPTION_KEY', 'ENCRYPTION_KEY') || '',
+    jwtSecret: getOptionalIfMultitenantConfigFromEnv('AUTH_JWT_SECRET', 'PGRST_JWT_SECRET') || '',
+    jwtAlgorithm: getOptionalConfigFromEnv('AUTH_JWT_ALGORITHM', 'PGRST_JWT_ALGORITHM') || 'HS256',
+
+    // Upload
+    uploadFileSizeLimit: Number(getConfigFromEnv('UPLOAD_FILE_SIZE_LIMIT', 'FILE_SIZE_LIMIT')),
+    uploadFileSizeLimitStandard: parseInt(
+      getOptionalConfigFromEnv(
+        'UPLOAD_FILE_SIZE_LIMIT_STANDARD',
+        'FILE_SIZE_LIMIT_STANDARD_UPLOAD'
+      ) || '0'
+    ),
+    uploadSignedUrlExpirationTime: parseInt(
+      getOptionalConfigFromEnv(
+        'UPLOAD_SIGNED_URL_EXPIRATION_TIME',
+        'SIGNED_UPLOAD_URL_EXPIRATION_TIME'
+      ) || '60'
+    ),
+
+    // Upload - TUS
+    tusPath: getOptionalConfigFromEnv('TUS_URL_PATH') || '/upload/resumable',
+    tusUrlExpiryMs: parseInt(
+      getOptionalConfigFromEnv('TUS_URL_EXPIRY_MS') || (1000 * 60 * 60).toString(),
+      10
+    ),
+    tusUseFileVersionSeparator:
+      getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
+
+    // Storage
+    storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
+
+    // Storage - File
+    storageFilePath: getOptionalConfigFromEnv('STORAGE_FILE_BACKEND_PATH', 'STORAGE_FILE_PATH'),
+
+    // Storage - S3
+    storageS3MaxSockets: parseInt(
+      getOptionalConfigFromEnv('STORAGE_S3_MAX_SOCKETS', 'GLOBAL_S3_MAX_SOCKETS') || '200',
+      10
+    ),
+    storageS3Bucket: getConfigFromEnv('STORAGE_S3_BUCKET', 'GLOBAL_S3_BUCKET'),
+    storageS3Endpoint: getOptionalConfigFromEnv('STORAGE_S3_ENDPOINT', 'GLOBAL_S3_ENDPOINT'),
+    storageS3ForcePathStyle:
+      getOptionalConfigFromEnv('STORAGE_S3_FORCE_PATH_STYLE', 'GLOBAL_S3_FORCE_PATH_STYLE') ===
+      'true',
+    storageS3Region: getOptionalConfigFromEnv('STORAGE_S3_REGION', 'REGION') as string,
+
+    // DB - Migrations
     dbAnonRole: getOptionalConfigFromEnv('DB_ANON_ROLE') || 'anon',
     dbServiceRole: getOptionalConfigFromEnv('DB_SERVICE_ROLE') || 'service_role',
     dbAuthenticatedRole: getOptionalConfigFromEnv('DB_AUTHENTICATED_ROLE') || 'authenticated',
@@ -139,8 +219,13 @@ export function getConfig(): StorageConfigType {
       getOptionalConfigFromEnv('DB_ALLOW_MIGRATION_REFRESH') === 'false'
     ),
     dbSuperUser: getOptionalConfigFromEnv('DB_SUPER_USER') || 'postgres',
-    dbSearchPath: getOptionalConfigFromEnv('DB_SEARCH_PATH') || '',
-    multitenantDatabaseUrl: getOptionalConfigFromEnv('MULTITENANT_DATABASE_URL'),
+
+    // Database - Connection
+    dbSearchPath: getOptionalConfigFromEnv('DATABASE_SEARCH_PATH', 'DB_SEARCH_PATH') || '',
+    multitenantDatabaseUrl: getOptionalConfigFromEnv(
+      'DATABASE_MULTITENANT_URL',
+      'MULTITENANT_DATABASE_URL'
+    ),
     databaseSSLRootCert: getOptionalConfigFromEnv('DATABASE_SSL_ROOT_CERT'),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
     databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
@@ -156,21 +241,17 @@ export function getConfig(): StorageConfigType {
       getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '3000',
       10
     ),
-    region: getConfigFromEnv('REGION'),
-    requestIdHeader: getOptionalConfigFromEnv('REQUEST_ID_HEADER'),
-    serviceKey: getOptionalIfMultitenantConfigFromEnv('SERVICE_KEY') || '',
-    storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
-    tenantId:
-      getOptionalConfigFromEnv('PROJECT_REF') ||
-      getOptionalIfMultitenantConfigFromEnv('TENANT_ID') ||
-      '',
-    urlLengthLimit: Number(getOptionalConfigFromEnv('URL_LENGTH_LIMIT')) || 7_500,
-    xForwardedHostRegExp: getOptionalConfigFromEnv('X_FORWARDED_HOST_REGEXP'),
+
+    // Monitoring
     logLevel: getOptionalConfigFromEnv('LOG_LEVEL') || 'info',
     logflareEnabled: getOptionalConfigFromEnv('LOGFLARE_ENABLED') === 'true',
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
-    enableQueueEvents: getOptionalConfigFromEnv('ENABLE_QUEUE_EVENTS') === 'true',
+    defaultMetricsEnabled:
+      getOptionalConfigFromEnv('DEFAULT_METRICS_ENABLED', 'ENABLE_DEFAULT_METRICS') === 'true',
+
+    // Queue
+    pgQueueEnable: getOptionalConfigFromEnv('PG_QUEUE_ENABLE', 'ENABLE_QUEUE_EVENTS') === 'true',
     pgQueueConnectionURL: getOptionalConfigFromEnv('PG_QUEUE_CONNECTION_URL'),
     pgQueueDeleteAfterDays: parseInt(
       getOptionalConfigFromEnv('PG_QUEUE_DELETE_AFTER_DAYS') || '2',
@@ -181,6 +262,8 @@ export function getConfig(): StorageConfigType {
       10
     ),
     pgQueueRetentionDays: parseInt(getOptionalConfigFromEnv('PG_QUEUE_RETENTION_DAYS') || '2', 10),
+
+    // Webhooks
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),
     webhookApiKey: getOptionalConfigFromEnv('WEBHOOK_API_KEY'),
     webhookQueuePullInterval: parseInt(
@@ -194,7 +277,11 @@ export function getConfig(): StorageConfigType {
     adminDeleteConcurrency: parseInt(
       getOptionalConfigFromEnv('QUEUE_ADMIN_DELETE_CONCURRENCY') || '5'
     ),
-    enableImageTransformation: getOptionalConfigFromEnv('ENABLE_IMAGE_TRANSFORMATION') === 'true',
+
+    // Image Transformation
+    imageTransformationEnabled:
+      getOptionalConfigFromEnv('IMAGE_TRANSFORMATION_ENABLED', 'ENABLE_IMAGE_TRANSFORMATION') ===
+      'true',
     imgProxyRequestTimeout: parseInt(
       getOptionalConfigFromEnv('IMGPROXY_REQUEST_TIMEOUT') || '15',
       10
@@ -210,15 +297,22 @@ export function getConfig(): StorageConfigType {
     imgProxyURL: getOptionalConfigFromEnv('IMGPROXY_URL'),
     imgLimits: {
       size: {
-        min: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MIN_SIZE') || '1', 10),
-        max: parseInt(getOptionalConfigFromEnv('IMG_LIMITS_MAX_SIZE') || '2000', 10),
+        min: parseInt(
+          getOptionalConfigFromEnv('IMAGE_TRANSFORMATION_LIMIT_MIN_SIZE', 'IMG_LIMITS_MIN_SIZE') ||
+            '1',
+          10
+        ),
+        max: parseInt(
+          getOptionalConfigFromEnv('IMAGE_TRANSFORMATION_LIMIT_MAX_SIZE', 'IMG_LIMITS_MAX_SIZE') ||
+            '2000',
+          10
+        ),
       },
     },
-    postgrestForwardHeaders: getOptionalConfigFromEnv('POSTGREST_FORWARD_HEADERS'),
-    host: getOptionalConfigFromEnv('HOST') || '0.0.0.0',
-    port: Number(getOptionalConfigFromEnv('PORT')) || 5000,
-    adminPort: Number(getOptionalConfigFromEnv('ADMIN_PORT')) || 5001,
-    enableRateLimiter: getOptionalConfigFromEnv('ENABLE_RATE_LIMITER') === 'true',
+
+    // Rate Limiting
+    rateLimiterEnabled:
+      getOptionalConfigFromEnv('RATE_LIMITER_ENABLED', 'ENABLE_RATE_LIMITER') === 'true',
     rateLimiterSkipOnError: getOptionalConfigFromEnv('RATE_LIMITER_SKIP_ON_ERROR') === 'true',
     rateLimiterDriver: getOptionalConfigFromEnv('RATE_LIMITER_DRIVER') || 'memory',
     rateLimiterRedisUrl: getOptionalConfigFromEnv('RATE_LIMITER_REDIS_URL'),
@@ -234,17 +328,7 @@ export function getConfig(): StorageConfigType {
       getOptionalConfigFromEnv('RATE_LIMITER_REDIS_COMMAND_TIMEOUT') || '2',
       10
     ),
-    signedUploadUrlExpirationTime: parseInt(
-      getOptionalConfigFromEnv('SIGNED_UPLOAD_URL_EXPIRATION_TIME') || '60'
-    ),
-
-    tusPath: getOptionalConfigFromEnv('TUS_URL_PATH') || '/upload/resumable',
-    tusUrlExpiryMs: parseInt(
-      getOptionalConfigFromEnv('TUS_URL_EXPIRY_MS') || (1000 * 60 * 60).toString(),
-      10
-    ),
-    tusUseFileVersionSeparator:
-      getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
-    enableDefaultMetrics: getOptionalConfigFromEnv('ENABLE_DEFAULT_METRICS') === 'true',
   }
+
+  return config
 }

@@ -7,7 +7,7 @@ export * from './s3'
 export * from './file'
 export * from './generic'
 
-const { region, globalS3Endpoint, globalS3ForcePathStyle } = getConfig()
+const { storageS3Region, storageS3Endpoint, storageS3ForcePathStyle } = getConfig()
 
 type ConfigForStorage<Type extends StorageBackendType> = Type extends 's3'
   ? S3ClientOptions
@@ -23,9 +23,9 @@ export function createStorageBackend<Type extends StorageBackendType>(
     storageBackend = new FileBackend()
   } else {
     const defaultOptions: S3ClientOptions = {
-      region: region,
-      endpoint: globalS3Endpoint,
-      forcePathStyle: globalS3ForcePathStyle,
+      region: storageS3Region,
+      endpoint: storageS3Endpoint,
+      forcePathStyle: storageS3ForcePathStyle,
       ...(config ? config : {}),
     }
     storageBackend = new S3Backend(defaultOptions)

@@ -1,0 +1,165 @@
+# docker-compose.yml
+
+version: '3'
+services:
+
+  tenant_db:
+    image: postgres:15
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready", "-d", "postgres" ]
+      interval: 50s
+      timeout: 60s
+      retries: 5
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_PORT: 5432
+
+  multitenant_db:
+    image: postgres:15
+    ports:
+      - '5433:5432'
+    configs:
+      - source: init.sql
+        target: /docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready", "-d", "postgres" ]
+      interval: 50s
+      timeout: 60s
+      retries: 5
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+
+  pg_bouncer:
+    image: bitnami/pgbouncer:latest
+    ports:
+      - 6453:6432
+    environment:
+      POSTGRESQL_USERNAME: postgres
+      POSTGRESQL_HOST: tenant_db
+      POSTGRESQL_PASSWORD: postgres
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_IGNORE_STARTUP_PARAMETERS: "extra_float_digits, options"
+      PGBOUNCER_STATS_USERS: postgres
+
+  supavisor:
+    image: supabase/supavisor:1.1.6
+    depends_on:
+      multitenant_db:
+        condition: service_healthy
+      tenant_db:
+        condition: service_healthy
+    ports:
+      - 4000:4000
+      - 5452:5452
+      - 6543:6543
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
+      interval: 2s
+      timeout: 10s
+      retries: 5
+    environment:
+      PORT: 4000
+      PROXY_PORT_SESSION: 5452
+      PROXY_PORT_TRANSACTION: 6543
+      DATABASE_URL: "ecto://postgres:postgres@multitenant_db:5432/postgres"
+      CLUSTER_POSTGRES: "true"
+      SECRET_KEY_BASE: "12345678901234567890121234567890123456789012345678903212345678901234567890123456789032123456789012345678901234567890323456789032"
+      VAULT_ENC_KEY: "12345678901234567890123456789032"
+      API_JWT_SECRET: "dev"
+      METRICS_JWT_SECRET: "dev"
+      REGION: "local"
+      ERL_AFLAGS: -proto_dist inet_tcp
+    command: sh -c "/app/bin/migrate && /app/bin/server"
+
+  supavisor_setup:
+    image: supabase/supavisor:1.1.6
+    command: |
+      curl -X PUT \
+        "http://supavisor:4000/api/tenants/bjhaohmqunupljrqypxz" \
+        --header "Accept: application/json" \
+        --header "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNjQ1MTkyODI0LCJleHAiOjE5NjA3Njg4MjR9.M9jrxyvPLkUxWgOYSf5dNdJ8v_eRrq810ShFRT8N-6M" \
+        --header "Content-Type: application/json" \
+        --data-raw "{
+          \"tenant\": {
+            \"db_host\": \"tenant_db\",
+            \"db_port\": 5432,
+            \"db_database\": \"postgres\",
+            \"ip_version\": \"auto\",
+            \"require_user\": true,
+            \"upstream_ssl\": false,
+            \"enforce_ssl\": false,
+            \"default_max_clients\": 200,
+            \"default_pool_size\": 15,
+            \"users\": [
+              {
+                \"db_user\": \"postgres\",
+                \"db_password\": \"postgres\",
+                \"mode_type\": \"transaction\",
+                \"pool_size\": 15,
+                \"pool_checkout_timeout\": 100
+              }
+            ]
+          }
+        }"
+    depends_on:
+      supavisor:
+        condition: service_healthy
+
+  minio:
+    image: minio/minio
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    healthcheck:
+      test: timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9000' || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 2
+    environment:
+      MINIO_ROOT_USER: supa-storage
+      MINIO_ROOT_PASSWORD: secret1234
+    command: server --console-address ":9001" /data
+
+  minio_setup:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set supa-minio http://minio:9000 supa-storage secret1234;
+      /usr/bin/mc mb supa-minio/supa-storage-bucket;
+      exit 0;
+      "
+
+  imgproxy:
+    image: darthsim/imgproxy
+    ports:
+      - '50020:8080'
+    volumes:
+      - ./data:/images/data
+    environment:
+      - IMGPROXY_WRITE_TIMEOUT=20
+      - IMGPROXY_READ_TIMEOUT=20
+      - IMGPROXY_REQUESTS_QUEUE_SIZE=24
+      - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/images
+      - IMGPROXY_USE_ETAG=true
+      - IMGPROXY_ENABLE_WEBP_DETECTION=true
+
+  # Optional for rate-limiting
+  redis:
+    image: redis:6.2-alpine
+    restart: always
+    ports:
+      - '6379:6379'
+
+configs:
+  init.sql:
+    content: |
+      CREATE SCHEMA IF NOT EXISTS _supavisor;

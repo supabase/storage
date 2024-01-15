@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
 
-const { globalS3Bucket } = getConfig()
+const { storageS3Bucket } = getConfig()
 
 const getPublicObjectParamsSchema = {
   type: 'object',
@@ -58,7 +58,7 @@ export default async function routes(fastify: FastifyInstance) {
       const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
 
       return request.storage.renderer('asset').render(request, response, {
-        bucket: globalS3Bucket,
+        bucket: storageS3Bucket,
         key: s3Key,
         version: obj.version,
         download,

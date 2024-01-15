@@ -4,7 +4,7 @@ import { getConfig } from '../../../config'
 import { getJwtSecret, SignedToken, verifyJWT } from '../../../auth'
 import { StorageBackendError } from '../../../storage'
 
-const { globalS3Bucket } = getConfig()
+const { storageS3Bucket } = getConfig()
 
 const getSignedObjectParamsSchema = {
   type: 'object',
@@ -82,7 +82,7 @@ export default async function routes(fastify: FastifyInstance) {
         .findObject(objParts.join('/'), 'id,version')
 
       return request.storage.renderer('asset').render(request, response, {
-        bucket: globalS3Bucket,
+        bucket: storageS3Bucket,
         key: s3Key,
         version: obj.version,
         download,

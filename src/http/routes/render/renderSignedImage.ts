@@ -5,7 +5,7 @@ import { ImageRenderer } from '../../../storage/renderer'
 import { getJwtSecret, SignedToken, verifyJWT } from '../../../auth'
 import { StorageBackendError } from '../../../storage'
 
-const { globalS3Bucket } = getConfig()
+const { storageS3Bucket } = getConfig()
 
 const renderAuthenticatedImageParamsSchema = {
   type: 'object',
@@ -82,7 +82,7 @@ export default async function routes(fastify: FastifyInstance) {
       return renderer
         .setTransformationsFromString(transformations || '')
         .render(request, response, {
-          bucket: globalS3Bucket,
+          bucket: storageS3Bucket,
           key: s3Key,
           version: obj.version,
           download,

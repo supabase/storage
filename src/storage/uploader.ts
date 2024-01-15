@@ -13,7 +13,7 @@ interface UploaderOptions extends UploadObjectOptions {
   allowedMimeTypes?: string[] | null
 }
 
-const { globalS3Bucket, fileSizeLimitStandardUpload } = getConfig()
+const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
 
 export interface UploadObjectOptions {
   bucketId: string
@@ -90,7 +90,7 @@ export class Uploader {
       const s3Key = `${this.db.tenantId}/${path}`
 
       const objectMetadata = await this.backend.uploadObject(
-        globalS3Bucket,
+        storageS3Bucket,
         s3Key,
         version,
         file.body,
@@ -302,8 +302,8 @@ export class Uploader {
       globalFileSizeLimit = Math.min(bucketSizeLimit, globalFileSizeLimit)
     }
 
-    if (fileSizeLimitStandardUpload && fileSizeLimitStandardUpload > 0) {
-      globalFileSizeLimit = Math.min(fileSizeLimitStandardUpload, globalFileSizeLimit)
+    if (uploadFileSizeLimitStandard && uploadFileSizeLimitStandard > 0) {
+      globalFileSizeLimit = Math.min(uploadFileSizeLimitStandard, globalFileSizeLimit)
     }
 
     return globalFileSizeLimit

@@ -8,7 +8,7 @@ import { Uploader } from '../../../storage/uploader'
 import { TenantConnection } from '../../../database/connection'
 import { BaseLogger } from 'pino'
 
-const { globalS3Bucket, tusPath } = getConfig()
+const { storageS3Bucket, tusPath } = getConfig()
 const reExtractFileID = /([^/]+)\/?$/
 
 export type MultiPartRequest = http.IncomingMessage & {
@@ -149,7 +149,7 @@ export async function onUploadFinish(
   try {
     const s3Key = `${req.upload.tenantId}/${resourceId.bucket}/${resourceId.objectName}`
     const metadata = await req.upload.storage.backend.headObject(
-      globalS3Bucket,
+      storageS3Bucket,
       s3Key,
       resourceId.version
     )

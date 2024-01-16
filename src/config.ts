@@ -1,4 +1,5 @@
 import dotenv from 'dotenv'
+import jwt from 'jsonwebtoken'
 
 export type StorageBackendType = 'file' | 's3'
 
@@ -8,7 +9,6 @@ type StorageConfigType = {
   headersTimeout: number
   adminApiKeys: string
   adminRequestIdHeader?: string
-  anonKey: string
   encryptionKey: string
   uploadFileSizeLimit: number
   uploadFileSizeLimitStandard?: number
@@ -132,12 +132,12 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     // Tenant
     tenantId:
       getOptionalConfigFromEnv('PROJECT_REF') ||
-      getOptionalIfMultitenantConfigFromEnv('TENANT_ID') ||
-      '',
+      getOptionalConfigFromEnv('TENANT_ID') ||
+      'storage-single-tenant',
     isMultitenant: getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true',
 
     // Server
-    region: getConfigFromEnv('SERVER_REGION', 'REGION'),
+    region: getOptionalConfigFromEnv('SERVER_REGION', 'REGION') || 'not-specified',
     version: getOptionalConfigFromEnv('VERSION') || '0.0.0',
     keepAliveTimeout: parseInt(getOptionalConfigFromEnv('SERVER_KEEP_ALIVE_TIMEOUT') || '61', 10),
     headersTimeout: parseInt(getOptionalConfigFromEnv('SERVER_HEADERS_TIMEOUT') || '65', 10),
@@ -162,14 +162,16 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
 
     // Auth
-    anonKey: getOptionalIfMultitenantConfigFromEnv('ANON_KEY') || '',
-    serviceKey: getOptionalIfMultitenantConfigFromEnv('SERVICE_KEY') || '',
+    serviceKey: getOptionalConfigFromEnv('SERVICE_KEY') || '',
+
     encryptionKey: getOptionalConfigFromEnv('AUTH_ENCRYPTION_KEY', 'ENCRYPTION_KEY') || '',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('AUTH_JWT_SECRET', 'PGRST_JWT_SECRET') || '',
     jwtAlgorithm: getOptionalConfigFromEnv('AUTH_JWT_ALGORITHM', 'PGRST_JWT_ALGORITHM') || 'HS256',
 
     // Upload
-    uploadFileSizeLimit: Number(getConfigFromEnv('UPLOAD_FILE_SIZE_LIMIT', 'FILE_SIZE_LIMIT')),
+    uploadFileSizeLimit: Number(
+      getOptionalConfigFromEnv('UPLOAD_FILE_SIZE_LIMIT', 'FILE_SIZE_LIMIT')
+    ),
     uploadFileSizeLimitStandard: parseInt(
       getOptionalConfigFromEnv(
         'UPLOAD_FILE_SIZE_LIMIT_STANDARD',
@@ -193,7 +195,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
 
     // Storage
-    storageBackendType: getConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
+    storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
 
     // Storage - File
     storageFilePath: getOptionalConfigFromEnv('STORAGE_FILE_BACKEND_PATH', 'STORAGE_FILE_PATH'),
@@ -203,7 +205,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('STORAGE_S3_MAX_SOCKETS', 'GLOBAL_S3_MAX_SOCKETS') || '200',
       10
     ),
-    storageS3Bucket: getConfigFromEnv('STORAGE_S3_BUCKET', 'GLOBAL_S3_BUCKET'),
+    storageS3Bucket: getOptionalConfigFromEnv('STORAGE_S3_BUCKET', 'GLOBAL_S3_BUCKET'),
     storageS3Endpoint: getOptionalConfigFromEnv('STORAGE_S3_ENDPOINT', 'GLOBAL_S3_ENDPOINT'),
     storageS3ForcePathStyle:
       getOptionalConfigFromEnv('STORAGE_S3_FORCE_PATH_STYLE', 'GLOBAL_S3_FORCE_PATH_STYLE') ===
@@ -328,6 +330,13 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('RATE_LIMITER_REDIS_COMMAND_TIMEOUT') || '2',
       10
     ),
+  } as StorageConfigType
+
+  if (!config.isMultitenant && !config.serviceKey) {
+    config.serviceKey = jwt.sign({ role: config.dbServiceRole }, config.jwtSecret, {
+      expiresIn: '10y',
+      algorithm: config.jwtAlgorithm as jwt.Algorithm,
+    })
   }
 
   return config

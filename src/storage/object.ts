@@ -1,7 +1,7 @@
 import { StorageBackendAdapter, ObjectMetadata, withOptionalVersion } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
-import { getJwtSecret, signJWT } from '../auth'
+import { signJWT } from '../auth'
 import { getConfig } from '../config'
 import { FastifyRequest } from 'fastify'
 import { Uploader } from './uploader'
@@ -15,6 +15,7 @@ import {
 } from '../queue'
 import { randomUUID } from 'crypto'
 import { StorageBackendError } from './errors'
+import { getJwtSecret } from '../database/tenant'
 
 export interface UploadObjectOptions {
   objectName: string

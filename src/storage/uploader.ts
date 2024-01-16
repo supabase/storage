@@ -13,7 +13,7 @@ interface UploaderOptions extends UploadObjectOptions {
   allowedMimeTypes?: string[] | null
 }
 
-const { globalS3Bucket, fileSizeLimitStandardUpload } = getConfig()
+const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
 
 export interface UploadObjectOptions {
   bucketId: string
@@ -90,7 +90,7 @@ export class Uploader {
       const s3Key = `${this.db.tenantId}/${path}`
 
       const objectMetadata = await this.backend.uploadObject(
-        globalS3Bucket,
+        storageS3Bucket,
         s3Key,
         version,
         file.body,
@@ -226,11 +226,13 @@ export class Uploader {
         continue
       }
 
-      if (allowedMime[0] === type && allowedMime[1] === '*') {
+      const [allowedType, allowedExtension] = allowedMime
+
+      if (allowedType === type && allowedExtension === '*') {
         return true
       }
 
-      if (allowedMime[0] === type && allowedMime[1] === ext) {
+      if (allowedType === type && allowedExtension === ext) {
         return true
       }
     }
@@ -267,7 +269,8 @@ export class Uploader {
         const cacheTime = formData.fields.cacheControl?.value
 
         body = formData.file
-        mimeType = formData.mimetype
+        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+        mimeType = formData.fields.contentType?.value || formData.mimetype
         cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
         isTruncated = () => formData.file.truncated
       } catch (e) {
@@ -299,8 +302,8 @@ export class Uploader {
       globalFileSizeLimit = Math.min(bucketSizeLimit, globalFileSizeLimit)
     }
 
-    if (fileSizeLimitStandardUpload && fileSizeLimitStandardUpload > 0) {
-      globalFileSizeLimit = Math.min(fileSizeLimitStandardUpload, globalFileSizeLimit)
+    if (uploadFileSizeLimitStandard && uploadFileSizeLimitStandard > 0) {
+      globalFileSizeLimit = Math.min(uploadFileSizeLimitStandard, globalFileSizeLimit)
     }
 
     return globalFileSizeLimit

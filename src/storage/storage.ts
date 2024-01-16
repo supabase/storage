@@ -6,7 +6,7 @@ import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from '.
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
 
-const { urlLengthLimit, globalS3Bucket } = getConfig()
+const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
 
 /**
  * Storage
@@ -186,7 +186,7 @@ export class Storage {
       const objects = await this.db.listObjects(
         bucketId,
         'id, name',
-        Math.floor(urlLengthLimit / (36 + 3))
+        Math.floor(requestUrlLengthLimit / (36 + 3))
       )
 
       if (!(objects && objects.length > 0)) {
@@ -207,7 +207,7 @@ export class Storage {
           return all
         }, [] as string[])
         // delete files from s3 asynchronously
-        this.backend.deleteObjects(globalS3Bucket, params)
+        this.backend.deleteObjects(storageS3Bucket, params)
       }
 
       if (deleted?.length !== objects.length) {
@@ -237,7 +237,9 @@ export class Storage {
         )
       }
 
-      if (!type.match(/^[a-zA-Z0-9\-\+]+\/([a-zA-Z0-9\-\+\.]+$)|\*$/)) {
+      if (
+        !type.match(/^([a-zA-Z0-9\-+.]+)\/([a-zA-Z0-9\-+.]+)(;\s*charset=[a-zA-Z0-9\-]+)?$|\*$/)
+      ) {
         throw new StorageBackendError(
           'invalid_mime_type',
           422,

@@ -24,14 +24,14 @@ import { S3Store } from './s3-store'
 import { DeleteHandler } from './handlers'
 
 const {
-  globalS3Bucket,
-  globalS3Endpoint,
-  globalS3ForcePathStyle,
-  region,
+  storageS3Bucket,
+  storageS3Endpoint,
+  storageS3ForcePathStyle,
+  storageS3Region,
   tusUrlExpiryMs,
   tusPath,
   storageBackendType,
-  fileStoragePath,
+  storageFilePath,
 } = getConfig()
 
 type MultiPartRequest = http.IncomingMessage & {
@@ -50,16 +50,16 @@ function createTusStore() {
       partSize: 6 * 1024 * 1024, // Each uploaded part will have ~6MB,
       expirationPeriodInMilliseconds: tusUrlExpiryMs,
       s3ClientConfig: {
-        bucket: globalS3Bucket,
-        region: region,
-        endpoint: globalS3Endpoint,
-        forcePathStyle: globalS3ForcePathStyle,
+        bucket: storageS3Bucket,
+        region: storageS3Region,
+        endpoint: storageS3Endpoint,
+        forcePathStyle: storageS3ForcePathStyle,
       },
     })
   }
 
   return new FileStore({
-    directory: fileStoragePath + '/' + globalS3Bucket,
+    directory: storageFilePath + '/' + storageS3Bucket,
   })
 }
 

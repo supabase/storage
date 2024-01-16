@@ -66,7 +66,7 @@ const testSpec = yaml.load(
   fs.readFileSync(path.resolve(__dirname, 'rls_tests.yaml'), 'utf8')
 ) as RlsTestSpec
 
-const { serviceKey, tenantId, jwtSecret, databaseURL, globalS3Bucket, storageBackendType } =
+const { serviceKey, tenantId, jwtSecret, databaseURL, storageS3Bucket, storageBackendType } =
   getConfig()
 const backend = createStorageBackend(storageBackendType)
 const client = backend.client
@@ -79,11 +79,11 @@ describe('RLS policies', () => {
   beforeAll(async () => {
     // parse yaml file
     if (client instanceof S3Client) {
-      const bucketExists = await checkBucketExists(client, globalS3Bucket)
+      const bucketExists = await checkBucketExists(client, storageS3Bucket)
 
       if (!bucketExists) {
         const createBucketCommand = new CreateBucketCommand({
-          Bucket: globalS3Bucket,
+          Bucket: storageS3Bucket,
         })
         await client.send(createBucketCommand)
       }

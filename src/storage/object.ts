@@ -1,7 +1,7 @@
 import { StorageBackendAdapter, ObjectMetadata, withOptionalVersion } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
-import { getJwtSecret, signJWT } from '../auth'
+import { signJWT } from '../auth'
 import { getConfig } from '../config'
 import { FastifyRequest } from 'fastify'
 import { Uploader } from './uploader'
@@ -15,6 +15,7 @@ import {
 } from '../queue'
 import { randomUUID } from 'crypto'
 import { StorageBackendError } from './errors'
+import { getJwtSecret } from '../database/tenant'
 
 export interface UploadObjectOptions {
   objectName: string
@@ -23,7 +24,7 @@ export interface UploadObjectOptions {
   version?: string
 }
 
-const { urlLengthLimit, globalS3Bucket } = getConfig()
+const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
 
 /**
  * ObjectStorage
@@ -146,7 +147,7 @@ export class ObjectStorage {
       const prefixesSubset: string[] = []
       let urlParamLength = 0
 
-      for (; i < prefixes.length && urlParamLength < urlLengthLimit; i++) {
+      for (; i < prefixes.length && urlParamLength < requestUrlLengthLimit; i++) {
         const prefix = prefixes[i]
         prefixesSubset.push(prefix)
         urlParamLength += encodeURIComponent(prefix).length + 9 // length of '%22%2C%22'
@@ -171,7 +172,7 @@ export class ObjectStorage {
             return all
           }, [] as string[])
 
-          await this.backend.deleteObjects(globalS3Bucket, prefixesToDelete)
+          await this.backend.deleteObjects(storageS3Bucket, prefixesToDelete)
 
           await Promise.allSettled(
             data.map((object) =>
@@ -278,14 +279,14 @@ export class ObjectStorage {
       })
 
       const copyResult = await this.backend.copyObject(
-        globalS3Bucket,
+        storageS3Bucket,
         s3SourceKey,
         originObject.version,
         s3DestinationKey,
         newVersion
       )
 
-      const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, newVersion)
+      const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
 
       const destObject = await this.db.createObject({
         ...originObject,
@@ -361,14 +362,14 @@ export class ObjectStorage {
 
     try {
       await this.backend.copyObject(
-        globalS3Bucket,
+        storageS3Bucket,
         s3SourceKey,
         sourceObj.version,
         s3DestinationKey,
         newVersion
       )
 
-      const metadata = await this.backend.headObject(globalS3Bucket, s3DestinationKey, newVersion)
+      const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
 
       await this.db.asSuperUser().withTransaction(async (db) => {
         await db.createObject({
@@ -484,7 +485,7 @@ export class ObjectStorage {
       const pathsSubset = []
       let urlParamLength = 0
 
-      for (; i < paths.length && urlParamLength < urlLengthLimit; i++) {
+      for (; i < paths.length && urlParamLength < requestUrlLengthLimit; i++) {
         const path = paths[i]
         pathsSubset.push(path)
         urlParamLength += encodeURIComponent(path).length + 9 // length of '%22%2C%22'

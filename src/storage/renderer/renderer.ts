@@ -17,7 +17,7 @@ export interface AssetResponse {
   transformations?: string[]
 }
 
-const { etagHeaders, sMaxAge } = getConfig()
+const { requestEtagHeaders, responseSMaxAge } = getConfig()
 
 /**
  * Renderer
@@ -25,7 +25,7 @@ const { etagHeaders, sMaxAge } = getConfig()
  * and all the important headers
  */
 export abstract class Renderer {
-  protected sMaxAge = sMaxAge
+  protected sMaxAge = responseSMaxAge
 
   abstract getAsset(request: FastifyRequest, options: RenderOptions): Promise<AssetResponse>
 
@@ -132,7 +132,7 @@ export abstract class Renderer {
   }
 
   protected findEtagHeader(request: FastifyRequest<any>) {
-    for (const header of etagHeaders) {
+    for (const header of requestEtagHeaders) {
       const etag = request.headers[header]
       if (etag) {
         return etag

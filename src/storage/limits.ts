@@ -2,18 +2,18 @@ import { getConfig } from '../config'
 import { getFileSizeLimit as getFileSizeLimitForTenant, getFeatures } from '../database/tenant'
 import { StorageBackendError } from './errors'
 
-const { isMultitenant, enableImageTransformation } = getConfig()
+const { isMultitenant, imageTransformationEnabled } = getConfig()
 
 /**
  * Get the maximum file size for a specific project
  * @param tenantId
  */
 export async function getFileSizeLimit(tenantId: string): Promise<number> {
-  let { fileSizeLimit } = getConfig()
+  let { uploadFileSizeLimit } = getConfig()
   if (isMultitenant) {
-    fileSizeLimit = await getFileSizeLimitForTenant(tenantId)
+    uploadFileSizeLimit = await getFileSizeLimitForTenant(tenantId)
   }
-  return fileSizeLimit
+  return uploadFileSizeLimit
 }
 
 /**
@@ -22,7 +22,7 @@ export async function getFileSizeLimit(tenantId: string): Promise<number> {
  */
 export async function isImageTransformationEnabled(tenantId: string) {
   if (!isMultitenant) {
-    return enableImageTransformation
+    return imageTransformationEnabled
   }
 
   const { imageTransformation } = await getFeatures(tenantId)

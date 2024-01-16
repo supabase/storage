@@ -18,7 +18,7 @@ import { DetailedError } from 'tus-js-client'
 import { getServiceKeyUser } from '../database/tenant'
 import { checkBucketExists } from './common'
 
-const { serviceKey, tenantId, globalS3Bucket, storageBackendType } = getConfig()
+const { serviceKey, tenantId, storageS3Bucket, storageBackendType } = getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
 const localServerAddress = 'http://127.0.0.1:8999'
 
@@ -41,11 +41,11 @@ describe('Tus multipart', () => {
     })
 
     if (client instanceof S3Client) {
-      const bucketExists = await checkBucketExists(client, globalS3Bucket)
+      const bucketExists = await checkBucketExists(client, storageS3Bucket)
 
       if (!bucketExists) {
         const createBucketCommand = new CreateBucketCommand({
-          Bucket: globalS3Bucket,
+          Bucket: storageS3Bucket,
         })
         await client.send(createBucketCommand)
       }

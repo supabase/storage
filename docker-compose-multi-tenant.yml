@@ -10,19 +10,26 @@ services:
     depends_on:
       tenant_db:
         condition: service_healthy
-      pg_bouncer:
+      multitenant_db:
+        condition: service_healthy
+      supavisor:
           condition: service_started
       minio_setup:
           condition: service_completed_successfully
     environment:
       # Server
       SERVER_PORT: 5000
+      SERVER_REGION: local
       # Auth
       AUTH_JWT_SECRET: f023d3db-39dc-4ac9-87b2-b2be72e9162b
       AUTH_JWT_ALGORITHM: HS256
-      # Single tenant Mode
-      DATABASE_URL: postgres://postgres:postgres@tenant_db:5432/postgres
-      DATABASE_POOL_URL: postgresql://postgres:postgres@pg_bouncer:6432/postgres
+      AUTH_ENCRYPTION_KEY: encryptionkey
+      # Multi tenant Mode
+      MULTI_TENANT: true
+      DATABASE_MULTITENANT_URL: postgresql://postgres:postgres@multitenant_db:5432/postgres
+      SERVER_ADMIN_API_KEYS: apikey
+      SERVER_ADMIN_PORT: 5001
+      REQUEST_X_FORWARDED_HOST_REGEXP: "^([a-z]{20}).local.(?:com|dev)$"
       # Migrations
       DB_INSTALL_ROLES: true # set to false if you want to manage roles yourself
       # Storage
@@ -49,9 +56,22 @@ services:
       service: tenant_db
       file: docker-compose-infra.yml
 
-  pg_bouncer:
+  multitenant_db:
     extends:
-      service: pg_bouncer
+      service: multitenant_db
+      file: docker-compose-infra.yml
+
+  supavisor:
+    extends:
+      service: supavisor
+      file: docker-compose-infra.yml
+
+  supavisor_setup:
+    depends_on:
+      supavisor:
+        condition: service_healthy
+    extends:
+      service: supavisor_setup
       file: docker-compose-infra.yml
 
   minio:
@@ -64,8 +84,7 @@ services:
       service: minio_setup
       file: docker-compose-infra.yml
     depends_on:
-      minio:
-        condition: service_healthy
+      - minio
 
   imgproxy:
     extends:
@@ -77,3 +96,7 @@ services:
 #    extends:
 #      service: redis
 #      file: docker-compose-infra.yml
+
+configs:
+  init.sql:
+    content: "CREATE SCHEMA IF NOT EXISTS _supavisor;"

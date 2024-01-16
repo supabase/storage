@@ -23,7 +23,7 @@ import { StorageBackendError } from '../errors'
 import { getConfig } from '../../config'
 import Agent, { HttpsAgent } from 'agentkeepalive'
 
-const { globalS3Protocol, globalS3MaxSockets } = getConfig()
+const { storageS3MaxSockets } = getConfig()
 
 /**
  * Creates an agent for the given protocol
@@ -31,7 +31,7 @@ const { globalS3Protocol, globalS3MaxSockets } = getConfig()
  */
 export function createAgent(protocol: 'http' | 'https') {
   const agentOptions = {
-    maxSockets: globalS3MaxSockets,
+    maxSockets: storageS3MaxSockets,
     keepAlive: true,
   }
 
@@ -58,7 +58,8 @@ export class S3Backend implements StorageBackendAdapter {
   client: S3Client
 
   constructor(options: S3ClientOptions) {
-    const agent = options.httpAgent ? options.httpAgent : createAgent(globalS3Protocol)
+    const storageS3Protocol = options.endpoint?.includes('http://') ? 'http' : 'https'
+    const agent = options.httpAgent ? options.httpAgent : createAgent(storageS3Protocol)
 
     const params: S3ClientConfig = {
       region: options.region,

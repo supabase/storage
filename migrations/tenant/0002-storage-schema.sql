@@ -6,10 +6,6 @@ BEGIN
     END IF;
 END$$;
 
-
-create extension if not exists "uuid-ossp" WITH schema storage;
-create extension if not exists pgcrypto WITH schema storage;
-
 DO $$
 DECLARE
     install_roles text = COALESCE(current_setting('storage.install_roles', true), 'true');
@@ -58,7 +54,7 @@ CREATE TABLE IF NOT EXISTS "storage"."buckets" (
 CREATE UNIQUE INDEX IF NOT EXISTS "bname" ON "storage"."buckets" USING BTREE ("name");
 
 CREATE TABLE IF NOT EXISTS "storage"."objects" (
-    "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+    "id" uuid NOT NULL DEFAULT gen_random_uuid(),
     "bucket_id" text,
     "name" text,
     "owner" uuid,

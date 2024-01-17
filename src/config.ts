@@ -37,6 +37,8 @@ type StorageConfigType = {
   databaseConnectionTimeout: number
   region: string
   requestTraceHeader?: string
+  requestEtagHeaders: string[]
+  responseSMaxAge: number
   serviceKey: string
   storageBackendType: StorageBackendType
   tenantId: string
@@ -153,6 +155,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     requestUrlLengthLimit:
       Number(getOptionalConfigFromEnv('REQUEST_URL_LENGTH_LIMIT', 'URL_LENGTH_LIMIT')) || 7_500,
     requestTraceHeader: getOptionalConfigFromEnv('REQUEST_TRACE_HEADER', 'REQUEST_ID_HEADER'),
+    requestEtagHeaders: getOptionalConfigFromEnv('REQUEST_ETAG_HEADERS')?.trim().split(',') || [
+      'if-none-match',
+    ],
+    responseSMaxAge: parseInt(getOptionalConfigFromEnv('RESPONSE_S_MAXAGE') || '0', 10),
 
     // Admin
     adminApiKeys: getOptionalConfigFromEnv('SERVER_ADMIN_API_KEYS', 'ADMIN_API_KEYS') || '',

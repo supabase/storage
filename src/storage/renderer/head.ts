@@ -1,6 +1,6 @@
 import { AssetResponse, Renderer, RenderOptions } from './renderer'
-import { FastifyRequest } from 'fastify'
-import { StorageBackendAdapter } from '../backend'
+import { FastifyReply, FastifyRequest } from 'fastify'
+import { ObjectMetadata, StorageBackendAdapter } from '../backend'
 import { ImageRenderer, TransformOptions } from './image'
 
 /**
@@ -19,5 +19,28 @@ export class HeadRenderer extends Renderer {
       metadata,
       transformations: ImageRenderer.applyTransformation(request.query as TransformOptions),
     }
+  }
+
+  protected handleCacheControl(
+    request: FastifyRequest<any>,
+    response: FastifyReply<any>,
+    metadata: ObjectMetadata
+  ) {
+    const etag = this.findEtagHeader(request)
+
+    const cacheControl = [metadata.cacheControl]
+
+    if (!etag) {
+      response.header('Cache-Control', cacheControl.join(', '))
+      return
+    }
+
+    if (etag !== metadata.eTag) {
+      cacheControl.push('must-revalidate')
+    } else if (this.sMaxAge > 0) {
+      cacheControl.push(`s-maxage=${this.sMaxAge}`)
+    }
+
+    response.header('Cache-Control', cacheControl.join(', '))
   }
 }

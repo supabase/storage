@@ -1,12 +1,12 @@
 import http from 'http'
-import { isRenderableError, Storage } from '../../../storage'
-import { Metadata, Upload } from '@tus/server'
-import { getConfig } from '../../../config'
+import { BaseLogger } from 'pino'
+import { Upload } from '@tus/server'
 import { randomUUID } from 'crypto'
-import { UploadId } from './upload-id'
+import { isRenderableError, Storage, StorageBackendError } from '../../../storage'
+import { getConfig } from '../../../config'
 import { Uploader } from '../../../storage/uploader'
 import { TenantConnection } from '../../../database/connection'
-import { BaseLogger } from 'pino'
+import { UploadId } from '../../../storage/tus'
 
 const { storageS3Bucket, tusPath } = getConfig()
 const reExtractFileID = /([^/]+)\/?$/
@@ -22,6 +22,9 @@ export type MultiPartRequest = http.IncomingMessage & {
   }
 }
 
+/**
+ * Runs on every TUS incoming request
+ */
 export async function onIncomingRequest(
   rawReq: http.IncomingMessage,
   res: http.ServerResponse,
@@ -51,22 +54,24 @@ export async function onIncomingRequest(
   })
 }
 
+/**
+ * Generate URL for TUS upload, it encodes the uploadID to base64url
+ */
 export function generateUrl(
   _: http.IncomingMessage,
-  {
-    proto,
-    host,
-    baseUrl,
-    path,
-    id,
-  }: { proto: string; host: string; baseUrl: string; path: string; id: string }
+  { proto, host, path, id }: { proto: string; host: string; path: string; id: string }
 ) {
   proto = process.env.NODE_ENV === 'production' ? 'https' : proto
+
+  // remove the tenant-id from the url, since we'll be using the tenant-id from the request
   id = id.split('/').slice(1).join('/')
   id = Buffer.from(id, 'utf-8').toString('base64url')
   return `${proto}://${host}${path}/${id}`
 }
 
+/**
+ * Extract the uploadId from the request and decodes it from base64url
+ */
 export function getFileIdFromRequest(rawRwq: http.IncomingMessage) {
   const req = rawRwq as MultiPartRequest
   const match = reExtractFileID.exec(req.url as string)
@@ -79,28 +84,33 @@ export function getFileIdFromRequest(rawRwq: http.IncomingMessage) {
   return req.upload.tenantId + '/' + idMatch
 }
 
-export function namingFunction(rawReq: http.IncomingMessage) {
+/**
+ * Generate the uploadId for the TUS upload
+ * the URL structure is as follows:
+ *
+ * /tenant-id/bucket-name/object-name/version
+ */
+export function namingFunction(
+  rawReq: http.IncomingMessage,
+  metadata?: Record<string, string | null>
+) {
   const req = rawReq as MultiPartRequest
 
   if (!req.url) {
     throw new Error('no url set')
   }
 
-  const metadataHeader = req.headers['upload-metadata']
-
-  if (typeof metadataHeader !== 'string') {
-    throw new Error('no metadata')
+  if (!metadata) {
+    throw new StorageBackendError('metadata_header_invalid', 400, 'metadata header invalid')
   }
 
   try {
-    const params = Metadata.parse(metadataHeader)
-
     const version = randomUUID()
 
     return new UploadId({
       tenant: req.upload.tenantId,
-      bucket: params.bucketName || '',
-      objectName: params.objectName || '',
+      bucket: metadata.bucketName || '',
+      objectName: metadata.objectName || '',
       version,
     }).toString()
   } catch (e) {
@@ -108,6 +118,9 @@ export function namingFunction(rawReq: http.IncomingMessage) {
   }
 }
 
+/**
+ * Runs before the upload URL is created
+ */
 export async function onCreate(
   rawReq: http.IncomingMessage,
   res: http.ServerResponse,
@@ -137,6 +150,9 @@ export async function onCreate(
   return res
 }
 
+/**
+ * Runs when the upload to the underline store is completed
+ */
 export async function onUploadFinish(
   rawReq: http.IncomingMessage,
   res: http.ServerResponse,
@@ -178,6 +194,9 @@ export async function onUploadFinish(
 
 type TusError = { status_code: number; body: string }
 
+/**
+ * Runs when there is an error on the TUS upload
+ */
 export function onResponseError(
   req: http.IncomingMessage,
   res: http.ServerResponse,

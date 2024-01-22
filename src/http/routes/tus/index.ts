@@ -1,9 +1,18 @@
 import { FastifyBaseLogger, FastifyInstance } from 'fastify'
-import { Server } from '@tus/server'
+import * as http from 'http'
+import { Server, ServerOptions, DataStore } from '@tus/server'
 import { jwt, storage, db, dbSuperUser } from '../../plugins'
 import { getConfig } from '../../../config'
-import * as http from 'http'
+import { getFileSizeLimit } from '../../../storage/limits'
 import { Storage } from '../../../storage'
+import {
+  FileStore,
+  LockNotifier,
+  PgLocker,
+  S3Store,
+  UploadId,
+  AlsMemoryKV,
+} from '../../../storage/tus'
 import {
   namingFunction,
   onCreate,
@@ -13,15 +22,8 @@ import {
   generateUrl,
   getFileIdFromRequest,
 } from './lifecycle'
-import { ServerOptions, DataStore } from '@tus/server'
-import { getFileSizeLimit } from '../../../storage/limits'
-import { UploadId } from './upload-id'
-import { FileStore } from './file-store'
 import { TenantConnection } from '../../../database/connection'
-import { PgLocker, LockNotifier } from './postgres-locker'
 import { PubSub } from '../../../database/pubsub'
-import { S3Store } from './s3-store'
-import { DeleteHandler } from './handlers'
 
 const {
   storageS3Bucket,
@@ -49,6 +51,7 @@ function createTusStore() {
     return new S3Store({
       partSize: 6 * 1024 * 1024, // Each uploaded part will have ~6MB,
       expirationPeriodInMilliseconds: tusUrlExpiryMs,
+      cache: new AlsMemoryKV(),
       s3ClientConfig: {
         bucket: storageS3Bucket,
         region: storageS3Region,
@@ -70,6 +73,7 @@ function createTusServer(lockNotifier: LockNotifier) {
   } = {
     path: tusPath,
     datastore: datastore,
+    disableTerminationForFinishedUploads: true,
     locker: (rawReq: http.IncomingMessage) => {
       const req = rawReq as MultiPartRequest
       return new PgLocker(req.upload.storage.db, lockNotifier)
@@ -106,9 +110,7 @@ function createTusServer(lockNotifier: LockNotifier) {
       return fileSizeLimit
     },
   }
-  const server = new Server(serverOptions)
-  server.handlers.DELETE = new DeleteHandler(datastore, serverOptions)
-  return server
+  return new Server(serverOptions)
 }
 
 export default async function routes(fastify: FastifyInstance) {
@@ -125,6 +127,12 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(jwt)
     fastify.register(db)
     fastify.register(storage)
+
+    fastify.addHook('onRequest', (req, res, done) => {
+      AlsMemoryKV.localStorage.run(new Map(), () => {
+        done()
+      })
+    })
 
     fastify.addHook('preHandler', async (req) => {
       ;(req.raw as MultiPartRequest).log = req.log

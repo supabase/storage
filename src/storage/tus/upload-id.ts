@@ -1,7 +1,7 @@
-import { mustBeValidBucketName, mustBeValidKey } from '../../../storage/limits'
-import { StorageBackendError } from '../../../storage'
-import { getConfig } from '../../../config'
-import { FILE_VERSION_SEPARATOR, PATH_SEPARATOR, SEPARATOR } from '../../../storage/backend'
+import { getConfig } from '../../config'
+import { StorageBackendError } from '../errors'
+import { mustBeValidBucketName, mustBeValidKey } from '../limits'
+import { FILE_VERSION_SEPARATOR, PATH_SEPARATOR, SEPARATOR } from '../backend'
 
 interface ResourceIDOptions {
   tenant: string
@@ -13,7 +13,7 @@ interface ResourceIDOptions {
 const { tusUseFileVersionSeparator } = getConfig()
 
 export class UploadId {
-  public tenant: string
+  public readonly tenant: string
   public readonly bucket: string
   public readonly objectName: string
   public readonly version: string

@@ -204,7 +204,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
 
     // Storage - File
-    storageFilePath: getOptionalConfigFromEnv('STORAGE_FILE_BACKEND_PATH', 'STORAGE_FILE_PATH'),
+    storageFilePath: getOptionalConfigFromEnv(
+      'STORAGE_FILE_BACKEND_PATH',
+      'FILE_STORAGE_BACKEND_PATH'
+    ),
 
     // Storage - S3
     storageS3MaxSockets: parseInt(

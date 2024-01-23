@@ -30,6 +30,7 @@ export const setErrorHandler = (app: FastifyInstance) => {
     if (
       error instanceof DatabaseError &&
       [
+        'Max client connections reached',
         'remaining connection slots are reserved for non-replication superuser connections',
         'no more connections allowed',
         'sorry, too many clients already',

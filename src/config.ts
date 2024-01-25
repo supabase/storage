@@ -225,7 +225,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     dbAnonRole: getOptionalConfigFromEnv('DB_ANON_ROLE') || 'anon',
     dbServiceRole: getOptionalConfigFromEnv('DB_SERVICE_ROLE') || 'service_role',
     dbAuthenticatedRole: getOptionalConfigFromEnv('DB_AUTHENTICATED_ROLE') || 'authenticated',
-    dbInstallRoles: !(getOptionalConfigFromEnv('DB_INSTALL_ROLES') === 'false'),
+    dbInstallRoles: getOptionalConfigFromEnv('DB_INSTALL_ROLES') === 'true',
     dbRefreshMigrationHashesOnMismatch: !(
       getOptionalConfigFromEnv('DB_ALLOW_MIGRATION_REFRESH') === 'false'
     ),

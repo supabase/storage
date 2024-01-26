@@ -1,7 +1,7 @@
 import { Client, ClientConfig } from 'pg'
 import { loadMigrationFiles, MigrationError } from 'postgres-migrations'
 import { getConfig } from '../config'
-import { logger } from '../monitoring'
+import { logger, logSchema } from '../monitoring'
 import { BasicPgClient, Migration } from 'postgres-migrations/dist/types'
 import { validateMigrationHashes } from 'postgres-migrations/dist/validation'
 import { runMigration } from 'postgres-migrations/dist/run-migration'
@@ -44,15 +44,16 @@ export async function runMultitenantMigrations(): Promise<void> {
 /**
  * Runs migrations on a specific tenant by providing its database DSN
  * @param databaseUrl
+ * @param tenantId
  */
-export async function runMigrationsOnTenant(databaseUrl: string): Promise<void> {
+export async function runMigrationsOnTenant(databaseUrl: string, tenantId?: string): Promise<void> {
   let ssl: ClientConfig['ssl'] | undefined = undefined
 
   if (databaseSSLRootCert) {
     ssl = { ca: databaseSSLRootCert }
   }
 
-  await connectAndMigrate(databaseUrl, './migrations/tenant', ssl)
+  await connectAndMigrate(databaseUrl, './migrations/tenant', ssl, undefined, tenantId)
 }
 
 /**
@@ -61,12 +62,14 @@ export async function runMigrationsOnTenant(databaseUrl: string): Promise<void> 
  * @param migrationsDirectory
  * @param ssl
  * @param shouldCreateStorageSchema
+ * @param tenantId
  */
 async function connectAndMigrate(
   databaseUrl: string | undefined,
   migrationsDirectory: string,
   ssl?: ClientConfig['ssl'],
-  shouldCreateStorageSchema?: boolean
+  shouldCreateStorageSchema?: boolean,
+  tenantId?: string
 ) {
   const dbConfig: ClientConfig = {
     connectionString: databaseUrl,
@@ -76,6 +79,13 @@ async function connectAndMigrate(
   }
 
   const client = new Client(dbConfig)
+  client.on('error', (err) => {
+    logSchema.error(logger, 'Error on database connection', {
+      type: 'error',
+      error: err,
+      project: tenantId,
+    })
+  })
   try {
     await client.connect()
     await migrate({ client }, migrationsDirectory, shouldCreateStorageSchema)

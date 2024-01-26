@@ -30,10 +30,6 @@ export async function onIncomingRequest(
   res: http.ServerResponse,
   id: string
 ) {
-  if (rawReq.method === 'OPTIONS') {
-    return
-  }
-
   const req = rawReq as MultiPartRequest
   const uploadID = UploadId.fromString(id)
 
@@ -43,14 +39,19 @@ export async function onIncomingRequest(
     })
   })
 
+  if (rawReq.method === 'OPTIONS') {
+    return
+  }
+
   const isUpsert = req.headers['x-upsert'] === 'true'
 
   const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+
   await uploader.canUpload({
     owner: req.upload.owner,
     bucketId: uploadID.bucket,
     objectName: uploadID.objectName,
-    isUpsert,
+    isUpsert: isUpsert,
   })
 }
 

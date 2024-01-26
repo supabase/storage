@@ -56,7 +56,7 @@ export async function runMigrations(
   logOnError = false
 ): Promise<void> {
   try {
-    await runMigrationsOnTenant(databaseUrl)
+    await runMigrationsOnTenant(databaseUrl, tenantId)
     console.log(`${tenantId} migrations ran successfully`)
   } catch (error: any) {
     if (logOnError) {

@@ -3,7 +3,7 @@ import { getConfig } from '../config'
 import { registerWorkers } from './workers'
 import { BaseEvent, BasePayload } from './events'
 import { QueueJobRetryFailed, QueueJobCompleted, QueueJobError } from '../monitoring/metrics'
-import { logger } from '../monitoring'
+import { logger, logSchema } from '../monitoring'
 import { normalizeRawError } from '../storage'
 
 //eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -51,6 +51,13 @@ export abstract class Queue {
       retryBackoff: true,
       retryLimit: 20,
       expireInHours: 48,
+    })
+
+    Queue.pgBoss.on('error', (error) => {
+      logSchema.error(logger, 'pgboss error', {
+        type: 'error',
+        error: error,
+      })
     })
 
     registerWorkers()

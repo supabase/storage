@@ -7,7 +7,8 @@ const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): 
   app.register(plugins.adminTenantId)
   app.register(plugins.logTenantId)
   app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health'] }))
-  app.register(routes.tenant, { prefix: 'tenants' })
+  app.register(routes.tenants, { prefix: 'tenants' })
+  app.register(routes.migrations, { prefix: 'migrations' })
 
   let registriesToMerge: Registry[] = []
 

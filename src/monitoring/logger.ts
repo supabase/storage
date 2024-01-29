@@ -57,6 +57,7 @@ export interface EventLog {
 interface ErrorLog {
   type: string
   error?: Error | unknown
+  project?: string
 }
 
 export const logSchema = {

@@ -56,7 +56,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     return this.queueName
   }
 
-  static getQueueOptions(): SendOptions | undefined {
+  static getQueueOptions<T extends BaseEvent<any>>(payload: T['payload']): SendOptions | undefined {
     return undefined
   }
 
@@ -136,11 +136,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     return new Storage(storageBackend, db)
   }
 
-  singletonKey(payload: T) {
-    return
-  }
-
-  async send() {
+  async send(): Promise<string | void | null> {
     const constructor = this.constructor as typeof BaseEvent
 
     if (!pgQueueEnable) {
@@ -155,6 +151,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     }
 
     const timer = QueueJobSchedulingTime.startTimer()
+    const sendOptions = constructor.getQueueOptions(this.payload)
 
     const res = await Queue.getInstance().send({
       name: constructor.getQueueName(),
@@ -162,10 +159,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
         ...this.payload,
         $version: constructor.version,
       },
-      options: {
-        ...constructor.getQueueOptions(),
-        singletonKey: this.payload.singletonKey,
-      },
+      options: sendOptions,
     })
 
     timer({

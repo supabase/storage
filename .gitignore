@@ -9,4 +9,4 @@ data/
 bin/
 coverage/
 .idea/
-migrations/tenants-migration-hash.txt
+DB_MIGRATION_HASH_FILE

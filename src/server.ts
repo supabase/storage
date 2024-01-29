@@ -4,8 +4,12 @@ import { IncomingMessage, Server, ServerResponse } from 'http'
 import build from './app'
 import buildAdmin from './admin-app'
 import { getConfig } from './config'
-import { runMultitenantMigrations, runMigrationsOnTenant } from './database/migrate'
-import { listenForTenantUpdate, runMigrations } from './database/tenant'
+import {
+  runMultitenantMigrations,
+  runMigrationsOnTenant,
+  runMigrationsOnAllTenants,
+} from './database/migrate'
+import { listenForTenantUpdate } from './database/tenant'
 import { logger, logSchema } from './monitoring'
 import { Queue } from './queue'
 import { TenantConnection } from './database/connection'
@@ -29,7 +33,7 @@ const exposeDocs = true
     await runMultitenantMigrations()
     await listenForTenantUpdate(PubSub)
 
-    runMigrations()
+    runMigrationsOnAllTenants()
       .then(() => {
         logger.info('Migrations completed')
       })

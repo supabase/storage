@@ -6,4 +6,8 @@ const { multitenantDatabaseUrl } = getConfig()
 export const knex = Knex({
   client: 'pg',
   connection: multitenantDatabaseUrl,
+  pool: {
+    min: 0,
+    max: 10,
+  },
 })

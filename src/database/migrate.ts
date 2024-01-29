@@ -1,17 +1,20 @@
 import { Client, ClientConfig } from 'pg'
 import { loadMigrationFiles, MigrationError } from 'postgres-migrations'
 import { getConfig } from '../config'
-import { logger } from '../monitoring'
+import { logger, logSchema } from '../monitoring'
 import { BasicPgClient, Migration } from 'postgres-migrations/dist/types'
 import { validateMigrationHashes } from 'postgres-migrations/dist/validation'
 import { runMigration } from 'postgres-migrations/dist/run-migration'
 import SQL from 'sql-template-strings'
 import { searchPath } from './connection'
-import { updateTenantMigrationVersion } from './tenant'
+import { listTenantsToMigrate, updateTenantMigrationVersion } from './tenant'
+import { knex } from './multitenant-db'
+import { RunMigrationsOnTenants } from '../queue'
 
 const {
   isMultitenant,
   multitenantDatabaseUrl,
+  pgQueueEnable,
   databaseSSLRootCert,
   dbAnonRole,
   dbAuthenticatedRole,
@@ -35,6 +38,43 @@ const backportMigrations = [
 ]
 
 /**
+ * Runs migrations for all tenants
+ * only one instance at the time is allowed to run
+ */
+export async function runMigrationsOnAllTenants() {
+  if (pgQueueEnable) {
+    return
+  }
+  const result = await knex.raw(`SELECT pg_try_advisory_lock(?);`, ['-8575985245963000605'])
+  const lockAcquired = result.rows.shift()?.pg_try_advisory_lock || false
+
+  if (!lockAcquired) {
+    return
+  }
+
+  try {
+    const tenants = listTenantsToMigrate()
+    for await (const tenantBatch of tenants) {
+      await Promise.allSettled(
+        tenantBatch.map((tenant) => {
+          return RunMigrationsOnTenants.send({
+            tenantId: tenant,
+            singletonKey: tenant,
+            tenant: {
+              ref: tenant,
+            },
+          })
+        })
+      )
+    }
+  } finally {
+    try {
+      await knex.raw(`SELECT pg_advisory_unlock(?);`, ['-8575985245963000605'])
+    } catch (e) {}
+  }
+}
+
+/**
  * Runs multi-tenant migrations
  */
 export async function runMultitenantMigrations(): Promise<void> {
@@ -46,15 +86,20 @@ export async function runMultitenantMigrations(): Promise<void> {
 /**
  * Runs migrations on a specific tenant by providing its database DSN
  * @param databaseUrl
+ * @param tenantId
  */
-export async function runMigrationsOnTenant(databaseUrl: string): Promise<void> {
+export async function runMigrationsOnTenant(databaseUrl: string, tenantId?: string): Promise<void> {
   let ssl: ClientConfig['ssl'] | undefined = undefined
 
   if (databaseSSLRootCert) {
     ssl = { ca: databaseSSLRootCert }
   }
 
-  await connectAndMigrate(databaseUrl, './migrations/tenant', ssl)
+  await connectAndMigrate(databaseUrl, './migrations/tenant', ssl, undefined, tenantId)
+
+  if (isMultitenant && tenantId) {
+    await updateTenantMigrationVersion(tenantId)
+  }
 }
 
 /**
@@ -63,12 +108,14 @@ export async function runMigrationsOnTenant(databaseUrl: string): Promise<void> 
  * @param migrationsDirectory
  * @param ssl
  * @param shouldCreateStorageSchema
+ * @param tenantId
  */
 async function connectAndMigrate(
   databaseUrl: string | undefined,
   migrationsDirectory: string,
   ssl?: ClientConfig['ssl'],
-  shouldCreateStorageSchema?: boolean
+  shouldCreateStorageSchema?: boolean,
+  tenantId?: string
 ) {
   const dbConfig: ClientConfig = {
     connectionString: databaseUrl,
@@ -78,6 +125,13 @@ async function connectAndMigrate(
   }
 
   const client = new Client(dbConfig)
+  client.on('error', (err) => {
+    logSchema.error(logger, 'Error on database connection', {
+      type: 'error',
+      error: err,
+      project: tenantId,
+    })
+  })
   try {
     await client.connect()
     await migrate({ client }, migrationsDirectory, shouldCreateStorageSchema)
@@ -113,6 +167,8 @@ function runMigrations(migrationsDirectory: string, shouldCreateStorageSchema = 
 
     try {
       const migrationTableName = 'migrations'
+
+      await client.query(`SET search_path TO ${searchPath.join(',')}`)
 
       let appliedMigrations: Migration[] = []
       if (await doesTableExist(client, migrationTableName)) {

@@ -4,7 +4,6 @@ import { knex } from './multitenant-db'
 import { StorageBackendError } from '../storage'
 import { JwtPayload } from 'jsonwebtoken'
 import { PubSubAdapter } from '../pubsub'
-import { RunMigrationsEvent } from '../queue/events/run-migrations'
 
 interface TenantConfig {
   anonKey?: string
@@ -26,14 +25,7 @@ export interface Features {
   }
 }
 
-const {
-  isMultitenant,
-  dbServiceRole,
-  serviceKey,
-  jwtSecret,
-  dbMigrationHash,
-  dbDisableTenantMigrations,
-} = getConfig()
+const { isMultitenant, dbServiceRole, serviceKey, jwtSecret, dbMigrationHash } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
 
@@ -80,47 +72,8 @@ export async function* listTenantsToMigrate() {
   }
 }
 
-/**
- * Runs migrations for all tenants
- */
-export async function runMigrations() {
-  if (dbDisableTenantMigrations) {
-    return
-  }
-  const result = await knex.raw(`SELECT pg_try_advisory_lock(?);`, ['-8575985245963000605'])
-  const lockAcquired = result.rows.shift()?.pg_try_advisory_lock || false
-
-  if (!lockAcquired) {
-    return
-  }
-
-  try {
-    const tenants = listTenantsToMigrate()
-    for await (const tenantBatch of tenants) {
-      await Promise.allSettled(
-        tenantBatch.map((tenant) => {
-          return RunMigrationsEvent.send({
-            tenantId: tenant,
-            singletonKey: tenant,
-            tenant: {
-              ref: tenant,
-            },
-          })
-        })
-      )
-    }
-  } finally {
-    try {
-      await knex.raw(`SELECT pg_advisory_unlock(?);`, ['-8575985245963000605'])
-    } catch (e) {}
-  }
-}
-
-export function updateTenantMigrationVersion(tenantIds: string[]) {
-  return knex
-    .table('tenants')
-    .whereIn('id', tenantIds)
-    .update({ migrations_version: dbMigrationHash })
+export function updateTenantMigrationVersion(tenantId: string) {
+  return knex.table('tenants').where('id', tenantId).update({ migrations_version: dbMigrationHash })
 }
 
 /**

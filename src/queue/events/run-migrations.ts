@@ -1,40 +1,40 @@
 import { BaseEvent, BasePayload } from './base-event'
-import { getTenantConfig } from '../../database/tenant'
-import { BatchWorkOptions, Job } from 'pg-boss'
+import { getTenantConfig, updateTenantMigrationVersion } from '../../database/tenant'
+import { Job, WorkOptions } from 'pg-boss'
 import { runMigrationsOnTenant } from '../../database/migrate'
-import { knex } from '../../database/multitenant-db'
-import { getConfig } from '../../config'
-
-const { dbMigrationHash } = getConfig()
+import { logger, logSchema } from '../../monitoring'
 
 interface RunMigrationsPayload extends BasePayload {
   tenantId: string
 }
 
-export class RunMigrationsEvent extends BaseEvent<RunMigrationsPayload> {
+export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
   static queueName = 'tenants-migrations'
 
-  static getWorkerOptions(): BatchWorkOptions {
+  static getWorkerOptions(): WorkOptions {
     return {
-      batchSize: 100,
-      newJobCheckIntervalSeconds: 20,
+      teamSize: 50,
+      teamConcurrency: 4,
     }
   }
 
-  static async handle(jobs: Job<BasePayload>[]) {
-    const migrations = jobs.map(async (job) => {
-      const tenant = await getTenantConfig(job.data.tenant.ref)
-      await runMigrationsOnTenant(tenant.databaseUrl)
-      return job.data.tenant.ref
-    })
-
-    const results = await Promise.allSettled(migrations)
-    const successfulTenants = results
-      .filter((result) => result.status === 'fulfilled')
-      .map((result) => (result as PromiseFulfilledResult<string>).value)
+  static getQueueOptions(payload: RunMigrationsPayload) {
+    return {
+      singletonKey: payload.tenantId,
+    }
   }
 
-  singletonKey(payload: BasePayload) {
-    return payload.tenant.ref
+  static async handle(job: Job<BasePayload>) {
+    const tenant = await getTenantConfig(job.data.tenant.ref)
+    try {
+      await runMigrationsOnTenant(tenant.databaseUrl, job.data.tenant.ref)
+    } catch (e) {
+      logSchema.error(logger, `[Migrations] failed for tenant ${job.data.tenant.ref}`, {
+        type: 'migrations',
+        error: e,
+        project: job.data.tenant.ref,
+      })
+      throw e
+    }
   }
 }

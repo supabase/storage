@@ -33,7 +33,7 @@ computeHash(tenantMigrationFolder)
     if (!hash) {
       throw new Error('Could not compute hash')
     }
-    fs.writeFileSync(path.join(tenantMigrationFolder, '..', 'tenant-migration-hash.txt'), hash)
+    fs.writeFileSync(path.join(__dirname, '..', '..', 'DB_MIGRATION_HASH_FILE'), hash)
   })
   .catch((e) => {
     console.error(e)

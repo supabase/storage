@@ -31,7 +31,6 @@ type StorageConfigType = {
   dbSuperUser: string
   dbSearchPath: string
   dbMigrationHash?: string
-  dbDisableTenantMigrations: boolean
   databaseURL: string
   databaseSSLRootCert?: string
   databasePoolURL?: string
@@ -236,7 +235,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     dbSuperUser: getOptionalConfigFromEnv('DB_SUPER_USER') || 'postgres',
     dbMigrationHash: getOptionalConfigFromEnv('DB_MIGRATION_HASH'),
-    dbDisableTenantMigrations: getOptionalConfigFromEnv('DB_DISABLE_TENANT_MIGRATIONS') === 'true',
 
     // Database - Connection
     dbSearchPath: getOptionalConfigFromEnv('DATABASE_SEARCH_PATH', 'DB_SEARCH_PATH') || '',

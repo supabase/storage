@@ -3,8 +3,9 @@ import { FromSchema } from 'json-schema-to-ts'
 import apiKey from '../../plugins/apikey'
 import { decrypt, encrypt } from '../../../auth'
 import { knex } from '../../../database/multitenant-db'
-import { deleteTenantConfig, runMigrations } from '../../../database/tenant'
+import { deleteTenantConfig } from '../../../database/tenant'
 import { dbSuperUser, storage } from '../../plugins'
+import { runMigrationsOnTenant } from '../../../database/migrate'
 
 const patchSchema = {
   body: {
@@ -150,7 +151,7 @@ export default async function routes(fastify: FastifyInstance) {
       maxConnections,
     } = request.body
 
-    await runMigrations(tenantId, databaseUrl)
+    await runMigrationsOnTenant(databaseUrl)
     await knex('tenants').insert({
       id: tenantId,
       anon_key: encrypt(anonKey),
@@ -181,7 +182,7 @@ export default async function routes(fastify: FastifyInstance) {
       } = request.body
       const { tenantId } = request.params
       if (databaseUrl) {
-        await runMigrations(tenantId, databaseUrl)
+        await runMigrationsOnTenant(databaseUrl)
       }
       console.log(databasePoolUrl, databasePoolUrl === null)
       await knex('tenants')
@@ -216,7 +217,7 @@ export default async function routes(fastify: FastifyInstance) {
       maxConnections,
     } = request.body
     const { tenantId } = request.params
-    await runMigrations(tenantId, databaseUrl)
+    await runMigrationsOnTenant(databaseUrl)
 
     const tenantInfo: tenantDBInterface = {
       id: tenantId,

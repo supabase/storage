@@ -7,8 +7,10 @@ import { validateMigrationHashes } from 'postgres-migrations/dist/validation'
 import { runMigration } from 'postgres-migrations/dist/run-migration'
 import SQL from 'sql-template-strings'
 import { searchPath } from './connection'
+import { updateTenantMigrationVersion } from './tenant'
 
 const {
+  isMultitenant,
   multitenantDatabaseUrl,
   databaseSSLRootCert,
   dbAnonRole,

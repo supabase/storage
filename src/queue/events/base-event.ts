@@ -1,5 +1,5 @@
 import { Queue } from '../queue'
-import { Job, SendOptions, WorkOptions } from 'pg-boss'
+import { BatchWorkOptions, Job, SendOptions, WorkOptions } from 'pg-boss'
 import { getServiceKeyUser } from '../../database/tenant'
 import { getPostgresConnection } from '../../database'
 import { Storage } from '../../storage'
@@ -11,6 +11,7 @@ import { logger } from '../../monitoring'
 
 export interface BasePayload {
   $version: string
+  singletonKey?: string
   reqId?: string
   tenant: {
     ref: string
@@ -18,11 +19,24 @@ export interface BasePayload {
   }
 }
 
-export type StaticThis<T> = { new (...args: any): T }
-
 const { pgQueueEnable, storageBackendType, storageS3Endpoint } = getConfig()
 const storageS3Protocol = storageS3Endpoint?.includes('http://') ? 'http' : 'https'
 const httpAgent = createAgent(storageS3Protocol)
+
+type StaticThis<T extends BaseEvent<any>> = BaseEventConstructor<T>
+
+interface BaseEventConstructor<Base extends BaseEvent<any>> {
+  version: string
+
+  new (...args: any): Base
+
+  send(
+    this: StaticThis<Base>,
+    payload: Omit<Base['payload'], '$version'>
+  ): Promise<string | void | null>
+
+  eventName(): string
+}
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   public static readonly version: string = 'v1'
@@ -46,7 +60,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     return undefined
   }
 
-  static getWorkerOptions(): WorkOptions {
+  static getWorkerOptions(): WorkOptions | BatchWorkOptions {
     return {}
   }
 
@@ -55,7 +69,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     payload: Omit<T['payload'], '$version'>
   ) {
     if (!payload.$version) {
-      ;(payload as any).$version = (this as any).version
+      ;(payload as T['payload']).$version = this.version
     }
     const that = new this(payload)
     return that.send()
@@ -67,13 +81,13 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
   ) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { Webhook } = require('./webhook')
-    const eventType = (this as any).eventName()
+    const eventType = this.eventName()
 
     try {
       await Webhook.send({
         event: {
           type: eventType,
-          $version: (this as any).version,
+          $version: this.version,
           applyTime: Date.now(),
           payload,
         },
@@ -85,7 +99,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
           error: e,
           event: {
             type: eventType,
-            $version: (this as any).version,
+            $version: this.version,
             applyTime: Date.now(),
             payload: JSON.stringify(payload),
           },
@@ -96,7 +110,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     }
   }
 
-  static handle(job: Job<BaseEvent<any>['payload']>) {
+  static handle(job: Job<BaseEvent<any>['payload']> | Job<BaseEvent<any>['payload']>[]) {
     throw new Error('not implemented')
   }
 
@@ -122,6 +136,10 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     return new Storage(storageBackend, db)
   }
 
+  singletonKey(payload: T) {
+    return
+  }
+
   async send() {
     const constructor = this.constructor as typeof BaseEvent
 
@@ -144,7 +162,10 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
         ...this.payload,
         $version: constructor.version,
       },
-      options: constructor.getQueueOptions(),
+      options: {
+        ...constructor.getQueueOptions(),
+        singletonKey: this.payload.singletonKey,
+      },
     })
 
     timer({

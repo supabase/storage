@@ -48,7 +48,7 @@ services:
       PGBOUNCER_STATS_USERS: postgres
 
   supavisor:
-    image: supabase/supavisor:1.1.6
+    image: supabase/supavisor:1.1.23
     depends_on:
       multitenant_db:
         condition: service_healthy
@@ -78,7 +78,7 @@ services:
     command: sh -c "/app/bin/migrate && /app/bin/server"
 
   supavisor_setup:
-    image: supabase/supavisor:1.1.6
+    image: supabase/supavisor:1.1.23
     command: |
       curl -X PUT \
         "http://supavisor:4000/api/tenants/bjhaohmqunupljrqypxz" \

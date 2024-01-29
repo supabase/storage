@@ -1,10 +1,10 @@
 import { getConfig } from '../config'
 import { decrypt, verifyJWT } from '../auth'
-import { runMigrationsOnTenant } from './migrate'
 import { knex } from './multitenant-db'
 import { StorageBackendError } from '../storage'
 import { JwtPayload } from 'jsonwebtoken'
 import { PubSubAdapter } from '../pubsub'
+import { RunMigrationsEvent } from '../queue/events/run-migrations'
 
 interface TenantConfig {
   anonKey?: string
@@ -26,7 +26,14 @@ export interface Features {
   }
 }
 
-const { isMultitenant, dbServiceRole, serviceKey, jwtSecret } = getConfig()
+const {
+  isMultitenant,
+  dbServiceRole,
+  serviceKey,
+  jwtSecret,
+  dbMigrationHash,
+  dbDisableTenantMigrations,
+} = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
 
@@ -45,27 +52,75 @@ const singleTenantServiceKey:
   : undefined
 
 /**
- * Runs migrations in a specific tenant
- * @param tenantId
- * @param databaseUrl
- * @param logOnError
+ * List all tenants that have not run migrations yet
  */
-export async function runMigrations(
-  tenantId: string,
-  databaseUrl: string,
-  logOnError = false
-): Promise<void> {
-  try {
-    await runMigrationsOnTenant(databaseUrl)
-    console.log(`${tenantId} migrations ran successfully`)
-  } catch (error: any) {
-    if (logOnError) {
-      console.error(`${tenantId} migration error:`, error.message)
-      return
-    } else {
-      throw error
+export async function* listTenantsToMigrate() {
+  let lastCursor = 0
+
+  while (true) {
+    const data = await knex
+      .table('tenants')
+      .select('id', 'cursor_id')
+      .where('cursor_id', '>', lastCursor)
+      .where((builder) => {
+        builder
+          .where('migrations_version', '=', dbMigrationHash || '')
+          .orWhere('migrations_version', null)
+      })
+      .orderBy('cursor_id', 'desc')
+      .limit(100)
+
+    yield data.map((tenant) => tenant.id)
+
+    if (data.length === 0) {
+      break
     }
+
+    lastCursor = data[data.length - 1].cursor_id
   }
+}
+
+/**
+ * Runs migrations for all tenants
+ */
+export async function runMigrations() {
+  if (dbDisableTenantMigrations) {
+    return
+  }
+  const result = await knex.raw(`SELECT pg_try_advisory_lock(?);`, ['-8575985245963000605'])
+  const lockAcquired = result.rows.shift()?.pg_try_advisory_lock || false
+
+  if (!lockAcquired) {
+    return
+  }
+
+  try {
+    const tenants = listTenantsToMigrate()
+    for await (const tenantBatch of tenants) {
+      await Promise.allSettled(
+        tenantBatch.map((tenant) => {
+          return RunMigrationsEvent.send({
+            tenantId: tenant,
+            singletonKey: tenant,
+            tenant: {
+              ref: tenant,
+            },
+          })
+        })
+      )
+    }
+  } finally {
+    try {
+      await knex.raw(`SELECT pg_advisory_unlock(?);`, ['-8575985245963000605'])
+    } catch (e) {}
+  }
+}
+
+export function updateTenantMigrationVersion(tenantIds: string[]) {
+  return knex
+    .table('tenants')
+    .whereIn('id', tenantIds)
+    .update({ migrations_version: dbMigrationHash })
 }
 
 /**
@@ -124,7 +179,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       },
     },
   }
-  await cacheTenantConfigAndRunMigrations(tenantId, config)
+  tenantConfigCache.set(tenantId, config)
   return config
 }
 
@@ -194,13 +249,4 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
   await pubSub.subscribe(TENANTS_UPDATE_CHANNEL, (tenantId) => {
     tenantConfigCache.delete(tenantId)
   })
-}
-
-async function cacheTenantConfigAndRunMigrations(
-  tenantId: string,
-  config: TenantConfig,
-  logOnError = false
-): Promise<void> {
-  await runMigrations(tenantId, config.databaseUrl, logOnError)
-  tenantConfigCache.set(tenantId, config)
 }

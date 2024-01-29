@@ -1,5 +1,6 @@
 import dotenv from 'dotenv'
 import jwt from 'jsonwebtoken'
+import path from 'path'
 
 export type StorageBackendType = 'file' | 's3'
 
@@ -29,6 +30,8 @@ type StorageConfigType = {
   dbRefreshMigrationHashesOnMismatch: boolean
   dbSuperUser: string
   dbSearchPath: string
+  dbMigrationHash?: string
+  dbDisableTenantMigrations: boolean
   databaseURL: string
   databaseSSLRootCert?: string
   databasePoolURL?: string
@@ -130,13 +133,15 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
   dotenv.config()
 
+  const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
+
   config = {
     // Tenant
     tenantId:
       getOptionalConfigFromEnv('PROJECT_REF') ||
       getOptionalConfigFromEnv('TENANT_ID') ||
       'storage-single-tenant',
-    isMultitenant: getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true',
+    isMultitenant,
 
     // Server
     region: getOptionalConfigFromEnv('SERVER_REGION', 'REGION') || 'not-specified',
@@ -230,6 +235,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('DB_ALLOW_MIGRATION_REFRESH') === 'false'
     ),
     dbSuperUser: getOptionalConfigFromEnv('DB_SUPER_USER') || 'postgres',
+    dbMigrationHash: getOptionalConfigFromEnv('DB_MIGRATION_HASH'),
+    dbDisableTenantMigrations: getOptionalConfigFromEnv('DB_DISABLE_TENANT_MIGRATIONS') === 'true',
 
     // Database - Connection
     dbSearchPath: getOptionalConfigFromEnv('DATABASE_SEARCH_PATH', 'DB_SEARCH_PATH') || '',

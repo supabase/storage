@@ -5,7 +5,7 @@ import build from './app'
 import buildAdmin from './admin-app'
 import { getConfig } from './config'
 import { runMultitenantMigrations, runMigrationsOnTenant } from './database/migrate'
-import { listenForTenantUpdate } from './database/tenant'
+import { listenForTenantUpdate, runMigrations } from './database/tenant'
 import { logger, logSchema } from './monitoring'
 import { Queue } from './queue'
 import { TenantConnection } from './database/connection'
@@ -28,6 +28,20 @@ const exposeDocs = true
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate(PubSub)
+
+    runMigrations()
+      .then(() => {
+        logger.info('Migrations completed')
+      })
+      .catch((e) => {
+        logger.error(
+          {
+            type: 'error',
+            error: e,
+          },
+          'migration error'
+        )
+      })
   } else {
     await runMigrationsOnTenant(databaseURL)
   }
@@ -45,7 +59,7 @@ const exposeDocs = true
 
   await PubSub.connect()
 
-  app.listen({ port, host }, (err, address) => {
+  app.listen({ port, host }, (err) => {
     if (err) {
       logSchema.error(logger, `Server failed to start`, {
         type: 'serverStartError',

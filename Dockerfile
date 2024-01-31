@@ -31,10 +31,6 @@ COPY migrations migrations
 COPY --from=production-deps /app/node_modules node_modules
 # Copy build artifacts from the build stage
 COPY --from=build /app/dist dist
-COPY ./docker-entrypoint.sh .
-
-RUN node dist/scripts/migration-hash.js
 
 EXPOSE 5000
-ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["node", "dist/server.js"]

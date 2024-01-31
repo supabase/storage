@@ -9,4 +9,3 @@ data/
 bin/
 coverage/
 .idea/
-DB_MIGRATION_HASH_FILE

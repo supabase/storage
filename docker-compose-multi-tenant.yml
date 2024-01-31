@@ -51,20 +51,22 @@ services:
       IMGPROXY_URL: http://imgproxy:8080
       IMGPROXY_REQUEST_TIMEOUT: 15
 
+      PG_QUEUE_ENABLE: "true"
+
   tenant_db:
     extends:
       service: tenant_db
-      file: docker-compose-infra.yml
+      file: ./.docker/docker-compose-infra.yml
 
   multitenant_db:
     extends:
       service: multitenant_db
-      file: docker-compose-infra.yml
+      file: ./.docker/docker-compose-infra.yml
 
   supavisor:
     extends:
       service: supavisor
-      file: docker-compose-infra.yml
+      file: ./.docker/docker-compose-infra.yml
 
   supavisor_setup:
     depends_on:
@@ -72,30 +74,47 @@ services:
         condition: service_healthy
     extends:
       service: supavisor_setup
-      file: docker-compose-infra.yml
+      file: ./.docker/docker-compose-infra.yml
 
   minio:
     extends:
       service: minio
-      file: docker-compose-infra.yml
+      file: ./.docker/docker-compose-infra.yml
 
   minio_setup:
     extends:
       service: minio_setup
-      file: docker-compose-infra.yml
+      file: ./.docker/docker-compose-infra.yml
     depends_on:
       - minio
 
   imgproxy:
     extends:
       service: imgproxy
-      file: docker-compose-infra.yml
+      file: ./.docker/docker-compose-infra.yml
 
 #  Optional for rate-limiting
 #  redis:
 #    extends:
 #      service: redis
-#      file: docker-compose-infra.yml
+#      file: ./.docker/docker-compose-infra.yml
+
+# Optional for monitoring:
+#  grafana:
+#    extends:
+#      service: grafana
+#      file: ./.docker/docker-compose-monitoring.yml
+#
+#  prometheus:
+#    extends:
+#      service: prometheus
+#      file: ./.docker/docker-compose-monitoring.yml
+#
+#  postgres_exporter:
+#    extends:
+#      service: postgres_exporter
+#      file: ./.docker/docker-compose-monitoring.yml
+
 
 configs:
   init.sql:

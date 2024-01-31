@@ -3,7 +3,7 @@ import { getConfig } from '../config'
 
 const { multitenantDatabaseUrl } = getConfig()
 
-export const knex = Knex({
+export const multitenantKnex = Knex({
   client: 'pg',
   connection: multitenantDatabaseUrl,
   pool: {

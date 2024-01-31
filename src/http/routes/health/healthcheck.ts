@@ -16,7 +16,7 @@ export default async function routes(fastify: FastifyInstance) {
         res.send({ healthy: true })
       } catch (e) {
         if (e instanceof Error) {
-          res.executionError = e
+          req.executionError = e
         }
         res.send({ healthy: false })
       }

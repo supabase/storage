@@ -200,11 +200,11 @@ type TusError = { status_code: number; body: string }
  */
 export function onResponseError(
   req: http.IncomingMessage,
-  res: http.ServerResponse,
+  _: http.ServerResponse,
   e: TusError | Error
 ) {
   if (e instanceof Error) {
-    ;(res as any).executionError = e
+    ;(req as any).executionError = e
   }
 
   if (isRenderableError(e)) {

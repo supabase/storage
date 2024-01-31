@@ -13,7 +13,7 @@ export const setErrorHandler = (app: FastifyInstance) => {
   app.setErrorHandler<Error>(function (error, request, reply) {
     // We assign the error received.
     // it will be logged in the request log plugin
-    reply.executionError = error
+    request.executionError = error
 
     if (isRenderableError(error)) {
       const renderableError = error.render()

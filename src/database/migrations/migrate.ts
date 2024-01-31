@@ -1,21 +1,22 @@
 import { Client, ClientConfig } from 'pg'
+import SQL from 'sql-template-strings'
 import { loadMigrationFiles, MigrationError } from 'postgres-migrations'
-import { getConfig } from '../config'
-import { logger, logSchema } from '../monitoring'
+import { getConfig, MultitenantMigrationStrategy } from '../../config'
+import { logger, logSchema } from '../../monitoring'
 import { BasicPgClient, Migration } from 'postgres-migrations/dist/types'
 import { validateMigrationHashes } from 'postgres-migrations/dist/validation'
 import { runMigration } from 'postgres-migrations/dist/run-migration'
-import SQL from 'sql-template-strings'
-import { searchPath } from './connection'
-import { listTenantsToMigrate, updateTenantMigrationVersion } from './tenant'
-import { knex } from './multitenant-db'
-import { RunMigrationsOnTenants } from '../queue'
+import { searchPath } from '../connection'
+import { listTenantsToMigrate } from '../tenant'
+import { multitenantKnex } from '../multitenant-db'
+import { RunMigrationsOnTenants } from '../../queue'
+import { ProgressiveMigrations } from './progressive'
 
 const {
-  isMultitenant,
   multitenantDatabaseUrl,
   pgQueueEnable,
   databaseSSLRootCert,
+  dbMigrationStrategy,
   dbAnonRole,
   dbAuthenticatedRole,
   dbSuperUser,
@@ -37,39 +38,85 @@ const backportMigrations = [
   },
 ]
 
+export const progressiveMigrations = new ProgressiveMigrations({
+  maxSize: 200,
+  interval: 1000 * 60, // 1m
+})
+
+/**
+ * Starts the async migrations depending on the strategy
+ * @param signal
+ */
+export function startAsyncMigrations(signal: AbortSignal) {
+  switch (dbMigrationStrategy) {
+    case MultitenantMigrationStrategy.ON_REQUEST:
+      return
+    case MultitenantMigrationStrategy.PROGRESSIVE:
+      progressiveMigrations.start(signal)
+    case MultitenantMigrationStrategy.FULL_FLEET:
+      runMigrationsOnAllTenants(signal).catch((e) => {
+        logger.error(
+          {
+            type: 'migrations',
+            error: e,
+          },
+          'migration error'
+        )
+      })
+      break
+    default:
+      throw new Error(`Unknown migration strategy: ${dbMigrationStrategy}`)
+  }
+}
+
+export async function lastMigrationName() {
+  const migrations = await loadMigrationFilesCached('./migrations/tenant')
+  return migrations[migrations.length - 1].name
+}
+
 /**
  * Runs migrations for all tenants
  * only one instance at the time is allowed to run
  */
-export async function runMigrationsOnAllTenants() {
-  if (pgQueueEnable) {
+export async function runMigrationsOnAllTenants(signal: AbortSignal) {
+  if (!pgQueueEnable) {
     return
   }
-  const result = await knex.raw(`SELECT pg_try_advisory_lock(?);`, ['-8575985245963000605'])
+  const result = await multitenantKnex.raw(`SELECT pg_try_advisory_lock(?);`, [
+    '-8575985245963000605',
+  ])
   const lockAcquired = result.rows.shift()?.pg_try_advisory_lock || false
 
   if (!lockAcquired) {
     return
   }
 
+  logSchema.info(logger, '[Migrations] Instance acquired the lock', {
+    type: 'migrations',
+  })
+
   try {
-    const tenants = listTenantsToMigrate()
+    const tenants = listTenantsToMigrate(signal)
     for await (const tenantBatch of tenants) {
-      await Promise.allSettled(
+      await RunMigrationsOnTenants.batchSend(
         tenantBatch.map((tenant) => {
-          return RunMigrationsOnTenants.send({
+          return new RunMigrationsOnTenants({
             tenantId: tenant,
-            singletonKey: tenant,
             tenant: {
+              host: '',
               ref: tenant,
             },
           })
         })
       )
     }
+
+    logSchema.info(logger, '[Migrations] Async migrations jobs completed', {
+      type: 'migrations',
+    })
   } finally {
     try {
-      await knex.raw(`SELECT pg_advisory_unlock(?);`, ['-8575985245963000605'])
+      await multitenantKnex.raw(`SELECT pg_advisory_unlock(?);`, ['-8575985245963000605'])
     } catch (e) {}
   }
 }
@@ -78,45 +125,64 @@ export async function runMigrationsOnAllTenants() {
  * Runs multi-tenant migrations
  */
 export async function runMultitenantMigrations(): Promise<void> {
-  logger.info('running multitenant migrations')
-  await connectAndMigrate(multitenantDatabaseUrl, './migrations/multitenant', undefined, false)
-  logger.info('finished multitenant migrations')
+  logger.info('Running multitenant migrations')
+  await connectAndMigrate({
+    databaseUrl: multitenantDatabaseUrl,
+    migrationsDirectory: './migrations/multitenant',
+    shouldCreateStorageSchema: false,
+    waitForLock: true,
+  })
+  logger.info('Multitenant migrations completed')
 }
 
 /**
  * Runs migrations on a specific tenant by providing its database DSN
  * @param databaseUrl
  * @param tenantId
+ * @param waitForLock
  */
-export async function runMigrationsOnTenant(databaseUrl: string, tenantId?: string): Promise<void> {
+export async function runMigrationsOnTenant(
+  databaseUrl: string,
+  tenantId?: string,
+  waitForLock = true
+): Promise<void> {
   let ssl: ClientConfig['ssl'] | undefined = undefined
 
   if (databaseSSLRootCert) {
     ssl = { ca: databaseSSLRootCert }
   }
 
-  await connectAndMigrate(databaseUrl, './migrations/tenant', ssl, undefined, tenantId)
-
-  if (isMultitenant && tenantId) {
-    await updateTenantMigrationVersion(tenantId)
-  }
+  await connectAndMigrate({
+    databaseUrl,
+    migrationsDirectory: './migrations/tenant',
+    ssl,
+    shouldCreateStorageSchema: true,
+    tenantId,
+    waitForLock,
+  })
 }
 
 /**
  * Connect and migrate the database
- * @param databaseUrl
- * @param migrationsDirectory
- * @param ssl
- * @param shouldCreateStorageSchema
- * @param tenantId
+ * @param options
  */
-async function connectAndMigrate(
-  databaseUrl: string | undefined,
-  migrationsDirectory: string,
-  ssl?: ClientConfig['ssl'],
-  shouldCreateStorageSchema?: boolean,
+async function connectAndMigrate(options: {
+  databaseUrl: string | undefined
+  migrationsDirectory: string
+  ssl?: ClientConfig['ssl']
+  shouldCreateStorageSchema?: boolean
   tenantId?: string
-) {
+  waitForLock?: boolean
+}) {
+  const {
+    shouldCreateStorageSchema,
+    migrationsDirectory,
+    ssl,
+    tenantId,
+    databaseUrl,
+    waitForLock,
+  } = options
+
   const dbConfig: ClientConfig = {
     connectionString: databaseUrl,
     connectionTimeoutMillis: 10_000,
@@ -134,7 +200,7 @@ async function connectAndMigrate(
   })
   try {
     await client.connect()
-    await migrate({ client }, migrationsDirectory, shouldCreateStorageSchema)
+    await migrate({ client }, migrationsDirectory, Boolean(waitForLock), shouldCreateStorageSchema)
   } finally {
     await client.end()
   }
@@ -144,16 +210,19 @@ async function connectAndMigrate(
  * Migration runner with advisory lock
  * @param dbConfig
  * @param migrationsDirectory
+ * @param waitForLock
  * @param shouldCreateStorageSchema
  */
 export async function migrate(
   dbConfig: { client: BasicPgClient },
   migrationsDirectory: string,
+  waitForLock: boolean,
   shouldCreateStorageSchema?: boolean
 ): Promise<Array<Migration>> {
-  return withAdvisoryLock(runMigrations(migrationsDirectory, shouldCreateStorageSchema))(
-    dbConfig.client
-  )
+  return withAdvisoryLock(
+    waitForLock,
+    runMigrations(migrationsDirectory, shouldCreateStorageSchema)
+  )(dbConfig.client)
 }
 
 /**
@@ -279,9 +348,11 @@ async function doesSchemaExists(client: BasicPgClient, schemaName: string) {
 
 /**
  * Wraps a function with an advisory lock
+ * @param waitForLock
  * @param f
  */
 function withAdvisoryLock<T>(
+  waitForLock: boolean,
   f: (client: BasicPgClient) => Promise<T>
 ): (client: BasicPgClient) => Promise<T> {
   return async (client: BasicPgClient): Promise<T> => {
@@ -295,7 +366,11 @@ function withAdvisoryLock<T>(
           if (lockResult.rows[0].pg_try_advisory_lock === true) {
             acquired = true
           } else {
-            await new Promise((res) => setTimeout(res, 700))
+            if (waitForLock) {
+              await new Promise((res) => setTimeout(res, 700))
+            } else {
+              return [] as unknown as Promise<T>
+            }
           }
         }
       } catch (e) {
@@ -394,7 +469,7 @@ async function refreshMigrationPosition(
   if (shouldUpdateMigrations) {
     await client.query(`BEGIN`)
     try {
-      await client.query(`DELETE FROM ${migrationTableName}`)
+      await client.query(`DELETE FROM ${migrationTableName} WHERE id is not NULL`)
       const query = SQL`INSERT INTO `
         .append(migrationTableName)
         .append('(id, name, hash, executed_at) VALUES ')

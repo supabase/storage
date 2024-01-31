@@ -102,7 +102,8 @@ services:
                 \"db_password\": \"postgres\",
                 \"mode_type\": \"transaction\",
                 \"pool_size\": 15,
-                \"pool_checkout_timeout\": 100
+                \"max_clients\": 200,
+                \"pool_checkout_timeout\": 5000
               }
             ]
           }

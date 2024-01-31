@@ -1,7 +1,6 @@
 import { Queue } from '../queue'
-import { BatchWorkOptions, Job, SendOptions, WorkOptions } from 'pg-boss'
-import { getServiceKeyUser } from '../../database/tenant'
-import { getPostgresConnection } from '../../database'
+import PgBoss, { BatchWorkOptions, Job, SendOptions, WorkOptions } from 'pg-boss'
+import { getPostgresConnection, getServiceKeyUser } from '../../database'
 import { Storage } from '../../storage'
 import { StorageKnexDB } from '../../storage/database'
 import { createAgent, createStorageBackend } from '../../storage/backend'
@@ -10,13 +9,18 @@ import { QueueJobScheduled, QueueJobSchedulingTime } from '../../monitoring/metr
 import { logger } from '../../monitoring'
 
 export interface BasePayload {
-  $version: string
+  $version?: string
   singletonKey?: string
   reqId?: string
   tenant: {
     ref: string
     host: string
   }
+}
+
+export interface SlowRetryQueueOptions {
+  retryLimit: number
+  retryDelay: number
 }
 
 const { pgQueueEnable, storageBackendType, storageS3Endpoint } = getConfig()
@@ -36,6 +40,7 @@ interface BaseEventConstructor<Base extends BaseEvent<any>> {
   ): Promise<string | void | null>
 
   eventName(): string
+  getWorkerOptions(): WorkOptions | BatchWorkOptions
 }
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
@@ -64,6 +69,34 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     return {}
   }
 
+  static withSlowRetryQueue(): undefined | SlowRetryQueueOptions {
+    return undefined
+  }
+
+  static getSlowRetryQueueName() {
+    if (!this.queueName) {
+      throw new Error(`Queue name not set on ${this.constructor.name}`)
+    }
+
+    return this.queueName + '-slow'
+  }
+
+  static batchSend<T extends BaseEvent<any>[]>(messages: T) {
+    return Queue.getInstance().insert(
+      messages.map((message) => {
+        const sendOptions = (this.getQueueOptions(message.payload) as PgBoss.JobInsert) || {}
+        if (!message.payload.$version) {
+          ;(message.payload as (typeof message)['payload']).$version = this.version
+        }
+        return {
+          ...sendOptions,
+          name: this.getQueueName(),
+          data: message.payload,
+        }
+      })
+    )
+  }
+
   static send<T extends BaseEvent<any>>(
     this: StaticThis<T>,
     payload: Omit<T['payload'], '$version'>
@@ -73,6 +106,17 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     }
     const that = new this(payload)
     return that.send()
+  }
+
+  static sendSlowRetryQueue<T extends BaseEvent<any>>(
+    this: StaticThis<T>,
+    payload: Omit<T['payload'], '$version'>
+  ) {
+    if (!payload.$version) {
+      ;(payload as T['payload']).$version = this.version
+    }
+    const that = new this(payload)
+    return that.sendSlowRetryQueue()
   }
 
   static async sendWebhook<T extends BaseEvent<any>>(
@@ -168,6 +212,42 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
 
     QueueJobScheduled.inc({
       name: constructor.getQueueName(),
+    })
+
+    return res
+  }
+
+  async sendSlowRetryQueue() {
+    const constructor = this.constructor as typeof BaseEvent
+    const slowRetryQueue = constructor.withSlowRetryQueue()
+
+    if (!pgQueueEnable || !slowRetryQueue) {
+      return
+    }
+
+    const timer = QueueJobSchedulingTime.startTimer()
+    const sendOptions = constructor.getQueueOptions(this.payload) || {}
+
+    const res = await Queue.getInstance().send({
+      name: constructor.getSlowRetryQueueName(),
+      data: {
+        ...this.payload,
+        $version: constructor.version,
+      },
+      options: {
+        retryBackoff: true,
+        startAfter: 60 * 60 * 30, // 30 mins
+        ...sendOptions,
+        ...slowRetryQueue,
+      },
+    })
+
+    timer({
+      name: constructor.getSlowRetryQueueName(),
+    })
+
+    QueueJobScheduled.inc({
+      name: constructor.getSlowRetryQueueName(),
     })
 
     return res

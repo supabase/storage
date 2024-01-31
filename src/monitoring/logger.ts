@@ -4,7 +4,7 @@ import { FastifyReply, FastifyRequest } from 'fastify'
 import { URL } from 'url'
 import { normalizeRawError } from '../storage'
 
-const { logLevel } = getConfig()
+const { logLevel, logflareApiKey, logflareSourceToken, logflareEnabled } = getConfig()
 
 export const logger = pino({
   transport: buildTransport(),
@@ -37,7 +37,7 @@ export const logger = pino({
 export interface RequestLog {
   type: 'request'
   req: FastifyRequest
-  res: FastifyReply
+  res?: FastifyReply
   responseTime: number
   error?: Error | unknown
   owner?: string
@@ -58,19 +58,33 @@ interface ErrorLog {
   type: string
   error?: Error | unknown
   project?: string
+  metadata?: string
+}
+
+interface InfoLog {
+  type: string
+  project?: string
 }
 
 export const logSchema = {
+  info: (logger: BaseLogger, message: string, log: InfoLog) => logger.info(log, message),
   request: (logger: BaseLogger, message: string, log: RequestLog) => {
-    logger.info(log, message)
+    if (!log.res) {
+      logger.warn(log, message)
+      return
+    }
+
+    const is4xxResponse = statusOfType(log.res.statusCode, 400)
+    const is5xxResponse = statusOfType(log.res.statusCode, 500)
+
+    const logLevel = is4xxResponse ? 'warn' : is5xxResponse ? 'error' : 'info'
+    logger[logLevel](log, message)
   },
   error: (logger: BaseLogger, message: string, log: ErrorLog) => logger.error(log, message),
   event: (logger: BaseLogger, message: string, log: EventLog) => logger.info(log, message),
 }
 
 export function buildTransport(): pino.TransportMultiOptions | undefined {
-  const { logflareApiKey, logflareSourceToken, logflareEnabled } = getConfig()
-
   if (!logflareEnabled) {
     return undefined
   }
@@ -145,7 +159,7 @@ const whitelistHeaders = (headers: Record<string, unknown>) => {
         allowlistedRequestHeaders.includes(header) || allowlistedResponseHeaders.includes(header)
     )
     .forEach((header) => {
-      responseMetadata[header.replace(/-/g, '_')] = headers[header]
+      responseMetadata[header.replace(/-/g, '_')] = `${headers[header]}`
     })
 
   return responseMetadata
@@ -160,4 +174,8 @@ export function redactQueryParamFromRequest(req: FastifyRequest, params: string[
     }
   })
   return `${lUrl.pathname}${lUrl.search}`
+}
+
+function statusOfType(statusCode: number, ofType: number) {
+  return statusCode >= ofType && statusCode < ofType + 100
 }

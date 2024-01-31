@@ -5,14 +5,7 @@ import { jwt, storage, db, dbSuperUser } from '../../plugins'
 import { getConfig } from '../../../config'
 import { getFileSizeLimit } from '../../../storage/limits'
 import { Storage } from '../../../storage'
-import {
-  FileStore,
-  LockNotifier,
-  PgLocker,
-  S3Store,
-  UploadId,
-  AlsMemoryKV,
-} from '../../../storage/tus'
+import { FileStore, LockNotifier, PgLocker, UploadId, AlsMemoryKV } from '../../../storage/tus'
 import {
   namingFunction,
   onCreate,
@@ -24,6 +17,7 @@ import {
 } from './lifecycle'
 import { TenantConnection } from '../../../database/connection'
 import { PubSub } from '../../../database/pubsub'
+import { S3Store } from '@tus/s3-store'
 
 const {
   storageS3Bucket,

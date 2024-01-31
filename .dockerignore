@@ -1,4 +1,3 @@
 node_modules
 dist
 .env
-DB_MIGRATION_HASH_FILE

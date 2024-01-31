@@ -93,7 +93,7 @@ export class PgLock implements Lock {
         if (e instanceof DBError && e.message === 'resource_locked') {
           await this.notifier.release(id)
           await new Promise((resolve) => {
-            setTimeout(resolve, 100)
+            setTimeout(resolve, 500)
           })
           continue
         }

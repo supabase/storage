@@ -76,6 +76,9 @@ jobs:
           GLOBAL_S3_PROTOCOL: http
           GLOBAL_S3_FORCE_PATH_STYLE: true
           DB_INSTALL_ROLES: true
+          ENABLE_DEFAULT_METRICS: false
+          PG_QUEUE_ENABLE: false
+          MULTI_TENANT: false
 
       - name: Upload coverage results to Coveralls
         uses: coverallsapp/github-action@master

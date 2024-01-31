@@ -1,7 +1,7 @@
 'use strict'
 import dotenv from 'dotenv'
-import * as migrate from '../database/migrate'
-import { knex } from '../database/multitenant-db'
+import * as migrate from '../database/migrations/migrate'
+import { multitenantKnex } from '../database/multitenant-db'
 import { adminApp } from './common'
 
 dotenv.config({ path: '.env.test' })
@@ -14,6 +14,8 @@ const payload = {
   fileSizeLimit: 1,
   jwtSecret: 'c',
   serviceKey: 'd',
+  migrationStatus: 'COMPLETED',
+  migrationVersion: 'alter-default-value-objects-id',
   features: {
     imageTransformation: {
       enabled: true,
@@ -29,6 +31,8 @@ const payload2 = {
   fileSizeLimit: 2,
   jwtSecret: 'g',
   serviceKey: 'h',
+  migrationStatus: 'COMPLETED',
+  migrationVersion: 'alter-default-value-objects-id',
   features: {
     imageTransformation: {
       enabled: false,
@@ -52,7 +56,7 @@ afterEach(async () => {
 })
 
 afterAll(async () => {
-  await knex.destroy()
+  await multitenantKnex.destroy()
 })
 
 describe('Tenant configs', () => {

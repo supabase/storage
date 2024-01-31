@@ -1,6 +1,5 @@
 'use strict'
 
-import dotenv from 'dotenv'
 import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
@@ -13,8 +12,6 @@ import { useMockObject, useMockQueue } from './common'
 import { getPostgresConnection } from '../database'
 import { getServiceKeyUser } from '../database/tenant'
 import { Knex } from 'knex'
-
-dotenv.config({ path: '.env.test' })
 
 const { jwtSecret, serviceKey, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''

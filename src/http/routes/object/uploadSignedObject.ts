@@ -71,7 +71,7 @@ export default async function routes(fastify: FastifyInstance) {
       // Validate sender
       const { token } = request.query
 
-      const jwtSecret = await getJwtSecret(request.tenantId)
+      const { secret: jwtSecret } = await getJwtSecret(request.tenantId)
 
       let payload: SignedUploadToken
       try {

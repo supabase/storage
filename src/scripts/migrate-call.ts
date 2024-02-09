@@ -1,6 +1,7 @@
 import dotenv from 'dotenv'
-import { runMigrationsOnTenant } from '../database/migrate'
 dotenv.config()
+
+import { runMigrationsOnTenant } from '../database'
 ;(async () => {
   await runMigrationsOnTenant(process.env.DATABASE_URL as string)
 })()

@@ -1,10 +1,11 @@
 import { getConfig } from '../config'
 import { decrypt, verifyJWT } from '../auth'
-import { runMigrationsOnTenant } from './migrate'
-import { knex } from './multitenant-db'
+import { multitenantKnex } from './multitenant-db'
 import { StorageBackendError } from '../storage'
 import { JwtPayload } from 'jsonwebtoken'
 import { PubSubAdapter } from '../pubsub'
+import { lastMigrationName } from './migrations'
+import { createMutexByKey } from '../concurrency'
 
 interface TenantConfig {
   anonKey?: string
@@ -25,6 +26,9 @@ interface TenantConfig {
   serviceKeyPayload: {
     role: string
   }
+  migrationVersion?: string
+  migrationStatus?: TenantMigrationStatus
+  syncMigrationsDone?: boolean
 }
 
 export interface Features {
@@ -33,9 +37,16 @@ export interface Features {
   }
 }
 
+export enum TenantMigrationStatus {
+  COMPLETED = 'COMPLETED',
+  FAILED = 'FAILED',
+  FAILED_STALE = 'FAILED_STALE',
+}
+
 const { isMultitenant, dbServiceRole, serviceKey, jwtSecret, jwtJWKS } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
+const tenantMutex = createMutexByKey()
 
 const singleTenantServiceKey:
   | {
@@ -52,27 +63,83 @@ const singleTenantServiceKey:
   : undefined
 
 /**
- * Runs migrations in a specific tenant
- * @param tenantId
- * @param databaseUrl
- * @param logOnError
+ * List all tenants that needs to have the migrations run
  */
-export async function runMigrations(
-  tenantId: string,
-  databaseUrl: string,
-  logOnError = false
-): Promise<void> {
-  try {
-    await runMigrationsOnTenant(databaseUrl, tenantId)
-    console.log(`${tenantId} migrations ran successfully`)
-  } catch (error: any) {
-    if (logOnError) {
-      console.error(`${tenantId} migration error:`, error.message)
-      return
-    } else {
-      throw error
+export async function* listTenantsToMigrate(signal: AbortSignal) {
+  let lastCursor = 0
+
+  while (true) {
+    if (signal.aborted) {
+      break
     }
+
+    const migrationVersion = await lastMigrationName()
+
+    const data = await multitenantKnex
+      .table<{ id: string; cursor_id: number }>('tenants')
+      .select('id', 'cursor_id')
+      .where('cursor_id', '>', lastCursor)
+      .where((builder) => {
+        builder
+          .where((whereBuilder) => {
+            whereBuilder
+              .where('migrations_version', '!=', migrationVersion)
+              .whereNotIn('migrations_status', [
+                TenantMigrationStatus.FAILED,
+                TenantMigrationStatus.FAILED_STALE,
+              ])
+          })
+          .orWhere('migrations_status', null)
+      })
+      .orderBy('cursor_id', 'asc')
+      .limit(200)
+
+    if (data.length === 0) {
+      break
+    }
+
+    lastCursor = data[data.length - 1].cursor_id
+    yield data.map((tenant) => tenant.id)
   }
+}
+
+/**
+ * Update tenant migration version and status
+ * @param tenantId
+ * @param options
+ */
+export async function updateTenantMigrationsState(
+  tenantId: string,
+  options?: { state: TenantMigrationStatus }
+) {
+  const migrationVersion = await lastMigrationName()
+  const state = options?.state || TenantMigrationStatus.COMPLETED
+  return multitenantKnex
+    .table('tenants')
+    .where('id', tenantId)
+    .update({
+      migrations_version: [
+        TenantMigrationStatus.FAILED,
+        TenantMigrationStatus.FAILED_STALE,
+      ].includes(state)
+        ? undefined
+        : migrationVersion,
+      migrations_status: state,
+    })
+}
+
+/**
+ * Determine if a tenant has the migrations up to date
+ * @param tenantId
+ */
+export async function areMigrationsUpToDate(tenantId: string) {
+  const latestMigrationVersion = await lastMigrationName()
+  const tenant = await getTenantConfig(tenantId)
+
+  return (
+    latestMigrationVersion === tenant.migrationVersion &&
+    tenant.migrationStatus === TenantMigrationStatus.COMPLETED
+  )
 }
 
 /**
@@ -92,50 +159,62 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   if (tenantConfigCache.has(tenantId)) {
     return tenantConfigCache.get(tenantId) as TenantConfig
   }
-  const tenant = await knex('tenants').first().where('id', tenantId)
-  if (!tenant) {
-    throw new StorageBackendError(
-      'Missing Tenant config',
-      400,
-      `Tenant config for ${tenantId} not found`
-    )
-  }
-  const {
-    anon_key,
-    database_url,
-    file_size_limit,
-    jwt_secret,
-    jwks,
-    service_key,
-    feature_image_transformation,
-    database_pool_url,
-    max_connections,
-  } = tenant
 
-  const serviceKey = decrypt(service_key)
-  const jwtSecret = decrypt(jwt_secret)
+  return tenantMutex(tenantId, async () => {
+    if (tenantConfigCache.has(tenantId)) {
+      return tenantConfigCache.get(tenantId) as TenantConfig
+    }
 
-  const serviceKeyPayload = await verifyJWT<{ role: string }>(serviceKey, jwtSecret)
+    const tenant = await multitenantKnex('tenants').first().where('id', tenantId)
+    if (!tenant) {
+      throw new StorageBackendError(
+        'Missing Tenant config',
+        400,
+        `Tenant config for ${tenantId} not found`
+      )
+    }
+    const {
+      anon_key,
+      database_url,
+      file_size_limit,
+      jwt_secret,
+      jwks,
+      service_key,
+      feature_image_transformation,
+      database_pool_url,
+      max_connections,
+      migrations_version,
+      migrations_status,
+    } = tenant
 
-  const config: TenantConfig = {
-    anonKey: decrypt(anon_key),
-    databaseUrl: decrypt(database_url),
-    databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
-    fileSizeLimit: Number(file_size_limit),
-    jwtSecret: jwtSecret,
-    jwks,
-    serviceKey: serviceKey,
-    serviceKeyPayload,
-    maxConnections: max_connections ? Number(max_connections) : undefined,
-    features: {
-      imageTransformation: {
-        enabled: feature_image_transformation,
+    const serviceKey = decrypt(service_key)
+    const jwtSecret = decrypt(jwt_secret)
+
+    const serviceKeyPayload = await verifyJWT<{ role: string }>(serviceKey, jwtSecret)
+
+    const config = {
+      anonKey: decrypt(anon_key),
+      databaseUrl: decrypt(database_url),
+      databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
+      fileSizeLimit: Number(file_size_limit),
+      jwtSecret: jwtSecret,
+      jwks,
+      serviceKey: serviceKey,
+      serviceKeyPayload,
+      maxConnections: max_connections ? Number(max_connections) : undefined,
+      features: {
+        imageTransformation: {
+          enabled: feature_image_transformation,
+        },
       },
-    },
-  }
+      migrationVersion: migrations_version,
+      migrationStatus: migrations_status,
+      migrationsRun: false,
+    }
+    tenantConfigCache.set(tenantId, config)
 
-  await cacheTenantConfigAndRunMigrations(tenantId, config)
-  return config
+    return tenantConfigCache.get(tenantId)
+  })
 }
 
 export async function getServiceKeyUser(tenantId: string) {
@@ -207,13 +286,4 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
   await pubSub.subscribe(TENANTS_UPDATE_CHANNEL, (tenantId) => {
     tenantConfigCache.delete(tenantId)
   })
-}
-
-async function cacheTenantConfigAndRunMigrations(
-  tenantId: string,
-  config: TenantConfig,
-  logOnError = false
-): Promise<void> {
-  await runMigrations(tenantId, config.databaseUrl, logOnError)
-  tenantConfigCache.set(tenantId, config)
 }

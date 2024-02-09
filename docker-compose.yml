@@ -47,22 +47,22 @@ services:
   tenant_db:
     extends:
       service: tenant_db
-      file: docker-compose-infra.yml
+      file: ./.docker/docker-compose-infra.yml
 
   pg_bouncer:
     extends:
       service: pg_bouncer
-      file: docker-compose-infra.yml
+      file: ./.docker/docker-compose-infra.yml
 
   minio:
     extends:
       service: minio
-      file: docker-compose-infra.yml
+      file: ./.docker/docker-compose-infra.yml
 
   minio_setup:
     extends:
       service: minio_setup
-      file: docker-compose-infra.yml
+      file: ./.docker/docker-compose-infra.yml
     depends_on:
       minio:
         condition: service_healthy
@@ -70,10 +70,31 @@ services:
   imgproxy:
     extends:
       service: imgproxy
-      file: docker-compose-infra.yml
+      file: ./.docker/docker-compose-infra.yml
 
 #  Optional for rate-limiting
 #  redis:
 #    extends:
 #      service: redis
-#      file: docker-compose-infra.yml
+#      file: ./.docker/docker-compose-infra.yml
+
+#  Optional for monitoring
+#  pg_bouncer_exporter:
+#    extends:
+#      service: pg_bouncer_exporter
+#      file: ./.docker/docker-compose-monitoring.yml
+
+#  postgres_exporter:
+#    extends:
+#      service: postgres_exporter
+#      file: ./.docker/docker-compose-monitoring.yml
+#
+#  grafana:
+#    extends:
+#      service: grafana
+#      file: ./.docker/docker-compose-monitoring.yml
+#
+#  prometheus:
+#    extends:
+#      service: prometheus
+#      file: ./.docker/docker-compose-monitoring.yml

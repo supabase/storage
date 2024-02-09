@@ -1,19 +1,21 @@
 import { TenantConnection } from '../database/connection'
+import { getConfig, mergeConfig } from '../config'
 
-process.env.ENABLE_QUEUE_EVENTS = 'true'
+const { serviceKey, tenantId } = getConfig()
+
+mergeConfig({
+  pgQueueEnable: true,
+})
 
 import { mockQueue, useMockObject } from './common'
 import FormData from 'form-data'
 
 import fs from 'fs'
 import app from '../app'
-import { getConfig } from '../config'
 import { getPostgresConnection } from '../database'
 import { Obj } from '../storage/schemas'
 import { randomUUID } from 'crypto'
 import { getServiceKeyUser } from '../database/tenant'
-
-const { serviceKey, tenantId } = getConfig()
 
 describe('Webhooks', () => {
   useMockObject()
@@ -41,6 +43,7 @@ describe('Webhooks', () => {
 
   it('will emit a webhook upon object creation', async () => {
     const form = new FormData()
+
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
       authorization: `Bearer ${serviceKey}`,

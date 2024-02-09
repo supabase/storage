@@ -4,12 +4,17 @@ import { IncomingMessage, Server, ServerResponse } from 'http'
 import build from './app'
 import buildAdmin from './admin-app'
 import { getConfig } from './config'
-import { runMultitenantMigrations, runMigrationsOnTenant } from './database/migrate'
-import { listenForTenantUpdate } from './database/tenant'
+import {
+  runMultitenantMigrations,
+  runMigrationsOnTenant,
+  startAsyncMigrations,
+  TenantConnection,
+  listenForTenantUpdate,
+  PubSub,
+  multitenantKnex,
+} from './database'
 import { logger, logSchema } from './monitoring'
 import { Queue } from './queue'
-import { TenantConnection } from './database/connection'
-import { PubSub } from './database/pubsub'
 
 const exposeDocs = true
 
@@ -25,9 +30,12 @@ const exposeDocs = true
     pgQueueEnable,
   } = getConfig()
 
+  const serverSignal = new AbortController()
+
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate(PubSub)
+    startAsyncMigrations(serverSignal.signal)
   } else {
     await runMigrationsOnTenant(databaseURL)
   }
@@ -36,6 +44,7 @@ const exposeDocs = true
     await Queue.init()
   }
 
+  let adminApp: FastifyInstance<Server, IncomingMessage, ServerResponse> | undefined = undefined
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
     logger,
     disableRequestLogging: true,
@@ -45,7 +54,7 @@ const exposeDocs = true
 
   await PubSub.connect()
 
-  app.listen({ port, host }, (err, address) => {
+  app.listen({ port, host }, (err) => {
     if (err) {
       logSchema.error(logger, `Server failed to start`, {
         type: 'serverStartError',
@@ -56,7 +65,7 @@ const exposeDocs = true
   })
 
   if (isMultitenant) {
-    const adminApp: FastifyInstance<Server, IncomingMessage, ServerResponse> = buildAdmin(
+    adminApp = buildAdmin(
       {
         logger,
         disableRequestLogging: true,
@@ -86,9 +95,15 @@ const exposeDocs = true
 
   process.on('SIGTERM', async () => {
     try {
-      await app.close()
-      await Promise.allSettled([Queue.stop(), TenantConnection.stop(), PubSub.close()])
-      process.exit(0)
+      logger.info('Received SIGTERM, shutting down')
+      await Promise.all([app.close(), adminApp?.close()])
+      await Promise.allSettled([
+        serverSignal.abort(),
+        Queue.stop(),
+        TenantConnection.stop(),
+        PubSub.close(),
+        multitenantKnex.destroy(),
+      ])
     } catch (e) {
       logSchema.error(logger, 'shutdown error', {
         type: 'SIGTERM',

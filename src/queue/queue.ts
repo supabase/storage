@@ -1,10 +1,9 @@
-import PgBoss, { Job } from 'pg-boss'
+import PgBoss, { Job, JobWithMetadata } from 'pg-boss'
 import { getConfig } from '../config'
 import { registerWorkers } from './workers'
 import { BaseEvent, BasePayload } from './events'
 import { QueueJobRetryFailed, QueueJobCompleted, QueueJobError } from '../monitoring/metrics'
-import { logger } from '../monitoring'
-import { normalizeRawError } from '../storage'
+import { logger, logSchema } from '../monitoring'
 
 //eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SubclassOfBaseClass = (new (payload: any) => BaseEvent<any>) & {
@@ -55,6 +54,13 @@ export abstract class Queue {
 
     registerWorkers()
 
+    Queue.pgBoss.on('error', (error) => {
+      logSchema.error(logger, '[Queue] error', {
+        type: 'queue',
+        error,
+      })
+    })
+
     await Queue.pgBoss.start()
     await Queue.startWorkers()
 
@@ -78,59 +84,103 @@ export abstract class Queue {
       return
     }
 
-    await this.pgBoss.stop()
+    const boss = this.pgBoss
+
+    await boss.stop({
+      timeout: 20 * 1000,
+    })
+
+    await new Promise((resolve) => {
+      boss.once('stopped', () => resolve(null))
+    })
+
+    Queue.pgBoss = undefined
   }
 
   protected static startWorkers() {
     const workers: Promise<string>[] = []
 
     Queue.events.forEach((event) => {
-      workers.push(
-        Queue.getInstance().work(
-          event.getQueueName(),
-          event.getWorkerOptions(),
-          async (job: Job<BasePayload>) => {
-            try {
-              const res = await event.handle(job)
+      workers.push(Queue.registerTask(event.getQueueName(), event, true))
 
-              QueueJobCompleted.inc({
-                name: event.getQueueName(),
-              })
+      const slowRetryQueue = event.withSlowRetryQueue()
 
-              return res
-            } catch (e) {
-              QueueJobRetryFailed.inc({
-                name: event.getQueueName(),
-              })
-
-              Queue.getInstance()
-                .getJobById(job.id)
-                .then((dbJob) => {
-                  if (!dbJob) {
-                    return
-                  }
-                  if (dbJob.retrycount === dbJob.retrylimit) {
-                    QueueJobError.inc({
-                      name: event.getQueueName(),
-                    })
-                  }
-                })
-
-              logger.error(
-                {
-                  job: JSON.stringify(job),
-                  rawError: normalizeRawError(e),
-                },
-                'Error while processing job'
-              )
-
-              throw e
-            }
-          }
-        )
-      )
+      if (slowRetryQueue) {
+        workers.push(Queue.registerTask(event.getSlowRetryQueueName(), event, false))
+      }
     })
 
     return Promise.all(workers)
+  }
+
+  protected static registerTask(
+    queueName: string,
+    event: SubclassOfBaseClass,
+    slowRetryQueueOnFail?: boolean
+  ) {
+    const hasSlowRetryQueue = event.withSlowRetryQueue()
+    return Queue.getInstance().work(
+      queueName,
+      event.getWorkerOptions(),
+      async (job: Job<BasePayload>) => {
+        try {
+          const res = await event.handle(job)
+
+          QueueJobCompleted.inc({
+            name: event.getQueueName(),
+          })
+
+          return res
+        } catch (e) {
+          QueueJobRetryFailed.inc({
+            name: event.getQueueName(),
+          })
+
+          try {
+            const dbJob: JobWithMetadata | null =
+              (job as JobWithMetadata).priority !== undefined
+                ? (job as JobWithMetadata)
+                : await Queue.getInstance().getJobById(job.id)
+
+            if (!dbJob) {
+              return
+            }
+            if (dbJob.retrycount >= dbJob.retrylimit) {
+              QueueJobError.inc({
+                name: event.getQueueName(),
+              })
+
+              if (hasSlowRetryQueue && slowRetryQueueOnFail) {
+                event.sendSlowRetryQueue(job.data).catch(() => {
+                  logSchema.error(
+                    logger,
+                    `[Queue Handler] Error while sending job to slow retry queue`,
+                    {
+                      type: 'queue-task',
+                      error: e,
+                      metadata: JSON.stringify(job),
+                    }
+                  )
+                })
+              }
+            }
+          } catch (e) {
+            logSchema.error(logger, `[Queue Handler] fetching job ${event.name}`, {
+              type: 'queue-task',
+              error: e,
+              metadata: JSON.stringify(job),
+            })
+          }
+
+          logSchema.error(logger, `[Queue Handler] Error while processing job ${event.name}`, {
+            type: 'queue-task',
+            error: e,
+            metadata: JSON.stringify(job),
+          })
+
+          throw e
+        }
+      }
+    )
   }
 }

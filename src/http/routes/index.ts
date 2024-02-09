@@ -1,6 +1,6 @@
 export { default as bucket } from './bucket'
 export { default as object } from './object'
 export { default as render } from './render'
-export { default as tenant } from './tenant'
 export { default as multiPart } from './tus'
 export { default as healthcheck } from './health'
+export * from './admin'

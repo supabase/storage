@@ -2,8 +2,13 @@ import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import apiKey from '../../plugins/apikey'
 import { decrypt, encrypt } from '../../../auth'
-import { knex } from '../../../database/multitenant-db'
-import { deleteTenantConfig, runMigrations } from '../../../database/tenant'
+import {
+  deleteTenantConfig,
+  TenantMigrationStatus,
+  multitenantKnex,
+  lastMigrationName,
+  runMigrationsOnTenant,
+} from '../../../database'
 import { dbSuperUser, storage } from '../../plugins'
 
 const patchSchema = {
@@ -73,7 +78,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
 
   fastify.get('/', async () => {
-    const tenants = await knex('tenants').select()
+    const tenants = await multitenantKnex('tenants').select()
     return tenants.map(
       ({
         id,
@@ -86,6 +91,8 @@ export default async function routes(fastify: FastifyInstance) {
         jwks,
         service_key,
         feature_image_transformation,
+        migrations_version,
+        migrations_status,
       }) => ({
         id,
         anonKey: decrypt(anon_key),
@@ -96,6 +103,8 @@ export default async function routes(fastify: FastifyInstance) {
         jwtSecret: decrypt(jwt_secret),
         jwks,
         serviceKey: decrypt(service_key),
+        migrationVersion: migrations_version,
+        migrationStatus: migrations_status,
         features: {
           imageTransformation: {
             enabled: feature_image_transformation,
@@ -106,7 +115,7 @@ export default async function routes(fastify: FastifyInstance) {
   })
 
   fastify.get<tenantRequestInterface>('/:tenantId', async (request, reply) => {
-    const tenant = await knex('tenants').first().where('id', request.params.tenantId)
+    const tenant = await multitenantKnex('tenants').first().where('id', request.params.tenantId)
     if (!tenant) {
       reply.code(404).send()
     } else {
@@ -120,6 +129,8 @@ export default async function routes(fastify: FastifyInstance) {
         jwks,
         service_key,
         feature_image_transformation,
+        migrations_version,
+        migrations_status,
       } = tenant
 
       return {
@@ -141,6 +152,8 @@ export default async function routes(fastify: FastifyInstance) {
             enabled: feature_image_transformation,
           },
         },
+        migrationVersion: migrations_version,
+        migrationStatus: migrations_status,
       }
     }
   })
@@ -159,8 +172,8 @@ export default async function routes(fastify: FastifyInstance) {
       maxConnections,
     } = request.body
 
-    await runMigrations(tenantId, databaseUrl)
-    await knex('tenants').insert({
+    await runMigrationsOnTenant(databaseUrl, tenantId)
+    await multitenantKnex('tenants').insert({
       id: tenantId,
       anon_key: encrypt(anonKey),
       database_url: encrypt(databaseUrl),
@@ -171,6 +184,8 @@ export default async function routes(fastify: FastifyInstance) {
       jwks,
       service_key: encrypt(serviceKey),
       feature_image_transformation: features?.imageTransformation?.enabled ?? false,
+      migrations_version: await lastMigrationName(),
+      migrations_status: TenantMigrationStatus.COMPLETED,
     })
     reply.code(201).send()
   })
@@ -192,10 +207,9 @@ export default async function routes(fastify: FastifyInstance) {
       } = request.body
       const { tenantId } = request.params
       if (databaseUrl) {
-        await runMigrations(tenantId, databaseUrl)
+        await runMigrationsOnTenant(databaseUrl, tenantId)
       }
-      console.log(databasePoolUrl, databasePoolUrl === null)
-      await knex('tenants')
+      await multitenantKnex('tenants')
         .update({
           anon_key: anonKey !== undefined ? encrypt(anonKey) : undefined,
           database_url: databaseUrl !== undefined ? encrypt(databaseUrl) : undefined,
@@ -210,6 +224,8 @@ export default async function routes(fastify: FastifyInstance) {
           jwks,
           service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
           feature_image_transformation: features?.imageTransformation?.enabled,
+          migrations_version: databaseUrl ? await lastMigrationName() : undefined,
+          migrations_status: databaseUrl ? TenantMigrationStatus.COMPLETED : undefined,
         })
         .where('id', tenantId)
       reply.code(204).send()
@@ -229,15 +245,20 @@ export default async function routes(fastify: FastifyInstance) {
       maxConnections,
     } = request.body
     const { tenantId } = request.params
-    await runMigrations(tenantId, databaseUrl)
+    await runMigrationsOnTenant(databaseUrl, tenantId)
 
-    const tenantInfo: tenantDBInterface = {
+    const tenantInfo: tenantDBInterface & {
+      migrations_version: string
+      migrations_status: TenantMigrationStatus
+    } = {
       id: tenantId,
       anon_key: encrypt(anonKey),
       database_url: encrypt(databaseUrl),
       jwt_secret: encrypt(jwtSecret),
       jwks: jwks || null,
       service_key: encrypt(serviceKey),
+      migrations_version: await lastMigrationName(),
+      migrations_status: TenantMigrationStatus.COMPLETED,
     }
 
     if (fileSizeLimit) {
@@ -256,14 +277,65 @@ export default async function routes(fastify: FastifyInstance) {
       tenantInfo.max_connections = Number(maxConnections)
     }
 
-    await knex('tenants').insert(tenantInfo).onConflict('id').merge()
+    await multitenantKnex('tenants').insert(tenantInfo).onConflict('id').merge()
     reply.code(204).send()
   })
 
   fastify.delete<tenantRequestInterface>('/:tenantId', async (request, reply) => {
-    await knex('tenants').del().where('id', request.params.tenantId)
+    await multitenantKnex('tenants').del().where('id', request.params.tenantId)
     deleteTenantConfig(request.params.tenantId)
     reply.code(204).send()
+  })
+
+  fastify.get<tenantRequestInterface>('/:tenantId/migrations', async (req, reply) => {
+    const migrationsInfo = await multitenantKnex
+      .table<{ migrations_version?: string; migrations_status?: string }>('tenants')
+      .select('migrations_version', 'migrations_status')
+      .where('id', req.params.tenantId)
+      .first()
+
+    if (!migrationsInfo) {
+      reply.status(404).send({
+        error: 'Tenant not found',
+      })
+      return
+    }
+
+    reply.send({
+      isLatest: (await lastMigrationName()) === migrationsInfo?.migrations_version,
+      migrationsVersion: migrationsInfo?.migrations_version,
+      migrationsStatus: migrationsInfo?.migrations_status,
+    })
+  })
+
+  fastify.post<tenantRequestInterface>('/:tenantId/migrations', async (req, reply) => {
+    const tenantId = req.params.tenantId
+    const migrationsInfo = await multitenantKnex
+      .table<{ databaseUrl: string }>('tenants')
+      .select('databaseUrl')
+      .where('id', req.params.tenantId)
+      .first()
+
+    if (!migrationsInfo) {
+      reply.status(404).send({
+        error: 'Tenant not found',
+      })
+      return
+    }
+
+    const databaseUrl = decrypt(migrationsInfo.databaseUrl)
+
+    try {
+      await runMigrationsOnTenant(databaseUrl, tenantId)
+      reply.send({
+        migrated: true,
+      })
+    } catch (e) {
+      reply.status(400).send({
+        migrated: false,
+        error: JSON.stringify(e),
+      })
+    }
   })
 
   fastify.register(async (fastify) => {
@@ -278,7 +350,7 @@ export default async function routes(fastify: FastifyInstance) {
         res.send({ healthy: true })
       } catch (e) {
         if (e instanceof Error) {
-          res.executionError = e
+          req.executionError = e
         }
         res.send({ healthy: false })
       }

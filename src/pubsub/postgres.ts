@@ -1,12 +1,25 @@
 import createSubscriber, { Subscriber } from 'pg-listen'
 import { PubSubAdapter } from './adapter'
+import EventEmitter from 'events'
 
-export class PostgresPubSub implements PubSubAdapter {
+export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
   isConnected = false
   subscriber: Subscriber
 
   constructor(connectionString: string) {
-    this.subscriber = createSubscriber({ connectionString })
+    super()
+    this.subscriber = createSubscriber(
+      { connectionString },
+      {
+        retryInterval: (attempt) => Math.min(attempt * 100, 1000),
+        retryTimeout: 60 * 1000 * 60 * 14, // 24h
+      }
+    )
+
+    this.subscriber.events.on('error', (e) => {
+      this.isConnected = false
+      this.emit('error', e)
+    })
   }
 
   async connect(): Promise<void> {

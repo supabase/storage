@@ -1,15 +1,10 @@
 'use strict'
 import { adminApp } from './common'
-import dotenv from 'dotenv'
-import * as migrate from '../database/migrate'
-import { knex } from '../database/multitenant-db'
+import * as migrate from '../database/migrations/migrate'
+import { multitenantKnex } from '../database/multitenant-db'
 import app from '../app'
 import * as tenant from '../database/tenant'
 import { getConfig, mergeConfig } from '../config'
-
-dotenv.config({ path: '.env.test' })
-
-const ENV = process.env
 
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
@@ -51,7 +46,7 @@ afterEach(() => {
 })
 
 afterAll(async () => {
-  await knex.destroy()
+  await multitenantKnex.destroy()
 })
 
 describe('with X-Forwarded-Host header', () => {

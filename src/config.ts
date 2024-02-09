@@ -2,6 +2,11 @@ import dotenv from 'dotenv'
 import jwt from 'jsonwebtoken'
 
 export type StorageBackendType = 'file' | 's3'
+export enum MultitenantMigrationStrategy {
+  PROGRESSIVE = 'progressive',
+  ON_REQUEST = 'on_request',
+  FULL_FLEET = 'full_fleet',
+}
 
 type StorageConfigType = {
   version: string
@@ -30,6 +35,7 @@ type StorageConfigType = {
   dbRefreshMigrationHashesOnMismatch: boolean
   dbSuperUser: string
   dbSearchPath: string
+  dbMigrationStrategy: MultitenantMigrationStrategy
   databaseURL: string
   databaseSSLRootCert?: string
   databasePoolURL?: string
@@ -119,6 +125,11 @@ function getOptionalIfMultitenantConfigFromEnv(key: string, fallback?: string): 
 }
 
 let config: StorageConfigType | undefined
+let envPaths = ['.env']
+
+export function setEnvPaths(paths: string[]) {
+  envPaths = paths
+}
 
 export function mergeConfig(newConfig: Partial<StorageConfigType>) {
   config = { ...config, ...(newConfig as Required<StorageConfigType>) }
@@ -129,7 +140,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     return config
   }
 
-  dotenv.config()
+  envPaths.map((envPath) => dotenv.config({ path: envPath, override: false }))
 
   config = {
     // Tenant
@@ -231,6 +242,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('DB_ALLOW_MIGRATION_REFRESH') === 'false'
     ),
     dbSuperUser: getOptionalConfigFromEnv('DB_SUPER_USER') || 'postgres',
+    dbMigrationStrategy: getOptionalConfigFromEnv('DB_MIGRATIONS_STRATEGY') || 'on_request',
 
     // Database - Connection
     dbSearchPath: getOptionalConfigFromEnv('DATABASE_SEARCH_PATH', 'DB_SEARCH_PATH') || '',
@@ -259,8 +271,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     logflareEnabled: getOptionalConfigFromEnv('LOGFLARE_ENABLED') === 'true',
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
-    defaultMetricsEnabled:
-      getOptionalConfigFromEnv('DEFAULT_METRICS_ENABLED', 'ENABLE_DEFAULT_METRICS') === 'true',
+    defaultMetricsEnabled: !(
+      getOptionalConfigFromEnv('DEFAULT_METRICS_ENABLED', 'ENABLE_DEFAULT_METRICS') === 'false'
+    ),
 
     // Queue
     pgQueueEnable: getOptionalConfigFromEnv('PG_QUEUE_ENABLE', 'ENABLE_QUEUE_EVENTS') === 'true',

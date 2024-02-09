@@ -1,9 +1,19 @@
 import fastifyPlugin from 'fastify-plugin'
-import { TenantConnection } from '../../database/connection'
-import { getServiceKeyUser } from '../../database/tenant'
-import { getPostgresConnection } from '../../database'
+import {
+  areMigrationsUpToDate,
+  getServiceKeyUser,
+  getTenantConfig,
+  TenantMigrationStatus,
+  updateTenantMigrationsState,
+  TenantConnection,
+  getPostgresConnection,
+  progressiveMigrations,
+  runMigrationsOnTenant,
+} from '../../database'
 import { verifyJWT } from '../../auth'
 import { logSchema } from '../../monitoring'
+import { getConfig, MultitenantMigrationStrategy } from '../../config'
+import { createMutexByKey } from '../../concurrency'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -11,8 +21,12 @@ declare module 'fastify' {
   }
 }
 
+const { dbMigrationStrategy, isMultitenant } = getConfig()
+
 export const db = fastifyPlugin(async (fastify) => {
+  fastify.register(migrations)
   fastify.decorateRequest('db', null)
+
   fastify.addHook('preHandler', async (request) => {
     const adminUser = await getServiceKeyUser(request.tenantId)
     const userPayload = await verifyJWT<{ role?: string }>(request.jwt, adminUser.jwtSecret)
@@ -75,6 +89,7 @@ interface DbSuperUserPluginOptions {
 }
 
 export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(async (fastify, opts) => {
+  fastify.register(migrations)
   fastify.decorateRequest('db', null)
 
   fastify.addHook('preHandler', async (request) => {
@@ -130,4 +145,91 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(async (fastif
       }
     }
   })
+})
+
+/**
+ * Handle database migration for multitenant applications when a request is made
+ */
+export const migrations = fastifyPlugin(async (fastify) => {
+  if (dbMigrationStrategy === MultitenantMigrationStrategy.ON_REQUEST) {
+    const migrationsMutex = createMutexByKey()
+
+    fastify.addHook('preHandler', async (request) => {
+      // migrations are handled via async migrations
+      if (!isMultitenant) {
+        return
+      }
+
+      const tenant = await getTenantConfig(request.tenantId)
+      const migrationsUpToDate = await areMigrationsUpToDate(request.tenantId)
+
+      if (tenant.syncMigrationsDone || migrationsUpToDate) {
+        return
+      }
+
+      await migrationsMutex(request.tenantId, async () => {
+        const tenant = await getTenantConfig(request.tenantId)
+
+        if (tenant.syncMigrationsDone) {
+          return
+        }
+
+        await runMigrationsOnTenant(tenant.databaseUrl, request.tenantId)
+        await updateTenantMigrationsState(request.tenantId)
+        tenant.syncMigrationsDone = true
+      })
+    })
+  }
+
+  if (dbMigrationStrategy === MultitenantMigrationStrategy.PROGRESSIVE) {
+    const migrationsMutex = createMutexByKey()
+    fastify.addHook('preHandler', async (request) => {
+      if (!isMultitenant) {
+        return
+      }
+
+      const tenant = await getTenantConfig(request.tenantId)
+      const migrationsUpToDate = await areMigrationsUpToDate(request.tenantId)
+
+      // migrations are up to date
+      if (tenant.syncMigrationsDone || migrationsUpToDate) {
+        return
+      }
+
+      // if the tenant is not marked as stale, add it to the progressive migrations queue
+      if (tenant.migrationStatus !== TenantMigrationStatus.FAILED_STALE) {
+        progressiveMigrations.addTenant(request.tenantId)
+        return
+      }
+
+      // if the tenant is marked as stale, try running the migrations
+      migrationsMutex(request.tenantId, async () => {
+        if (tenant.syncMigrationsDone || migrationsUpToDate) {
+          return
+        }
+
+        await runMigrationsOnTenant(tenant.databaseUrl, request.tenantId, false)
+          .then(async () => {
+            await updateTenantMigrationsState(request.tenantId)
+            tenant.syncMigrationsDone = true
+          })
+          .catch((e) => {
+            logSchema.error(
+              fastify.log,
+              `[Migrations] Error running migrations ${request.tenantId} `,
+              {
+                type: 'migrations',
+                error: e,
+                metadata: JSON.stringify({
+                  strategy: 'progressive',
+                }),
+              }
+            )
+          })
+          .catch(() => {
+            // no-op
+          })
+      })
+    })
+  }
 })

@@ -27,6 +27,7 @@ interface TenantConnectionOptions {
   tenantId: string
   dbUrl: string
   isExternalPool?: boolean
+  idleTimeoutMillis?: number
   maxConnections: number
   headers?: Record<string, string | undefined | string[]>
   method?: string
@@ -95,8 +96,10 @@ export class TenantConnection {
         min: 0,
         max: isExternalPool ? 1 : options.maxConnections || databaseMaxConnections,
         acquireTimeoutMillis: databaseConnectionTimeout,
-        idleTimeoutMillis: isExternalPool ? 100 : databaseFreePoolAfterInactivity,
-        reapIntervalMillis: isExternalPool ? 110 : undefined,
+        idleTimeoutMillis: isExternalPool
+          ? options.idleTimeoutMillis || 100
+          : databaseFreePoolAfterInactivity,
+        reapIntervalMillis: isExternalPool ? 50 : undefined,
       },
       connection: {
         connectionString: connectionString,

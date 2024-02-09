@@ -10,14 +10,17 @@ declare module 'fastify' {
   }
 }
 
+const BEARER = /^Bearer\s+/i
+
 export const jwt = fastifyPlugin(async (fastify) => {
   fastify.decorateRequest('jwt', '')
   fastify.addHook('preHandler', async (request, reply) => {
-    request.jwt = (request.headers.authorization || '').substring('Bearer '.length)
+    request.jwt = (request.headers.authorization || '').replace(BEARER, '')
 
-    const jwtSecret = await getJwtSecret(request.tenantId)
+    const { secret, jwks } = await getJwtSecret(request.tenantId)
+
     try {
-      const owner = await getOwner(request.jwt, jwtSecret)
+      const owner = await getOwner(request.jwt, secret, jwks || null)
       request.owner = owner
     } catch (err: any) {
       request.log.error({ error: err }, 'unable to get owner')

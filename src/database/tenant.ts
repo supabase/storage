@@ -15,6 +15,13 @@ interface TenantConfig {
   fileSizeLimit: number
   features: Features
   jwtSecret: string
+  jwks?: {
+    keys: {
+      kid?: string
+      kty: string
+      // other fields are present too but are dependent on kid, alg and other fields, cast to unknown to access those
+    }[]
+  } | null
   serviceKey: string
   serviceKeyPayload: {
     role: string
@@ -36,7 +43,7 @@ export enum TenantMigrationStatus {
   FAILED_STALE = 'FAILED_STALE',
 }
 
-const { isMultitenant, dbServiceRole, serviceKey, jwtSecret } = getConfig()
+const { isMultitenant, dbServiceRole, serviceKey, jwtSecret, jwtJWKS } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
 const tenantMutex = createMutexByKey()
@@ -171,6 +178,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       database_url,
       file_size_limit,
       jwt_secret,
+      jwks,
       service_key,
       feature_image_transformation,
       database_pool_url,
@@ -190,6 +198,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
       fileSizeLimit: Number(file_size_limit),
       jwtSecret: jwtSecret,
+      jwks,
       serviceKey: serviceKey,
       serviceKeyPayload,
       maxConnections: max_connections ? Number(max_connections) : undefined,
@@ -239,12 +248,15 @@ export async function getServiceKey(tenantId: string): Promise<string> {
  * Get the jwt key from the tenant config
  * @param tenantId
  */
-export async function getJwtSecret(tenantId: string): Promise<string> {
+export async function getJwtSecret(
+  tenantId: string
+): Promise<{ secret: string; jwks: TenantConfig['jwks'] | null }> {
   if (isMultitenant) {
-    const { jwtSecret } = await getTenantConfig(tenantId)
-    return jwtSecret
+    const { jwtSecret, jwks } = await getTenantConfig(tenantId)
+    return { secret: jwtSecret, jwks: jwks || null }
   }
-  return jwtSecret
+
+  return { secret: jwtSecret, jwks: jwtJWKS || null }
 }
 
 /**

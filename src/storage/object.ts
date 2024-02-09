@@ -460,7 +460,7 @@ export class ObjectStorage {
 
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(3).join('/'))
-    const jwtSecret = await getJwtSecret(this.db.tenantId)
+    const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
     const token = await signJWT({ url: urlToSign, ...metadata }, jwtSecret, expiresIn)
 
     let urlPath = 'object'
@@ -497,7 +497,7 @@ export class ObjectStorage {
 
     const nameSet = new Set(results.map(({ name }) => name))
 
-    const jwtSecret = await getJwtSecret(this.db.tenantId)
+    const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
 
     return Promise.all(
       paths.map(async (path) => {
@@ -548,7 +548,7 @@ export class ObjectStorage {
 
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(4).join('/'))
-    const jwtSecret = await getJwtSecret(this.db.tenantId)
+    const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
     const token = await signJWT({ owner, url: urlToSign }, jwtSecret, expiresIn)
 
     return `/object/upload/sign/${urlToSign}?token=${token}`

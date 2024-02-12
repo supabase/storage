@@ -53,6 +53,7 @@ export function startAsyncMigrations(signal: AbortSignal) {
       return
     case MultitenantMigrationStrategy.PROGRESSIVE:
       progressiveMigrations.start(signal)
+      break
     case MultitenantMigrationStrategy.FULL_FLEET:
       runMigrationsOnAllTenants(signal).catch((e) => {
         logger.error(

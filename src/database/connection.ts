@@ -18,6 +18,7 @@ const {
   databaseFreePoolAfterInactivity,
   databaseConnectionTimeout,
   dbSearchPath,
+  dbPostgresVersion,
 } = getConfig()
 
 interface TenantConnectionOptions {
@@ -91,6 +92,7 @@ export class TenantConnection {
 
     knexPool = knex({
       client: 'pg',
+      version: dbPostgresVersion,
       searchPath: isExternalPool ? undefined : searchPath,
       pool: {
         min: 0,

@@ -10,7 +10,7 @@ import {
   S3ClientConfig,
 } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
-import { NodeHttpHandler } from '@aws-sdk/node-http-handler'
+import { NodeHttpHandler } from '@smithy/node-http-handler'
 import {
   StorageBackendAdapter,
   BrowserCacheHeaders,
@@ -164,27 +164,6 @@ export class S3Backend implements StorageBackendAdapter {
     } catch (err: any) {
       throw StorageBackendError.fromError(err)
     }
-  }
-
-  async setMetadataToCompleted(bucketName: string, key: string) {
-    const headObject = new HeadObjectCommand({
-      Bucket: bucketName,
-      Key: `${key}.info`,
-    })
-    const findObjResp = await this.client.send(headObject)
-
-    const copyCmd = new CopyObjectCommand({
-      Bucket: bucketName,
-      CopySource: `${bucketName}/${key}.info`,
-      Key: `${key}.info`,
-      Metadata: {
-        ...findObjResp.Metadata,
-        tus_completed: 'true',
-      },
-      MetadataDirective: 'REPLACE',
-    })
-
-    return this.client.send(copyCmd)
   }
 
   /**

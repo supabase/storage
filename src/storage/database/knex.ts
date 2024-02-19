@@ -40,41 +40,26 @@ export class StorageKnexDB implements Database {
     fn: T,
     transactionOptions?: TransactionOptions
   ) {
-    let retryLeft = transactionOptions?.retry || 1
-    let error: Error | undefined | unknown
+    const tnx = await this.connection.transactionProvider(this.options.tnx)()
 
-    while (retryLeft > 0) {
-      try {
-        const tnx = await this.connection.transactionProvider(this.options.tnx)()
+    try {
+      await this.connection.setScope(tnx)
 
-        try {
-          await this.connection.setScope(tnx)
+      tnx.once('query-error', (error) => {
+        throw DBError.fromDBError(error)
+      })
 
-          tnx.once('query-error', (error) => {
-            throw DBError.fromDBError(error)
-          })
+      const opts = { ...this.options, tnx }
+      const storageWithTnx = new StorageKnexDB(this.connection, opts)
 
-          const opts = { ...this.options, tnx }
-          const storageWithTnx = new StorageKnexDB(this.connection, opts)
-
-          const result: Awaited<ReturnType<T>> = await fn(storageWithTnx)
-          await tnx.commit()
-          return result
-        } catch (e) {
-          await tnx.rollback()
-          throw e
-        } finally {
-          tnx.removeAllListeners()
-        }
-      } catch (e) {
-        error = e
-      } finally {
-        retryLeft--
-      }
-    }
-
-    if (error) {
-      throw error
+      const result: Awaited<ReturnType<T>> = await fn(storageWithTnx)
+      await tnx.commit()
+      return result
+    } catch (e) {
+      await tnx.rollback()
+      throw e
+    } finally {
+      tnx.removeAllListeners()
     }
   }
 
@@ -401,7 +386,7 @@ export class StorageKnexDB implements Database {
     }
 
     return object as typeof filters extends FindObjectFilters
-      ? (typeof filters)['dontErrorOnEmpty'] extends true
+      ? FindObjectFilters['dontErrorOnEmpty'] extends true
         ? Obj | undefined
         : Obj
       : Obj

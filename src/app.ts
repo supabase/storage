@@ -63,6 +63,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(routes.bucket, { prefix: 'bucket' })
   app.register(routes.object, { prefix: 'object' })
   app.register(routes.render, { prefix: 'render/image' })
+  app.register(routes.s3, { prefix: 's3' })
   app.register(routes.healthcheck, { prefix: 'health' })
 
   setErrorHandler(app)

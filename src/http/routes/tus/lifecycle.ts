@@ -6,7 +6,7 @@ import { isRenderableError, Storage, StorageBackendError } from '../../../storag
 import { getConfig } from '../../../config'
 import { Uploader } from '../../../storage/uploader'
 import { TenantConnection } from '../../../database/connection'
-import { UploadId } from '../../../storage/tus'
+import { UploadId } from '../../../storage/protocols/tus'
 
 const { storageS3Bucket, tusPath } = getConfig()
 const reExtractFileID = /([^/]+)\/?$/

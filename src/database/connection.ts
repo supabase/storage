@@ -97,7 +97,7 @@ export class TenantConnection {
         max: isExternalPool ? 1 : options.maxConnections || databaseMaxConnections,
         acquireTimeoutMillis: databaseConnectionTimeout,
         idleTimeoutMillis: isExternalPool
-          ? options.idleTimeoutMillis || 100
+          ? options.idleTimeoutMillis || 1000000
           : databaseFreePoolAfterInactivity,
         reapIntervalMillis: isExternalPool ? 50 : undefined,
       },

@@ -436,6 +436,15 @@ export class ObjectStorage {
     return this.db.searchObjects(this.bucketId, prefix, options)
   }
 
+  async listObjects(prefix: string, options: SearchObjectOption) {
+    // if (prefix.length > 0 && !prefix.endsWith('/')) {
+    //   // assuming prefix is always a folder
+    //   prefix = `${prefix}/`
+    // }
+
+    return this.db.listObjects(this.bucketId, prefix, options.limit || 100)
+  }
+
   /**
    * Generates a signed url for accessing an object securely
    * @param objectName

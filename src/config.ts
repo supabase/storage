@@ -94,6 +94,7 @@ type StorageConfigType = {
   tusPath: string
   tusUseFileVersionSeparator: boolean
   defaultMetricsEnabled: boolean
+  s3ProtocolPrefix: string
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -211,6 +212,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     tusUseFileVersionSeparator:
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
+
+    // S3 Protocol
+    s3ProtocolPrefix: getOptionalConfigFromEnv('S3_PROTOCOL_PREFIX') || '',
 
     // Storage
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,

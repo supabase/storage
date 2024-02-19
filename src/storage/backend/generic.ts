@@ -1,4 +1,4 @@
-import { Readable } from 'stream'
+import stream, { Readable } from 'stream'
 import { getConfig } from '../../config'
 
 /**
@@ -30,6 +30,16 @@ export type ObjectMetadata = {
   eTag: string
   contentRange?: string
   httpStatusCode: number
+}
+
+export type UploadPart = {
+  Version?: string
+  ETag?: string
+  PartNumber?: number
+  ChecksumCRC32?: string
+  ChecksumCRC32C?: string
+  ChecksumSHA1?: string
+  ChecksumSHA256?: string
 }
 
 /**
@@ -134,6 +144,42 @@ export abstract class StorageBackendAdapter {
    */
   async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
     throw new Error('privateAssetUrl not implemented')
+  }
+
+  async createMultiPartUpload(
+    bucketName: string,
+    key: string,
+    version: string | undefined,
+    contentType: string,
+    cacheControl: string
+  ): Promise<string | undefined> {
+    throw new Error('not implemented')
+  }
+
+  async uploadPart(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    body?: string | Uint8Array | Buffer | Readable,
+    length?: number
+  ): Promise<{ ETag?: string }> {
+    throw new Error('not implemented')
+  }
+
+  async completeMultipartUpload(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    parts: UploadPart[]
+  ): Promise<
+    Omit<UploadPart, 'PartNumber'> & {
+      location?: string
+      bucket?: string
+      version: string
+    }
+  > {
+    throw new Error('not implemented')
   }
 }
 

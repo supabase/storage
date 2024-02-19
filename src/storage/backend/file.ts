@@ -1,4 +1,4 @@
-import xattr from 'fs-xattr'
+// import xattr from 'fs-xattr'
 import fs from 'fs-extra'
 import path from 'path'
 import fileChecksum from 'md5-file'
@@ -11,6 +11,7 @@ import {
   ObjectResponse,
   withOptionalVersion,
   BrowserCacheHeaders,
+  UploadPart,
 } from './generic'
 import { StorageBackendError } from '../errors'
 const pipeline = promisify(stream.pipeline)
@@ -250,6 +251,42 @@ export class FileBackend implements StorageBackendAdapter {
     }
   }
 
+  createMultiPartUpload(
+    bucketName: string,
+    key: string,
+    version: string | undefined,
+    contentType: string,
+    cacheControl: string
+  ): Promise<string | undefined> {
+    throw new Error('Method not implemented.')
+  }
+
+  async uploadPart(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    body: stream.Readable,
+    length: number
+  ): Promise<{ ETag?: string }> {
+    throw new Error('not implemented')
+  }
+
+  async completeMultipartUpload(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    parts: UploadPart[]
+  ): Promise<
+    Omit<UploadPart, 'PartNumber'> & {
+      location?: string
+      bucket?: string
+      version: string
+    }
+  > {
+    throw new Error('not implemented')
+  }
+
   /**
    * Returns a private url that can only be accessed internally by the system
    * @param bucket
@@ -282,12 +319,14 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   protected getMetadataAttr(file: string, attribute: string): Promise<string | undefined> {
-    return xattr.get(file, attribute).then((value) => {
-      return value?.toString() ?? undefined
-    })
+    return Promise.resolve(undefined)
+    // return xattr.get(file, attribute).then((value) => {
+    //   return value?.toString() ?? undefined
+    // })
   }
 
   protected setMetadataAttr(file: string, attribute: string, value: string): Promise<void> {
-    return xattr.set(file, attribute, value)
+    return Promise.resolve(undefined)
+    // return xattr.set(file, attribute, value)
   }
 }

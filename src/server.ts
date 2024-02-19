@@ -50,6 +50,16 @@ const exposeDocs = true
     disableRequestLogging: true,
     exposeDocs,
     requestIdHeader: requestTraceHeader,
+    ignoreTrailingSlash: true,
+    ajv: {
+      customOptions: {
+        coerceTypes: false,
+      },
+    },
+    // https: {
+    //   key: fs.readFileSync(path.join(__dirname, '..', 'data', 'localhost-key.pem')),
+    //   cert: fs.readFileSync(path.join(__dirname, '..', 'data', 'localhost.pem')),
+    // } as any,
   })
 
   await PubSub.connect()
@@ -104,6 +114,7 @@ const exposeDocs = true
         PubSub.close(),
         multitenantKnex.destroy(),
       ])
+      process.exit(0)
     } catch (e) {
       logSchema.error(logger, 'shutdown error', {
         type: 'SIGTERM',

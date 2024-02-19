@@ -5,7 +5,13 @@ import { jwt, storage, db, dbSuperUser } from '../../plugins'
 import { getConfig } from '../../../config'
 import { getFileSizeLimit } from '../../../storage/limits'
 import { Storage } from '../../../storage'
-import { FileStore, LockNotifier, PgLocker, UploadId, AlsMemoryKV } from '../../../storage/tus'
+import {
+  FileStore,
+  LockNotifier,
+  PgLocker,
+  UploadId,
+  AlsMemoryKV,
+} from '../../../storage/protocols/tus'
 import {
   namingFunction,
   onCreate,

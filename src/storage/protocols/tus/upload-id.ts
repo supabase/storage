@@ -1,7 +1,7 @@
-import { getConfig } from '../../config'
-import { StorageBackendError } from '../errors'
-import { mustBeValidBucketName, mustBeValidKey } from '../limits'
-import { FILE_VERSION_SEPARATOR, PATH_SEPARATOR, SEPARATOR } from '../backend'
+import { getConfig } from '../../../config'
+import { StorageBackendError } from '../../errors'
+import { mustBeValidBucketName, mustBeValidKey } from '../../limits'
+import { FILE_VERSION_SEPARATOR, PATH_SEPARATOR, SEPARATOR } from '../../backend'
 
 interface ResourceIDOptions {
   tenant: string

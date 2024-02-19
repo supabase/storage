@@ -51,6 +51,9 @@ async function getDbCredentials(
       throw new StorageBackendError('Invalid Tenant Id', 400, 'Tenant id not provided')
     }
 
+    if (options) {
+      options.disableHostCheck = true
+    }
     if (requestXForwardedHostRegExp && !options?.disableHostCheck) {
       const xForwardedHost = host
 

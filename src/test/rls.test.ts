@@ -141,8 +141,8 @@ describe('RLS policies', () => {
       const content = fs.readFileSync(path.resolve(__dirname, 'rls_tests.yaml'), 'utf8')
 
       const runId = randomUUID()
-      let bucketName = randomUUID()
-      let objectName = randomUUID()
+      let bucketName: string = randomUUID()
+      let objectName: string = randomUUID()
       const originalBucketName = bucketName
 
       const testScopedSpec = yaml.load(

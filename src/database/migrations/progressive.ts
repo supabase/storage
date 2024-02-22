@@ -5,7 +5,7 @@ import { RunMigrationsOnTenants } from '../../queue'
 export class ProgressiveMigrations {
   protected tenants: string[] = []
   protected emittingJobs = false
-  protected watchInterval: NodeJS.Timer | undefined
+  protected watchInterval: NodeJS.Timeout | undefined
 
   constructor(protected readonly options: { maxSize: number; interval: number }) {}
 

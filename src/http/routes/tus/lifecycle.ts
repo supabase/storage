@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto'
 import { isRenderableError, Storage, StorageBackendError } from '../../../storage'
 import { getConfig } from '../../../config'
 import { Uploader } from '../../../storage/uploader'
-import { TenantConnection } from '../../../database/connection'
+import { TenantConnection } from '../../../database'
 import { UploadId } from '../../../storage/tus'
 
 const { storageS3Bucket, tusPath } = getConfig()
@@ -31,7 +31,6 @@ export async function onIncomingRequest(
   id: string
 ) {
   const req = rawReq as MultiPartRequest
-  const uploadID = UploadId.fromString(id)
 
   res.on('finish', () => {
     req.upload.db.dispose().catch((e) => {
@@ -39,11 +38,12 @@ export async function onIncomingRequest(
     })
   })
 
-  if (rawReq.method === 'OPTIONS') {
+  if (rawReq.method === 'OPTIONS' || req.method === 'HEAD') {
     return
   }
 
   const isUpsert = req.headers['x-upsert'] === 'true'
+  const uploadID = UploadId.fromString(id)
 
   const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
 

@@ -1,11 +1,12 @@
 import { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import * as http from 'http'
-import { Server, ServerOptions, DataStore } from '@tus/server'
+import { ServerOptions, DataStore } from '@tus/server'
 import { jwt, storage, db, dbSuperUser } from '../../plugins'
 import { getConfig } from '../../../config'
 import { getFileSizeLimit } from '../../../storage/limits'
 import { Storage } from '../../../storage'
 import {
+  TusServer,
   FileStore,
   LockNotifier,
   PgLocker,
@@ -21,9 +22,10 @@ import {
   generateUrl,
   getFileIdFromRequest,
 } from './lifecycle'
-import { TenantConnection } from '../../../database/connection'
-import { PubSub } from '../../../database/pubsub'
+import { TenantConnection, PubSub } from '../../../database'
 import { S3Store } from '@tus/s3-store'
+import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { createAgent } from '../../../storage/backend'
 
 const {
   storageS3Bucket,
@@ -32,6 +34,7 @@ const {
   storageS3Region,
   tusUrlExpiryMs,
   tusPath,
+  tusPartSize,
   storageBackendType,
   storageFilePath,
 } = getConfig()
@@ -48,11 +51,16 @@ type MultiPartRequest = http.IncomingMessage & {
 
 function createTusStore() {
   if (storageBackendType === 's3') {
+    const agent = createAgent(storageS3Endpoint?.includes('http://') ? 'http' : 'https')
     return new S3Store({
-      partSize: 6 * 1024 * 1024, // Each uploaded part will have ~6MB,
+      partSize: tusPartSize * 1024 * 1024, // Each uploaded part will have ${tusPartSize}MB,
       expirationPeriodInMilliseconds: tusUrlExpiryMs,
       cache: new AlsMemoryKV(),
+      maxConcurrentPartUploads: 100,
       s3ClientConfig: {
+        requestHandler: new NodeHttpHandler({
+          ...agent,
+        }),
         bucket: storageS3Bucket,
         region: storageS3Region,
         endpoint: storageS3Endpoint,
@@ -110,7 +118,7 @@ function createTusServer(lockNotifier: LockNotifier) {
       return fileSizeLimit
     },
   }
-  return new Server(serverOptions)
+  return new TusServer(serverOptions)
 }
 
 export default async function routes(fastify: FastifyInstance) {

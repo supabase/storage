@@ -36,6 +36,7 @@ type StorageConfigType = {
   dbSuperUser: string
   dbSearchPath: string
   dbMigrationStrategy: MultitenantMigrationStrategy
+  dbPostgresVersion?: string
   databaseURL: string
   databaseSSLRootCert?: string
   databasePoolURL?: string
@@ -92,6 +93,7 @@ type StorageConfigType = {
   uploadSignedUrlExpirationTime: number
   tusUrlExpiryMs: number
   tusPath: string
+  tusPartSize: number
   tusUseFileVersionSeparator: boolean
   defaultMetricsEnabled: boolean
   s3ProtocolPrefix: string
@@ -206,6 +208,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
     // Upload - TUS
     tusPath: getOptionalConfigFromEnv('TUS_URL_PATH') || '/upload/resumable',
+    tusPartSize: parseInt(getOptionalConfigFromEnv('TUS_PART_SIZE') || '50', 10),
     tusUrlExpiryMs: parseInt(
       getOptionalConfigFromEnv('TUS_URL_EXPIRY_MS') || (1000 * 60 * 60).toString(),
       10
@@ -250,6 +253,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
     // Database - Connection
     dbSearchPath: getOptionalConfigFromEnv('DATABASE_SEARCH_PATH', 'DB_SEARCH_PATH') || '',
+    dbPostgresVersion: getOptionalConfigFromEnv('DATABASE_POSTGRES_VERSION'),
     multitenantDatabaseUrl: getOptionalConfigFromEnv(
       'DATABASE_MULTITENANT_URL',
       'MULTITENANT_DATABASE_URL'

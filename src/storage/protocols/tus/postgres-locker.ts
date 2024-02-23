@@ -19,7 +19,7 @@ export class LockNotifier {
     this.events.once(`release:${id}`, callback)
   }
 
-  removeListeners(id: string) {
+  unsubscribe(id: string) {
     this.events.removeAllListeners(`release:${id}`)
   }
 
@@ -77,7 +77,7 @@ export class PgLock implements Lock {
   }
 
   async unlock(): Promise<void> {
-    this.notifier.removeListeners(this.id)
+    this.notifier.unsubscribe(this.id)
     this.tnxResolver?.()
     this.tnxResolver = undefined
   }

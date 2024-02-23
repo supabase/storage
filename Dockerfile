@@ -1,5 +1,5 @@
 # Base stage for shared environment setup
-FROM node:18-alpine as base
+FROM node:20-alpine as base
 RUN apk add --no-cache g++ make python3
 WORKDIR /app
 COPY package.json package-lock.json ./

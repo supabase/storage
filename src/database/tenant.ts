@@ -1,7 +1,7 @@
 import { getConfig } from '../config'
 import { decrypt, verifyJWT } from '../auth'
 import { multitenantKnex } from './multitenant-db'
-import { StorageBackendError } from '../storage'
+import { ERRORS } from '../storage'
 import { JwtPayload } from 'jsonwebtoken'
 import { PubSubAdapter } from '../pubsub'
 import { lastMigrationName } from './migrations'
@@ -167,11 +167,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
 
     const tenant = await multitenantKnex('tenants').first().where('id', tenantId)
     if (!tenant) {
-      throw new StorageBackendError(
-        'Missing Tenant config',
-        400,
-        `Tenant config for ${tenantId} not found`
-      )
+      throw ERRORS.MissingTenantConfig(tenantId)
     }
     const {
       anon_key,

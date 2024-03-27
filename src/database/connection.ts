@@ -5,7 +5,7 @@ import retry from 'async-retry'
 import TTLCache from '@isaacs/ttlcache'
 import { getConfig } from '../config'
 import { DbActiveConnection, DbActivePool } from '../monitoring/metrics'
-import { StorageBackendError } from '../storage'
+import { ERRORS } from '../storage'
 import KnexTimeoutError = knex.KnexTimeoutError
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
@@ -178,7 +178,7 @@ export class TenantConnection {
       )
 
       if (!tnx) {
-        throw new StorageBackendError('Could not create transaction', 500, 'transaction_failed')
+        throw ERRORS.InternalError(undefined, 'Could not create transaction')
       }
 
       if (!instance && this.options.isExternalPool) {
@@ -188,12 +188,7 @@ export class TenantConnection {
       return tnx
     } catch (e) {
       if (e instanceof KnexTimeoutError) {
-        throw StorageBackendError.withStatusCode(
-          'database_timeout',
-          544,
-          'The connection to the database timed out',
-          e
-        )
+        throw ERRORS.DatabaseTimeout(e)
       }
 
       throw e

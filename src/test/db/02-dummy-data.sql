@@ -64,6 +64,7 @@ CREATE POLICY crud_uid_folder ON storage.objects for all USING (bucket_id='bucke
 CREATE POLICY crud_uid_file ON storage.objects for all USING (bucket_id='bucket2' and name = 'folder/only_uid.jpg' and auth.uid() = 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2');
 -- allow CRUD acccess to a folder in bucket2 to all authenticated users
 CREATE POLICY authenticated_folder ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'authenticated' and auth.role() = 'authenticated');
+CREATE POLICY authenticated_folder_bucket_3 ON storage.objects for all USING (bucket_id='bucket3' and (storage.foldername(name))[1] = 'authenticated' and auth.role() = 'authenticated');
 -- allow CRUD access to a folder in bucket2 to its owners
 CREATE POLICY crud_owner_only ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'only_owner' and owner = auth.uid());
 -- allow CRUD access to bucket4

@@ -7,7 +7,7 @@ import { getConfig, mergeConfig } from '../config'
 import { S3Backend } from '../storage/backend'
 import { Obj } from '../storage/schemas'
 import { signJWT } from '../auth'
-import { StorageBackendError } from '../storage'
+import { ErrorCode, StorageBackendError } from '../storage'
 import { useMockObject, useMockQueue } from './common'
 import { getPostgresConnection } from '../database'
 import { getServiceKeyUser } from '../database/tenant'
@@ -376,7 +376,7 @@ describe('testing POST object via multipart upload', () => {
     expect(await response.json()).toEqual({
       error: 'invalid_mime_type',
       message: `mime type image/png is not supported`,
-      statusCode: '422',
+      statusCode: '415',
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -399,8 +399,8 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
     expect(await response.json()).toEqual({
       error: 'invalid_mime_type',
-      message: `mime type thisisnotarealmimetype is not formatted properly`,
-      statusCode: '422',
+      message: `mime type thisisnotarealmimetype is not supported`,
+      statusCode: '415',
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -498,6 +498,7 @@ describe('testing POST object via multipart upload', () => {
     })
     expect(createObjectResponse.statusCode).toBe(500)
     expect(JSON.parse(createObjectResponse.body)).toStrictEqual({
+      code: ErrorCode.S3Error,
       statusCode: '500',
       error: 'Unknown error',
       message: 'S3ServiceException',
@@ -742,6 +743,7 @@ describe('testing POST object via binary upload', () => {
     expect(createObjectResponse.statusCode).toBe(500)
     expect(JSON.parse(createObjectResponse.body)).toStrictEqual({
       statusCode: '500',
+      code: ErrorCode.S3Error,
       error: 'Unknown error',
       message: 'S3ServiceException',
     })
@@ -990,6 +992,42 @@ describe('testing copy object', () => {
     expect(response.body).toBe(`{"Key":"bucket2/authenticated/casestudy11.png"}`)
   })
 
+  test('can copy objects across buckets', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/copy',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey: 'authenticated/casestudy.png',
+        destinationBucket: 'bucket3',
+        destinationKey: 'authenticated/casestudy11.png',
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(response.body).toBe(`{"Key":"bucket3/authenticated/casestudy11.png"}`)
+  })
+
+  test('cannot copy objects across buckets when RLS dont allow it', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/copy',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey: 'authenticated/casestudy.png',
+        destinationBucket: 'bucket3',
+        destinationKey: 'somekey/casestudy11.png',
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
   test('check if RLS policies are respected: anon user is not able to update authenticated resource', async () => {
     const response = await app().inject({
       method: 'POST',
@@ -1069,7 +1107,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObjects).toBeCalled()
+    expect(S3Backend.prototype.deleteObject).toBeCalled()
   })
 
   test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {

@@ -102,14 +102,21 @@ export abstract class StorageBackendAdapter {
    * @param version
    * @param destination
    * @param destinationVersion
+   * @param conditions
    */
   async copyObject(
     bucket: string,
     source: string,
     version: string | undefined,
     destination: string,
-    destinationVersion: string | undefined
-  ): Promise<Pick<ObjectMetadata, 'httpStatusCode'>> {
+    destinationVersion: string | undefined,
+    conditions?: {
+      ifMatch?: string
+      ifNoneMatch?: string
+      ifModifiedSince?: Date
+      ifUnmodifiedSince?: Date
+    }
+  ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     throw new Error('copyObject not implemented')
   }
 
@@ -159,6 +166,7 @@ export abstract class StorageBackendAdapter {
   async uploadPart(
     bucketName: string,
     key: string,
+    version: string,
     uploadId: string,
     partNumber: number,
     body?: string | Uint8Array | Buffer | Readable,
@@ -171,6 +179,7 @@ export abstract class StorageBackendAdapter {
     bucketName: string,
     key: string,
     uploadId: string,
+    version: string,
     parts: UploadPart[]
   ): Promise<
     Omit<UploadPart, 'PartNumber'> & {
@@ -179,6 +188,10 @@ export abstract class StorageBackendAdapter {
       version: string
     }
   > {
+    throw new Error('not implemented')
+  }
+
+  async abortMultipartUpload(bucketName: string, key: string, uploadId: string): Promise<void> {
     throw new Error('not implemented')
   }
 }

@@ -1,5 +1,12 @@
-import { Bucket, Obj } from '../schemas'
-import { RenderableError, StorageBackendError, StorageError } from '../errors'
+import { Bucket, S3MultipartUpload, Obj, S3PartUpload } from '../schemas'
+import {
+  ErrorCode,
+  ERRORS,
+  isStorageError,
+  RenderableError,
+  StorageBackendError,
+  StorageErrorOptions,
+} from '../errors'
 import { ObjectMetadata } from '../backend'
 import { Knex } from 'knex'
 import {
@@ -8,10 +15,9 @@ import {
   FindBucketFilters,
   FindObjectFilters,
   SearchObjectOption,
-  TransactionOptions,
 } from './adapter'
 import { DatabaseError } from 'pg'
-import { TenantConnection } from '../../database/connection'
+import { TenantConnection } from '../../database'
 import { DbQueryPerformance } from '../../monitoring/metrics'
 import { isUuid } from '../limits'
 
@@ -36,17 +42,14 @@ export class StorageKnexDB implements Database {
   }
 
   //eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async withTransaction<T extends (db: Database) => Promise<any>>(
-    fn: T,
-    transactionOptions?: TransactionOptions
-  ) {
+  async withTransaction<T extends (db: Database) => Promise<any>>(fn: T) {
     const tnx = await this.connection.transactionProvider(this.options.tnx)()
 
     try {
       await this.connection.setScope(tnx)
 
-      tnx.once('query-error', (error) => {
-        throw DBError.fromDBError(error)
+      tnx.once('query-error', (error, q) => {
+        throw DBError.fromDBError(error, q.sql)
       })
 
       const opts = { ...this.options, tnx }
@@ -83,10 +86,10 @@ export class StorageKnexDB implements Database {
     try {
       await this.withTransaction(async (db) => {
         result = await fn(db)
-        throw new StorageBackendError('permission_ok', 200, 'permission pass')
+        throw true
       })
     } catch (e) {
-      if (e instanceof StorageBackendError && e.name === 'permission_ok') {
+      if (e === true) {
         return result
       }
       throw e
@@ -109,17 +112,22 @@ export class StorageKnexDB implements Database {
       file_size_limit: data.file_size_limit,
     }
 
-    const bucket = await this.runQuery('CreateBucket', async (knex) => {
-      return knex.from<Bucket>('buckets').insert(bucketData) as Promise<{ rowCount: number }>
-    })
-
-    if (bucket.rowCount === 0) {
-      throw new DBError('Bucket not found', 404, 'Bucket not found', undefined, {
-        bucketId: data.id,
+    try {
+      const bucket = await this.runQuery('CreateBucket', async (knex) => {
+        return knex.from<Bucket>('buckets').insert(bucketData) as Promise<{ rowCount: number }>
       })
-    }
 
-    return bucketData
+      if (bucket.rowCount === 0) {
+        throw ERRORS.NoSuchBucket(data.id)
+      }
+
+      return bucketData
+    } catch (e) {
+      if (isStorageError(ErrorCode.ResourceAlreadyExists, e)) {
+        throw ERRORS.BucketAlreadyExists(data.id, e)
+      }
+      throw e
+    }
   }
 
   async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
@@ -142,9 +150,7 @@ export class StorageKnexDB implements Database {
     })
 
     if (!result && !filters?.dontErrorOnEmpty) {
-      throw new DBError('Bucket not found', 404, 'Bucket not found', undefined, {
-        bucketId,
-      })
+      throw ERRORS.NoSuchBucket(bucketId)
     }
 
     return result
@@ -183,12 +189,106 @@ export class StorageKnexDB implements Database {
     return data
   }
 
+  async listObjectsV2(
+    bucketId: string,
+    options?: { prefix?: string; deltimeter?: string; nextToken?: string; maxKeys?: number }
+  ) {
+    return this.runQuery('ListObjectsV2', async (knex) => {
+      if (!options?.deltimeter) {
+        const query = knex
+          .table('objects')
+          .where('bucket_id', bucketId)
+          .select(['id', 'name', 'metadata', 'updated_at'])
+          .limit(options?.maxKeys || 100)
+
+        // knex typing is wrong, it doesn't accept a knex.raw on orderBy, even though is totally legit
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        query.orderBy(knex.raw('name COLLATE "C"'))
+
+        if (options?.prefix) {
+          query.where('name', 'ilike', `${options.prefix}%`)
+        }
+
+        if (options?.nextToken) {
+          query.andWhere(knex.raw('name COLLATE "C" > ?', [options?.nextToken]))
+        }
+
+        return query
+      }
+
+      const query = await knex.raw('select * from storage.list_objects_with_delimiter(?,?,?,?,?)', [
+        bucketId,
+        options?.prefix,
+        options?.deltimeter,
+        options?.maxKeys,
+        options?.nextToken || '',
+      ])
+
+      return query.rows
+    })
+  }
+
   async listBuckets(columns = 'id') {
     const data = await this.runQuery('ListBuckets', (knex) => {
       return knex.from<Bucket>('buckets').select(columns.split(','))
     })
 
     return data as Bucket[]
+  }
+
+  listMultipartUploads(
+    bucketId: string,
+    options?: {
+      prefix?: string
+      deltimeter?: string
+      nextUploadToken?: string
+      nextUploadKeyToken?: string
+      maxKeys?: number
+    }
+  ) {
+    return this.runQuery('ListMultipartsUploads', async (knex) => {
+      if (!options?.deltimeter) {
+        const query = knex
+          .table('_s3_multipart_uploads')
+          .select(['id', 'key', 'created_at'])
+          .where('bucket_id', bucketId)
+          .limit(options?.maxKeys || 100)
+
+        // knex typing is wrong, it doesn't accept a knex.raw on orderBy, even though is totally legit
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        query.orderBy(knex.raw('key COLLATE "C", created_at'))
+
+        if (options?.prefix) {
+          query.where('key', 'ilike', `${options.prefix}%`)
+        }
+
+        if (options?.nextUploadKeyToken && !options.nextUploadToken) {
+          query.andWhere(knex.raw(`key COLLATE "C" > ?`, [options?.nextUploadKeyToken]))
+        }
+
+        if (options?.nextUploadToken) {
+          query.andWhere(knex.raw('id COLLATE "C" > ?', [options?.nextUploadToken]))
+        }
+
+        return query
+      }
+
+      const query = await knex.raw(
+        'select * from storage.list_multipart_uploads_with_delimiter(?,?,?,?,?,?)',
+        [
+          bucketId,
+          options?.prefix,
+          options?.deltimeter,
+          options?.maxKeys,
+          options?.nextUploadKeyToken || '',
+          options.nextUploadToken || '',
+        ]
+      )
+
+      return query.rows
+    })
   }
 
   async updateBucket(
@@ -204,9 +304,7 @@ export class StorageKnexDB implements Database {
     })
 
     if (bucket === 0) {
-      throw new DBError('Bucket not found', 404, 'Bucket not found', undefined, {
-        bucketId,
-      })
+      throw ERRORS.NoSuchBucket(bucketId)
     }
 
     return
@@ -261,26 +359,33 @@ export class StorageKnexDB implements Database {
     })
 
     if (!object) {
-      throw new DBError('Not Found', 404, 'object not found')
+      throw ERRORS.NoSuchKey(name)
     }
 
     return object
   }
 
   async createObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>) {
-    const object = {
-      name: data.name,
-      owner: isUuid(data.owner || '') ? data.owner : undefined,
-      owner_id: data.owner,
-      bucket_id: data.bucket_id,
-      metadata: data.metadata,
-      version: data.version,
-    }
-    await this.runQuery('CreateObject', (knex) => {
-      return knex.from<Obj>('objects').insert(object)
-    })
+    try {
+      const object = {
+        name: data.name,
+        owner: isUuid(data.owner || '') ? data.owner : undefined,
+        owner_id: data.owner,
+        bucket_id: data.bucket_id,
+        metadata: data.metadata,
+        version: data.version,
+      }
+      await this.runQuery('CreateObject', (knex) => {
+        return knex.from<Obj>('objects').insert(object)
+      })
 
-    return object
+      return object
+    } catch (e) {
+      if (isStorageError(ErrorCode.ResourceAlreadyExists, e)) {
+        throw ERRORS.KeyAlreadyExists(data.name, e)
+      }
+      throw e
+    }
   }
 
   async deleteObject(bucketId: string, objectName: string, version?: string) {
@@ -340,9 +445,7 @@ export class StorageKnexDB implements Database {
     })
 
     if (!object) {
-      throw new DBError('Object not found', 404, 'not_found', undefined, {
-        bucketId,
-      })
+      throw ERRORS.NoSuchKey(objectName)
     }
 
     return object
@@ -380,9 +483,7 @@ export class StorageKnexDB implements Database {
     })
 
     if (!object && !filters?.dontErrorOnEmpty) {
-      throw new DBError('Object not found', 404, 'not_found', undefined, {
-        bucketId,
-      })
+      throw ERRORS.NoSuchKey(objectName)
     }
 
     return object as typeof filters extends FindObjectFilters
@@ -411,7 +512,7 @@ export class StorageKnexDB implements Database {
       const lockAcquired = result.rows.shift()?.pg_try_advisory_xact_lock || false
 
       if (!lockAcquired) {
-        throw new DBError('resource_locked', 409, 'Resource is locked')
+        throw ERRORS.ResourceLocked()
       }
 
       return true
@@ -440,6 +541,94 @@ export class StorageKnexDB implements Database {
       ])
 
       return (result as any).rows
+    })
+  }
+
+  async createMultipartUpload(
+    uploadId: string,
+    bucketId: string,
+    objectName: string,
+    version: string,
+    signature: string
+  ) {
+    return this.runQuery('CreateMultipartUpload', async (knex) => {
+      const multipart = await knex
+        .table<S3MultipartUpload>('_s3_multipart_uploads')
+        .insert({
+          id: uploadId,
+          bucket_id: bucketId,
+          key: objectName,
+          version,
+          upload_signature: signature,
+        })
+        .returning('*')
+
+      return multipart[0] as S3MultipartUpload
+    })
+  }
+
+  async findMultipartUpload(uploadId: string, columns = 'id', options?: { forUpdate?: boolean }) {
+    const multiPart = await this.runQuery('FindMultipartUpload', async (knex) => {
+      const query = knex
+        .from('_s3_multipart_uploads')
+        .select(columns.split(','))
+        .where('id', uploadId)
+
+      if (options?.forUpdate) {
+        return query.forUpdate().first()
+      }
+      return query.first()
+    })
+
+    if (!multiPart) {
+      throw ERRORS.NoSuchUpload(uploadId)
+    }
+    return multiPart
+  }
+
+  async updateMultipartUploadProgress(uploadId: string, progress: BigInt, signature: string) {
+    return this.runQuery('UpdateMultipartUploadProgress', async (knex) => {
+      await knex
+        .from('_s3_multipart_uploads')
+        .update({ in_progress_size: progress, upload_signature: signature })
+        .where('id', uploadId)
+    })
+  }
+
+  async deleteMultipartUpload(uploadId: string) {
+    return this.runQuery('DeleteMultipartUpload', async (knex) => {
+      await knex.from('_s3_multipart_uploads').delete().where('id', uploadId)
+    })
+  }
+
+  async insertUploadPart(part: S3PartUpload) {
+    return this.runQuery('InsertUploadPart', async (knex) => {
+      const storedPart = await knex
+        .table<S3PartUpload>('_s3_multipart_uploads_parts')
+        .insert(part)
+        .returning('*')
+
+      return storedPart[0]
+    })
+  }
+
+  async listParts(
+    uploadId: string,
+    options: { afterPart?: string; maxParts: number }
+  ): Promise<S3PartUpload[]> {
+    return this.runQuery('ListParts', async (knex) => {
+      const query = knex
+        .from<S3PartUpload>('_s3_multipart_uploads_parts')
+        .select('etag', 'part_number', 'size', 'upload_id', 'created_at')
+        .where('upload_id', uploadId)
+        .orderBy('part_number')
+        .limit(options.maxParts)
+
+      if (options.afterPart) {
+        query.andWhere('part_number', '>', options.afterPart)
+      }
+
+      return query
     })
   }
 
@@ -510,58 +699,43 @@ export class StorageKnexDB implements Database {
   }
 }
 
-export class DBError extends Error implements RenderableError {
-  constructor(
-    message: string,
-    public readonly statusCode: number,
-    public readonly error: string,
-    public readonly originalError?: Error,
-    public readonly metadata?: Record<string, any>,
-    public readonly details?: string,
-    public readonly query?: string
-  ) {
-    super(message)
-    this.message = message
+export class DBError extends StorageBackendError implements RenderableError {
+  constructor(options: StorageErrorOptions) {
+    super(options)
     Object.setPrototypeOf(this, DBError.prototype)
   }
 
   static fromDBError(pgError: DatabaseError, query?: string) {
-    let message = 'Internal Server Error'
-    let statusCode = 500
-    let error = 'internal'
-
     switch (pgError.code) {
       case '42501':
-        message = 'new row violates row-level security policy'
-        statusCode = 403
-        error = 'Unauthorized'
-        break
+        return ERRORS.AccessDenied(
+          'new row violates row-level security policy',
+          pgError
+        ).withMetadata({
+          query,
+          code: pgError.code,
+        })
       case '23505':
-        message = 'The resource already exists'
-        statusCode = 409
-        error = 'Duplicate'
-        break
+        return ERRORS.ResourceAlreadyExists(pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
       case '23503':
-        message = 'The parent resource is not found'
-        statusCode = 404
-        error = 'Not Found'
-        break
+        return ERRORS.RelatedResourceNotFound(pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
       case '55P03':
       case 'resource_locked':
-        message = 'Resource Locked, an upload might be in progress for this resource'
-        statusCode = 400
-        error = 'resource_locked'
-        break
-    }
-
-    return new DBError(message, statusCode, error, pgError, undefined, pgError.message, query)
-  }
-
-  render(): StorageError {
-    return {
-      message: this.message,
-      statusCode: `${this.statusCode}`,
-      error: this.error,
+        return ERRORS.ResourceLocked(pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
+      default:
+        return ERRORS.DatabaseError(pgError.message, pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
     }
   }
 

@@ -2,12 +2,27 @@ import { FastifyInstance } from 'fastify'
 import apiKey from '../../plugins/apikey'
 import { Queue, RunMigrationsOnTenants } from '../../../queue'
 import { getConfig } from '../../../config'
-import { multitenantKnex } from '../../../database'
+import { multitenantKnex, runMigrationsOnAllTenants } from '../../../database'
 
 const { pgQueueEnable } = getConfig()
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
+
+  fastify.post('/migrate/fleet', async (req, reply) => {
+    if (!pgQueueEnable) {
+      return reply.status(400).send({ message: 'Queue is not enabled' })
+    }
+    const abortController = new AbortController()
+
+    req.raw.on('error', () => {
+      abortController.abort()
+    })
+
+    await runMigrationsOnAllTenants(abortController.signal)
+
+    return reply.send({ message: 'Migrations scheduled' })
+  })
 
   fastify.get('/progress', async (req, reply) => {
     if (!pgQueueEnable) {

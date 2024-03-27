@@ -50,16 +50,6 @@ const exposeDocs = true
     disableRequestLogging: true,
     exposeDocs,
     requestIdHeader: requestTraceHeader,
-    ignoreTrailingSlash: true,
-    ajv: {
-      customOptions: {
-        coerceTypes: false,
-      },
-    },
-    // https: {
-    //   key: fs.readFileSync(path.join(__dirname, '..', 'data', 'localhost-key.pem')),
-    //   cert: fs.readFileSync(path.join(__dirname, '..', 'data', 'localhost.pem')),
-    // } as any,
   })
 
   await PubSub.connect()

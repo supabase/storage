@@ -2,7 +2,7 @@ import http from 'http'
 import { BaseLogger } from 'pino'
 import { Upload } from '@tus/server'
 import { randomUUID } from 'crypto'
-import { isRenderableError, Storage, StorageBackendError } from '../../../storage'
+import { ERRORS, isRenderableError, Storage } from '../../../storage'
 import { getConfig } from '../../../config'
 import { Uploader } from '../../../storage/uploader'
 import { TenantConnection } from '../../../database'
@@ -102,7 +102,7 @@ export function namingFunction(
   }
 
   if (!metadata) {
-    throw new StorageBackendError('metadata_header_invalid', 400, 'metadata header invalid')
+    throw ERRORS.MetadataRequired()
   }
 
   try {

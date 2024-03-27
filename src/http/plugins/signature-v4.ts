@@ -35,7 +35,6 @@ export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstanc
 
       request.jwt = serviceKey.jwt
     } catch (e) {
-      console.error(e)
       throw e
     }
   })

@@ -14,7 +14,7 @@ import {
   ObjectUpdatedMetadata,
 } from '../queue'
 import { randomUUID } from 'crypto'
-import { StorageBackendError } from './errors'
+import { ERRORS } from './errors'
 import { getJwtSecret } from '../database/tenant'
 
 export interface UploadObjectOptions {
@@ -55,7 +55,7 @@ export class ObjectStorage {
    * @param options
    */
   async uploadNewObject(request: FastifyRequest, options: UploadObjectOptions) {
-    mustBeValidKey(options.objectName, 'The object name contains invalid characters')
+    mustBeValidKey(options.objectName)
 
     const path = `${this.bucketId}/${options.objectName}`
 
@@ -74,7 +74,7 @@ export class ObjectStorage {
   }
 
   public async uploadOverridingObject(request: FastifyRequest, options: UploadObjectOptions) {
-    mustBeValidKey(options.objectName, 'The object name contains invalid characters')
+    mustBeValidKey(options.objectName)
 
     const path = `${this.bucketId}/${options.objectName}`
 
@@ -115,16 +115,14 @@ export class ObjectStorage {
       const deleted = await db.deleteObject(this.bucketId, objectName)
 
       if (!deleted) {
-        throw new StorageBackendError('not_found', 404, 'Object Not Found')
+        throw ERRORS.NoSuchKey(objectName)
       }
 
-      await ObjectAdminDelete.send({
-        tenant: this.db.tenant(),
-        name: objectName,
-        bucketId: this.bucketId,
-        version: obj.version,
-        reqId: this.db.reqId,
-      })
+      await this.backend.deleteObject(
+        storageS3Bucket,
+        `${this.db.tenantId}/${this.bucketId}/${objectName}`,
+        obj.version
+      )
     })
 
     await ObjectRemoved.sendWebhook({
@@ -197,7 +195,7 @@ export class ObjectStorage {
    * @param metadata
    */
   async updateObjectMetadata(objectName: string, metadata: ObjectMetadata) {
-    mustBeValidKey(objectName, 'The object name contains invalid characters')
+    mustBeValidKey(objectName)
 
     const result = await this.db.updateObjectMetadata(this.bucketId, objectName, metadata)
 
@@ -228,7 +226,7 @@ export class ObjectStorage {
    * @param filters
    */
   async findObject(objectName: string, columns = 'id', filters?: FindObjectFilters) {
-    mustBeValidKey(objectName, 'The object name contains invalid characters')
+    mustBeValidKey(objectName)
 
     return this.db.findObject(this.bucketId, objectName, columns, filters)
   }
@@ -245,23 +243,29 @@ export class ObjectStorage {
   /**
    * Copies an existing remote object to a given location
    * @param sourceKey
+   * @param destinationBucket
    * @param destinationKey
    * @param owner
+   * @param conditions
    */
-  async copyObject(sourceKey: string, destinationKey: string, owner?: string) {
-    mustBeValidKey(destinationKey, 'The destination object name contains invalid characters')
-
-    if (sourceKey === destinationKey) {
-      return {
-        destObject: undefined,
-        httpStatusCode: 200,
-      }
+  async copyObject(
+    sourceKey: string,
+    destinationBucket: string,
+    destinationKey: string,
+    owner?: string,
+    conditions?: {
+      ifMatch?: string
+      ifNoneMatch?: string
+      ifModifiedSince?: Date
+      ifUnmodifiedSince?: Date
     }
+  ) {
+    mustBeValidKey(destinationKey)
 
     const newVersion = randomUUID()
     const bucketId = this.bucketId
     const s3SourceKey = `${this.db.tenantId}/${bucketId}/${sourceKey}`
-    const s3DestinationKey = `${this.db.tenantId}/${bucketId}/${destinationKey}`
+    const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationKey}`
 
     try {
       // We check if the user has permission to copy the object to the destination key
@@ -271,8 +275,19 @@ export class ObjectStorage {
         'bucket_id,metadata,version'
       )
 
+      if (sourceKey === destinationKey) {
+        return {
+          destObject: originObject,
+          httpStatusCode: 200,
+          eTag: originObject.metadata?.eTag,
+          lastModified: originObject.metadata?.lastModified
+            ? new Date(originObject.metadata.lastModified as string)
+            : undefined,
+        }
+      }
+
       await this.uploader.canUpload({
-        bucketId: this.bucketId,
+        bucketId: destinationBucket,
         objectName: destinationKey,
         owner,
         isUpsert: false,
@@ -283,13 +298,15 @@ export class ObjectStorage {
         s3SourceKey,
         originObject.version,
         s3DestinationKey,
-        newVersion
+        newVersion,
+        conditions
       )
 
       const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
 
       const destObject = await this.db.createObject({
         ...originObject,
+        bucket_id: destinationBucket,
         name: destinationKey,
         owner,
         metadata,
@@ -307,6 +324,8 @@ export class ObjectStorage {
       return {
         destObject,
         httpStatusCode: copyResult.httpStatusCode,
+        eTag: copyResult.eTag,
+        lastModified: copyResult.lastModified,
       }
     } catch (e) {
       await ObjectAdminDelete.send({
@@ -326,8 +345,13 @@ export class ObjectStorage {
    * @param destinationObjectName
    * @param owner
    */
-  async moveObject(sourceObjectName: string, destinationObjectName: string, owner?: string) {
-    mustBeValidKey(destinationObjectName, 'The destination object name contains invalid characters')
+  async moveObject(
+    sourceObjectName: string,
+    destinationBucket: string,
+    destinationObjectName: string,
+    owner?: string
+  ) {
+    mustBeValidKey(destinationObjectName)
 
     if (sourceObjectName === destinationObjectName) {
       return
@@ -335,7 +359,7 @@ export class ObjectStorage {
 
     const newVersion = randomUUID()
     const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
-    const s3DestinationKey = `${this.db.tenantId}/${this.bucketId}/${destinationObjectName}`
+    const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationObjectName}`
 
     await this.db.testPermission((db) => {
       return Promise.all([
@@ -436,13 +460,13 @@ export class ObjectStorage {
     return this.db.searchObjects(this.bucketId, prefix, options)
   }
 
-  async listObjects(prefix: string, options: SearchObjectOption) {
-    // if (prefix.length > 0 && !prefix.endsWith('/')) {
-    //   // assuming prefix is always a folder
-    //   prefix = `${prefix}/`
-    // }
-
-    return this.db.listObjects(this.bucketId, prefix, options.limit || 100)
+  async listObjectsV2(options?: {
+    prefix?: string
+    deltimeter?: string
+    nextToken?: string
+    maxKeys?: number
+  }) {
+    return this.db.listObjectsV2(this.bucketId, options)
   }
 
   /**
@@ -542,7 +566,7 @@ export class ObjectStorage {
     })
 
     if (found) {
-      throw new StorageBackendError('Duplicate', 409, 'The resource already exists')
+      throw ERRORS.KeyAlreadyExists(objectName)
     }
 
     // check if user has INSERT permissions

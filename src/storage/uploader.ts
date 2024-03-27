@@ -2,7 +2,7 @@ import { FastifyRequest } from 'fastify'
 import { getFileSizeLimit } from './limits'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { getConfig } from '../config'
-import { StorageBackendError } from './errors'
+import { ERRORS } from './errors'
 import { Database } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from '../queue'
 import { randomUUID } from 'crypto'
@@ -99,11 +99,7 @@ export class Uploader {
       )
 
       if (file.isTruncated()) {
-        throw new StorageBackendError(
-          'Payload too large',
-          413,
-          'The object exceeded the maximum allowed size'
-        )
+        throw ERRORS.EntityTooLarge()
       }
 
       return this.completeUpload({
@@ -210,11 +206,7 @@ export class Uploader {
     const requestedMime = mimeType.split('/')
 
     if (requestedMime.length < 2) {
-      throw new StorageBackendError(
-        'invalid_mime_type',
-        422,
-        `mime type ${mimeType} is not formatted properly`
-      )
+      throw ERRORS.InvalidMimeType(mimeType)
     }
 
     const [type, ext] = requestedMime
@@ -237,11 +229,7 @@ export class Uploader {
       }
     }
 
-    throw new StorageBackendError(
-      'invalid_mime_type',
-      422,
-      `mime type ${mimeType} is not supported`
-    )
+    throw ERRORS.InvalidMimeType(mimeType)
   }
 
   protected async incomingFileInfo(
@@ -249,7 +237,7 @@ export class Uploader {
     options?: Pick<UploaderOptions, 'fileSizeLimit'>
   ) {
     const contentType = request.headers['content-type']
-    const fileSizeLimit = await this.getFileSizeLimit(request.tenantId, options?.fileSizeLimit)
+    const fileSizeLimit = await getMaxFileSizeLimit(this.db.tenantId, options?.fileSizeLimit)
 
     let body: NodeJS.ReadableStream
     let mimeType: string
@@ -261,7 +249,7 @@ export class Uploader {
         const formData = await request.file({ limits: { fileSize: fileSizeLimit } })
 
         if (!formData) {
-          throw new StorageBackendError(`no_file_provided`, 400, 'No file provided')
+          throw ERRORS.NoContentProvided()
         }
 
         // https://github.com/fastify/fastify-multipart/issues/162
@@ -274,7 +262,7 @@ export class Uploader {
         cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
         isTruncated = () => formData.file.truncated
       } catch (e) {
-        throw new StorageBackendError('empty_file', 400, 'Unexpected empty file received', e)
+        throw ERRORS.NoContentProvided(e as Error)
       }
     } else {
       // just assume it's a binary file
@@ -308,4 +296,18 @@ export class Uploader {
 
     return globalFileSizeLimit
   }
+}
+
+export async function getMaxFileSizeLimit(tenantId: string, bucketSizeLimit?: number | null) {
+  let globalFileSizeLimit = await getFileSizeLimit(tenantId)
+
+  if (typeof bucketSizeLimit === 'number') {
+    globalFileSizeLimit = Math.min(bucketSizeLimit, globalFileSizeLimit)
+  }
+
+  if (uploadFileSizeLimitStandard && uploadFileSizeLimitStandard > 0) {
+    globalFileSizeLimit = Math.min(uploadFileSizeLimitStandard, globalFileSizeLimit)
+  }
+
+  return globalFileSizeLimit
 }

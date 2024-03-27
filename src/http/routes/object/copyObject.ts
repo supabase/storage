@@ -48,7 +48,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       const result = await request.storage
         .from(bucketId)
-        .copyObject(sourceKey, destinationKey, request.owner)
+        .copyObject(sourceKey, bucketId, destinationKey, request.owner)
 
       return response.status(result.httpStatusCode ?? 200).send({
         Key: `${bucketId}/${destinationKey}`,

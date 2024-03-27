@@ -1,6 +1,6 @@
 import { getConfig } from '../config'
 import { getFileSizeLimit as getFileSizeLimitForTenant, getFeatures } from '../database/tenant'
-import { StorageBackendError } from './errors'
+import { ERRORS } from './errors'
 
 const { isMultitenant, imageTransformationEnabled } = getConfig()
 
@@ -57,11 +57,10 @@ export function isValidBucketName(bucketName: string): boolean {
  * Validates if a given object key is valid
  * throws if invalid
  * @param key
- * @param message
  */
-export function mustBeValidKey(key: string, message: string) {
-  if (!isValidKey(key)) {
-    throw new StorageBackendError('Invalid Input', 400, message)
+export function mustBeValidKey(key?: string): asserts key is string {
+  if (!key || !isValidKey(key)) {
+    throw ERRORS.InvalidKey(key || '')
   }
 }
 
@@ -69,11 +68,10 @@ export function mustBeValidKey(key: string, message: string) {
  * Validates if a given bucket name is valid
  * throws if invalid
  * @param key
- * @param message
  */
-export function mustBeValidBucketName(key: string, message: string) {
-  if (!isValidBucketName(key)) {
-    throw new StorageBackendError('Invalid Input', 400, message)
+export function mustBeValidBucketName(key?: string): asserts key is string {
+  if (!key || !isValidBucketName(key)) {
+    throw ERRORS.InvalidBucketName(key || '')
   }
 }
 
@@ -81,11 +79,7 @@ export function parseFileSizeToBytes(valueWithUnit: string) {
   const valuesRegex = /(^[0-9]+(?:\.[0-9]+)?)(gb|mb|kb|b)$/i
 
   if (!valuesRegex.test(valueWithUnit)) {
-    throw new StorageBackendError(
-      'file_size_limit',
-      422,
-      'the requested file_size_limit uses an invalid format, use 20GB / 20MB / 30KB / 3B'
-    )
+    throw ERRORS.InvalidFileSizeLimit()
   }
 
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
@@ -102,11 +96,7 @@ export function parseFileSizeToBytes(valueWithUnit: string) {
     case 'B':
       return value
     default:
-      throw new StorageBackendError(
-        'file_size_limit',
-        422,
-        'the requested file_size_limit unit is not supported, use GB/MB/KB/B'
-      )
+      throw ERRORS.InvalidFileSizeLimit()
   }
 }
 

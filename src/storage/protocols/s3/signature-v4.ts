@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { ERRORS } from '../../errors'
 
 interface SignatureV4Options {
   region: string
@@ -28,7 +29,7 @@ export class SignatureV4 {
   sign(request: SignatureRequest) {
     const authorizationHeader = this.getHeader(request, 'authorization')
     if (!authorizationHeader) {
-      throw new Error('Missing Authorization header')
+      throw ERRORS.AccessDenied('Missing authorization header')
     }
 
     const { credentials, signedHeaders, signature } =
@@ -37,22 +38,21 @@ export class SignatureV4 {
     // Extract additional information from the credentials
     const [accessKey, shortDate, region, service] = credentials.split('/')
     if (accessKey !== this.options.tenantId) {
-      throw new Error('no correct tenant')
+      throw ERRORS.AccessDenied('Invalid Access Key')
     }
 
     // Ensure the region and service match the expected values
     if (region !== this.options.region || service !== this.options.service) {
-      throw new Error('Region or service mismatch')
+      throw ERRORS.AccessDenied('Invalid Region')
     }
 
     const longDate = request.headers['x-amz-date'] as string
     if (!longDate) {
-      throw new Error('no date provided')
+      throw ERRORS.AccessDenied('No date header provided')
     }
 
     // Construct the Canonical Request and String to Sign
     const canonicalRequest = this.constructCanonicalRequest(request, signedHeaders)
-
     const stringToSign = this.constructStringToSign(
       longDate,
       shortDate,
@@ -183,9 +183,9 @@ export class SignatureV4 {
             }
           }
 
-          return `${header.toLowerCase()}:${(
+          return `${header.toLowerCase()}:${
             (request.headers[header.toLowerCase()] || '') as string
-          ).trim()}`
+          }`
         })
         .join('\n') + '\n'
 

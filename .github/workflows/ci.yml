@@ -56,16 +56,13 @@ jobs:
           SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
           TENANT_ID: ${{ secrets.TENANT_ID }}
           REGION: ${{ secrets.REGION }}
-          POSTGREST_URL: ${{ secrets.POSTGREST_URL }}
           GLOBAL_S3_BUCKET: ${{ secrets.GLOBAL_S3_BUCKET }}
           PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
           AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
-          PGOPTIONS: -c search_path=storage,public
           FILE_SIZE_LIMIT: '52428800'
           STORAGE_BACKEND: s3
           MULTITENANT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5433/postgres
-          POSTGREST_URL_SUFFIX: /rest/v1
           ADMIN_API_KEYS: apikey
           ENABLE_IMAGE_TRANSFORMATION: true
           IMGPROXY_URL: http://127.0.0.1:50020

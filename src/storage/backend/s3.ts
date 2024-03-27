@@ -1,4 +1,5 @@
 import {
+  AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
   CompleteMultipartUploadCommandOutput,
   CopyObjectCommand,
@@ -24,12 +25,12 @@ import {
   ObjectResponse,
   withOptionalVersion,
   UploadPart,
-} from './generic'
+} from './adapter'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { StorageBackendError } from '../errors'
+import { ERRORS, StorageBackendError } from '../errors'
 import { getConfig } from '../../config'
 import Agent, { HttpsAgent } from 'agentkeepalive'
-import stream, { Readable } from 'stream'
+import { Readable } from 'stream'
 
 const { storageS3MaxSockets } = getConfig()
 
@@ -195,23 +196,36 @@ export class S3Backend implements StorageBackendAdapter {
    * @param version
    * @param destination
    * @param destinationVersion
+   * @param conditions
    */
   async copyObject(
     bucket: string,
     source: string,
     version: string | undefined,
     destination: string,
-    destinationVersion: string | undefined
-  ): Promise<Pick<ObjectMetadata, 'httpStatusCode'>> {
+    destinationVersion: string | undefined,
+    conditions?: {
+      ifMatch?: string
+      ifNoneMatch?: string
+      ifModifiedSince?: Date
+      ifUnmodifiedSince?: Date
+    }
+  ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     try {
       const command = new CopyObjectCommand({
         Bucket: bucket,
         CopySource: `${bucket}/${withOptionalVersion(source, version)}`,
         Key: withOptionalVersion(destination, destinationVersion),
+        CopySourceIfMatch: conditions?.ifMatch,
+        CopySourceIfNoneMatch: conditions?.ifNoneMatch,
+        CopySourceIfModifiedSince: conditions?.ifModifiedSince,
+        CopySourceIfUnmodifiedSince: conditions?.ifUnmodifiedSince,
       })
       const data = await this.client.send(command)
       return {
         httpStatusCode: data.$metadata.httpStatusCode || 200,
+        eTag: data.CopyObjectResult?.ETag || '',
+        lastModified: data.CopyObjectResult?.LastModified,
       }
     } catch (e: any) {
       throw StorageBackendError.fromError(e)
@@ -304,16 +318,12 @@ export class S3Backend implements StorageBackendAdapter {
         Version: version || '',
       },
     })
+
     const resp = await this.client.send(createMultiPart)
 
-    const uploadInfo = new PutObjectCommand({
-      Bucket: bucketName,
-      Key: `.info.${withOptionalVersion(key)}/${resp.UploadId}`,
-      Metadata: {
-        Version: version || '',
-      },
-    })
-    await this.client.send(uploadInfo)
+    if (!resp.UploadId) {
+      throw ERRORS.InvalidUploadId()
+    }
 
     return resp.UploadId
   }
@@ -321,30 +331,15 @@ export class S3Backend implements StorageBackendAdapter {
   async uploadPart(
     bucketName: string,
     key: string,
+    version: string,
     uploadId: string,
     partNumber: number,
     body?: string | Uint8Array | Buffer | Readable,
     length?: number
   ) {
-    const uploadInfo = new HeadObjectCommand({
-      Bucket: bucketName,
-      Key: `.info.${withOptionalVersion(key)}/${uploadId}`,
-    })
-    const objMapping = await this.client.send(uploadInfo)
-
-    if (!objMapping) {
-      throw new Error('Upload ID not found')
-    }
-
-    const version = objMapping.Metadata?.version
-
-    if (!version) {
-      throw new Error('missing version metadata')
-    }
-
     const paralellUploadS3 = new UploadPartCommand({
       Bucket: bucketName,
-      Key: `${key}/${objMapping.Metadata?.version}`,
+      Key: `${key}/${version}`,
       UploadId: uploadId,
       PartNumber: partNumber,
       Body: body,
@@ -354,7 +349,6 @@ export class S3Backend implements StorageBackendAdapter {
     const resp = await this.client.send(paralellUploadS3)
 
     return {
-      // partNumber: resp.
       version,
       ETag: resp.ETag,
     }
@@ -364,23 +358,10 @@ export class S3Backend implements StorageBackendAdapter {
     bucketName: string,
     key: string,
     uploadId: string,
+    version: string,
     parts: UploadPart[]
   ) {
-    const uploadInfo = new HeadObjectCommand({
-      Bucket: bucketName,
-      Key: `.info.${key}/${uploadId}`,
-    })
-    const objMapping = await this.client.send(uploadInfo)
-
-    if (!objMapping) {
-      throw new Error('Upload ID not found')
-    }
-
-    const version = objMapping.Metadata?.version
-
-    if (!version) {
-      throw new Error('missing version metadata')
-    }
+    const keyParts = key.split('/')
 
     if (parts.length === 0) {
       const listPartsInput = new ListPartsCommand({
@@ -397,15 +378,18 @@ export class S3Backend implements StorageBackendAdapter {
       Bucket: bucketName,
       Key: key + '/' + version,
       UploadId: uploadId,
-      MultipartUpload: {
-        Parts: parts,
-      },
+      MultipartUpload:
+        parts.length === 0
+          ? undefined
+          : {
+              Parts: parts,
+            },
     })
 
     const response = await this.client.send(completeUpload)
 
-    const keyParts = key.split('/')
-    const tenantId = keyParts.shift()
+    const locationParts = key.split('/')
+    locationParts.shift() // tenant-id
     const bucket = keyParts.shift()
 
     // remove object version from key
@@ -418,5 +402,14 @@ export class S3Backend implements StorageBackendAdapter {
       bucket,
       ...response,
     }
+  }
+
+  async abortMultipartUpload(bucketName: string, key: string, uploadId: string): Promise<void> {
+    const abortUpload = new AbortMultipartUploadCommand({
+      Bucket: bucketName,
+      Key: key,
+      UploadId: uploadId,
+    })
+    await this.client.send(abortUpload)
   }
 }

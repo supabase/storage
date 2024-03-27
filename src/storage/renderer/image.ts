@@ -4,7 +4,7 @@ import { getConfig } from '../../config'
 import { FastifyRequest } from 'fastify'
 import { Renderer, RenderOptions } from './renderer'
 import axiosRetry from 'axios-retry'
-import { StorageBackendError } from '../errors'
+import { ERRORS } from '../errors'
 import { Stream } from 'stream'
 import Agent from 'agentkeepalive'
 
@@ -241,7 +241,7 @@ export class ImageRenderer extends Renderer {
   protected async handleRequestError(error: AxiosError) {
     const stream = error.response?.data as Stream
     if (!stream) {
-      throw new StorageBackendError('Internal Server Error', 500, 'Internal Server Error', error)
+      throw ERRORS.InternalError(error)
     }
 
     const errorResponse = await new Promise<string>((resolve) => {
@@ -257,7 +257,7 @@ export class ImageRenderer extends Renderer {
     })
 
     const statusCode = error.response?.status || 500
-    throw new StorageBackendError('ImageProcessingError', statusCode, errorResponse, error)
+    throw ERRORS.ImageProcessingError(statusCode, errorResponse, error)
   }
 }
 

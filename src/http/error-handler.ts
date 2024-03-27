@@ -15,17 +15,6 @@ export const setErrorHandler = (app: FastifyInstance) => {
     // it will be logged in the request log plugin
     request.executionError = error
 
-    if (isRenderableError(error)) {
-      const renderableError = error.render()
-      const statusCode = error.userStatusCode
-        ? error.userStatusCode
-        : renderableError.statusCode === '500'
-        ? 500
-        : 400
-
-      return reply.status(statusCode).send(renderableError)
-    }
-
     // database error
     if (
       error instanceof DatabaseError &&
@@ -44,10 +33,23 @@ export const setErrorHandler = (app: FastifyInstance) => {
       })
     }
 
+    if (isRenderableError(error)) {
+      const renderableError = error.render()
+      const statusCode = error.userStatusCode
+        ? error.userStatusCode
+        : renderableError.statusCode === '500'
+        ? 500
+        : 400
+
+      return reply.status(statusCode).send({
+        ...renderableError,
+        error: error.error || renderableError.code,
+      })
+    }
+
     // Fastify errors
     if ('statusCode' in error) {
       const err = error as FastifyError
-      console.log(error)
       return reply.status((error as any).statusCode || 500).send({
         statusCode: `${err.statusCode}`,
         error: err.name,

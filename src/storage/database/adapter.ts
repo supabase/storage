@@ -1,4 +1,4 @@
-import { Bucket, Obj } from '../schemas'
+import { Bucket, S3MultipartUpload, Obj, S3PartUpload } from '../schemas'
 import { ObjectMetadata } from '../backend'
 import { TenantConnection } from '../../database/connection'
 
@@ -77,6 +77,21 @@ export interface Database {
   deleteBucket(bucketId: string | string[]): Promise<Bucket[]>
 
   listObjects(bucketId: string, columns: string, limit: number): Promise<Obj[]>
+  listObjectsV2(
+    bucketId: string,
+    options?: { prefix?: string; deltimeter?: string; nextToken?: string; maxKeys?: number }
+  ): Promise<Obj[]>
+
+  listMultipartUploads(
+    bucketId: string,
+    options?: {
+      prefix?: string
+      deltimeter?: string
+      nextUploadToken?: string
+      nextUploadKeyToken?: string
+      maxKeys?: number
+    }
+  ): Promise<S3MultipartUpload[]>
 
   listBuckets(columns: string): Promise<Bucket[]>
   mustLockObject(bucketId: string, objectName: string, version?: string): Promise<boolean>
@@ -120,4 +135,33 @@ export interface Database {
   healthcheck(): Promise<void>
 
   destroyConnection(): Promise<void>
+
+  createMultipartUpload(
+    uploadId: string,
+    bucketId: string,
+    objectName: string,
+    version: string,
+    signature: string
+  ): Promise<S3MultipartUpload>
+
+  findMultipartUpload(
+    uploadId: string,
+    columns: string,
+    options?: { forUpdate?: boolean }
+  ): Promise<S3MultipartUpload>
+
+  updateMultipartUploadProgress(
+    uploadId: string,
+    progress: BigInt,
+    signature: string
+  ): Promise<void>
+
+  deleteMultipartUpload(uploadId: string): Promise<void>
+
+  insertUploadPart(part: S3PartUpload): Promise<S3PartUpload>
+  listAllParts(uploadId: string): Promise<S3PartUpload[]>
+  listParts(
+    uploadId: string,
+    options: { afterPart?: string; maxParts: number }
+  ): Promise<S3PartUpload[]>
 }

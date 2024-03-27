@@ -1,4 +1,4 @@
-// import xattr from 'fs-xattr'
+import * as xattr from 'fs-xattr'
 import fs from 'fs-extra'
 import path from 'path'
 import fileChecksum from 'md5-file'
@@ -12,7 +12,7 @@ import {
   withOptionalVersion,
   BrowserCacheHeaders,
   UploadPart,
-} from './generic'
+} from './adapter'
 import { StorageBackendError } from '../errors'
 const pipeline = promisify(stream.pipeline)
 
@@ -182,7 +182,7 @@ export class FileBackend implements StorageBackendAdapter {
     version: string | undefined,
     destination: string,
     destinationVersion: string
-  ): Promise<Pick<ObjectMetadata, 'httpStatusCode'>> {
+  ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     const srcFile = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${source}`, version))
     const destFile = path.resolve(
       this.filePath,
@@ -194,8 +194,13 @@ export class FileBackend implements StorageBackendAdapter {
 
     await this.setFileMetadata(destFile, await this.getFileMetadata(srcFile))
 
+    const fileStat = await fs.lstat(destFile)
+    const checksum = await fileChecksum(destFile)
+
     return {
       httpStatusCode: 200,
+      lastModified: fileStat.mtime,
+      eTag: checksum,
     }
   }
 
@@ -264,10 +269,10 @@ export class FileBackend implements StorageBackendAdapter {
   async uploadPart(
     bucketName: string,
     key: string,
+    version: string,
     uploadId: string,
     partNumber: number,
-    body: stream.Readable,
-    length: number
+    body: stream.Readable
   ): Promise<{ ETag?: string }> {
     throw new Error('not implemented')
   }
@@ -276,6 +281,7 @@ export class FileBackend implements StorageBackendAdapter {
     bucketName: string,
     key: string,
     uploadId: string,
+    version: string,
     parts: UploadPart[]
   ): Promise<
     Omit<UploadPart, 'PartNumber'> & {
@@ -305,6 +311,10 @@ export class FileBackend implements StorageBackendAdapter {
     ])
   }
 
+  async abortMultipartUpload(bucketName: string, key: string, uploadId: string): Promise<void> {
+    return Promise.resolve(undefined)
+  }
+
   protected async getFileMetadata(file: string) {
     const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
     const [cacheControl, contentType] = await Promise.all([
@@ -319,14 +329,12 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   protected getMetadataAttr(file: string, attribute: string): Promise<string | undefined> {
-    return Promise.resolve(undefined)
-    // return xattr.get(file, attribute).then((value) => {
-    //   return value?.toString() ?? undefined
-    // })
+    return xattr.get(file, attribute).then((value: any) => {
+      return value?.toString() ?? undefined
+    })
   }
 
   protected setMetadataAttr(file: string, attribute: string, value: string): Promise<void> {
-    return Promise.resolve(undefined)
-    // return xattr.set(file, attribute, value)
+    return xattr.set(file, attribute, value)
   }
 }

@@ -1,10 +1,9 @@
 import * as crypto from 'crypto'
 import jwt from 'jsonwebtoken'
 
-import { getJwtSecret as getJwtSecretForTenant } from '../database/tenant'
 import { getConfig } from '../config'
 
-const { isMultitenant, jwtSecret, jwtAlgorithm, jwtJWKS } = getConfig()
+const { jwtAlgorithm } = getConfig()
 
 const JWT_HMAC_ALGOS: jwt.Algorithm[] = ['HS256', 'HS384', 'HS512']
 const JWT_RSA_ALGOS: jwt.Algorithm[] = ['RS256', 'RS384', 'RS512']

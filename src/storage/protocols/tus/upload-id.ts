@@ -1,7 +1,7 @@
-import { getConfig } from '../../config'
-import { StorageBackendError } from '../errors'
-import { mustBeValidBucketName, mustBeValidKey } from '../limits'
-import { FILE_VERSION_SEPARATOR, PATH_SEPARATOR, SEPARATOR } from '../backend'
+import { getConfig } from '../../../config'
+import { ERRORS } from '../../errors'
+import { mustBeValidBucketName, mustBeValidKey } from '../../limits'
+import { FILE_VERSION_SEPARATOR, PATH_SEPARATOR, SEPARATOR } from '../../backend'
 
 interface ResourceIDOptions {
   tenant: string
@@ -24,15 +24,15 @@ export class UploadId {
     this.objectName = options.objectName
     this.version = options.version
 
-    mustBeValidBucketName(options.bucket, 'invalid bucket name')
-    mustBeValidKey(options.objectName, 'invalid object name')
+    mustBeValidBucketName(options.bucket)
+    mustBeValidKey(options.objectName)
 
     if (!options.tenant) {
-      throw new StorageBackendError('tenant_not_found', 422, 'tenant not provided')
+      throw ERRORS.InvalidTenantId()
     }
 
     if (!options.version) {
-      throw new StorageBackendError('version_not_found', 422, 'version not provided')
+      throw ERRORS.InvalidUploadId('Version not provided')
     }
   }
 
@@ -52,14 +52,14 @@ function fromPathSeparator(id: string) {
   const idParts = id.split(PATH_SEPARATOR)
 
   if (idParts.length < 3) {
-    throw new StorageBackendError('id_missmatch', 422, 'id format invalid')
+    throw ERRORS.InvalidUploadId()
   }
 
   const [tenant, bucket, ...objParts] = idParts
   const version = objParts.pop()
 
   if (!version) {
-    throw new StorageBackendError('version_not_found', 422, 'version not provided')
+    throw ERRORS.InvalidUploadId('Version not provided')
   }
 
   return {
@@ -74,7 +74,7 @@ function fromFileSeparator(id: string) {
   const idParts = id.split(PATH_SEPARATOR)
 
   if (idParts.length < 3) {
-    throw new StorageBackendError('id_missmatch', 422, 'id format invalid')
+    throw ERRORS.InvalidUploadId()
   }
 
   const [tenant, bucket, ...objParts] = idParts
@@ -84,14 +84,14 @@ function fromFileSeparator(id: string) {
   const objectNameParts = objectWithVersion?.split(separator) || []
 
   if (objectNameParts.length < 2) {
-    throw new StorageBackendError('object_name_invalid', 422, 'object name invalid')
+    throw ERRORS.InvalidUploadId('Object name is invalid')
   }
 
   const version = objectNameParts[1]
   const objectName = objectNameParts[0]
 
   if (!version) {
-    throw new StorageBackendError('version_not_found', 422, 'version not provided')
+    throw ERRORS.InvalidUploadId('Version not provided')
   }
 
   objParts.push(objectName)

@@ -43,6 +43,8 @@ async function requestHandler(
 
   const obj = await request.storage.from(bucketName).findObject(objectName, 'id, version')
 
+  // await new Promise((resolve) => setTimeout(resolve, 10000))
+
   // send the object from s3
   const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
   request.log.info(s3Key)

@@ -1,6 +1,6 @@
 import { getConfig } from '../config'
 import { getTenantConfig } from './tenant'
-import { StorageBackendError } from '../storage'
+import { ERRORS } from '../storage'
 import { User, TenantConnection } from './connection'
 
 interface ConnectionOptions {
@@ -48,23 +48,17 @@ async function getDbCredentials(
 
   if (isMultitenant) {
     if (!tenantId) {
-      throw new StorageBackendError('Invalid Tenant Id', 400, 'Tenant id not provided')
+      throw ERRORS.InvalidTenantId()
     }
 
     if (requestXForwardedHostRegExp && !options?.disableHostCheck) {
       const xForwardedHost = host
 
       if (typeof xForwardedHost !== 'string') {
-        throw new StorageBackendError(
-          'Invalid Header',
-          400,
-          'X-Forwarded-Host header is not a string'
-        )
+        throw ERRORS.InvalidXForwardedHeader('X-Forwarded-Host header is not a string')
       }
       if (!new RegExp(requestXForwardedHostRegExp).test(xForwardedHost)) {
-        throw new StorageBackendError(
-          'Invalid Header',
-          400,
+        throw ERRORS.InvalidXForwardedHeader(
           'X-Forwarded-Host header does not match regular expression'
         )
       }

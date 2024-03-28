@@ -15,17 +15,6 @@ export const setErrorHandler = (app: FastifyInstance) => {
     // it will be logged in the request log plugin
     request.executionError = error
 
-    if (isRenderableError(error)) {
-      const renderableError = error.render()
-      const statusCode = error.userStatusCode
-        ? error.userStatusCode
-        : renderableError.statusCode === '500'
-        ? 500
-        : 400
-
-      return reply.status(statusCode).send(renderableError)
-    }
-
     // database error
     if (
       error instanceof DatabaseError &&
@@ -41,6 +30,20 @@ export const setErrorHandler = (app: FastifyInstance) => {
         statusCode: `429`,
         error: 'too_many_connections',
         message: 'Too many connections issued to the database',
+      })
+    }
+
+    if (isRenderableError(error)) {
+      const renderableError = error.render()
+      const statusCode = error.userStatusCode
+        ? error.userStatusCode
+        : renderableError.statusCode === '500'
+        ? 500
+        : 400
+
+      return reply.status(statusCode).send({
+        ...renderableError,
+        error: error.error || renderableError.code,
       })
     }
 

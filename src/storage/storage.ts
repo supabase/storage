@@ -1,6 +1,6 @@
 import { StorageBackendAdapter, withOptionalVersion } from './backend'
 import { Database, FindBucketFilters } from './database'
-import { StorageBackendError } from './errors'
+import { ERRORS } from './errors'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from './limits'
 import { getConfig } from '../config'
@@ -21,7 +21,7 @@ export class Storage {
    * @param bucketId
    */
   from(bucketId: string) {
-    mustBeValidBucketName(bucketId, 'The bucketId name contains invalid characters')
+    mustBeValidBucketName(bucketId)
 
     return new ObjectStorage(this.backend, this.db, bucketId)
   }
@@ -82,7 +82,7 @@ export class Storage {
       allowedMimeTypes?: null | string[]
     }
   ) {
-    mustBeValidBucketName(data.name, 'Bucket name invalid')
+    mustBeValidBucketName(data.name)
 
     const bucketData: Parameters<Database['createBucket']>[0] = data
 
@@ -117,7 +117,7 @@ export class Storage {
       allowedMimeTypes?: null | string[]
     }
   ) {
-    mustBeValidBucketName(id, 'Bucket name invalid')
+    mustBeValidBucketName(id)
 
     const bucketData: Parameters<Database['updateBucket']>[1] = data
 
@@ -158,17 +158,13 @@ export class Storage {
       const countObjects = await db.asSuperUser().countObjectsInBucket(id)
 
       if (countObjects && countObjects > 0) {
-        throw new StorageBackendError(
-          'Storage not empty',
-          400,
-          'Storage must be empty before you can delete it'
-        )
+        throw ERRORS.BucketNotEmpty(id)
       }
 
       const deleted = await db.deleteBucket(id)
 
       if (!deleted) {
-        throw new StorageBackendError('not_found', 404, 'Bucket Not Found')
+        throw ERRORS.NoSuchBucket(id)
       }
 
       return deleted
@@ -216,9 +212,7 @@ export class Storage {
           .filter(({ name }) => !deletedNames.has(name))
           .map(({ name }) => name)
 
-        throw new StorageBackendError(
-          'Cannot delete',
-          400,
+        throw ERRORS.AccessDenied(
           `Cannot delete: ${remainingNames.join(
             ' ,'
           )}, you may have SELECT but not DELETE permissions`
@@ -230,21 +224,13 @@ export class Storage {
   validateMimeType(mimeType: string[]) {
     for (const type of mimeType) {
       if (type.length > 1000) {
-        throw new StorageBackendError(
-          'invalid_mime_type',
-          422,
-          `the requested mime type "${type}" is invalid`
-        )
+        throw ERRORS.InvalidMimeType(type)
       }
 
       if (
         !type.match(/^([a-zA-Z0-9\-+.]+)\/([a-zA-Z0-9\-+.]+)(;\s*charset=[a-zA-Z0-9\-]+)?$|\*$/)
       ) {
-        throw new StorageBackendError(
-          'invalid_mime_type',
-          422,
-          `the requested mime type "${type} is invalid`
-        )
+        throw ERRORS.InvalidMimeType(type)
       }
     }
     return true
@@ -262,11 +248,7 @@ export class Storage {
     const globalMaxLimit = await getFileSizeLimit(this.db.tenantId)
 
     if (maxFileLimit > globalMaxLimit) {
-      throw new StorageBackendError(
-        'max_file_size',
-        422,
-        'the requested max_file_size exceed the global limit'
-      )
+      throw ERRORS.EntityTooLarge()
     }
 
     return maxFileLimit

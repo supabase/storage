@@ -66,7 +66,7 @@ tests:
 
       - operation: bucket.delete
         status: 400
-        error: 'Bucket Not Found'
+        error: 'Bucket not found'
 
       - operation: bucket.update
         status: 400
@@ -125,7 +125,7 @@ tests:
 
       - operation: bucket.delete
         status: 400
-        error: 'Bucket Not Found'
+        error: 'Bucket not found'
 
       - operation: bucket.update
         status: 400
@@ -161,7 +161,7 @@ tests:
 
       - operation: bucket.delete
         status: 400
-        error: 'Bucket Not Found'
+        error: 'Bucket not found'
 
       - operation: bucket.update
         status: 400
@@ -191,7 +191,7 @@ tests:
 
       - operation: bucket.delete
         status: 400
-        error: 'Bucket Not Found'
+        error: 'Bucket not found'
 
       - operation: bucket.update
         status: 400
@@ -244,7 +244,7 @@ tests:
 
       - operation: bucket.delete
         status: 400
-        error: 'Bucket Not Found'
+        error: 'Bucket not found'
 
       - operation: upload
         status: 400
@@ -265,7 +265,7 @@ tests:
 
       - operation: object.delete
         status: 400
-        error: 'Object Not Found'
+        error: 'Object not found'
 
       - operation: bucket.update
         status: 200
@@ -285,7 +285,7 @@ tests:
 
       - operation: bucket.delete
         status: 400
-        error: 'Bucket Not Found'
+        error: 'Bucket not found'
 
       - operation: upload
         bucketName: 'bucket_{{runId}}'
@@ -302,7 +302,7 @@ tests:
 
       - operation: object.delete
         status: 400
-        error: 'Object Not Found'
+        error: 'Object not found'
 
       - operation: bucket.update
         status: 400
@@ -343,7 +343,7 @@ tests:
 
       - operation: object.delete
         status: 400
-        error: 'Object Not Found'
+        error: 'Object not found'
 
       - operation: object.delete
         role: service
@@ -393,7 +393,7 @@ tests:
 
       - operation: bucket.delete
         status: 400
-        error: 'Bucket Not Found'
+        error: 'Bucket not found'
 
   - description: 'Will only able to move objects when authenticated'
     policies:
@@ -433,7 +433,7 @@ tests:
 
       - operation: bucket.delete
         status: 400
-        error: 'Bucket Not Found'
+        error: 'Bucket not found'
 
   - description: 'Will only able to copy owned objects when authenticated'
     policies:
@@ -474,4 +474,4 @@ tests:
 
       - operation: bucket.delete
         status: 400
-        error: 'Bucket Not Found'
+        error: 'Bucket not found'

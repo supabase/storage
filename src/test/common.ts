@@ -57,6 +57,8 @@ export function useMockObject() {
 
     jest.spyOn(S3Backend.prototype, 'copyObject').mockResolvedValue({
       httpStatusCode: 200,
+      lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
+      eTag: 'abc',
     })
 
     jest.spyOn(S3Backend.prototype, 'deleteObject').mockResolvedValue()

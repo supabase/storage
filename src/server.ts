@@ -104,6 +104,7 @@ const exposeDocs = true
         PubSub.close(),
         multitenantKnex.destroy(),
       ])
+      process.exit(0)
     } catch (e) {
       logSchema.error(logger, 'shutdown error', {
         type: 'SIGTERM',

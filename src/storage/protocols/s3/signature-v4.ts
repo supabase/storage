@@ -6,6 +6,7 @@ interface SignatureV4Options {
   service: string
   tenantId: string
   secretKey: string
+  enforceRegion: boolean
 }
 
 interface SignatureRequest {
@@ -15,6 +16,28 @@ interface SignatureRequest {
   method: string
   query?: Record<string, string>
   prefix?: string
+}
+
+/**
+ * Lists the headers that should never be included in the
+ * request signature signature process.
+ */
+export const ALWAYS_UNSIGNABLE_HEADERS = {
+  authorization: true,
+  'cache-control': true,
+  connection: true,
+  expect: true,
+  from: true,
+  'keep-alive': true,
+  'max-forwards': true,
+  pragma: true,
+  referer: true,
+  te: true,
+  trailer: true,
+  'transfer-encoding': true,
+  upgrade: true,
+  'user-agent': true,
+  'x-amzn-trace-id': true,
 }
 
 export class SignatureV4 {
@@ -42,8 +65,12 @@ export class SignatureV4 {
     }
 
     // Ensure the region and service match the expected values
-    if (region !== this.options.region || service !== this.options.service) {
+    if (this.options.enforceRegion && region !== this.options.region) {
       throw ERRORS.AccessDenied('Invalid Region')
+    }
+
+    if (service !== this.options.service) {
+      throw ERRORS.AccessDenied('Invalid Service')
     }
 
     const longDate = request.headers['x-amz-date'] as string
@@ -51,12 +78,25 @@ export class SignatureV4 {
       throw ERRORS.AccessDenied('No date header provided')
     }
 
+    // When enforcing region is false, we allow the region to be:
+    // - auto
+    // - us-east-1
+    // - the region set in the env
+    if (
+      !this.options.enforceRegion &&
+      !['auto', 'us-east-1', this.options.region, ''].includes(region)
+    ) {
+      throw ERRORS.AccessDenied('Invalid Region')
+    }
+
+    const selectedRegion = this.options.enforceRegion ? this.options.region : region
+
     // Construct the Canonical Request and String to Sign
     const canonicalRequest = this.constructCanonicalRequest(request, signedHeaders)
     const stringToSign = this.constructStringToSign(
       longDate,
       shortDate,
-      this.options.region,
+      selectedRegion,
       this.options.service,
       canonicalRequest
     )
@@ -64,7 +104,7 @@ export class SignatureV4 {
     const signingKey = this.signingKey(
       this.options.secretKey,
       shortDate,
-      this.options.region,
+      selectedRegion,
       this.options.service
     )
 
@@ -136,7 +176,9 @@ export class SignatureV4 {
 
   protected parseAuthorizationHeader(header: string) {
     const parts = header.split(' ')
-    if (parts[0] !== 'AWS4-HMAC-SHA256') throw new Error('Unsupported authorization type')
+    if (parts[0] !== 'AWS4-HMAC-SHA256') {
+      throw ERRORS.InvalidSignature('Unsupported authorization type')
+    }
 
     const params = header
       .replace('AWS4-HMAC-SHA256 ', '')
@@ -152,7 +194,7 @@ export class SignatureV4 {
     const signaturePart = params.get('Signature')
 
     if (!credentialPart || !signedHeadersPart || !signaturePart) {
-      throw new Error('Invalid authorization header format')
+      throw ERRORS.InvalidSignature('Invalid signature format')
     }
     const signedHeaders = signedHeadersPart.split(';') || []
 
@@ -174,6 +216,11 @@ export class SignatureV4 {
 
     const canonicalHeaders =
       signedHeaders
+        .filter(
+          (header) =>
+            request.headers[header] !== undefined &&
+            !(header.toLowerCase() in ALWAYS_UNSIGNABLE_HEADERS)
+        )
         .sort()
         .map((header) => {
           if (header === 'host') {

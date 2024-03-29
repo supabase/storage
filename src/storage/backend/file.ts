@@ -14,6 +14,9 @@ import {
   UploadPart,
 } from './adapter'
 import { StorageBackendError } from '../errors'
+import { contentType } from 'prom-client'
+import { bucket } from '../../http/routes'
+import { platform } from 'os'
 const pipeline = promisify(stream.pipeline)
 
 interface FileMetadata {
@@ -313,6 +316,17 @@ export class FileBackend implements StorageBackendAdapter {
 
   async abortMultipartUpload(bucketName: string, key: string, uploadId: string): Promise<void> {
     return Promise.resolve(undefined)
+  }
+
+  async uploadPartCopy(
+    storageS3Bucket: string,
+    key: string,
+    version: string,
+    UploadId: string,
+    PartNumber: number,
+    sourceKey: string
+  ): Promise<{ eTag?: string; lastModified?: Date }> {
+    throw new Error('Method not implemented.')
   }
 
   protected async getFileMetadata(file: string) {

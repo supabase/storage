@@ -191,10 +191,16 @@ export class StorageKnexDB implements Database {
 
   async listObjectsV2(
     bucketId: string,
-    options?: { prefix?: string; deltimeter?: string; nextToken?: string; maxKeys?: number }
+    options?: {
+      prefix?: string
+      delimiter?: string
+      nextToken?: string
+      maxKeys?: number
+      startAfter?: string
+    }
   ) {
     return this.runQuery('ListObjectsV2', async (knex) => {
-      if (!options?.deltimeter) {
+      if (!options?.delimiter) {
         const query = knex
           .table('objects')
           .where('bucket_id', bucketId)
@@ -217,13 +223,17 @@ export class StorageKnexDB implements Database {
         return query
       }
 
-      const query = await knex.raw('select * from storage.list_objects_with_delimiter(?,?,?,?,?)', [
-        bucketId,
-        options?.prefix,
-        options?.deltimeter,
-        options?.maxKeys,
-        options?.nextToken || '',
-      ])
+      const query = await knex.raw(
+        'select * from storage.list_objects_with_delimiter(?,?,?,?,?,?)',
+        [
+          bucketId,
+          options?.prefix,
+          options?.delimiter,
+          options?.maxKeys,
+          options?.startAfter || '',
+          options?.nextToken || '',
+        ]
+      )
 
       return query.rows
     })
@@ -339,7 +349,7 @@ export class StorageKnexDB implements Database {
   async updateObject(
     bucketId: string,
     name: string,
-    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name'>
+    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id'>
   ) {
     const [object] = await this.runQuery('UpdateObject', (knex) => {
       return knex
@@ -349,6 +359,7 @@ export class StorageKnexDB implements Database {
         .update(
           {
             name: data.name,
+            bucket_id: data.bucket_id,
             owner: isUuid(data.owner || '') ? data.owner : undefined,
             owner_id: data.owner,
             metadata: data.metadata,
@@ -737,10 +748,6 @@ export class DBError extends StorageBackendError implements RenderableError {
           code: pgError.code,
         })
     }
-  }
-
-  getOriginalError() {
-    return this.originalError
   }
 }
 

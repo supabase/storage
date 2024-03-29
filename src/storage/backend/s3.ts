@@ -15,6 +15,7 @@ import {
   S3Client,
   S3ClientConfig,
   UploadPartCommand,
+  UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
@@ -392,10 +393,6 @@ export class S3Backend implements StorageBackendAdapter {
     locationParts.shift() // tenant-id
     const bucket = keyParts.shift()
 
-    // remove object version from key
-    // const removeObject = new ObjectDeleteCommand()
-    // this.client.send()
-
     return {
       version,
       location: keyParts.join('/'),
@@ -411,5 +408,30 @@ export class S3Backend implements StorageBackendAdapter {
       UploadId: uploadId,
     })
     await this.client.send(abortUpload)
+  }
+
+  async uploadPartCopy(
+    storageS3Bucket: string,
+    key: string,
+    version: string,
+    UploadId: string,
+    PartNumber: number,
+    sourceKey: string,
+    sourceKeyVersion?: string
+  ) {
+    const uploadPartCopy = new UploadPartCopyCommand({
+      Bucket: storageS3Bucket,
+      Key: withOptionalVersion(key, version),
+      UploadId,
+      PartNumber,
+      CopySource: `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceKeyVersion)}`,
+    })
+
+    const part = await this.client.send(uploadPartCopy)
+
+    return {
+      eTag: part.CopyPartResult?.ETag,
+      lastModified: part.CopyPartResult?.LastModified,
+    }
   }
 }

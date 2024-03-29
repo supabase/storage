@@ -13,12 +13,14 @@ import {
   HeadBucketCommand,
   ListBucketsCommand,
   ListMultipartUploadsCommand,
+  ListObjectsCommand,
   ListObjectsV2Command,
   ListPartsCommand,
   PutObjectCommand,
   S3Client,
   S3ServiceException,
   UploadPartCommand,
+  UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
 import { getConfig, mergeConfig } from '../config'
 import app from '../app'
@@ -30,20 +32,21 @@ import { randomUUID } from 'crypto'
 const { tenantId, serviceKey, storageS3Region } = getConfig()
 
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
+  let bucketName: string
   if (!name) {
-    name = `TestBucket-${randomUUID()}`
+    bucketName = `TestBucket-${randomUUID()}`
+  } else {
+    bucketName = `${name}-${randomUUID()}`
   }
 
-  name = `${name}-${randomUUID()}`
-
   const createBucketRequest = new CreateBucketCommand({
-    Bucket: name,
+    Bucket: bucketName,
     ACL: publicRead ? 'public-read' : undefined,
   })
 
   await client.send(createBucketRequest)
 
-  return name
+  return bucketName
 }
 
 async function uploadFile(client: S3Client, bucketName: string, key: string, mb: number) {
@@ -74,7 +77,7 @@ describe('S3 Protocol', () => {
       client = new S3Client({
         endpoint: `${listener.replace('[::1]', 'localhost')}/s3`,
         forcePathStyle: true,
-        region: 'us-east-1',
+        region: storageS3Region,
         credentials: {
           accessKeyId: tenantId,
           secretAccessKey: serviceKey,
@@ -83,7 +86,7 @@ describe('S3 Protocol', () => {
 
       clientMinio = new S3Client({
         forcePathStyle: true,
-        region: 'us-east-1',
+        region: storageS3Region,
         logger: console,
         endpoint: 'http://localhost:9000',
         credentials: {
@@ -100,7 +103,7 @@ describe('S3 Protocol', () => {
     describe('CreateBucketCommand', () => {
       it('creates a bucket', async () => {
         const createBucketRequest = new CreateBucketCommand({
-          Bucket: `SomeBucket-${Date.now()}`,
+          Bucket: `SomeBucket-${randomUUID()}`,
           ACL: 'public-read',
         })
 
@@ -197,6 +200,34 @@ describe('S3 Protocol', () => {
       })
     })
 
+    describe('ListObjectCommand', () => {
+      it('list empty bucket', async () => {
+        const bucket = await createBucket(client)
+        const listBuckets = new ListObjectsCommand({
+          Bucket: bucket,
+        })
+
+        const resp = await client.send(listBuckets)
+        expect(resp.Contents?.length).toBe(undefined)
+      })
+
+      it('list all keys', async () => {
+        const bucket = await createBucket(client)
+        const listBuckets = new ListObjectsCommand({
+          Bucket: bucket,
+        })
+
+        await Promise.all([
+          uploadFile(client, bucket, 'test-1.jpg', 1),
+          uploadFile(client, bucket, 'prefix-1/test-1.jpg', 1),
+          uploadFile(client, bucket, 'prefix-3/test-1.jpg', 1),
+        ])
+
+        const resp = await client.send(listBuckets)
+        expect(resp.Contents?.length).toBe(3)
+      })
+    })
+
     describe('ListObjectsV2Command', () => {
       it('list empty bucket', async () => {
         const bucket = await createBucket(client)
@@ -286,6 +317,55 @@ describe('S3 Protocol', () => {
         expect(objectsPage3.Contents?.length).toBe(1)
         expect(objectsPage3.CommonPrefixes?.length).toBe(undefined)
         expect(objectsPage3.Contents?.[0].Key).toBe('test-1.jpg')
+      })
+
+      it('paginate keys and common prefixes using StartAfter', async () => {
+        const bucket = await createBucket(client)
+        const listBucketsPage1 = new ListObjectsV2Command({
+          Bucket: bucket,
+          Delimiter: '/',
+          MaxKeys: 1,
+          StartAfter: 'prefix-1/test-1.jpg',
+        })
+
+        await Promise.all([
+          uploadFile(client, bucket, 'test-1.jpg', 1),
+          uploadFile(client, bucket, 'prefix-1/test-1.jpg', 1),
+          uploadFile(client, bucket, 'prefix-3/test-1.jpg', 1),
+        ])
+
+        const objectsPage1 = await client.send(listBucketsPage1)
+        expect(objectsPage1.Contents?.length).toBe(undefined)
+        expect(objectsPage1.CommonPrefixes?.length).toBe(1)
+        expect(objectsPage1.CommonPrefixes?.[0].Prefix).toBe('prefix-3/')
+        expect(objectsPage1.IsTruncated).toBe(true)
+
+        const listBucketsPage2 = new ListObjectsV2Command({
+          Bucket: bucket,
+          Delimiter: '/',
+          MaxKeys: 1,
+          ContinuationToken: objectsPage1.NextContinuationToken,
+        })
+
+        const objectsPage2 = await client.send(listBucketsPage2)
+
+        expect(objectsPage2.Contents?.length).toBe(1)
+        expect(objectsPage2.CommonPrefixes?.length).toBe(undefined)
+
+        const listBucketsPage3 = new ListObjectsV2Command({
+          Bucket: bucket,
+          Delimiter: '/',
+          MaxKeys: 1,
+          ContinuationToken: objectsPage2.NextContinuationToken,
+          StartAfter: 'prefix-3/test-1.jpg',
+        })
+
+        const objectsPage3 = await client.send(listBucketsPage3)
+
+        expect(objectsPage3.Contents?.length).toBe(1)
+        expect(objectsPage3.CommonPrefixes?.length).toBe(undefined)
+        expect(objectsPage3.Contents?.[0].Key).toBe('test-1.jpg')
+        expect(objectsPage3.IsTruncated).toBe(false)
       })
     })
 
@@ -952,6 +1032,62 @@ describe('S3 Protocol', () => {
         const parts3 = await client.send(listParts3)
         expect(parts3.Parts?.length).toBe(1)
         expect(parts3.Parts?.[0].PartNumber).toBe(3)
+      })
+    })
+
+    describe('UploadPartCopyCommand', () => {
+      it('will copy a part from an existing object and upload it as a part', async () => {
+        const bucket = await createBucket(client)
+
+        const sourceKey = `${randomUUID()}.jpg`
+        const newKey = `new-${randomUUID()}.jpg`
+
+        await uploadFile(client, bucket, sourceKey, 12)
+
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucket,
+          Key: newKey,
+          ContentType: 'image/jpg',
+          CacheControl: 'max-age=2000',
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+
+        const copyPart = new UploadPartCopyCommand({
+          Bucket: bucket,
+          Key: newKey,
+          UploadId: resp.UploadId,
+          PartNumber: 1,
+          CopySource: `${bucket}/${sourceKey}`,
+          CopySourceRange: `bytes=0-${1024 * 1024 * 4}`,
+        })
+
+        const copyResp = await client.send(copyPart)
+        expect(copyResp.CopyPartResult?.ETag).toBeTruthy()
+        expect(copyResp.CopyPartResult?.LastModified).toBeTruthy()
+
+        const listPartsCmd = new ListPartsCommand({
+          Bucket: bucket,
+          Key: newKey,
+          UploadId: resp.UploadId,
+        })
+
+        const parts = await client.send(listPartsCmd)
+        expect(parts.Parts?.length).toBe(1)
+
+        const completeMultiPartUpload = new CompleteMultipartUploadCommand({
+          Bucket: bucket,
+          Key: newKey,
+          UploadId: resp.UploadId,
+          MultipartUpload: {
+            Parts: [
+              {
+                PartNumber: 1,
+                ETag: copyResp.CopyPartResult?.ETag,
+              },
+            ],
+          },
+        })
       })
     })
   })

@@ -1722,6 +1722,44 @@ describe('testing move object', () => {
     expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
   })
 
+  test('can move objects across buckets respecting RLS', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: `/object/move`,
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey: 'authenticated/move-orig-4.png',
+        destinationBucket: 'bucket3',
+        destinationKey: 'authenticated/move-new.png',
+      },
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+  })
+
+  test('cannot move objects across buckets because RLS checks', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: `/object/move`,
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey: 'authenticated/move-orig-5.png',
+        destinationBucket: 'bucket3',
+        destinationKey: 'somekey/move-new.png',
+      },
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
+  })
+
   test('check if RLS policies are respected: anon user is not able to move an authenticated object', async () => {
     const response = await app().inject({
       method: 'POST',

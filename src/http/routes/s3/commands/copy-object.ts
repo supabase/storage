@@ -24,6 +24,7 @@ const CopyObjectInput = {
       'cache-control': { type: 'string' },
       expires: { type: 'string' },
     },
+    required: ['x-amz-copy-source'],
   },
 } as const
 

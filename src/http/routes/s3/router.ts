@@ -16,6 +16,7 @@ import { default as HeadBucket } from './commands/head-bucket'
 import { default as CopyObject } from './commands/copy-object'
 import { default as ListMultipartUploads } from './commands/list-multipart-uploads'
 import { default as ListParts } from './commands/list-parts'
+import { default as UploadPartCopy } from './commands/upload-part-copy'
 
 import { FromSchema, JSONSchema } from 'json-schema-to-ts'
 
@@ -23,10 +24,10 @@ export type Context = { storage: Storage; tenantId: string }
 export type S3Router = Router<Context>
 
 const s3Commands = [
+  UploadPartCopy,
   CopyObject,
   DeleteBucket,
   HeadObject,
-  ListObjects,
   CreateBucket,
   CompleteMultipartUpload,
   CreateMultipartUpload,
@@ -39,6 +40,7 @@ const s3Commands = [
   ListBucket,
   ListParts,
   GetObject,
+  ListObjects,
 ]
 
 export function getRouter() {
@@ -154,7 +156,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
   }
 
   parseQueryString(queryString: string) {
-    const queries = queryString.split('?')[1]?.split('&') || []
+    const queries = queryString.replace(/\|.*/, '').split('?')[1]?.split('&') || []
     const headers = queryString.split('|').splice(1)
 
     if (queries.length === 0) {

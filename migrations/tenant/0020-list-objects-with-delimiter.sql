@@ -1,6 +1,6 @@
 
 
-CREATE OR REPLACE FUNCTION storage.list_objects_with_delimiter(bucket_id text, prefix_param text, delimiter_param text, max_keys integer default 100, next_token text DEFAULT '')
+CREATE OR REPLACE FUNCTION storage.list_objects_with_delimiter(bucket_id text, prefix_param text, delimiter_param text, max_keys integer default 100, start_after text DEFAULT '', next_token text DEFAULT '')
     RETURNS TABLE (name text, id uuid, metadata jsonb, updated_at timestamptz) AS
 $$
 BEGIN
@@ -19,6 +19,10 @@ BEGIN
                 bucket_id = $5 AND
                 name ILIKE $1 || ''%'' AND
                 CASE
+                    WHEN $6 != '''' THEN
+                    name COLLATE "C" > $6
+                ELSE true END
+                AND CASE
                     WHEN $4 != '''' THEN
                         CASE
                             WHEN position($2 IN substring(name from length($1) + 1)) > 0 THEN
@@ -31,7 +35,7 @@ BEGIN
                 END
             ORDER BY
                 name COLLATE "C" ASC) as e order by name COLLATE "C" LIMIT $3'
-        USING prefix_param, delimiter_param, max_keys, next_token, bucket_id;
+        USING prefix_param, delimiter_param, max_keys, next_token, bucket_id, start_after;
 END;
 $$ LANGUAGE plpgsql;
 

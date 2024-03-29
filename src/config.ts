@@ -97,6 +97,7 @@ type StorageConfigType = {
   tusUseFileVersionSeparator: boolean
   defaultMetricsEnabled: boolean
   s3ProtocolPrefix: string
+  s3ProtocolEnforceRegion: boolean
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -218,6 +219,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
     // S3 Protocol
     s3ProtocolPrefix: getOptionalConfigFromEnv('S3_PROTOCOL_PREFIX') || '',
+    s3ProtocolEnforceRegion: getOptionalConfigFromEnv('S3_PROTOCOL_ENFORCE_REGION') === 'true',
 
     // Storage
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,

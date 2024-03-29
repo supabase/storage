@@ -46,7 +46,7 @@ export default async function routes(fastify: FastifyInstance) {
         querystring: renderImageQuerySchema,
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
-        tags: ['object'],
+        tags: ['transformation'],
       },
     },
     async (request, response) => {

@@ -20,6 +20,9 @@ export enum ErrorCode {
   ResourceAlreadyExists = 'ResourceAlreadyExists',
   InvalidBucketName = 'InvalidBucketName',
   InvalidKey = 'InvalidKey',
+  InvalidRange = 'InvalidRange',
+  InvalidMimeType = 'InvalidMimeType',
+  InvalidUploadId = 'InvalidUploadId',
   KeyAlreadyExists = 'KeyAlreadyExists',
   BucketAlreadyExists = 'BucketAlreadyExists',
   DatabaseTimeout = 'DatabaseTimeout',
@@ -48,6 +51,7 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.NoSuchBucket,
       resource: bucket,
+      error: 'Bucket not found',
       httpStatusCode: 404,
       message: `Bucket not found`,
       originalError: e,
@@ -64,6 +68,7 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.NoSuchKey,
       resource,
+      error: 'not_found',
       httpStatusCode: 404,
       message: `Object not found`,
       originalError: e,
@@ -72,7 +77,7 @@ export const ERRORS = {
   MissingParameter: (parameter: string, e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.MissingParameter,
-      httpStatusCode: 404,
+      httpStatusCode: 400,
       message: `Missing Required Parameter ${parameter}`,
       originalError: e,
     }),
@@ -117,11 +122,11 @@ export const ERRORS = {
       originalError: e,
     }),
 
-  InvalidSignature: (e?: Error) =>
+  InvalidSignature: (message?: string, e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.InvalidSignature,
       httpStatusCode: 400,
-      message: 'Invalid signature',
+      message: message || 'Invalid signature',
       originalError: e,
     }),
 
@@ -151,7 +156,7 @@ export const ERRORS = {
 
   InvalidUploadId: (message?: string, e?: Error) =>
     new StorageBackendError({
-      code: ErrorCode.InvalidRequest,
+      code: ErrorCode.InvalidUploadId,
       httpStatusCode: 400,
       message: message || 'Invalid upload id',
       originalError: e,
@@ -167,9 +172,17 @@ export const ERRORS = {
   InvalidMimeType: (mimeType: string) =>
     new StorageBackendError({
       error: 'invalid_mime_type',
-      code: ErrorCode.InvalidRequest,
+      code: ErrorCode.InvalidMimeType,
       httpStatusCode: 415,
       message: `mime type ${mimeType} is not supported`,
+    }),
+
+  InvalidRange: () =>
+    new StorageBackendError({
+      error: 'invalid_range',
+      code: ErrorCode.InvalidRange,
+      httpStatusCode: 400,
+      message: `invalid range provided`,
     }),
 
   EntityTooLarge: (e?: Error) =>
@@ -236,8 +249,9 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.KeyAlreadyExists,
       resource: key,
+      error: 'Duplicate',
       httpStatusCode: 409,
-      message: `Key already exists: ${key}`,
+      message: `The resource already exists`,
       originalError: e,
     }),
 
@@ -245,8 +259,9 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.BucketAlreadyExists,
       resource: bucket,
+      error: 'Duplicate',
       httpStatusCode: 409,
-      message: `Bucket already exists: ${bucket}`,
+      message: `The resource already exists`,
       originalError: e,
     }),
 

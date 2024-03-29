@@ -64,3 +64,19 @@ BEGIN
         USING prefix_param, delimiter_param, max_keys, next_key_token, bucket_id, next_upload_token;
 END;
 $$ LANGUAGE plpgsql;
+
+ALTER TABLE storage._s3_multipart_uploads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE storage._s3_multipart_uploads_parts ENABLE ROW LEVEL SECURITY;
+
+-- Do not expose this tables to PostgREST
+DO $$
+DECLARE
+    anon_role text = COALESCE(current_setting('storage.anon_role', true), 'anon');
+    authenticated_role text = COALESCE(current_setting('storage.authenticated_role', true), 'authenticated');
+    service_role text = COALESCE(current_setting('storage.service_role', true), 'service_role');
+BEGIN
+    EXECUTE 'revoke all on storage._s3_multipart_uploads from ' || anon_role || ', ' || authenticated_role;
+    EXECUTE 'revoke all on storage._s3_multipart_uploads_parts from ' || anon_role || ', ' || authenticated_role;
+    EXECUTE 'GRANT ALL ON TABLE storage._s3_multipart_uploads TO ' || service_role;
+    EXECUTE 'GRANT ALL ON TABLE storage._s3_multipart_uploads_parts TO ' || service_role;
+END$$;

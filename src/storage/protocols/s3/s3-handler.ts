@@ -11,10 +11,13 @@ import {
   GetObjectCommandInput,
   HeadObjectCommandInput,
   ListMultipartUploadsCommandInput,
+  ListObjectsCommandInput,
   ListObjectsV2CommandInput,
+  ListObjectsV2Output,
   ListPartsCommandInput,
   PutObjectCommandInput,
   UploadPartCommandInput,
+  UploadPartCopyCommandInput,
 } from '@aws-sdk/client-s3'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
@@ -23,7 +26,6 @@ import { ERRORS } from '../../errors'
 import { S3MultipartUpload, Obj } from '../../schemas'
 import { decrypt, encrypt } from '../../../auth'
 import { ByteLimitTransformStream } from './byte-limit-stream'
-import { randomUUID } from 'crypto'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
 
@@ -31,8 +33,10 @@ export class S3ProtocolHandler {
   constructor(protected readonly storage: Storage, protected readonly tenantId: string) {}
 
   /**
-   * Get the versioning configuration of a bucket
+   * Returns the versioning state of a bucket.
    * default: versioning is suspended
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketVersioning.html
    */
   async getBucketVersioning() {
     return {
@@ -46,7 +50,9 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Get the location of a bucket
+   * Returns the Region the bucket resides in
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLocation.html
    */
   async getBucketLocation() {
     return {
@@ -59,7 +65,9 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * List all buckets
+   * Returns a list of all buckets owned by the authenticated sender of the request
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html
    */
   async listBuckets() {
     const buckets = await this.storage.listBuckets('name,created_at')
@@ -81,7 +89,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Create a new bucket
+   * Creates a new S3 bucket.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
+   *
    * @param Bucket
    * @param isPublic
    */
@@ -102,7 +113,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Delete a bucket
+   * Deletes the S3 bucket. All objects in the bucket must be deleted before the bucket itself can be deleted.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucket.html
+   *
    * @param name
    */
   async deleteBucket(name: string) {
@@ -114,7 +128,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Head bucket
+   * You can use this operation to determine if a bucket exists and if you have permission to access it. The action returns a 200 OK if the bucket exists and you have permission to access it.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html
+   *
    * @param name
    */
   async headBucket(name: string) {
@@ -128,7 +145,42 @@ export class S3ProtocolHandler {
   }
 
   /**
+   * Returns some or all (up to 1,000) of the objects in a bucket.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjects.html
+   * @param command
+   */
+  async listObjects(command: ListObjectsCommandInput) {
+    const list = await this.listObjectsV2({
+      Bucket: command.Bucket,
+      Delimiter: command.Delimiter,
+      EncodingType: command.EncodingType,
+      MaxKeys: command.MaxKeys,
+      Prefix: command.Prefix,
+      ContinuationToken: command.Marker,
+    })
+
+    return {
+      responseBody: {
+        ListBucketResult: {
+          Name: list.responseBody.ListBucketResult.Name,
+          Prefix: list.responseBody.ListBucketResult.Prefix,
+          Marker: list.responseBody.ListBucketResult.ContinuationToken,
+          MaxKeys: list.responseBody.ListBucketResult.MaxKeys,
+          IsTruncated: list.responseBody.ListBucketResult.IsTruncated,
+          Contents: list.responseBody.ListBucketResult.Contents,
+          CommonPrefixes: list.responseBody.ListBucketResult.CommonPrefixes,
+          EncodingType: list.responseBody.ListBucketResult.EncodingType,
+        },
+      },
+    }
+  }
+
+  /**
    * List objects in a bucket, implements the ListObjectsV2Command
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
+   *
    * @param command
    */
   async listObjectsV2(command: ListObjectsV2CommandInput) {
@@ -144,15 +196,16 @@ export class S3ProtocolHandler {
     const delimiter = command.Delimiter
     const prefix = command.Prefix || ''
     const maxKeys = command.MaxKeys
-    const bucket = command.Bucket!
+    const bucket = command.Bucket
 
-    const limit = maxKeys || 200
+    const limit = maxKeys || 1000
 
     const objects = await this.storage.from(bucket).listObjectsV2({
       prefix,
-      deltimeter: delimiter,
+      delimiter: delimiter,
       maxKeys: limit + 1,
       nextToken: continuationToken ? decodeContinuationToken(continuationToken) : undefined,
+      startAfter,
     })
 
     let results = objects
@@ -196,31 +249,31 @@ export class S3ProtocolHandler {
     }
 
     const commonPrefixes = results
+      .filter((e) => e.id === null)
       .map((object) => {
-        if (object.id === null) {
-          return {
-            Prefix: command.EncodingType === 'url' ? encodeURIComponent(object.name) : object.name,
-          }
+        return {
+          Prefix: object.name,
         }
       })
-      .filter((e) => e)
 
     const contents =
       results
         .filter((o) => o.id)
         .map((o) => ({
           Key: command.EncodingType === 'url' ? encodeURIComponent(o.name) : o.name,
-          LastModified: o.updated_at ? new Date(o.updated_at).toISOString() : undefined,
-          ETag: o.metadata?.eTag,
-          Size: o.metadata?.size,
-          StorageClass: 'STANDARD',
+          LastModified: (o.updated_at ? new Date(o.updated_at).toISOString() : undefined) as
+            | Date
+            | undefined,
+          ETag: o.metadata?.eTag as string,
+          Size: o.metadata?.size as number,
+          StorageClass: 'STANDARD' as const,
         })) || []
 
     const nextContinuationToken = isTruncated
       ? encodeContinuationToken(results[results.length - 1].name)
       : undefined
 
-    const response = {
+    const response: { ListBucketResult: ListObjectsV2Output } = {
       ListBucketResult: {
         Name: bucket,
         Prefix: prefix,
@@ -241,6 +294,13 @@ export class S3ProtocolHandler {
     }
   }
 
+  /**
+   * This operation lists in-progress multipart uploads in a bucket.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListMultipartUploads.html
+   *
+   * @param command
+   */
   async listMultipartUploads(command: ListMultipartUploadsCommandInput) {
     if (!command.Bucket) {
       throw ERRORS.MissingParameter('Bucket')
@@ -255,11 +315,11 @@ export class S3ProtocolHandler {
     const delimiter = command.Delimiter
     const prefix = command.Prefix || ''
     const maxKeys = command.MaxUploads
-    const bucket = command.Bucket!
+    const bucket = command.Bucket
 
     const limit = maxKeys || 200
 
-    const multipartUploads = await this.storage.db.listMultipartUploads(bucket, {
+    const multipartUploads = await this.storage.db.asSuperUser().listMultipartUploads(bucket, {
       prefix,
       deltimeter: delimiter,
       maxKeys: limit + 1,
@@ -308,17 +368,12 @@ export class S3ProtocolHandler {
     }
 
     const commonPrefixes = results
+      .filter((e) => e.isFolder)
       .map((object) => {
-        if (object.isFolder) {
-          return {
-            Prefix:
-              command.EncodingType === 'url' && object.key
-                ? encodeURIComponent(object.key)
-                : object.key,
-          }
+        return {
+          Prefix: object.key,
         }
       })
-      .filter((e) => e)
 
     const uploads =
       results
@@ -363,7 +418,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Create a multipart upload
+   * This action initiates a multipart upload and returns an upload ID
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html
+   *
    * @param command
    */
   async createMultiPartUpload(command: CreateMultipartUploadCommandInput) {
@@ -373,7 +431,7 @@ export class S3ProtocolHandler {
     mustBeValidBucketName(Bucket)
     mustBeValidKey(Key)
 
-    await this.storage.asSuperUser().findBucket(Bucket)
+    await this.storage.asSuperUser().findBucket(Bucket, 'id')
 
     // Create Multi Part Upload
     const version = await uploader.prepareUpload({
@@ -411,7 +469,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Complete a multipart upload
+   * Completes a multipart upload by assembling previously uploaded parts.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html
+   *
    * @param command
    */
   async completeMultiPartUpload(command: CompleteMultipartUploadCommandInput) {
@@ -476,7 +537,9 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Upload a part of a multipart upload
+   * Uploads a part in a multipart upload.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
    * @param command
    */
   async uploadPart(command: UploadPartCommandInput) {
@@ -497,31 +560,7 @@ export class S3ProtocolHandler {
     const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'file_size_limit')
 
     const maxFileSize = await getMaxFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
-    const multipart = await this.storage.db.asSuperUser().withTransaction(async (db) => {
-      const multipart = await db.findMultipartUpload(
-        UploadId,
-        'in_progress_size,version,upload_signature',
-        {
-          forUpdate: true,
-        }
-      )
-
-      const { progress } = this.decryptUploadSignature(multipart.upload_signature)
-
-      if (progress !== BigInt(multipart.in_progress_size)) {
-        throw ERRORS.InvalidUploadSignature()
-      }
-
-      const currentProgress = BigInt(multipart.in_progress_size) + BigInt(ContentLength)
-
-      if (currentProgress > maxFileSize) {
-        throw ERRORS.EntityTooLarge()
-      }
-
-      const signature = this.uploadSignature({ in_progress_size: currentProgress })
-      await db.updateMultipartUploadProgress(UploadId, currentProgress, signature)
-      return multipart
-    })
+    const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize)
 
     const proxy = new PassThrough()
 
@@ -586,7 +625,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Put an object in a bucket
+   * Adds an object to a bucket.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html
+   *
    * @param command
    */
   async putObject(command: PutObjectCommandInput) {
@@ -594,6 +636,14 @@ export class S3ProtocolHandler {
 
     mustBeValidBucketName(command.Bucket)
     mustBeValidKey(command.Key)
+
+    if (
+      command.Key.endsWith('/') &&
+      (command.ContentLength === undefined || command.ContentLength === 0)
+    ) {
+      // Consistent with how supabase Storage handles empty folders
+      command.Key += '.emptyFolderPlaceholder'
+    }
 
     const upload = await uploader.upload(command.Body as any, {
       bucketId: command.Bucket as string,
@@ -610,7 +660,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Abort a multipart upload
+   * This operation aborts a multipart upload
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_AbortMultipartUpload.html
+   *
    * @param command
    */
   async abortMultipartUpload(command: AbortMultipartUploadCommandInput) {
@@ -632,7 +685,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Head Object
+   * The HEAD operation retrieves metadata from an object without returning the object itself. This operation is useful if you're interested only in an object's metadata.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html
+   *
    * @param command
    */
   async headObject(command: HeadObjectCommandInput) {
@@ -666,7 +722,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Get Object
+   * Retrieves an object from Amazon S3.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html
+   *
    * @param command
    */
   async getObject(command: GetObjectCommandInput) {
@@ -698,7 +757,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Delete Object
+   * Removes an object from a bucket.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html
+   *
    * @param command
    */
   async deleteObject(command: DeleteObjectCommandInput) {
@@ -718,7 +780,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Delete Multiple Objects
+   * This operation enables you to delete multiple objects from a bucket using a single HTTP request.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
+   *
    * @param command
    */
   async deleteObjects(command: DeleteObjectsCommandInput) {
@@ -771,6 +836,13 @@ export class S3ProtocolHandler {
     }
   }
 
+  /**
+   * Creates a copy of an object that is already stored in Amazon S3.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
+   *
+   * @param command
+   */
   async copyObject(command: CopyObjectCommandInput) {
     const { Bucket, Key, CopySource } = command
 
@@ -786,11 +858,17 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    const sourceBucket = CopySource.split('/').shift()
-    const sourceKey = CopySource.split('/').slice(1).join('/')
+    const sourceBucket = (
+      CopySource.startsWith('/') ? CopySource.replace('/', '').split('/') : CopySource.split('/')
+    ).shift()
+
+    const sourceKey = (CopySource.startsWith('/') ? CopySource.replace('/', '') : CopySource)
+      .split('/')
+      .slice(1)
+      .join('/')
 
     if (!sourceBucket) {
-      throw ERRORS.MissingParameter('CopySource')
+      throw ERRORS.InvalidBucketName('')
     }
 
     if (!sourceKey) {
@@ -822,16 +900,24 @@ export class S3ProtocolHandler {
     }
   }
 
+  /**
+   * Lists the parts that have been uploaded for a specific multipart upload.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListParts.html
+   *
+   * @param command
+   */
   async listParts(command: ListPartsCommandInput) {
     if (!command.UploadId) {
       throw ERRORS.MissingParameter('UploadId')
     }
 
+    // check if multipart exists
     await this.storage.db.asSuperUser().findMultipartUpload(command.UploadId, 'id')
 
     const maxParts = command.MaxParts || 1000
 
-    let result = await this.storage.db.listParts(command.UploadId, {
+    let result = await this.storage.db.asSuperUser().listParts(command.UploadId, {
       afterPart: command.PartNumberMarker,
       maxParts: maxParts + 1,
     })
@@ -864,17 +950,165 @@ export class S3ProtocolHandler {
     }
   }
 
+  /**
+   * Uploads a part by copying data from an existing object as data source. To specify the data source, you add the request header x-amz-copy-source in your request. To specify a byte range, you add the request header x-amz-copy-source-range in your request.
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPartCopy.html
+   *
+   * @param command UploadPartCopyCommandInput
+   */
+  async uploadPartCopy(command: UploadPartCopyCommandInput) {
+    const { Bucket, Key, UploadId, PartNumber, CopySource, CopySourceRange } = command
+
+    if (!UploadId) {
+      throw ERRORS.MissingParameter('UploadId')
+    }
+
+    if (!Bucket) {
+      throw ERRORS.MissingParameter('Bucket')
+    }
+
+    if (!Key) {
+      throw ERRORS.MissingParameter('Key')
+    }
+
+    if (!PartNumber) {
+      throw ERRORS.MissingParameter('PartNumber')
+    }
+
+    if (!CopySource) {
+      throw ERRORS.MissingParameter('CopySource')
+    }
+
+    if (!CopySourceRange) {
+      throw ERRORS.MissingParameter('CopySourceRange')
+    }
+
+    const sourceBucketName = (
+      CopySource.startsWith('/') ? CopySource.replace('/', '').split('/') : CopySource.split('/')
+    ).shift()
+
+    const sourceKey = (CopySource.startsWith('/') ? CopySource.replace('/', '') : CopySource)
+      .split('/')
+      .slice(1)
+      .join('/')
+
+    if (!sourceBucketName) {
+      throw ERRORS.NoSuchBucket('')
+    }
+
+    if (!sourceKey) {
+      throw ERRORS.NoSuchKey('')
+    }
+
+    const bytes = CopySourceRange.split('=')[1].split('-')
+
+    if (bytes.length !== 2) {
+      throw ERRORS.InvalidRange()
+    }
+
+    const fromByte = BigInt(bytes[0])
+    const toByte = BigInt(bytes[1])
+
+    const size = toByte - fromByte
+
+    const uploader = new Uploader(this.storage.backend, this.storage.db)
+
+    await uploader.canUpload({
+      bucketId: Bucket as string,
+      objectName: Key as string,
+      isUpsert: true,
+    })
+
+    // Check if copy source exists
+    const copySource = await this.storage.db.findObject(
+      sourceBucketName,
+      sourceKey,
+      'id,name,version'
+    )
+
+    const [destinationBucket] = await this.storage.db.asSuperUser().withTransaction(async (db) => {
+      return Promise.all([
+        db.findBucketById(Bucket, 'file_size_limit'),
+        db.findBucketById(sourceBucketName, 'id'),
+      ])
+    })
+    const maxFileSize = await getMaxFileSizeLimit(
+      this.storage.db.tenantId,
+      destinationBucket?.file_size_limit
+    )
+
+    const multipart = await this.shouldAllowPartUpload(UploadId, Number(size), maxFileSize)
+
+    const uploadPart = await this.storage.backend.uploadPartCopy(
+      storageS3Bucket,
+      `${this.tenantId}/${Bucket}/${Key}`,
+      multipart.version,
+      UploadId,
+      PartNumber,
+      `${this.tenantId}/${sourceBucketName}/${copySource.name}`,
+      copySource.version
+    )
+
+    await this.storage.db.insertUploadPart({
+      upload_id: UploadId,
+      version: multipart.version,
+      part_number: PartNumber,
+      etag: uploadPart.eTag || '',
+      key: Key as string,
+      bucket_id: Bucket,
+    })
+
+    return {
+      responseBody: {
+        ETag: uploadPart.eTag || '',
+        LastModified: uploadPart.lastModified ? uploadPart.lastModified.toISOString() : undefined,
+      },
+    }
+  }
+
   protected uploadSignature({ in_progress_size }: { in_progress_size: BigInt }) {
     return `${encrypt('progress:' + in_progress_size.toString())}`
   }
 
   protected decryptUploadSignature(signature: string) {
     const originalSignature = decrypt(signature)
-    const [_, value] = originalSignature.split(':')
+    const [, value] = originalSignature.split(':')
 
     return {
       progress: BigInt(value),
     }
+  }
+
+  protected async shouldAllowPartUpload(
+    uploadId: string,
+    contentLength: number,
+    maxFileSize: number
+  ) {
+    return this.storage.db.asSuperUser().withTransaction(async (db) => {
+      const multipart = await db.findMultipartUpload(
+        uploadId,
+        'in_progress_size,version,upload_signature',
+        {
+          forUpdate: true,
+        }
+      )
+
+      const { progress } = this.decryptUploadSignature(multipart.upload_signature)
+
+      if (progress !== BigInt(multipart.in_progress_size)) {
+        throw ERRORS.InvalidUploadSignature()
+      }
+
+      const currentProgress = BigInt(multipart.in_progress_size) + BigInt(contentLength)
+
+      if (currentProgress > maxFileSize) {
+        throw ERRORS.EntityTooLarge()
+      }
+
+      const signature = this.uploadSignature({ in_progress_size: currentProgress })
+      await db.updateMultipartUploadProgress(uploadId, currentProgress, signature)
+      return multipart
+    })
   }
 }
 

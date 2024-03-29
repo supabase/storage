@@ -79,7 +79,13 @@ export interface Database {
   listObjects(bucketId: string, columns: string, limit: number): Promise<Obj[]>
   listObjectsV2(
     bucketId: string,
-    options?: { prefix?: string; deltimeter?: string; nextToken?: string; maxKeys?: number }
+    options?: {
+      prefix?: string
+      delimiter?: string
+      nextToken?: string
+      maxKeys?: number
+      startAfter?: string
+    }
   ): Promise<Obj[]>
 
   listMultipartUploads(

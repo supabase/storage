@@ -342,6 +342,7 @@ export class ObjectStorage {
   /**
    * Moves an existing remote object to a given location
    * @param sourceObjectName
+   * @param destinationBucket
    * @param destinationObjectName
    * @param owner
    */
@@ -353,10 +354,6 @@ export class ObjectStorage {
   ) {
     mustBeValidKey(destinationObjectName)
 
-    if (sourceObjectName === destinationObjectName) {
-      return
-    }
-
     const newVersion = randomUUID()
     const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
     const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationObjectName}`
@@ -365,16 +362,9 @@ export class ObjectStorage {
       return Promise.all([
         db.findObject(this.bucketId, sourceObjectName, 'id'),
         db.updateObject(this.bucketId, sourceObjectName, {
-          name: sourceObjectName,
-          version: '1',
-          owner,
-        }),
-        // We also check if we can create the destination object
-        // before starting the move
-        db.asSuperUser().createObject({
           name: destinationObjectName,
           version: newVersion,
-          bucket_id: this.bucketId,
+          bucket_id: destinationBucket,
           owner,
         }),
       ])
@@ -383,6 +373,12 @@ export class ObjectStorage {
     const sourceObj = await this.db
       .asSuperUser()
       .findObject(this.bucketId, sourceObjectName, 'id, version')
+
+    if (sourceObjectName === destinationObjectName) {
+      return {
+        destObject: sourceObj,
+      }
+    }
 
     try {
       await this.backend.copyObject(
@@ -395,16 +391,20 @@ export class ObjectStorage {
 
       const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
 
-      await this.db.asSuperUser().withTransaction(async (db) => {
-        await db.createObject({
+      return this.db.asSuperUser().withTransaction(async (db) => {
+        const sourceObject = await db.findObject(this.bucketId, sourceObjectName, 'id', {
+          forUpdate: true,
+          dontErrorOnEmpty: false,
+        })
+
+        await db.updateObject(this.bucketId, sourceObjectName, {
           name: destinationObjectName,
+          bucket_id: destinationBucket,
           version: newVersion,
-          bucket_id: this.bucketId,
-          owner: sourceObj.owner,
+          owner: owner,
           metadata,
         })
 
-        await db.deleteObject(this.bucketId, sourceObjectName, sourceObj.version)
         await ObjectAdminDelete.send({
           name: sourceObjectName,
           bucketId: this.bucketId,
@@ -433,6 +433,17 @@ export class ObjectStorage {
             reqId: this.db.reqId,
           }),
         ])
+
+        return {
+          destObject: {
+            id: sourceObject.id,
+            name: destinationObjectName,
+            bucket_id: destinationBucket,
+            version: newVersion,
+            owner: owner,
+            metadata,
+          },
+        }
       })
     } catch (e) {
       await ObjectAdminDelete.send({
@@ -462,8 +473,9 @@ export class ObjectStorage {
 
   async listObjectsV2(options?: {
     prefix?: string
-    deltimeter?: string
+    delimiter?: string
     nextToken?: string
+    startAfter?: string
     maxKeys?: number
   }) {
     return this.db.listObjectsV2(this.bucketId, options)

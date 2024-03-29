@@ -1,16 +1,12 @@
 import { FastifyInstance, RouteHandlerMethod } from 'fastify'
 import { db, jsonToXml, signatureV4, storage } from '../../plugins'
 import { getRouter } from './router'
-import { FastifyError } from '@fastify/error'
-import { FastifyRequest } from 'fastify/types/request'
-import { FastifyReply } from 'fastify/types/reply'
-import { ErrorCode, StorageBackendError } from '../../../storage'
-import { DatabaseError } from 'pg'
+import { s3ErrorHandler } from './error-handler'
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(async (fastify) => {
-    fastify.register(signatureV4)
     fastify.register(jsonToXml)
+    fastify.register(signatureV4)
     fastify.register(db)
     fastify.register(storage)
 
@@ -75,58 +71,6 @@ export default async function routes(fastify: FastifyInstance) {
           } as any
         )
 
-        const errorHandler = (
-          error: FastifyError | Error,
-          request: FastifyRequest,
-          reply: FastifyReply
-        ) => {
-          request.executionError = error
-
-          const resource = request.url
-            .split('?')[0]
-            .replace('/s3', '')
-            .split('/')
-            .filter((e) => e)
-            .join('/')
-
-          // database error
-          if (
-            error instanceof DatabaseError &&
-            [
-              'Max client connections reached',
-              'remaining connection slots are reserved for non-replication superuser connections',
-              'no more connections allowed',
-              'sorry, too many clients already',
-              'server login has been failing, try again later',
-            ].some((msg) => (error as DatabaseError).message.includes(msg))
-          ) {
-            return reply.status(429).send({
-              Error: {
-                Resource: resource,
-                Code: ErrorCode.SlowDown,
-                Message: 'Too many connections issued to the database',
-              },
-            })
-          }
-
-          if (error instanceof StorageBackendError) {
-            return reply.status(error.httpStatusCode || 500).send({
-              Error: {
-                Resource: resource,
-                Code: error.code,
-                Message: error.message,
-              },
-            })
-          }
-
-          return reply.status(500).send({
-            Error: {
-              Code: 'Internal',
-              Message: 'Internal Server Error',
-            },
-          })
-        }
-
         const routeHandler: RouteHandlerMethod = async (req, reply) => {
           for (const route of routesByMethod) {
             if (
@@ -171,7 +115,7 @@ export default async function routes(fastify: FastifyInstance) {
           {
             schema,
             exposeHeadRoute: false,
-            errorHandler: errorHandler,
+            errorHandler: s3ErrorHandler,
           },
           routeHandler
         )
@@ -183,7 +127,7 @@ export default async function routes(fastify: FastifyInstance) {
             {
               schema,
               exposeHeadRoute: false,
-              errorHandler: errorHandler,
+              errorHandler: s3ErrorHandler,
             },
             routeHandler
           )

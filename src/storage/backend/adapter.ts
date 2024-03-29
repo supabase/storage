@@ -194,6 +194,18 @@ export abstract class StorageBackendAdapter {
   async abortMultipartUpload(bucketName: string, key: string, uploadId: string): Promise<void> {
     throw new Error('not implemented')
   }
+
+  async uploadPartCopy(
+    storageS3Bucket: string,
+    key: string,
+    version: string,
+    UploadId: string,
+    PartNumber: number,
+    sourceKey: string,
+    sourceKeyVersion?: string
+  ): Promise<{ eTag?: string; lastModified?: Date }> {
+    throw new Error('not implemented')
+  }
 }
 
 const { tusUseFileVersionSeparator } = getConfig()

@@ -18,6 +18,8 @@ export const jsonToXml = fastifyPlugin(async function (fastify: FastifyInstance)
       res.getHeader('content-type')?.toString()?.includes('application/json') &&
       accept.types(['application/xml', 'application/json']) === 'application/xml'
     ) {
+      res.serializer((payload) => payload)
+
       const xmlBuilder = new xml.Builder({
         renderOpts: {
           pretty: false,
@@ -29,13 +31,6 @@ export const jsonToXml = fastifyPlugin(async function (fastify: FastifyInstance)
       return xmlPayload
     }
 
-    return payload
-  })
-
-  fastify.addHook('onSend', async (req, res, payload) => {
-    if (res.getHeader('content-type')?.toString()?.includes('application/xml')) {
-      return JSON.parse(payload as any)
-    }
     return payload
   })
 })

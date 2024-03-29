@@ -18,7 +18,7 @@ const isS3Test = (test) => {
 class CustomSequencer extends Sequencer {
   sort(tests) {
     const copyTests = Array.from(tests)
-    const normalTests = copyTests.filter((t) => !isRLSTest(t) && !isTusTest(t))
+    const normalTests = copyTests.filter((t) => !isRLSTest(t) && !isTusTest(t) && !isS3Test(t))
     const tusTests = copyTests.filter((t) => isTusTest(t))
     const s3Tests = copyTests.filter((t) => isS3Test(t))
     const rlsTests = copyTests.filter((t) => isRLSTest(t))

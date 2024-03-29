@@ -3,8 +3,9 @@ import fastifyPlugin from 'fastify-plugin'
 import { getConfig } from '../../config'
 import { getServiceKeyUser } from '../../database'
 import { SignatureV4 } from '../../storage/protocols/s3'
+import { ERRORS } from '../../storage'
 
-const { storageS3Region, s3ProtocolPrefix } = getConfig()
+const { storageS3Region, s3ProtocolPrefix, s3ProtocolEnforceRegion } = getConfig()
 
 export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstance) {
   fastify.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -17,6 +18,7 @@ export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstanc
       service: awsService,
       tenantId: request.tenantId,
       secretKey: serviceKey.jwt,
+      enforceRegion: s3ProtocolEnforceRegion,
     })
 
     try {
@@ -30,7 +32,7 @@ export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstanc
       })
 
       if (!isVerified) {
-        return reply.code(403).send({ error: 'Unauthorized' })
+        throw ERRORS.AccessDenied('Invalid Signature')
       }
 
       request.jwt = serviceKey.jwt

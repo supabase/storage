@@ -38,6 +38,9 @@ async function requestHandler(
 
   let obj: Obj
   if (publicRoute) {
+    await request.storage.asSuperUser().findBucket(bucketName, 'id', {
+      isPublic: true,
+    })
     obj = await request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id,version')
   } else {
     obj = await request.storage.from(bucketName).findObject(objectName, 'id,version')

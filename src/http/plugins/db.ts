@@ -29,7 +29,8 @@ export const db = fastifyPlugin(async (fastify) => {
 
   fastify.addHook('preHandler', async (request) => {
     const adminUser = await getServiceKeyUser(request.tenantId)
-    const userPayload = await verifyJWT<{ role?: string }>(request.jwt, adminUser.jwtSecret)
+    const userPayload =
+      request.jwtPayload ?? (await verifyJWT<{ role?: string }>(request.jwt, adminUser.jwtSecret))
 
     request.db = await getPostgresConnection({
       user: {

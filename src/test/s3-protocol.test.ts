@@ -29,7 +29,14 @@ import { Upload } from '@aws-sdk/lib-storage'
 import { ReadableStreamBuffer } from 'stream-buffers'
 import { randomUUID } from 'crypto'
 
-const { tenantId, serviceKey, storageS3Region } = getConfig()
+const {
+  s3ProtocolAccessKeySecret,
+  s3ProtocolAccessKeyId,
+  storageS3Region,
+  tenantId,
+  anonKey,
+  serviceKey,
+} = getConfig()
 
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
   let bucketName: string
@@ -79,8 +86,8 @@ describe('S3 Protocol', () => {
         forcePathStyle: true,
         region: storageS3Region,
         credentials: {
-          accessKeyId: tenantId,
-          secretAccessKey: serviceKey,
+          accessKeyId: s3ProtocolAccessKeyId!,
+          secretAccessKey: s3ProtocolAccessKeySecret!,
         },
       })
 

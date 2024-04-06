@@ -22,7 +22,7 @@ const AbortMultiPartUploadInput = {
 
 export default function AbortMultiPartUpload(s3Router: S3Router) {
   s3Router.delete('/:Bucket/*?uploadId', AbortMultiPartUploadInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId)
+    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
     return s3Protocol.abortMultipartUpload({
       Bucket: req.Params.Bucket,

@@ -12,6 +12,8 @@ export const s3ErrorHandler = (
 ) => {
   request.executionError = error
 
+  console.log(error)
+
   const resource = request.url
     .split('?')[0]
     .replace('/s3', '')

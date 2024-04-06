@@ -2,6 +2,7 @@ import * as crypto from 'crypto'
 import jwt from 'jsonwebtoken'
 
 import { getConfig } from '../config'
+import { ERRORS } from '../storage'
 
 const { jwtAlgorithm } = getConfig()
 
@@ -100,10 +101,7 @@ function getJWTVerificationKey(
   }
 }
 
-export function getJWTAlgorithms(
-  secret: string,
-  jwks: { keys: { kid?: string; kty: string }[] } | null
-) {
+export function getJWTAlgorithms(jwks: { keys: { kid?: string; kty: string }[] } | null) {
   let algorithms: jwt.Algorithm[]
 
   if (jwks && jwks.keys && jwks.keys.length) {
@@ -143,9 +141,9 @@ export function verifyJWT<T>(
     jwt.verify(
       token,
       getJWTVerificationKey(secret, jwks || null),
-      { algorithms: getJWTAlgorithms(secret, jwks || null) },
+      { algorithms: getJWTAlgorithms(jwks || null) },
       (err, decoded) => {
-        if (err) return reject(err)
+        if (err) return reject(ERRORS.AccessDenied(err.message, err))
         resolve(decoded as jwt.JwtPayload & T)
       }
     )
@@ -161,32 +159,18 @@ export function verifyJWT<T>(
 export function signJWT(
   payload: string | object | Buffer,
   secret: string,
-  expiresIn: string | number
-): Promise<string | undefined> {
-  return new Promise((resolve, reject) => {
-    jwt.sign(
-      payload,
-      secret,
-      { expiresIn, algorithm: jwtAlgorithm as jwt.Algorithm },
-      (err, token) => {
-        if (err) return reject(err)
-        resolve(token)
-      }
-    )
-  })
-}
+  expiresIn: string | number | undefined
+): Promise<string> {
+  const options: jwt.SignOptions = { algorithm: jwtAlgorithm as jwt.Algorithm }
 
-/**
- * Extract the owner (user) from the provided JWT
- * @param token
- * @param secret
- * @param jwks
- */
-export async function getOwner(
-  token: string,
-  secret: string,
-  jwks: { keys: { kid?: string; kty: string }[] } | null
-): Promise<string | undefined> {
-  const decodedJWT = await verifyJWT(token, secret, jwks)
-  return (decodedJWT as jwtInterface)?.sub
+  if (expiresIn) {
+    options.expiresIn = expiresIn
+  }
+
+  return new Promise<string>((resolve, reject) => {
+    jwt.sign(payload, secret, options, (err, token) => {
+      if (err) return reject(err)
+      resolve(token as string)
+    })
+  })
 }

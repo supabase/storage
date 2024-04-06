@@ -32,7 +32,7 @@ const CreateMultiPartUploadInput = {
 
 export default function CreateMultipartUpload(s3Router: S3Router) {
   s3Router.post('/:Bucket/*?uploads', CreateMultiPartUploadInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId)
+    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
     return s3Protocol.createMultiPartUpload({
       Bucket: req.Params.Bucket,

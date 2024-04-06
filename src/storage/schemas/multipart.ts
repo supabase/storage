@@ -10,6 +10,7 @@ export const multipartUploadSchema = {
     in_progress_size: { type: 'number' },
     upload_signature: { type: 'string' },
     version: { type: 'string' },
+    owner_id: { type: 'string' },
     created_at: { type: 'string' },
   },
   required: [
@@ -38,6 +39,7 @@ export const uploadPartSchema = {
     version: { type: 'string' },
     created_at: { type: 'string' },
     etag: { type: 'string' },
+    owner_id: { type: 'string' },
   },
   required: ['upload_id', 'bucket_id', 'key', 'version', 'part_number'],
   additionalProperties: false,

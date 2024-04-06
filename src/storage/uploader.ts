@@ -237,7 +237,10 @@ export class Uploader {
     options?: Pick<UploaderOptions, 'fileSizeLimit'>
   ) {
     const contentType = request.headers['content-type']
-    const fileSizeLimit = await getMaxFileSizeLimit(this.db.tenantId, options?.fileSizeLimit)
+    const fileSizeLimit = await getStandardMaxFileSizeLimit(
+      this.db.tenantId,
+      options?.fileSizeLimit
+    )
 
     let body: NodeJS.ReadableStream
     let mimeType: string
@@ -282,23 +285,12 @@ export class Uploader {
       isTruncated,
     }
   }
-
-  protected async getFileSizeLimit(tenantId: string, bucketSizeLimit?: number | null) {
-    let globalFileSizeLimit = await getFileSizeLimit(tenantId)
-
-    if (typeof bucketSizeLimit === 'number') {
-      globalFileSizeLimit = Math.min(bucketSizeLimit, globalFileSizeLimit)
-    }
-
-    if (uploadFileSizeLimitStandard && uploadFileSizeLimitStandard > 0) {
-      globalFileSizeLimit = Math.min(uploadFileSizeLimitStandard, globalFileSizeLimit)
-    }
-
-    return globalFileSizeLimit
-  }
 }
 
-export async function getMaxFileSizeLimit(tenantId: string, bucketSizeLimit?: number | null) {
+export async function getStandardMaxFileSizeLimit(
+  tenantId: string,
+  bucketSizeLimit?: number | null
+) {
   let globalFileSizeLimit = await getFileSizeLimit(tenantId)
 
   if (typeof bucketSizeLimit === 'number') {

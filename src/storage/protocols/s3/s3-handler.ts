@@ -1,6 +1,6 @@
 import { Storage } from '../../storage'
 import { getConfig } from '../../../config'
-import { getMaxFileSizeLimit, Uploader } from '../../uploader'
+import { Uploader } from '../../uploader'
 import {
   AbortMultipartUploadCommandInput,
   CompleteMultipartUploadCommandInput,
@@ -21,7 +21,7 @@ import {
 } from '@aws-sdk/client-s3'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
-import { mustBeValidBucketName, mustBeValidKey } from '../../limits'
+import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
 import { ERRORS } from '../../errors'
 import { S3MultipartUpload, Obj } from '../../schemas'
 import { decrypt, encrypt } from '../../../auth'
@@ -30,7 +30,11 @@ import { ByteLimitTransformStream } from './byte-limit-stream'
 const { storageS3Region, storageS3Bucket } = getConfig()
 
 export class S3ProtocolHandler {
-  constructor(protected readonly storage: Storage, protected readonly tenantId: string) {}
+  constructor(
+    protected readonly storage: Storage,
+    protected readonly tenantId: string,
+    protected readonly owner?: string
+  ) {}
 
   /**
    * Returns the versioning state of a bucket.
@@ -103,6 +107,7 @@ export class S3ProtocolHandler {
       name: Bucket,
       id: Bucket,
       public: isPublic,
+      owner: this.owner,
     })
 
     return {
@@ -319,7 +324,7 @@ export class S3ProtocolHandler {
 
     const limit = maxKeys || 200
 
-    const multipartUploads = await this.storage.db.asSuperUser().listMultipartUploads(bucket, {
+    const multipartUploads = await this.storage.db.listMultipartUploads(bucket, {
       prefix,
       deltimeter: delimiter,
       maxKeys: limit + 1,
@@ -431,13 +436,18 @@ export class S3ProtocolHandler {
     mustBeValidBucketName(Bucket)
     mustBeValidKey(Key)
 
-    await this.storage.asSuperUser().findBucket(Bucket, 'id')
+    const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'id,allowed_mime_types')
+
+    if (command.ContentType && bucket.allowed_mime_types && bucket.allowed_mime_types.length > 0) {
+      uploader.validateMimeType(command.ContentType, bucket.allowed_mime_types || [])
+    }
 
     // Create Multi Part Upload
     const version = await uploader.prepareUpload({
       bucketId: command.Bucket as string,
       objectName: command.Key as string,
       isUpsert: true,
+      owner: this.owner,
     })
 
     const uploadId = await this.storage.backend.createMultiPartUpload(
@@ -452,10 +462,10 @@ export class S3ProtocolHandler {
       throw ERRORS.InvalidUploadId(uploadId)
     }
 
-    const signature = this.uploadSignature({ in_progress_size: BigInt(0) })
+    const signature = this.uploadSignature({ in_progress_size: 0 })
     await this.storage.db
       .asSuperUser()
-      .createMultipartUpload(uploadId, Bucket, Key, version, signature)
+      .createMultipartUpload(uploadId, Bucket, Key, version, signature, this.owner)
 
     return {
       responseBody: {
@@ -487,6 +497,7 @@ export class S3ProtocolHandler {
       bucketId: Bucket as string,
       objectName: Key as string,
       isUpsert: true,
+      owner: this.owner,
     })
 
     const multiPartUpload = await this.storage.db
@@ -494,6 +505,19 @@ export class S3ProtocolHandler {
       .findMultipartUpload(UploadId, 'id,version')
 
     const parts = command.MultipartUpload?.Parts || []
+
+    if (parts.length === 0) {
+      const allParts = await this.storage.db.asSuperUser().listParts(UploadId, {
+        maxParts: 1000,
+      })
+
+      parts.push(
+        ...allParts.map((part) => ({
+          PartNumber: part.part_number,
+          ETag: part.etag,
+        }))
+      )
+    }
 
     const resp = await this.storage.backend.completeMultipartUpload(
       storageS3Bucket,
@@ -516,15 +540,16 @@ export class S3ProtocolHandler {
       isUpsert: true,
       isMultipart: false,
       objectMetadata: metadata,
+      owner: this.owner,
     })
 
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
 
     return {
       responseBody: {
-        CompleteMultipartUpload: {
-          Location: resp.location,
-          Bucket: resp.bucket,
+        CompleteMultipartUploadResult: {
+          Location: `${Bucket}/${Key}`,
+          Bucket: Bucket,
           Key: Key,
           ChecksumCRC32: resp.ChecksumCRC32,
           ChecksumCRC32C: resp.ChecksumCRC32,
@@ -559,7 +584,8 @@ export class S3ProtocolHandler {
 
     const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'file_size_limit')
 
-    const maxFileSize = await getMaxFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
+    const maxFileSize = await getFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
+
     const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize)
 
     const proxy = new PassThrough()
@@ -581,7 +607,7 @@ export class S3ProtocolHandler {
     try {
       const uploadPart = await stream.pipeline(
         body,
-        new ByteLimitTransformStream(BigInt(ContentLength)),
+        new ByteLimitTransformStream(ContentLength),
         async (stream) => {
           return this.storage.backend.uploadPart(
             storageS3Bucket,
@@ -602,6 +628,7 @@ export class S3ProtocolHandler {
         etag: uploadPart.ETag || '',
         key: Key as string,
         bucket_id: Bucket,
+        owner_id: this.owner,
       })
 
       return {
@@ -615,7 +642,7 @@ export class S3ProtocolHandler {
           forUpdate: true,
         })
 
-        const diff = BigInt(multipart.in_progress_size) - BigInt(ContentLength)
+        const diff = multipart.in_progress_size - ContentLength
         const signature = this.uploadSignature({ in_progress_size: diff })
         await db.updateMultipartUploadProgress(UploadId, diff, signature)
       })
@@ -645,11 +672,18 @@ export class S3ProtocolHandler {
       command.Key += '.emptyFolderPlaceholder'
     }
 
+    const bucket = await this.storage
+      .asSuperUser()
+      .findBucket(command.Bucket, 'id,file_size_limit,allowed_mime_types')
+
     const upload = await uploader.upload(command.Body as any, {
       bucketId: command.Bucket as string,
       objectName: command.Key as string,
+      owner: this.owner,
       isUpsert: true,
       isMultipart: false,
+      fileSizeLimit: bucket.file_size_limit,
+      allowedMimeTypes: bucket.allowed_mime_types,
     })
 
     return {
@@ -673,10 +707,15 @@ export class S3ProtocolHandler {
       throw ERRORS.InvalidUploadId()
     }
 
+    const multipart = await this.storage.db
+      .asSuperUser()
+      .findMultipartUpload(UploadId, 'id,version')
+
     await this.storage.backend.abortMultipartUpload(
       storageS3Bucket,
       `${this.tenantId}/${Bucket}/${Key}`,
-      UploadId
+      UploadId,
+      multipart.version
     )
 
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
@@ -716,7 +755,7 @@ export class S3ProtocolHandler {
         'content-length': (object.metadata?.size as string) || '',
         'content-type': (object.metadata?.contentType as string) || '',
         etag: (object.metadata?.eTag as string) || '',
-        'last-modified': object.updated_at ? new Date(object.updated_at).toISOString() || '' : '',
+        'last-modified': object.updated_at ? new Date(object.updated_at).toUTCString() || '' : '',
       },
     }
   }
@@ -1032,7 +1071,7 @@ export class S3ProtocolHandler {
         db.findBucketById(sourceBucketName, 'id'),
       ])
     })
-    const maxFileSize = await getMaxFileSizeLimit(
+    const maxFileSize = await getFileSizeLimit(
       this.storage.db.tenantId,
       destinationBucket?.file_size_limit
     )
@@ -1056,6 +1095,7 @@ export class S3ProtocolHandler {
       etag: uploadPart.eTag || '',
       key: Key as string,
       bucket_id: Bucket,
+      owner_id: this.owner,
     })
 
     return {
@@ -1066,7 +1106,7 @@ export class S3ProtocolHandler {
     }
   }
 
-  protected uploadSignature({ in_progress_size }: { in_progress_size: BigInt }) {
+  protected uploadSignature({ in_progress_size }: { in_progress_size: number }) {
     return `${encrypt('progress:' + in_progress_size.toString())}`
   }
 
@@ -1075,7 +1115,7 @@ export class S3ProtocolHandler {
     const [, value] = originalSignature.split(':')
 
     return {
-      progress: BigInt(value),
+      progress: parseInt(value, 10),
     }
   }
 
@@ -1095,11 +1135,11 @@ export class S3ProtocolHandler {
 
       const { progress } = this.decryptUploadSignature(multipart.upload_signature)
 
-      if (progress !== BigInt(multipart.in_progress_size)) {
+      if (progress !== multipart.in_progress_size) {
         throw ERRORS.InvalidUploadSignature()
       }
 
-      const currentProgress = BigInt(multipart.in_progress_size) + BigInt(contentLength)
+      const currentProgress = multipart.in_progress_size + contentLength
 
       if (currentProgress > maxFileSize) {
         throw ERRORS.EntityTooLarge()

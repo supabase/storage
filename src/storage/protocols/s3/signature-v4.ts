@@ -2,11 +2,14 @@ import crypto from 'crypto'
 import { ERRORS } from '../../errors'
 
 interface SignatureV4Options {
-  region: string
-  service: string
-  tenantId: string
-  secretKey: string
   enforceRegion: boolean
+  credentials: Omit<Credentials, 'shortDate'> & { secretKey: string }
+}
+
+export interface ClientSignature {
+  credentials: Credentials
+  signature: string
+  signedHeaders: string[]
 }
 
 interface SignatureRequest {
@@ -16,6 +19,16 @@ interface SignatureRequest {
   method: string
   query?: Record<string, string>
   prefix?: string
+  credentials: Credentials
+  signature: string
+  signedHeaders: string[]
+}
+
+interface Credentials {
+  accessKey: string
+  shortDate: string
+  region: string
+  service: string
 }
 
 /**
@@ -41,7 +54,57 @@ export const ALWAYS_UNSIGNABLE_HEADERS = {
 }
 
 export class SignatureV4 {
-  constructor(protected readonly options: SignatureV4Options) {}
+  public readonly serverCredentials: SignatureV4Options['credentials']
+  enforceRegion: boolean
+
+  constructor(options: SignatureV4Options) {
+    this.serverCredentials = options.credentials
+    this.enforceRegion = options.enforceRegion
+  }
+
+  static parseAuthorizationHeader(header: string) {
+    const parts = header.split(' ')
+    if (parts[0] !== 'AWS4-HMAC-SHA256') {
+      throw ERRORS.InvalidSignature('Unsupported authorization type')
+    }
+
+    const params = header
+      .replace('AWS4-HMAC-SHA256 ', '')
+      .split(',')
+      .reduce((values, value) => {
+        const [k, v] = value.split('=')
+        values.set(k.trim(), v)
+        return values
+      }, new Map<string, string>())
+
+    const credentialPart = params.get('Credential')
+    const signedHeadersPart = params.get('SignedHeaders')
+    const signaturePart = params.get('Signature')
+
+    if (!credentialPart || !signedHeadersPart || !signaturePart) {
+      throw ERRORS.InvalidSignature('Invalid signature format')
+    }
+    const signedHeaders = signedHeadersPart.split(';') || []
+
+    const credentialsPart = credentialPart.split('/')
+
+    if (credentialsPart.length !== 5) {
+      throw ERRORS.InvalidSignature('Invalid credentials')
+    }
+
+    const [accessKey, shortDate, region, service] = credentialsPart
+
+    return {
+      credentials: {
+        accessKey,
+        shortDate,
+        region,
+        service,
+      },
+      signedHeaders,
+      signature: signaturePart,
+    }
+  }
 
   verify(request: SignatureRequest) {
     const { clientSignature, serverSignature } = this.sign(request)
@@ -55,21 +118,16 @@ export class SignatureV4 {
       throw ERRORS.AccessDenied('Missing authorization header')
     }
 
-    const { credentials, signedHeaders, signature } =
-      this.parseAuthorizationHeader(authorizationHeader)
-
-    // Extract additional information from the credentials
-    const [accessKey, shortDate, region, service] = credentials.split('/')
-    if (accessKey !== this.options.tenantId) {
+    if (request.credentials.accessKey !== this.serverCredentials.accessKey) {
       throw ERRORS.AccessDenied('Invalid Access Key')
     }
 
     // Ensure the region and service match the expected values
-    if (this.options.enforceRegion && region !== this.options.region) {
+    if (this.enforceRegion && request.credentials.region !== this.serverCredentials.region) {
       throw ERRORS.AccessDenied('Invalid Region')
     }
 
-    if (service !== this.options.service) {
+    if (request.credentials.service !== this.serverCredentials.service) {
       throw ERRORS.AccessDenied('Invalid Service')
     }
 
@@ -83,33 +141,35 @@ export class SignatureV4 {
     // - us-east-1
     // - the region set in the env
     if (
-      !this.options.enforceRegion &&
-      !['auto', 'us-east-1', this.options.region, ''].includes(region)
+      !this.enforceRegion &&
+      !['auto', 'us-east-1', this.serverCredentials.region, ''].includes(request.credentials.region)
     ) {
       throw ERRORS.AccessDenied('Invalid Region')
     }
 
-    const selectedRegion = this.options.enforceRegion ? this.options.region : region
+    const selectedRegion = this.enforceRegion
+      ? this.serverCredentials.region
+      : request.credentials.region
 
     // Construct the Canonical Request and String to Sign
-    const canonicalRequest = this.constructCanonicalRequest(request, signedHeaders)
+    const canonicalRequest = this.constructCanonicalRequest(request, request.signedHeaders)
     const stringToSign = this.constructStringToSign(
       longDate,
-      shortDate,
+      request.credentials.shortDate,
       selectedRegion,
-      this.options.service,
+      this.serverCredentials.service,
       canonicalRequest
     )
 
     const signingKey = this.signingKey(
-      this.options.secretKey,
-      shortDate,
+      this.serverCredentials.secretKey,
+      request.credentials.shortDate,
       selectedRegion,
-      this.options.service
+      this.serverCredentials.service
     )
 
     return {
-      clientSignature: signature,
+      clientSignature: request.signature,
       serverSignature: this.hmac(signingKey, stringToSign).toString('hex'),
     }
   }
@@ -172,33 +232,6 @@ export class SignatureV4 {
     const kRegion = this.hmac(kDate, regionName)
     const kService = this.hmac(kRegion, serviceName)
     return this.hmac(kService, 'aws4_request')
-  }
-
-  protected parseAuthorizationHeader(header: string) {
-    const parts = header.split(' ')
-    if (parts[0] !== 'AWS4-HMAC-SHA256') {
-      throw ERRORS.InvalidSignature('Unsupported authorization type')
-    }
-
-    const params = header
-      .replace('AWS4-HMAC-SHA256 ', '')
-      .split(',')
-      .reduce((values, value) => {
-        const [k, v] = value.split('=')
-        values.set(k.trim(), v)
-        return values
-      }, new Map())
-
-    const credentialPart = params.get('Credential')
-    const signedHeadersPart = params.get('SignedHeaders')
-    const signaturePart = params.get('Signature')
-
-    if (!credentialPart || !signedHeadersPart || !signaturePart) {
-      throw ERRORS.InvalidSignature('Invalid signature format')
-    }
-    const signedHeaders = signedHeadersPart.split(';') || []
-
-    return { credentials: credentialPart, signedHeaders, signature: signaturePart }
   }
 
   protected constructCanonicalRequest(request: SignatureRequest, signedHeaders: string[]) {

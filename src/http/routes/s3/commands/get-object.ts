@@ -24,7 +24,7 @@ const ListObjectsInput = {
 
 export default function ListObjects(s3Router: S3Router) {
   s3Router.get('/:Bucket/*', ListObjectsInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId)
+    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
     const ifModifiedSince = req.Headers?.['if-modified-since']
 
     return s3Protocol.getObject({

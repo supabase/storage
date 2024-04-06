@@ -48,7 +48,7 @@ const ListObjectsInput = {
 
 export default function ListObjects(s3Router: S3Router) {
   s3Router.get('/:Bucket?list-type=2', ListObjectsV2Input, async (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId)
+    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
     return s3Protocol.listObjectsV2({
       Bucket: req.Params.Bucket,
@@ -62,7 +62,7 @@ export default function ListObjects(s3Router: S3Router) {
   })
 
   s3Router.get('/:Bucket', ListObjectsInput, async (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId)
+    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
     return s3Protocol.listObjects({
       Bucket: req.Params.Bucket,

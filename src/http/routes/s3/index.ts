@@ -93,6 +93,7 @@ export default async function routes(fastify: FastifyInstance) {
                 {
                   storage: req.storage,
                   tenantId: req.tenantId,
+                  owner: req.owner,
                 }
               )
 

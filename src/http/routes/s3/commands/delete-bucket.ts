@@ -14,7 +14,7 @@ const DeleteBucketInput = {
 
 export default function DeleteBucket(s3Router: S3Router) {
   s3Router.delete('/:Bucket', DeleteBucketInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId)
+    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
     return s3Protocol.deleteBucket(req.Params.Bucket)
   })

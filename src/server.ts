@@ -81,7 +81,10 @@ const exposeDocs = true
         type: 'adminAppStartError',
         error: err,
       })
-      process.exit(1)
+
+      if (process.env.NODE_ENV !== 'production') {
+        process.exit(1)
+      }
     }
   }
 

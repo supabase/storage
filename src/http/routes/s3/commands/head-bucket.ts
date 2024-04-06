@@ -13,7 +13,7 @@ const HeadBucketInput = {
 
 export default function HeadBucket(s3Router: S3Router) {
   s3Router.head('/:Bucket', HeadBucketInput, async (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId)
+    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
     return s3Protocol.headBucket(req.Params.Bucket)
   })

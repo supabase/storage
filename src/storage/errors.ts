@@ -27,6 +27,7 @@ export enum ErrorCode {
   BucketAlreadyExists = 'BucketAlreadyExists',
   DatabaseTimeout = 'DatabaseTimeout',
   InvalidSignature = 'InvalidSignature',
+  SignatureDoesNotMatch = 'SignatureDoesNotMatch',
   AccessDenied = 'AccessDenied',
   ResourceLocked = 'ResourceLocked',
   DatabaseError = 'DatabaseError',
@@ -35,6 +36,10 @@ export enum ErrorCode {
   InvalidUploadSignature = 'InvalidUploadSignature',
   LockTimeout = 'LockTimeout',
   S3Error = 'S3Error',
+  S3InvalidAccessKeyId = 'InvalidAccessKeyId',
+  S3MaximumCredentialsLimit = 'MaximumCredentialsLimit',
+  InvalidChecksum = 'InvalidChecksum',
+  MissingPart = 'MissingPart',
   SlowDown = 'SlowDown',
 }
 
@@ -120,6 +125,13 @@ export const ERRORS = {
       httpStatusCode: 400,
       message: 'Metadata header is required',
       originalError: e,
+    }),
+
+  SignatureDoesNotMatch: (message?: string) =>
+    new StorageBackendError({
+      code: ErrorCode.SignatureDoesNotMatch,
+      httpStatusCode: 403,
+      message: message || 'Signature does not match',
     }),
 
   InvalidSignature: (message?: string, e?: Error) =>
@@ -312,6 +324,34 @@ export const ERRORS = {
       httpStatusCode: 503,
       message: 'acquiring lock timeout',
       originalError: err,
+    }),
+
+  MissingS3Credentials: () =>
+    new StorageBackendError({
+      code: ErrorCode.S3InvalidAccessKeyId,
+      httpStatusCode: 403,
+      message: 'The Access Key Id you provided does not exist in our records.',
+    }),
+
+  MaximumCredentialsLimit: () =>
+    new StorageBackendError({
+      code: ErrorCode.S3MaximumCredentialsLimit,
+      httpStatusCode: 400,
+      message: 'You have reached the maximum number of credentials allowed',
+    }),
+
+  InvalidChecksum: (message: string) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidChecksum,
+      httpStatusCode: 400,
+      message: message,
+    }),
+
+  MissingPart: (partNumber: number, uploadId: string) =>
+    new StorageBackendError({
+      code: ErrorCode.MissingPart,
+      httpStatusCode: 400,
+      message: `Part ${partNumber} is missing for upload id ${uploadId}`,
     }),
 }
 

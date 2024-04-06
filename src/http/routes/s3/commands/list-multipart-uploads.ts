@@ -27,7 +27,7 @@ const ListObjectsInput = {
 
 export default function ListMultipartUploads(s3Router: S3Router) {
   s3Router.get('/:Bucket?uploads', ListObjectsInput, async (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId)
+    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
     return s3Protocol.listMultipartUploads({
       Bucket: req.Params.Bucket,

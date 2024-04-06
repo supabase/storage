@@ -191,7 +191,12 @@ export abstract class StorageBackendAdapter {
     throw new Error('not implemented')
   }
 
-  async abortMultipartUpload(bucketName: string, key: string, uploadId: string): Promise<void> {
+  async abortMultipartUpload(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    version?: string
+  ): Promise<void> {
     throw new Error('not implemented')
   }
 

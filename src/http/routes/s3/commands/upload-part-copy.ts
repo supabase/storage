@@ -39,7 +39,7 @@ export default function UploadPartCopy(s3Router: S3Router) {
     '/:Bucket/*?partNumber&uploadId|x-amz-copy-source',
     UploadPartCopyInput,
     (req, ctx) => {
-      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId)
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
       return s3Protocol.uploadPartCopy({
         Bucket: req.Params.Bucket,

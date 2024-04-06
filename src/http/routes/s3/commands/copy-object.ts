@@ -30,7 +30,7 @@ const CopyObjectInput = {
 
 export default function CopyObject(s3Router: S3Router) {
   s3Router.put('/:Bucket/*|x-amz-copy-source', CopyObjectInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId)
+    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
     return s3Protocol.copyObject({
       Bucket: req.Params.Bucket,

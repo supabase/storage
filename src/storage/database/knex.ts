@@ -260,7 +260,7 @@ export class StorageKnexDB implements Database {
     return this.runQuery('ListMultipartsUploads', async (knex) => {
       if (!options?.deltimeter) {
         const query = knex
-          .table('_s3_multipart_uploads')
+          .table('s3_multipart_uploads')
           .select(['id', 'key', 'created_at'])
           .where('bucket_id', bucketId)
           .limit(options?.maxKeys || 100)
@@ -560,17 +560,19 @@ export class StorageKnexDB implements Database {
     bucketId: string,
     objectName: string,
     version: string,
-    signature: string
+    signature: string,
+    owner?: string
   ) {
     return this.runQuery('CreateMultipartUpload', async (knex) => {
       const multipart = await knex
-        .table<S3MultipartUpload>('_s3_multipart_uploads')
+        .table<S3MultipartUpload>('s3_multipart_uploads')
         .insert({
           id: uploadId,
           bucket_id: bucketId,
           key: objectName,
           version,
           upload_signature: signature,
+          owner_id: owner,
         })
         .returning('*')
 
@@ -581,7 +583,7 @@ export class StorageKnexDB implements Database {
   async findMultipartUpload(uploadId: string, columns = 'id', options?: { forUpdate?: boolean }) {
     const multiPart = await this.runQuery('FindMultipartUpload', async (knex) => {
       const query = knex
-        .from('_s3_multipart_uploads')
+        .from('s3_multipart_uploads')
         .select(columns.split(','))
         .where('id', uploadId)
 
@@ -597,10 +599,10 @@ export class StorageKnexDB implements Database {
     return multiPart
   }
 
-  async updateMultipartUploadProgress(uploadId: string, progress: BigInt, signature: string) {
+  async updateMultipartUploadProgress(uploadId: string, progress: number, signature: string) {
     return this.runQuery('UpdateMultipartUploadProgress', async (knex) => {
       await knex
-        .from('_s3_multipart_uploads')
+        .from('s3_multipart_uploads')
         .update({ in_progress_size: progress, upload_signature: signature })
         .where('id', uploadId)
     })
@@ -608,14 +610,14 @@ export class StorageKnexDB implements Database {
 
   async deleteMultipartUpload(uploadId: string) {
     return this.runQuery('DeleteMultipartUpload', async (knex) => {
-      await knex.from('_s3_multipart_uploads').delete().where('id', uploadId)
+      await knex.from('s3_multipart_uploads').delete().where('id', uploadId)
     })
   }
 
   async insertUploadPart(part: S3PartUpload) {
     return this.runQuery('InsertUploadPart', async (knex) => {
       const storedPart = await knex
-        .table<S3PartUpload>('_s3_multipart_uploads_parts')
+        .table<S3PartUpload>('s3_multipart_uploads_parts')
         .insert(part)
         .returning('*')
 
@@ -629,7 +631,7 @@ export class StorageKnexDB implements Database {
   ): Promise<S3PartUpload[]> {
     return this.runQuery('ListParts', async (knex) => {
       const query = knex
-        .from<S3PartUpload>('_s3_multipart_uploads_parts')
+        .from<S3PartUpload>('s3_multipart_uploads_parts')
         .select('etag', 'part_number', 'size', 'upload_id', 'created_at')
         .where('upload_id', uploadId)
         .orderBy('part_number')

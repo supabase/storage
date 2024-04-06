@@ -147,7 +147,8 @@ export interface Database {
     bucketId: string,
     objectName: string,
     version: string,
-    signature: string
+    signature: string,
+    owner?: string
   ): Promise<S3MultipartUpload>
 
   findMultipartUpload(
@@ -158,7 +159,7 @@ export interface Database {
 
   updateMultipartUploadProgress(
     uploadId: string,
-    progress: BigInt,
+    progress: number,
     signature: string
   ): Promise<void>
 

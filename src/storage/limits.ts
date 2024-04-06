@@ -7,12 +7,21 @@ const { isMultitenant, imageTransformationEnabled } = getConfig()
 /**
  * Get the maximum file size for a specific project
  * @param tenantId
+ * @param maxUpperLimit
  */
-export async function getFileSizeLimit(tenantId: string): Promise<number> {
+export async function getFileSizeLimit(
+  tenantId: string,
+  maxUpperLimit?: number | null
+): Promise<number> {
   let { uploadFileSizeLimit } = getConfig()
   if (isMultitenant) {
     uploadFileSizeLimit = await getFileSizeLimitForTenant(tenantId)
   }
+
+  if (maxUpperLimit) {
+    return Math.min(uploadFileSizeLimit, maxUpperLimit)
+  }
+
   return uploadFileSizeLimit
 }
 

@@ -49,7 +49,7 @@ const CompletedMultipartUpload = {
 
 export default function CompleteMultipartUpload(s3Router: S3Router) {
   s3Router.post('/:Bucket/*?uploadId', CompletedMultipartUpload, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId)
+    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
     return s3Protocol.completeMultiPartUpload({
       Bucket: req.Params.Bucket,
       Key: req.Params['*'],

@@ -20,7 +20,7 @@ import { default as UploadPartCopy } from './commands/upload-part-copy'
 
 import { FromSchema, JSONSchema } from 'json-schema-to-ts'
 
-export type Context = { storage: Storage; tenantId: string }
+export type Context = { storage: Storage; tenantId: string; owner?: string }
 export type S3Router = Router<Context>
 
 const s3Commands = [

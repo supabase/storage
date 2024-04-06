@@ -47,6 +47,7 @@ type StorageConfigType = {
   requestTraceHeader?: string
   requestEtagHeaders: string[]
   responseSMaxAge: number
+  anonKey: string
   serviceKey: string
   storageBackendType: StorageBackendType
   tenantId: string
@@ -98,6 +99,9 @@ type StorageConfigType = {
   defaultMetricsEnabled: boolean
   s3ProtocolPrefix: string
   s3ProtocolEnforceRegion: boolean
+  s3ProtocolAccessKeyId?: string
+  s3ProtocolAccessKeySecret?: string
+  s3ProtocolAllowServiceKeyAsSecret: boolean
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -185,6 +189,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
     // Auth
     serviceKey: getOptionalConfigFromEnv('SERVICE_KEY') || '',
+    anonKey: getOptionalConfigFromEnv('ANON_KEY') || '',
 
     encryptionKey: getOptionalConfigFromEnv('AUTH_ENCRYPTION_KEY', 'ENCRYPTION_KEY') || '',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('AUTH_JWT_SECRET', 'PGRST_JWT_SECRET') || '',
@@ -220,6 +225,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     // S3 Protocol
     s3ProtocolPrefix: getOptionalConfigFromEnv('S3_PROTOCOL_PREFIX') || '',
     s3ProtocolEnforceRegion: getOptionalConfigFromEnv('S3_PROTOCOL_ENFORCE_REGION') === 'true',
+    s3ProtocolAccessKeyId: getOptionalConfigFromEnv('S3_PROTOCOL_ACCESS_KEY_ID'),
+    s3ProtocolAccessKeySecret: getOptionalConfigFromEnv('S3_PROTOCOL_ACCESS_KEY_SECRET'),
+    s3ProtocolAllowServiceKeyAsSecret:
+      getOptionalConfigFromEnv('S3_PROTOCOL_ALLOWS_SERVICE_KEY_AS_SECRET') === 'true',
 
     // Storage
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
@@ -367,6 +376,13 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
   if (!config.isMultitenant && !config.serviceKey) {
     config.serviceKey = jwt.sign({ role: config.dbServiceRole }, config.jwtSecret, {
+      expiresIn: '10y',
+      algorithm: config.jwtAlgorithm as jwt.Algorithm,
+    })
+  }
+
+  if (!config.isMultitenant && !config.anonKey) {
+    config.anonKey = jwt.sign({ role: config.dbAnonRole }, config.jwtSecret, {
       expiresIn: '10y',
       algorithm: config.jwtAlgorithm as jwt.Algorithm,
     })

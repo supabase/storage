@@ -21,13 +21,14 @@ const CreateMultiPartUploadInput = {
   Headers: {
     type: 'object',
     properties: {
+      authorization: { type: 'string' },
       'content-type': { type: 'string' },
       'cache-control': { type: 'string' },
       'content-disposition': { type: 'string' },
       'content-encoding': { type: 'string' },
     },
+    required: ['authorization'],
   },
-  Body: {},
 } as const
 
 export default function CreateMultipartUpload(s3Router: S3Router) {

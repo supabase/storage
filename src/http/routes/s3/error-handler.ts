@@ -12,14 +12,22 @@ export const s3ErrorHandler = (
 ) => {
   request.executionError = error
 
-  console.log(error)
-
   const resource = request.url
     .split('?')[0]
     .replace('/s3', '')
     .split('/')
     .filter((e) => e)
     .join('/')
+
+  if ('validation' in error) {
+    return reply.status(400).send({
+      Error: {
+        Resource: resource,
+        Code: ErrorCode.InvalidRequest,
+        Message: formatValidationError(error.validation).message,
+      },
+    })
+  }
 
   if (error instanceof S3ServiceException) {
     return reply.status(error.$metadata.httpStatusCode || 500).send({
@@ -68,4 +76,16 @@ export const s3ErrorHandler = (
       Message: 'Internal Server Error',
     },
   })
+}
+
+function formatValidationError(errors: any) {
+  let text = ''
+  const separator = ', '
+
+  for (let i = 0; i !== errors.length; ++i) {
+    const e = errors[i]
+    const instancePath = (e.instancePath || '').replace(/^\//, '')
+    text += instancePath.split('/').join(separator) + ' ' + e.message + separator
+  }
+  return new Error(text.slice(0, -separator.length))
 }

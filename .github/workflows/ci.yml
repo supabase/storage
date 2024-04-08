@@ -78,7 +78,6 @@ jobs:
           MULTI_TENANT: false
           S3_PROTOCOL_ACCESS_KEY_ID: ${{ secrets.TENANT_ID }}
           S3_PROTOCOL_ACCESS_KEY_SECRET: ${{ secrets.SERVICE_KEY }}
-          S3_PROTOCOL_ALLOWS_SERVICE_KEY_AS_SECRET: true
 
 
       - name: Upload coverage results to Coveralls

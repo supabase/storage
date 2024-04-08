@@ -62,7 +62,7 @@ export default function UploadPart(s3Router: S3Router) {
     const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
     return s3Protocol.uploadPart({
-      Body: (req.raw as any).raw,
+      Body: ctx.req.raw,
       UploadId: req.Querystring?.uploadId,
       Bucket: req.Params.Bucket,
       Key: req.Params['*'],
@@ -74,7 +74,7 @@ export default function UploadPart(s3Router: S3Router) {
   s3Router.put('/:Bucket/*', PutObjectInput, (req, ctx) => {
     const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
     return s3Protocol.putObject({
-      Body: req.raw,
+      Body: ctx.req as any,
       Bucket: req.Params.Bucket,
       Key: req.Params['*'],
     })

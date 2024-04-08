@@ -81,10 +81,7 @@ const exposeDocs = true
         type: 'adminAppStartError',
         error: err,
       })
-
-      if (process.env.NODE_ENV !== 'production') {
-        process.exit(1)
-      }
+      process.exit(1)
     }
   }
 
@@ -107,7 +104,10 @@ const exposeDocs = true
         PubSub.close(),
         multitenantKnex.destroy(),
       ])
-      process.exit(0)
+
+      if (process.env.NODE_ENV !== 'production') {
+        process.exit(0)
+      }
     } catch (e) {
       logSchema.error(logger, 'shutdown error', {
         type: 'SIGTERM',

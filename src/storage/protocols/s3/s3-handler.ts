@@ -203,7 +203,7 @@ export class S3ProtocolHandler {
     const maxKeys = command.MaxKeys
     const bucket = command.Bucket
 
-    const limit = maxKeys || 1000
+    const limit = Math.min(maxKeys || 1000, 1000)
 
     const objects = await this.storage.from(bucket).listObjectsV2({
       prefix,
@@ -583,8 +583,15 @@ export class S3ProtocolHandler {
     }
 
     const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'file_size_limit')
-
     const maxFileSize = await getFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
+
+    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    await uploader.canUpload({
+      bucketId: Bucket as string,
+      objectName: Key as string,
+      owner: this.owner,
+      isUpsert: true,
+    })
 
     const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize)
 
@@ -707,9 +714,7 @@ export class S3ProtocolHandler {
       throw ERRORS.InvalidUploadId()
     }
 
-    const multipart = await this.storage.db
-      .asSuperUser()
-      .findMultipartUpload(UploadId, 'id,version')
+    const multipart = await this.storage.db.findMultipartUpload(UploadId, 'id,version')
 
     await this.storage.backend.abortMultipartUpload(
       storageS3Bucket,
@@ -954,7 +959,7 @@ export class S3ProtocolHandler {
     // check if multipart exists
     await this.storage.db.asSuperUser().findMultipartUpload(command.UploadId, 'id')
 
-    const maxParts = command.MaxParts || 1000
+    const maxParts = Math.min(command.MaxParts || 1000, 1000)
 
     let result = await this.storage.db.asSuperUser().listParts(command.UploadId, {
       afterPart: command.PartNumberMarker,
@@ -981,7 +986,7 @@ export class S3ProtocolHandler {
           UploadId: command.UploadId,
           PartNumberMarker: command.PartNumberMarker,
           NextPartNumberMarker: nextPartNumberMarker,
-          MaxParts: command.MaxParts || 1000,
+          MaxParts: maxParts,
           IsTruncated: isTruncated,
           Part: parts,
         },
@@ -1055,6 +1060,7 @@ export class S3ProtocolHandler {
     await uploader.canUpload({
       bucketId: Bucket as string,
       objectName: Key as string,
+      owner: this.owner,
       isUpsert: true,
     })
 

@@ -39,5 +39,5 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE INDEX idx_objects_bucket_id_name
+CREATE INDEX IF NOT EXISTS idx_objects_bucket_id_name
     ON storage.objects (bucket_id, (name COLLATE "C"));

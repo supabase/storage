@@ -16,7 +16,7 @@ const createCredentialsSchema = {
     type: 'object',
     properties: {
       description: { type: 'string', minLength: 3, maxLength: 2000 },
-      scopes: {
+      claims: {
         type: 'object',
         properties: {
           role: { type: 'string' },
@@ -42,9 +42,9 @@ const deleteCredentialsSchema = {
   body: {
     type: 'object',
     properties: {
-      access_key: { type: 'string' },
+      id: { type: 'string' },
     },
-    required: ['access_key'],
+    required: ['id'],
   },
 } as const
 
@@ -90,7 +90,7 @@ export default async function routes(fastify: FastifyInstance) {
     async (req, reply) => {
       const credentials = await createS3Credentials(req.params.tenantId, {
         description: req.body.description,
-        scopes: req.body.scopes,
+        claims: req.body.claims,
       })
 
       reply.status(201).send({
@@ -116,11 +116,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/credentials',
     { schema: deleteCredentialsSchema },
     async (req, reply) => {
-      const deleted = await deleteS3Credential(req.params.tenantId, req.body.access_key)
-
-      if (!deleted) {
-        return reply.code(404).send({ message: 'Credentials not found' })
-      }
+      await deleteS3Credential(req.params.tenantId, req.body.id)
 
       return reply.code(204).send()
     }

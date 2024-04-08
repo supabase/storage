@@ -13,7 +13,7 @@ CREATE INDEX IF NOT EXISTS tenants_s3_credentials_tenant_id_idx ON tenants_s3_cr
 CREATE UNIQUE INDEX IF NOT EXISTS tenants_s3_credentials_access_key_idx ON tenants_s3_credentials(tenant_id, access_key);
 
 
-CREATE FUNCTION tenants_s3_credentials_update_notify_trigger ()
+CREATE OR REPLACE FUNCTION tenants_s3_credentials_update_notify_trigger ()
     RETURNS TRIGGER
 AS $$
 BEGIN
@@ -24,7 +24,7 @@ END;
 $$
     LANGUAGE plpgsql;
 
-CREATE FUNCTION tenants_s3_credentials_delete_notify_trigger ()
+CREATE OR REPLACE FUNCTION tenants_s3_credentials_delete_notify_trigger ()
     RETURNS TRIGGER
 AS $$
 BEGIN

@@ -42,8 +42,6 @@ export const setErrorHandler = (app: FastifyInstance) => {
         ? 500
         : 400
 
-      console.log('renderableError', renderableError)
-
       return reply.status(statusCode).send({
         ...renderableError,
         error: error.error || renderableError.code,

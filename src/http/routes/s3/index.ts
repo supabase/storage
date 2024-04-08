@@ -1,6 +1,6 @@
 import { FastifyInstance, RouteHandlerMethod } from 'fastify'
 import { db, jsonToXml, signatureV4, storage } from '../../plugins'
-import { getRouter } from './router'
+import { getRouter, RequestInput } from './router'
 import { s3ErrorHandler } from './error-handler'
 
 export default async function routes(fastify: FastifyInstance) {
@@ -26,76 +26,37 @@ export default async function routes(fastify: FastifyInstance) {
       methods.forEach((method) => {
         const routesByMethod = routes.filter((e) => e.method === method)
 
-        const schemaTypes = routesByMethod.map((r) => r.schema)
-        const schema = schemaTypes.reduce(
-          (acc, curr) => {
-            if (curr.summary) {
-              if (acc.summary) {
-                acc.summary = `${acc.summary} | ${curr.summary}`
-              } else {
-                acc.summary = `${curr.summary}`
-              }
-            }
-            if (curr.Params) {
-              acc.params = {
-                ...acc.params,
-                ...(curr.Params as any),
-              }
-            }
-
-            if (curr.Querystring) {
-              acc.querystring = {
-                ...acc.querystring,
-                anyOf: [...(acc.querystring?.anyOf ? acc.querystring.anyOf : []), curr.Querystring],
-              }
-            }
-
-            if (curr.Headers) {
-              acc.headers = {
-                ...acc.headers,
-                anyOf: [...(acc.headers?.anyOf ? acc.headers.anyOf : []), curr.Headers],
-              }
-            }
-
-            if (curr.Body && ['put', 'post', 'patch'].includes(method)) {
-              acc.body = {
-                ...acc.body,
-                anyOf: [...(acc.body?.oneOf ? acc.body.oneOf : []), curr.Body],
-              }
-            }
-
-            return acc
-          },
-          {
-            tags: ['s3'],
-          } as any
-        )
-
         const routeHandler: RouteHandlerMethod = async (req, reply) => {
           for (const route of routesByMethod) {
             if (
               s3Router.matchRoute(route, {
-                query: (req.query as any) || {},
-                headers: (req.headers as any) || {},
+                query: (req.query as Record<string, string>) || {},
+                headers: (req.headers as Record<string, string>) || {},
               })
             ) {
               if (!route.handler) {
                 throw new Error('no handler found')
               }
-              const output = await route.handler(
-                {
-                  Params: req.params as any,
-                  Body: req.body as any,
-                  Headers: req.headers as any,
-                  Querystring: req.query as any,
-                  raw: req as any,
-                },
-                {
-                  storage: req.storage,
-                  tenantId: req.tenantId,
-                  owner: req.owner,
-                }
-              )
+
+              const data: RequestInput<any> = {
+                Params: req.params,
+                Body: req.body,
+                Headers: req.headers,
+                Querystring: req.query,
+              }
+              const compiler = route.compiledSchema()
+              const isValid = compiler(data)
+
+              if (!isValid) {
+                throw { validation: compiler.errors }
+              }
+
+              const output = await route.handler(data, {
+                req: req,
+                storage: req.storage,
+                tenantId: req.tenantId,
+                owner: req.owner,
+              })
 
               const headers = output.headers
 
@@ -114,7 +75,7 @@ export default async function routes(fastify: FastifyInstance) {
         fastify[method](
           routePath,
           {
-            schema,
+            validatorCompiler: () => () => true,
             exposeHeadRoute: false,
             errorHandler: s3ErrorHandler,
           },
@@ -126,7 +87,7 @@ export default async function routes(fastify: FastifyInstance) {
           fastify[method](
             routePath + '/',
             {
-              schema,
+              validatorCompiler: () => () => true,
               exposeHeadRoute: false,
               errorHandler: s3ErrorHandler,
             },

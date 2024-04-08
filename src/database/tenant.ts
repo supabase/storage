@@ -49,10 +49,10 @@ export enum TenantMigrationStatus {
 interface S3Credentials {
   accessKey: string
   secretKey: string
-  scopes: { role: string; sub?: string; [key: string]: any }
+  claims: { role: string; sub?: string; [key: string]: any }
 }
 
-const { isMultitenant, dbServiceRole, serviceKey, jwtSecret, jwtJWKS, dbSuperUser } = getConfig()
+const { isMultitenant, dbServiceRole, serviceKey, jwtSecret, jwtJWKS } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
 
@@ -304,7 +304,7 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
   })
 
   await pubSub.subscribe(TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL, (cacheKey) => {
-    tenantConfigCache.delete(cacheKey)
+    tenantS3CredentialsCache.delete(cacheKey)
   })
 }
 
@@ -315,7 +315,7 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
  */
 export async function createS3Credentials(
   tenantId: string,
-  data: { description: string; scopes?: S3Credentials['scopes'] }
+  data: { description: string; claims?: S3Credentials['claims'] }
 ) {
   const existingCount = await countS3Credentials(tenantId)
 
@@ -326,18 +326,18 @@ export async function createS3Credentials(
   const secretAccessKeyId = crypto.randomBytes(32).toString('hex').slice(0, 32)
   const secretAccessKey = crypto.randomBytes(64).toString('hex').slice(0, 64)
 
-  if (data.scopes) {
-    delete data.scopes.iss
-    delete data.scopes.issuer
-    delete data.scopes.exp
-    delete data.scopes.iat
+  if (data.claims) {
+    delete data.claims.iss
+    delete data.claims.issuer
+    delete data.claims.exp
+    delete data.claims.iat
   }
 
-  data.scopes = {
-    ...(data.scopes || {}),
-    role: data.scopes?.role ?? dbServiceRole,
+  data.claims = {
+    ...(data.claims || {}),
+    role: data.claims?.role ?? dbServiceRole,
     issuer: `supabase.storage.${tenantId}`,
-    sub: data.scopes?.sub || dbServiceRole,
+    sub: data.claims?.sub,
   }
 
   const credentials = await multitenantKnex
@@ -347,7 +347,7 @@ export async function createS3Credentials(
       description: data.description,
       access_key: secretAccessKeyId,
       secret_key: encrypt(secretAccessKey),
-      scopes: JSON.stringify(data.scopes),
+      claims: JSON.stringify(data.claims),
     })
     .returning('id')
 
@@ -378,7 +378,7 @@ export async function getS3CredentialsByAccessKey(
 
     const data = await multitenantKnex
       .table('tenants_s3_credentials')
-      .select('access_key', 'secret_key', 'scopes')
+      .select('access_key', 'secret_key', 'claims')
       .where('tenant_id', tenantId)
       .where('access_key', accessKey)
       .first()
@@ -392,13 +392,13 @@ export async function getS3CredentialsByAccessKey(
     tenantS3CredentialsCache.set(cacheKey, {
       accessKey: data.access_key,
       secretKey: secretKey,
-      scopes: data.scopes,
+      claims: data.claims,
     })
 
     return {
       accessKey: data.access_key,
       secretKey: secretKey,
-      scopes: data.scopes,
+      claims: data.claims,
     }
   })
 }
@@ -410,14 +410,14 @@ export function deleteS3Credential(tenantId: string, credentialId: string) {
     .where('id', credentialId)
     .delete()
     .returning('id')
-    .first()
 }
 
 export function listS3Credentials(tenantId: string) {
   return multitenantKnex
     .table('tenants_s3_credentials')
-    .select('id', 'description', 'created_at')
+    .select('id', 'description', 'access_key', 'created_at')
     .where('tenant_id', tenantId)
+    .orderBy('created_at', 'asc')
 }
 
 export async function countS3Credentials(tenantId: string) {
@@ -425,7 +425,6 @@ export async function countS3Credentials(tenantId: string) {
     .table('tenants_s3_credentials')
     .count('id')
     .where('tenant_id', tenantId)
-    .first()
 
   return Number((data as any)?.count || 0)
 }

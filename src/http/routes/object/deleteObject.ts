@@ -33,7 +33,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.delete<deleteObjectRequestInterface>(
     '/:bucketName/*',
     {
-      schema: schema,
+      schema,
     },
     async (request, response) => {
       const { bucketName } = request.params

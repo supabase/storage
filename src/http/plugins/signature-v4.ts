@@ -7,12 +7,12 @@ import { signJWT, verifyJWT } from '../../auth'
 import { getConfig } from '../../config'
 
 const {
+  anonKey,
   jwtSecret,
   jwtJWKS,
   serviceKey,
   storageS3Region,
   isMultitenant,
-  s3ProtocolAllowServiceKeyAsSecret,
   s3ProtocolPrefix,
   s3ProtocolEnforceRegion,
   s3ProtocolAccessKeyId,
@@ -21,19 +21,20 @@ const {
 
 export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstance) {
   fastify.addHook('preHandler', async (request: FastifyRequest) => {
-    const clientCredentials = SignatureV4.parseAuthorizationHeader(
-      request.headers.authorization as string
-    )
+    if (typeof request.headers.authorization !== 'string') {
+      throw ERRORS.AccessDenied('Missing authorization header')
+    }
+
+    const clientCredentials = SignatureV4.parseAuthorizationHeader(request.headers.authorization)
 
     const sessionToken = request.headers['x-amz-security-token'] as string | undefined
 
     const {
       signature: signatureV4,
-      scopes,
+      claims,
       token,
     } = await createSignature(request.tenantId, clientCredentials, {
       sessionToken: sessionToken,
-      allowServiceKeyAsSecret: s3ProtocolAllowServiceKeyAsSecret,
     })
 
     const isVerified = signatureV4.verify({
@@ -72,15 +73,6 @@ export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstanc
       jwtSecrets.jwks = tenant.jwks || undefined
     }
 
-    // it is a session token authentication, we validate the incoming session
-    if (sessionToken) {
-      const payload = await verifyJWT(sessionToken, jwtSecrets.jwtSecret, jwtSecrets.jwks)
-      request.jwt = sessionToken
-      request.jwtPayload = payload
-      request.owner = payload.sub
-      return
-    }
-
     if (token) {
       const payload = await verifyJWT(token, jwtSecrets.jwtSecret, jwtSecrets.jwks)
       request.jwt = token
@@ -89,30 +81,30 @@ export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstanc
       return
     }
 
-    if (!scopes) {
-      throw ERRORS.AccessDenied('Missing scopes')
+    if (!claims) {
+      throw ERRORS.AccessDenied('Missing claims')
     }
 
-    const jwt = await signJWT(scopes, jwtSecrets.jwtSecret, '5m')
+    const jwt = await signJWT(claims, jwtSecrets.jwtSecret, '5m')
 
     request.jwt = jwt
-    request.jwtPayload = scopes
-    request.owner = scopes.sub
+    request.jwtPayload = claims
+    request.owner = claims.sub
   })
 })
 
 async function createSignature(
   tenantId: string,
   clientSignature: ClientSignature,
-  session?: { sessionToken?: string; allowServiceKeyAsSecret: boolean }
+  session?: { sessionToken?: string }
 ) {
   const awsRegion = storageS3Region
   const awsService = 's3'
 
   if (session?.sessionToken) {
-    const tenant = await getTenantConfig(tenantId)
+    const tenantAnonKey = isMultitenant ? (await getTenantConfig(tenantId)).anonKey : anonKey
 
-    if (!tenant.anonKey) {
+    if (!tenantAnonKey) {
       throw ERRORS.AccessDenied('Missing tenant anon key')
     }
 
@@ -120,31 +112,13 @@ async function createSignature(
       enforceRegion: s3ProtocolEnforceRegion,
       credentials: {
         accessKey: tenantId,
-        secretKey: tenant.anonKey,
+        secretKey: tenantAnonKey,
         region: awsRegion,
         service: awsService,
       },
     })
 
-    return { signature, scopes: undefined }
-  }
-
-  if (session?.allowServiceKeyAsSecret && clientSignature.credentials.accessKey === tenantId) {
-    const tenantServiceKey = isMultitenant
-      ? (await getTenantConfig(tenantId)).serviceKey
-      : serviceKey
-
-    const signature = new SignatureV4({
-      enforceRegion: s3ProtocolEnforceRegion,
-      credentials: {
-        accessKey: tenantId,
-        secretKey: tenantServiceKey,
-        region: awsRegion,
-        service: awsService,
-      },
-    })
-
-    return { signature, scopes: undefined, token: tenantServiceKey }
+    return { signature, claims: undefined, token: session.sessionToken }
   }
 
   if (isMultitenant) {
@@ -163,7 +137,7 @@ async function createSignature(
       },
     })
 
-    return { signature, scopes: credential.scopes, token: undefined }
+    return { signature, claims: credential.claims, token: undefined }
   }
 
   if (!s3ProtocolAccessKeyId || !s3ProtocolAccessKeySecret) {
@@ -182,5 +156,5 @@ async function createSignature(
     },
   })
 
-  return { signature, scopes: undefined, token: serviceKey }
+  return { signature, claims: undefined, token: serviceKey }
 }

@@ -1,5 +1,8 @@
+import { FastifyRequest } from 'fastify'
+import { FromSchema, JSONSchema } from 'json-schema-to-ts'
+import type { ValidateFunction } from 'ajv'
+import Ajv from 'ajv'
 import { Storage } from '../../../storage'
-
 import { default as CreateBucket } from './commands/create-bucket'
 import { default as ListBucket } from './commands/list-buckets'
 import { default as ListObjects } from './commands/list-objects'
@@ -17,10 +20,9 @@ import { default as CopyObject } from './commands/copy-object'
 import { default as ListMultipartUploads } from './commands/list-multipart-uploads'
 import { default as ListParts } from './commands/list-parts'
 import { default as UploadPartCopy } from './commands/upload-part-copy'
+import { JTDDataType } from 'ajv/dist/jtd'
 
-import { FromSchema, JSONSchema } from 'json-schema-to-ts'
-
-export type Context = { storage: Storage; tenantId: string; owner?: string }
+export type Context = { storage: Storage; tenantId: string; owner?: string; req: FastifyRequest }
 export type S3Router = Router<Context>
 
 const s3Commands = [
@@ -70,7 +72,7 @@ type ResponseType = {
   responseBody?: unknown
 }
 
-type RequestInput<
+export type RequestInput<
   S extends Schema,
   A extends {
     [key in keyof S]: S[key] extends JSONSchema ? FromSchema<S[key]> : undefined
@@ -82,7 +84,6 @@ type RequestInput<
   Headers: A['Headers']
   Params: A['Params']
   Body: A['Body']
-  raw: ReadableStream
 }
 
 type Handler<Req extends Schema, Context = unknown> = (
@@ -97,10 +98,20 @@ type Route<S extends Schema, Context> = {
   headersMatches: string[]
   handler?: Handler<S, Context>
   schema: S
+  compiledSchema: () => ValidateFunction<JTDDataType<S>>
 }
 
 export class Router<Context = unknown, S extends Schema = Schema> {
   protected _routes: Map<string, Route<S, Context>[]> = new Map<string, Route<S, Context>[]>()
+
+  protected ajv = new Ajv({
+    coerceTypes: 'array',
+    useDefaults: true,
+    removeAdditional: true,
+    uriResolver: require('fast-uri'),
+    addUsedSchema: false,
+    allErrors: false,
+  })
 
   registerRoute<R extends S = S>(
     method: HTTPMethod,
@@ -112,12 +123,42 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     const normalizedUrl = url.split('?')[0].split('|')[0]
 
     const existingPath = this._routes.get(normalizedUrl)
+    const schemaToCompile: {
+      Params?: JSONSchema
+      Headers?: JSONSchema
+      Querystring?: JSONSchema
+      Body?: JSONSchema
+    } = {}
+
+    if (schema.Params) {
+      schemaToCompile.Params = schema.Params
+    }
+    if (schema.Body) {
+      schemaToCompile.Body
+    }
+    if (schema.Headers) {
+      schemaToCompile.Headers = schema.Headers
+    }
+
+    if (schema.Querystring) {
+      schemaToCompile.Querystring = schema.Querystring
+    }
+
+    this.ajv.addSchema(
+      {
+        type: 'object',
+        properties: schemaToCompile,
+      },
+      method + url
+    )
+
     const newRoute: Route<R, Context> = {
       method: method as HTTPMethod,
       path: normalizedUrl,
       querystringMatches: query,
       headersMatches: headers,
       schema: schema,
+      compiledSchema: () => this.ajv.getSchema(method + url) as ValidateFunction<JTDDataType<R>>,
       handler: handler as Handler<R, Context>,
     } as const
 

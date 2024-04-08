@@ -101,7 +101,6 @@ type StorageConfigType = {
   s3ProtocolEnforceRegion: boolean
   s3ProtocolAccessKeyId?: string
   s3ProtocolAccessKeySecret?: string
-  s3ProtocolAllowServiceKeyAsSecret: boolean
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -227,9 +226,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     s3ProtocolEnforceRegion: getOptionalConfigFromEnv('S3_PROTOCOL_ENFORCE_REGION') === 'true',
     s3ProtocolAccessKeyId: getOptionalConfigFromEnv('S3_PROTOCOL_ACCESS_KEY_ID'),
     s3ProtocolAccessKeySecret: getOptionalConfigFromEnv('S3_PROTOCOL_ACCESS_KEY_SECRET'),
-    s3ProtocolAllowServiceKeyAsSecret:
-      getOptionalConfigFromEnv('S3_PROTOCOL_ALLOWS_SERVICE_KEY_AS_SECRET') === 'true',
-
     // Storage
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
 

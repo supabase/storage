@@ -23,8 +23,11 @@ const CompletedMultipartUpload = {
     properties: {
       authorization: { type: 'string' },
     },
+    additionalProperties: true,
+    required: ['authorization'],
   },
   Body: {
+    nullable: true,
     type: 'object',
     properties: {
       CompleteMultipartUpload: {
@@ -38,7 +41,7 @@ const CompletedMultipartUpload = {
                 PartNumber: { type: 'integer' },
                 ETag: { type: 'string' },
               },
-              // required: ['PartNumber', 'ETag'],
+              required: ['PartNumber', 'ETag'],
             },
           },
         },

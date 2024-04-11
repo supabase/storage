@@ -3,7 +3,7 @@ import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
 import { ImageRenderer } from '../../../storage/renderer'
 import { SignedToken, verifyJWT } from '../../../auth'
-import { StorageBackendError } from '../../../storage'
+import { ERRORS } from '../../../storage'
 import { getJwtSecret } from '../../../database/tenant'
 
 const { storageS3Bucket } = getConfig()
@@ -46,7 +46,7 @@ export default async function routes(fastify: FastifyInstance) {
         querystring: renderImageQuerySchema,
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
-        tags: ['object'],
+        tags: ['transformation'],
       },
     },
     async (request, response) => {
@@ -60,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
         payload = (await verifyJWT(token, jwtSecret)) as SignedToken
       } catch (e) {
         const err = e as Error
-        throw new StorageBackendError('Invalid JWT', 400, err.message, err)
+        throw ERRORS.InvalidJWT(err)
       }
 
       const { url, transformations, exp } = payload
@@ -68,7 +68,7 @@ export default async function routes(fastify: FastifyInstance) {
       const path = `${request.params.bucketName}/${request.params['*']}`
 
       if (url !== path) {
-        throw new StorageBackendError('InvalidSignature', 400, 'The url do not match the signature')
+        throw ERRORS.InvalidSignature()
       }
 
       const s3Key = `${request.tenantId}/${url}`

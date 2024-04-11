@@ -42,6 +42,9 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
         tags: [
           { name: 'object', description: 'Object end-points' },
           { name: 'bucket', description: 'Bucket end-points' },
+          { name: 's3', description: 'S3 end-points' },
+          { name: 'transformation', description: 'Image transformation' },
+          { name: 'resumable', description: 'Resumable Upload end-points' },
           { name: 'deprecated', description: 'Deprecated end-points' },
         ],
       },
@@ -63,6 +66,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(routes.bucket, { prefix: 'bucket' })
   app.register(routes.object, { prefix: 'object' })
   app.register(routes.render, { prefix: 'render/image' })
+  app.register(routes.s3, { prefix: 's3' })
   app.register(routes.healthcheck, { prefix: 'health' })
 
   setErrorHandler(app)

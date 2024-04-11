@@ -45,7 +45,6 @@ async function requestHandler(
 
   // send the object from s3
   const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
-  request.log.info(s3Key)
 
   return request.storage.renderer('asset').render(request, response, {
     bucket: storageS3Bucket,

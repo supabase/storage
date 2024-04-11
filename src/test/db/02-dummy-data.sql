@@ -40,6 +40,8 @@ INSERT INTO "storage"."objects" ("id", "bucket_id", "name", "owner", "created_at
 ('D1CE4E4F-03E2-473D-858B-301D7989B581', 'bucket2', 'authenticated/move-orig.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png", "size": 1234}'),
 ('222b3d1e-bc17-414c-b336-47894aa4d697', 'bucket2', 'authenticated/move-orig-2.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png", "size": 1234}'),
 ('8f7d643d-1e82-4d39-ae39-d9bd6b0cfe9c', 'bucket2', 'authenticated/move-orig-3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png", "size": 1234}'),
+('24f70210-62aa-4daa-9909-693b3febd8fd', 'bucket2', 'authenticated/move-orig-4.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png", "size": 1234}'),
+('18dc5e3b-4fb1-45a7-bfa4-d99b0784be31', 'bucket2', 'authenticated/move-orig-5.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-02-22 22:29:15.14732+00', '2021-02-22 22:29:15.14732+00', '2021-03-02 09:32:17.116+00', '{"mimetype": "image/png", "size": 1234}'),
 ('8377527d-3518-4dc8-8290-c6926470e795', 'bucket2', 'folder/subfolder/public-all-permissions.png', 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2', '2021-02-17 10:26:42.791214+00', '2021-02-17 11:03:30.025116+00', '2021-02-17 10:26:42.791214+00', '{"size": 1234}'),
 ('b39ae4ab-802b-4c42-9271-3f908c34363c', 'bucket2', 'private/sadcat-upload3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml", "size": 1234}'),
 ('8098E1AC-C744-4368-86DF-71B60CCDE221', 'bucket3', 'sadcat-upload3.png', '317eadce-631a-4429-a0bb-f19a7a517b4a', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '2021-03-01 08:53:29.567975+00', '{"mimetype": "image/svg+xml", "size": 1234}'),
@@ -64,6 +66,7 @@ CREATE POLICY crud_uid_folder ON storage.objects for all USING (bucket_id='bucke
 CREATE POLICY crud_uid_file ON storage.objects for all USING (bucket_id='bucket2' and name = 'folder/only_uid.jpg' and auth.uid() = 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2');
 -- allow CRUD acccess to a folder in bucket2 to all authenticated users
 CREATE POLICY authenticated_folder ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'authenticated' and auth.role() = 'authenticated');
+CREATE POLICY authenticated_folder_bucket_3 ON storage.objects for all USING (bucket_id='bucket3' and (storage.foldername(name))[1] = 'authenticated' and auth.role() = 'authenticated');
 -- allow CRUD access to a folder in bucket2 to its owners
 CREATE POLICY crud_owner_only ON storage.objects for all USING (bucket_id='bucket2' and (storage.foldername(name))[1] = 'only_owner' and owner = auth.uid());
 -- allow CRUD access to bucket4

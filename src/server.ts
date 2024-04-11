@@ -104,6 +104,10 @@ const exposeDocs = true
         PubSub.close(),
         multitenantKnex.destroy(),
       ])
+
+      if (process.env.NODE_ENV !== 'production') {
+        process.exit(0)
+      }
     } catch (e) {
       logSchema.error(logger, 'shutdown error', {
         type: 'SIGTERM',

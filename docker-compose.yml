@@ -6,7 +6,6 @@ services:
     image: supabase/storage-api:latest
     ports:
       - '5000:5000'
-      - '5001:5001'
     depends_on:
       tenant_db:
         condition: service_healthy
@@ -39,7 +38,7 @@ services:
       UPLOAD_SIGNED_URL_EXPIRATION_TIME: 120
       TUS_URL_PATH: /upload/resumable
       TUS_URL_EXPIRY_MS: 3600000
-      # Image Tranformation
+      # Image Transformation
       IMAGE_TRANSFORMATION_ENABLED: "true"
       IMGPROXY_URL: http://imgproxy:8080
       IMGPROXY_REQUEST_TIMEOUT: 15

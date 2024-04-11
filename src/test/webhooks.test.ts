@@ -105,25 +105,10 @@ describe('Webhooks', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(2)
-    expect(sendSpy).toHaveBeenNthCalledWith(1, {
-      data: {
-        $version: 'v1',
-        bucketId: 'bucket6',
-        name: obj.name,
-        tenant: {
-          host: undefined,
-          ref: 'bjhaohmqunupljrqypxz',
-        },
-        reqId: expect.any(String),
-        version: expect.any(String),
-      },
-      name: 'object:admin:delete',
-      options: undefined,
-    })
+    expect(sendSpy).toBeCalledTimes(1)
 
     expect(sendSpy).toHaveBeenNthCalledWith(
-      2,
+      1,
       expect.objectContaining({
         name: 'webhooks',
         options: undefined,

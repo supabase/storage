@@ -7,10 +7,14 @@ export class ProgressiveMigrations {
   protected emittingJobs = false
   protected watchInterval: NodeJS.Timeout | undefined
 
-  constructor(protected readonly options: { maxSize: number; interval: number }) {}
+  constructor(protected readonly options: { maxSize: number; interval: number; watch?: boolean }) {
+    if (typeof options.watch === 'undefined') {
+      this.options.watch = true
+    }
+  }
 
   start(signal: AbortSignal) {
-    this.watch(signal)
+    this.watchTenants(signal)
 
     signal.addEventListener('abort', () => {
       if (this.watchInterval) {
@@ -43,8 +47,8 @@ export class ProgressiveMigrations {
     })
   }
 
-  protected watch(signal: AbortSignal) {
-    if (signal.aborted) {
+  protected watchTenants(signal: AbortSignal) {
+    if (signal.aborted || !this.options.watch) {
       return
     }
     this.watchInterval = setInterval(() => {

@@ -9,6 +9,7 @@ const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): 
   app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health'] }))
   app.register(routes.tenants, { prefix: 'tenants' })
   app.register(routes.migrations, { prefix: 'migrations' })
+  app.register(routes.s3Credentials, { prefix: 's3' })
 
   let registriesToMerge: Registry[] = []
 

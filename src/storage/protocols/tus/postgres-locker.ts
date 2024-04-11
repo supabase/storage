@@ -1,9 +1,10 @@
 import { Lock, Locker, RequestRelease } from '@tus/server'
 import { clearTimeout } from 'timers'
 import EventEmitter from 'events'
-import { Database, DBError } from '../database'
-import { PubSubAdapter } from '../../pubsub'
+import { Database, DBError } from '../../database'
+import { PubSubAdapter } from '../../../pubsub'
 import { UploadId } from './upload-id'
+import { ERRORS } from '../../errors'
 
 const REQUEST_LOCK_RELEASE_MESSAGE = 'REQUEST_LOCK_RELEASE'
 
@@ -60,7 +61,7 @@ export class PgLock implements Lock {
           abortController.abort()
 
           if (!acquired) {
-            throw new DBError('acquiring lock timeout', 503, 'acquiring_lock_timeout')
+            throw ERRORS.LockTimeout()
           }
 
           await new Promise<void>((innerResolve) => {

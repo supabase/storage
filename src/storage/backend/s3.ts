@@ -1,13 +1,21 @@
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
   CompleteMultipartUploadCommandOutput,
   CopyObjectCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   GetObjectCommandInput,
   HeadObjectCommand,
+  ListMultipartUploadsCommand,
+  ListPartsCommand,
+  PutObjectCommand,
   S3Client,
   S3ClientConfig,
+  UploadPartCommand,
+  UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
@@ -17,11 +25,13 @@ import {
   ObjectMetadata,
   ObjectResponse,
   withOptionalVersion,
-} from './generic'
+  UploadPart,
+} from './adapter'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { StorageBackendError } from '../errors'
+import { ERRORS, StorageBackendError } from '../errors'
 import { getConfig } from '../../config'
 import Agent, { HttpsAgent } from 'agentkeepalive'
+import { Readable } from 'stream'
 
 const { storageS3MaxSockets } = getConfig()
 
@@ -187,23 +197,36 @@ export class S3Backend implements StorageBackendAdapter {
    * @param version
    * @param destination
    * @param destinationVersion
+   * @param conditions
    */
   async copyObject(
     bucket: string,
     source: string,
     version: string | undefined,
     destination: string,
-    destinationVersion: string | undefined
-  ): Promise<Pick<ObjectMetadata, 'httpStatusCode'>> {
+    destinationVersion: string | undefined,
+    conditions?: {
+      ifMatch?: string
+      ifNoneMatch?: string
+      ifModifiedSince?: Date
+      ifUnmodifiedSince?: Date
+    }
+  ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     try {
       const command = new CopyObjectCommand({
         Bucket: bucket,
         CopySource: `${bucket}/${withOptionalVersion(source, version)}`,
         Key: withOptionalVersion(destination, destinationVersion),
+        CopySourceIfMatch: conditions?.ifMatch,
+        CopySourceIfNoneMatch: conditions?.ifNoneMatch,
+        CopySourceIfModifiedSince: conditions?.ifModifiedSince,
+        CopySourceIfUnmodifiedSince: conditions?.ifUnmodifiedSince,
       })
       const data = await this.client.send(command)
       return {
         httpStatusCode: data.$metadata.httpStatusCode || 200,
+        eTag: data.CopyObjectResult?.ETag || '',
+        lastModified: data.CopyObjectResult?.LastModified,
       }
     } catch (e: any) {
       throw StorageBackendError.fromError(e)
@@ -278,5 +301,137 @@ export class S3Backend implements StorageBackendAdapter {
 
     const command = new GetObjectCommand(input)
     return getSignedUrl(this.client, command, { expiresIn: 600 })
+  }
+
+  async createMultiPartUpload(
+    bucketName: string,
+    key: string,
+    version: string | undefined,
+    contentType: string,
+    cacheControl: string
+  ) {
+    const createMultiPart = new CreateMultipartUploadCommand({
+      Bucket: bucketName,
+      Key: withOptionalVersion(key, version),
+      CacheControl: cacheControl,
+      ContentType: contentType,
+      Metadata: {
+        Version: version || '',
+      },
+    })
+
+    const resp = await this.client.send(createMultiPart)
+
+    if (!resp.UploadId) {
+      throw ERRORS.InvalidUploadId()
+    }
+
+    return resp.UploadId
+  }
+
+  async uploadPart(
+    bucketName: string,
+    key: string,
+    version: string,
+    uploadId: string,
+    partNumber: number,
+    body?: string | Uint8Array | Buffer | Readable,
+    length?: number
+  ) {
+    const paralellUploadS3 = new UploadPartCommand({
+      Bucket: bucketName,
+      Key: `${key}/${version}`,
+      UploadId: uploadId,
+      PartNumber: partNumber,
+      Body: body,
+      ContentLength: length,
+    })
+
+    const resp = await this.client.send(paralellUploadS3)
+
+    return {
+      version,
+      ETag: resp.ETag,
+    }
+  }
+
+  async completeMultipartUpload(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    version: string,
+    parts: UploadPart[]
+  ) {
+    const keyParts = key.split('/')
+
+    if (parts.length === 0) {
+      const listPartsInput = new ListPartsCommand({
+        Bucket: bucketName,
+        Key: key + '/' + version,
+        UploadId: uploadId,
+      })
+
+      const partsResponse = await this.client.send(listPartsInput)
+      parts = partsResponse.Parts || []
+    }
+
+    const completeUpload = new CompleteMultipartUploadCommand({
+      Bucket: bucketName,
+      Key: key + '/' + version,
+      UploadId: uploadId,
+      MultipartUpload:
+        parts.length === 0
+          ? undefined
+          : {
+              Parts: parts,
+            },
+    })
+
+    const response = await this.client.send(completeUpload)
+
+    const locationParts = key.split('/')
+    locationParts.shift() // tenant-id
+    const bucket = keyParts.shift()
+
+    return {
+      version,
+      location: keyParts.join('/'),
+      bucket,
+      ...response,
+    }
+  }
+
+  async abortMultipartUpload(bucketName: string, key: string, uploadId: string): Promise<void> {
+    const abortUpload = new AbortMultipartUploadCommand({
+      Bucket: bucketName,
+      Key: key,
+      UploadId: uploadId,
+    })
+    await this.client.send(abortUpload)
+  }
+
+  async uploadPartCopy(
+    storageS3Bucket: string,
+    key: string,
+    version: string,
+    UploadId: string,
+    PartNumber: number,
+    sourceKey: string,
+    sourceKeyVersion?: string
+  ) {
+    const uploadPartCopy = new UploadPartCopyCommand({
+      Bucket: storageS3Bucket,
+      Key: withOptionalVersion(key, version),
+      UploadId,
+      PartNumber,
+      CopySource: `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceKeyVersion)}`,
+    })
+
+    const part = await this.client.send(uploadPartCopy)
+
+    return {
+      eTag: part.CopyPartResult?.ETag,
+      lastModified: part.CopyPartResult?.LastModified,
+    }
   }
 }

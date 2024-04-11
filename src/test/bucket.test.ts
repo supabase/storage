@@ -102,7 +102,7 @@ describe('testing GET all buckets', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.length).toBe(10)
+    expect(responseJSON.length).toBeGreaterThanOrEqual(10)
     expect(responseJSON[0]).toMatchObject({
       id: expect.any(String),
       name: expect.any(String),

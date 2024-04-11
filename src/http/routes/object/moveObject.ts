@@ -8,6 +8,7 @@ const moveObjectsBodySchema = {
   properties: {
     bucketId: { type: 'string', examples: ['avatars'] },
     sourceKey: { type: 'string', examples: ['folder/cat.png'] },
+    destinationBucket: { type: 'string', examples: ['users'] },
     destinationKey: { type: 'string', examples: ['folder/newcat.png'] },
   },
   required: ['bucketId', 'sourceKey', 'destinationKey'],
@@ -38,11 +39,19 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      const { destinationKey, sourceKey, bucketId } = request.body
+      const { destinationKey, sourceKey, bucketId, destinationBucket } = request.body
 
-      await request.storage.from(bucketId).moveObject(sourceKey, destinationKey, request.owner)
+      const destinationBucketId = destinationBucket || bucketId
 
-      return response.status(200).send(createResponse('Successfully moved'))
+      const move = await request.storage
+        .from(bucketId)
+        .moveObject(sourceKey, destinationBucketId, destinationKey, request.owner)
+
+      return response.status(200).send({
+        message: 'Successfully moved',
+        Id: move.destObject.id,
+        Key: move.destObject.name,
+      })
     }
   )
 }

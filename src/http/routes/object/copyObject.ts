@@ -6,8 +6,9 @@ import { AuthenticatedRequest } from '../../request'
 const copyRequestBodySchema = {
   type: 'object',
   properties: {
-    sourceKey: { type: 'string', examples: ['folder/source.png'] },
     bucketId: { type: 'string', examples: ['avatars'] },
+    sourceKey: { type: 'string', examples: ['folder/source.png'] },
+    destinationBucket: { type: 'string', examples: ['users'] },
     destinationKey: { type: 'string', examples: ['folder/destination.png'] },
   },
   required: ['sourceKey', 'bucketId', 'destinationKey'],
@@ -38,7 +39,7 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
     },
     async (request, response) => {
-      const { sourceKey, destinationKey, bucketId } = request.body
+      const { sourceKey, destinationKey, bucketId, destinationBucket } = request.body
       request.log.info(
         'sourceKey is %s and bucketName is %s and destinationKey is %s',
         sourceKey,
@@ -46,12 +47,15 @@ export default async function routes(fastify: FastifyInstance) {
         destinationKey
       )
 
+      const destinationBucketId = destinationBucket || bucketId
+
       const result = await request.storage
         .from(bucketId)
-        .copyObject(sourceKey, destinationKey, request.owner)
+        .copyObject(sourceKey, destinationBucketId, destinationKey, request.owner)
 
       return response.status(result.httpStatusCode ?? 200).send({
-        Key: `${bucketId}/${destinationKey}`,
+        Id: result.destObject.id,
+        Key: `${destinationBucketId}/${destinationKey}`,
       })
     }
   )

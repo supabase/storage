@@ -1,4 +1,4 @@
-import { Readable } from 'stream'
+import stream, { Readable } from 'stream'
 import { getConfig } from '../../config'
 
 /**
@@ -30,6 +30,16 @@ export type ObjectMetadata = {
   eTag: string
   contentRange?: string
   httpStatusCode: number
+}
+
+export type UploadPart = {
+  Version?: string
+  ETag?: string
+  PartNumber?: number
+  ChecksumCRC32?: string
+  ChecksumCRC32C?: string
+  ChecksumSHA1?: string
+  ChecksumSHA256?: string
 }
 
 /**
@@ -92,14 +102,21 @@ export abstract class StorageBackendAdapter {
    * @param version
    * @param destination
    * @param destinationVersion
+   * @param conditions
    */
   async copyObject(
     bucket: string,
     source: string,
     version: string | undefined,
     destination: string,
-    destinationVersion: string | undefined
-  ): Promise<Pick<ObjectMetadata, 'httpStatusCode'>> {
+    destinationVersion: string | undefined,
+    conditions?: {
+      ifMatch?: string
+      ifNoneMatch?: string
+      ifModifiedSince?: Date
+      ifUnmodifiedSince?: Date
+    }
+  ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     throw new Error('copyObject not implemented')
   }
 
@@ -134,6 +151,65 @@ export abstract class StorageBackendAdapter {
    */
   async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
     throw new Error('privateAssetUrl not implemented')
+  }
+
+  async createMultiPartUpload(
+    bucketName: string,
+    key: string,
+    version: string | undefined,
+    contentType: string,
+    cacheControl: string
+  ): Promise<string | undefined> {
+    throw new Error('not implemented')
+  }
+
+  async uploadPart(
+    bucketName: string,
+    key: string,
+    version: string,
+    uploadId: string,
+    partNumber: number,
+    body?: string | Uint8Array | Buffer | Readable,
+    length?: number
+  ): Promise<{ ETag?: string }> {
+    throw new Error('not implemented')
+  }
+
+  async completeMultipartUpload(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    version: string,
+    parts: UploadPart[]
+  ): Promise<
+    Omit<UploadPart, 'PartNumber'> & {
+      location?: string
+      bucket?: string
+      version: string
+    }
+  > {
+    throw new Error('not implemented')
+  }
+
+  async abortMultipartUpload(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    version?: string
+  ): Promise<void> {
+    throw new Error('not implemented')
+  }
+
+  async uploadPartCopy(
+    storageS3Bucket: string,
+    key: string,
+    version: string,
+    UploadId: string,
+    PartNumber: number,
+    sourceKey: string,
+    sourceKeyVersion?: string
+  ): Promise<{ eTag?: string; lastModified?: Date }> {
+    throw new Error('not implemented')
   }
 }
 

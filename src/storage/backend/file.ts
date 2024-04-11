@@ -1,9 +1,10 @@
-import xattr from 'fs-xattr'
+import * as xattr from 'fs-xattr'
 import fs from 'fs-extra'
 import path from 'path'
 import fileChecksum from 'md5-file'
 import { promisify } from 'util'
 import stream from 'stream'
+import MultiStream from 'multistream'
 import { getConfig } from '../../config'
 import {
   StorageBackendAdapter,
@@ -11,8 +12,11 @@ import {
   ObjectResponse,
   withOptionalVersion,
   BrowserCacheHeaders,
-} from './generic'
-import { StorageBackendError } from '../errors'
+  UploadPart,
+} from './adapter'
+import { ERRORS, StorageBackendError } from '../errors'
+import { randomUUID } from 'crypto'
+import fsExtra from 'fs-extra'
 const pipeline = promisify(stream.pipeline)
 
 interface FileMetadata {
@@ -181,7 +185,7 @@ export class FileBackend implements StorageBackendAdapter {
     version: string | undefined,
     destination: string,
     destinationVersion: string
-  ): Promise<Pick<ObjectMetadata, 'httpStatusCode'>> {
+  ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     const srcFile = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${source}`, version))
     const destFile = path.resolve(
       this.filePath,
@@ -193,8 +197,13 @@ export class FileBackend implements StorageBackendAdapter {
 
     await this.setFileMetadata(destFile, await this.getFileMetadata(srcFile))
 
+    const fileStat = await fs.lstat(destFile)
+    const checksum = await fileChecksum(destFile)
+
     return {
       httpStatusCode: 200,
+      lastModified: fileStat.mtime,
+      eTag: checksum,
     }
   }
 
@@ -250,6 +259,151 @@ export class FileBackend implements StorageBackendAdapter {
     }
   }
 
+  async createMultiPartUpload(
+    bucketName: string,
+    key: string,
+    version: string | undefined,
+    contentType: string,
+    cacheControl: string
+  ): Promise<string | undefined> {
+    const uploadId = randomUUID()
+    const multiPartFolder = path.join(
+      this.filePath,
+      'multiparts',
+      uploadId,
+      bucketName,
+      withOptionalVersion(key, version)
+    )
+
+    const multipartFile = path.join(multiPartFolder, 'metadata.json')
+    await fsExtra.ensureDir(multiPartFolder)
+    await fsExtra.writeFile(multipartFile, JSON.stringify({ contentType, cacheControl }))
+
+    return uploadId
+  }
+
+  async uploadPart(
+    bucketName: string,
+    key: string,
+    version: string,
+    uploadId: string,
+    partNumber: number,
+    body: stream.Readable
+  ): Promise<{ ETag?: string }> {
+    const multiPartFolder = path.join(
+      this.filePath,
+      'multiparts',
+      uploadId,
+      bucketName,
+      withOptionalVersion(key, version)
+    )
+
+    const multipartFile = path.join(multiPartFolder, `part-${partNumber}`)
+
+    const writeStream = fsExtra.createWriteStream(multipartFile)
+    await pipeline(body, writeStream)
+
+    const etag = await fileChecksum(multipartFile)
+
+    await this.setMetadataAttr(multipartFile, 'etag', etag)
+
+    return { ETag: etag }
+  }
+
+  async completeMultipartUpload(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    version: string,
+    parts: UploadPart[]
+  ): Promise<
+    Omit<UploadPart, 'PartNumber'> & {
+      location?: string
+      bucket?: string
+      version: string
+    }
+  > {
+    const multiPartFolder = path.join(
+      this.filePath,
+      'multiparts',
+      uploadId,
+      bucketName,
+      withOptionalVersion(key, version)
+    )
+
+    const partsByEtags = parts.map(async (part) => {
+      const partFilePath = path.join(multiPartFolder, `part-${part.PartNumber}`)
+      const partExists = await fsExtra.pathExists(partFilePath)
+
+      if (partExists) {
+        const etag = await this.getMetadataAttr(partFilePath, 'etag')
+        if (etag === part.ETag) {
+          return partFilePath
+        }
+        throw ERRORS.InvalidChecksum(`Invalid ETag for part ${part.PartNumber}`)
+      }
+
+      throw ERRORS.MissingPart(part.PartNumber || 0, uploadId)
+    })
+
+    const finalParts = await Promise.all(partsByEtags)
+    finalParts.sort((a, b) => parseInt(a.split('-')[1]) - parseInt(b.split('-')[1]))
+
+    const fileStreams = finalParts.map((partPath) => {
+      return fs.createReadStream(partPath)
+    })
+
+    const multistream = new MultiStream(fileStreams)
+    const metadataContent = await fsExtra.readFile(
+      path.join(multiPartFolder, 'metadata.json'),
+      'utf-8'
+    )
+
+    const metadata = JSON.parse(metadataContent)
+
+    const uploaded = await this.uploadObject(
+      bucketName,
+      key,
+      version,
+      multistream,
+      metadata.contentType,
+      metadata.cacheControl
+    )
+
+    fsExtra.remove(path.join(this.filePath, 'multiparts', uploadId)).catch(() => {
+      // no-op
+    })
+
+    return {
+      version: version,
+      ETag: uploaded.eTag,
+      bucket: bucketName,
+      location: `${bucketName}/${key}`,
+    }
+  }
+
+  async abortMultipartUpload(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    version?: string
+  ): Promise<void> {
+    const multiPartFolder = path.join(this.filePath, 'multiparts', uploadId)
+
+    await fsExtra.remove(multiPartFolder)
+  }
+
+  async uploadPartCopy(
+    storageS3Bucket: string,
+    key: string,
+    version: string,
+    UploadId: string,
+    PartNumber: number,
+    sourceKey: string
+  ): Promise<{ eTag?: string; lastModified?: Date }> {
+    throw new Error('Method not implemented.')
+  }
+
   /**
    * Returns a private url that can only be accessed internally by the system
    * @param bucket
@@ -282,7 +436,7 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   protected getMetadataAttr(file: string, attribute: string): Promise<string | undefined> {
-    return xattr.get(file, attribute).then((value) => {
+    return xattr.get(file, attribute).then((value: any) => {
       return value?.toString() ?? undefined
     })
   }

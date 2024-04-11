@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { FromSchema } from 'json-schema-to-ts'
+import { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import { createDefaultSchema, createResponse } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
 

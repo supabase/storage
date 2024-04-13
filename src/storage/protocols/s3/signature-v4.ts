@@ -3,6 +3,7 @@ import { ERRORS } from '../../errors'
 
 interface SignatureV4Options {
   enforceRegion: boolean
+  allowForwardedHeader?: boolean
   credentials: Omit<Credentials, 'shortDate'> & { secretKey: string }
 }
 
@@ -56,10 +57,12 @@ export const ALWAYS_UNSIGNABLE_HEADERS = {
 export class SignatureV4 {
   public readonly serverCredentials: SignatureV4Options['credentials']
   enforceRegion: boolean
+  allowForwardedHeader?: boolean
 
   constructor(options: SignatureV4Options) {
     this.serverCredentials = options.credentials
     this.enforceRegion = options.enforceRegion
+    this.allowForwardedHeader = options.allowForwardedHeader
   }
 
   static parseAuthorizationHeader(header: string) {
@@ -257,6 +260,16 @@ export class SignatureV4 {
         .sort()
         .map((header) => {
           if (header === 'host') {
+            if (this.allowForwardedHeader) {
+              const forwarded = this.getHeader(request, 'forwarded')
+              if (forwarded) {
+                const extractedHost = /host="?([^";]+)/.exec(forwarded)?.[1]
+                if (extractedHost) {
+                  return `host:${extractedHost.toLowerCase()}`
+                }
+              }
+            }
+
             const xForwardedHost = this.getHeader(request, 'x-forwarded-host')
             if (xForwardedHost) {
               return `host:${xForwardedHost.toLowerCase()}`

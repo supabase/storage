@@ -187,7 +187,7 @@ async function connectAndMigrate(options: {
 
   const dbConfig: ClientConfig = {
     connectionString: databaseUrl,
-    connectionTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 60_000,
     options: `-c search_path=${searchPath}`,
     ssl,
   }

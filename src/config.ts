@@ -98,6 +98,7 @@ type StorageConfigType = {
   tusUseFileVersionSeparator: boolean
   defaultMetricsEnabled: boolean
   s3ProtocolPrefix: string
+  s3ProtocolAllowForwardedHeader: boolean
   s3ProtocolEnforceRegion: boolean
   s3ProtocolAccessKeyId?: string
   s3ProtocolAccessKeySecret?: string
@@ -223,6 +224,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
     // S3 Protocol
     s3ProtocolPrefix: getOptionalConfigFromEnv('S3_PROTOCOL_PREFIX') || '',
+    s3ProtocolAllowForwardedHeader:
+      getOptionalConfigFromEnv('S3_ALLOW_FORWARDED_HEADER') === 'true',
     s3ProtocolEnforceRegion: getOptionalConfigFromEnv('S3_PROTOCOL_ENFORCE_REGION') === 'true',
     s3ProtocolAccessKeyId: getOptionalConfigFromEnv('S3_PROTOCOL_ACCESS_KEY_ID'),
     s3ProtocolAccessKeySecret: getOptionalConfigFromEnv('S3_PROTOCOL_ACCESS_KEY_SECRET'),

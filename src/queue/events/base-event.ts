@@ -166,6 +166,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
       superUser: adminUser,
       host: payload.tenant.host,
       tenantId: payload.tenant.ref,
+      disableHostCheck: true,
     })
 
     const db = new StorageKnexDB(client, {

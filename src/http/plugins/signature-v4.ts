@@ -14,6 +14,7 @@ const {
   storageS3Region,
   isMultitenant,
   s3ProtocolPrefix,
+  s3ProtocolAllowForwardedHeader,
   s3ProtocolEnforceRegion,
   s3ProtocolAccessKeyId,
   s3ProtocolAccessKeySecret,
@@ -110,6 +111,7 @@ async function createSignature(
 
     const signature = new SignatureV4({
       enforceRegion: s3ProtocolEnforceRegion,
+      allowForwardedHeader: s3ProtocolAllowForwardedHeader,
       credentials: {
         accessKey: tenantId,
         secretKey: tenantAnonKey,
@@ -129,6 +131,7 @@ async function createSignature(
 
     const signature = new SignatureV4({
       enforceRegion: s3ProtocolEnforceRegion,
+      allowForwardedHeader: s3ProtocolAllowForwardedHeader,
       credentials: {
         accessKey: credential.accessKey,
         secretKey: credential.secretKey,
@@ -148,6 +151,7 @@ async function createSignature(
 
   const signature = new SignatureV4({
     enforceRegion: s3ProtocolEnforceRegion,
+    allowForwardedHeader: s3ProtocolAllowForwardedHeader,
     credentials: {
       accessKey: s3ProtocolAccessKeyId,
       secretKey: s3ProtocolAccessKeySecret,

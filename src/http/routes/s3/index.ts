@@ -62,7 +62,9 @@ export default async function routes(fastify: FastifyInstance) {
 
               if (headers) {
                 Object.keys(headers).forEach((header) => {
-                  reply.header(header, headers[header])
+                  if (headers[header]) {
+                    reply.header(header, headers[header])
+                  }
                 })
               }
               return reply.status(output.statusCode || 200).send(output.responseBody)

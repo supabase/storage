@@ -58,25 +58,35 @@ const UploadPartInput = {
 } as const
 
 export default function UploadPart(s3Router: S3Router) {
-  s3Router.put('/:Bucket/*?uploadId&partNumber', UploadPartInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+  s3Router.put(
+    '/:Bucket/*?uploadId&partNumber',
+    UploadPartInput,
+    (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-    return s3Protocol.uploadPart({
-      Body: ctx.req.raw,
-      UploadId: req.Querystring?.uploadId,
-      Bucket: req.Params.Bucket,
-      Key: req.Params['*'],
-      PartNumber: req.Querystring?.partNumber,
-      ContentLength: req.Headers?.['content-length'],
-    })
-  })
+      return s3Protocol.uploadPart({
+        Body: ctx.req.raw,
+        UploadId: req.Querystring?.uploadId,
+        Bucket: req.Params.Bucket,
+        Key: req.Params['*'],
+        PartNumber: req.Querystring?.partNumber,
+        ContentLength: req.Headers?.['content-length'],
+      })
+    },
+    { disableContentTypeParser: true }
+  )
 
-  s3Router.put('/:Bucket/*', PutObjectInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
-    return s3Protocol.putObject({
-      Body: ctx.req as any,
-      Bucket: req.Params.Bucket,
-      Key: req.Params['*'],
-    })
-  })
+  s3Router.put(
+    '/:Bucket/*',
+    PutObjectInput,
+    (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+      return s3Protocol.putObject({
+        Body: ctx.req as any,
+        Bucket: req.Params.Bucket,
+        Key: req.Params['*'],
+      })
+    },
+    { disableContentTypeParser: true }
+  )
 }

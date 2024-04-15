@@ -5,11 +5,6 @@ import { s3ErrorHandler } from './error-handler'
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(async (fastify) => {
-    fastify.register(jsonToXml)
-    fastify.register(signatureV4)
-    fastify.register(db)
-    fastify.register(storage)
-
     const s3Router = getRouter()
     const s3Routes = s3Router.routes()
 
@@ -74,20 +69,29 @@ export default async function routes(fastify: FastifyInstance) {
           return reply.status(404).send()
         }
 
-        fastify[method](
-          routePath,
-          {
-            validatorCompiler: () => () => true,
-            exposeHeadRoute: false,
-            errorHandler: s3ErrorHandler,
-          },
-          routeHandler
-        )
+        fastify.register(async (localFastify) => {
+          const disableContentParser = routesByMethod?.some(
+            (route) => route.disableContentTypeParser
+          )
 
-        // handle optional trailing slash
-        if (!routePath.endsWith('*') && !routePath.endsWith('/')) {
-          fastify[method](
-            routePath + '/',
+          if (disableContentParser) {
+            localFastify.addContentTypeParser(
+              ['application/json', 'text/plain', 'application/xml'],
+              function (request, payload, done) {
+                done(null)
+              }
+            )
+          }
+
+          fastify.register(jsonToXml, {
+            disableContentParser,
+          })
+          fastify.register(signatureV4)
+          fastify.register(db)
+          fastify.register(storage)
+
+          localFastify[method](
+            routePath,
             {
               validatorCompiler: () => () => true,
               exposeHeadRoute: false,
@@ -95,7 +99,20 @@ export default async function routes(fastify: FastifyInstance) {
             },
             routeHandler
           )
-        }
+
+          // handle optional trailing slash
+          if (!routePath.endsWith('*') && !routePath.endsWith('/')) {
+            localFastify[method](
+              routePath + '/',
+              {
+                validatorCompiler: () => () => true,
+                exposeHeadRoute: false,
+                errorHandler: s3ErrorHandler,
+              },
+              routeHandler
+            )
+          }
+        })
       })
     })
   })

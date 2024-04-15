@@ -275,7 +275,7 @@ export class ObjectStorage {
         'bucket_id,metadata,version'
       )
 
-      if (sourceKey === destinationKey) {
+      if (s3SourceKey === s3DestinationKey) {
         return {
           destObject: originObject,
           httpStatusCode: 200,
@@ -374,7 +374,7 @@ export class ObjectStorage {
       .asSuperUser()
       .findObject(this.bucketId, sourceObjectName, 'id, version')
 
-    if (sourceObjectName === destinationObjectName) {
+    if (s3SourceKey === s3DestinationKey) {
       return {
         destObject: sourceObj,
       }

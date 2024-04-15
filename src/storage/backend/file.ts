@@ -29,10 +29,12 @@ const METADATA_ATTR_KEYS = {
   darwin: {
     'cache-control': 'com.apple.metadata.supabase.cache-control',
     'content-type': 'com.apple.metadata.supabase.content-type',
+    etag: 'com.apple.metadata.supabase.etag',
   },
   linux: {
     'cache-control': 'user.supabase.cache-control',
     'content-type': 'user.supabase.content-type',
+    etag: 'user.supabase.content-type',
   },
 }
 
@@ -304,8 +306,8 @@ export class FileBackend implements StorageBackendAdapter {
     await pipeline(body, writeStream)
 
     const etag = await fileChecksum(multipartFile)
-
-    await this.setMetadataAttr(multipartFile, 'etag', etag)
+    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+    await this.setMetadataAttr(multipartFile, METADATA_ATTR_KEYS[platform]['etag'], etag)
 
     return { ETag: etag }
   }
@@ -336,7 +338,8 @@ export class FileBackend implements StorageBackendAdapter {
       const partExists = await fsExtra.pathExists(partFilePath)
 
       if (partExists) {
-        const etag = await this.getMetadataAttr(partFilePath, 'etag')
+        const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+        const etag = await this.getMetadataAttr(partFilePath, METADATA_ATTR_KEYS[platform]['etag'])
         if (etag === part.ETag) {
           return partFilePath
         }

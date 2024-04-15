@@ -8,10 +8,15 @@ import xml from 'xml2js'
 // @ts-ignore
 import xmlBodyParser from 'fastify-xml-body-parser'
 
-export const jsonToXml = fastifyPlugin(async function (fastify: FastifyInstance) {
+export const jsonToXml = fastifyPlugin(async function (
+  fastify: FastifyInstance,
+  opts: { disableContentParser?: boolean }
+) {
   fastify.register(accepts)
 
-  fastify.register(xmlBodyParser)
+  if (!opts.disableContentParser) {
+    fastify.register(xmlBodyParser)
+  }
   fastify.addHook('preSerialization', async (req, res, payload) => {
     const accept = req.accepts()
     if (

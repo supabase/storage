@@ -231,7 +231,10 @@ export class ImageRenderer extends Renderer {
       }
     } catch (e) {
       if (e instanceof AxiosError) {
-        await this.handleRequestError(e)
+        const error = await this.handleRequestError(e)
+        throw error.withMetadata({
+          transformations,
+        })
       }
 
       throw e
@@ -241,7 +244,7 @@ export class ImageRenderer extends Renderer {
   protected async handleRequestError(error: AxiosError) {
     const stream = error.response?.data as Stream
     if (!stream) {
-      throw ERRORS.InternalError(error)
+      throw ERRORS.InternalError(undefined, error.message)
     }
 
     const errorResponse = await new Promise<string>((resolve) => {
@@ -257,7 +260,7 @@ export class ImageRenderer extends Renderer {
     })
 
     const statusCode = error.response?.status || 500
-    throw ERRORS.ImageProcessingError(statusCode, errorResponse, error)
+    return ERRORS.ImageProcessingError(statusCode, errorResponse)
   }
 }
 

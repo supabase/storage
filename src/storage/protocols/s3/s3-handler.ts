@@ -9,6 +9,7 @@ import {
   DeleteObjectCommandInput,
   DeleteObjectsCommandInput,
   GetObjectCommandInput,
+  GetObjectTaggingCommandInput,
   HeadObjectCommandInput,
   ListMultipartUploadsCommandInput,
   ListObjectsCommandInput,
@@ -508,7 +509,7 @@ export class S3ProtocolHandler {
 
     if (parts.length === 0) {
       const allParts = await this.storage.db.asSuperUser().listParts(UploadId, {
-        maxParts: 1000,
+        maxParts: 10000,
       })
 
       parts.push(
@@ -758,9 +759,36 @@ export class S3ProtocolHandler {
         'cache-control': (object.metadata?.cacheControl as string) || '',
         expires: (object.metadata?.expires as string) || '',
         'content-length': (object.metadata?.size as string) || '',
-        'content-type': (object.metadata?.contentType as string) || '',
+        'content-type': (object.metadata?.mimetype as string) || '',
         etag: (object.metadata?.eTag as string) || '',
         'last-modified': object.updated_at ? new Date(object.updated_at).toUTCString() || '' : '',
+      },
+    }
+  }
+
+  async getObjectTagging(command: GetObjectTaggingCommandInput) {
+    const { Bucket, Key } = command
+
+    if (!Bucket) {
+      throw ERRORS.MissingParameter('Bucket')
+    }
+
+    if (!Key) {
+      throw ERRORS.MissingParameter('Key')
+    }
+
+    const object = await this.storage.from(Bucket).findObject(Key, 'id')
+
+    if (!object) {
+      throw ERRORS.NoSuchKey(Key)
+    }
+
+    // TODO: implement tagging when supported
+    return {
+      responseBody: {
+        Tagging: {
+          TagSet: null,
+        },
       },
     }
   }
@@ -790,7 +818,7 @@ export class S3ProtocolHandler {
     return {
       headers: {
         'cache-control': response.metadata.cacheControl,
-        'content-length': response.metadata.contentLength.toString(),
+        'content-length': response.metadata.contentLength?.toString() || '0',
         'content-type': response.metadata.mimetype,
         etag: response.metadata.eTag,
         'last-modified': response.metadata.lastModified?.toUTCString() || '',
@@ -1044,16 +1072,33 @@ export class S3ProtocolHandler {
       throw ERRORS.NoSuchKey('')
     }
 
-    const bytes = CopySourceRange.split('=')[1].split('-')
+    // Check if copy source exists
+    const copySource = await this.storage.db.findObject(
+      sourceBucketName,
+      sourceKey,
+      'id,name,version,metadata'
+    )
 
-    if (bytes.length !== 2) {
-      throw ERRORS.InvalidRange()
+    let copySize = copySource.metadata?.size || 0
+    let rangeBytes: { fromByte: number; toByte: number } | undefined = undefined
+
+    if (CopySourceRange) {
+      const bytes = CopySourceRange.split('=')[1].split('-')
+
+      if (bytes.length !== 2) {
+        throw ERRORS.InvalidRange()
+      }
+
+      const fromByte = Number(bytes[0])
+      const toByte = Number(bytes[1])
+
+      if (isNaN(fromByte) || isNaN(toByte)) {
+        throw ERRORS.InvalidRange()
+      }
+
+      rangeBytes = { fromByte, toByte }
+      copySize = toByte - fromByte
     }
-
-    const fromByte = BigInt(bytes[0])
-    const toByte = BigInt(bytes[1])
-
-    const size = toByte - fromByte
 
     const uploader = new Uploader(this.storage.backend, this.storage.db)
 
@@ -1063,13 +1108,6 @@ export class S3ProtocolHandler {
       owner: this.owner,
       isUpsert: true,
     })
-
-    // Check if copy source exists
-    const copySource = await this.storage.db.findObject(
-      sourceBucketName,
-      sourceKey,
-      'id,name,version'
-    )
 
     const [destinationBucket] = await this.storage.db.asSuperUser().withTransaction(async (db) => {
       return Promise.all([
@@ -1082,7 +1120,7 @@ export class S3ProtocolHandler {
       destinationBucket?.file_size_limit
     )
 
-    const multipart = await this.shouldAllowPartUpload(UploadId, Number(size), maxFileSize)
+    const multipart = await this.shouldAllowPartUpload(UploadId, Number(copySize), maxFileSize)
 
     const uploadPart = await this.storage.backend.uploadPartCopy(
       storageS3Bucket,
@@ -1091,7 +1129,8 @@ export class S3ProtocolHandler {
       UploadId,
       PartNumber,
       `${this.tenantId}/${sourceBucketName}/${copySource.name}`,
-      copySource.version
+      copySource.version,
+      rangeBytes
     )
 
     await this.storage.db.insertUploadPart({

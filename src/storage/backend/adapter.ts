@@ -207,7 +207,8 @@ export abstract class StorageBackendAdapter {
     UploadId: string,
     PartNumber: number,
     sourceKey: string,
-    sourceKeyVersion?: string
+    sourceKeyVersion?: string,
+    bytes?: { fromByte: number; toByte: number }
   ): Promise<{ eTag?: string; lastModified?: Date }> {
     throw new Error('not implemented')
   }

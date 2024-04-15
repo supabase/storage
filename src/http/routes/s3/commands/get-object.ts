@@ -1,7 +1,7 @@
 import { S3ProtocolHandler } from '../../../../storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 
-const ListObjectsInput = {
+const GetObjectInput = {
   summary: 'Get Object',
   Params: {
     type: 'object',
@@ -22,8 +22,36 @@ const ListObjectsInput = {
   Querystring: {},
 } as const
 
-export default function ListObjects(s3Router: S3Router) {
-  s3Router.get('/:Bucket/*', ListObjectsInput, (req, ctx) => {
+const GetObjectTagging = {
+  summary: 'Get Object Tagging',
+  Params: {
+    type: 'object',
+    properties: {
+      Bucket: { type: 'string' },
+      '*': { type: 'string' },
+    },
+    required: ['Bucket', '*'],
+  },
+  Querystring: {
+    type: 'object',
+    properties: {
+      tagging: { type: 'string' },
+    },
+    required: ['tagging'],
+  },
+} as const
+
+export default function GetObject(s3Router: S3Router) {
+  s3Router.get('/:Bucket/*?tagging', GetObjectTagging, (req, ctx) => {
+    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+
+    return s3Protocol.getObjectTagging({
+      Bucket: req.Params.Bucket,
+      Key: req.Params['*'],
+    })
+  })
+
+  s3Router.get('/:Bucket/*', GetObjectInput, (req, ctx) => {
     const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
     const ifModifiedSince = req.Headers?.['if-modified-since']
 

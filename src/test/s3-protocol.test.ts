@@ -1081,20 +1081,6 @@ describe('S3 Protocol', () => {
 
         const parts = await client.send(listPartsCmd)
         expect(parts.Parts?.length).toBe(1)
-
-        const completeMultiPartUpload = new CompleteMultipartUploadCommand({
-          Bucket: bucket,
-          Key: newKey,
-          UploadId: resp.UploadId,
-          MultipartUpload: {
-            Parts: [
-              {
-                PartNumber: 1,
-                ETag: copyResp.CopyPartResult?.ETag,
-              },
-            ],
-          },
-        })
       })
     })
   })

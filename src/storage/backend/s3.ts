@@ -9,9 +9,7 @@ import {
   GetObjectCommand,
   GetObjectCommandInput,
   HeadObjectCommand,
-  ListMultipartUploadsCommand,
   ListPartsCommand,
-  PutObjectCommand,
   S3Client,
   S3ClientConfig,
   UploadPartCommand,
@@ -417,7 +415,8 @@ export class S3Backend implements StorageBackendAdapter {
     UploadId: string,
     PartNumber: number,
     sourceKey: string,
-    sourceKeyVersion?: string
+    sourceKeyVersion?: string,
+    bytesRange?: { fromByte: number; toByte: number }
   ) {
     const uploadPartCopy = new UploadPartCopyCommand({
       Bucket: storageS3Bucket,
@@ -425,6 +424,7 @@ export class S3Backend implements StorageBackendAdapter {
       UploadId,
       PartNumber,
       CopySource: `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceKeyVersion)}`,
+      CopySourceRange: bytesRange ? `bytes=${bytesRange.fromByte}-${bytesRange.toByte}` : undefined,
     })
 
     const part = await this.client.send(uploadPartCopy)

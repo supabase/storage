@@ -38,7 +38,6 @@ interface Credentials {
  */
 export const ALWAYS_UNSIGNABLE_HEADERS = {
   authorization: true,
-  'cache-control': true,
   connection: true,
   expect: true,
   from: true,

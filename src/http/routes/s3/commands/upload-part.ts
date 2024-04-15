@@ -22,6 +22,11 @@ const PutObjectInput = {
       'x-amz-content-sha256': { type: 'string' },
       'x-amz-date': { type: 'string' },
       'content-type': { type: 'string' },
+      'content-length': { type: 'integer' },
+      'cache-control': { type: 'string' },
+      'content-disposition': { type: 'string' },
+      'content-encoding': { type: 'string' },
+      expires: { type: 'string' },
     },
   },
 } as const
@@ -85,6 +90,10 @@ export default function UploadPart(s3Router: S3Router) {
         Body: ctx.req as any,
         Bucket: req.Params.Bucket,
         Key: req.Params['*'],
+        CacheControl: req.Headers?.['cache-control'],
+        ContentType: req.Headers?.['content-type'],
+        Expires: req.Headers?.['expires'] ? new Date(req.Headers?.['expires']) : undefined,
+        ContentEncoding: req.Headers?.['content-encoding'],
       })
     },
     { disableContentTypeParser: true }

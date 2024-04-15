@@ -300,14 +300,16 @@ export class FileBackend implements StorageBackendAdapter {
       withOptionalVersion(key, version)
     )
 
-    const multipartFile = path.join(multiPartFolder, `part-${partNumber}`)
+    const partPath = path.join(multiPartFolder, `part-${partNumber}`)
 
-    const writeStream = fsExtra.createWriteStream(multipartFile)
+    const writeStream = fsExtra.createWriteStream(partPath)
+
     await pipeline(body, writeStream)
 
-    const etag = await fileChecksum(multipartFile)
+    const etag = await fileChecksum(partPath)
+
     const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
-    await this.setMetadataAttr(multipartFile, METADATA_ATTR_KEYS[platform]['etag'], etag)
+    await this.setMetadataAttr(partPath, METADATA_ATTR_KEYS[platform]['etag'], etag)
 
     return { ETag: etag }
   }
@@ -402,9 +404,44 @@ export class FileBackend implements StorageBackendAdapter {
     version: string,
     UploadId: string,
     PartNumber: number,
-    sourceKey: string
+    sourceKey: string,
+    sourceVersion?: string,
+    rangeBytes?: { fromByte: number; toByte: number }
   ): Promise<{ eTag?: string; lastModified?: Date }> {
-    throw new Error('Method not implemented.')
+    const multiPartFolder = path.join(
+      this.filePath,
+      'multiparts',
+      UploadId,
+      storageS3Bucket,
+      withOptionalVersion(key, version)
+    )
+
+    const partFilePath = path.join(multiPartFolder, `part-${PartNumber}`)
+    const sourceFilePath = path.join(
+      this.filePath,
+      storageS3Bucket,
+      withOptionalVersion(sourceKey, sourceVersion)
+    )
+
+    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+
+    const readStreamOptions = rangeBytes
+      ? { start: rangeBytes.fromByte, end: rangeBytes.toByte }
+      : {}
+    const partStream = fs.createReadStream(sourceFilePath, readStreamOptions)
+
+    const writePart = fs.createWriteStream(partFilePath)
+    await pipeline(partStream, writePart)
+
+    const etag = await fileChecksum(partFilePath)
+    await this.setMetadataAttr(partFilePath, METADATA_ATTR_KEYS[platform]['etag'], etag)
+
+    const fileStat = await fs.lstat(partFilePath)
+
+    return {
+      eTag: etag,
+      lastModified: fileStat.mtime,
+    }
   }
 
   /**

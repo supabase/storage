@@ -629,7 +629,7 @@ export class S3ProtocolHandler {
         }
       )
 
-      await this.storage.db.insertUploadPart({
+      await this.storage.db.asSuperUser().insertUploadPart({
         upload_id: UploadId,
         version: multipart.version,
         part_number: PartNumber || 0,
@@ -715,7 +715,25 @@ export class S3ProtocolHandler {
       throw ERRORS.InvalidUploadId()
     }
 
-    const multipart = await this.storage.db.findMultipartUpload(UploadId, 'id,version')
+    if (!Bucket) {
+      throw ERRORS.MissingParameter('Bucket')
+    }
+
+    if (!Key) {
+      throw ERRORS.MissingParameter('Key')
+    }
+
+    const multipart = await this.storage.db
+      .asSuperUser()
+      .findMultipartUpload(UploadId, 'id,version')
+
+    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    await uploader.canUpload({
+      bucketId: Bucket,
+      objectName: Key,
+      owner: this.owner,
+      isUpsert: true,
+    })
 
     await this.storage.backend.abortMultipartUpload(
       storageS3Bucket,
@@ -819,6 +837,7 @@ export class S3ProtocolHandler {
       headers: {
         'cache-control': response.metadata.cacheControl,
         'content-length': response.metadata.contentLength?.toString() || '0',
+        'content-range': response.metadata.contentRange?.toString() || '0',
         'content-type': response.metadata.mimetype,
         etag: response.metadata.eTag,
         'last-modified': response.metadata.lastModified?.toUTCString() || '',
@@ -989,7 +1008,7 @@ export class S3ProtocolHandler {
 
     const maxParts = Math.min(command.MaxParts || 1000, 1000)
 
-    let result = await this.storage.db.asSuperUser().listParts(command.UploadId, {
+    let result = await this.storage.db.listParts(command.UploadId, {
       afterPart: command.PartNumberMarker,
       maxParts: maxParts + 1,
     })
@@ -1103,8 +1122,8 @@ export class S3ProtocolHandler {
     const uploader = new Uploader(this.storage.backend, this.storage.db)
 
     await uploader.canUpload({
-      bucketId: Bucket as string,
-      objectName: Key as string,
+      bucketId: Bucket,
+      objectName: Key,
       owner: this.owner,
       isUpsert: true,
     })
@@ -1133,7 +1152,7 @@ export class S3ProtocolHandler {
       rangeBytes
     )
 
-    await this.storage.db.insertUploadPart({
+    await this.storage.db.asSuperUser().insertUploadPart({
       upload_id: UploadId,
       version: multipart.version,
       part_number: PartNumber,

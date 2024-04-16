@@ -42,6 +42,9 @@ services:
       IMAGE_TRANSFORMATION_ENABLED: "true"
       IMGPROXY_URL: http://imgproxy:8080
       IMGPROXY_REQUEST_TIMEOUT: 15
+      # S3 Protocol
+      S3_PROTOCOL_ACCESS_KEY_ID: 625729a08b95bf1b7ff351a663f3a23c
+      S3_PROTOCOL_ACCESS_KEY_SECRET: 850181e4652dd023b7a98c58ae0d2d34bd487ee0cc3254aed6eda37307425907
 
   tenant_db:
     extends:

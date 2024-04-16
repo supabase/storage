@@ -392,6 +392,8 @@ export class ObjectStorage {
       const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
 
       return this.db.asSuperUser().withTransaction(async (db) => {
+        await db.waitObjectLock(this.bucketId, destinationObjectName)
+
         const sourceObject = await db.findObject(this.bucketId, sourceObjectName, 'id', {
           forUpdate: true,
           dontErrorOnEmpty: false,

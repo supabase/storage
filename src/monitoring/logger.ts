@@ -4,7 +4,7 @@ import { FastifyReply, FastifyRequest } from 'fastify'
 import { URL } from 'url'
 import { normalizeRawError } from '../storage'
 
-const { logLevel, logflareApiKey, logflareSourceToken, logflareEnabled } = getConfig()
+const { logLevel, logflareApiKey, logflareSourceToken, logflareEnabled, region } = getConfig()
 
 export const logger = pino({
   transport: buildTransport(),
@@ -20,6 +20,7 @@ export const logger = pino({
     },
     req(request) {
       return {
+        region,
         traceId: request.id,
         method: request.method,
         url: redactQueryParamFromRequest(request, ['token']),
@@ -138,10 +139,13 @@ const whitelistHeaders = (headers: Record<string, unknown>) => {
     'upload-length',
     'upload-offset',
     'tus-resumable',
+    'range',
   ]
   const allowlistedResponseHeaders = [
     'cf-cache-status',
     'cf-ray',
+    'location',
+    'cache-control',
     'content-location',
     'content-range',
     'content-type',
@@ -152,6 +156,11 @@ const whitelistHeaders = (headers: Record<string, unknown>) => {
     'x-kong-upstream-latency',
     'sb-gateway-mode',
     'sb-gateway-version',
+    'x-transformations',
+    'expires',
+    'etag',
+    'content-disposition',
+    'last-modified',
   ]
   Object.keys(headers)
     .filter(

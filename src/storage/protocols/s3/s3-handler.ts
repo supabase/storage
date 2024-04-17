@@ -765,7 +765,7 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Bucket')
     }
 
-    const object = await this.storage.from(Bucket).findObject(Key, '*')
+    const object = await this.storage.from(Bucket).findObject(Key, 'metadata,created_at,updated_at')
 
     if (!object) {
       throw ERRORS.NoSuchKey(Key)
@@ -822,7 +822,7 @@ export class S3ProtocolHandler {
     const bucket = command.Bucket as string
     const key = command.Key as string
 
-    const object = await this.storage.from(bucket).findObject(key, '*')
+    const object = await this.storage.from(bucket).findObject(key, 'version')
     const response = await this.storage.backend.getObject(
       storageS3Bucket,
       `${this.tenantId}/${bucket}/${key}`,
@@ -837,7 +837,7 @@ export class S3ProtocolHandler {
       headers: {
         'cache-control': response.metadata.cacheControl,
         'content-length': response.metadata.contentLength?.toString() || '0',
-        'content-range': response.metadata.contentRange?.toString() || '0',
+        'content-range': response.metadata.contentRange?.toString() || '',
         'content-type': response.metadata.mimetype,
         etag: response.metadata.eTag,
         'last-modified': response.metadata.lastModified?.toUTCString() || '',
@@ -966,15 +966,9 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    const object = await this.storage.from(sourceBucket).findObject(sourceKey, '*')
-
-    if (!object) {
-      throw ERRORS.NoSuchKey(sourceKey)
-    }
-
     const copyResult = await this.storage
       .from(sourceBucket)
-      .copyObject(sourceKey, Bucket, Key, object.owner, {
+      .copyObject(sourceKey, Bucket, Key, this.owner, {
         ifMatch: command.CopySourceIfMatch,
         ifNoneMatch: command.CopySourceIfNoneMatch,
         ifModifiedSince: command.CopySourceIfModifiedSince,

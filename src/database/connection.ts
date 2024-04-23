@@ -7,6 +7,7 @@ import { getConfig } from '../config'
 import { DbActiveConnection, DbActivePool } from '../monitoring/metrics'
 import { ERRORS } from '../storage'
 import KnexTimeoutError = knex.KnexTimeoutError
+import { logger, logSchema } from '../monitoring'
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)
@@ -49,8 +50,15 @@ export const connections = new TTLCache<string, Knex>({
   ...(isMultitenant ? multiTenantLRUConfig : { max: 1, ttl: Infinity }),
   dispose: async (pool) => {
     if (!pool) return
-    await pool.destroy()
-    pool.client.removeAllListeners()
+    try {
+      await pool.destroy()
+      pool.client.removeAllListeners()
+    } catch (e) {
+      logSchema.error(logger, 'pool was not able to be destroyed', {
+        type: 'db',
+        error: e,
+      })
+    }
   },
 })
 
@@ -182,6 +190,15 @@ export class TenantConnection {
       }
 
       if (!instance && this.options.isExternalPool) {
+        // Note: in knex there is a bug when using `knex.transaction()` which doesn't bubble up the error to the catch block
+        // in case the transaction was not able to be created. This is a workaround to make sure the error is thrown.
+        // Ref: https://github.com/knex/knex/issues/4709
+        if (tnx.isCompleted()) {
+          await tnx.executionPromise
+
+          // This should never be reached, since the above promise is always rejected in this edge case.
+          throw ERRORS.DatabaseError('Transaction already completed')
+        }
         await tnx.raw(`SELECT set_config('search_path', ?, true)`, [searchPath.join(', ')])
       }
 

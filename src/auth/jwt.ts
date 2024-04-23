@@ -24,6 +24,7 @@ export type SignedToken = {
 
 export type SignedUploadToken = {
   owner: string | undefined
+  upsert: boolean
   url: string
   exp: number
 }

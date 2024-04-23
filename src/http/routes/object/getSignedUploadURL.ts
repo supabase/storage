@@ -15,6 +15,15 @@ const getSignedUploadURLParamsSchema = {
   required: ['bucketName', '*'],
 } as const
 
+const getSignedUploadURLHeadersSchema = {
+  type: 'object',
+  properties: {
+    'x-upsert': { type: 'string' },
+    authorization: { type: 'string' },
+  },
+  required: ['authorization'],
+} as const
+
 const successResponseSchema = {
   type: 'object',
   properties: {
@@ -29,6 +38,7 @@ const successResponseSchema = {
 }
 interface getSignedURLRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof getSignedUploadURLParamsSchema>
+  Headers: FromSchema<typeof getSignedUploadURLHeadersSchema>
 }
 
 export default async function routes(fastify: FastifyInstance) {
@@ -54,7 +64,9 @@ export default async function routes(fastify: FastifyInstance) {
 
       const signedUploadURL = await request.storage
         .from(bucketName)
-        .signUploadObjectUrl(objectName, urlPath as string, uploadSignedUrlExpirationTime, owner)
+        .signUploadObjectUrl(objectName, urlPath as string, uploadSignedUrlExpirationTime, owner, {
+          upsert: request.headers['x-upsert'] === 'true',
+        })
 
       return response.status(200).send({ url: signedUploadURL })
     }

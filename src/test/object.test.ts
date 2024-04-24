@@ -1544,6 +1544,73 @@ describe('testing uploading with generated signed upload URL', () => {
     expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
+
+  it('will allow overwriting a file when the generating a signed upload url with x-upsert:true', async () => {
+    function createUpload() {
+      const form = new FormData()
+      form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+      return form
+    }
+
+    const BUCKET_ID = 'bucket2'
+    const OBJECT_NAME = 'signed/sadcat-upload-signed-2.png'
+    const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
+    const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
+
+    // Upload a file first
+    const resp = await app().inject({
+      method: 'POST',
+      url: `/object/${urlToSign}`,
+      payload: createUpload(),
+      headers: {
+        authorization: serviceKey,
+      },
+    })
+
+    expect(resp.statusCode).toBe(200)
+
+    const jwtToken = await signJWT({ owner, url: urlToSign, upsert: true }, jwtSecret, 100)
+    const response = await app().inject({
+      method: 'PUT',
+      url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
+      payload: createUpload(),
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+  })
+
+  it('will allow not be able overwriting a file when the generating a signed upload url without x-upsert header', async () => {
+    function createUpload() {
+      const form = new FormData()
+      form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+      return form
+    }
+
+    const BUCKET_ID = 'bucket2'
+    const OBJECT_NAME = 'signed/sadcat-upload-signed-3.png'
+    const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
+    const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
+
+    // Upload a file first
+    const resp = await app().inject({
+      method: 'POST',
+      url: `/object/${urlToSign}`,
+      payload: createUpload(),
+      headers: {
+        authorization: serviceKey,
+      },
+    })
+
+    expect(resp.statusCode).toBe(200)
+
+    const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, 100)
+    const response = await app().inject({
+      method: 'PUT',
+      url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
+      payload: createUpload(),
+    })
+    expect(response.statusCode).toBe(400)
+  })
 })
 
 /**
@@ -1864,7 +1931,7 @@ describe('testing list objects', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON).toHaveLength(5)
+    expect(responseJSON).toHaveLength(6)
     const names = responseJSON.map((ele: any) => ele.name)
     expect(names).toContain('curlimage.jpg')
     expect(names).toContain('private')

@@ -572,8 +572,15 @@ export class ObjectStorage {
    * @param url
    * @param expiresIn seconds
    * @param owner
+   * @param options
    */
-  async signUploadObjectUrl(objectName: string, url: string, expiresIn: number, owner?: string) {
+  async signUploadObjectUrl(
+    objectName: string,
+    url: string,
+    expiresIn: number,
+    owner?: string,
+    options?: { upsert?: boolean }
+  ) {
     // check as super user if the object already exists
     const found = await this.asSuperUser().findObject(objectName, 'id', {
       dontErrorOnEmpty: true,
@@ -584,19 +591,21 @@ export class ObjectStorage {
     }
 
     // check if user has INSERT permissions
-    await this.db.testPermission((db) => {
-      return db.createObject({
-        bucket_id: this.bucketId,
-        name: objectName,
-        owner,
-        metadata: {},
-      })
+    await this.uploader.canUpload({
+      bucketId: this.bucketId,
+      objectName,
+      owner,
+      isUpsert: options?.upsert ?? false,
     })
 
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(4).join('/'))
     const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
-    const token = await signJWT({ owner, url: urlToSign }, jwtSecret, expiresIn)
+    const token = await signJWT(
+      { owner, url: urlToSign, upsert: Boolean(options?.upsert) },
+      jwtSecret,
+      expiresIn
+    )
 
     return `/object/upload/sign/${urlToSign}?token=${token}`
   }

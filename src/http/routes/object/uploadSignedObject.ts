@@ -99,6 +99,7 @@ export default async function routes(fastify: FastifyInstance) {
         .uploadNewObject(request, {
           owner,
           objectName,
+          isUpsert: payload.upsert,
         })
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({

@@ -33,6 +33,9 @@ const successResponseSchema = {
         '/object/sign/upload/avatars/folder/cat.png?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJhdmF0YXJzL2ZvbGRlci9jYXQucG5nIiwiaWF0IjoxNjE3NzI2MjczLCJleHAiOjE2MTc3MjcyNzN9.s7Gt8ME80iREVxPhH01ZNv8oUn4XtaWsmiQ5csiUHn4',
       ],
     },
+    token: {
+      type: 'string',
+    },
   },
   required: ['url'],
 }
@@ -60,15 +63,15 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
       const owner = request.owner
 
-      const urlPath = request.url.split('?').shift()
+      const urlPath = `${bucketName}/${objectName}`
 
-      const signedUploadURL = await request.storage
+      const signedUpload = await request.storage
         .from(bucketName)
         .signUploadObjectUrl(objectName, urlPath as string, uploadSignedUrlExpirationTime, owner, {
           upsert: request.headers['x-upsert'] === 'true',
         })
 
-      return response.status(200).send({ url: signedUploadURL })
+      return response.status(200).send({ url: signedUpload.url, token: signedUpload.token })
     }
   )
 }

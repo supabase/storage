@@ -113,6 +113,7 @@ export class TenantConnection {
       },
       connection: {
         connectionString: connectionString,
+        connectionTimeoutMillis: databaseConnectionTimeout,
         ...this.sslSettings(),
       },
       acquireConnectionTimeout: databaseConnectionTimeout,

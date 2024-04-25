@@ -1,4 +1,5 @@
 import { FastifyBaseLogger, FastifyInstance } from 'fastify'
+import fastifyPlugin from 'fastify-plugin'
 import * as http from 'http'
 import { ServerOptions, DataStore } from '@tus/server'
 import { jwt, storage, db, dbSuperUser } from '../../plugins'
@@ -21,6 +22,7 @@ import {
   onUploadFinish,
   generateUrl,
   getFileIdFromRequest,
+  SIGNED_URL_SUFFIX,
 } from './lifecycle'
 import { TenantConnection, PubSub } from '../../../database'
 import { S3Store } from '@tus/s3-store'
@@ -46,6 +48,7 @@ type MultiPartRequest = http.IncomingMessage & {
     owner?: string
     tenantId: string
     db: TenantConnection
+    isUpsert: boolean
   }
 }
 
@@ -94,7 +97,7 @@ function createTusServer(lockNotifier: LockNotifier) {
     getFileIdFromRequest: getFileIdFromRequest,
     onResponseError: onResponseError,
     respectForwardedHeaders: true,
-    allowedHeaders: ['Authorization', 'X-Upsert', 'Upload-Expires', 'ApiKey'],
+    allowedHeaders: ['Authorization', 'X-Upsert', 'Upload-Expires', 'ApiKey', 'x-signature'],
     maxSize: async (rawReq, uploadId) => {
       const req = rawReq as MultiPartRequest
 
@@ -127,125 +130,189 @@ export default async function routes(fastify: FastifyInstance) {
 
   const tusServer = createTusServer(lockNotifier)
 
-  fastify.register(async function authorizationContext(fastify) {
-    fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>
-      done(null)
-    )
-
+  // authenticated routes
+  fastify.register(async (fastify) => {
     fastify.register(jwt)
     fastify.register(db)
     fastify.register(storage)
 
-    fastify.addHook('onRequest', (req, res, done) => {
-      AlsMemoryKV.localStorage.run(new Map(), () => {
-        done()
-      })
+    fastify.register(authenticatedRoutes, {
+      tusServer,
     })
-
-    fastify.addHook('preHandler', async (req) => {
-      ;(req.raw as MultiPartRequest).log = req.log
-      ;(req.raw as MultiPartRequest).upload = {
-        storage: req.storage,
-        owner: req.owner,
-        tenantId: req.tenantId,
-        db: req.db,
-      }
-    })
-
-    fastify.post(
-      '/',
-      { schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['resumable'] } },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
-      }
-    )
-
-    fastify.post(
-      '/*',
-      { schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['resumable'] } },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
-      }
-    )
-
-    fastify.put(
-      '/*',
-      { schema: { summary: 'Handle PUT request for TUS Resumable uploads', tags: ['resumable'] } },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
-      }
-    )
-    fastify.patch(
-      '/*',
-      {
-        schema: { summary: 'Handle PATCH request for TUS Resumable uploads', tags: ['resumable'] },
-      },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
-      }
-    )
-    fastify.head(
-      '/*',
-      { schema: { summary: 'Handle HEAD request for TUS Resumable uploads', tags: ['resumable'] } },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
-      }
-    )
-    fastify.delete(
-      '/*',
-      {
-        schema: { summary: 'Handle DELETE request for TUS Resumable uploads', tags: ['resumable'] },
-      },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
-      }
-    )
   })
 
-  fastify.register(async function authorizationContext(fastify) {
-    fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>
-      done(null)
-    )
+  // signed routes
+  fastify.register(
+    async (fastify) => {
+      fastify.register(dbSuperUser)
+      fastify.register(storage)
 
+      fastify.register(authenticatedRoutes, {
+        tusServer,
+      })
+    },
+    { prefix: SIGNED_URL_SUFFIX }
+  )
+
+  // public routes
+  fastify.register(async (fastify) => {
     fastify.register(dbSuperUser)
     fastify.register(storage)
 
-    fastify.addHook('preHandler', async (req) => {
-      ;(req.raw as MultiPartRequest).log = req.log
-      ;(req.raw as MultiPartRequest).upload = {
-        storage: req.storage,
-        owner: req.owner,
-        tenantId: req.tenantId,
-        db: req.db,
-      }
+    fastify.register(publicRoutes, {
+      tusServer,
     })
-
-    fastify.options(
-      '/',
-      {
-        schema: {
-          tags: ['resumable'],
-          summary: 'Handle OPTIONS request for TUS Resumable uploads',
-          description: 'Handle OPTIONS request for TUS Resumable uploads',
-        },
-      },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
-      }
-    )
-
-    fastify.options(
-      '/*',
-      {
-        schema: {
-          tags: ['resumable'],
-          summary: 'Handle OPTIONS request for TUS Resumable uploads',
-          description: 'Handle OPTIONS request for TUS Resumable uploads',
-        },
-      },
-      (req, res) => {
-        tusServer.handle(req.raw, res.raw)
-      }
-    )
   })
+
+  // public signed routes
+  fastify.register(
+    async (fastify) => {
+      fastify.register(dbSuperUser)
+      fastify.register(storage)
+
+      fastify.register(publicRoutes, {
+        tusServer,
+      })
+    },
+    { prefix: SIGNED_URL_SUFFIX }
+  )
 }
+
+const authenticatedRoutes = fastifyPlugin(
+  async (fastify: FastifyInstance, options: { tusServer: TusServer }) => {
+    fastify.register(async function authorizationContext(fastify) {
+      fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>
+        done(null)
+      )
+
+      fastify.addHook('onRequest', (req, res, done) => {
+        AlsMemoryKV.localStorage.run(new Map(), () => {
+          done()
+        })
+      })
+
+      fastify.addHook('preHandler', async (req) => {
+        ;(req.raw as MultiPartRequest).log = req.log
+        ;(req.raw as MultiPartRequest).upload = {
+          storage: req.storage,
+          owner: req.owner,
+          tenantId: req.tenantId,
+          db: req.db,
+          isUpsert: req.headers['x-upsert'] === 'true',
+        }
+      })
+
+      fastify.post(
+        '/',
+        {
+          schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['resumable'] },
+        },
+        (req, res) => {
+          options.tusServer.handle(req.raw, res.raw)
+        }
+      )
+
+      fastify.post(
+        '/*',
+        {
+          schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['resumable'] },
+        },
+        (req, res) => {
+          options.tusServer.handle(req.raw, res.raw)
+        }
+      )
+
+      fastify.put(
+        '/*',
+        {
+          schema: { summary: 'Handle PUT request for TUS Resumable uploads', tags: ['resumable'] },
+        },
+        (req, res) => {
+          options.tusServer.handle(req.raw, res.raw)
+        }
+      )
+      fastify.patch(
+        '/*',
+        {
+          schema: {
+            summary: 'Handle PATCH request for TUS Resumable uploads',
+            tags: ['resumable'],
+          },
+        },
+        (req, res) => {
+          options.tusServer.handle(req.raw, res.raw)
+        }
+      )
+      fastify.head(
+        '/*',
+        {
+          schema: { summary: 'Handle HEAD request for TUS Resumable uploads', tags: ['resumable'] },
+        },
+        (req, res) => {
+          options.tusServer.handle(req.raw, res.raw)
+        }
+      )
+      fastify.delete(
+        '/*',
+        {
+          schema: {
+            summary: 'Handle DELETE request for TUS Resumable uploads',
+            tags: ['resumable'],
+          },
+        },
+        (req, res) => {
+          options.tusServer.handle(req.raw, res.raw)
+        }
+      )
+    })
+  }
+)
+
+const publicRoutes = fastifyPlugin(
+  async (fastify: FastifyInstance, options: { tusServer: TusServer }) => {
+    fastify.register(async (fastify) => {
+      fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>
+        done(null)
+      )
+
+      fastify.addHook('preHandler', async (req) => {
+        ;(req.raw as MultiPartRequest).log = req.log
+        ;(req.raw as MultiPartRequest).upload = {
+          storage: req.storage,
+          owner: req.owner,
+          tenantId: req.tenantId,
+          db: req.db,
+          isUpsert: req.headers['x-upsert'] === 'true',
+        }
+      })
+
+      fastify.options(
+        '/',
+        {
+          schema: {
+            tags: ['resumable'],
+            summary: 'Handle OPTIONS request for TUS Resumable uploads',
+            description: 'Handle OPTIONS request for TUS Resumable uploads',
+          },
+        },
+        (req, res) => {
+          options.tusServer.handle(req.raw, res.raw)
+        }
+      )
+
+      fastify.options(
+        '/*',
+        {
+          schema: {
+            tags: ['resumable'],
+            summary: 'Handle OPTIONS request for TUS Resumable uploads',
+            description: 'Handle OPTIONS request for TUS Resumable uploads',
+          },
+        },
+        (req, res) => {
+          options.tusServer.handle(req.raw, res.raw)
+        }
+      )
+    })
+  }
+)

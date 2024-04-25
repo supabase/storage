@@ -1,8 +1,5 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { SignedUploadToken, verifyJWT } from '../../../auth'
-import { ERRORS } from '../../../storage'
-import { getJwtSecret } from '../../../database/tenant'
 
 const uploadSignedObjectParamsSchema = {
   type: 'object',
@@ -70,28 +67,12 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       // Validate sender
       const { token } = request.query
-
-      const { secret: jwtSecret } = await getJwtSecret(request.tenantId)
-
-      let payload: SignedUploadToken
-      try {
-        payload = (await verifyJWT(token, jwtSecret)) as SignedUploadToken
-      } catch (e) {
-        const err = e as Error
-        throw ERRORS.InvalidJWT(err)
-      }
-
-      const { url, exp, owner } = payload
       const { bucketName } = request.params
       const objectName = request.params['*']
 
-      if (url !== `${bucketName}/${objectName}`) {
-        throw ERRORS.InvalidSignature()
-      }
-
-      if (exp * 1000 < Date.now()) {
-        throw ERRORS.ExpiredSignature()
-      }
+      const { owner, upsert } = await request.storage
+        .from(bucketName)
+        .verifyObjectSignature(token, objectName)
 
       const { objectMetadata, path } = await request.storage
         .asSuperUser()
@@ -99,7 +80,7 @@ export default async function routes(fastify: FastifyInstance) {
         .uploadNewObject(request, {
           owner,
           objectName,
-          isUpsert: payload.upsert,
+          isUpsert: upsert,
         })
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({

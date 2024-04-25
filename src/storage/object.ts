@@ -1,7 +1,7 @@
 import { StorageBackendAdapter, ObjectMetadata, withOptionalVersion } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
-import { signJWT } from '../auth'
+import { SignedUploadToken, signJWT, verifyJWT } from '../auth'
 import { getConfig } from '../config'
 import { FastifyRequest } from 'fastify'
 import { Uploader } from './uploader'
@@ -581,15 +581,6 @@ export class ObjectStorage {
     owner?: string,
     options?: { upsert?: boolean }
   ) {
-    // check as super user if the object already exists
-    const found = await this.asSuperUser().findObject(objectName, 'id', {
-      dontErrorOnEmpty: true,
-    })
-
-    if (found) {
-      throw ERRORS.KeyAlreadyExists(objectName)
-    }
-
     // check if user has INSERT permissions
     await this.uploader.canUpload({
       bucketId: this.bucketId,
@@ -598,15 +589,42 @@ export class ObjectStorage {
       isUpsert: options?.upsert ?? false,
     })
 
-    const urlParts = url.split('/')
-    const urlToSign = decodeURI(urlParts.splice(4).join('/'))
     const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
     const token = await signJWT(
-      { owner, url: urlToSign, upsert: Boolean(options?.upsert) },
+      { owner, url, upsert: Boolean(options?.upsert) },
       jwtSecret,
       expiresIn
     )
 
-    return `/object/upload/sign/${urlToSign}?token=${token}`
+    return { url: `/object/upload/sign/${url}?token=${token}`, token }
+  }
+
+  /**
+   * Verify the signature for a specific object
+   * @param token
+   * @param objectName
+   */
+  async verifyObjectSignature(token: string, objectName: string) {
+    const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
+
+    let payload: SignedUploadToken
+    try {
+      payload = (await verifyJWT(token, jwtSecret)) as SignedUploadToken
+    } catch (e) {
+      const err = e as Error
+      throw ERRORS.InvalidJWT(err)
+    }
+
+    const { url, exp } = payload
+
+    if (url !== `${this.bucketId}/${objectName}`) {
+      throw ERRORS.InvalidSignature()
+    }
+
+    if (exp * 1000 < Date.now()) {
+      throw ERRORS.ExpiredSignature()
+    }
+
+    return payload
   }
 }

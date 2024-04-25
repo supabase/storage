@@ -1,8 +1,8 @@
 import fastifyPlugin from 'fastify-plugin'
-import { createResponse } from '../generic-routes'
 import { verifyJWT } from '../../auth'
 import { getJwtSecret } from '../../database'
 import { JwtPayload } from 'jsonwebtoken'
+import { ERRORS } from '../../storage'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -28,8 +28,7 @@ export const jwt = fastifyPlugin(async (fastify) => {
       request.jwtPayload = payload
       request.owner = payload.sub
     } catch (err: any) {
-      request.log.error({ error: err }, 'unable to get owner')
-      return reply.status(400).send(createResponse(err.message, '400', err.message))
+      throw ERRORS.AccessDenied(err.message, err)
     }
   })
 })

@@ -43,7 +43,7 @@ export async function onIncomingRequest(
   const uploadID = UploadId.fromString(id)
 
   // Handle signed url requests
-  if (req.url?.startsWith(`${tusPath}${SIGNED_URL_SUFFIX}`)) {
+  if (req.url?.startsWith(`/upload/resumable/sign`)) {
     const signature = req.headers['x-signature']
     if (!signature || (signature && typeof signature !== 'string')) {
       throw ERRORS.InvalidSignature('Missing x-signature header')
@@ -64,7 +64,7 @@ export async function onIncomingRequest(
   }
 
   // All other requests need to be authorized if they have permission to upload
-  const isUpsert = req.headers['x-upsert'] === 'true'
+  const isUpsert = req.upload.isUpsert
   const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
 
   await uploader.canUpload({
@@ -84,16 +84,13 @@ export function generateUrl(
 ) {
   proto = process.env.NODE_ENV === 'production' ? 'https' : proto
 
-  // validate allowed paths
-  const allowedPaths = [path, `${path}${SIGNED_URL_SUFFIX}`]
-  if (!allowedPaths.includes(req.url || '')) {
-    throw ERRORS.InvalidSignature('The url provided is not allowed for upload')
-  }
+  const isSigned = req.url?.endsWith(SIGNED_URL_SUFFIX)
+  const fullPath = isSigned ? `${path}${SIGNED_URL_SUFFIX}` : path
 
   // remove the tenant-id from the url, since we'll be using the tenant-id from the request
   id = id.split('/').slice(1).join('/')
   id = Buffer.from(id, 'utf-8').toString('base64url')
-  return `${proto}://${host}${req.url}/${id}`
+  return `${proto}://${host}${fullPath}/${id}`
 }
 
 /**

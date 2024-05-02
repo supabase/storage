@@ -11,11 +11,6 @@ const JWT_RSA_ALGOS: jwt.Algorithm[] = ['RS256', 'RS384', 'RS512']
 const JWT_ECC_ALGOS: jwt.Algorithm[] = ['ES256', 'ES384', 'ES512']
 const JWT_ED_ALGOS: jwt.Algorithm[] = ['EdDSA'] as unknown as jwt.Algorithm[] // types for EdDSA not yet updated
 
-interface jwtInterface {
-  sub?: string
-  role?: string
-}
-
 export type SignedToken = {
   url: string
   transformations?: string

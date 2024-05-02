@@ -41,6 +41,7 @@ export enum ErrorCode {
   InvalidChecksum = 'InvalidChecksum',
   MissingPart = 'MissingPart',
   SlowDown = 'SlowDown',
+  TusError = 'TusError',
 }
 
 export const ERRORS = {
@@ -172,6 +173,13 @@ export const ERRORS = {
       httpStatusCode: 400,
       message: message || 'Invalid upload id',
       originalError: e,
+    }),
+
+  TusError: (message: string, statusCode: number) =>
+    new StorageBackendError({
+      code: ErrorCode.TusError,
+      httpStatusCode: statusCode,
+      message: message,
     }),
 
   MissingTenantConfig: (tenantId: string) =>

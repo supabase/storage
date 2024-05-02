@@ -233,4 +233,281 @@ describe('Tus multipart', () => {
       }
     })
   })
+
+  describe('Signed Upload URL', () => {
+    it('will allow uploading using signed upload url without authorization token', async () => {
+      const bucket = await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+      })
+
+      const objectName = randomUUID() + '-cat.jpeg'
+
+      const signedUpload = await storage
+        .from(bucketName)
+        .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 3600)
+
+      const result = await new Promise((resolve, reject) => {
+        const upload = new tus.Upload(oneChunkFile, {
+          endpoint: `${localServerAddress}/upload/resumable/sign`,
+          onShouldRetry: () => false,
+          uploadDataDuringCreation: false,
+          headers: {
+            'x-signature': signedUpload.token,
+          },
+          metadata: {
+            bucketName: bucketName,
+            objectName: objectName,
+            contentType: 'image/jpeg',
+            cacheControl: '3600',
+          },
+          onError: function (error) {
+            console.log('Failed because: ' + error)
+            reject(error)
+          },
+          onSuccess: () => {
+            resolve(true)
+          },
+        })
+
+        upload.start()
+      })
+
+      expect(result).toEqual(true)
+
+      const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+      expect(dbAsset).toEqual({
+        bucket_id: bucket.id,
+        created_at: expect.any(Date),
+        id: expect.any(String),
+        last_accessed_at: expect.any(Date),
+        metadata: {
+          cacheControl: 'max-age=3600',
+          contentLength: 29526,
+          eTag: '"53e1323c929d57b09b95fbe6d531865c-1"',
+          httpStatusCode: 200,
+          lastModified: expect.any(String),
+          mimetype: 'image/jpeg',
+          size: 29526,
+        },
+        name: objectName,
+        owner: null,
+        owner_id: null,
+        path_tokens: [objectName],
+        updated_at: expect.any(Date),
+        version: expect.any(String),
+      })
+    })
+
+    it('will allow uploading using signed upload url without authorization token, honouring the owner id', async () => {
+      const bucket = await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+      })
+
+      const objectName = randomUUID() + '-cat.jpeg'
+
+      const signedUpload = await storage
+        .from(bucketName)
+        .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 3600, 'some-owner-id')
+
+      const result = await new Promise((resolve, reject) => {
+        const upload = new tus.Upload(oneChunkFile, {
+          endpoint: `${localServerAddress}/upload/resumable/sign`,
+          onShouldRetry: () => false,
+          uploadDataDuringCreation: false,
+          headers: {
+            'x-signature': signedUpload.token,
+          },
+          metadata: {
+            bucketName: bucketName,
+            objectName: objectName,
+            contentType: 'image/jpeg',
+            cacheControl: '3600',
+          },
+          onError: function (error) {
+            console.log('Failed because: ' + error)
+            reject(error)
+          },
+          onSuccess: () => {
+            resolve(true)
+          },
+        })
+
+        upload.start()
+      })
+
+      expect(result).toEqual(true)
+
+      const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+      expect(dbAsset).toEqual({
+        bucket_id: bucket.id,
+        created_at: expect.any(Date),
+        id: expect.any(String),
+        last_accessed_at: expect.any(Date),
+        metadata: {
+          cacheControl: 'max-age=3600',
+          contentLength: 29526,
+          eTag: '"53e1323c929d57b09b95fbe6d531865c-1"',
+          httpStatusCode: 200,
+          lastModified: expect.any(String),
+          mimetype: 'image/jpeg',
+          size: 29526,
+        },
+        name: objectName,
+        owner: null,
+        owner_id: 'some-owner-id',
+        path_tokens: [objectName],
+        updated_at: expect.any(Date),
+        version: expect.any(String),
+      })
+    })
+
+    it('will not allow uploading using signed upload url with an expired token', async () => {
+      await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+      })
+
+      const objectName = randomUUID() + '-cat.jpeg'
+
+      const signedUpload = await storage
+        .from(bucketName)
+        .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 1)
+
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+
+      try {
+        await new Promise((resolve, reject) => {
+          const upload = new tus.Upload(oneChunkFile, {
+            endpoint: `${localServerAddress}/upload/resumable/sign`,
+            onShouldRetry: () => false,
+            uploadDataDuringCreation: false,
+            headers: {
+              'x-signature': signedUpload.token,
+            },
+            metadata: {
+              bucketName: bucketName,
+              objectName: objectName,
+              contentType: 'image/jpeg',
+              cacheControl: '3600',
+            },
+            onError: function (error) {
+              console.log('Failed because: ' + error)
+              reject(error)
+            },
+            onSuccess: () => {
+              resolve(true)
+            },
+          })
+
+          upload.start()
+        })
+
+        throw new Error('it should error with expired token')
+      } catch (e) {
+        expect((e as Error).message).not.toEqual('it should error with expired token')
+
+        const err = e as DetailedError
+        expect(err.originalResponse.getBody()).toEqual('jwt expired')
+        expect(err.originalResponse.getStatus()).toEqual(400)
+      }
+    })
+
+    it('will not allow uploading using signed upload url with an invalid token', async () => {
+      await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+      })
+
+      const objectName = randomUUID() + '-cat.jpeg'
+
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+
+      try {
+        await new Promise((resolve, reject) => {
+          const upload = new tus.Upload(oneChunkFile, {
+            endpoint: `${localServerAddress}/upload/resumable/sign`,
+            onShouldRetry: () => false,
+            uploadDataDuringCreation: false,
+            headers: {
+              'x-signature': 'invalid-token',
+            },
+            metadata: {
+              bucketName: bucketName,
+              objectName: objectName,
+              contentType: 'image/jpeg',
+              cacheControl: '3600',
+            },
+            onError: function (error) {
+              console.log('Failed because: ' + error)
+              reject(error)
+            },
+            onSuccess: () => {
+              resolve(true)
+            },
+          })
+
+          upload.start()
+        })
+
+        throw new Error('it should error with expired token')
+      } catch (e) {
+        expect((e as Error).message).not.toEqual('it should error with expired token')
+
+        const err = e as DetailedError
+        expect(err.originalResponse.getBody()).toEqual('jwt malformed')
+        expect(err.originalResponse.getStatus()).toEqual(400)
+      }
+    })
+
+    it('will not allow uploading using signed upload url without a token', async () => {
+      await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+      })
+
+      const objectName = randomUUID() + '-cat.jpeg'
+
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+
+      try {
+        await new Promise((resolve, reject) => {
+          const upload = new tus.Upload(oneChunkFile, {
+            endpoint: `${localServerAddress}/upload/resumable/sign`,
+            onShouldRetry: () => false,
+            uploadDataDuringCreation: false,
+            metadata: {
+              bucketName: bucketName,
+              objectName: objectName,
+              contentType: 'image/jpeg',
+              cacheControl: '3600',
+            },
+            onError: function (error) {
+              console.log('Failed because: ' + error)
+              reject(error)
+            },
+            onSuccess: () => {
+              resolve(true)
+            },
+          })
+
+          upload.start()
+        })
+
+        throw new Error('it should error with expired token')
+      } catch (e) {
+        expect((e as Error).message).not.toEqual('it should error with expired token')
+
+        const err = e as DetailedError
+        expect(err.originalResponse.getBody()).toEqual('Missing x-signature header')
+        expect(err.originalResponse.getStatus()).toEqual(400)
+      }
+    })
+  })
 })

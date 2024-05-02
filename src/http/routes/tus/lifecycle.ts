@@ -11,6 +11,8 @@ import { UploadId } from '../../../storage/protocols/tus'
 const { storageS3Bucket, tusPath } = getConfig()
 const reExtractFileID = /([^/]+)\/?$/
 
+export const SIGNED_URL_SUFFIX = '/sign'
+
 export type MultiPartRequest = http.IncomingMessage & {
   log: BaseLogger
   upload: {
@@ -18,7 +20,7 @@ export type MultiPartRequest = http.IncomingMessage & {
     db: TenantConnection
     owner?: string
     tenantId: string
-    isNew: boolean
+    isUpsert: boolean
   }
 }
 
@@ -38,13 +40,31 @@ export async function onIncomingRequest(
     })
   })
 
+  const uploadID = UploadId.fromString(id)
+
+  // Handle signed url requests
+  if (req.url?.startsWith(`${tusPath}${SIGNED_URL_SUFFIX}`)) {
+    const signature = req.headers['x-signature']
+    if (!signature || (signature && typeof signature !== 'string')) {
+      throw ERRORS.InvalidSignature('Missing x-signature header')
+    }
+
+    const payload = await req.upload.storage
+      .from(uploadID.bucket)
+      .verifyObjectSignature(signature, uploadID.objectName)
+
+    req.upload.owner = payload.owner
+    req.upload.isUpsert = payload.upsert
+    return
+  }
+
+  // Options and HEAD request don't need to be authorized
   if (rawReq.method === 'OPTIONS' || req.method === 'HEAD') {
     return
   }
 
+  // All other requests need to be authorized if they have permission to upload
   const isUpsert = req.headers['x-upsert'] === 'true'
-  const uploadID = UploadId.fromString(id)
-
   const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
 
   await uploader.canUpload({
@@ -59,15 +79,21 @@ export async function onIncomingRequest(
  * Generate URL for TUS upload, it encodes the uploadID to base64url
  */
 export function generateUrl(
-  _: http.IncomingMessage,
+  req: http.IncomingMessage,
   { proto, host, path, id }: { proto: string; host: string; path: string; id: string }
 ) {
   proto = process.env.NODE_ENV === 'production' ? 'https' : proto
 
+  // validate allowed paths
+  const allowedPaths = [path, `${path}${SIGNED_URL_SUFFIX}`]
+  if (!allowedPaths.includes(req.url || '')) {
+    throw ERRORS.InvalidSignature('The url provided is not allowed for upload')
+  }
+
   // remove the tenant-id from the url, since we'll be using the tenant-id from the request
   id = id.split('/').slice(1).join('/')
   id = Buffer.from(id, 'utf-8').toString('base64url')
-  return `${proto}://${host}${path}/${id}`
+  return `${proto}://${host}${req.url}/${id}`
 }
 
 /**
@@ -161,7 +187,6 @@ export async function onUploadFinish(
 ) {
   const req = rawReq as MultiPartRequest
   const resourceId = UploadId.fromString(upload.id)
-  const isUpsert = req.headers['x-upsert'] === 'true'
 
   try {
     const s3Key = `${req.upload.tenantId}/${resourceId.bucket}/${resourceId.objectName}`
@@ -178,7 +203,7 @@ export async function onUploadFinish(
       bucketId: resourceId.bucket,
       objectName: resourceId.objectName,
       objectMetadata: metadata,
-      isUpsert: isUpsert,
+      isUpsert: req.upload.isUpsert,
       isMultipart: true,
       owner: req.upload.owner,
     })
@@ -205,6 +230,8 @@ export function onResponseError(
 ) {
   if (e instanceof Error) {
     ;(req as any).executionError = e
+  } else {
+    ;(req as any).executionError = ERRORS.TusError(e.body, e.status_code).withMetadata(e)
   }
 
   if (isRenderableError(e)) {

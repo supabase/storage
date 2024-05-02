@@ -1555,7 +1555,6 @@ describe('testing uploading with generated signed upload URL', () => {
     const BUCKET_ID = 'bucket2'
     const OBJECT_NAME = 'signed/sadcat-upload-signed-2.png'
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
-    const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
     // Upload a file first
     const resp = await app().inject({
@@ -1563,13 +1562,25 @@ describe('testing uploading with generated signed upload URL', () => {
       url: `/object/${urlToSign}`,
       payload: createUpload(),
       headers: {
+        'x-upsert': 'true',
         authorization: serviceKey,
       },
     })
 
     expect(resp.statusCode).toBe(200)
 
-    const jwtToken = await signJWT({ owner, url: urlToSign, upsert: true }, jwtSecret, 100)
+    // generate signed upload url with upsert
+    const signedUrlResp = await app().inject({
+      method: 'POST',
+      url: `/object/upload/sign/${urlToSign}`,
+      headers: {
+        'x-upsert': 'true',
+        authorization: serviceKey,
+      },
+    })
+    expect(signedUrlResp.statusCode).toBe(200)
+
+    const jwtToken = (await signedUrlResp.json()).token
     const response = await app().inject({
       method: 'PUT',
       url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,

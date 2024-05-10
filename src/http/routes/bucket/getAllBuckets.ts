@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
 import { bucketSchema } from '../../../storage/schemas'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const successResponseSchema = {
   type: 'array',
@@ -33,6 +34,9 @@ export default async function routes(fastify: FastifyInstance) {
     '/',
     {
       schema,
+      config: {
+        operation: { type: ROUTE_OPERATIONS.LIST_BUCKET },
+      },
     },
     async (request, response) => {
       const results = await request.storage.listBuckets(

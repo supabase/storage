@@ -68,6 +68,7 @@ export class ObjectStorage {
       bucketId: this.bucketId,
       fileSizeLimit: bucket.file_size_limit,
       allowedMimeTypes: bucket.allowed_mime_types,
+      uploadType: 'standard',
     })
 
     return { objectMetadata: metadata, path, id: obj.id }
@@ -96,6 +97,7 @@ export class ObjectStorage {
       fileSizeLimit: bucket.file_size_limit,
       allowedMimeTypes: bucket.allowed_mime_types,
       isUpsert: true,
+      uploadType: 'standard',
     })
 
     return { objectMetadata: metadata, path, id: obj.id }

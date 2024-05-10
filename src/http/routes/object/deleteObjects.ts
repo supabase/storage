@@ -1,8 +1,9 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
 import { objectSchema } from '../../../storage/schemas/object'
+import { ROUTE_OPERATIONS } from '../operations'
 const deleteObjectsParamsSchema = {
   type: 'object',
   properties: {
@@ -45,6 +46,13 @@ export default async function routes(fastify: FastifyInstance) {
     '/:bucketName',
     {
       schema,
+      config: {
+        operation: { type: ROUTE_OPERATIONS.DELETE_OBJECTS },
+        resources: (req: FastifyRequest<deleteObjectsInterface>) => {
+          const { prefixes } = req.body
+          return prefixes.map((prefix) => `${req.params.bucketName}/${prefix}`)
+        },
+      },
     },
     async (request, response) => {
       const { bucketName } = request.params

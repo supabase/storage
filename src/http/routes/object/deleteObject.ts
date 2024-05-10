@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import { createDefaultSchema, createResponse } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const deleteObjectParamsSchema = {
   type: 'object',
@@ -34,6 +35,9 @@ export default async function routes(fastify: FastifyInstance) {
     '/:bucketName/*',
     {
       schema,
+      config: {
+        operation: { type: ROUTE_OPERATIONS.DELETE_OBJECT },
+      },
     },
     async (request, response) => {
       const { bucketName } = request.params

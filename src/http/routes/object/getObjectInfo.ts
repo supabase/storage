@@ -4,6 +4,7 @@ import { IncomingMessage, Server, ServerResponse } from 'http'
 import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../request'
 import { Obj } from '../../../storage/schemas'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
 
@@ -64,6 +65,9 @@ export async function publicRoutes(fastify: FastifyInstance) {
         tags: ['object'],
         response: { '4xx': { $ref: 'errorSchema#' } },
       },
+      config: {
+        operation: { type: ROUTE_OPERATIONS.INFO_PUBLIC_OBJECT },
+      },
     },
     async (request, response) => {
       return requestHandler(request, response, true)
@@ -80,6 +84,9 @@ export async function publicRoutes(fastify: FastifyInstance) {
         description: 'returns object info',
         tags: ['object'],
         response: { '4xx': { $ref: 'errorSchema#' } },
+      },
+      config: {
+        operation: { type: ROUTE_OPERATIONS.INFO_PUBLIC_OBJECT },
       },
     },
     async (request, response) => {
@@ -100,6 +107,9 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },
+      config: {
+        operation: { type: 'object.head_authenticated_info' },
+      },
     },
     async (request, response) => {
       return requestHandler(request, response)
@@ -115,6 +125,9 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
+      },
+      config: {
+        operation: { type: 'object.get_authenticated_info' },
       },
     },
     async (request, response) => {
@@ -133,6 +146,9 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#' } },
         tags: ['deprecated'],
       },
+      config: {
+        operation: { type: 'object.get_authenticated_info' },
+      },
     },
     async (request, response) => {
       return requestHandler(request, response)
@@ -149,6 +165,9 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         description: 'use HEAD /object/authenticated/{bucketName} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
         tags: ['deprecated'],
+      },
+      config: {
+        operation: { type: 'object.head_authenticated_info' },
       },
     },
     async (request, response) => {

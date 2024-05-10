@@ -4,6 +4,7 @@ import { getConfig } from '../../../config'
 import { SignedToken, verifyJWT } from '../../../auth'
 import { ERRORS } from '../../../storage'
 import { getJwtSecret } from '../../../database/tenant'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
 
@@ -50,6 +51,9 @@ export default async function routes(fastify: FastifyInstance) {
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
+      },
+      config: {
+        operation: { type: ROUTE_OPERATIONS.GET_SIGNED_OBJECT },
       },
     },
     async (request, response) => {

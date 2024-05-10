@@ -8,12 +8,33 @@ interface RequestLoggerOptions {
 declare module 'fastify' {
   interface FastifyRequest {
     executionError?: Error
+    operation?: { type: string }
+    resources?: string[]
+  }
+
+  interface FastifyContextConfig {
+    operation?: { type: string }
+    resources?: (req: FastifyRequest<any>) => string[]
   }
 }
 
 export const logRequest = (options: RequestLoggerOptions) =>
   fastifyPlugin(async (fastify) => {
-    fastify.addHook('onRequestAbort', (req) => {
+    fastify.addHook('preHandler', async (req) => {
+      const resourceFromParams = Object.values(req.params || {}).join('/')
+      const resources =
+        req.resources ??
+        req.routeConfig.resources?.(req) ??
+        (req.raw as any).resources ??
+        resourceFromParams
+          ? ['/' + resourceFromParams]
+          : ([] as string[])
+
+      req.resources = resources
+      req.operation = req.routeConfig.operation
+    })
+
+    fastify.addHook('onRequestAbort', async (req) => {
       if (options.excludeUrls?.includes(req.url)) {
         return
       }
@@ -34,6 +55,8 @@ export const logRequest = (options: RequestLoggerOptions) =>
         responseTime: 0,
         error: error,
         owner: req.owner,
+        operation: req.operation?.type ?? req.routeConfig.operation?.type,
+        resources: req.resources,
       })
     })
 
@@ -60,6 +83,8 @@ export const logRequest = (options: RequestLoggerOptions) =>
         responseTime: reply.getResponseTime(),
         error: error,
         owner: req.owner,
+        resources: req.resources,
+        operation: req.operation?.type ?? req.routeConfig.operation?.type,
       })
     })
   })

@@ -3,6 +3,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
 import { getConfig } from '../../../config'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const { uploadSignedUrlExpirationTime } = getConfig()
 
@@ -57,6 +58,9 @@ export default async function routes(fastify: FastifyInstance) {
     '/upload/sign/:bucketName/*',
     {
       schema,
+      config: {
+        operation: { type: ROUTE_OPERATIONS.SIGN_UPLOAD_URL },
+      },
     },
     async (request, response) => {
       const { bucketName } = request.params

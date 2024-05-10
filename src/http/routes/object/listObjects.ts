@@ -3,6 +3,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
 import { objectSchema } from '../../../storage/schemas'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const searchRequestParamsSchema = {
   type: 'object',
@@ -54,6 +55,9 @@ export default async function routes(fastify: FastifyInstance) {
     '/list/:bucketName',
     {
       schema,
+      config: {
+        operation: { type: ROUTE_OPERATIONS.LIST_OBJECTS },
+      },
     },
     async (request, response) => {
       const { bucketName } = request.params

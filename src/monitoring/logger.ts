@@ -42,6 +42,8 @@ export interface RequestLog {
   responseTime: number
   error?: Error | unknown
   owner?: string
+  operation?: string
+  resources?: string[]
 }
 
 export interface EventLog {
@@ -52,6 +54,7 @@ export interface EventLog {
   objectPath: string
   tenantId: string
   project: string
+  resources?: string[]
   reqId?: string
 }
 

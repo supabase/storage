@@ -1,6 +1,7 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const createObjectParamsSchema = {
   type: 'object',
@@ -53,6 +54,9 @@ export default async function routes(fastify: FastifyInstance) {
     '/:bucketName/*',
     {
       schema,
+      config: {
+        operation: { type: ROUTE_OPERATIONS.CREATE_OBJECT },
+      },
     },
     async (request, response) => {
       const { bucketName } = request.params

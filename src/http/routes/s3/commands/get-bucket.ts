@@ -1,5 +1,6 @@
 import { S3ProtocolHandler } from '../../../../storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
+import { ROUTE_OPERATIONS } from '../../operations'
 
 const GetBucketLocationInput = {
   Params: {
@@ -36,17 +37,25 @@ const GetBucketVersioningInput = {
 } as const
 
 export default function GetBucket(s3Router: S3Router) {
-  s3Router.get('/:Bucket?location', GetBucketLocationInput, async (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
-    await ctx.storage.findBucket(req.Params.Bucket)
+  s3Router.get(
+    '/:Bucket?location',
+    { schema: GetBucketLocationInput, operation: ROUTE_OPERATIONS.S3_GET_BUCKET_LOCATION },
+    async (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+      await ctx.storage.findBucket(req.Params.Bucket)
 
-    return s3Protocol.getBucketLocation()
-  })
+      return s3Protocol.getBucketLocation()
+    }
+  )
 
-  s3Router.get('/:Bucket?versioning', GetBucketVersioningInput, async (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
-    await ctx.storage.findBucket(req.Params.Bucket)
+  s3Router.get(
+    '/:Bucket?versioning',
+    { schema: GetBucketVersioningInput, operation: ROUTE_OPERATIONS.S3_GET_BUCKET_VERSIONING },
+    async (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+      await ctx.storage.findBucket(req.Params.Bucket)
 
-    return s3Protocol.getBucketVersioning()
-  })
+      return s3Protocol.getBucketVersioning()
+    }
+  )
 }

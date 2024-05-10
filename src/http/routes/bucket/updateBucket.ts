@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema, createResponse } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const updateBucketBodySchema = {
   type: 'object',
@@ -51,6 +52,9 @@ export default async function routes(fastify: FastifyInstance) {
     '/:bucketId',
     {
       schema,
+      config: {
+        operation: { type: ROUTE_OPERATIONS.UPDATE_BUCKET },
+      },
     },
     async (request, response) => {
       const { bucketId } = request.params

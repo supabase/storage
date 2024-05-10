@@ -5,6 +5,7 @@ import { AuthenticatedRequest } from '../../request'
 import { ImageRenderer } from '../../../storage/renderer'
 import { transformationOptionsSchema } from '../../schemas/transformations'
 import { isImageTransformationEnabled } from '../../../storage/limits'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const getSignedURLParamsSchema = {
   type: 'object',
@@ -57,6 +58,9 @@ export default async function routes(fastify: FastifyInstance) {
     '/sign/:bucketName/*',
     {
       schema,
+      config: {
+        operation: { type: ROUTE_OPERATIONS.SIGN_OBJECT_URL },
+      },
     },
     async (request, response) => {
       const { bucketName } = request.params

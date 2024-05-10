@@ -1,5 +1,6 @@
 import { S3ProtocolHandler } from '../../../../storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
+import { ROUTE_OPERATIONS } from '../../operations'
 
 const CreateMultiPartUploadInput = {
   summary: 'Create multipart upload',
@@ -32,16 +33,20 @@ const CreateMultiPartUploadInput = {
 } as const
 
 export default function CreateMultipartUpload(s3Router: S3Router) {
-  s3Router.post('/:Bucket/*?uploads', CreateMultiPartUploadInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+  s3Router.post(
+    '/:Bucket/*?uploads',
+    { schema: CreateMultiPartUploadInput, operation: ROUTE_OPERATIONS.S3_CREATE_MULTIPART },
+    (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-    return s3Protocol.createMultiPartUpload({
-      Bucket: req.Params.Bucket,
-      Key: req.Params['*'],
-      ContentType: req.Headers?.['content-type'],
-      CacheControl: req.Headers?.['cache-control'],
-      ContentDisposition: req.Headers?.['content-disposition'],
-      ContentEncoding: req.Headers?.['content-encoding'],
-    })
-  })
+      return s3Protocol.createMultiPartUpload({
+        Bucket: req.Params.Bucket,
+        Key: req.Params['*'],
+        ContentType: req.Headers?.['content-type'],
+        CacheControl: req.Headers?.['cache-control'],
+        ContentDisposition: req.Headers?.['content-disposition'],
+        ContentEncoding: req.Headers?.['content-encoding'],
+      })
+    }
+  )
 }

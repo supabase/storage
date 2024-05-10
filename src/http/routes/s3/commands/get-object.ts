@@ -1,5 +1,6 @@
 import { S3ProtocolHandler } from '../../../../storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
+import { ROUTE_OPERATIONS } from '../../operations'
 
 const GetObjectInput = {
   summary: 'Get Object',
@@ -42,25 +43,33 @@ const GetObjectTagging = {
 } as const
 
 export default function GetObject(s3Router: S3Router) {
-  s3Router.get('/:Bucket/*?tagging', GetObjectTagging, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+  s3Router.get(
+    '/:Bucket/*?tagging',
+    { schema: GetObjectTagging, operation: ROUTE_OPERATIONS.S3_GET_OBJECT_TAGGING },
+    (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-    return s3Protocol.getObjectTagging({
-      Bucket: req.Params.Bucket,
-      Key: req.Params['*'],
-    })
-  })
+      return s3Protocol.getObjectTagging({
+        Bucket: req.Params.Bucket,
+        Key: req.Params['*'],
+      })
+    }
+  )
 
-  s3Router.get('/:Bucket/*', GetObjectInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
-    const ifModifiedSince = req.Headers?.['if-modified-since']
+  s3Router.get(
+    '/:Bucket/*',
+    { schema: GetObjectInput, operation: ROUTE_OPERATIONS.S3_GET_OBJECT },
+    (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+      const ifModifiedSince = req.Headers?.['if-modified-since']
 
-    return s3Protocol.getObject({
-      Bucket: req.Params.Bucket,
-      Key: req.Params['*'],
-      Range: req.Headers?.['range'],
-      IfNoneMatch: req.Headers?.['if-none-match'],
-      IfModifiedSince: ifModifiedSince ? new Date(ifModifiedSince) : undefined,
-    })
-  })
+      return s3Protocol.getObject({
+        Bucket: req.Params.Bucket,
+        Key: req.Params['*'],
+        Range: req.Headers?.['range'],
+        IfNoneMatch: req.Headers?.['if-none-match'],
+        IfModifiedSince: ifModifiedSince ? new Date(ifModifiedSince) : undefined,
+      })
+    }
+  )
 }

@@ -21,6 +21,7 @@ export type MultiPartRequest = http.IncomingMessage & {
     owner?: string
     tenantId: string
     isUpsert: boolean
+    resources?: string[]
   }
 }
 
@@ -41,6 +42,8 @@ export async function onIncomingRequest(
   })
 
   const uploadID = UploadId.fromString(id)
+
+  req.upload.resources = [`${uploadID.bucket}/${uploadID.objectName}`]
 
   // Handle signed url requests
   if (req.url?.startsWith(`/upload/resumable/sign`)) {
@@ -201,9 +204,11 @@ export async function onUploadFinish(
       objectName: resourceId.objectName,
       objectMetadata: metadata,
       isUpsert: req.upload.isUpsert,
-      isMultipart: true,
+      uploadType: 'resumable',
       owner: req.upload.owner,
     })
+
+    res.setHeader('Tus-Complete', '1')
 
     return res
   } catch (e) {

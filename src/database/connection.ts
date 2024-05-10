@@ -34,6 +34,7 @@ interface TenantConnectionOptions {
   headers?: Record<string, string | undefined | string[]>
   method?: string
   path?: string
+  operation?: string
 }
 
 export interface User {
@@ -238,7 +239,8 @@ export class TenantConnection {
           set_config('request.jwt.claims', ?, true),
           set_config('request.headers', ?, true),
           set_config('request.method', ?, true),
-          set_config('request.path', ?, true);
+          set_config('request.path', ?, true),
+          set_config('storage.operation', ?, true);
     `,
       [
         this.role,
@@ -249,6 +251,7 @@ export class TenantConnection {
         headers,
         this.options.method || '',
         this.options.path || '',
+        this.options.operation || '',
       ]
     )
   }

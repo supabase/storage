@@ -539,7 +539,7 @@ export class S3ProtocolHandler {
       objectName: Key as string,
       version: resp.version,
       isUpsert: true,
-      isMultipart: false,
+      uploadType: 's3',
       objectMetadata: metadata,
       owner: this.owner,
     })
@@ -689,7 +689,7 @@ export class S3ProtocolHandler {
       objectName: command.Key as string,
       owner: this.owner,
       isUpsert: true,
-      isMultipart: false,
+      uploadType: 's3',
       fileSizeLimit: bucket.file_size_limit,
       allowedMimeTypes: bucket.allowed_mime_types,
     })

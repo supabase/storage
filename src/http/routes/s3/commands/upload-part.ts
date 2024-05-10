@@ -1,5 +1,6 @@
 import { S3ProtocolHandler } from '../../../../storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
+import { ROUTE_OPERATIONS } from '../../operations'
 
 const PutObjectInput = {
   summary: 'Put Object',
@@ -65,7 +66,11 @@ const UploadPartInput = {
 export default function UploadPart(s3Router: S3Router) {
   s3Router.put(
     '/:Bucket/*?uploadId&partNumber',
-    UploadPartInput,
+    {
+      schema: UploadPartInput,
+      operation: ROUTE_OPERATIONS.S3_UPLOAD_PART,
+      disableContentTypeParser: true,
+    },
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
@@ -77,13 +82,16 @@ export default function UploadPart(s3Router: S3Router) {
         PartNumber: req.Querystring?.partNumber,
         ContentLength: req.Headers?.['content-length'],
       })
-    },
-    { disableContentTypeParser: true }
+    }
   )
 
   s3Router.put(
     '/:Bucket/*',
-    PutObjectInput,
+    {
+      schema: PutObjectInput,
+      operation: ROUTE_OPERATIONS.S3_UPLOAD,
+      disableContentTypeParser: true,
+    },
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
       return s3Protocol.putObject({
@@ -95,7 +103,6 @@ export default function UploadPart(s3Router: S3Router) {
         Expires: req.Headers?.['expires'] ? new Date(req.Headers?.['expires']) : undefined,
         ContentEncoding: req.Headers?.['content-encoding'],
       })
-    },
-    { disableContentTypeParser: true }
+    }
   )
 }

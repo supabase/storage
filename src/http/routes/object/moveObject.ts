@@ -1,7 +1,8 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema, createResponse } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const moveObjectsBodySchema = {
   type: 'object',
@@ -37,6 +38,13 @@ export default async function routes(fastify: FastifyInstance) {
     '/move',
     {
       schema,
+      config: {
+        operation: { type: ROUTE_OPERATIONS.MOVE_OBJECT },
+        resources: (req: FastifyRequest<moveObjectRequestInterface>) => {
+          const { sourceKey, destinationKey, bucketId, destinationBucket } = req.body
+          return [`${bucketId}/${sourceKey}`, `${destinationBucket || bucketId}/${destinationKey}`]
+        },
+      },
     },
     async (request, response) => {
       const { destinationKey, sourceKey, bucketId, destinationBucket } = request.body

@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
 
@@ -40,6 +41,9 @@ export default async function routes(fastify: FastifyInstance) {
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
+      },
+      config: {
+        operation: { type: ROUTE_OPERATIONS.GET_PUBLIC_OBJECT },
       },
     },
     async (request, response) => {

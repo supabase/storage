@@ -1,5 +1,6 @@
 import { S3ProtocolHandler } from '../../../../storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
+import { ROUTE_OPERATIONS } from '../../operations'
 
 const UploadPartCopyInput = {
   summary: 'Upload Part Copy',
@@ -37,7 +38,7 @@ const UploadPartCopyInput = {
 export default function UploadPartCopy(s3Router: S3Router) {
   s3Router.put(
     '/:Bucket/*?partNumber&uploadId|x-amz-copy-source',
-    UploadPartCopyInput,
+    { schema: UploadPartCopyInput, operation: ROUTE_OPERATIONS.S3_UPLOAD_PART_COPY },
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 

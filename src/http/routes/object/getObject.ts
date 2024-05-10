@@ -3,6 +3,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import { IncomingMessage, Server, ServerResponse } from 'http'
 import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../request'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
 
@@ -68,6 +69,9 @@ export default async function routes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },
+      config: {
+        operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT },
+      },
     },
     async (request, response) => {
       return requestHandler(request, response)
@@ -86,6 +90,9 @@ export default async function routes(fastify: FastifyInstance) {
         description: 'use GET /object/authenticated/{bucketName} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
         tags: ['deprecated'],
+      },
+      config: {
+        operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT },
       },
     },
     async (request, response) => {

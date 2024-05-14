@@ -60,10 +60,13 @@ export default async function routes(fastify: FastifyInstance) {
     '/authenticated/:bucketName/*',
     {
       exposeHeadRoute: false,
+      config: {
+        allowQueryStringToken: true,
+      },
       // @todo add success response schema here
       schema: {
         params: getObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
+        headers: { type: 'object', properties: { authorization: { type: 'string' } } },
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
@@ -78,10 +81,13 @@ export default async function routes(fastify: FastifyInstance) {
     '/:bucketName/*',
     {
       exposeHeadRoute: false,
+      config: {
+        allowQueryStringToken: true,
+      },
       // @todo add success response schema here
       schema: {
         params: getObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
+        headers: { type: 'object', properties: { authorization: { type: 'string' } } },
         summary: 'Get object',
         description: 'use GET /object/authenticated/{bucketName} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },

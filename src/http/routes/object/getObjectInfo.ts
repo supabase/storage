@@ -93,9 +93,12 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
   fastify.head<getObjectRequestInterface>(
     '/authenticated/:bucketName/*',
     {
+      config: {
+        allowQueryStringToken: true,
+      },
       schema: {
         params: getObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
+        headers: { type: 'object', properties: { authorization: { type: 'string' } } },
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
@@ -109,9 +112,12 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
   fastify.get<getObjectRequestInterface>(
     '/info/authenticated/:bucketName/*',
     {
+      config: {
+        allowQueryStringToken: true,
+      },
       schema: {
         params: getObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
+        headers: { type: 'object', properties: { authorization: { type: 'string' } } },
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
@@ -125,9 +131,12 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
   fastify.get<getObjectRequestInterface>(
     '/info/:bucketName/*',
     {
+      config: {
+        allowQueryStringToken: true,
+      },
       schema: {
         params: getObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
+        headers: { type: 'object', properties: { authorization: { type: 'string' } } },
         summary,
         description: 'use HEAD /object/authenticated/{bucketName} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
@@ -142,9 +151,12 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
   fastify.head<getObjectRequestInterface>(
     '/:bucketName/*',
     {
+      config: {
+        allowQueryStringToken: true,
+      },
       schema: {
         params: getObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
+        headers: { type: 'object', properties: { authorization: { type: 'string' } } },
         summary,
         description: 'use HEAD /object/authenticated/{bucketName} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },

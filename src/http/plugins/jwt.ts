@@ -10,6 +10,10 @@ declare module 'fastify' {
     jwtPayload?: JwtPayload & { role?: string }
     owner?: string
   }
+
+  interface FastifyContextConfig {
+    allowQueryStringToken?: boolean
+  }
 }
 
 const BEARER = /^Bearer\s+/i
@@ -19,7 +23,15 @@ export const jwt = fastifyPlugin(async (fastify) => {
   fastify.decorateRequest('jwtPayload', undefined)
 
   fastify.addHook('preHandler', async (request, reply) => {
-    request.jwt = (request.headers.authorization || '').replace(BEARER, '')
+    const jwt = request.routeConfig.allowQueryStringToken
+      ? (request.query as Record<string, string>).authorization ?? request.headers.authorization
+      : request.headers.authorization || ''
+
+    if (!jwt) {
+      throw ERRORS.AccessDenied('Missing Authorization')
+    }
+
+    request.jwt = jwt.replace(BEARER, '')
 
     const { secret, jwks } = await getJwtSecret(request.tenantId)
 

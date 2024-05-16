@@ -291,8 +291,11 @@ export class S3ProtocolHandler {
         EncodingType: encodingType,
         KeyCount: results.length,
         CommonPrefixes: commonPrefixes,
-        NextContinuationToken: nextContinuationToken,
       },
+    }
+
+    if (nextContinuationToken) {
+      response.ListBucketResult.NextContinuationToken = nextContinuationToken
     }
 
     return {

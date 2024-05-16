@@ -33,6 +33,8 @@ export default async function routes(fastify: FastifyInstance) {
                 throw new Error('no handler found')
               }
 
+              req.operation = { type: route.operation }
+
               const data: RequestInput<any> = {
                 Params: req.params,
                 Body: req.body,

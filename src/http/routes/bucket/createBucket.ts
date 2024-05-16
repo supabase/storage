@@ -1,7 +1,8 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const createBucketBodySchema = {
   type: 'object',
@@ -47,6 +48,12 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.post<createBucketRequestInterface>(
     '/',
     {
+      config: {
+        operation: { type: ROUTE_OPERATIONS.CREATE_BUCKET },
+        resources: (req: FastifyRequest<createBucketRequestInterface>) => [
+          req.body.id || req.body.name || '',
+        ],
+      },
       schema,
     },
     async (request, response) => {

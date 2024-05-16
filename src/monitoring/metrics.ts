@@ -12,7 +12,7 @@ export const FileUploadStarted = new client.Gauge({
 export const FileUploadedSuccess = new client.Gauge({
   name: 'storage_api_upload_success',
   help: 'Successful uploads',
-  labelNames: ['region', 'is_multipart'],
+  labelNames: ['region', 'is_multipart', 'is_resumable', 'is_standard', 'is_s3'],
 })
 
 export const DbQueryPerformance = new client.Histogram({

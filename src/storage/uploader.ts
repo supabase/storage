@@ -20,7 +20,7 @@ export interface UploadObjectOptions {
   objectName: string
   owner?: string
   isUpsert?: boolean
-  isMultipart?: boolean
+  uploadType?: 'standard' | 's3' | 'resumable'
 }
 
 /**
@@ -64,7 +64,7 @@ export class Uploader {
   async prepareUpload(options: UploadObjectOptions) {
     await this.canUpload(options)
     FileUploadStarted.inc({
-      is_multipart: Boolean(options.isMultipart).toString(),
+      is_multipart: Boolean(options.uploadType).toString(),
     })
 
     return randomUUID()
@@ -125,13 +125,13 @@ export class Uploader {
     objectName,
     owner,
     objectMetadata,
-    isMultipart,
+    uploadType,
     isUpsert,
   }: UploadObjectOptions & {
     objectMetadata: ObjectMetadata
     version: string
     emitEvent?: boolean
-    isMultipart?: boolean
+    uploadType?: 'standard' | 's3' | 'resumable'
   }) {
     try {
       return await this.db.withTransaction(async (db) => {
@@ -179,13 +179,17 @@ export class Uploader {
             bucketId: bucketId,
             metadata: objectMetadata,
             reqId: this.db.reqId,
+            uploadType,
           })
         )
 
         await Promise.all(events)
 
         FileUploadedSuccess.inc({
-          is_multipart: Boolean(isMultipart).toString(),
+          is_multipart: uploadType === 'resumable' ? 1 : 0,
+          is_resumable: uploadType === 'resumable' ? 1 : 0,
+          is_standard: uploadType === 'standard' ? 1 : 0,
+          is_s3: uploadType === 's3' ? 1 : 0,
         })
 
         return { obj: newObject, isNew, metadata: objectMetadata }

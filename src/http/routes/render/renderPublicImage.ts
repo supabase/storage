@@ -3,6 +3,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import { FastifyInstance } from 'fastify'
 import { ImageRenderer } from '../../../storage/renderer'
 import { transformationOptionsSchema } from '../../schemas/transformations'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
 
@@ -39,6 +40,9 @@ export default async function routes(fastify: FastifyInstance) {
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['transformation'],
+      },
+      config: {
+        operation: { type: ROUTE_OPERATIONS.RENDER_PUBLIC_IMAGE },
       },
     },
     async (request, response) => {

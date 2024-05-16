@@ -1,7 +1,8 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const getSignedURLsParamsSchema = {
   type: 'object',
@@ -65,6 +66,13 @@ export default async function routes(fastify: FastifyInstance) {
     '/sign/:bucketName',
     {
       schema,
+      config: {
+        operation: { type: ROUTE_OPERATIONS.SIGN_OBJECT_URLS },
+        resources: (req: FastifyRequest<getSignedURLsRequestInterface>) => {
+          const { paths } = req.body
+          return paths.map((path) => `${req.params.bucketName}/${path}`)
+        },
+      },
     },
     async (request, response) => {
       const { bucketName } = request.params

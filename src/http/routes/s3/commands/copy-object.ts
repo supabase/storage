@@ -1,5 +1,6 @@
 import { S3ProtocolHandler } from '../../../../storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
+import { ROUTE_OPERATIONS } from '../../operations'
 
 const CopyObjectInput = {
   summary: 'Copy Object',
@@ -29,25 +30,29 @@ const CopyObjectInput = {
 } as const
 
 export default function CopyObject(s3Router: S3Router) {
-  s3Router.put('/:Bucket/*|x-amz-copy-source', CopyObjectInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+  s3Router.put(
+    '/:Bucket/*|x-amz-copy-source',
+    { schema: CopyObjectInput, operation: ROUTE_OPERATIONS.S3_COPY_OBJECT },
+    (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-    return s3Protocol.copyObject({
-      Bucket: req.Params.Bucket,
-      Key: req.Params['*'],
-      CopySource: req.Headers['x-amz-copy-source'],
-      ContentType: req.Headers['content-type'],
-      CacheControl: req.Headers['cache-control'],
-      Expires: req.Headers.expires ? new Date(req.Headers.expires) : undefined,
-      ContentEncoding: req.Headers['content-encoding'],
-      CopySourceIfMatch: req.Headers['x-amz-copy-source-if-match'],
-      CopySourceIfModifiedSince: req.Headers['x-amz-copy-source-if-modified-since']
-        ? new Date(req.Headers['x-amz-copy-source-if-modified-since'])
-        : undefined,
-      CopySourceIfNoneMatch: req.Headers['x-amz-copy-source-if-none-match'],
-      CopySourceIfUnmodifiedSince: req.Headers['x-amz-copy-source-if-unmodified-since']
-        ? new Date(req.Headers['x-amz-copy-source-if-unmodified-since'])
-        : undefined,
-    })
-  })
+      return s3Protocol.copyObject({
+        Bucket: req.Params.Bucket,
+        Key: req.Params['*'],
+        CopySource: req.Headers['x-amz-copy-source'],
+        ContentType: req.Headers['content-type'],
+        CacheControl: req.Headers['cache-control'],
+        Expires: req.Headers.expires ? new Date(req.Headers.expires) : undefined,
+        ContentEncoding: req.Headers['content-encoding'],
+        CopySourceIfMatch: req.Headers['x-amz-copy-source-if-match'],
+        CopySourceIfModifiedSince: req.Headers['x-amz-copy-source-if-modified-since']
+          ? new Date(req.Headers['x-amz-copy-source-if-modified-since'])
+          : undefined,
+        CopySourceIfNoneMatch: req.Headers['x-amz-copy-source-if-none-match'],
+        CopySourceIfUnmodifiedSince: req.Headers['x-amz-copy-source-if-unmodified-since']
+          ? new Date(req.Headers['x-amz-copy-source-if-unmodified-since'])
+          : undefined,
+      })
+    }
+  )
 }

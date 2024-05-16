@@ -23,7 +23,7 @@ export interface SlowRetryQueueOptions {
   retryDelay: number
 }
 
-const { pgQueueEnable, storageBackendType, storageS3Endpoint } = getConfig()
+const { pgQueueEnable, storageBackendType, storageS3Endpoint, region } = getConfig()
 const storageS3Protocol = storageS3Endpoint?.includes('http://') ? 'http' : 'https'
 const httpAgent = createAgent(storageS3Protocol)
 
@@ -131,6 +131,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
       await Webhook.send({
         event: {
           type: eventType,
+          region,
           $version: this.version,
           applyTime: Date.now(),
           payload,
@@ -189,6 +190,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
         id: '',
         name: constructor.getQueueName(),
         data: {
+          region,
           ...this.payload,
           $version: constructor.version,
         },
@@ -201,6 +203,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     const res = await Queue.getInstance().send({
       name: constructor.getQueueName(),
       data: {
+        region,
         ...this.payload,
         $version: constructor.version,
       },
@@ -232,6 +235,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> {
     const res = await Queue.getInstance().send({
       name: constructor.getSlowRetryQueueName(),
       data: {
+        region,
         ...this.payload,
         $version: constructor.version,
       },

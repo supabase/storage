@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const uploadSignedObjectParamsSchema = {
   type: 'object',
@@ -62,6 +63,9 @@ export default async function routes(fastify: FastifyInstance) {
           '4xx': { $ref: 'errorSchema#', description: 'Error response' },
         },
         tags: ['object'],
+      },
+      config: {
+        operation: { type: ROUTE_OPERATIONS.UPLOAD_SIGN_OBJECT },
       },
     },
     async (request, response) => {

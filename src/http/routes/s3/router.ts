@@ -99,11 +99,14 @@ type Route<S extends Schema, Context> = {
   handler?: Handler<S, Context>
   schema: S
   disableContentTypeParser?: boolean
+  operation: string
   compiledSchema: () => ValidateFunction<JTDDataType<S>>
 }
 
-interface RouteOptions {
+interface RouteOptions<S extends JSONSchema> {
   disableContentTypeParser?: boolean
+  operation: string
+  schema: S
 }
 
 export class Router<Context = unknown, S extends Schema = Schema> {
@@ -121,9 +124,8 @@ export class Router<Context = unknown, S extends Schema = Schema> {
   registerRoute<R extends S = S>(
     method: HTTPMethod,
     url: string,
-    schema: R,
-    handler: Handler<R, Context>,
-    options?: { disableContentTypeParser?: boolean }
+    options: RouteOptions<R>,
+    handler: Handler<R, Context>
   ) {
     const { query, headers } = this.parseQueryString(url)
     const normalizedUrl = url.split('?')[0].split('|')[0]
@@ -135,6 +137,8 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       Querystring?: JSONSchema
       Body?: JSONSchema
     } = {}
+
+    const { schema, disableContentTypeParser, operation } = options
 
     if (schema.Params) {
       schemaToCompile.Params = schema.Params
@@ -166,7 +170,8 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       schema: schema,
       compiledSchema: () => this.ajv.getSchema(method + url) as ValidateFunction<JTDDataType<R>>,
       handler: handler as Handler<R, Context>,
-      disableContentTypeParser: options?.disableContentTypeParser,
+      disableContentTypeParser: disableContentTypeParser,
+      operation,
     } as const
 
     if (!existingPath) {
@@ -178,44 +183,24 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     this._routes.set(normalizedUrl, existingPath)
   }
 
-  get<R extends S>(url: string, schema: R, handler: Handler<R, Context>, options?: RouteOptions) {
-    this.registerRoute('get', url, schema, handler as any, options)
+  get<R extends S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRoute('get', url, options, handler as any)
   }
 
-  post<R extends S = S>(
-    url: string,
-    schema: R,
-    handler: Handler<R, Context>,
-    options?: RouteOptions
-  ) {
-    this.registerRoute('post', url, schema, handler as any, options)
+  post<R extends S = S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRoute('post', url, options, handler as any)
   }
 
-  put<R extends S = S>(
-    url: string,
-    schema: R,
-    handler: Handler<R, Context>,
-    options?: RouteOptions
-  ) {
-    this.registerRoute('put', url, schema, handler as any, options)
+  put<R extends S = S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRoute('put', url, options, handler as any)
   }
 
-  delete<R extends S = S>(
-    url: string,
-    schema: R,
-    handler: Handler<R, Context>,
-    options?: RouteOptions
-  ) {
-    this.registerRoute('delete', url, schema, handler as any, options)
+  delete<R extends S = S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRoute('delete', url, options, handler as any)
   }
 
-  head<R extends S = S>(
-    url: string,
-    schema: R,
-    handler: Handler<R, Context>,
-    options?: RouteOptions
-  ) {
-    this.registerRoute('head', url, schema, handler as any, options)
+  head<R extends S = S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRoute('head', url, options, handler as any)
   }
 
   parseQueryMatch(query: string) {

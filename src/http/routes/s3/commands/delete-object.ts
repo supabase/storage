@@ -1,5 +1,6 @@
 import { S3ProtocolHandler } from '../../../../storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
+import { ROUTE_OPERATIONS } from '../../operations'
 
 const DeleteObjectInput = {
   summary: 'Delete Object',
@@ -56,24 +57,32 @@ const DeleteObjectsInput = {
 
 export default function DeleteObject(s3Router: S3Router) {
   // Delete multiple objects
-  s3Router.post('/:Bucket?delete', DeleteObjectsInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+  s3Router.post(
+    '/:Bucket?delete',
+    { schema: DeleteObjectsInput, operation: ROUTE_OPERATIONS.S3_DELETE_OBJECTS },
+    (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-    return s3Protocol.deleteObjects({
-      Bucket: req.Params.Bucket,
-      Delete: {
-        Objects: req.Body.Delete.Object,
-      },
-    })
-  })
+      return s3Protocol.deleteObjects({
+        Bucket: req.Params.Bucket,
+        Delete: {
+          Objects: req.Body.Delete.Object,
+        },
+      })
+    }
+  )
 
   // Delete single object
-  s3Router.delete('/:Bucket/*', DeleteObjectInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+  s3Router.delete(
+    '/:Bucket/*',
+    { schema: DeleteObjectInput, operation: 's3.object.delete' },
+    (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-    return s3Protocol.deleteObject({
-      Bucket: req.Params.Bucket,
-      Key: req.Params['*'],
-    })
-  })
+      return s3Protocol.deleteObject({
+        Bucket: req.Params.Bucket,
+        Key: req.Params['*'],
+      })
+    }
+  )
 }

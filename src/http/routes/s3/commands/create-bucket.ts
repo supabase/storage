@@ -1,5 +1,6 @@
 import { S3ProtocolHandler } from '../../../../storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
+import { ROUTE_OPERATIONS } from '../../operations'
 
 const CreateBucketInput = {
   summary: 'Create Bucket',
@@ -19,9 +20,16 @@ const CreateBucketInput = {
 } as const
 
 export default function CreateBucket(s3Router: S3Router) {
-  s3Router.put('/:Bucket', CreateBucketInput, (req, ctx) => {
-    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+  s3Router.put(
+    '/:Bucket',
+    { schema: CreateBucketInput, operation: ROUTE_OPERATIONS.S3_CREATE_BUCKET },
+    (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-    return s3Protocol.createBucket(req.Params.Bucket, req.Headers?.['x-amz-acl'] === 'public-read')
-  })
+      return s3Protocol.createBucket(
+        req.Params.Bucket,
+        req.Headers?.['x-amz-acl'] === 'public-read'
+      )
+    }
+  )
 }

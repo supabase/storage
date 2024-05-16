@@ -1,7 +1,8 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const copyRequestBodySchema = {
   type: 'object',
@@ -37,15 +38,16 @@ export default async function routes(fastify: FastifyInstance) {
     '/copy',
     {
       schema,
+      config: {
+        operation: { type: ROUTE_OPERATIONS.COPY_OBJECT },
+        resources: (req: FastifyRequest<copyRequestInterface>) => {
+          const { sourceKey, destinationKey, bucketId, destinationBucket } = req.body
+          return [`${bucketId}/${sourceKey}`, `${destinationBucket || bucketId}/${destinationKey}`]
+        },
+      },
     },
     async (request, response) => {
       const { sourceKey, destinationKey, bucketId, destinationBucket } = request.body
-      request.log.info(
-        'sourceKey is %s and bucketName is %s and destinationKey is %s',
-        sourceKey,
-        bucketId,
-        destinationKey
-      )
 
       const destinationBucketId = destinationBucket || bucketId
 

@@ -38,6 +38,7 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
         event: 'ObjectAdminDelete',
         payload: JSON.stringify(job.data),
         objectPath: s3Key,
+        resources: [`${job.data.bucketId}/${job.data.name}`],
         tenantId: job.data.tenant.ref,
         project: job.data.tenant.ref,
         reqId: job.data.reqId,

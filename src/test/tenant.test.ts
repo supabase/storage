@@ -16,7 +16,7 @@ const payload = {
   serviceKey: 'd',
   jwks: { keys: [] },
   migrationStatus: 'COMPLETED',
-  migrationVersion: 'optimize-search-function',
+  migrationVersion: 'operation-function',
   features: {
     imageTransformation: {
       enabled: true,
@@ -34,7 +34,7 @@ const payload2 = {
   serviceKey: 'h',
   jwks: null,
   migrationStatus: 'COMPLETED',
-  migrationVersion: 'optimize-search-function',
+  migrationVersion: 'operation-function',
   features: {
     imageTransformation: {
       enabled: false,

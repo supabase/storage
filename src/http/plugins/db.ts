@@ -43,6 +43,7 @@ export const db = fastifyPlugin(async (fastify) => {
       headers: request.headers,
       path: request.url,
       method: request.method,
+      operation: request.operation?.type,
     })
   })
 

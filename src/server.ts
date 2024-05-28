@@ -1,3 +1,4 @@
+import './monitoring/otel'
 import { FastifyInstance } from 'fastify'
 import { IncomingMessage, Server, ServerResponse } from 'http'
 
@@ -15,9 +16,6 @@ import {
 } from './database'
 import { logger, logSchema } from './monitoring'
 import { Queue } from './queue'
-
-const exposeDocs = true
-
 ;(async () => {
   const {
     databaseURL,
@@ -28,6 +26,7 @@ const exposeDocs = true
     port,
     host,
     pgQueueEnable,
+    exposeDocs,
   } = getConfig()
 
   const serverSignal = new AbortController()

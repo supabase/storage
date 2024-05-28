@@ -10,6 +10,7 @@ export enum MultitenantMigrationStrategy {
 
 type StorageConfigType = {
   version: string
+  exposeDocs: boolean
   keepAliveTimeout: number
   headersTimeout: number
   adminApiKeys: string
@@ -102,6 +103,7 @@ type StorageConfigType = {
   s3ProtocolEnforceRegion: boolean
   s3ProtocolAccessKeyId?: string
   s3ProtocolAccessKeySecret?: string
+  tracingMode?: string
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -151,6 +153,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   envPaths.map((envPath) => dotenv.config({ path: envPath, override: false }))
 
   config = {
+    exposeDocs: getOptionalConfigFromEnv('EXPOSE_DOCS') !== 'false',
     // Tenant
     tenantId:
       getOptionalConfigFromEnv('PROJECT_REF') ||
@@ -292,6 +295,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     defaultMetricsEnabled: !(
       getOptionalConfigFromEnv('DEFAULT_METRICS_ENABLED', 'ENABLE_DEFAULT_METRICS') === 'false'
     ),
+    tracingMode: getOptionalConfigFromEnv('TRACING_MODE') ?? 'basic',
 
     // Queue
     pgQueueEnable: getOptionalConfigFromEnv('PG_QUEUE_ENABLE', 'ENABLE_QUEUE_EVENTS') === 'true',

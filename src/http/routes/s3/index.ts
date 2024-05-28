@@ -1,7 +1,8 @@
 import { FastifyInstance, RouteHandlerMethod } from 'fastify'
-import { db, jsonToXml, signatureV4, storage } from '../../plugins'
+import { db, jsonToXml, signatureV4, storage, tracingMode } from '../../plugins'
 import { getRouter, RequestInput } from './router'
 import { s3ErrorHandler } from './error-handler'
+import { trace } from '@opentelemetry/api'
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(async (fastify) => {
@@ -33,38 +34,52 @@ export default async function routes(fastify: FastifyInstance) {
                 throw new Error('no handler found')
               }
 
-              req.operation = { type: route.operation }
+              try {
+                req.operation = { type: route.operation }
 
-              const data: RequestInput<any> = {
-                Params: req.params,
-                Body: req.body,
-                Headers: req.headers,
-                Querystring: req.query,
-              }
-              const compiler = route.compiledSchema()
-              const isValid = compiler(data)
+                if (req.operation.type) {
+                  trace.getActiveSpan()?.setAttribute('http.operation', req.operation.type)
+                }
 
-              if (!isValid) {
-                throw { validation: compiler.errors }
-              }
+                const data: RequestInput<any> = {
+                  Params: req.params,
+                  Body: req.body,
+                  Headers: req.headers,
+                  Querystring: req.query,
+                }
+                const compiler = route.compiledSchema()
+                const isValid = compiler(data)
 
-              const output = await route.handler(data, {
-                req: req,
-                storage: req.storage,
-                tenantId: req.tenantId,
-                owner: req.owner,
-              })
+                if (!isValid) {
+                  throw { validation: compiler.errors }
+                }
 
-              const headers = output.headers
-
-              if (headers) {
-                Object.keys(headers).forEach((header) => {
-                  if (headers[header]) {
-                    reply.header(header, headers[header])
-                  }
+                const output = await route.handler(data, {
+                  req: req,
+                  storage: req.storage,
+                  tenantId: req.tenantId,
+                  owner: req.owner,
                 })
+
+                const headers = output.headers
+
+                if (headers) {
+                  Object.keys(headers).forEach((header) => {
+                    if (headers[header]) {
+                      reply.header(header, headers[header])
+                    }
+                  })
+                }
+                return reply.status(output.statusCode || 200).send(output.responseBody)
+              } catch (e) {
+                if (route.disableContentTypeParser) {
+                  reply.header('connection', 'close')
+                  reply.raw.on('finish', () => {
+                    req.raw.destroy()
+                  })
+                }
+                throw e
               }
-              return reply.status(output.statusCode || 200).send(output.responseBody)
             }
           }
 
@@ -91,6 +106,7 @@ export default async function routes(fastify: FastifyInstance) {
           fastify.register(signatureV4)
           fastify.register(db)
           fastify.register(storage)
+          fastify.register(tracingMode)
 
           localFastify[method](
             routePath,

@@ -606,9 +606,9 @@ export class S3ProtocolHandler {
         Body.unpipe(proxy)
       })
 
-      Body.on('error', () => {
+      Body.on('error', (err) => {
         if (!proxy.closed) {
-          proxy.destroy()
+          proxy.destroy(err)
         }
       })
     }

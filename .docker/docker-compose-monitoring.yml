@@ -44,3 +44,26 @@ services:
     volumes:
       - ../monitoring/grafana/config:/etc/grafana/provisioning
       - ../monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57.0
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14250:14250"  # GRPC
+      - "14268:14268"  # HTTP
+      - "14269:14269"  # HTTP
+      - "6831:6831/udp"  # UDP
+      - "6832:6832/udp"  # UDP
+      - "5778:5778"  # HTTP
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.100.0
+    ports:
+      - "4317:4317"  # OTLP gRPC receiver
+      - "4318:4318"  # OTLP Http receiver
+      - "55680:55680"  # OTLP HTTP receiver
+    command: [ "--config=/etc/otel/otel-collector-config.yml" ]
+    depends_on:
+      - jaeger
+    volumes:
+      - ../monitoring/otel/config:/etc/otel

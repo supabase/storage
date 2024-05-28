@@ -32,6 +32,7 @@ interface TenantConfig {
   migrationVersion?: string
   migrationStatus?: TenantMigrationStatus
   syncMigrationsDone?: boolean
+  tracingMode?: string
 }
 
 export interface Features {
@@ -200,6 +201,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       max_connections,
       migrations_version,
       migrations_status,
+      tracing_mode,
     } = tenant
 
     const serviceKey = decrypt(service_key)
@@ -225,6 +227,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       migrationVersion: migrations_version,
       migrationStatus: migrations_status,
       migrationsRun: false,
+      tracingMode: tracing_mode,
     }
     tenantConfigCache.set(tenantId, config)
 

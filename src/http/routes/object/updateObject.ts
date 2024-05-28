@@ -2,6 +2,7 @@ import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../generic-routes'
 import { ROUTE_OPERATIONS } from '../operations'
+import fastifyMultipart from '@fastify/multipart'
 
 const updateObjectParamsSchema = {
   type: 'object',
@@ -38,6 +39,14 @@ export default async function routes(fastify: FastifyInstance) {
     params: updateObjectParamsSchema,
     summary,
     tags: ['object'],
+  })
+
+  fastify.register(fastifyMultipart, {
+    limits: {
+      fields: 10,
+      files: 1,
+    },
+    throwFileSizeLimit: false,
   })
 
   fastify.addContentTypeParser(

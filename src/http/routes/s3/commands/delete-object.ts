@@ -75,7 +75,7 @@ export default function DeleteObject(s3Router: S3Router) {
   // Delete single object
   s3Router.delete(
     '/:Bucket/*',
-    { schema: DeleteObjectInput, operation: 's3.object.delete' },
+    { schema: DeleteObjectInput, operation: ROUTE_OPERATIONS.S3_DELETE_OBJECT },
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 

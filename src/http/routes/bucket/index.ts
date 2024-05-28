@@ -5,12 +5,13 @@ import emptyBucket from './emptyBucket'
 import getAllBuckets from './getAllBuckets'
 import getBucket from './getBucket'
 import updateBucket from './updateBucket'
-import { storage, jwt, db } from '../../plugins'
+import { storage, jwt, db, tracingMode } from '../../plugins'
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(jwt)
   fastify.register(db)
   fastify.register(storage)
+  fastify.register(tracingMode)
 
   fastify.register(createBucket)
   fastify.register(emptyBucket)

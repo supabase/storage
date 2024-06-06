@@ -57,6 +57,7 @@ jobs:
             ghcr.io/supabase/storage-api
           tags: |
             type=raw,value=v${{ needs.release.outputs.version }}
+            type=raw,value=latest
 
       - uses: docker/setup-qemu-action@v2
         with:

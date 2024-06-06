@@ -35,5 +35,6 @@ jobs:
           dst: |
             public.ecr.aws/supabase/storage-api:${{ inputs.version }}
             public.ecr.aws/supabase/storage-api:latest
+            docker.io/supabase/storage-api:latest
             ghcr.io/supabase/storage-api:${{ inputs.version }}
             ghcr.io/supabase/storage-api:latest

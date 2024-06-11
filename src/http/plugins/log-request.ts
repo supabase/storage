@@ -1,5 +1,6 @@
 import fastifyPlugin from 'fastify-plugin'
 import { logSchema, redactQueryParamFromRequest } from '../../monitoring'
+import { trace } from '@opentelemetry/api'
 
 interface RequestLoggerOptions {
   excludeUrls?: string[]
@@ -22,16 +23,27 @@ export const logRequest = (options: RequestLoggerOptions) =>
   fastifyPlugin(async (fastify) => {
     fastify.addHook('preHandler', async (req) => {
       const resourceFromParams = Object.values(req.params || {}).join('/')
-      const resources =
-        req.resources ??
-        req.routeConfig.resources?.(req) ??
-        (req.raw as any).resources ??
-        resourceFromParams
-          ? ['/' + resourceFromParams]
-          : ([] as string[])
+      const resources = getFirstDefined<string[]>(
+        req.resources,
+        req.routeConfig.resources?.(req),
+        (req.raw as any).resources,
+        resourceFromParams ? [resourceFromParams] : ([] as string[])
+      )
+
+      if (resources && resources.length > 0) {
+        resources.map((resource, index) => {
+          if (!resource.startsWith('/')) {
+            resources[index] = `/${resource}`
+          }
+        })
+      }
 
       req.resources = resources
       req.operation = req.routeConfig.operation
+
+      if (req.operation) {
+        trace.getActiveSpan()?.setAttribute('http.operation', req.operation.type)
+      }
     })
 
     fastify.addHook('onRequestAbort', async (req) => {
@@ -88,3 +100,12 @@ export const logRequest = (options: RequestLoggerOptions) =>
       })
     })
   })
+
+function getFirstDefined<T>(...values: any[]): T | undefined {
+  for (const value of values) {
+    if (value !== undefined) {
+      return value
+    }
+  }
+  return undefined
+}

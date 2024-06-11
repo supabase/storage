@@ -46,6 +46,7 @@ export const ROUTE_OPERATIONS = {
   S3_LIST_OBJECT: 'storage.s3.object.list',
   S3_HEAD_OBJECT: 'storage.s3.object.info',
   S3_DELETE_OBJECTS: 'storage.s3.object.delete_many',
+  S3_DELETE_OBJECT: 'storage.s3.object.delete',
   S3_GET_OBJECT_TAGGING: 'storage.s3.object.get_tagging',
 
   // S3 Bucket

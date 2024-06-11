@@ -13,13 +13,6 @@ const { version, keepAliveTimeout, headersTimeout, isMultitenant } = getConfig()
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
   const app = fastify(opts)
-  app.register(fastifyMultipart, {
-    limits: {
-      fields: 10,
-      files: 1,
-    },
-    throwFileSizeLimit: false,
-  })
 
   app.addContentTypeParser('*', function (request, payload, done) {
     done(null)
@@ -49,6 +42,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
         ],
       },
     })
+
     app.register(fastifySwaggerUi, {
       routePrefix: '/documentation',
     })

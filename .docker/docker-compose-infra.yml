@@ -153,12 +153,23 @@ services:
       - IMGPROXY_USE_ETAG=true
       - IMGPROXY_ENABLE_WEBP_DETECTION=true
 
-  # Optional for rate-limiting
-  redis:
-    image: redis:6.2-alpine
-    restart: always
-    ports:
-      - '6379:6379'
+# Optional for rate-limiting
+#  redis:
+#    image: redis:6.2-alpine
+#    restart: always
+#    ports:
+#      - '6379:6379'
+
+# Optional for tracing
+#  otel:
+#    extends:
+#      service: otel-collector
+#      file: ./.docker/docker-compose-monitoring.yml
+#
+#  jaeger:
+#    extends:
+#      service: jaeger
+#      file: ./.docker/docker-compose-monitoring.yml
 
 configs:
   init.sql:

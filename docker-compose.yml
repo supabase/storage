@@ -100,3 +100,13 @@ services:
 #    extends:
 #      service: prometheus
 #      file: ./.docker/docker-compose-monitoring.yml
+#
+#  otel:
+#    extends:
+#      service: otel-collector
+#      file: ./.docker/docker-compose-monitoring.yml
+#
+#  jaeger:
+#    extends:
+#      service: jaeger
+#      file: ./.docker/docker-compose-monitoring.yml

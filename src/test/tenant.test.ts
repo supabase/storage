@@ -17,6 +17,7 @@ const payload = {
   jwks: { keys: [] },
   migrationStatus: 'COMPLETED',
   migrationVersion: 'operation-function',
+  tracingMode: 'basic',
   features: {
     imageTransformation: {
       enabled: true,
@@ -35,6 +36,7 @@ const payload2 = {
   jwks: null,
   migrationStatus: 'COMPLETED',
   migrationVersion: 'operation-function',
+  tracingMode: 'basic',
   features: {
     imageTransformation: {
       enabled: false,

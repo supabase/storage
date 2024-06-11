@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { createDefaultSchema, createResponse } from '../../generic-routes'
+import { createDefaultSchema } from '../../generic-routes'
 import { AuthenticatedRequest } from '../../request'
 import { ROUTE_OPERATIONS } from '../operations'
 

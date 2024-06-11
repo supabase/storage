@@ -23,7 +23,7 @@ declare module 'fastify' {
 
 const { dbMigrationStrategy, isMultitenant } = getConfig()
 
-export const db = fastifyPlugin(async (fastify) => {
+export const db = fastifyPlugin(async function db(fastify) {
   fastify.register(migrations)
   fastify.decorateRequest('db', null)
 
@@ -90,7 +90,10 @@ interface DbSuperUserPluginOptions {
   disableHostCheck?: boolean
 }
 
-export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(async (fastify, opts) => {
+export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(async function dbSuperUser(
+  fastify,
+  opts
+) {
   fastify.register(migrations)
   fastify.decorateRequest('db', null)
 
@@ -152,7 +155,7 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(async (fastif
 /**
  * Handle database migration for multitenant applications when a request is made
  */
-export const migrations = fastifyPlugin(async (fastify) => {
+export const migrations = fastifyPlugin(async function migrations(fastify) {
   if (dbMigrationStrategy === MultitenantMigrationStrategy.ON_REQUEST) {
     const migrationsMutex = createMutexByKey()
 

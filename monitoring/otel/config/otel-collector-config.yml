@@ -1,0 +1,183 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+      http:
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 70
+    spike_limit_percentage: 20
+  batch:
+    send_batch_size: 10000
+    timeout: 10s
+  tail_sampling/storage:
+    decision_wait: 10s
+    expected_new_traces_per_sec: 10000
+    num_traces: 50000
+    policies:
+      [
+        # Exclude probes URLs
+        {
+          name: exclude-urls,
+          type: string_attribute,
+          string_attribute: { key: http.route, values: [ \/health.*, \/metrics, \/tenants, \/version, \/status ], enabled_regex_matching: true, invert_match: true }
+        },
+        # All error are sampled
+        {
+          name: error-status-codes,
+          type: numeric_attribute,
+          numeric_attribute: { key: http.status_code, min_value: 500, max_value: 599 }
+        },
+        # Always sample high latency traces that are not uploads
+        {
+          name: high-latency-excluding-uploads,
+          type: and,
+          and: {
+            and_sub_policy:
+              [
+                {
+                  type: latency,
+                  latency: { threshold_ms: 5000 }
+                },
+                # Exclude upload operations
+                {
+                  type: string_attribute,
+                  string_attribute: {
+                    key: http.operation,
+                    values: [ .*upload.* ],
+                    enabled_regex_matching: true,
+                    invert_match: true
+                  }
+                }
+              ]
+          }
+        },
+        # Always sample high latency uploads
+        {
+          name: high-latency-uploads,
+          type: and,
+          and: {
+            and_sub_policy:
+              [
+                {
+                  type: latency,
+                  latency: { threshold_ms: 300000 }
+                },
+                # Only upload operations
+                {
+                  type: string_attribute,
+                  string_attribute: {
+                    key: http.operation,
+                    values: [ .*upload.* ],
+                    enabled_regex_matching: true,
+                  }
+                }
+              ]
+          }
+        },
+        # Sample traces for tenants with default mode
+        # Default mode is the mode where the trace.mode attribute is set to basic
+        # and only 0.2 of traces are sampled for each tenant
+        {
+          name: sampling-basic-tenants,
+          type: and,
+          and: {
+            and_sub_policy:
+              [
+                {
+                  # must have tenant.ref attribute
+                  name: has-tenant-ref,
+                  type: string_attribute,
+                  string_attribute:
+                    {
+                      key: tenant.ref,
+                      values: [ .* ],
+                      enabled_regex_matching: true
+                    },
+                },
+                {
+                  # trace.mode = basic
+                  name: trace-mode-default,
+                  type: string_attribute,
+                  string_attribute:
+                    {
+                      key: trace.mode,
+                      values: [ basic ],
+                    },
+                },
+                {
+                  name: success-status-codes,
+                  type: numeric_attribute,
+                  numeric_attribute: { key: http.status_code, min_value: 200, max_value: 399 }
+                },
+                {
+                  name: basic-sampling,
+                  type: probabilistic,
+                  probabilistic: {
+                    sampling_percentage: 5
+                  }
+                }
+              ]
+          }
+        },
+
+        # Sample traces for tenants with premium mode
+        # Premium mode sample 100% of traces for each tenant
+        {
+          name: sampling-premium-tenants,
+          type: and,
+          and: {
+            and_sub_policy:
+              [
+                {
+                  # must have tenant.ref attribute
+                  name: has-tenant-ref,
+                  type: string_attribute,
+                  string_attribute:
+                    {
+                      key: tenant.ref,
+                      values: [ .* ],
+                      enabled_regex_matching: true
+                    },
+                },
+                {
+                  # trace.mode = premium
+                  name: trace-mode-default,
+                  type: string_attribute,
+                  string_attribute:
+                    {
+                      key: trace.mode,
+                      values: [ full ],
+                    },
+                },
+                {
+                  name: success-status-codes,
+                  type: numeric_attribute,
+                  numeric_attribute: { key: http.status_code, min_value: 200, max_value: 399 }
+                },
+                {
+                  name: full-sampling,
+                  type: probabilistic,
+                  probabilistic: {
+                    sampling_percentage: 100
+                  }
+                }
+              ]
+          }
+        }
+      ]
+
+exporters:
+  otlp/jaeger:
+    endpoint: "jaeger:4317"
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, tail_sampling/storage, batch]
+      exporters: [otlp/jaeger]

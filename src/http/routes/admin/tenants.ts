@@ -23,6 +23,7 @@ const patchSchema = {
       jwtSecret: { type: 'string' },
       jwks: { type: 'object', nullable: true },
       serviceKey: { type: 'string' },
+      tracingMode: { type: 'string' },
       features: {
         type: 'object',
         properties: {
@@ -36,6 +37,7 @@ const patchSchema = {
       },
     },
   },
+  optional: ['tracingMode'],
 } as const
 
 const schema = {
@@ -93,6 +95,7 @@ export default async function routes(fastify: FastifyInstance) {
         feature_image_transformation,
         migrations_version,
         migrations_status,
+        tracing_mode,
       }) => ({
         id,
         anonKey: decrypt(anon_key),
@@ -105,6 +108,7 @@ export default async function routes(fastify: FastifyInstance) {
         serviceKey: decrypt(service_key),
         migrationVersion: migrations_version,
         migrationStatus: migrations_status,
+        tracingMode: tracing_mode,
         features: {
           imageTransformation: {
             enabled: feature_image_transformation,
@@ -131,6 +135,7 @@ export default async function routes(fastify: FastifyInstance) {
         feature_image_transformation,
         migrations_version,
         migrations_status,
+        tracing_mode,
       } = tenant
 
       return {
@@ -154,6 +159,7 @@ export default async function routes(fastify: FastifyInstance) {
         },
         migrationVersion: migrations_version,
         migrationStatus: migrations_status,
+        tracingMode: tracing_mode,
       }
     }
   })
@@ -170,6 +176,7 @@ export default async function routes(fastify: FastifyInstance) {
       features,
       databasePoolUrl,
       maxConnections,
+      tracingMode,
     } = request.body
 
     await runMigrationsOnTenant(databaseUrl, tenantId)
@@ -186,6 +193,7 @@ export default async function routes(fastify: FastifyInstance) {
       feature_image_transformation: features?.imageTransformation?.enabled ?? false,
       migrations_version: await lastMigrationName(),
       migrations_status: TenantMigrationStatus.COMPLETED,
+      tracing_mode: tracingMode,
     })
     reply.code(201).send()
   })
@@ -204,6 +212,7 @@ export default async function routes(fastify: FastifyInstance) {
         features,
         databasePoolUrl,
         maxConnections,
+        tracingMode,
       } = request.body
       const { tenantId } = request.params
       if (databaseUrl) {
@@ -226,6 +235,7 @@ export default async function routes(fastify: FastifyInstance) {
           feature_image_transformation: features?.imageTransformation?.enabled,
           migrations_version: databaseUrl ? await lastMigrationName() : undefined,
           migrations_status: databaseUrl ? TenantMigrationStatus.COMPLETED : undefined,
+          tracing_mode: tracingMode,
         })
         .where('id', tenantId)
       reply.code(204).send()
@@ -243,6 +253,7 @@ export default async function routes(fastify: FastifyInstance) {
       features,
       databasePoolUrl,
       maxConnections,
+      tracingMode,
     } = request.body
     const { tenantId } = request.params
     await runMigrationsOnTenant(databaseUrl, tenantId)
@@ -250,6 +261,7 @@ export default async function routes(fastify: FastifyInstance) {
     const tenantInfo: tenantDBInterface & {
       migrations_version: string
       migrations_status: TenantMigrationStatus
+      tracing_mode?: string
     } = {
       id: tenantId,
       anon_key: encrypt(anonKey),
@@ -275,6 +287,10 @@ export default async function routes(fastify: FastifyInstance) {
 
     if (maxConnections) {
       tenantInfo.max_connections = Number(maxConnections)
+    }
+
+    if (tracingMode) {
+      tenantInfo.tracing_mode = tracingMode
     }
 
     await multitenantKnex('tenants').insert(tenantInfo).onConflict('id').merge()

@@ -28,15 +28,9 @@ import { FastifyInstance } from 'fastify'
 import { Upload } from '@aws-sdk/lib-storage'
 import { ReadableStreamBuffer } from 'stream-buffers'
 import { randomUUID } from 'crypto'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
-const {
-  s3ProtocolAccessKeySecret,
-  s3ProtocolAccessKeyId,
-  storageS3Region,
-  tenantId,
-  anonKey,
-  serviceKey,
-} = getConfig()
+const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
 
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
   let bucketName: string
@@ -1081,6 +1075,58 @@ describe('S3 Protocol', () => {
 
         const parts = await client.send(listPartsCmd)
         expect(parts.Parts?.length).toBe(1)
+      })
+    })
+
+    describe('S3 Presigned URL', () => {
+      it('can call a simple method with presigned url', async () => {
+        const bucket = await createBucket(client)
+        const bucketVersioningCommand = new GetBucketVersioningCommand({
+          Bucket: bucket,
+        })
+        const signedUrl = await getSignedUrl(client, bucketVersioningCommand, { expiresIn: 100 })
+        const resp = await fetch(signedUrl)
+
+        expect(resp.ok).toBeTruthy()
+      })
+
+      it('cannot request a presigned url if expired', async () => {
+        const bucket = await createBucket(client)
+        const bucketVersioningCommand = new GetBucketVersioningCommand({
+          Bucket: bucket,
+        })
+        const signedUrl = await getSignedUrl(client, bucketVersioningCommand, { expiresIn: 1 })
+        await new Promise((resolve) => setTimeout(resolve, 1500))
+        const resp = await fetch(signedUrl)
+
+        expect(resp.ok).toBeFalsy()
+        expect(resp.status).toBe(400)
+      })
+
+      it('can upload with presigned URL', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-1.jpg'
+        const body = Buffer.alloc(1024 * 1024 * 2)
+
+        const uploadUrl = await getSignedUrl(
+          client,
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: body,
+          }),
+          { expiresIn: 100 }
+        )
+
+        const resp = await fetch(uploadUrl, {
+          method: 'PUT',
+          body: body,
+          headers: {
+            'Content-Length': body.length.toString(),
+          },
+        })
+
+        expect(resp.ok).toBeTruthy()
       })
     })
   })

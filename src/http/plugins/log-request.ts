@@ -52,7 +52,12 @@ export const logRequest = (options: RequestLoggerOptions) =>
       }
 
       const rMeth = req.method
-      const rUrl = redactQueryParamFromRequest(req, ['token'])
+      const rUrl = redactQueryParamFromRequest(req, [
+        'token',
+        'X-Amz-Credential',
+        'X-Amz-Signature',
+        'X-Amz-Security-Token',
+      ])
       const uAgent = req.headers['user-agent']
       const rId = req.id
       const cIP = req.ip
@@ -78,7 +83,12 @@ export const logRequest = (options: RequestLoggerOptions) =>
       }
 
       const rMeth = req.method
-      const rUrl = redactQueryParamFromRequest(req, ['token'])
+      const rUrl = redactQueryParamFromRequest(req, [
+        'token',
+        'X-Amz-Credential',
+        'X-Amz-Signature',
+        'X-Amz-Security-Token',
+      ])
       const uAgent = req.headers['user-agent']
       const rId = req.id
       const cIP = req.ip

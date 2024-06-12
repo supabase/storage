@@ -103,6 +103,7 @@ type StorageConfigType = {
   s3ProtocolEnforceRegion: boolean
   s3ProtocolAccessKeyId?: string
   s3ProtocolAccessKeySecret?: string
+  s3ProtocolNonCanonicalHostHeader?: string
   tracingMode?: string
 }
 
@@ -232,6 +233,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     s3ProtocolEnforceRegion: getOptionalConfigFromEnv('S3_PROTOCOL_ENFORCE_REGION') === 'true',
     s3ProtocolAccessKeyId: getOptionalConfigFromEnv('S3_PROTOCOL_ACCESS_KEY_ID'),
     s3ProtocolAccessKeySecret: getOptionalConfigFromEnv('S3_PROTOCOL_ACCESS_KEY_SECRET'),
+    s3ProtocolNonCanonicalHostHeader: getOptionalConfigFromEnv(
+      'S3_PROTOCOL_NON_CANONICAL_HOST_HEADER'
+    ),
     // Storage
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
 

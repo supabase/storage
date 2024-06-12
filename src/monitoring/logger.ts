@@ -23,7 +23,12 @@ export const logger = pino({
         region,
         traceId: request.id,
         method: request.method,
-        url: redactQueryParamFromRequest(request, ['token']),
+        url: redactQueryParamFromRequest(request, [
+          'token',
+          'X-Amz-Credential',
+          'X-Amz-Signature',
+          'X-Amz-Security-Token',
+        ]),
         headers: whitelistHeaders(request.headers),
         hostname: request.hostname,
         remoteAddress: request.ip,

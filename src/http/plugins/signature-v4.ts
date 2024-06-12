@@ -18,25 +18,22 @@ const {
   s3ProtocolEnforceRegion,
   s3ProtocolAccessKeyId,
   s3ProtocolAccessKeySecret,
+  s3ProtocolNonCanonicalHostHeader,
 } = getConfig()
 
+type AWSRequest = FastifyRequest<{ Querystring: { 'X-Amz-Credential'?: string } }>
+
 export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstance) {
-  fastify.addHook('preHandler', async (request: FastifyRequest) => {
-    if (typeof request.headers.authorization !== 'string') {
-      throw ERRORS.AccessDenied('Missing authorization header')
-    }
+  fastify.addHook('preHandler', async (request: AWSRequest) => {
+    const clientSignature = extractSignature(request)
 
-    const clientCredentials = SignatureV4.parseAuthorizationHeader(request.headers.authorization)
-
-    const sessionToken = request.headers['x-amz-security-token'] as string | undefined
+    const sessionToken = clientSignature.sessionToken
 
     const {
       signature: signatureV4,
       claims,
       token,
-    } = await createSignature(request.tenantId, clientCredentials, {
-      sessionToken: sessionToken,
-    })
+    } = await createServerSignature(request.tenantId, clientSignature)
 
     const isVerified = signatureV4.verify({
       url: request.url,
@@ -45,9 +42,7 @@ export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstanc
       method: request.method,
       query: request.query as Record<string, string>,
       prefix: s3ProtocolPrefix,
-      credentials: clientCredentials.credentials,
-      signature: clientCredentials.signature,
-      signedHeaders: clientCredentials.signedHeaders,
+      clientSignature: clientSignature,
     })
 
     if (!isVerified && !sessionToken) {
@@ -94,15 +89,23 @@ export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstanc
   })
 })
 
-async function createSignature(
-  tenantId: string,
-  clientSignature: ClientSignature,
-  session?: { sessionToken?: string }
-) {
+function extractSignature(req: AWSRequest) {
+  if (typeof req.headers.authorization === 'string') {
+    return SignatureV4.parseAuthorizationHeader(req.headers)
+  }
+
+  if (typeof req.query['X-Amz-Credential'] === 'string') {
+    return SignatureV4.parseQuerySignature(req.query)
+  }
+
+  throw ERRORS.AccessDenied('Missing signature')
+}
+
+async function createServerSignature(tenantId: string, clientSignature: ClientSignature) {
   const awsRegion = storageS3Region
   const awsService = 's3'
 
-  if (session?.sessionToken) {
+  if (clientSignature?.sessionToken) {
     const tenantAnonKey = isMultitenant ? (await getTenantConfig(tenantId)).anonKey : anonKey
 
     if (!tenantAnonKey) {
@@ -112,6 +115,7 @@ async function createSignature(
     const signature = new SignatureV4({
       enforceRegion: s3ProtocolEnforceRegion,
       allowForwardedHeader: s3ProtocolAllowForwardedHeader,
+      nonCanonicalForwardedHost: s3ProtocolNonCanonicalHostHeader,
       credentials: {
         accessKey: tenantId,
         secretKey: tenantAnonKey,
@@ -120,7 +124,7 @@ async function createSignature(
       },
     })
 
-    return { signature, claims: undefined, token: session.sessionToken }
+    return { signature, claims: undefined, token: clientSignature.sessionToken }
   }
 
   if (isMultitenant) {
@@ -132,6 +136,7 @@ async function createSignature(
     const signature = new SignatureV4({
       enforceRegion: s3ProtocolEnforceRegion,
       allowForwardedHeader: s3ProtocolAllowForwardedHeader,
+      nonCanonicalForwardedHost: s3ProtocolNonCanonicalHostHeader,
       credentials: {
         accessKey: credential.accessKey,
         secretKey: credential.secretKey,
@@ -152,6 +157,7 @@ async function createSignature(
   const signature = new SignatureV4({
     enforceRegion: s3ProtocolEnforceRegion,
     allowForwardedHeader: s3ProtocolAllowForwardedHeader,
+    nonCanonicalForwardedHost: s3ProtocolNonCanonicalHostHeader,
     credentials: {
       accessKey: s3ProtocolAccessKeyId,
       secretKey: s3ProtocolAccessKeySecret,

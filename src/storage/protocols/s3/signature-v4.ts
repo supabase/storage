@@ -4,6 +4,7 @@ import { ERRORS } from '../../errors'
 interface SignatureV4Options {
   enforceRegion: boolean
   allowForwardedHeader?: boolean
+  nonCanonicalForwardedHost?: string
   credentials: Omit<Credentials, 'shortDate'> & { secretKey: string }
 }
 
@@ -11,6 +12,9 @@ export interface ClientSignature {
   credentials: Credentials
   signature: string
   signedHeaders: string[]
+  sessionToken?: string
+  longDate: string
+  contentSha?: string
 }
 
 interface SignatureRequest {
@@ -20,9 +24,7 @@ interface SignatureRequest {
   method: string
   query?: Record<string, string>
   prefix?: string
-  credentials: Credentials
-  signature: string
-  signedHeaders: string[]
+  clientSignature: ClientSignature
 }
 
 interface Credentials {
@@ -53,24 +55,36 @@ export const ALWAYS_UNSIGNABLE_HEADERS = {
   'x-amzn-trace-id': true,
 }
 
+export const ALWAYS_UNSIGNABLE_QUERY_PARAMS = {
+  'X-Amz-Signature': true,
+}
+
 export class SignatureV4 {
   public readonly serverCredentials: SignatureV4Options['credentials']
   enforceRegion: boolean
   allowForwardedHeader?: boolean
+  nonCanonicalForwardedHost?: string
 
   constructor(options: SignatureV4Options) {
     this.serverCredentials = options.credentials
     this.enforceRegion = options.enforceRegion
     this.allowForwardedHeader = options.allowForwardedHeader
+    this.nonCanonicalForwardedHost = options.nonCanonicalForwardedHost
   }
 
-  static parseAuthorizationHeader(header: string) {
-    const parts = header.split(' ')
+  static parseAuthorizationHeader(headers: Record<string, any>) {
+    const clientSignature = headers.authorization
+
+    if (typeof clientSignature !== 'string') {
+      throw ERRORS.InvalidSignature('Missing authorization header')
+    }
+
+    const parts = clientSignature.split(' ')
     if (parts[0] !== 'AWS4-HMAC-SHA256') {
       throw ERRORS.InvalidSignature('Unsupported authorization type')
     }
 
-    const params = header
+    const params = clientSignature
       .replace('AWS4-HMAC-SHA256 ', '')
       .split(',')
       .reduce((values, value) => {
@@ -81,12 +95,80 @@ export class SignatureV4 {
 
     const credentialPart = params.get('Credential')
     const signedHeadersPart = params.get('SignedHeaders')
-    const signaturePart = params.get('Signature')
+    const signature = params.get('Signature')
+    const longDate = headers['x-amz-date']
+    const contentSha = headers['x-amz-content-sha256']
+    const sessionToken = headers['x-amz-security-token']
 
-    if (!credentialPart || !signedHeadersPart || !signaturePart) {
+    if (!validateTypeOfStrings(credentialPart, signedHeadersPart, signature, longDate)) {
       throw ERRORS.InvalidSignature('Invalid signature format')
     }
-    const signedHeaders = signedHeadersPart.split(';') || []
+
+    const signedHeaders = signedHeadersPart?.split(';') || []
+
+    const credentialsPart = credentialPart?.split('/') || []
+
+    if (credentialsPart.length !== 5) {
+      throw ERRORS.InvalidSignature('Invalid credentials')
+    }
+
+    const [accessKey, shortDate, region, service] = credentialsPart
+
+    return {
+      credentials: {
+        accessKey,
+        shortDate,
+        region,
+        service,
+      },
+      signedHeaders,
+      signature,
+      longDate,
+      contentSha,
+      sessionToken,
+    }
+  }
+
+  static parseQuerySignature(query: Record<string, any>) {
+    const credentialPart = query['X-Amz-Credential']
+    const signedHeaders = query['X-Amz-SignedHeaders']
+    const signature = query['X-Amz-Signature']
+    const longDate = query['X-Amz-Date']
+    const contentSha = query['X-Amz-Content-Sha256']
+    const sessionToken = query['X-Amz-Security-Token']
+    const expires = query['X-Amz-Expires']
+
+    if (!validateTypeOfStrings(credentialPart, signedHeaders, signature)) {
+      throw ERRORS.InvalidSignature('Invalid signature format')
+    }
+
+    if (expires) {
+      const expiresSec = parseInt(expires, 10)
+      if (isNaN(expiresSec) || expiresSec < 0) {
+        throw ERRORS.InvalidSignature('Invalid expiration')
+      }
+
+      if (typeof longDate !== 'string') {
+        throw ERRORS.InvalidSignature('Invalid date')
+      }
+
+      const isoLongDate = longDate.replace(
+        /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,
+        '$1-$2-$3T$4:$5:$6Z'
+      )
+
+      const expirationDate = new Date(isoLongDate)
+
+      if (isNaN(expirationDate.getTime())) {
+        throw ERRORS.InvalidSignature('Invalid date')
+      }
+      expirationDate.setSeconds(expirationDate.getSeconds() + expiresSec)
+
+      const isExpired = expirationDate < new Date()
+      if (isExpired) {
+        throw ERRORS.ExpiredSignature()
+      }
+    }
 
     const credentialsPart = credentialPart.split('/')
 
@@ -103,8 +185,11 @@ export class SignatureV4 {
         region,
         service,
       },
-      signedHeaders,
-      signature: signaturePart,
+      signedHeaders: signedHeaders.split(';'),
+      signature,
+      longDate,
+      contentSha,
+      sessionToken,
     }
   }
 
@@ -115,25 +200,23 @@ export class SignatureV4 {
   }
 
   sign(request: SignatureRequest) {
-    const authorizationHeader = this.getHeader(request, 'authorization')
-    if (!authorizationHeader) {
-      throw ERRORS.AccessDenied('Missing authorization header')
-    }
-
-    if (request.credentials.accessKey !== this.serverCredentials.accessKey) {
+    if (request.clientSignature.credentials.accessKey !== this.serverCredentials.accessKey) {
       throw ERRORS.AccessDenied('Invalid Access Key')
     }
 
     // Ensure the region and service match the expected values
-    if (this.enforceRegion && request.credentials.region !== this.serverCredentials.region) {
+    if (
+      this.enforceRegion &&
+      request.clientSignature.credentials.region !== this.serverCredentials.region
+    ) {
       throw ERRORS.AccessDenied('Invalid Region')
     }
 
-    if (request.credentials.service !== this.serverCredentials.service) {
+    if (request.clientSignature.credentials.service !== this.serverCredentials.service) {
       throw ERRORS.AccessDenied('Invalid Service')
     }
 
-    const longDate = request.headers['x-amz-date'] as string
+    const longDate = request.clientSignature.longDate
     if (!longDate) {
       throw ERRORS.AccessDenied('No date header provided')
     }
@@ -144,20 +227,25 @@ export class SignatureV4 {
     // - the region set in the env
     if (
       !this.enforceRegion &&
-      !['auto', 'us-east-1', this.serverCredentials.region, ''].includes(request.credentials.region)
+      !['auto', 'us-east-1', this.serverCredentials.region, ''].includes(
+        request.clientSignature.credentials.region
+      )
     ) {
       throw ERRORS.AccessDenied('Invalid Region')
     }
 
     const selectedRegion = this.enforceRegion
       ? this.serverCredentials.region
-      : request.credentials.region
+      : request.clientSignature.credentials.region
 
     // Construct the Canonical Request and String to Sign
-    const canonicalRequest = this.constructCanonicalRequest(request, request.signedHeaders)
+    const canonicalRequest = this.constructCanonicalRequest(
+      request,
+      request.clientSignature.signedHeaders
+    )
     const stringToSign = this.constructStringToSign(
       longDate,
-      request.credentials.shortDate,
+      request.clientSignature.credentials.shortDate,
       selectedRegion,
       this.serverCredentials.service,
       canonicalRequest
@@ -165,25 +253,22 @@ export class SignatureV4 {
 
     const signingKey = this.signingKey(
       this.serverCredentials.secretKey,
-      request.credentials.shortDate,
+      request.clientSignature.credentials.shortDate,
       selectedRegion,
       this.serverCredentials.service
     )
 
     return {
-      clientSignature: request.signature,
+      clientSignature: request.clientSignature.signature,
       serverSignature: this.hmac(signingKey, stringToSign).toString('hex'),
     }
   }
 
   getPayloadHash(request: SignatureRequest) {
-    const headers = request.headers
     const body = request.body
 
-    for (const headerName of Object.keys(headers)) {
-      if (headerName.toLowerCase() === 'x-amz-content-sha256') {
-        return headers[headerName]
-      }
+    if (request.clientSignature.contentSha) {
+      return request.clientSignature.contentSha
     }
 
     const contentLenght = parseInt(this.getHeader(request, 'content-length') || '0', 10)
@@ -242,6 +327,7 @@ export class SignatureV4 {
       .pathname
 
     const canonicalQueryString = Object.keys((request.query as object) || {})
+      .filter((key) => !(key in ALWAYS_UNSIGNABLE_QUERY_PARAMS))
       .sort()
       .map(
         (key) =>
@@ -266,6 +352,17 @@ export class SignatureV4 {
                 if (extractedHost) {
                   return `host:${extractedHost.toLowerCase()}`
                 }
+              }
+            }
+
+            if (this.nonCanonicalForwardedHost) {
+              const xForwardedHost = this.getHeader(
+                request,
+                this.nonCanonicalForwardedHost.toLowerCase()
+              )
+
+              if (xForwardedHost) {
+                return `host:${xForwardedHost.toLowerCase()}`
               }
             }
 
@@ -295,4 +392,10 @@ export class SignatureV4 {
     }
     return item
   }
+}
+
+function validateTypeOfStrings(...values: any[]) {
+  return values.every((value) => {
+    return typeof value === 'string'
+  })
 }

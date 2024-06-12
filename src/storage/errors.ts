@@ -27,6 +27,7 @@ export enum ErrorCode {
   BucketAlreadyExists = 'BucketAlreadyExists',
   DatabaseTimeout = 'DatabaseTimeout',
   InvalidSignature = 'InvalidSignature',
+  ExpiredToken = 'ExpiredToken',
   SignatureDoesNotMatch = 'SignatureDoesNotMatch',
   AccessDenied = 'AccessDenied',
   ResourceLocked = 'ResourceLocked',
@@ -145,9 +146,9 @@ export const ERRORS = {
 
   ExpiredSignature: (e?: Error) =>
     new StorageBackendError({
-      code: ErrorCode.InvalidSignature,
+      code: ErrorCode.ExpiredToken,
       httpStatusCode: 400,
-      message: 'Expired signature',
+      message: 'The provided token has expired.',
       originalError: e,
     }),
 

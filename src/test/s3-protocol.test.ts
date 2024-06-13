@@ -1128,6 +1128,26 @@ describe('S3 Protocol', () => {
 
         expect(resp.ok).toBeTruthy()
       })
+
+      it('can fetch an asset via presigned URL', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-1.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const getUrl = await getSignedUrl(
+          client,
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+          }),
+          { expiresIn: 100 }
+        )
+
+        const resp = await fetch(getUrl)
+
+        expect(resp.ok).toBeTruthy()
+      })
     })
   })
 })

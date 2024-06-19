@@ -14,6 +14,7 @@ interface UploaderOptions extends UploadObjectOptions {
 }
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
+const EMPTY_FOLDER_PLACEHOLDER = ".emptyFolderPlaceholder"
 
 export interface UploadObjectOptions {
   bucketId: string
@@ -82,7 +83,8 @@ export class Uploader {
     try {
       const file = await this.incomingFileInfo(request, options)
 
-      if (options.allowedMimeTypes) {
+      if (options.allowedMimeTypes && 
+        !options.objectName.endsWith(EMPTY_FOLDER_PLACEHOLDER)) {
         this.validateMimeType(file.mimeType, options.allowedMimeTypes)
       }
 

@@ -701,6 +701,37 @@ describe('S3 Protocol', () => {
     })
 
     describe('DeleteObjectsCommand', () => {
+      it('can delete a single object', async () => {
+        const bucketName = await createBucket(client)
+        await Promise.all([uploadFile(client, bucketName, 'test-1.jpg', 1)])
+
+        const deleteObjectsCommand = new DeleteObjectsCommand({
+          Bucket: bucketName,
+          Delete: {
+            Objects: [
+              {
+                Key: 'test-1.jpg',
+              },
+            ],
+          },
+        })
+
+        const deleteResp = await client.send(deleteObjectsCommand)
+
+        expect(deleteResp.Deleted).toEqual([
+          {
+            Key: 'test-1.jpg',
+          },
+        ])
+
+        const listObjectsCommand = new ListObjectsV2Command({
+          Bucket: bucketName,
+        })
+
+        const resp = await client.send(listObjectsCommand)
+        expect(resp.Contents).toBe(undefined)
+      })
+
       it('can delete multiple objects', async () => {
         const bucketName = await createBucket(client)
         await Promise.all([
@@ -726,7 +757,70 @@ describe('S3 Protocol', () => {
           },
         })
 
-        await client.send(deleteObjectsCommand)
+        const deleteResp = await client.send(deleteObjectsCommand)
+
+        expect(deleteResp.Deleted).toEqual([
+          {
+            Key: 'test-1.jpg',
+          },
+          {
+            Key: 'test-2.jpg',
+          },
+          {
+            Key: 'test-3.jpg',
+          },
+        ])
+
+        const listObjectsCommand = new ListObjectsV2Command({
+          Bucket: bucketName,
+        })
+
+        const resp = await client.send(listObjectsCommand)
+        expect(resp.Contents).toBe(undefined)
+      })
+
+      it('try to delete multiple objects that dont exists', async () => {
+        const bucketName = await createBucket(client)
+
+        await uploadFile(client, bucketName, 'test-1.jpg', 1)
+
+        const deleteObjectsCommand = new DeleteObjectsCommand({
+          Bucket: bucketName,
+          Delete: {
+            Objects: [
+              {
+                Key: 'test-1.jpg',
+              },
+              {
+                Key: 'test-2.jpg',
+              },
+              {
+                Key: 'test-3.jpg',
+              },
+            ],
+          },
+        })
+
+        const deleteResp = await client.send(deleteObjectsCommand)
+        expect(deleteResp.Deleted).toEqual([
+          {
+            Key: 'test-1.jpg',
+          },
+        ])
+        expect(deleteResp.Errors).toEqual([
+          {
+            Key: 'test-2.jpg',
+            Code: 'AccessDenied',
+            Message:
+              "You do not have permission to delete this object or the object doesn't exists",
+          },
+          {
+            Key: 'test-3.jpg',
+            Code: 'AccessDenied',
+            Message:
+              "You do not have permission to delete this object or the object doesn't exists",
+          },
+        ])
 
         const listObjectsCommand = new ListObjectsV2Command({
           Bucket: bucketName,

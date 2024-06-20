@@ -34,6 +34,7 @@ export enum ErrorCode {
   DatabaseError = 'DatabaseError',
   MissingContentLength = 'MissingContentLength',
   MissingParameter = 'MissingParameter',
+  InvalidParameter = 'InvalidParameter',
   InvalidUploadSignature = 'InvalidUploadSignature',
   LockTimeout = 'LockTimeout',
   S3Error = 'S3Error',
@@ -86,6 +87,14 @@ export const ERRORS = {
       code: ErrorCode.MissingParameter,
       httpStatusCode: 400,
       message: `Missing Required Parameter ${parameter}`,
+      originalError: e,
+    }),
+
+  InvalidParameter: (parameter: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.MissingParameter,
+      httpStatusCode: 400,
+      message: `Invalid Parameter ${parameter}`,
       originalError: e,
     }),
 

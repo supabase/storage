@@ -10,12 +10,17 @@ import xmlBodyParser from 'fastify-xml-body-parser'
 
 export const jsonToXml = fastifyPlugin(async function (
   fastify: FastifyInstance,
-  opts: { disableContentParser?: boolean }
+  opts: { disableContentParser?: boolean; parseAsArray?: string[] }
 ) {
   fastify.register(accepts)
 
   if (!opts.disableContentParser) {
-    fastify.register(xmlBodyParser)
+    fastify.register(xmlBodyParser, {
+      contentType: ['text/xml', 'application/xml', '*'],
+      isArray: (_: string, jpath: string) => {
+        return opts.parseAsArray?.includes(jpath)
+      },
+    })
   }
   fastify.addHook('preSerialization', async (req, res, payload) => {
     const accept = req.accepts()

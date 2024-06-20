@@ -891,8 +891,8 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Delete')
     }
 
-    if (!Delete.Objects) {
-      throw ERRORS.MissingParameter('Objects')
+    if (!Array.isArray(Delete.Objects)) {
+      throw ERRORS.InvalidParameter('Objects')
     }
 
     if (Delete.Objects.length === 0) {
@@ -903,28 +903,23 @@ export class S3ProtocolHandler {
       .from(Bucket)
       .deleteObjects(Delete.Objects.map((o) => o.Key || ''))
 
+    const deleted = Delete.Objects.filter((o) => deletedResult.find((d) => d.name === o.Key)).map(
+      (o) => ({ Key: o.Key })
+    )
+
+    const errors = Delete.Objects.filter((o) => !deletedResult.find((d) => d.name === o.Key)).map(
+      (o) => ({
+        Key: o.Key,
+        Code: 'AccessDenied',
+        Message: "You do not have permission to delete this object or the object doesn't exists",
+      })
+    )
+
     return {
       responseBody: {
         DeletedResult: {
-          Deleted: Delete.Objects.map((o) => {
-            const isDeleted = deletedResult.find((d) => d.name === o.Key)
-            if (isDeleted) {
-              return {
-                Deleted: {
-                  Key: o.Key,
-                },
-              }
-            }
-
-            return {
-              Error: {
-                Key: o.Key,
-                Code: 'AccessDenied',
-                Message:
-                  "You do not have permission to delete this object or the object doesn't exists",
-              },
-            }
-          }),
+          Deleted: deleted,
+          Error: errors,
         },
       },
     }

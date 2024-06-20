@@ -144,7 +144,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       schemaToCompile.Params = schema.Params
     }
     if (schema.Body) {
-      schemaToCompile.Body
+      schemaToCompile.Body = schema.Body
     }
     if (schema.Headers) {
       schemaToCompile.Headers = schema.Headers
@@ -154,10 +154,25 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       schemaToCompile.Querystring = schema.Querystring
     }
 
+    // If any of the keys has a required property, then the top level object is also required
+    const required = Object.keys(schemaToCompile).map((key) => {
+      const k = key as keyof typeof schemaToCompile
+      const schemaObj = schemaToCompile[k]
+
+      if (typeof schemaObj === 'boolean') {
+        return
+      }
+
+      if (schemaObj?.required && schemaObj.required.length > 0) {
+        return key as string
+      }
+    })
+
     this.ajv.addSchema(
       {
         type: 'object',
         properties: schemaToCompile,
+        required: required.filter(Boolean),
       },
       method + url
     )
@@ -270,4 +285,33 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     }
     return false
   }
+}
+
+/**
+ * Given a JSONSchema Definition, it returns dotted paths of all array properties
+ * @param schemas
+ */
+export function findArrayPathsInSchemas(schemas: JSONSchema[]): string[] {
+  const arrayPaths: string[] = []
+
+  function traverse(schema: JSONSchema, currentPath = ''): void {
+    if (typeof schema === 'boolean') {
+      return
+    }
+
+    if (schema.type === 'array') {
+      arrayPaths.push(currentPath)
+    }
+
+    if (schema.properties) {
+      for (const key in schema.properties) {
+        const nextSchema = schema.properties[key]
+        traverse(nextSchema, currentPath ? `${currentPath}.${key}` : key)
+      }
+    }
+  }
+
+  schemas.forEach((schema) => traverse(schema))
+
+  return arrayPaths
 }

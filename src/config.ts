@@ -59,6 +59,7 @@ type StorageConfigType = {
   logflareApiKey?: string
   logflareSourceToken?: string
   pgQueueEnable: boolean
+  pgQueueEnableWorkers?: boolean
   pgQueueConnectionURL?: string
   pgQueueDeleteAfterDays?: number
   pgQueueArchiveCompletedAfterSeconds?: number
@@ -303,6 +304,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
     // Queue
     pgQueueEnable: getOptionalConfigFromEnv('PG_QUEUE_ENABLE', 'ENABLE_QUEUE_EVENTS') === 'true',
+    pgQueueEnableWorkers: getOptionalConfigFromEnv('PG_QUEUE_WORKERS_ENABLE') !== 'false',
     pgQueueConnectionURL: getOptionalConfigFromEnv('PG_QUEUE_CONNECTION_URL'),
     pgQueueDeleteAfterDays: parseInt(
       getOptionalConfigFromEnv('PG_QUEUE_DELETE_AFTER_DAYS') || '2',

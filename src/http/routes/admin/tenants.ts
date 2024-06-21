@@ -8,6 +8,7 @@ import {
   multitenantKnex,
   lastMigrationName,
   runMigrationsOnTenant,
+  progressiveMigrations,
 } from '../../../database'
 import { dbSuperUser, storage } from '../../plugins'
 
@@ -179,7 +180,6 @@ export default async function routes(fastify: FastifyInstance) {
       tracingMode,
     } = request.body
 
-    await runMigrationsOnTenant(databaseUrl, tenantId)
     await multitenantKnex('tenants').insert({
       id: tenantId,
       anon_key: encrypt(anonKey),
@@ -191,10 +191,23 @@ export default async function routes(fastify: FastifyInstance) {
       jwks,
       service_key: encrypt(serviceKey),
       feature_image_transformation: features?.imageTransformation?.enabled ?? false,
-      migrations_version: await lastMigrationName(),
-      migrations_status: TenantMigrationStatus.COMPLETED,
+      migrations_version: null,
+      migrations_status: null,
       tracing_mode: tracingMode,
     })
+
+    try {
+      await runMigrationsOnTenant(databaseUrl, tenantId)
+      await multitenantKnex('tenants')
+        .where('id', tenantId)
+        .update({
+          migrations_version: await lastMigrationName(),
+          migrations_status: TenantMigrationStatus.COMPLETED,
+        })
+    } catch (e) {
+      progressiveMigrations.addTenant(tenantId)
+    }
+
     reply.code(201).send()
   })
 
@@ -215,9 +228,7 @@ export default async function routes(fastify: FastifyInstance) {
         tracingMode,
       } = request.body
       const { tenantId } = request.params
-      if (databaseUrl) {
-        await runMigrationsOnTenant(databaseUrl, tenantId)
-      }
+
       await multitenantKnex('tenants')
         .update({
           anon_key: anonKey !== undefined ? encrypt(anonKey) : undefined,
@@ -233,11 +244,24 @@ export default async function routes(fastify: FastifyInstance) {
           jwks,
           service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
           feature_image_transformation: features?.imageTransformation?.enabled,
-          migrations_version: databaseUrl ? await lastMigrationName() : undefined,
-          migrations_status: databaseUrl ? TenantMigrationStatus.COMPLETED : undefined,
           tracing_mode: tracingMode,
         })
         .where('id', tenantId)
+
+      if (databaseUrl) {
+        try {
+          await runMigrationsOnTenant(databaseUrl, tenantId)
+          await multitenantKnex('tenants')
+            .where('id', tenantId)
+            .update({
+              migrations_version: await lastMigrationName(),
+              migrations_status: TenantMigrationStatus.COMPLETED,
+            })
+        } catch (e) {
+          progressiveMigrations.addTenant(tenantId)
+        }
+      }
+
       reply.code(204).send()
     }
   )
@@ -256,11 +280,8 @@ export default async function routes(fastify: FastifyInstance) {
       tracingMode,
     } = request.body
     const { tenantId } = request.params
-    await runMigrationsOnTenant(databaseUrl, tenantId)
 
     const tenantInfo: tenantDBInterface & {
-      migrations_version: string
-      migrations_status: TenantMigrationStatus
       tracing_mode?: string
     } = {
       id: tenantId,
@@ -269,8 +290,6 @@ export default async function routes(fastify: FastifyInstance) {
       jwt_secret: encrypt(jwtSecret),
       jwks: jwks || null,
       service_key: encrypt(serviceKey),
-      migrations_version: await lastMigrationName(),
-      migrations_status: TenantMigrationStatus.COMPLETED,
     }
 
     if (fileSizeLimit) {
@@ -294,6 +313,19 @@ export default async function routes(fastify: FastifyInstance) {
     }
 
     await multitenantKnex('tenants').insert(tenantInfo).onConflict('id').merge()
+
+    try {
+      await runMigrationsOnTenant(databaseUrl, tenantId)
+      await multitenantKnex('tenants')
+        .where('id', tenantId)
+        .update({
+          migrations_version: await lastMigrationName(),
+          migrations_status: TenantMigrationStatus.COMPLETED,
+        })
+    } catch (e) {
+      progressiveMigrations.addTenant(tenantId)
+    }
+
     reply.code(204).send()
   })
 

@@ -19,7 +19,28 @@ export class ProgressiveMigrations {
     signal.addEventListener('abort', () => {
       if (this.watchInterval) {
         clearInterval(this.watchInterval)
+        this.drain().catch((e) => {
+          logSchema.error(logger, '[Migrations] Error creating migration jobs', {
+            type: 'migrations',
+            error: e,
+            metadata: JSON.stringify({
+              strategy: 'progressive',
+            }),
+          })
+        })
       }
+    })
+  }
+
+  async drain() {
+    return this.createJobs(this.tenants.length).catch((e) => {
+      logSchema.error(logger, '[Migrations] Error creating migration jobs', {
+        type: 'migrations',
+        error: e,
+        metadata: JSON.stringify({
+          strategy: 'progressive',
+        }),
+      })
     })
   }
 
@@ -36,7 +57,7 @@ export class ProgressiveMigrations {
       return
     }
 
-    this.createJobs().catch((e) => {
+    this.createJobs(this.options.maxSize).catch((e) => {
       logSchema.error(logger, '[Migrations] Error creating migration jobs', {
         type: 'migrations',
         error: e,
@@ -56,7 +77,7 @@ export class ProgressiveMigrations {
         return
       }
 
-      this.createJobs().catch((e) => {
+      this.createJobs(this.options.maxSize).catch((e) => {
         logSchema.error(logger, '[Migrations] Error creating migration jobs', {
           type: 'migrations',
           error: e,
@@ -68,9 +89,9 @@ export class ProgressiveMigrations {
     }, this.options.interval)
   }
 
-  protected async createJobs() {
+  protected async createJobs(maxJobs: number) {
     this.emittingJobs = true
-    const tenantsBatch = this.tenants.splice(0, this.options.maxSize)
+    const tenantsBatch = this.tenants.splice(0, maxJobs)
     const jobs = await Promise.allSettled(
       tenantsBatch.map(async (tenant) => {
         const tenantConfig = await getTenantConfig(tenant)

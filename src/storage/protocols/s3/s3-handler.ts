@@ -779,7 +779,7 @@ export class S3ProtocolHandler {
         'created-at': (object.created_at as string) || '',
         'cache-control': (object.metadata?.cacheControl as string) || '',
         expires: (object.metadata?.expires as string) || '',
-        'content-length': (object.metadata?.size as string) || '',
+        'content-length': `${object.metadata?.size || '0'}`,
         'content-type': (object.metadata?.mimetype as string) || '',
         etag: (object.metadata?.eTag as string) || '',
         'last-modified': object.updated_at ? new Date(object.updated_at).toUTCString() || '' : '',
@@ -838,7 +838,7 @@ export class S3ProtocolHandler {
     )
     return {
       headers: {
-        'cache-control': response.metadata.cacheControl,
+        'cache-control': `${response.metadata.cacheControl || 'no-store'}`,
         'content-length': response.metadata.contentLength?.toString() || '0',
         'content-range': response.metadata.contentRange?.toString() || '',
         'content-type': response.metadata.mimetype,

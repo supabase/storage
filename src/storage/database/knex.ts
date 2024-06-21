@@ -1,4 +1,4 @@
-import { Bucket, S3MultipartUpload, Obj, S3PartUpload } from '../schemas'
+import { Bucket, S3MultipartUpload, Obj, S3PartUpload, ObjMetadata } from '../schemas'
 import {
   ErrorCode,
   ERRORS,
@@ -7,7 +7,6 @@ import {
   StorageBackendError,
   StorageErrorOptions,
 } from '../errors'
-import { ObjectMetadata } from '../backend'
 import { Knex } from 'knex'
 import {
   Database,
@@ -428,7 +427,7 @@ export class StorageKnexDB implements Database {
     return objects
   }
 
-  async updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata) {
+  async updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjMetadata) {
     const [object] = await this.runQuery('UpdateObjectMetadata', (knex) => {
       return knex
         .from<Obj>('objects')

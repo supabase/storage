@@ -1,7 +1,7 @@
 import { FastifyReply, FastifyRequest } from 'fastify'
-import { ObjectMetadata } from '../backend'
 import { Readable } from 'stream'
 import { getConfig } from '../../config'
+import { ObjMetadata } from '../schemas'
 
 export interface RenderOptions {
   bucket: string
@@ -13,7 +13,7 @@ export interface RenderOptions {
 
 export interface AssetResponse {
   body?: Readable | ReadableStream<any> | Blob | Buffer
-  metadata: ObjectMetadata
+  metadata: ObjMetadata
   transformations?: string[]
 }
 
@@ -69,7 +69,10 @@ export abstract class Renderer {
     response
       .status(data.metadata.httpStatusCode ?? 200)
       .header('Accept-Ranges', 'bytes')
-      .header('Content-Type', normalizeContentType(data.metadata.mimetype))
+      .header(
+        'Content-Type',
+        normalizeContentType(data.metadata.mimetype || 'application/octet-stream')
+      )
       .header('ETag', data.metadata.eTag)
       .header('Content-Length', data.metadata.contentLength)
       .header('Last-Modified', data.metadata.lastModified?.toUTCString())
@@ -109,26 +112,27 @@ export abstract class Renderer {
   protected handleCacheControl(
     request: FastifyRequest<any>,
     response: FastifyReply<any>,
-    metadata: ObjectMetadata
+    metadata: ObjMetadata
   ) {
     const etag = this.findEtagHeader(request)
+    const cacheControl = metadata.cacheControl ?? 'no-cache'
 
-    const cacheControl = [metadata.cacheControl]
+    const newCacheControl: string[] = [cacheControl]
 
     if (!etag) {
-      response.header('Cache-Control', cacheControl.join(', '))
+      response.header('Cache-Control', newCacheControl.join(', '))
       return
     }
 
-    if (this.sMaxAge > 0) {
-      cacheControl.push(`s-maxage=${this.sMaxAge}`)
+    if (this.sMaxAge > 0 && !['no-cache', 'no-store'].includes(cacheControl)) {
+      newCacheControl.push(`s-maxage=${this.sMaxAge}`)
     }
 
     if (etag !== metadata.eTag) {
-      cacheControl.push('stale-while-revalidate=30')
+      newCacheControl.push('stale-while-revalidate=30')
     }
 
-    response.header('Cache-Control', cacheControl.join(', '))
+    response.header('Cache-Control', newCacheControl.join(', '))
   }
 
   protected findEtagHeader(request: FastifyRequest<any>) {

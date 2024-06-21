@@ -1,6 +1,21 @@
 import { bucketSchema } from './bucket'
 import { FromSchema } from 'json-schema-to-ts'
 
+export const objectMetadataSchema = {
+  $id: 'objectMetatadataSchema',
+  type: 'object',
+  format: 'metadata',
+  properties: {
+    eTag: { type: 'string' },
+    size: { type: 'number' },
+    mimetype: { type: 'string' },
+    cacheControl: { type: 'string' },
+    lastModified: { type: 'string', format: 'date' },
+    contentLength: { type: 'number' },
+    httpStatusCode: { type: 'number' },
+  },
+} as const
+
 export const objectSchema = {
   $id: 'objectSchema',
   type: 'object',
@@ -15,7 +30,11 @@ export const objectSchema = {
     created_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
     last_accessed_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
     metadata: {
-      anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }],
+      anyOf: [
+        { $ref: 'objectMetatadataSchema#', format: 'metadata' },
+        objectMetadataSchema,
+        { type: 'null' },
+      ],
     },
     buckets: bucketSchema,
   },
@@ -37,4 +56,32 @@ export const objectSchema = {
   ],
 } as const
 
-export type Obj = FromSchema<typeof objectSchema>
+export type ObjMetadata = FromSchema<
+  typeof objectMetadataSchema,
+  {
+    deserialize: [
+      {
+        pattern: {
+          type: 'string'
+          format: 'date'
+        }
+        output: Date
+      }
+    ]
+  }
+>
+
+export type Obj = FromSchema<
+  typeof objectSchema,
+  {
+    deserialize: [
+      {
+        pattern: {
+          type: 'object'
+          format: 'metadata'
+        }
+        output: ObjMetadata
+      }
+    ]
+  }
+>

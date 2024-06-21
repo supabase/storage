@@ -1,10 +1,10 @@
 import { BaseEvent, BasePayload } from './base-event'
-import { ObjectMetadata } from '../../storage/backend'
+import { ObjMetadata } from '../../storage/schemas'
 
 interface ObjectUpdatedMetadataEvent extends BasePayload {
   name: string
   bucketId: string
-  metadata: ObjectMetadata
+  metadata: ObjMetadata
 }
 
 export class ObjectUpdatedMetadata extends BaseEvent<ObjectUpdatedMetadataEvent> {

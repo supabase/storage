@@ -68,7 +68,7 @@ export type Schema<
 
 type ResponseType = {
   statusCode?: number
-  headers?: Record<string, string>
+  headers?: Record<string, string | undefined>
   responseBody?: unknown
 }
 

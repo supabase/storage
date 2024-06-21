@@ -20,7 +20,6 @@ import { NodeHttpHandler } from '@smithy/node-http-handler'
 import {
   StorageBackendAdapter,
   BrowserCacheHeaders,
-  ObjectMetadata,
   ObjectResponse,
   withOptionalVersion,
   UploadPart,
@@ -30,6 +29,7 @@ import { ERRORS, StorageBackendError } from '../errors'
 import { getConfig } from '../../config'
 import Agent, { HttpsAgent } from 'agentkeepalive'
 import { Readable } from 'stream'
+import { ObjMetadata } from '../schemas'
 
 const { storageS3MaxSockets } = getConfig()
 
@@ -141,7 +141,7 @@ export class S3Backend implements StorageBackendAdapter {
     body: NodeJS.ReadableStream,
     contentType: string,
     cacheControl: string
-  ): Promise<ObjectMetadata> {
+  ): Promise<ObjMetadata> {
     try {
       const paralellUploadS3 = new Upload({
         client: this.client,
@@ -209,7 +209,7 @@ export class S3Backend implements StorageBackendAdapter {
       ifModifiedSince?: Date
       ifUnmodifiedSince?: Date
     }
-  ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
+  ): Promise<Pick<ObjMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     try {
       const command = new CopyObjectCommand({
         Bucket: bucket,
@@ -260,11 +260,7 @@ export class S3Backend implements StorageBackendAdapter {
    * @param key
    * @param version
    */
-  async headObject(
-    bucket: string,
-    key: string,
-    version: string | undefined
-  ): Promise<ObjectMetadata> {
+  async headObject(bucket: string, key: string, version: string | undefined): Promise<ObjMetadata> {
     try {
       const command = new HeadObjectCommand({
         Bucket: bucket,

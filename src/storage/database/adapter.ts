@@ -1,5 +1,4 @@
-import { Bucket, S3MultipartUpload, Obj, S3PartUpload } from '../schemas'
-import { ObjectMetadata } from '../backend'
+import { Bucket, S3MultipartUpload, Obj, S3PartUpload, ObjMetadata } from '../schemas'
 import { TenantConnection } from '../../database/connection'
 
 export interface SearchObjectOption {
@@ -125,7 +124,7 @@ export interface Database {
 
   deleteObjects(bucketId: string, objectNames: string[], by: keyof Obj): Promise<Obj[]>
 
-  updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata): Promise<Obj>
+  updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjMetadata): Promise<Obj>
 
   updateObjectOwner(bucketId: string, objectName: string, owner?: string): Promise<Obj>
 

@@ -1,12 +1,13 @@
 import { FastifyRequest } from 'fastify'
 import { getFileSizeLimit } from './limits'
-import { ObjectMetadata, StorageBackendAdapter } from './backend'
+import { StorageBackendAdapter } from './backend'
 import { getConfig } from '../config'
 import { ERRORS } from './errors'
 import { Database } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from '../queue'
 import { randomUUID } from 'crypto'
 import { FileUploadedSuccess, FileUploadStarted } from '../monitoring/metrics'
+import { ObjMetadata } from './schemas'
 
 interface UploaderOptions extends UploadObjectOptions {
   fileSizeLimit?: number | null
@@ -128,7 +129,7 @@ export class Uploader {
     uploadType,
     isUpsert,
   }: UploadObjectOptions & {
-    objectMetadata: ObjectMetadata
+    objectMetadata: ObjMetadata
     version: string
     emitEvent?: boolean
     uploadType?: 'standard' | 's3' | 'resumable'

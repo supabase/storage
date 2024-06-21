@@ -1,9 +1,9 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
-import fastifyMultipart from '@fastify/multipart'
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
 import { routes, schemas, plugins, setErrorHandler } from './http'
 import { getConfig } from './config'
+import { objectMetadataSchema } from './storage/schemas'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -51,6 +51,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   // add in common schemas
   app.addSchema(schemas.authSchema)
   app.addSchema(schemas.errorSchema)
+  app.addSchema(objectMetadataSchema)
 
   app.register(plugins.tenantId)
   app.register(plugins.metrics({ enabledEndpoint: !isMultitenant }))

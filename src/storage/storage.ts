@@ -41,11 +41,11 @@ export class Storage {
   renderer(type: 'asset' | 'head' | 'image') {
     switch (type) {
       case 'asset':
-        return new AssetRenderer(this.backend)
+        return new AssetRenderer(this)
       case 'head':
-        return new HeadRenderer(this.backend)
+        return new HeadRenderer(this)
       case 'image':
-        return new ImageRenderer(this.backend)
+        return new ImageRenderer(this)
     }
 
     throw new Error(`renderer of type "${type}" not supported`)

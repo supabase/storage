@@ -1,5 +1,6 @@
-import stream, { Readable } from 'stream'
+import { Readable } from 'stream'
 import { getConfig } from '../../config'
+import { ObjMetadata } from '../schemas'
 
 /**
  * Browser cache headers
@@ -14,22 +15,8 @@ export interface BrowserCacheHeaders {
  * Representation of a file object Response
  */
 export type ObjectResponse = {
-  metadata: ObjectMetadata
+  metadata: ObjMetadata
   body?: ReadableStream<any> | Readable | Blob | Buffer
-}
-
-/**
- * Representation of the object metadata
- */
-export type ObjectMetadata = {
-  cacheControl: string
-  contentLength: number
-  size: number
-  mimetype: string
-  lastModified?: Date
-  eTag: string
-  contentRange?: string
-  httpStatusCode: number
 }
 
 export type UploadPart = {
@@ -81,7 +68,7 @@ export abstract class StorageBackendAdapter {
     body: NodeJS.ReadableStream,
     contentType: string,
     cacheControl: string
-  ): Promise<ObjectMetadata> {
+  ): Promise<ObjMetadata> {
     throw new Error('uploadObject not implemented')
   }
 
@@ -116,7 +103,7 @@ export abstract class StorageBackendAdapter {
       ifModifiedSince?: Date
       ifUnmodifiedSince?: Date
     }
-  ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
+  ): Promise<Pick<ObjMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     throw new Error('copyObject not implemented')
   }
 
@@ -135,11 +122,7 @@ export abstract class StorageBackendAdapter {
    * @param key
    * @param version
    */
-  async headObject(
-    bucket: string,
-    key: string,
-    version: string | undefined
-  ): Promise<ObjectMetadata> {
+  async headObject(bucket: string, key: string, version: string | undefined): Promise<ObjMetadata> {
     throw new Error('headObject not implemented')
   }
 

@@ -8,7 +8,6 @@ import MultiStream from 'multistream'
 import { getConfig } from '../../config'
 import {
   StorageBackendAdapter,
-  ObjectMetadata,
   ObjectResponse,
   withOptionalVersion,
   BrowserCacheHeaders,
@@ -17,6 +16,7 @@ import {
 import { ERRORS, StorageBackendError } from '../errors'
 import { randomUUID } from 'crypto'
 import fsExtra from 'fs-extra'
+import { ObjMetadata } from '../schemas'
 const pipeline = promisify(stream.pipeline)
 
 interface FileMetadata {
@@ -130,7 +130,7 @@ export class FileBackend implements StorageBackendAdapter {
     body: NodeJS.ReadableStream,
     contentType: string,
     cacheControl: string
-  ): Promise<ObjectMetadata> {
+  ): Promise<ObjMetadata> {
     try {
       const file = path.resolve(this.filePath, withOptionalVersion(`${bucketName}/${key}`, version))
       await fs.ensureFile(file)
@@ -187,7 +187,7 @@ export class FileBackend implements StorageBackendAdapter {
     version: string | undefined,
     destination: string,
     destinationVersion: string
-  ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
+  ): Promise<Pick<ObjMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     const srcFile = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${source}`, version))
     const destFile = path.resolve(
       this.filePath,
@@ -236,11 +236,7 @@ export class FileBackend implements StorageBackendAdapter {
    * @param key
    * @param version
    */
-  async headObject(
-    bucket: string,
-    key: string,
-    version: string | undefined
-  ): Promise<ObjectMetadata> {
+  async headObject(bucket: string, key: string, version: string | undefined): Promise<ObjMetadata> {
     const file = path.join(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
 
     const data = await fs.stat(file)

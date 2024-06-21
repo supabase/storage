@@ -44,6 +44,7 @@ export enum ErrorCode {
   MissingPart = 'MissingPart',
   SlowDown = 'SlowDown',
   TusError = 'TusError',
+  MetadataNotFound = 'MetadataNotFound',
 }
 
 export const ERRORS = {
@@ -92,7 +93,7 @@ export const ERRORS = {
 
   InvalidParameter: (parameter: string, e?: Error) =>
     new StorageBackendError({
-      code: ErrorCode.MissingParameter,
+      code: ErrorCode.InvalidParameter,
       httpStatusCode: 400,
       message: `Invalid Parameter ${parameter}`,
       originalError: e,
@@ -135,6 +136,14 @@ export const ERRORS = {
       code: ErrorCode.InvalidRequest,
       httpStatusCode: 400,
       message: 'Metadata header is required',
+      originalError: e,
+    }),
+
+  MetadataNotFound: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.MetadataNotFound,
+      httpStatusCode: 404,
+      message: 'Metadata not found',
       originalError: e,
     }),
 

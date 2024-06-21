@@ -1,4 +1,4 @@
-import { StorageBackendAdapter, ObjectMetadata, withOptionalVersion } from './backend'
+import { StorageBackendAdapter, withOptionalVersion } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
 import { SignedUploadToken, signJWT, verifyJWT } from '../auth'
@@ -16,6 +16,7 @@ import {
 import { randomUUID } from 'crypto'
 import { ERRORS } from './errors'
 import { getJwtSecret } from '../database/tenant'
+import { ObjMetadata } from './schemas'
 
 export interface UploadObjectOptions {
   objectName: string
@@ -196,7 +197,7 @@ export class ObjectStorage {
    * @param objectName
    * @param metadata
    */
-  async updateObjectMetadata(objectName: string, metadata: ObjectMetadata) {
+  async updateObjectMetadata(objectName: string, metadata: ObjMetadata) {
     mustBeValidKey(objectName)
 
     const result = await this.db.updateObjectMetadata(this.bucketId, objectName, metadata)
@@ -282,9 +283,7 @@ export class ObjectStorage {
           destObject: originObject,
           httpStatusCode: 200,
           eTag: originObject.metadata?.eTag,
-          lastModified: originObject.metadata?.lastModified
-            ? new Date(originObject.metadata.lastModified as string)
-            : undefined,
+          lastModified: originObject.metadata?.lastModified,
         }
       }
 
@@ -327,7 +326,7 @@ export class ObjectStorage {
         destObject,
         httpStatusCode: copyResult.httpStatusCode,
         eTag: copyResult.eTag,
-        lastModified: copyResult.lastModified,
+        lastModified: metadata?.lastModified,
       }
     } catch (e) {
       await ObjectAdminDelete.send({

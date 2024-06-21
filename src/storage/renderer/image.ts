@@ -1,4 +1,3 @@
-import { ObjectMetadata, StorageBackendAdapter } from '../backend'
 import axios, { Axios, AxiosError } from 'axios'
 import { getConfig } from '../../config'
 import { FastifyRequest } from 'fastify'
@@ -7,6 +6,8 @@ import axiosRetry from 'axios-retry'
 import { ERRORS } from '../errors'
 import { Stream } from 'stream'
 import Agent from 'agentkeepalive'
+import { Storage } from '../storage'
+import { ObjMetadata } from '../schemas'
 
 /**
  * All the transformations options available
@@ -78,7 +79,7 @@ export class ImageRenderer extends Renderer {
   private readonly client: Axios
   private transformOptions?: TransformOptions
 
-  constructor(private readonly backend: StorageBackendAdapter) {
+  constructor(private readonly storage: Storage) {
     super()
     this.client = client
   }
@@ -185,9 +186,9 @@ export class ImageRenderer extends Renderer {
    * @param options
    */
   async getAsset(request: FastifyRequest, options: RenderOptions) {
-    const [privateURL, headObj] = await Promise.all([
-      this.backend.privateAssetUrl(options.bucket, options.key, options.version),
-      this.backend.headObject(options.bucket, options.key, options.version),
+    const [privateURL, asset] = await Promise.all([
+      this.storage.backend.privateAssetUrl(options.bucket, options.key, options.version),
+      this.storage.from(options.bucket).findObject(options.key, 'metadata'),
     ])
     const transformations = ImageRenderer.applyTransformation(this.transformOptions || {})
 
@@ -216,6 +217,8 @@ export class ImageRenderer extends Renderer {
         ? new Date(response.headers['last-modified'])
         : undefined
 
+      const { metadata } = asset
+
       return {
         body: response.data,
         transformations,
@@ -224,10 +227,10 @@ export class ImageRenderer extends Renderer {
           size: contentLength,
           contentLength: contentLength,
           lastModified: lastModified,
-          eTag: headObj.eTag,
-          cacheControl: headObj.cacheControl,
+          eTag: metadata?.eTag || undefined,
+          cacheControl: metadata?.cacheControl ?? 'no-cache',
           mimetype: response.headers['content-type'],
-        } as ObjectMetadata,
+        } as ObjMetadata,
       }
     } catch (e) {
       if (e instanceof AxiosError) {

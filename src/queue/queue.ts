@@ -27,6 +27,7 @@ export abstract class Queue {
       pgQueueDeleteAfterDays,
       pgQueueArchiveCompletedAfterSeconds,
       pgQueueRetentionDays,
+      pgQueueEnableWorkers,
     } = getConfig()
 
     let url = pgQueueConnectionURL ?? databaseURL
@@ -52,7 +53,9 @@ export abstract class Queue {
       expireInHours: 48,
     })
 
-    registerWorkers()
+    if (pgQueueEnableWorkers) {
+      registerWorkers()
+    }
 
     Queue.pgBoss.on('error', (error) => {
       logSchema.error(logger, '[Queue] error', {

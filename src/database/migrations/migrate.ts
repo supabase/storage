@@ -40,7 +40,7 @@ const backportMigrations = [
 
 export const progressiveMigrations = new ProgressiveMigrations({
   maxSize: 200,
-  interval: 1000 * 60, // 1m
+  interval: 1000 * 5, // 5s
   watch: pgQueueEnable,
 })
 

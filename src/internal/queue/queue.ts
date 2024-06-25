@@ -1,7 +1,6 @@
 import PgBoss, { Job, JobWithMetadata } from 'pg-boss'
-import { getConfig } from '../config'
-import { registerWorkers } from './workers'
-import { BaseEvent, BasePayload } from './events'
+import { getConfig } from '../../config'
+import { BaseEvent, BasePayload } from '../../storage/events'
 import { QueueJobRetryFailed, QueueJobCompleted, QueueJobError } from '../monitoring/metrics'
 import { logger, logSchema } from '../monitoring'
 
@@ -27,7 +26,6 @@ export abstract class Queue {
       pgQueueDeleteAfterDays,
       pgQueueArchiveCompletedAfterSeconds,
       pgQueueRetentionDays,
-      pgQueueEnableWorkers,
     } = getConfig()
 
     let url = pgQueueConnectionURL ?? databaseURL
@@ -52,10 +50,6 @@ export abstract class Queue {
       retryLimit: 20,
       expireInHours: 48,
     })
-
-    if (pgQueueEnableWorkers) {
-      registerWorkers()
-    }
 
     Queue.pgBoss.on('error', (error) => {
       logSchema.error(logger, '[Queue] error', {

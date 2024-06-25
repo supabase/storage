@@ -1,7 +1,7 @@
 import { getConfig } from '../../../config'
 import { FromSchema } from 'json-schema-to-ts'
 import { FastifyInstance } from 'fastify'
-import { ImageRenderer } from '../../../storage/renderer'
+import { ImageRenderer } from '@storage/renderer'
 import { transformationOptionsSchema } from '../../schemas/transformations'
 import { ROUTE_OPERATIONS } from '../operations'
 

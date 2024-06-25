@@ -1,14 +1,14 @@
 import crypto from 'crypto'
-import { getConfig } from '../config'
+import { getConfig } from '../../config'
 import { decrypt, encrypt, verifyJWT } from '../auth'
 import { multitenantKnex } from './multitenant-db'
-import { ERRORS } from '../storage'
 import { JwtPayload } from 'jsonwebtoken'
 import { PubSubAdapter } from '../pubsub'
 import { createMutexByKey } from '../concurrency'
 import { LRUCache } from 'lru-cache'
 import objectSizeOf from 'object-sizeof'
 import { lastMigrationName } from './migrations/migrate'
+import { ERRORS } from '@internal/errors'
 
 interface TenantConfig {
   anonKey?: string

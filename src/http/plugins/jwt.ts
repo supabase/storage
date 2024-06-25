@@ -1,8 +1,9 @@
 import fastifyPlugin from 'fastify-plugin'
-import { verifyJWT } from '../../auth'
-import { getJwtSecret } from '../../database'
 import { JwtPayload } from 'jsonwebtoken'
-import { ERRORS } from '../../storage'
+
+import { verifyJWT } from '@internal/auth'
+import { getJwtSecret } from '@internal/database'
+import { ERRORS } from '@internal/errors'
 
 declare module 'fastify' {
   interface FastifyRequest {

@@ -1,6 +1,6 @@
 import AES from 'crypto-js/aes'
 import Utf8 from 'crypto-js/enc-utf8'
-import { getConfig } from '../config'
+import { getConfig } from '../../config'
 
 const { encryptionKey } = getConfig()
 

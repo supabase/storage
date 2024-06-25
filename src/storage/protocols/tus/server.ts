@@ -1,4 +1,4 @@
-import { CancellationContext, ERRORS, Server } from '@tus/server'
+import { ERRORS, Server } from '@tus/server'
 import http from 'node:http'
 
 export class TusServer extends Server {

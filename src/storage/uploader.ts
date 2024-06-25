@@ -1,12 +1,14 @@
-import { FastifyRequest } from 'fastify'
-import { getFileSizeLimit } from './limits'
-import { ObjectMetadata, StorageBackendAdapter } from './backend'
-import { getConfig } from '../config'
-import { ERRORS } from './errors'
-import { Database } from './database'
-import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from '../queue'
 import { randomUUID } from 'crypto'
-import { FileUploadedSuccess, FileUploadStarted } from '../monitoring/metrics'
+import { FastifyRequest } from 'fastify'
+
+import { ERRORS } from '@internal/errors'
+import { FileUploadedSuccess, FileUploadStarted } from '@internal/monitoring/metrics'
+
+import { ObjectMetadata, StorageBackendAdapter } from './backend'
+import { getFileSizeLimit } from './limits'
+import { Database } from './database'
+import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
+import { getConfig } from '../config'
 
 interface UploaderOptions extends UploadObjectOptions {
   fileSizeLimit?: number | null

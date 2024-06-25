@@ -1,6 +1,6 @@
 import { Bucket, S3MultipartUpload, Obj, S3PartUpload } from '../schemas'
 import { ObjectMetadata } from '../backend'
-import { TenantConnection } from '../../database/connection'
+import { TenantConnection } from '@internal/database'
 
 export interface SearchObjectOption {
   search?: string

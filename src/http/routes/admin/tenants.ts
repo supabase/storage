@@ -1,7 +1,7 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import apiKey from '../../plugins/apikey'
-import { decrypt, encrypt } from '../../../auth'
+import { decrypt, encrypt } from '../../../internal/auth'
 import {
   deleteTenantConfig,
   TenantMigrationStatus,
@@ -9,7 +9,7 @@ import {
   lastMigrationName,
   runMigrationsOnTenant,
   progressiveMigrations,
-} from '../../../database'
+} from '../../../internal/database'
 import { dbSuperUser, storage } from '../../plugins'
 
 const patchSchema = {

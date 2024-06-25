@@ -3,11 +3,11 @@ import { Knex, knex } from 'knex'
 import { JwtPayload } from 'jsonwebtoken'
 import retry from 'async-retry'
 import TTLCache from '@isaacs/ttlcache'
-import { getConfig } from '../config'
+import { getConfig } from '../../config'
 import { DbActiveConnection, DbActivePool } from '../monitoring/metrics'
-import { ERRORS } from '../storage'
 import KnexTimeoutError = knex.KnexTimeoutError
 import { logger, logSchema } from '../monitoring'
+import { ERRORS } from '@internal/errors'
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)

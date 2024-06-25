@@ -4,7 +4,7 @@ import { getConfig } from '../../config'
 import { FastifyRequest } from 'fastify'
 import { Renderer, RenderOptions } from './renderer'
 import axiosRetry from 'axios-retry'
-import { ERRORS } from '../errors'
+import { ERRORS } from '@internal/errors'
 import { Stream } from 'stream'
 import Agent from 'agentkeepalive'
 

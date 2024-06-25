@@ -1,5 +1,5 @@
 import { BaseEvent, BasePayload } from './base-event'
-import { ObjectMetadata } from '../../storage/backend'
+import { ObjectMetadata } from '../backend'
 import { ObjectRemovedEvent } from './object-removed'
 
 interface ObjectCreatedEvent extends BasePayload {

@@ -4,7 +4,7 @@ import { HttpsAgent } from 'agentkeepalive'
 import HttpAgent from 'agentkeepalive'
 import axios from 'axios'
 import { getConfig } from '../../config'
-import { logger, logSchema } from '../../monitoring'
+import { logger, logSchema } from '@internal/monitoring'
 
 const {
   webhookURL,

@@ -1,5 +1,5 @@
 import fastifyPlugin from 'fastify-plugin'
-import { MetricsRegistrar } from '../../monitoring/metrics'
+import { MetricsRegistrar } from '@internal/monitoring/metrics'
 import fastifyMetrics from 'fastify-metrics'
 import { getConfig } from '../../config'
 

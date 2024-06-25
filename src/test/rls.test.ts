@@ -6,15 +6,15 @@ import { getConfig } from '../config'
 import { checkBucketExists } from './common'
 import { createStorageBackend } from '../storage/backend'
 import { Knex, knex } from 'knex'
-import { signJWT } from '../auth'
+import { signJWT } from '../internal/auth'
 import fs from 'fs'
 import path from 'path'
 import { Storage } from '../storage'
-import { getPostgresConnection } from '../database'
+import { getPostgresConnection } from '../internal/database'
 import FormData from 'form-data'
 import yaml from 'js-yaml'
 import Mustache from 'mustache'
-import { getServiceKeyUser } from '../database/tenant'
+import { getServiceKeyUser } from '../internal/database/tenant'
 
 interface Policy {
   name: string

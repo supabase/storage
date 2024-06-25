@@ -1,10 +1,10 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
-import { SignedToken, verifyJWT } from '../../../auth'
-import { ERRORS } from '../../../storage'
-import { getJwtSecret } from '../../../database/tenant'
+import { SignedToken, verifyJWT } from '../../../internal/auth'
+import { getJwtSecret } from '../../../internal/database'
 import { ROUTE_OPERATIONS } from '../operations'
+import { ERRORS } from '../../../internal/errors'
 
 const { storageS3Bucket } = getConfig()
 

@@ -1,5 +1,5 @@
 import fastifyPlugin from 'fastify-plugin'
-import { logSchema, redactQueryParamFromRequest } from '../../monitoring'
+import { logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
 import { trace } from '@opentelemetry/api'
 
 interface RequestLoggerOptions {

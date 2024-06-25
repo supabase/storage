@@ -1,4 +1,4 @@
-import { TenantConnection } from '../database/connection'
+import { TenantConnection } from '../internal/database/connection'
 import { getConfig, mergeConfig } from '../config'
 
 const { serviceKey, tenantId } = getConfig()
@@ -12,10 +12,10 @@ import FormData from 'form-data'
 
 import fs from 'fs'
 import app from '../app'
-import { getPostgresConnection } from '../database'
+import { getPostgresConnection } from '../internal/database'
 import { Obj } from '../storage/schemas'
 import { randomUUID } from 'crypto'
-import { getServiceKeyUser } from '../database/tenant'
+import { getServiceKeyUser } from '../internal/database/tenant'
 
 describe('Webhooks', () => {
   useMockObject()

@@ -6,7 +6,7 @@ import {
   RenderableError,
   StorageBackendError,
   StorageErrorOptions,
-} from '../errors'
+} from '@internal/errors'
 import { ObjectMetadata } from '../backend'
 import { Knex } from 'knex'
 import {
@@ -17,8 +17,8 @@ import {
   SearchObjectOption,
 } from './adapter'
 import { DatabaseError } from 'pg'
-import { TenantConnection } from '../../database'
-import { DbQueryPerformance } from '../../monitoring/metrics'
+import { TenantConnection } from '@internal/database'
+import { DbQueryPerformance } from '@internal/monitoring/metrics'
 import { isUuid } from '../limits'
 
 /**

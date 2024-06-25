@@ -26,7 +26,7 @@ import {
   UploadPart,
 } from './adapter'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { ERRORS, StorageBackendError } from '../errors'
+import { ERRORS, StorageBackendError } from '@internal/errors'
 import { getConfig } from '../../config'
 import Agent, { HttpsAgent } from 'agentkeepalive'
 import { Readable } from 'stream'

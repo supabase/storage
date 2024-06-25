@@ -1,12 +1,12 @@
-import { Queue } from '../queue'
+import { Queue } from '@internal/queue'
 import PgBoss, { BatchWorkOptions, Job, SendOptions, WorkOptions } from 'pg-boss'
-import { getPostgresConnection, getServiceKeyUser } from '../../database'
-import { Storage } from '../../storage'
-import { StorageKnexDB } from '../../storage/database'
-import { createAgent, createStorageBackend } from '../../storage/backend'
+import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
+import { Storage } from '../index'
+import { StorageKnexDB } from '../database'
+import { createAgent, createStorageBackend } from '../backend'
 import { getConfig } from '../../config'
-import { QueueJobScheduled, QueueJobSchedulingTime } from '../../monitoring/metrics'
-import { logger } from '../../monitoring'
+import { QueueJobScheduled, QueueJobSchedulingTime } from '@internal/monitoring/metrics'
+import { logger } from '@internal/monitoring'
 
 export interface BasePayload {
   $version?: string

@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { createDefaultSchema, createResponse } from '../../generic-routes'
-import { AuthenticatedRequest } from '../../request'
+import { createDefaultSchema, createResponse } from '../../routes-helper'
+import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const emptyBucketParamsSchema = {

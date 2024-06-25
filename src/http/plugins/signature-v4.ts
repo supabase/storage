@@ -1,9 +1,10 @@
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
-import { getS3CredentialsByAccessKey, getTenantConfig } from '../../database'
-import { ClientSignature, SignatureV4 } from '../../storage/protocols/s3'
-import { ERRORS } from '../../storage'
-import { signJWT, verifyJWT } from '../../auth'
+import { getS3CredentialsByAccessKey, getTenantConfig } from '@internal/database'
+import { ClientSignature, SignatureV4 } from '@storage/protocols/s3'
+import { signJWT, verifyJWT } from '@internal/auth'
+import { ERRORS } from '@internal/errors'
+
 import { getConfig } from '../../config'
 
 const {

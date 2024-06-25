@@ -1,4 +1,4 @@
-import stream, { Readable } from 'stream'
+import { Readable } from 'stream'
 import { getConfig } from '../../config'
 
 /**

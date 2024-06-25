@@ -1,4 +1,5 @@
 import fastifyPlugin from 'fastify-plugin'
+import { getConfig, MultitenantMigrationStrategy } from '../../config'
 import {
   areMigrationsUpToDate,
   getServiceKeyUser,
@@ -9,11 +10,10 @@ import {
   getPostgresConnection,
   progressiveMigrations,
   runMigrationsOnTenant,
-} from '../../database'
-import { verifyJWT } from '../../auth'
-import { logSchema } from '../../monitoring'
-import { getConfig, MultitenantMigrationStrategy } from '../../config'
-import { createMutexByKey } from '../../concurrency'
+} from '@internal/database'
+import { verifyJWT } from '@internal/auth'
+import { logSchema } from '@internal/monitoring'
+import { createMutexByKey } from '@internal/concurrency'
 
 declare module 'fastify' {
   interface FastifyRequest {

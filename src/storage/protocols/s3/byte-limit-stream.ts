@@ -1,5 +1,5 @@
 import { Transform, TransformCallback } from 'stream'
-import { ERRORS } from '../../errors'
+import { ERRORS } from '@internal/errors'
 
 export class ByteLimitTransformStream extends Transform {
   bytesProcessed = 0

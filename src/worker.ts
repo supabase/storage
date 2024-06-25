@@ -1,12 +1,18 @@
-import { Queue } from './queue'
-import { logger, logSchema } from './monitoring'
-import adminApp from './admin-app'
+import { Queue } from '@internal/queue'
+import { logger, logSchema } from '@internal/monitoring'
+import { registerWorkers } from '@storage/events'
 import { getConfig } from './config'
+import adminApp from './admin-app'
 
+/**
+ * Starts Storage Worker
+ */
 export async function main() {
   const { requestTraceHeader, adminPort, host } = getConfig()
 
   logger.info('[Queue] Starting Queue Worker')
+  registerWorkers()
+
   const queue = await Queue.init()
 
   const server = adminApp({

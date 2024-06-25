@@ -1,6 +1,6 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { createDefaultSchema } from '../../generic-routes'
+import { createDefaultSchema } from '../../routes-helper'
 import { ROUTE_OPERATIONS } from '../operations'
 import fastifyMultipart from '@fastify/multipart'
 

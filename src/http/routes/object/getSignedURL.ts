@@ -1,10 +1,10 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { createDefaultSchema } from '../../generic-routes'
-import { AuthenticatedRequest } from '../../request'
-import { ImageRenderer } from '../../../storage/renderer'
+import { createDefaultSchema } from '../../routes-helper'
+import { AuthenticatedRequest } from '../../types'
+import { ImageRenderer } from '@storage/renderer'
 import { transformationOptionsSchema } from '../../schemas/transformations'
-import { isImageTransformationEnabled } from '../../../storage/limits'
+import { isImageTransformationEnabled } from '@storage/limits'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const getSignedURLParamsSchema = {

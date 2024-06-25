@@ -1,5 +1,5 @@
-import { Queue } from './queue'
-import { ObjectAdminDelete, Webhook, RunMigrationsOnTenants } from './events'
+import { Queue } from '@internal/queue'
+import { ObjectAdminDelete, Webhook, RunMigrationsOnTenants } from './index'
 
 export function registerWorkers() {
   Queue.register(Webhook)

@@ -1,6 +1,7 @@
 import fastifyPlugin from 'fastify-plugin'
+import { Features, getFeatures } from '@internal/database'
+
 import { getConfig } from '../../config'
-import { Features, getFeatures } from '../../database/tenant'
 
 /**
  * Requires a specific feature to be enabled for a given tenant.

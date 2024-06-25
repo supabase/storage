@@ -1,10 +1,14 @@
+import { FastifyRequest } from 'fastify'
+import { randomUUID } from 'crypto'
+import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
+import { ERRORS } from '@internal/errors'
+import { getJwtSecret } from '@internal/database'
+
 import { StorageBackendAdapter, ObjectMetadata, withOptionalVersion } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
-import { SignedUploadToken, signJWT, verifyJWT } from '../auth'
-import { getConfig } from '../config'
-import { FastifyRequest } from 'fastify'
 import { Uploader } from './uploader'
+import { getConfig } from '../config'
 import {
   ObjectAdminDelete,
   ObjectCreatedCopyEvent,
@@ -12,10 +16,7 @@ import {
   ObjectRemoved,
   ObjectRemovedMove,
   ObjectUpdatedMetadata,
-} from '../queue'
-import { randomUUID } from 'crypto'
-import { ERRORS } from './errors'
-import { getJwtSecret } from '../database/tenant'
+} from './events'
 
 export interface UploadObjectOptions {
   objectName: string

@@ -14,7 +14,7 @@ import {
   BrowserCacheHeaders,
   UploadPart,
 } from './adapter'
-import { ERRORS, StorageBackendError } from '../errors'
+import { ERRORS, StorageBackendError } from '@internal/errors'
 import { randomUUID } from 'crypto'
 import fsExtra from 'fs-extra'
 const pipeline = promisify(stream.pipeline)

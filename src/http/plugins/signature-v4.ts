@@ -35,14 +35,13 @@ export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstanc
       token,
     } = await createServerSignature(request.tenantId, clientSignature)
 
-    const isVerified = signatureV4.verify({
+    const isVerified = signatureV4.verify(clientSignature, {
       url: request.url,
       body: request.body as string | ReadableStream | Buffer,
       headers: request.headers as Record<string, string | string[]>,
       method: request.method,
       query: request.query as Record<string, string>,
       prefix: s3ProtocolPrefix,
-      clientSignature: clientSignature,
     })
 
     if (!isVerified && !sessionToken) {

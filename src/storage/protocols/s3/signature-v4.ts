@@ -24,7 +24,6 @@ interface SignatureRequest {
   method: string
   query?: Record<string, string>
   prefix?: string
-  clientSignature: ClientSignature
 }
 
 interface Credentials {
@@ -176,13 +175,25 @@ export class SignatureV4 {
       }, new Map<string, string>())
   }
 
-  verify(request: SignatureRequest) {
-    const { clientSignature, serverSignature } = this.sign(request)
-    return crypto.timingSafeEqual(Buffer.from(clientSignature), Buffer.from(serverSignature))
+  /**
+   * Verify if client signature and server signature matches
+   * @param clientSignature
+   * @param request
+   */
+  verify(clientSignature: ClientSignature, request: SignatureRequest) {
+    const serverSignature = this.sign(clientSignature, request)
+    return crypto.timingSafeEqual(
+      Buffer.from(clientSignature.signature),
+      Buffer.from(serverSignature)
+    )
   }
 
-  sign(request: SignatureRequest) {
-    const clientSignature = request.clientSignature
+  /**
+   * Sign the server side signature
+   * @param clientSignature
+   * @param request
+   */
+  sign(clientSignature: ClientSignature, request: SignatureRequest) {
     const serverCredentials = this.serverCredentials
 
     this.validateCredentials(clientSignature.credentials)
@@ -193,7 +204,11 @@ export class SignatureV4 {
     }
 
     const selectedRegion = this.getSelectedRegion(clientSignature.credentials.region)
-    const canonicalRequest = this.constructCanonicalRequest(request, clientSignature.signedHeaders)
+    const canonicalRequest = this.constructCanonicalRequest(
+      clientSignature,
+      request,
+      clientSignature.signedHeaders
+    )
     const stringToSign = this.constructStringToSign(
       longDate,
       clientSignature.credentials.shortDate,
@@ -208,13 +223,10 @@ export class SignatureV4 {
       serverCredentials.service
     )
 
-    return {
-      clientSignature: clientSignature.signature,
-      serverSignature: this.hmac(signingKey, stringToSign).toString('hex'),
-    }
+    return this.hmac(signingKey, stringToSign).toString('hex')
   }
 
-  getPayloadHash(request: SignatureRequest) {
+  protected getPayloadHash(clientSignature: ClientSignature, request: SignatureRequest) {
     const body = request.body
 
     // For presigned URLs and GET requests, use UNSIGNED-PAYLOAD
@@ -223,8 +235,8 @@ export class SignatureV4 {
     }
 
     // If contentSha is provided, use it
-    if (request.clientSignature.contentSha) {
-      return request.clientSignature.contentSha
+    if (clientSignature.contentSha) {
+      return clientSignature.contentSha
     }
 
     // If the body is undefined, use the hash of an empty string
@@ -244,14 +256,18 @@ export class SignatureV4 {
     return 'UNSIGNED-PAYLOAD'
   }
 
-  protected constructCanonicalRequest(request: SignatureRequest, signedHeaders: string[]) {
+  protected constructCanonicalRequest(
+    clientSignature: ClientSignature,
+    request: SignatureRequest,
+    signedHeaders: string[]
+  ) {
     const method = request.method
     const canonicalUri = new URL(`http://localhost:8080${request.prefix || ''}${request.url}`)
       .pathname
     const canonicalQueryString = this.constructCanonicalQueryString(request.query || {})
     const canonicalHeaders = this.constructCanonicalHeaders(request, signedHeaders)
     const signedHeadersString = signedHeaders.sort().join(';')
-    const payloadHash = this.getPayloadHash(request)
+    const payloadHash = this.getPayloadHash(clientSignature, request)
 
     return `${method}\n${canonicalUri}\n${canonicalQueryString}\n${canonicalHeaders}\n${signedHeadersString}\n${payloadHash}`
   }

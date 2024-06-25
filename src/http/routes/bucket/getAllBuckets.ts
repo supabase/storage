@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
-import { createDefaultSchema } from '../../generic-routes'
-import { AuthenticatedRequest } from '../../request'
-import { bucketSchema } from '../../../storage/schemas'
+import { createDefaultSchema } from '../../routes-helper'
+import { AuthenticatedRequest } from '../../types'
+import { bucketSchema } from '@storage/schemas'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const successResponseSchema = {

@@ -5,9 +5,9 @@ import {
   TenantMigrationStatus,
   updateTenantMigrationsState,
   runMigrationsOnTenant,
-} from '../../database'
+} from '@internal/database'
 import { JobWithMetadata, SendOptions, WorkOptions } from 'pg-boss'
-import { logger, logSchema } from '../../monitoring'
+import { logger, logSchema } from '@internal/monitoring'
 
 interface RunMigrationsPayload extends BasePayload {
   tenantId: string

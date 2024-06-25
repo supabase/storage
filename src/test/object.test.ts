@@ -4,17 +4,16 @@ import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
-import { S3Backend } from '../storage/backend'
-import { Obj } from '../storage/schemas'
-import { signJWT } from '../auth'
-import { ErrorCode, StorageBackendError } from '../storage'
+import { signJWT } from '@internal/auth'
+import { Obj, backends } from '../storage'
 import { useMockObject, useMockQueue } from './common'
-import { getPostgresConnection } from '../database'
-import { getServiceKeyUser } from '../database/tenant'
+import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
 import { Knex } from 'knex'
+import { ErrorCode, StorageBackendError } from '@internal/errors'
 
 const { jwtSecret, serviceKey, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
+const S3Backend = backends.S3Backend
 
 let tnx: Knex.Transaction | undefined
 async function getSuperuserPostgrestClient() {

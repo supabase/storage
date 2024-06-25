@@ -1,8 +1,10 @@
 import { BaseEvent } from './base-event'
 import { Job, WorkOptions } from 'pg-boss'
+import { HttpsAgent } from 'agentkeepalive'
+import HttpAgent from 'agentkeepalive'
 import axios from 'axios'
 import { getConfig } from '../../config'
-import { logger, logSchema } from '../../monitoring'
+import { logger, logSchema } from '@internal/monitoring'
 
 const {
   webhookURL,
@@ -25,6 +27,25 @@ interface WebhookEvent {
     host: string
   }
 }
+
+const httpAgent = webhookURL?.startsWith('https://')
+  ? {
+      httpsAgent: new HttpsAgent({
+        maxSockets: 100,
+      }),
+    }
+  : {
+      httpAgent: new HttpAgent({
+        maxSockets: 100,
+      }),
+    }
+
+const client = axios.create({
+  ...httpAgent,
+  headers: {
+    ...(webhookApiKey ? { authorization: `Bearer ${webhookApiKey}` } : {}),
+  },
+})
 
 export class Webhook extends BaseEvent<WebhookEvent> {
   static queueName = 'webhooks'
@@ -59,20 +80,12 @@ export class Webhook extends BaseEvent<WebhookEvent> {
     })
 
     try {
-      await axios.post(
-        webhookURL,
-        {
-          type: 'Webhook',
-          event: job.data.event,
-          sentAt: new Date(),
-          tenant: job.data.tenant,
-        },
-        {
-          headers: {
-            ...(webhookApiKey ? { authorization: `Bearer ${webhookApiKey}` } : {}),
-          },
-        }
-      )
+      await client.post(webhookURL, {
+        type: 'Webhook',
+        event: job.data.event,
+        sentAt: new Date(),
+        tenant: job.data.tenant,
+      })
     } catch (e) {
       logger.error(
         {

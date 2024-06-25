@@ -2,11 +2,13 @@ import http from 'http'
 import { BaseLogger } from 'pino'
 import { Upload } from '@tus/server'
 import { randomUUID } from 'crypto'
-import { ERRORS, isRenderableError, Storage } from '../../../storage'
+import { TenantConnection } from '@internal/database'
+import { ERRORS, isRenderableError } from '@internal/errors'
+import { Storage } from '@storage/storage'
+import { Uploader } from '@storage/uploader'
+import { UploadId } from '@storage/protocols/tus'
+
 import { getConfig } from '../../../config'
-import { Uploader } from '../../../storage/uploader'
-import { TenantConnection } from '../../../database'
-import { UploadId } from '../../../storage/protocols/tus'
 
 const { storageS3Bucket, tusPath } = getConfig()
 const reExtractFileID = /([^/]+)\/?$/

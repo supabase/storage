@@ -1,7 +1,7 @@
 import fastifyPlugin from 'fastify-plugin'
-import { StorageBackendAdapter, createStorageBackend } from '../../storage/backend'
-import { Storage } from '../../storage'
-import { StorageKnexDB } from '../../storage/database'
+import { StorageBackendAdapter, createStorageBackend } from '@storage/backend'
+import { Storage } from '@storage/storage'
+import { StorageKnexDB } from '@storage/database'
 import { getConfig } from '../../config'
 
 declare module 'fastify' {

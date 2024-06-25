@@ -1,4 +1,4 @@
-import './monitoring/otel'
+import './internal/monitoring/otel'
 import { FastifyInstance } from 'fastify'
 import { IncomingMessage, Server, ServerResponse } from 'http'
 
@@ -13,10 +13,37 @@ import {
   listenForTenantUpdate,
   PubSub,
   multitenantKnex,
-} from './database'
-import { logger, logSchema } from './monitoring'
-import { Queue } from './queue'
-;(async () => {
+} from '@internal/database'
+import { logger, logSchema } from '@internal/monitoring'
+import { Queue } from '@internal/queue'
+import { registerWorkers } from '@storage/events'
+
+const serverSignal = new AbortController()
+
+process.on('uncaughtException', (e) => {
+  logSchema.error(logger, 'uncaught exception', {
+    type: 'uncaughtException',
+    error: e,
+  })
+  process.exit(1)
+})
+
+// Start API server
+main()
+  .then(() => {
+    logger.info('[Server] Started Successfully')
+  })
+  .catch((e) => {
+    logSchema.error(logger, 'Server shutdown with error', {
+      type: 'startupError',
+      error: e,
+    })
+  })
+
+/**
+ * Start Storage API server
+ */
+async function main() {
   const {
     databaseURL,
     isMultitenant,
@@ -26,11 +53,11 @@ import { Queue } from './queue'
     port,
     host,
     pgQueueEnable,
+    pgQueueEnableWorkers,
     exposeDocs,
   } = getConfig()
 
-  const serverSignal = new AbortController()
-
+  // Migrations
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate(PubSub)
@@ -39,19 +66,24 @@ import { Queue } from './queue'
     await runMigrationsOnTenant(databaseURL)
   }
 
+  // Queue
   if (pgQueueEnable) {
+    if (pgQueueEnableWorkers) {
+      registerWorkers()
+    }
     await Queue.init()
   }
 
-  let adminApp: FastifyInstance<Server, IncomingMessage, ServerResponse> | undefined = undefined
+  // Pubsub
+  await PubSub.connect()
+
+  // HTTP Server
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
     logger,
     disableRequestLogging: true,
     exposeDocs,
     requestIdHeader: requestTraceHeader,
   })
-
-  await PubSub.connect()
 
   app.listen({ port, host }, (err) => {
     if (err) {
@@ -62,6 +94,9 @@ import { Queue } from './queue'
       process.exit(1)
     }
   })
+
+  // HTTP Server Admin
+  let adminApp: FastifyInstance<Server, IncomingMessage, ServerResponse> | undefined = undefined
 
   if (isMultitenant) {
     adminApp = buildAdmin(
@@ -84,18 +119,10 @@ import { Queue } from './queue'
     }
   }
 
-  process.on('uncaughtException', (e) => {
-    logSchema.error(logger, 'uncaught exception', {
-      type: 'uncaughtException',
-      error: e,
-    })
-    process.exit(1)
-  })
-
   process.on('SIGTERM', async () => {
     try {
       logger.info('Received SIGTERM, shutting down')
-      await Promise.all([app.close(), adminApp?.close()])
+      await Promise.allSettled([app.close(), adminApp?.close()])
       await Promise.allSettled([
         serverSignal.abort(),
         Queue.stop(),
@@ -115,4 +142,4 @@ import { Queue } from './queue'
       process.exit(1)
     }
   })
-})()
+}

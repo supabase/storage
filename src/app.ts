@@ -1,5 +1,4 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
-import fastifyMultipart from '@fastify/multipart'
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
 import { routes, schemas, plugins, setErrorHandler } from './http'
@@ -30,7 +29,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
         info: {
           title: 'Supabase Storage API',
           description: 'API documentation for Supabase Storage',
-          version: '0.0.1',
+          version: version,
         },
         tags: [
           { name: 'object', description: 'Object end-points' },

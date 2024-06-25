@@ -1,6 +1,6 @@
 import { StorageBackendAdapter, withOptionalVersion } from './backend'
 import { Database, FindBucketFilters } from './database'
-import { ERRORS } from './errors'
+import { ERRORS } from '@internal/errors'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from './limits'
 import { getConfig } from '../config'

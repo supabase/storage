@@ -1,5 +1,5 @@
 import { PostgresPubSub } from '../pubsub'
-import { getConfig } from '../config'
+import { getConfig } from '../../config'
 import { logger } from '../monitoring'
 
 const { isMultitenant, databaseURL, multitenantDatabaseUrl } = getConfig()

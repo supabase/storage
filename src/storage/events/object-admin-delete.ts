@@ -1,9 +1,9 @@
 import { BaseEvent, BasePayload } from './base-event'
 import { getConfig } from '../../config'
-import { Job, WorkOptions } from 'pg-boss'
-import { withOptionalVersion } from '../../storage/backend'
-import { logger, logSchema } from '../../monitoring'
-import { Storage } from '../../storage'
+import { Job, SendOptions, WorkOptions } from 'pg-boss'
+import { withOptionalVersion } from '../backend'
+import { logger, logSchema } from '@internal/monitoring'
+import { Storage } from '../index'
 
 export interface ObjectDeleteEvent extends BasePayload {
   name: string
@@ -20,6 +20,12 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
     return {
       teamSize: adminDeleteQueueTeamSize,
       teamConcurrency: adminDeleteConcurrency,
+    }
+  }
+
+  static getQueueOptions(): SendOptions {
+    return {
+      priority: 10,
     }
   }
 

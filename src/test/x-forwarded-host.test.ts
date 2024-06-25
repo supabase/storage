@@ -1,9 +1,9 @@
 'use strict'
 import { adminApp } from './common'
-import * as migrate from '../database/migrations/migrate'
-import { multitenantKnex } from '../database/multitenant-db'
+import * as migrate from '../internal/database/migrations/migrate'
+import { multitenantKnex } from '../internal/database/multitenant-db'
 import app from '../app'
-import * as tenant from '../database/tenant'
+import * as tenant from '../internal/database/tenant'
 import { getConfig, mergeConfig } from '../config'
 
 beforeAll(async () => {

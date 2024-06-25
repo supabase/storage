@@ -2,10 +2,10 @@ import { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 import * as http from 'http'
 import { ServerOptions, DataStore } from '@tus/server'
+import { getFileSizeLimit } from '@storage/limits'
+import { Storage } from '@storage/storage'
 import { jwt, storage, db, dbSuperUser, tracingMode } from '../../plugins'
 import { getConfig } from '../../../config'
-import { getFileSizeLimit } from '../../../storage/limits'
-import { Storage } from '../../../storage'
 import {
   TusServer,
   FileStore,
@@ -13,7 +13,7 @@ import {
   PgLocker,
   UploadId,
   AlsMemoryKV,
-} from '../../../storage/protocols/tus'
+} from '@storage/protocols/tus'
 import {
   namingFunction,
   onCreate,
@@ -24,10 +24,10 @@ import {
   getFileIdFromRequest,
   SIGNED_URL_SUFFIX,
 } from './lifecycle'
-import { TenantConnection, PubSub } from '../../../database'
+import { TenantConnection, PubSub } from '../../../internal/database'
 import { S3Store } from '@tus/s3-store'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
-import { createAgent } from '../../../storage/backend'
+import { createAgent } from '@storage/backend'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const {

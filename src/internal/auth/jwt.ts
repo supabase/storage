@@ -1,8 +1,8 @@
 import * as crypto from 'crypto'
 import jwt from 'jsonwebtoken'
+import { ERRORS } from '@internal/errors'
 
-import { getConfig } from '../config'
-import { ERRORS } from '../storage'
+import { getConfig } from '../../config'
 
 const { jwtAlgorithm } = getConfig()
 

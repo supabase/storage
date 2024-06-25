@@ -1,8 +1,8 @@
 import pino, { BaseLogger } from 'pino'
-import { getConfig } from '../config'
+import { getConfig } from '../../config'
 import { FastifyReply, FastifyRequest } from 'fastify'
 import { URL } from 'url'
-import { normalizeRawError } from '../storage'
+import { normalizeRawError } from '@internal/errors'
 
 const { logLevel, logflareApiKey, logflareSourceToken, logflareEnabled, region } = getConfig()
 

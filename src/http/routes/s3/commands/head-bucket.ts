@@ -1,4 +1,4 @@
-import { S3ProtocolHandler } from '../../../../storage/protocols/s3/s3-handler'
+import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
 

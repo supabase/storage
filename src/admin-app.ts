@@ -35,6 +35,8 @@ const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): 
 
       return reply.type(merged.contentType).send(data)
     })
+  } else {
+    app.register(plugins.metrics({ enabledEndpoint: true }))
   }
 
   app.get('/status', async (_, response) => response.status(200).send())

@@ -1,8 +1,8 @@
+import { HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import app from '../admin-app'
 import { S3Backend } from '../storage/backend'
-import { Queue } from '../queue'
-import { HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
-import { isS3Error } from '../storage'
+import { Queue } from '@internal/queue'
+import { isS3Error } from '@internal/errors'
 
 export const adminApp = app({})
 

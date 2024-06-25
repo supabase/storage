@@ -1,5 +1,6 @@
 import fastifyPlugin from 'fastify-plugin'
-import { getTenantConfig } from '../../database'
+import { getTenantConfig } from '@internal/database'
+
 import { getConfig } from '../../config'
 
 declare module 'fastify' {

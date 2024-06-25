@@ -1,9 +1,10 @@
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
-import { getS3CredentialsByAccessKey, getTenantConfig } from '../../database'
-import { ClientSignature, SignatureV4 } from '../../storage/protocols/s3'
-import { ERRORS } from '../../storage'
-import { signJWT, verifyJWT } from '../../auth'
+import { getS3CredentialsByAccessKey, getTenantConfig } from '@internal/database'
+import { ClientSignature, SignatureV4 } from '@storage/protocols/s3'
+import { signJWT, verifyJWT } from '@internal/auth'
+import { ERRORS } from '@internal/errors'
+
 import { getConfig } from '../../config'
 
 const {
@@ -35,14 +36,13 @@ export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstanc
       token,
     } = await createServerSignature(request.tenantId, clientSignature)
 
-    const isVerified = signatureV4.verify({
+    const isVerified = signatureV4.verify(clientSignature, {
       url: request.url,
       body: request.body as string | ReadableStream | Buffer,
       headers: request.headers as Record<string, string | string[]>,
       method: request.method,
       query: request.query as Record<string, string>,
       prefix: s3ProtocolPrefix,
-      clientSignature: clientSignature,
     })
 
     if (!isVerified && !sessionToken) {

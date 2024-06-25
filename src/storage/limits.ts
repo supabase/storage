@@ -1,6 +1,9 @@
 import { getConfig } from '../config'
-import { getFileSizeLimit as getFileSizeLimitForTenant, getFeatures } from '../database/tenant'
-import { ERRORS } from './errors'
+import {
+  getFileSizeLimit as getFileSizeLimitForTenant,
+  getFeatures,
+} from '../internal/database/tenant'
+import { ERRORS } from '../internal/errors'
 
 const { isMultitenant, imageTransformationEnabled } = getConfig()
 

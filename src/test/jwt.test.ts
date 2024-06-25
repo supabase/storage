@@ -1,6 +1,6 @@
 import * as crypto from 'crypto'
 
-import { verifyJWT } from '../auth'
+import { verifyJWT } from '../internal/auth'
 
 describe('JWT', () => {
   describe('verifyJWT with JWKS', () => {

@@ -2,9 +2,9 @@ import { Lock, Locker, RequestRelease } from '@tus/server'
 import { clearTimeout } from 'timers'
 import EventEmitter from 'events'
 import { Database, DBError } from '../../database'
-import { PubSubAdapter } from '../../../pubsub'
+import { PubSubAdapter } from '@internal/pubsub'
 import { UploadId } from './upload-id'
-import { ERRORS } from '../../errors'
+import { ERRORS } from '@internal/errors'
 
 const REQUEST_LOCK_RELEASE_MESSAGE = 'REQUEST_LOCK_RELEASE'
 

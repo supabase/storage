@@ -23,9 +23,9 @@ import {
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
-import { ERRORS } from '../../errors'
+import { ERRORS } from '@internal/errors'
 import { S3MultipartUpload, Obj } from '../../schemas'
-import { decrypt, encrypt } from '../../../auth'
+import { decrypt, encrypt } from '@internal/auth'
 import { ByteLimitTransformStream } from './byte-limit-stream'
 
 const { storageS3Region, storageS3Bucket } = getConfig()

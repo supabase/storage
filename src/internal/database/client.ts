@@ -1,7 +1,7 @@
-import { getConfig } from '../config'
+import { getConfig } from '../../config'
 import { getTenantConfig } from './tenant'
-import { ERRORS } from '../storage'
 import { User, TenantConnection } from './connection'
+import { ERRORS } from '@internal/errors'
 
 interface ConnectionOptions {
   host: string

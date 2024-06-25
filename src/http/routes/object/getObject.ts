@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { IncomingMessage, Server, ServerResponse } from 'http'
 import { getConfig } from '../../../config'
-import { AuthenticatedRangeRequest } from '../../request'
+import { AuthenticatedRangeRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()

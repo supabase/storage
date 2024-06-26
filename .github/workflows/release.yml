@@ -143,7 +143,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: akhilerm/tag-push-action@v2.1.0
         with:
-          src: docker.io/supabase/storage-api:${{ needs.release.outputs.version }}
+          src: docker.io/supabase/storage-api:v${{ needs.release.outputs.version }}
           dst: |
             public.ecr.aws/supabase/storage-api:latest
             docker.io/supabase/storage-api:latest

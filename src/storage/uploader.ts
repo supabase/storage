@@ -5,7 +5,7 @@ import { ERRORS } from '@internal/errors'
 import { FileUploadedSuccess, FileUploadStarted } from '@internal/monitoring/metrics'
 
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
-import { getFileSizeLimit } from './limits'
+import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { Database } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getConfig } from '../config'
@@ -81,10 +81,15 @@ export class Uploader {
   async upload(request: FastifyRequest, options: UploaderOptions) {
     const version = await this.prepareUpload(options)
 
+    // When is an empty folder we restrict it to 0 bytes
+    if (isEmptyFolder(options.objectName)) {
+      options.fileSizeLimit = 0
+    }
+
     try {
       const file = await this.incomingFileInfo(request, options)
 
-      if (options.allowedMimeTypes) {
+      if (options.allowedMimeTypes && !isEmptyFolder(options.objectName)) {
         this.validateMimeType(file.mimeType, options.allowedMimeTypes)
       }
 

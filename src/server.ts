@@ -9,75 +9,83 @@ import {
   runMultitenantMigrations,
   runMigrationsOnTenant,
   startAsyncMigrations,
-  TenantConnection,
   listenForTenantUpdate,
   PubSub,
-  multitenantKnex,
 } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import { Queue } from '@internal/queue'
 import { registerWorkers } from '@storage/events'
+import { AsyncAbortController } from '@internal/concurrency'
+import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 
-const serverSignal = new AbortController()
+const shutdownSignal = new AsyncAbortController()
 
-process.on('uncaughtException', (e) => {
-  logSchema.error(logger, 'uncaught exception', {
-    type: 'uncaughtException',
-    error: e,
-  })
-  process.exit(1)
-})
+bindShutdownSignals(shutdownSignal)
 
 // Start API server
 main()
   .then(() => {
-    logger.info('[Server] Started Successfully')
+    logSchema.info(logger, '[Server] Started Successfully', {
+      type: 'server',
+    })
   })
-  .catch((e) => {
-    logSchema.error(logger, 'Server shutdown with error', {
+  .catch(async (e) => {
+    logSchema.error(logger, 'Server not started with error', {
       type: 'startupError',
       error: e,
     })
+
+    await shutdown(shutdownSignal)
+    process.exit(1)
+  })
+  .catch(() => {
+    process.exit(1)
   })
 
 /**
  * Start Storage API server
  */
 async function main() {
-  const {
-    databaseURL,
-    isMultitenant,
-    requestTraceHeader,
-    adminRequestIdHeader,
-    adminPort,
-    port,
-    host,
-    pgQueueEnable,
-    pgQueueEnableWorkers,
-    exposeDocs,
-  } = getConfig()
+  const { databaseURL, isMultitenant, pgQueueEnable, pgQueueEnableWorkers } = getConfig()
 
   // Migrations
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate(PubSub)
-    startAsyncMigrations(serverSignal.signal)
+    startAsyncMigrations(shutdownSignal.nextGroup.signal)
   } else {
     await runMigrationsOnTenant(databaseURL)
   }
 
   // Queue
   if (pgQueueEnable) {
-    if (pgQueueEnableWorkers) {
-      registerWorkers()
-    }
-    await Queue.init()
+    await Queue.start({
+      signal: shutdownSignal.nextGroup.signal,
+      registerWorkers: registerWorkers,
+    })
   }
 
   // Pubsub
-  await PubSub.connect()
+  await PubSub.start({
+    signal: shutdownSignal.nextGroup.signal,
+  })
 
   // HTTP Server
+  const app = await httpServer(shutdownSignal.signal)
+
+  // HTTP Server Admin
+  if (isMultitenant) {
+    await httpAdminApp(app, shutdownSignal.signal)
+  }
+}
+
+/**
+ * Starts HTTP API Server
+ * @param signal
+ */
+async function httpServer(signal: AbortSignal) {
+  const { exposeDocs, requestTraceHeader, port, host } = getConfig()
+
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
     logger,
     disableRequestLogging: true,
@@ -85,61 +93,82 @@ async function main() {
     requestIdHeader: requestTraceHeader,
   })
 
-  app.listen({ port, host }, (err) => {
-    if (err) {
-      logSchema.error(logger, `Server failed to start`, {
-        type: 'serverStartError',
-        error: err,
-      })
-      process.exit(1)
-    }
+  const closePromise = createServerClosedPromise(app.server, () => {
+    logSchema.info(logger, '[Server] Exited', {
+      type: 'server',
+    })
   })
 
-  // HTTP Server Admin
-  let adminApp: FastifyInstance<Server, IncomingMessage, ServerResponse> | undefined = undefined
+  try {
+    signal.addEventListener(
+      'abort',
+      async () => {
+        logSchema.info(logger, '[Server] Stopping', {
+          type: 'server',
+        })
 
-  if (isMultitenant) {
-    adminApp = buildAdmin(
-      {
-        logger,
-        disableRequestLogging: true,
-        requestIdHeader: adminRequestIdHeader,
+        await closePromise
       },
-      app
+      { once: true }
     )
+    await app.listen({ port, host, signal })
 
-    try {
-      await adminApp.listen({ port: adminPort, host })
-    } catch (err) {
-      logSchema.error(adminApp.log, 'Failed to start admin app', {
-        type: 'adminAppStartError',
-        error: err,
-      })
-      process.exit(1)
-    }
+    return app
+  } catch (err) {
+    logSchema.error(logger, `Server failed to start`, {
+      type: 'serverStartError',
+      error: err,
+    })
+    throw err
   }
+}
 
-  process.on('SIGTERM', async () => {
-    try {
-      logger.info('Received SIGTERM, shutting down')
-      await Promise.allSettled([app.close(), adminApp?.close()])
-      await Promise.allSettled([
-        serverSignal.abort(),
-        Queue.stop(),
-        TenantConnection.stop(),
-        PubSub.close(),
-        multitenantKnex.destroy(),
-      ])
+/**
+ * Starts HTTP Admin endpoints
+ * @param app
+ * @param signal
+ */
+async function httpAdminApp(
+  app: FastifyInstance<Server, IncomingMessage, ServerResponse>,
+  signal: AbortSignal
+) {
+  const { adminRequestIdHeader, adminPort, host } = getConfig()
 
-      if (process.env.NODE_ENV !== 'production') {
-        process.exit(0)
-      }
-    } catch (e) {
-      logSchema.error(logger, 'shutdown error', {
-        type: 'SIGTERM',
-        error: e,
-      })
-      process.exit(1)
-    }
+  const adminApp = buildAdmin(
+    {
+      logger,
+      disableRequestLogging: true,
+      requestIdHeader: adminRequestIdHeader,
+    },
+    app
+  )
+
+  const closePromise = createServerClosedPromise(adminApp.server, () => {
+    logSchema.info(logger, '[Admin Server] Exited', {
+      type: 'server',
+    })
   })
+
+  signal.addEventListener(
+    'abort',
+    async () => {
+      logSchema.info(logger, '[Admin Server] Stopping', {
+        type: 'server',
+      })
+
+      await closePromise
+    },
+    { once: true }
+  )
+
+  try {
+    await adminApp.listen({ port: adminPort, host, signal })
+  } catch (err) {
+    logSchema.error(adminApp.log, 'Failed to start admin app', {
+      type: 'adminAppStartError',
+      error: err,
+    })
+    throw err
+  }
+  return adminApp
 }

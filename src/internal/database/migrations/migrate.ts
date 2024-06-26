@@ -11,6 +11,7 @@ import { listTenantsToMigrate } from '../tenant'
 import { multitenantKnex } from '../multitenant-db'
 import { ProgressiveMigrations } from './progressive'
 import { RunMigrationsOnTenants } from '@storage/events'
+import { ERRORS } from '@internal/errors'
 
 const {
   multitenantDatabaseUrl,
@@ -49,6 +50,9 @@ export const progressiveMigrations = new ProgressiveMigrations({
  * @param signal
  */
 export function startAsyncMigrations(signal: AbortSignal) {
+  if (signal.aborted) {
+    throw ERRORS.Aborted('Migration aborted')
+  }
   switch (dbMigrationStrategy) {
     case MultitenantMigrationStrategy.ON_REQUEST:
       return
@@ -127,14 +131,18 @@ export async function runMigrationsOnAllTenants(signal: AbortSignal) {
  * Runs multi-tenant migrations
  */
 export async function runMultitenantMigrations(): Promise<void> {
-  logger.info('Running multitenant migrations')
+  logSchema.info(logger, '[Migrations] Running multitenant migrations', {
+    type: 'migrations',
+  })
   await connectAndMigrate({
     databaseUrl: multitenantDatabaseUrl,
     migrationsDirectory: './migrations/multitenant',
     shouldCreateStorageSchema: false,
     waitForLock: true,
   })
-  logger.info('Multitenant migrations completed')
+  logSchema.info(logger, '[Migrations] Completed', {
+    type: 'migrations',
+  })
 }
 
 /**

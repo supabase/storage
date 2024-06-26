@@ -3,6 +3,7 @@ import { getConfig } from '../../config'
 import { BaseEvent, BasePayload } from '../../storage/events'
 import { QueueJobRetryFailed, QueueJobCompleted, QueueJobError } from '../monitoring/metrics'
 import { logger, logSchema } from '../monitoring'
+import { ERRORS } from '@internal/errors'
 
 //eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SubclassOfBaseClass = (new (payload: any) => BaseEvent<any>) & {
@@ -13,9 +14,17 @@ export abstract class Queue {
   protected static events: SubclassOfBaseClass[] = []
   private static pgBoss?: PgBoss
 
-  static async init() {
+  static async start(opts: {
+    signal?: AbortSignal
+    onMessage?: (job: Job) => void
+    registerWorkers?: () => void
+  }) {
     if (Queue.pgBoss) {
       return Queue.pgBoss
+    }
+
+    if (opts.signal?.aborted) {
+      throw ERRORS.Aborted('Cannot start queue with aborted signal')
     }
 
     const {
@@ -26,6 +35,7 @@ export abstract class Queue {
       pgQueueDeleteAfterDays,
       pgQueueArchiveCompletedAfterSeconds,
       pgQueueRetentionDays,
+      pgQueueEnableWorkers,
     } = getConfig()
 
     let url = pgQueueConnectionURL ?? databaseURL
@@ -59,7 +69,36 @@ export abstract class Queue {
     })
 
     await Queue.pgBoss.start()
-    await Queue.startWorkers()
+
+    if (opts.registerWorkers && pgQueueEnableWorkers) {
+      opts.registerWorkers()
+    }
+
+    await Queue.startWorkers(opts.onMessage)
+
+    if (opts.signal) {
+      opts.signal.addEventListener(
+        'abort',
+        async () => {
+          logSchema.info(logger, '[Queue] Stopping', {
+            type: 'queue',
+          })
+          return Queue.stop()
+            .then(() => {
+              logSchema.info(logger, '[Queue] Exited', {
+                type: 'queue',
+              })
+            })
+            .catch((e) => {
+              logSchema.error(logger, '[Queue] Error while stopping queue', {
+                error: e,
+                type: 'queue',
+              })
+            })
+        },
+        { once: true }
+      )
+    }
 
     return Queue.pgBoss
   }
@@ -85,25 +124,29 @@ export abstract class Queue {
 
     await boss.stop({
       timeout: 20 * 1000,
+      graceful: true,
+      destroy: true,
     })
 
     await new Promise((resolve) => {
-      boss.once('stopped', () => resolve(null))
+      boss.once('stopped', () => {
+        resolve(null)
+      })
     })
 
     Queue.pgBoss = undefined
   }
 
-  protected static startWorkers() {
+  protected static startWorkers(onMessage?: (job: Job) => void) {
     const workers: Promise<string>[] = []
 
     Queue.events.forEach((event) => {
-      workers.push(Queue.registerTask(event.getQueueName(), event, true))
+      workers.push(Queue.registerTask(event.getQueueName(), event, true, onMessage))
 
       const slowRetryQueue = event.withSlowRetryQueue()
 
       if (slowRetryQueue) {
-        workers.push(Queue.registerTask(event.getSlowRetryQueueName(), event, false))
+        workers.push(Queue.registerTask(event.getSlowRetryQueueName(), event, false, onMessage))
       }
     })
 
@@ -113,7 +156,8 @@ export abstract class Queue {
   protected static registerTask(
     queueName: string,
     event: SubclassOfBaseClass,
-    slowRetryQueueOnFail?: boolean
+    slowRetryQueueOnFail?: boolean,
+    onMessage?: (job: Job) => void
   ) {
     const hasSlowRetryQueue = event.withSlowRetryQueue()
     return Queue.getInstance().work(
@@ -121,6 +165,9 @@ export abstract class Queue {
       event.getWorkerOptions(),
       async (job: Job<BasePayload>) => {
         try {
+          if (onMessage) {
+            onMessage(job)
+          }
           const res = await event.handle(job)
 
           QueueJobCompleted.inc({

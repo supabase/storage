@@ -1,20 +1,22 @@
 import { randomUUID } from 'crypto'
-import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
-import { StorageKnexDB } from '../storage/database'
-import app from '../app'
-import { getConfig } from '../config'
-import { checkBucketExists } from './common'
-import { createStorageBackend } from '../storage/backend'
 import { Knex, knex } from 'knex'
-import { signJWT } from '../internal/auth'
 import fs from 'fs'
 import path from 'path'
-import { Storage } from '../storage'
-import { getPostgresConnection } from '../internal/database'
 import FormData from 'form-data'
 import yaml from 'js-yaml'
 import Mustache from 'mustache'
-import { getServiceKeyUser } from '../internal/database/tenant'
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
+
+import { StorageKnexDB } from '@storage/database'
+import { createStorageBackend } from '@storage/backend'
+import { getPostgresConnection } from '@internal/database'
+import { getServiceKeyUser } from '@internal/database'
+import { signJWT } from '@internal/auth'
+
+import app from '../app'
+import { getConfig } from '../config'
+import { checkBucketExists } from './common'
+import { Storage } from '../storage'
 
 interface Policy {
   name: string

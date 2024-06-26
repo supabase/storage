@@ -380,6 +380,43 @@ describe('testing POST object via multipart upload', () => {
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
+  test('can create an empty folder when mime-type is set', async () => {
+    const form = new FormData()
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${serviceKey}`,
+      'x-upsert': 'true',
+    })
+
+    form.append('file', Buffer.alloc(0))
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/public-limit-mime-types/nested/.emptyFolderPlaceholder',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+  })
+
+  test('cannot create an empty folder with more than 0kb', async () => {
+    const form = new FormData()
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${serviceKey}`,
+      'x-upsert': 'true',
+    })
+
+    form.append('file', Buffer.alloc(1))
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/public-limit-mime-types/nested-2/.emptyFolderPlaceholder',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
   test('return 422 when uploading an object with a malformed mime-type', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))

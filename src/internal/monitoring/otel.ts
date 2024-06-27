@@ -21,6 +21,7 @@ import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
 import * as grpc from '@grpc/grpc-js'
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http'
 import { IncomingMessage } from 'http'
+import { logger, logSchema } from '@internal/monitoring/logger'
 
 const headersEnv = process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS || ''
 
@@ -125,9 +126,21 @@ if (process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT) {
 
   // Gracefully shutdown the SDK on process exit
   process.on('SIGTERM', () => {
+    logSchema.info(logger, '[Otel] Stopping', {
+      type: 'otel',
+    })
     sdk
       .shutdown()
-      .then(() => console.log('Tracing terminated'))
-      .catch((error) => console.error('Error terminating tracing', error))
+      .then(() => {
+        logSchema.info(logger, '[Otel] Exited', {
+          type: 'otel',
+        })
+      })
+      .catch((error) =>
+        logSchema.error(logger, '[Otel] Shutdown error', {
+          type: 'otel',
+          error: error,
+        })
+      )
   })
 }

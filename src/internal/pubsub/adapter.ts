@@ -1,5 +1,5 @@
 export interface PubSubAdapter {
-  connect(): Promise<void>
+  start(): Promise<void>
   publish(channel: string, message: any): Promise<void>
   subscribe(channel: string, cb: (message: any) => void): Promise<void>
   unsubscribe(channel: string, cb: (message: any) => void): Promise<void>

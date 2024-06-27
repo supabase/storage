@@ -19,6 +19,9 @@ export class ProgressiveMigrations {
     signal.addEventListener('abort', () => {
       if (this.watchInterval) {
         clearInterval(this.watchInterval)
+        logSchema.info(logger, '[Migrations] Stopping', {
+          type: 'migrations',
+        })
         this.drain().catch((e) => {
           logSchema.error(logger, '[Migrations] Error creating migration jobs', {
             type: 'migrations',

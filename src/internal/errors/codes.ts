@@ -36,6 +36,7 @@ export enum ErrorCode {
   MissingPart = 'MissingPart',
   SlowDown = 'SlowDown',
   TusError = 'TusError',
+  Aborted = 'Aborted',
 }
 
 export const ERRORS = {
@@ -362,6 +363,14 @@ export const ERRORS = {
       code: ErrorCode.MissingPart,
       httpStatusCode: 400,
       message: `Part ${partNumber} is missing for upload id ${uploadId}`,
+    }),
+
+  Aborted: (message: string, originalError?: unknown) =>
+    new StorageBackendError({
+      code: ErrorCode.Aborted,
+      httpStatusCode: 500,
+      message: message,
+      originalError,
     }),
 }
 

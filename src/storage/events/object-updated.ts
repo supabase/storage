@@ -1,9 +1,11 @@
-import { BaseEvent, BasePayload } from './base-event'
+import { BasePayload } from '@internal/queue'
+import { BaseEvent } from './base-event'
 import { ObjectMetadata } from '../backend'
 
 interface ObjectUpdatedMetadataEvent extends BasePayload {
   name: string
   bucketId: string
+  version: string
   metadata: ObjectMetadata
 }
 

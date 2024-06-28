@@ -6,7 +6,7 @@ import { normalizeRawError } from '@internal/errors'
 
 const { logLevel, logflareApiKey, logflareSourceToken, logflareEnabled, region } = getConfig()
 
-export const logger = pino({
+export const baseLogger = pino({
   transport: buildTransport(),
   serializers: {
     error(error) {
@@ -39,6 +39,8 @@ export const logger = pino({
   level: logLevel,
   timestamp: pino.stdTimeFunctions.isoTime,
 })
+
+export const logger = baseLogger.child({ region })
 
 export interface RequestLog {
   type: 'request'
@@ -77,6 +79,8 @@ interface InfoLog {
 
 export const logSchema = {
   info: (logger: BaseLogger, message: string, log: InfoLog) => logger.info(log, message),
+  warning: (logger: BaseLogger, message: string, log: InfoLog | ErrorLog) =>
+    logger.warn(log, message),
   request: (logger: BaseLogger, message: string, log: RequestLog) => {
     if (!log.res) {
       logger.warn(log, message)

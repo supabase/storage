@@ -4,8 +4,8 @@ import { listenForTenantUpdate, PubSub } from '@internal/database'
 import { AsyncAbortController } from '@internal/concurrency'
 import { registerWorkers } from '@storage/events'
 
-import { getConfig } from './config'
-import adminApp from './admin-app'
+import { getConfig } from '../config'
+import adminApp from '../admin-app'
 import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 
 const shutdownSignal = new AsyncAbortController()

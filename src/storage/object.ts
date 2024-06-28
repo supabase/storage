@@ -110,7 +110,7 @@ export class ObjectStorage {
    * @param objectName
    */
   async deleteObject(objectName: string) {
-    await this.db.withTransaction(async (db) => {
+    const obj = await this.db.withTransaction(async (db) => {
       const obj = await db.asSuperUser().findObject(this.bucketId, objectName, 'id,version', {
         forUpdate: true,
       })
@@ -126,13 +126,17 @@ export class ObjectStorage {
         `${this.db.tenantId}/${this.bucketId}/${objectName}`,
         obj.version
       )
+
+      return obj
     })
 
     await ObjectRemoved.sendWebhook({
       tenant: this.db.tenant(),
       name: objectName,
+      version: obj.version,
       bucketId: this.bucketId,
       reqId: this.db.reqId,
+      metadata: obj.metadata,
     })
   }
 
@@ -182,6 +186,8 @@ export class ObjectStorage {
                 name: object.name,
                 bucketId: this.bucketId,
                 reqId: this.db.reqId,
+                version: object.version,
+                metadata: object.metadata,
               })
             )
           )
@@ -205,6 +211,7 @@ export class ObjectStorage {
     await ObjectUpdatedMetadata.sendWebhook({
       tenant: this.db.tenant(),
       name: objectName,
+      version: result.version,
       bucketId: this.bucketId,
       metadata,
       reqId: this.db.reqId,
@@ -319,6 +326,7 @@ export class ObjectStorage {
       await ObjectCreatedCopyEvent.sendWebhook({
         tenant: this.db.tenant(),
         name: destinationKey,
+        version: newVersion,
         bucketId: this.bucketId,
         metadata,
         reqId: this.db.reqId,
@@ -395,12 +403,19 @@ export class ObjectStorage {
       const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
 
       return this.db.asSuperUser().withTransaction(async (db) => {
-        await db.waitObjectLock(this.bucketId, destinationObjectName)
-
-        const sourceObject = await db.findObject(this.bucketId, sourceObjectName, 'id', {
-          forUpdate: true,
-          dontErrorOnEmpty: false,
+        await db.waitObjectLock(this.bucketId, destinationObjectName, undefined, {
+          timeout: 5000,
         })
+
+        const sourceObject = await db.findObject(
+          this.bucketId,
+          sourceObjectName,
+          'id,version,metadata',
+          {
+            forUpdate: true,
+            dontErrorOnEmpty: false,
+          }
+        )
 
         await db.updateObject(this.bucketId, sourceObjectName, {
           name: destinationObjectName,
@@ -424,16 +439,20 @@ export class ObjectStorage {
             name: sourceObjectName,
             bucketId: this.bucketId,
             reqId: this.db.reqId,
+            version: sourceObject.version,
+            metadata: sourceObject.metadata,
           }),
           ObjectCreatedMove.sendWebhook({
             tenant: this.db.tenant(),
             name: destinationObjectName,
+            version: newVersion,
             bucketId: this.bucketId,
             metadata: metadata,
             oldObject: {
               name: sourceObjectName,
               bucketId: this.bucketId,
               reqId: this.db.reqId,
+              version: sourceObject.version,
             },
             reqId: this.db.reqId,
           }),

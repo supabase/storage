@@ -9,6 +9,7 @@ export enum MultitenantMigrationStrategy {
 }
 
 type StorageConfigType = {
+  isProduction: boolean
   version: string
   exposeDocs: boolean
   keepAliveTimeout: number
@@ -19,7 +20,7 @@ type StorageConfigType = {
   uploadFileSizeLimit: number
   uploadFileSizeLimitStandard?: number
   storageFilePath?: string
-  storageS3MaxSockets?: number
+  storageS3MaxSockets: number
   storageS3Bucket: string
   storageS3Endpoint?: string
   storageS3ForcePathStyle?: boolean
@@ -60,7 +61,10 @@ type StorageConfigType = {
   logflareSourceToken?: string
   pgQueueEnable: boolean
   pgQueueEnableWorkers?: boolean
+  pgQueueReadWriteTimeout: number
+  pgQueueMaxConnections: number
   pgQueueConnectionURL?: string
+  pgQueueDeleteAfterHours?: number
   pgQueueDeleteAfterDays?: number
   pgQueueArchiveCompletedAfterSeconds?: number
   pgQueueRetentionDays?: number
@@ -69,6 +73,8 @@ type StorageConfigType = {
   webhookQueuePullInterval?: number
   webhookQueueTeamSize?: number
   webhookQueueConcurrency?: number
+  webhookMaxConnections: number
+  webhookQueueMaxFreeSockets: number
   adminDeleteQueueTeamSize?: number
   adminDeleteConcurrency?: number
   imageTransformationEnabled: boolean
@@ -155,6 +161,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   envPaths.map((envPath) => dotenv.config({ path: envPath, override: false }))
 
   config = {
+    isProduction: process.env.NODE_ENV === 'production',
     exposeDocs: getOptionalConfigFromEnv('EXPOSE_DOCS') !== 'false',
     // Tenant
     tenantId:
@@ -305,11 +312,15 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     // Queue
     pgQueueEnable: getOptionalConfigFromEnv('PG_QUEUE_ENABLE', 'ENABLE_QUEUE_EVENTS') === 'true',
     pgQueueEnableWorkers: getOptionalConfigFromEnv('PG_QUEUE_WORKERS_ENABLE') !== 'false',
+    pgQueueReadWriteTimeout: Number(getOptionalConfigFromEnv('PG_QUEUE_READ_WRITE_TIMEOUT')) || 0,
+    pgQueueMaxConnections: Number(getOptionalConfigFromEnv('PG_QUEUE_MAX_CONNECTIONS')) || 4,
     pgQueueConnectionURL: getOptionalConfigFromEnv('PG_QUEUE_CONNECTION_URL'),
     pgQueueDeleteAfterDays: parseInt(
       getOptionalConfigFromEnv('PG_QUEUE_DELETE_AFTER_DAYS') || '2',
       10
     ),
+    pgQueueDeleteAfterHours:
+      Number(getOptionalConfigFromEnv('PG_QUEUE_DELETE_AFTER_HOURS')) || undefined,
     pgQueueArchiveCompletedAfterSeconds: parseInt(
       getOptionalConfigFromEnv('PG_QUEUE_ARCHIVE_COMPLETED_AFTER_SECONDS') || '7200',
       10
@@ -324,6 +335,12 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     webhookQueueTeamSize: parseInt(getOptionalConfigFromEnv('QUEUE_WEBHOOKS_TEAM_SIZE') || '50'),
     webhookQueueConcurrency: parseInt(getOptionalConfigFromEnv('QUEUE_WEBHOOK_CONCURRENCY') || '5'),
+    webhookMaxConnections: parseInt(
+      getOptionalConfigFromEnv('QUEUE_WEBHOOK_MAX_CONNECTIONS') || '500'
+    ),
+    webhookQueueMaxFreeSockets: parseInt(
+      getOptionalConfigFromEnv('QUEUE_WEBHOOK_MAX_FREE_SOCKETS') || '20'
+    ),
     adminDeleteQueueTeamSize: parseInt(
       getOptionalConfigFromEnv('QUEUE_ADMIN_DELETE_TEAM_SIZE') || '50'
     ),

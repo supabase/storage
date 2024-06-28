@@ -12,6 +12,8 @@ const {
   webhookQueuePullInterval,
   webhookQueueTeamSize,
   webhookQueueConcurrency,
+  webhookMaxConnections,
+  webhookQueueMaxFreeSockets,
 } = getConfig()
 
 interface WebhookEvent {
@@ -31,12 +33,14 @@ interface WebhookEvent {
 const httpAgent = webhookURL?.startsWith('https://')
   ? {
       httpsAgent: new HttpsAgent({
-        maxSockets: 100,
+        maxSockets: webhookMaxConnections,
+        maxFreeSockets: webhookQueueMaxFreeSockets,
       }),
     }
   : {
       httpAgent: new HttpAgent({
-        maxSockets: 100,
+        maxSockets: webhookMaxConnections,
+        maxFreeSockets: webhookQueueMaxFreeSockets,
       }),
     }
 
@@ -73,7 +77,7 @@ export class Webhook extends BaseEvent<WebhookEvent> {
       event: job.data.event.type,
       payload: JSON.stringify(job.data.event.payload),
       objectPath: path,
-      resources: [path],
+      resources: ['/' + path],
       tenantId: job.data.tenant.ref,
       project: job.data.tenant.ref,
       reqId: job.data.event.payload.reqId,

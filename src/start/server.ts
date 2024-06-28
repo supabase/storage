@@ -1,10 +1,10 @@
-import './internal/monitoring/otel'
+import '@internal/monitoring/otel'
 import { FastifyInstance } from 'fastify'
 import { IncomingMessage, Server, ServerResponse } from 'http'
 
-import build from './app'
-import buildAdmin from './admin-app'
-import { getConfig } from './config'
+import build from '../app'
+import buildAdmin from '../admin-app'
+import { getConfig } from '../config'
 import {
   runMultitenantMigrations,
   runMigrationsOnTenant,
@@ -16,6 +16,7 @@ import { logger, logSchema } from '@internal/monitoring'
 import { Queue } from '@internal/queue'
 import { registerWorkers } from '@storage/events'
 import { AsyncAbortController } from '@internal/concurrency'
+
 import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 
 const shutdownSignal = new AsyncAbortController()
@@ -46,13 +47,12 @@ main()
  * Start Storage API server
  */
 async function main() {
-  const { databaseURL, isMultitenant, pgQueueEnable, pgQueueEnableWorkers } = getConfig()
+  const { databaseURL, isMultitenant, pgQueueEnable } = getConfig()
 
   // Migrations
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate(PubSub)
-    startAsyncMigrations(shutdownSignal.nextGroup.signal)
   } else {
     await runMigrationsOnTenant(databaseURL)
   }
@@ -70,12 +70,17 @@ async function main() {
     signal: shutdownSignal.nextGroup.signal,
   })
 
+  // Start async migrations background process
+  if (isMultitenant) {
+    startAsyncMigrations(shutdownSignal.nextGroup.signal)
+  }
+
   // HTTP Server
   const app = await httpServer(shutdownSignal.signal)
 
-  // HTTP Server Admin
+  // HTTP Admin Server
   if (isMultitenant) {
-    await httpAdminApp(app, shutdownSignal.signal)
+    await httpAdminServer(app, shutdownSignal.signal)
   }
 }
 
@@ -128,7 +133,7 @@ async function httpServer(signal: AbortSignal) {
  * @param app
  * @param signal
  */
-async function httpAdminApp(
+async function httpAdminServer(
   app: FastifyInstance<Server, IncomingMessage, ServerResponse>,
   signal: AbortSignal
 ) {

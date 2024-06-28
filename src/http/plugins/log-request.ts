@@ -11,6 +11,7 @@ declare module 'fastify' {
     executionError?: Error
     operation?: { type: string }
     resources?: string[]
+    startTime: number
   }
 
   interface FastifyContextConfig {
@@ -21,6 +22,10 @@ declare module 'fastify' {
 
 export const logRequest = (options: RequestLoggerOptions) =>
   fastifyPlugin(async (fastify) => {
+    fastify.addHook('onRequest', async (req) => {
+      req.startTime = Date.now()
+    })
+
     fastify.addHook('preHandler', async (req) => {
       const resourceFromParams = Object.values(req.params || {}).join('/')
       const resources = getFirstDefined<string[]>(
@@ -69,7 +74,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
       logSchema.request(req.log, buildLogMessage, {
         type: 'request',
         req,
-        responseTime: 0,
+        responseTime: (Date.now() - req.startTime) / 1000,
         error: error,
         owner: req.owner,
         operation: req.operation?.type ?? req.routeConfig.operation?.type,

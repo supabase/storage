@@ -1,9 +1,10 @@
-import { BaseEvent, BasePayload } from './base-event'
+import { BaseEvent } from './base-event'
 import { getConfig } from '../../config'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { withOptionalVersion } from '../backend'
 import { logger, logSchema } from '@internal/monitoring'
 import { Storage } from '../index'
+import { BasePayload } from '@internal/queue'
 
 export interface ObjectDeleteEvent extends BasePayload {
   name: string
@@ -65,6 +66,7 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
           event: 'ObjectAdminDelete',
           payload: JSON.stringify(job.data),
           objectPath: s3Key,
+          objectVersion: job.data.version,
           tenantId: job.data.tenant.ref,
           project: job.data.tenant.ref,
           reqId: job.data.reqId,

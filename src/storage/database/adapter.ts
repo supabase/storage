@@ -101,7 +101,12 @@ export interface Database {
 
   listBuckets(columns: string): Promise<Bucket[]>
   mustLockObject(bucketId: string, objectName: string, version?: string): Promise<boolean>
-  waitObjectLock(bucketId: string, objectName: string, version?: string): Promise<boolean>
+  waitObjectLock(
+    bucketId: string,
+    objectName: string,
+    version?: string,
+    opts?: { timeout?: number }
+  ): Promise<boolean>
 
   updateBucket(
     bucketId: string,

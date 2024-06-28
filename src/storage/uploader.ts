@@ -9,6 +9,7 @@ import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { Database } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getConfig } from '../config'
+import { logger, logSchema } from '@internal/monitoring'
 
 interface UploaderOptions extends UploadObjectOptions {
   fileSizeLimit?: number | null
@@ -141,20 +142,20 @@ export class Uploader {
     uploadType?: 'standard' | 's3' | 'resumable'
   }) {
     try {
-      return await this.db.withTransaction(async (db) => {
-        await db.waitObjectLock(bucketId, objectName)
+      return await this.db.asSuperUser().withTransaction(async (db) => {
+        await db.waitObjectLock(bucketId, objectName, undefined, {
+          timeout: 5000,
+        })
 
-        const currentObj = await db
-          .asSuperUser()
-          .findObject(bucketId, objectName, 'id, version, metadata', {
-            forUpdate: true,
-            dontErrorOnEmpty: true,
-          })
+        const currentObj = await db.findObject(bucketId, objectName, 'id, version, metadata', {
+          forUpdate: true,
+          dontErrorOnEmpty: true,
+        })
 
         const isNew = !Boolean(currentObj)
 
         // update object
-        const newObject = await db.asSuperUser().upsertObject({
+        const newObject = await db.upsertObject({
           bucket_id: bucketId,
           name: objectName,
           metadata: objectMetadata,
@@ -180,14 +181,30 @@ export class Uploader {
         const event = isUpsert && !isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
 
         events.push(
-          event.sendWebhook({
-            tenant: this.db.tenant(),
-            name: objectName,
-            bucketId: bucketId,
-            metadata: objectMetadata,
-            reqId: this.db.reqId,
-            uploadType,
-          })
+          event
+            .sendWebhook({
+              tenant: this.db.tenant(),
+              name: objectName,
+              version: version,
+              bucketId: bucketId,
+              metadata: objectMetadata,
+              reqId: this.db.reqId,
+              uploadType,
+            })
+            .catch((e) => {
+              logSchema.error(logger, 'Failed to send webhook', {
+                type: 'event',
+                error: e,
+                project: this.db.tenantId,
+                metadata: JSON.stringify({
+                  name: objectName,
+                  bucketId: bucketId,
+                  metadata: objectMetadata,
+                  reqId: this.db.reqId,
+                  uploadType,
+                }),
+              })
+            })
         )
 
         await Promise.all(events)

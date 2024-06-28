@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import { ERRORS } from '@internal/errors'
+import { signatureV4 } from '../../../http/plugins'
 
 interface SignatureV4Options {
   enforceRegion: boolean
@@ -105,7 +106,7 @@ export class SignatureV4 {
     return {
       credentials: { accessKey, shortDate, region, service },
       signedHeaders,
-      signature,
+      signature: signature as string,
       longDate,
       contentSha,
       sessionToken,
@@ -114,11 +115,11 @@ export class SignatureV4 {
 
   static parseQuerySignature(query: Record<string, any>) {
     const credentialPart = query['X-Amz-Credential']
-    const signedHeaders = query['X-Amz-SignedHeaders']
-    const signature = query['X-Amz-Signature']
-    const longDate = query['X-Amz-Date']
-    const contentSha = query['X-Amz-Content-Sha256']
-    const sessionToken = query['X-Amz-Security-Token']
+    const signedHeaders: string = query['X-Amz-SignedHeaders']
+    const signature: string = query['X-Amz-Signature']
+    const longDate: string = query['X-Amz-Date']
+    const contentSha: string = query['X-Amz-Content-Sha256']
+    const sessionToken: string | undefined = query['X-Amz-Security-Token']
     const expires = query['X-Amz-Expires']
 
     if (!validateTypeOfStrings(credentialPart, signedHeaders, signature, longDate)) {
@@ -129,7 +130,7 @@ export class SignatureV4 {
       this.checkExpiration(longDate, expires)
     }
 
-    const credentialsPart = credentialPart.split('/')
+    const credentialsPart = credentialPart.split('/') as string[]
     if (credentialsPart.length !== 5) {
       throw ERRORS.InvalidSignature('Invalid credentials')
     }

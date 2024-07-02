@@ -1,13 +1,14 @@
 import PgBoss, { Job, JobWithMetadata } from 'pg-boss'
-import { getConfig } from '../../config'
-import { BaseEvent, BasePayload } from '../../storage/events'
-import { QueueJobRetryFailed, QueueJobCompleted, QueueJobError } from '../monitoring/metrics'
-import { logger, logSchema } from '../monitoring'
 import { ERRORS } from '@internal/errors'
+import { QueueDB } from '@internal/queue/database'
+import { getConfig } from '../../config'
+import { logger, logSchema } from '../monitoring'
+import { QueueJobRetryFailed, QueueJobCompleted, QueueJobError } from '../monitoring/metrics'
+import { BasePayload, Event } from './event'
 
 //eslint-disable-next-line @typescript-eslint/no-explicit-any
-type SubclassOfBaseClass = (new (payload: any) => BaseEvent<any>) & {
-  [K in keyof typeof BaseEvent]: (typeof BaseEvent)[K]
+type SubclassOfBaseClass = (new (payload: any) => Event<any>) & {
+  [K in keyof typeof Event]: (typeof Event)[K]
 }
 
 export abstract class Queue {
@@ -33,9 +34,12 @@ export abstract class Queue {
       multitenantDatabaseUrl,
       pgQueueConnectionURL,
       pgQueueDeleteAfterDays,
+      pgQueueDeleteAfterHours,
       pgQueueArchiveCompletedAfterSeconds,
       pgQueueRetentionDays,
       pgQueueEnableWorkers,
+      pgQueueReadWriteTimeout,
+      pgQueueMaxConnections,
     } = getConfig()
 
     let url = pgQueueConnectionURL ?? databaseURL
@@ -51,14 +55,22 @@ export abstract class Queue {
 
     Queue.pgBoss = new PgBoss({
       connectionString: url,
-      max: 4,
+      db: new QueueDB({
+        min: 0,
+        max: pgQueueMaxConnections,
+        connectionString: url,
+        statement_timeout: pgQueueReadWriteTimeout > 0 ? pgQueueReadWriteTimeout : undefined,
+      }),
       application_name: 'storage-pgboss',
-      deleteAfterDays: pgQueueDeleteAfterDays,
+      deleteAfterDays: pgQueueDeleteAfterHours ? undefined : pgQueueDeleteAfterDays,
+      deleteAfterHours: pgQueueDeleteAfterHours,
       archiveCompletedAfterSeconds: pgQueueArchiveCompletedAfterSeconds,
       retentionDays: pgQueueRetentionDays,
       retryBackoff: true,
       retryLimit: 20,
       expireInHours: 48,
+      noSupervisor: pgQueueEnableWorkers === false,
+      noScheduling: pgQueueEnableWorkers === false,
     })
 
     Queue.pgBoss.on('error', (error) => {
@@ -121,10 +133,11 @@ export abstract class Queue {
     }
 
     const boss = this.pgBoss
+    const { isProduction } = getConfig()
 
     await boss.stop({
       timeout: 20 * 1000,
-      graceful: true,
+      graceful: isProduction,
       destroy: true,
     })
 

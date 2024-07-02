@@ -1,9 +1,11 @@
-import { BaseEvent, BasePayload } from './base-event'
+import { BasePayload } from '@internal/queue'
+import { BaseEvent } from './base-event'
 import { ObjectMetadata } from '../backend'
 import { ObjectRemovedEvent } from './object-removed'
 
 interface ObjectCreatedEvent extends BasePayload {
   name: string
+  version: string
   bucketId: string
   metadata: ObjectMetadata
   uploadType: 'standard' | 'resumable' | 's3'

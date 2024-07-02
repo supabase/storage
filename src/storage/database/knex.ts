@@ -530,10 +530,38 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async waitObjectLock(bucketId: string, objectName: string, version?: string) {
+  async waitObjectLock(
+    bucketId: string,
+    objectName: string,
+    version?: string,
+    opts?: { timeout: number }
+  ) {
     return this.runQuery('WaitObjectLock', async (knex) => {
       const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
-      await knex.raw<any>(`SELECT pg_advisory_xact_lock(?)`, [hash])
+      const query = knex.raw<any>(`SELECT pg_advisory_xact_lock(?)`, [hash])
+
+      if (opts?.timeout) {
+        let timeoutInterval: undefined | NodeJS.Timeout
+
+        try {
+          await Promise.race([
+            query,
+            new Promise(
+              (_, reject) =>
+                (timeoutInterval = setTimeout(() => reject(ERRORS.LockTimeout()), opts.timeout))
+            ),
+          ])
+        } catch (e) {
+          throw e
+        } finally {
+          if (timeoutInterval) {
+            clearTimeout(timeoutInterval)
+          }
+        }
+      } else {
+        await query
+      }
+
       return true
     })
   }

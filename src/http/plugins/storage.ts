@@ -15,7 +15,7 @@ const { storageBackendType } = getConfig()
 
 const storageBackend = createStorageBackend(storageBackendType)
 
-export const storage = fastifyPlugin(async (fastify) => {
+export const storage = fastifyPlugin(async function storagePlugin(fastify) {
   fastify.decorateRequest('storage', undefined)
   fastify.addHook('preHandler', async (request) => {
     const database = new StorageKnexDB(request.db, {

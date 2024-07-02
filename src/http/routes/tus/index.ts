@@ -24,7 +24,7 @@ import {
   getFileIdFromRequest,
   SIGNED_URL_SUFFIX,
 } from './lifecycle'
-import { TenantConnection, PubSub } from '../../../internal/database'
+import { TenantConnection, PubSub } from '@internal/database'
 import { S3Store } from '@tus/s3-store'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { createAgent } from '@storage/backend'

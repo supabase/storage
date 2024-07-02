@@ -1,4 +1,4 @@
-import { TenantConnection } from '../internal/database/connection'
+import { TenantConnection } from '@internal/database'
 import { getConfig, mergeConfig } from '../config'
 
 const { serviceKey, tenantId } = getConfig()
@@ -12,10 +12,10 @@ import FormData from 'form-data'
 
 import fs from 'fs'
 import app from '../app'
-import { getPostgresConnection } from '../internal/database'
-import { Obj } from '../storage/schemas'
+import { getPostgresConnection } from '@internal/database'
+import { Obj } from '@storage/schemas'
 import { randomUUID } from 'crypto'
-import { getServiceKeyUser } from '../internal/database/tenant'
+import { getServiceKeyUser } from '@internal/database'
 
 describe('Webhooks', () => {
   useMockObject()
@@ -170,6 +170,7 @@ describe('Webhooks', () => {
             payload: expect.objectContaining({
               bucketId: 'bucket6',
               name: obj.name,
+              version: expect.any(String),
               tenant: {
                 host: undefined,
                 ref: 'bjhaohmqunupljrqypxz',
@@ -198,6 +199,7 @@ describe('Webhooks', () => {
             applyTime: expect.any(Number),
             payload: expect.objectContaining({
               bucketId: 'bucket6',
+              version: expect.any(String),
               metadata: expect.objectContaining({
                 cacheControl: 'no-cache',
                 contentLength: 3746,
@@ -212,6 +214,7 @@ describe('Webhooks', () => {
                 bucketId: 'bucket6',
                 name: obj.name,
                 reqId: expect.any(String),
+                version: expect.any(String),
               },
               tenant: {
                 host: undefined,

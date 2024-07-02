@@ -33,4 +33,4 @@ COPY --from=production-deps /app/node_modules node_modules
 COPY --from=build /app/dist dist
 
 EXPOSE 5000
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/start/server.js"]

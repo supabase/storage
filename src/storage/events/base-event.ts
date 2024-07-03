@@ -2,7 +2,7 @@ import { Event as QueueBaseEvent, BasePayload, StaticThis, Event } from '@intern
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { StorageKnexDB } from '../database'
 import { createAgent, createStorageBackend } from '../backend'
-import { Storage } from '../index'
+import { Storage } from '../storage'
 import { getConfig } from '../../config'
 import { logger } from '@internal/monitoring'
 

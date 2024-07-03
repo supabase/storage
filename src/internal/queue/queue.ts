@@ -53,6 +53,10 @@ export abstract class Queue {
       url = multitenantDatabaseUrl
     }
 
+    console.log({
+      deleteAfterDays: pgQueueDeleteAfterDays,
+      deleteAfterHours: pgQueueDeleteAfterHours,
+    })
     Queue.pgBoss = new PgBoss({
       connectionString: url,
       db: new QueueDB({
@@ -63,7 +67,7 @@ export abstract class Queue {
       }),
       application_name: 'storage-pgboss',
       deleteAfterDays: pgQueueDeleteAfterHours ? undefined : pgQueueDeleteAfterDays,
-      deleteAfterHours: pgQueueDeleteAfterHours,
+      ...(pgQueueDeleteAfterHours ? { deleteAfterHours: pgQueueDeleteAfterHours } : {}),
       archiveCompletedAfterSeconds: pgQueueArchiveCompletedAfterSeconds,
       retentionDays: pgQueueRetentionDays,
       retryBackoff: true,

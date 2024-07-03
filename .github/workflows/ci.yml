@@ -37,7 +37,7 @@ jobs:
 
       - name: Prettier checks
         run: |
-          npm run prettier:check
+          npm run lint
 
       - name: ESLint checks
         run: |

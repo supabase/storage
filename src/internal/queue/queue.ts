@@ -66,7 +66,7 @@ export abstract class Queue {
         statement_timeout: pgQueueReadWriteTimeout > 0 ? pgQueueReadWriteTimeout : undefined,
       }),
       application_name: 'storage-pgboss',
-      deleteAfterDays: pgQueueDeleteAfterHours ? undefined : pgQueueDeleteAfterDays,
+      ...(pgQueueDeleteAfterHours ? {} : { deleteAfterDays: pgQueueDeleteAfterDays }),
       ...(pgQueueDeleteAfterHours ? { deleteAfterHours: pgQueueDeleteAfterHours } : {}),
       archiveCompletedAfterSeconds: pgQueueArchiveCompletedAfterSeconds,
       retentionDays: pgQueueRetentionDays,

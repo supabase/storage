@@ -9,7 +9,7 @@
     "start": "NODE_ENV=production node dist/start/server.js",
     "format": "prettier -c --write src/**",
     "lint": "prettier -v && prettier -c src/**",
-    "migration:run": "tsx src/scripts/migrate.ts",
+    "migration:run": "tsx src/scripts/migrate-call.ts",
     "docs:export": "tsx ./src/scripts/export-docs.ts",
     "test:dummy-data": "tsx -r dotenv/config ./src/test/db/import-dummy-data.ts",
     "test": "npm run infra:restart && npm run test:dummy-data && jest --runInBand --forceExit",

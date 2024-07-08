@@ -27,6 +27,20 @@ export interface UploadObjectOptions {
 
 const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
 
+interface CopyObjectParams {
+  sourceKey: string
+  destinationBucket: string
+  destinationKey: string
+  owner?: string
+  copyMetadata?: boolean
+  conditions?: {
+    ifMatch?: string
+    ifNoneMatch?: string
+    ifModifiedSince?: Date
+    ifUnmodifiedSince?: Date
+  }
+}
+
 /**
  * ObjectStorage
  * interact with remote objects and database state
@@ -257,19 +271,16 @@ export class ObjectStorage {
    * @param destinationKey
    * @param owner
    * @param conditions
+   * @param copyMetadata
    */
-  async copyObject(
-    sourceKey: string,
-    destinationBucket: string,
-    destinationKey: string,
-    owner?: string,
-    conditions?: {
-      ifMatch?: string
-      ifNoneMatch?: string
-      ifModifiedSince?: Date
-      ifUnmodifiedSince?: Date
-    }
-  ) {
+  async copyObject({
+    sourceKey,
+    destinationBucket,
+    destinationKey,
+    owner,
+    conditions,
+    copyMetadata,
+  }: CopyObjectParams) {
     mustBeValidKey(destinationKey)
 
     const newVersion = randomUUID()
@@ -282,7 +293,7 @@ export class ObjectStorage {
       const originObject = await this.db.findObject(
         this.bucketId,
         sourceKey,
-        'bucket_id,metadata,version'
+        'bucket_id,metadata,user_metadata,version'
       )
 
       if (s3SourceKey === s3DestinationKey) {
@@ -320,6 +331,7 @@ export class ObjectStorage {
         name: destinationKey,
         owner,
         metadata,
+        user_metadata: copyMetadata ? originObject.user_metadata : undefined,
         version: newVersion,
       })
 
@@ -383,7 +395,7 @@ export class ObjectStorage {
 
     const sourceObj = await this.db
       .asSuperUser()
-      .findObject(this.bucketId, sourceObjectName, 'id, version')
+      .findObject(this.bucketId, sourceObjectName, 'id, version,user_metadata')
 
     if (s3SourceKey === s3DestinationKey) {
       return {
@@ -410,7 +422,7 @@ export class ObjectStorage {
         const sourceObject = await db.findObject(
           this.bucketId,
           sourceObjectName,
-          'id,version,metadata',
+          'id,version,metadata,user_metadata',
           {
             forUpdate: true,
             dontErrorOnEmpty: false,
@@ -423,6 +435,7 @@ export class ObjectStorage {
           version: newVersion,
           owner: owner,
           metadata,
+          user_metadata: sourceObj.user_metadata,
         })
 
         await ObjectAdminDelete.send({

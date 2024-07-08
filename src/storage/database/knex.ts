@@ -61,8 +61,6 @@ export class StorageKnexDB implements Database {
     } catch (e) {
       await tnx.rollback()
       throw e
-    } finally {
-      tnx.removeAllListeners()
     }
   }
 
@@ -320,13 +318,16 @@ export class StorageKnexDB implements Database {
     return
   }
 
-  async upsertObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>) {
+  async upsertObject(
+    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version'>
+  ) {
     const objectData = {
       name: data.name,
       owner: isUuid(data.owner || '') ? data.owner : undefined,
       owner_id: data.owner,
       bucket_id: data.bucket_id,
       metadata: data.metadata,
+      user_metadata: data.user_metadata,
       version: data.version,
     }
     const [object] = await this.runQuery('UpsertObject', (knex) => {
@@ -336,6 +337,7 @@ export class StorageKnexDB implements Database {
         .onConflict(['name', 'bucket_id'])
         .merge({
           metadata: data.metadata,
+          user_metadata: data.user_metadata,
           version: data.version,
           owner: isUuid(data.owner || '') ? data.owner : undefined,
           owner_id: data.owner,
@@ -349,7 +351,7 @@ export class StorageKnexDB implements Database {
   async updateObject(
     bucketId: string,
     name: string,
-    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id'>
+    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>
   ) {
     const [object] = await this.runQuery('UpdateObject', (knex) => {
       return knex
@@ -363,6 +365,7 @@ export class StorageKnexDB implements Database {
             owner: isUuid(data.owner || '') ? data.owner : undefined,
             owner_id: data.owner,
             metadata: data.metadata,
+            user_metadata: data.user_metadata,
             version: data.version,
           },
           '*'
@@ -376,7 +379,9 @@ export class StorageKnexDB implements Database {
     return object
   }
 
-  async createObject(data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version'>) {
+  async createObject(
+    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
+  ) {
     try {
       const object = {
         name: data.name,
@@ -385,6 +390,7 @@ export class StorageKnexDB implements Database {
         bucket_id: data.bucket_id,
         metadata: data.metadata,
         version: data.version,
+        user_metadata: data.user_metadata,
       }
       await this.runQuery('CreateObject', (knex) => {
         return knex.from<Obj>('objects').insert(object)
@@ -589,7 +595,8 @@ export class StorageKnexDB implements Database {
     objectName: string,
     version: string,
     signature: string,
-    owner?: string
+    owner?: string,
+    metadata?: Record<string, string | null>
   ) {
     return this.runQuery('CreateMultipartUpload', async (knex) => {
       const multipart = await knex
@@ -601,6 +608,7 @@ export class StorageKnexDB implements Database {
           version,
           upload_signature: signature,
           owner_id: owner,
+          user_metadata: metadata,
         })
         .returning('*')
 
@@ -732,10 +740,6 @@ export class StorageKnexDB implements Database {
       }
       timer()
       throw e
-    } finally {
-      if (needsNewTransaction) {
-        tnx.removeAllListeners()
-      }
     }
   }
 }

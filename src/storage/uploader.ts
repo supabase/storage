@@ -14,6 +14,7 @@ import { logger, logSchema } from '@internal/monitoring'
 interface UploaderOptions extends UploadObjectOptions {
   fileSizeLimit?: number | null
   allowedMimeTypes?: string[] | null
+  metadata?: Record<string, any>
 }
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
@@ -25,6 +26,8 @@ export interface UploadObjectOptions {
   isUpsert?: boolean
   uploadType?: 'standard' | 's3' | 'resumable'
 }
+
+const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
 
 /**
  * Uploader
@@ -114,6 +117,7 @@ export class Uploader {
         ...options,
         version,
         objectMetadata: objectMetadata,
+        userMetadata: { ...file.userMetadata, ...(options.metadata || {}) },
       })
     } catch (e) {
       await ObjectAdminDelete.send({
@@ -135,11 +139,13 @@ export class Uploader {
     objectMetadata,
     uploadType,
     isUpsert,
+    userMetadata,
   }: UploadObjectOptions & {
     objectMetadata: ObjectMetadata
     version: string
     emitEvent?: boolean
     uploadType?: 'standard' | 's3' | 'resumable'
+    userMetadata?: Record<string, unknown>
   }) {
     try {
       return await this.db.asSuperUser().withTransaction(async (db) => {
@@ -159,6 +165,7 @@ export class Uploader {
           bucket_id: bucketId,
           name: objectName,
           metadata: objectMetadata,
+          user_metadata: userMetadata,
           version,
           owner,
         })
@@ -271,6 +278,7 @@ export class Uploader {
     )
 
     let body: NodeJS.ReadableStream
+    let userMetadata: Record<string, any> | undefined
     let mimeType: string
     let isTruncated: () => boolean
 
@@ -289,9 +297,23 @@ export class Uploader {
 
         body = formData.file
         /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+        const customMd = formData.fields.userMetadata?.value
+        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
         mimeType = formData.fields.contentType?.value || formData.mimetype
         cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
         isTruncated = () => formData.file.truncated
+
+        if (typeof customMd === 'string') {
+          if (Buffer.byteLength(customMd, 'utf8') > MAX_CUSTOM_METADATA_SIZE) {
+            throw ERRORS.EntityTooLarge(undefined, 'user_metadata')
+          }
+
+          try {
+            userMetadata = JSON.parse(customMd)
+          } catch (e) {
+            // no-op
+          }
+        }
       } catch (e) {
         throw ERRORS.NoContentProvided(e as Error)
       }
@@ -300,6 +322,20 @@ export class Uploader {
       body = request.raw
       mimeType = request.headers['content-type'] || 'application/octet-stream'
       cacheControl = request.headers['cache-control'] ?? 'no-cache'
+
+      const customMd = request.headers['x-metadata']
+
+      if (typeof customMd === 'string') {
+        if (userMetadata && Buffer.byteLength(customMd, 'utf8') > MAX_CUSTOM_METADATA_SIZE) {
+          throw ERRORS.EntityTooLarge(undefined, 'metadata')
+        }
+
+        try {
+          userMetadata = JSON.parse(customMd)
+        } catch (e) {
+          // no-op
+        }
+      }
       isTruncated = () => {
         // @todo more secure to get this from the stream or from s3 in the next step
         return Number(request.headers['content-length']) > fileSizeLimit
@@ -311,6 +347,7 @@ export class Uploader {
       mimeType,
       cacheControl,
       isTruncated,
+      userMetadata,
     }
   }
 }

@@ -154,7 +154,7 @@ export async function onCreate(
   rawReq: http.IncomingMessage,
   res: http.ServerResponse,
   upload: Upload
-): Promise<http.ServerResponse> {
+): Promise<{ res: http.ServerResponse; metadata?: Upload['metadata'] }> {
   const uploadID = UploadId.fromString(upload.id)
 
   const req = rawReq as MultiPartRequest
@@ -166,17 +166,21 @@ export async function onCreate(
 
   const uploader = new Uploader(storage.backend, storage.db)
 
-  if (upload.metadata && /^-?\d+$/.test(upload.metadata.cacheControl || '')) {
-    upload.metadata.cacheControl = `max-age=${upload.metadata.cacheControl}`
-  } else if (upload.metadata) {
-    upload.metadata.cacheControl = 'no-cache'
+  const metadata = {
+    ...(upload.metadata ? upload.metadata : {}),
   }
 
-  if (upload.metadata?.contentType && bucket.allowed_mime_types) {
-    uploader.validateMimeType(upload.metadata.contentType, bucket.allowed_mime_types)
+  if (/^-?\d+$/.test(metadata.cacheControl || '')) {
+    metadata.cacheControl = `max-age=${metadata.cacheControl}`
+  } else if (metadata) {
+    metadata.cacheControl = 'no-cache'
   }
 
-  return res
+  if (metadata?.contentType && bucket.allowed_mime_types) {
+    uploader.validateMimeType(metadata.contentType, bucket.allowed_mime_types)
+  }
+
+  return { res, metadata }
 }
 
 /**
@@ -199,6 +203,14 @@ export async function onUploadFinish(
     )
 
     const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+    let customMd: undefined | Record<string, string> = undefined
+    if (upload.metadata?.userMetadata) {
+      try {
+        customMd = JSON.parse(upload.metadata.userMetadata)
+      } catch (e) {
+        // no-op
+      }
+    }
 
     await uploader.completeUpload({
       version: resourceId.version,
@@ -208,6 +220,7 @@ export async function onUploadFinish(
       isUpsert: req.upload.isUpsert,
       uploadType: 'resumable',
       owner: req.upload.owner,
+      userMetadata: customMd,
     })
 
     res.setHeader('Tus-Complete', '1')

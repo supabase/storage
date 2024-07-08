@@ -46,6 +46,7 @@ const httpAgent = webhookURL?.startsWith('https://')
 
 const client = axios.create({
   ...httpAgent,
+  timeout: 4000,
   headers: {
     ...(webhookApiKey ? { authorization: `Bearer ${webhookApiKey}` } : {}),
   },

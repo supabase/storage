@@ -71,7 +71,7 @@ async function main() {
   })
 
   // Start async migrations background process
-  if (isMultitenant) {
+  if (isMultitenant && pgQueueEnable) {
     startAsyncMigrations(shutdownSignal.nextGroup.signal)
   }
 

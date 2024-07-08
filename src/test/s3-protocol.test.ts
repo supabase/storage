@@ -11,6 +11,7 @@ import {
   GetBucketVersioningCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   ListBucketsCommand,
   ListMultipartUploadsCommand,
   ListObjectsCommand,
@@ -495,6 +496,32 @@ describe('S3 Protocol', () => {
 
         const resp = await client.send(putObject)
         expect(resp.$metadata.httpStatusCode).toEqual(200)
+      })
+
+      it('upload a file using putObject with custom metadata', async () => {
+        const bucketName = await createBucket(client)
+
+        const putObject = new PutObjectCommand({
+          Bucket: bucketName,
+          Key: 'test-1-put-object.jpg',
+          Body: Buffer.alloc(1024 * 1024 * 12),
+          Metadata: {
+            nice: '1111',
+            test2: 'test3',
+          },
+        })
+
+        const resp = await client.send(putObject)
+        expect(resp.$metadata.httpStatusCode).toEqual(200)
+
+        const getObject = new HeadObjectCommand({
+          Bucket: bucketName,
+          Key: 'test-1-put-object.jpg',
+        })
+
+        const headResp = await client.send(getObject)
+        expect(headResp.Metadata?.nice).toEqual('1111')
+        expect(headResp.Metadata?.test2).toEqual('test3')
       })
 
       it('it will not allow to upload a file using putObject when exceeding maxFileSize', async () => {

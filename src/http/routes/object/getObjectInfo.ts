@@ -30,7 +30,8 @@ async function requestHandler(
     getObjectRequestInterface,
     unknown
   >,
-  publicRoute = false
+  publicRoute = false,
+  method: 'head' | 'info' = 'head'
 ) {
   const { bucketName } = request.params
   const objectName = request.params['*']
@@ -42,15 +43,21 @@ async function requestHandler(
     await request.storage.asSuperUser().findBucket(bucketName, 'id', {
       isPublic: true,
     })
-    obj = await request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id,version')
+    obj = await request.storage
+      .asSuperUser()
+      .from(bucketName)
+      .findObject(objectName, 'id,version,metadata,user_metadata,created_at')
   } else {
-    obj = await request.storage.from(bucketName).findObject(objectName, 'id,version')
+    obj = await request.storage
+      .from(bucketName)
+      .findObject(objectName, 'id,version,metadata,user_metadata,created_at')
   }
 
-  return request.storage.renderer('head').render(request, response, {
+  return request.storage.renderer(method).render(request, response, {
     bucket: storageS3Bucket,
     key: s3Key,
     version: obj.version,
+    object: obj,
   })
 }
 
@@ -90,7 +97,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      return requestHandler(request, response, true)
+      return requestHandler(request, response, true, 'info')
     }
   )
 }
@@ -131,7 +138,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      return requestHandler(request, response)
+      return requestHandler(request, response, false, 'info')
     }
   )
 
@@ -151,7 +158,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      return requestHandler(request, response)
+      return requestHandler(request, response, false, 'info')
     }
   )
 

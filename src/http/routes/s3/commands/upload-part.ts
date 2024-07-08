@@ -94,6 +94,9 @@ export default function UploadPart(s3Router: S3Router) {
     },
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+
+      const metadata = s3Protocol.parseMetadataHeaders(req.Headers)
+
       return s3Protocol.putObject({
         Body: ctx.req as any,
         Bucket: req.Params.Bucket,
@@ -102,6 +105,7 @@ export default function UploadPart(s3Router: S3Router) {
         ContentType: req.Headers?.['content-type'],
         Expires: req.Headers?.['expires'] ? new Date(req.Headers?.['expires']) : undefined,
         ContentEncoding: req.Headers?.['content-encoding'],
+        Metadata: metadata,
       })
     }
   )

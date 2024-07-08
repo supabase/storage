@@ -1,6 +1,5 @@
 import crypto from 'crypto'
 import { ERRORS } from '@internal/errors'
-import { signatureV4 } from '../../../http/plugins'
 
 interface SignatureV4Options {
   enforceRegion: boolean

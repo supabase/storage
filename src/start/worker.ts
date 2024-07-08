@@ -16,10 +16,14 @@ bindShutdownSignals(shutdownSignal)
 main()
   .then(async () => {
     logSchema.info(logger, '[Server] Started successfully', {
-      type: 'server',
+      type: 'worker',
     })
   })
-  .catch(async () => {
+  .catch(async (e) => {
+    logSchema.error(logger, '[Queue Server] Error starting server', {
+      type: 'worker',
+      error: e,
+    })
     await shutdown(shutdownSignal)
     process.exit(1)
   })

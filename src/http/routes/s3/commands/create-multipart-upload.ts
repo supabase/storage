@@ -21,6 +21,7 @@ const CreateMultiPartUploadInput = {
   },
   Headers: {
     type: 'object',
+    additionalProperties: true,
     properties: {
       authorization: { type: 'string' },
       'content-type': { type: 'string' },
@@ -39,6 +40,8 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
+      const metadata = s3Protocol.parseMetadataHeaders(req.Headers)
+
       return s3Protocol.createMultiPartUpload({
         Bucket: req.Params.Bucket,
         Key: req.Params['*'],
@@ -46,6 +49,7 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
         CacheControl: req.Headers?.['cache-control'],
         ContentDisposition: req.Headers?.['content-disposition'],
         ContentEncoding: req.Headers?.['content-encoding'],
+        Metadata: metadata,
       })
     }
   )

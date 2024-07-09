@@ -17,6 +17,9 @@ export const objectSchema = {
     metadata: {
       anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }],
     },
+    user_metadata: {
+      anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }],
+    },
     buckets: bucketSchema,
   },
   required: ['name'],

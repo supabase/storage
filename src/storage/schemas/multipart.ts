@@ -12,6 +12,9 @@ export const multipartUploadSchema = {
     version: { type: 'string' },
     owner_id: { type: 'string' },
     created_at: { type: 'string' },
+    user_metadata: {
+      anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }],
+    },
   },
   required: [
     'id',

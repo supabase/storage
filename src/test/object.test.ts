@@ -97,7 +97,6 @@ describe('testing GET object', () => {
     expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
     expect(response.headers['content-length']).toBe(3746)
     expect(response.headers['cache-control']).toBe('no-cache')
-    expect(S3Backend.prototype.headObject).toBeCalled()
   })
 
   test('get public object info', async () => {
@@ -113,7 +112,6 @@ describe('testing GET object', () => {
     expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
     expect(response.headers['content-length']).toBe(3746)
     expect(response.headers['cache-control']).toBe('no-cache')
-    expect(S3Backend.prototype.headObject).toBeCalled()
   })
 
   test('force downloading file with default name', async () => {
@@ -354,6 +352,87 @@ describe('testing POST object via multipart upload', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+  })
+
+  test('successfully uploading an object with custom metadata', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    form.append(
+      'userMetadata',
+      JSON.stringify({
+        test1: 'test1',
+        test2: 'test2',
+      })
+    )
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${serviceKey}`,
+      'x-upsert': 'true',
+      ...form.getHeaders(),
+    })
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/sadcat-upload3012.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+
+    const client = await getSuperuserPostgrestClient()
+
+    const object = await client
+      .table('objects')
+      .select('*')
+      .where('name', 'sadcat-upload3012.png')
+      .where('bucket_id', 'bucket2')
+      .first()
+
+    expect(object).not.toBeFalsy()
+    expect(object?.user_metadata).toEqual({
+      test1: 'test1',
+      test2: 'test2',
+    })
+  })
+
+  test('fetch object metadata', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    form.append(
+      'userMetadata',
+      JSON.stringify({
+        test1: 'test1',
+        test2: 'test2',
+      })
+    )
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${serviceKey}`,
+      'x-upsert': 'true',
+    })
+
+    const uploadResponse = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/sadcat-upload3019.png',
+      headers: {
+        ...headers,
+        ...form.getHeaders(),
+      },
+      payload: form,
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/info/bucket2/sadcat-upload3019.png',
+      headers,
+    })
+
+    const data = await response.json()
+
+    expect(data.user_metadata).toEqual({
+      test1: 'test1',
+      test2: 'test2',
+    })
   })
 
   test('return 422 when uploading an object with a not allowed mime-type', async () => {
@@ -1045,6 +1124,70 @@ describe('testing copy object', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toBeCalled()
     expect(response.body).toBe(`{"Key":"bucket3/authenticated/casestudy11.png"}`)
+  })
+
+  test('can copy objects keeping their metadata', async () => {
+    const copiedKey = 'casestudy-2349.png'
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/copy',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey: 'authenticated/casestudy.png',
+        destinationKey: `authenticated/${copiedKey}`,
+        copyMetadata: true,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(response.body).toBe(`{"Key":"bucket2/authenticated/${copiedKey}"}`)
+
+    const conn = await getSuperuserPostgrestClient()
+    const object = await conn
+      .table('objects')
+      .select('*')
+      .where('bucket_id', 'bucket2')
+      .where('name', `authenticated/${copiedKey}`)
+      .first()
+
+    expect(object).not.toBeFalsy()
+    expect(object.user_metadata).toEqual({
+      test1: 1234,
+    })
+  })
+
+  test('can copy objects excluding their metadata', async () => {
+    const copiedKey = 'casestudy-2450.png'
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/copy',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey: 'authenticated/casestudy.png',
+        destinationKey: `authenticated/${copiedKey}`,
+        copyMetadata: false,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(response.body).toBe(`{"Key":"bucket2/authenticated/${copiedKey}"}`)
+
+    const conn = await getSuperuserPostgrestClient()
+    const object = await conn
+      .table('objects')
+      .select('*')
+      .where('bucket_id', 'bucket2')
+      .where('name', `authenticated/${copiedKey}`)
+      .first()
+
+    expect(object).not.toBeFalsy()
+    expect(object.user_metadata).toBeNull()
   })
 
   test('cannot copy objects across buckets when RLS dont allow it', async () => {
@@ -1978,7 +2121,7 @@ describe('testing list objects', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON).toHaveLength(6)
+    expect(responseJSON).toHaveLength(8)
     const names = responseJSON.map((ele: any) => ele.name)
     expect(names).toContain('curlimage.jpg')
     expect(names).toContain('private')

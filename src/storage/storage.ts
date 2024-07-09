@@ -5,6 +5,7 @@ import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from './limits'
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
+import { InfoRenderer } from '@storage/renderer/info'
 
 const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
 
@@ -38,14 +39,16 @@ export class Storage {
    * Creates a renderer type
    * @param type
    */
-  renderer(type: 'asset' | 'head' | 'image') {
+  renderer(type: 'asset' | 'head' | 'image' | 'info') {
     switch (type) {
       case 'asset':
         return new AssetRenderer(this.backend)
       case 'head':
-        return new HeadRenderer(this.backend)
+        return new HeadRenderer()
       case 'image':
         return new ImageRenderer(this.backend)
+      case 'info':
+        return new InfoRenderer()
     }
 
     throw new Error(`renderer of type "${type}" not supported`)

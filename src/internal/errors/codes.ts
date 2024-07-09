@@ -208,12 +208,12 @@ export const ERRORS = {
       message: `invalid range provided`,
     }),
 
-  EntityTooLarge: (e?: Error) =>
+  EntityTooLarge: (e?: Error, entity = 'object') =>
     new StorageBackendError({
       error: 'Payload too large',
       code: ErrorCode.EntityTooLarge,
       httpStatusCode: 413,
-      message: 'The object exceeded the maximum allowed size',
+      message: `The ${entity} exceeded the maximum allowed size`,
       originalError: e,
     }),
 

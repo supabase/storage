@@ -53,7 +53,6 @@ export const connections = new TTLCache<string, Knex>({
     if (!pool) return
     try {
       await pool.destroy()
-      pool.client.removeAllListeners()
     } catch (e) {
       logSchema.error(logger, 'pool was not able to be destroyed', {
         type: 'db',
@@ -155,7 +154,6 @@ export class TenantConnection {
   async dispose() {
     if (this.options.isExternalPool) {
       await this.pool.destroy()
-      this.pool.client.removeAllListeners()
     }
   }
 
@@ -201,7 +199,13 @@ export class TenantConnection {
           // This should never be reached, since the above promise is always rejected in this edge case.
           throw ERRORS.DatabaseError('Transaction already completed')
         }
-        await tnx.raw(`SELECT set_config('search_path', ?, true)`, [searchPath.join(', ')])
+
+        try {
+          await tnx.raw(`SELECT set_config('search_path', ?, true)`, [searchPath.join(', ')])
+        } catch (e) {
+          await tnx.rollback()
+          throw e
+        }
       }
 
       return tnx

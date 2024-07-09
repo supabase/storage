@@ -11,6 +11,7 @@ const copyRequestBodySchema = {
     sourceKey: { type: 'string', examples: ['folder/source.png'] },
     destinationBucket: { type: 'string', examples: ['users'] },
     destinationKey: { type: 'string', examples: ['folder/destination.png'] },
+    copyMetadata: { type: 'boolean', examples: [true] },
   },
   required: ['sourceKey', 'bucketId', 'destinationKey'],
 } as const
@@ -51,9 +52,13 @@ export default async function routes(fastify: FastifyInstance) {
 
       const destinationBucketId = destinationBucket || bucketId
 
-      const result = await request.storage
-        .from(bucketId)
-        .copyObject(sourceKey, destinationBucketId, destinationKey, request.owner)
+      const result = await request.storage.from(bucketId).copyObject({
+        sourceKey,
+        destinationBucket: destinationBucketId,
+        destinationKey,
+        owner: request.owner,
+        copyMetadata: request.body.copyMetadata ?? true,
+      })
 
       return response.status(result.httpStatusCode ?? 200).send({
         Id: result.destObject.id,

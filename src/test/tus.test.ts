@@ -95,6 +95,10 @@ describe('Tus multipart', () => {
           objectName: objectName,
           contentType: 'image/jpeg',
           cacheControl: '3600',
+          userMetadata: JSON.stringify({
+            test1: 'test1',
+            test2: 'test2',
+          }),
         },
         onError: function (error) {
           console.log('Failed because: ' + error)
@@ -124,6 +128,10 @@ describe('Tus multipart', () => {
         lastModified: expect.any(String),
         mimetype: 'image/jpeg',
         size: 29526,
+      },
+      user_metadata: {
+        test1: 'test1',
+        test2: 'test2',
       },
       name: objectName,
       owner: null,
@@ -259,6 +267,10 @@ describe('Tus multipart', () => {
             objectName: objectName,
             contentType: 'image/jpeg',
             cacheControl: '3600',
+            userMetadata: JSON.stringify({
+              test1: 'test1',
+              test3: 'test3',
+            }),
           },
           onError: function (error) {
             console.log('Failed because: ' + error)
@@ -288,6 +300,10 @@ describe('Tus multipart', () => {
           lastModified: expect.any(String),
           mimetype: 'image/jpeg',
           size: 29526,
+        },
+        user_metadata: {
+          test1: 'test1',
+          test3: 'test3',
         },
         name: objectName,
         owner: null,
@@ -354,6 +370,7 @@ describe('Tus multipart', () => {
           mimetype: 'image/jpeg',
           size: 29526,
         },
+        user_metadata: null,
         name: objectName,
         owner: null,
         owner_id: 'some-owner-id',

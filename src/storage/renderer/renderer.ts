@@ -2,6 +2,7 @@ import { FastifyReply, FastifyRequest } from 'fastify'
 import { ObjectMetadata } from '../backend'
 import { Readable } from 'stream'
 import { getConfig } from '../../config'
+import { Obj } from '../schemas'
 
 export interface RenderOptions {
   bucket: string
@@ -9,10 +10,11 @@ export interface RenderOptions {
   version: string | undefined
   download?: string
   expires?: string
+  object?: Obj
 }
 
 export interface AssetResponse {
-  body?: Readable | ReadableStream<any> | Blob | Buffer
+  body?: Readable | ReadableStream<any> | Blob | Buffer | Record<any, any>
   metadata: ObjectMetadata
   transformations?: string[]
 }

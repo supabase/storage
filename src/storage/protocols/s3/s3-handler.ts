@@ -469,7 +469,15 @@ export class S3ProtocolHandler {
     const signature = this.uploadSignature({ in_progress_size: 0 })
     await this.storage.db
       .asSuperUser()
-      .createMultipartUpload(uploadId, Bucket, Key, version, signature, this.owner)
+      .createMultipartUpload(
+        uploadId,
+        Bucket,
+        Key,
+        version,
+        signature,
+        this.owner,
+        command.Metadata
+      )
 
     return {
       responseBody: {
@@ -506,7 +514,7 @@ export class S3ProtocolHandler {
 
     const multiPartUpload = await this.storage.db
       .asSuperUser()
-      .findMultipartUpload(UploadId, 'id,version')
+      .findMultipartUpload(UploadId, 'id,version,user_metadata')
 
     const parts = command.MultipartUpload?.Parts || []
 
@@ -545,6 +553,7 @@ export class S3ProtocolHandler {
       uploadType: 's3',
       objectMetadata: metadata,
       owner: this.owner,
+      userMetadata: multiPartUpload.user_metadata || undefined,
     })
 
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
@@ -695,6 +704,7 @@ export class S3ProtocolHandler {
       uploadType: 's3',
       fileSizeLimit: bucket.file_size_limit,
       allowedMimeTypes: bucket.allowed_mime_types,
+      metadata: command.Metadata,
     })
 
     return {
@@ -768,10 +778,18 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Bucket')
     }
 
-    const object = await this.storage.from(Bucket).findObject(Key, 'metadata,created_at,updated_at')
+    const object = await this.storage
+      .from(Bucket)
+      .findObject(Key, 'metadata,user_metadata,created_at,updated_at')
 
     if (!object) {
       throw ERRORS.NoSuchKey(Key)
+    }
+
+    let metadataHeaders: Record<string, any> = {}
+
+    if (object.user_metadata) {
+      metadataHeaders = toAwsMeatadataHeaders(object.user_metadata)
     }
 
     return {
@@ -783,6 +801,7 @@ export class S3ProtocolHandler {
         'content-type': (object.metadata?.mimetype as string) || '',
         etag: (object.metadata?.eTag as string) || '',
         'last-modified': object.updated_at ? new Date(object.updated_at).toUTCString() || '' : '',
+        ...metadataHeaders,
       },
     }
   }
@@ -825,7 +844,7 @@ export class S3ProtocolHandler {
     const bucket = command.Bucket as string
     const key = command.Key as string
 
-    const object = await this.storage.from(bucket).findObject(key, 'version')
+    const object = await this.storage.from(bucket).findObject(key, 'version,user_metadata')
     const response = await this.storage.backend.getObject(
       storageS3Bucket,
       `${this.tenantId}/${bucket}/${key}`,
@@ -836,6 +855,13 @@ export class S3ProtocolHandler {
         range: command.Range,
       }
     )
+
+    let metadataHeaders: Record<string, any> = {}
+
+    if (object.user_metadata) {
+      metadataHeaders = toAwsMeatadataHeaders(object.user_metadata)
+    }
+
     return {
       headers: {
         'cache-control': response.metadata.cacheControl,
@@ -844,6 +870,7 @@ export class S3ProtocolHandler {
         'content-type': response.metadata.mimetype,
         etag: response.metadata.eTag,
         'last-modified': response.metadata.lastModified?.toUTCString() || '',
+        ...metadataHeaders,
       },
       responseBody: response.body,
       statusCode: command.Range ? 206 : 200,
@@ -964,14 +991,19 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    const copyResult = await this.storage
-      .from(sourceBucket)
-      .copyObject(sourceKey, Bucket, Key, this.owner, {
+    const copyResult = await this.storage.from(sourceBucket).copyObject({
+      sourceKey,
+      destinationBucket: Bucket,
+      destinationKey: Key,
+      owner: this.owner,
+      conditions: {
         ifMatch: command.CopySourceIfMatch,
         ifNoneMatch: command.CopySourceIfNoneMatch,
         ifModifiedSince: command.CopySourceIfModifiedSince,
         ifUnmodifiedSince: command.CopySourceIfUnmodifiedSince,
-      })
+      },
+      copyMetadata: command.MetadataDirective === 'COPY',
+    })
 
     return {
       responseBody: {
@@ -1162,6 +1194,19 @@ export class S3ProtocolHandler {
     }
   }
 
+  parseMetadataHeaders(headers: Record<string, any>) {
+    let metadata: undefined | Record<string, any> = undefined
+
+    Object.keys(headers)
+      .filter((key) => key.startsWith('x-amz-meta-'))
+      .forEach((key) => {
+        if (!metadata) metadata = {}
+        metadata[key.replace('x-amz-meta-', '')] = headers[key]
+      })
+
+    return metadata
+  }
+
   protected uploadSignature({ in_progress_size }: { in_progress_size: number }) {
     return `${encrypt('progress:' + in_progress_size.toString())}`
   }
@@ -1206,6 +1251,37 @@ export class S3ProtocolHandler {
       return multipart
     })
   }
+}
+
+function toAwsMeatadataHeaders(records: Record<string, any>) {
+  const metadataHeaders: Record<string, any> = {}
+  let missingCount = 0
+
+  if (records) {
+    Object.keys(records).forEach((key) => {
+      const value = records[key]
+      if (isUSASCII(value)) {
+        metadataHeaders['x-amz-meta-' + key.toLowerCase()] = value
+      } else {
+        missingCount++
+      }
+    })
+  }
+
+  if (missingCount) {
+    metadataHeaders['x-amz-missing-meta'] = missingCount
+  }
+
+  return metadataHeaders
+}
+
+function isUSASCII(str: string): boolean {
+  for (let i = 0; i < str.length; i++) {
+    if (str.charCodeAt(i) > 127) {
+      return false
+    }
+  }
+  return true
 }
 
 function encodeContinuationToken(name: string) {

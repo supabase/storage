@@ -1,22 +1,28 @@
 import { AssetResponse, Renderer, RenderOptions } from './renderer'
 import { FastifyReply, FastifyRequest } from 'fastify'
-import { ObjectMetadata, StorageBackendAdapter } from '../backend'
+import { ObjectMetadata } from '../backend'
 import { ImageRenderer, TransformOptions } from './image'
+import { ERRORS } from '@internal/errors'
 
 /**
  * HeadRenderer
  * is a special renderer that only outputs metadata information with an empty content
  */
 export class HeadRenderer extends Renderer {
-  constructor(private readonly backend: StorageBackendAdapter) {
-    super()
-  }
-
   async getAsset(request: FastifyRequest, options: RenderOptions): Promise<AssetResponse> {
-    const metadata = await this.backend.headObject(options.bucket, options.key, options.version)
+    const { object } = options
+
+    if (!object) {
+      throw ERRORS.NoSuchKey(`${options.bucket}/${options.key}/${options.version}`)
+    }
+
+    const metadata = object.metadata ? { ...object.metadata } : {}
+    if (metadata.lastModified) {
+      metadata.lastModified = new Date(metadata.lastModified as string)
+    }
 
     return {
-      metadata,
+      metadata: metadata as ObjectMetadata,
       transformations: ImageRenderer.applyTransformation(request.query as TransformOptions),
     }
   }

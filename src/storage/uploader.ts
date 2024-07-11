@@ -326,12 +326,9 @@ export class Uploader {
       const customMd = request.headers['x-metadata']
 
       if (typeof customMd === 'string') {
-        if (userMetadata && Buffer.byteLength(customMd, 'utf8') > MAX_CUSTOM_METADATA_SIZE) {
-          throw ERRORS.EntityTooLarge(undefined, 'metadata')
-        }
-
         try {
-          userMetadata = JSON.parse(customMd)
+          const json = Buffer.from(customMd, 'base64').toString('utf8')
+          userMetadata = JSON.parse(json)
         } catch (e) {
           // no-op
         }

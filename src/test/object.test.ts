@@ -354,7 +354,7 @@ describe('testing POST object via multipart upload', () => {
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
   })
 
-  test('successfully uploading an object with custom metadata', async () => {
+  test('successfully uploading an object with custom metadata using form data', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     form.append(
@@ -385,6 +385,45 @@ describe('testing POST object via multipart upload', () => {
       .table('objects')
       .select('*')
       .where('name', 'sadcat-upload3012.png')
+      .where('bucket_id', 'bucket2')
+      .first()
+
+    expect(object).not.toBeFalsy()
+    expect(object?.user_metadata).toEqual({
+      test1: 'test1',
+      test2: 'test2',
+    })
+  })
+
+  test('successfully uploading an object with custom metadata using stream', async () => {
+    const file = fs.createReadStream(`./src/test/assets/sadcat.jpg`)
+
+    const headers = {
+      authorization: `Bearer ${serviceKey}`,
+      'x-upsert': 'true',
+      'x-metadata': Buffer.from(
+        JSON.stringify({
+          test1: 'test1',
+          test2: 'test2',
+        })
+      ).toString('base64'),
+    }
+
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/bucket2/sadcat-upload3018.png',
+      headers,
+      payload: file,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+
+    const client = await getSuperuserPostgrestClient()
+
+    const object = await client
+      .table('objects')
+      .select('*')
+      .where('name', 'sadcat-upload3018.png')
       .where('bucket_id', 'bucket2')
       .first()
 
@@ -2121,7 +2160,7 @@ describe('testing list objects', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON).toHaveLength(8)
+    expect(responseJSON).toHaveLength(9)
     const names = responseJSON.map((ele: any) => ele.name)
     expect(names).toContain('curlimage.jpg')
     expect(names).toContain('private')

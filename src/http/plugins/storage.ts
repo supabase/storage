@@ -1,29 +1,90 @@
 import fastifyPlugin from 'fastify-plugin'
-import { StorageBackendAdapter, createStorageBackend } from '@storage/backend'
-import { Storage } from '@storage/storage'
-import { StorageKnexDB } from '@storage/database'
+import { createDefaultDisk, createAgent, createDisk, StorageDisk } from '@storage/disks'
 import { getConfig } from '../../config'
+import { FastifyRequest } from 'fastify'
+import { Storage } from '@storage/storage'
 
 declare module 'fastify' {
   interface FastifyRequest {
     storage: Storage
-    backend: StorageBackendAdapter
+    disk: StorageDisk
+  }
+
+  interface FastifyContextConfig {
+    getBucketId?: (req: FastifyRequest<any>) => Promise<string>
   }
 }
 
-const { storageBackendType } = getConfig()
+const { isMultitenant, storageBackendType, storageS3MaxSockets } = getConfig()
 
-const storageBackend = createStorageBackend(storageBackendType)
+let cachedDisk: StorageDisk | undefined
 
-export const storage = fastifyPlugin(async function storagePlugin(fastify) {
-  fastify.decorateRequest('storage', undefined)
+const managedS3BucketHttpAgent = createAgent({
+  maxSockets: storageS3MaxSockets,
+})
+const externalS3BucketHttpAgent = createAgent({
+  maxSockets: 100,
+})
+
+export const disk = fastifyPlugin(async function diskPlugin(fastify) {
+  fastify.decorateRequest('disk', undefined)
   fastify.addHook('preHandler', async (request) => {
-    const database = new StorageKnexDB(request.db, {
-      tenantId: request.tenantId,
-      host: request.headers['x-forwarded-host'] as string,
-      reqId: request.id,
-    })
-    request.backend = storageBackend
-    request.storage = new Storage(storageBackend, database)
+    const database = request.db
+
+    const bucketId = await getBucketIdFromRequest(request)
+
+    if (bucketId) {
+      const bucket = await database.asSuperUser().findBucketById(bucketId, 'buckets.id', {
+        withDisk: true,
+      })
+      const credentials = bucket.credentials
+
+      if (credentials) {
+        request.disk = createDisk(storageBackendType, {
+          httpAgent: externalS3BucketHttpAgent,
+          bucket: bucket.mount_point,
+          accessKey: credentials.access_key,
+          secretKey: credentials.secret_key,
+          endpoint: credentials.endpoint,
+          forcePathStyle: credentials.force_path_style,
+          region: credentials.region,
+        })
+        return
+      }
+    }
+
+    if (isMultitenant) {
+      request.disk = createDefaultDisk({
+        prefix: request.tenantId,
+        httpAgent: managedS3BucketHttpAgent,
+      })
+    } else {
+      if (!cachedDisk) {
+        cachedDisk = createDefaultDisk({
+          prefix: request.tenantId,
+          httpAgent: managedS3BucketHttpAgent,
+        })
+      }
+      request.disk = cachedDisk
+    }
   })
 })
+
+export const storage = fastifyPlugin(async function storagePlugin(fastify) {
+  fastify.register(disk)
+
+  fastify.decorateRequest('storage', undefined)
+  fastify.addHook('preHandler', async (request) => {
+    request.storage = new Storage(request.disk, request.db)
+  })
+})
+
+function getBucketIdFromRequest(req: FastifyRequest) {
+  const params = (req.params as Record<string, any>) || {}
+
+  if ('Bucket' in params) {
+    return params.Bucket as string
+  }
+
+  return req.routeConfig.getBucketId?.(req)
+}

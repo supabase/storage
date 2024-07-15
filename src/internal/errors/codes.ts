@@ -4,6 +4,7 @@ export enum ErrorCode {
   NoSuchBucket = 'NoSuchBucket',
   NoSuchKey = 'NoSuchKey',
   NoSuchUpload = 'NoSuchUpload',
+  NoSuchDisk = 'NoSuchDisk',
   InvalidJWT = 'InvalidJWT',
   InvalidRequest = 'InvalidRequest',
   TenantNotFound = 'TenantNotFound',
@@ -72,6 +73,15 @@ export const ERRORS = {
       error: 'not_found',
       httpStatusCode: 404,
       message: `Object not found`,
+      originalError: e,
+    }),
+  NoSuchDisk: (resource: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.NoSuchDisk,
+      resource,
+      error: 'not_found',
+      httpStatusCode: 404,
+      message: `Disk not found`,
       originalError: e,
     }),
 

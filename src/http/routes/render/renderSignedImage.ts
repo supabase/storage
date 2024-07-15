@@ -9,8 +9,6 @@ import { ImageRenderer } from '@storage/renderer'
 import { getConfig } from '../../../config'
 import { ROUTE_OPERATIONS } from '../operations'
 
-const { storageS3Bucket } = getConfig()
-
 const renderAuthenticatedImageParamsSchema = {
   type: 'object',
   properties: {
@@ -77,20 +75,17 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.InvalidSignature()
       }
 
-      const s3Key = `${request.tenantId}/${url}`
+      const [bucket, ...objParts] = url.split('/')
+      const key = objParts.join('/')
 
-      const [bucketName, ...objParts] = url.split('/')
-      const obj = await request.storage
-        .asSuperUser()
-        .from(bucketName)
-        .findObject(objParts.join('/'), 'id,version')
+      const obj = await request.storage.asSuperUser().from(bucket).findObject(key, 'id,version')
 
       const renderer = request.storage.renderer('image') as ImageRenderer
       return renderer
         .setTransformationsFromString(transformations || '')
         .render(request, response, {
-          bucket: storageS3Bucket,
-          key: s3Key,
+          bucket: bucket,
+          key: key,
           version: obj.version,
           download,
           expires: new Date(exp * 1000).toUTCString(),

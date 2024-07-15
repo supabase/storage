@@ -6,10 +6,10 @@ import fastifyMultipart from '@fastify/multipart'
 const uploadSignedObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', examples: ['avatars'] },
+    Bucket: { type: 'string', examples: ['avatars'] },
     '*': { type: 'string', examples: ['folder/cat.png'] },
   },
-  required: ['bucketName', '*'],
+  required: ['Bucket', '*'],
 } as const
 
 const uploadSignedObjectQSSchema = {
@@ -60,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
   )
 
   fastify.put<UploadSignedObjectRequestInterface>(
-    '/upload/sign/:bucketName/*',
+    '/upload/sign/:Bucket/*',
     {
       // @todo add success response schema here
       schema: {
@@ -80,16 +80,16 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       // Validate sender
       const { token } = request.query
-      const { bucketName } = request.params
+      const { Bucket } = request.params
       const objectName = request.params['*']
 
       const { owner, upsert } = await request.storage
-        .from(bucketName)
+        .from(Bucket)
         .verifyObjectSignature(token, objectName)
 
       const { objectMetadata, path } = await request.storage
         .asSuperUser()
-        .from(bucketName)
+        .from(Bucket)
         .uploadNewObject(request, {
           owner,
           objectName,

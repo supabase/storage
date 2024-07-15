@@ -4,7 +4,7 @@ import { FastifyRequest } from 'fastify'
 import { ERRORS } from '@internal/errors'
 import { FileUploadedSuccess, FileUploadStarted } from '@internal/monitoring/metrics'
 
-import { ObjectMetadata, StorageBackendAdapter } from './backend'
+import { ObjectMetadata, StorageDisk } from './disks'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { Database } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
@@ -15,9 +15,10 @@ interface UploaderOptions extends UploadObjectOptions {
   fileSizeLimit?: number | null
   allowedMimeTypes?: string[] | null
   metadata?: Record<string, any>
+  signal?: AbortSignal
 }
 
-const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
+const { uploadFileSizeLimitStandard } = getConfig()
 
 export interface UploadObjectOptions {
   bucketId: string
@@ -34,7 +35,7 @@ const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
  * Handles the upload of a multi-part request or binary body
  */
 export class Uploader {
-  constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
+  constructor(private readonly disk: StorageDisk, private readonly db: Database) {}
 
   async canUpload(
     options: Pick<UploadObjectOptions, 'bucketId' | 'objectName' | 'isUpsert' | 'owner'>
@@ -97,17 +98,15 @@ export class Uploader {
         this.validateMimeType(file.mimeType, options.allowedMimeTypes)
       }
 
-      const path = `${options.bucketId}/${options.objectName}`
-      const s3Key = `${this.db.tenantId}/${path}`
-
-      const objectMetadata = await this.backend.uploadObject(
-        storageS3Bucket,
-        s3Key,
+      const objectMetadata = await this.disk.save({
+        bucket: options.bucketId,
+        key: options.objectName,
+        body: file.body,
+        cacheControl: file.cacheControl,
         version,
-        file.body,
-        file.mimeType,
-        file.cacheControl
-      )
+        contentType: file.mimeType,
+        signal: options.signal,
+      })
 
       if (file.isTruncated()) {
         throw ERRORS.EntityTooLarge()

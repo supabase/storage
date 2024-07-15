@@ -8,9 +8,9 @@ import { ROUTE_OPERATIONS } from '../operations'
 const getBucketParamsSchema = {
   type: 'object',
   properties: {
-    bucketId: { type: 'string', examples: ['avatars'] },
+    Bucket: { type: 'string', examples: ['avatars'] },
   },
-  required: ['bucketId'],
+  required: ['Bucket'],
 } as const
 
 const successResponseSchema = bucketSchema
@@ -26,7 +26,7 @@ export default async function routes(fastify: FastifyInstance) {
     tags: ['bucket'],
   })
   fastify.get<getBucketRequestInterface>(
-    '/:bucketId',
+    '/:Bucket',
     {
       schema,
       config: {
@@ -34,10 +34,10 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      const { bucketId } = request.params
+      const { Bucket } = request.params
 
       const results = await request.storage.findBucket(
-        bucketId,
+        Bucket,
         'id, name, owner, public, created_at, updated_at, file_size_limit, allowed_mime_types'
       )
 

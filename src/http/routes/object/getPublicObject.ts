@@ -1,17 +1,14 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { getConfig } from '../../../config'
 import { ROUTE_OPERATIONS } from '../operations'
-
-const { storageS3Bucket } = getConfig()
 
 const getPublicObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', examples: ['avatars'] },
+    Bucket: { type: 'string', examples: ['avatars'] },
     '*': { type: 'string', examples: ['folder/cat.png'] },
   },
-  required: ['bucketName', '*'],
+  required: ['Bucket', '*'],
 } as const
 
 const getObjectQuerySchema = {
@@ -32,7 +29,7 @@ interface getObjectRequestInterface {
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Retrieve an object from a public bucket'
   fastify.get<getObjectRequestInterface>(
-    '/public/:bucketName/*',
+    '/public/:Bucket/*',
     {
       // @todo add success response schema here
       exposeHeadRoute: false,
@@ -47,23 +44,20 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      const { bucketName } = request.params
+      const { Bucket } = request.params
       const objectName = request.params['*']
       const { download } = request.query
 
       const [, obj] = await Promise.all([
-        request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
+        request.storage.asSuperUser().findBucket(Bucket, 'id,public', {
           isPublic: true,
         }),
-        request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id,version'),
+        request.storage.asSuperUser().from(Bucket).findObject(objectName, 'id,version'),
       ])
 
-      // send the object from s3
-      const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
-
       return request.storage.renderer('asset').render(request, response, {
-        bucket: storageS3Bucket,
-        key: s3Key,
+        bucket: Bucket,
+        key: objectName,
         version: obj.version,
         download,
       })

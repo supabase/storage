@@ -8,9 +8,9 @@ import { ROUTE_OPERATIONS } from '../operations'
 const searchRequestParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string' },
+    Bucket: { type: 'string' },
   },
-  required: ['bucketName'],
+  required: ['Bucket'],
 } as const
 const searchRequestBodySchema = {
   type: 'object',
@@ -52,7 +52,7 @@ export default async function routes(fastify: FastifyInstance) {
   })
 
   fastify.post<searchRequestInterface>(
-    '/list/:bucketName',
+    '/list/:Bucket',
     {
       schema,
       config: {
@@ -60,10 +60,10 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      const { bucketName } = request.params
+      const { Bucket } = request.params
       const { limit, offset, sortBy, search, prefix } = request.body
 
-      const results = await request.storage.from(bucketName).searchObjects(prefix, {
+      const results = await request.storage.from(Bucket).searchObjects(prefix, {
         limit,
         offset,
         search,

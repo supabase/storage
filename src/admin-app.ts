@@ -8,6 +8,7 @@ const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): 
   app.register(plugins.logTenantId)
   app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health'] }))
   app.register(routes.tenants, { prefix: 'tenants' })
+  app.register(routes.providers, { prefix: 'tenants' })
   app.register(routes.migrations, { prefix: 'migrations' })
   app.register(routes.s3Credentials, { prefix: 's3' })
 

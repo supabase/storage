@@ -7,9 +7,9 @@ import { ROUTE_OPERATIONS } from '../operations'
 const emptyBucketParamsSchema = {
   type: 'object',
   properties: {
-    bucketId: { type: 'string', examples: ['avatars'] },
+    Bucket: { type: 'string', examples: ['avatars'] },
   },
-  required: ['bucketId'],
+  required: ['Bucket'],
 } as const
 const successResponseSchema = {
   type: 'object',
@@ -29,7 +29,7 @@ export default async function routes(fastify: FastifyInstance) {
     tags: ['bucket'],
   })
   fastify.post<emptyBucketRequestInterface>(
-    '/:bucketId/empty',
+    '/:Bucket/empty',
     {
       schema,
       config: {
@@ -37,9 +37,9 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      const { bucketId } = request.params
+      const { Bucket } = request.params
 
-      await request.storage.emptyBucket(bucketId)
+      await request.storage.emptyBucket(Bucket)
 
       return response.status(200).send(createResponse('Successfully emptied'))
     }

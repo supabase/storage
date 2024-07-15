@@ -1,5 +1,6 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import fastifySwagger from '@fastify/swagger'
+import fastifyRacing from 'fastify-racing'
 import fastifySwaggerUi from '@fastify/swagger-ui'
 import { routes, schemas, plugins, setErrorHandler } from './http'
 import { getConfig } from './config'
@@ -51,6 +52,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.addSchema(schemas.authSchema)
   app.addSchema(schemas.errorSchema)
 
+  app.register(fastifyRacing)
   app.register(plugins.tenantId)
   app.register(plugins.metrics({ enabledEndpoint: !isMultitenant }))
   app.register(plugins.logTenantId)

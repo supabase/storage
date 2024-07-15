@@ -7,10 +7,10 @@ import fastifyMultipart from '@fastify/multipart'
 const createObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', examples: ['avatars'] },
+    Bucket: { type: 'string', examples: ['avatars'] },
     '*': { type: 'string', examples: ['folder/cat.png'] },
   },
-  required: ['bucketName', '*'],
+  required: ['Bucket', '*'],
 } as const
 const successResponseSchema = {
   type: 'object',
@@ -60,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
   )
 
   fastify.post<createObjectRequestInterface>(
-    '/:bucketName/*',
+    '/:Bucket/*',
     {
       schema,
       config: {
@@ -68,18 +68,19 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      const { bucketName } = request.params
+      const { Bucket } = request.params
       const objectName = request.params['*']
 
       const isUpsert = request.headers['x-upsert'] === 'true'
       const owner = request.owner as string
 
       const { objectMetadata, path, id } = await request.storage
-        .from(bucketName)
+        .from(Bucket)
         .uploadNewObject(request, {
           objectName,
           owner,
           isUpsert,
+          signal: request.race(),
         })
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({

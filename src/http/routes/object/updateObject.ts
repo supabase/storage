@@ -7,10 +7,10 @@ import fastifyMultipart from '@fastify/multipart'
 const updateObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', examples: ['avatars'] },
+    Bucket: { type: 'string', examples: ['avatars'] },
     '*': { type: 'string', examples: ['folder/cat.png'] },
   },
-  required: ['bucketName', '*'],
+  required: ['Bucket', '*'],
 } as const
 const successResponseSchema = {
   type: 'object',
@@ -57,7 +57,7 @@ export default async function routes(fastify: FastifyInstance) {
   )
 
   fastify.put<updateObjectRequestInterface>(
-    '/:bucketName/*',
+    '/:Bucket/*',
     {
       schema,
       config: {
@@ -68,12 +68,12 @@ export default async function routes(fastify: FastifyInstance) {
       const contentType = request.headers['content-type']
       request.log.info(`content-type is ${contentType}`)
 
-      const { bucketName } = request.params
+      const { Bucket } = request.params
       const objectName = request.params['*']
       const owner = request.owner as string
 
       const { objectMetadata, path, id } = await request.storage
-        .from(bucketName)
+        .from(Bucket)
         .uploadOverridingObject(request, {
           owner,
           objectName: objectName,

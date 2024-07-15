@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
-import { getS3CredentialsByAccessKey, getTenantConfig } from '@internal/database'
-import { ClientSignature, SignatureV4 } from '@storage/protocols/s3'
+import { getTenantConfig } from '@internal/database'
+import { ClientSignature, getS3CredentialsByAccessKey, SignatureV4 } from '@storage/protocols/s3'
 import { signJWT, verifyJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
 

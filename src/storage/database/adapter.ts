@@ -1,5 +1,5 @@
-import { Bucket, S3MultipartUpload, Obj, S3PartUpload } from '../schemas'
-import { ObjectMetadata } from '../backend'
+import { Bucket, S3MultipartUpload, Obj, S3PartUpload, Disk, BucketWithDisk } from '../schemas'
+import { ObjectMetadata } from '../disks'
 import { TenantConnection } from '@internal/database'
 
 export interface SearchObjectOption {
@@ -17,6 +17,7 @@ export interface FindBucketFilters {
   forUpdate?: boolean
   forShare?: boolean
   dontErrorOnEmpty?: boolean
+  withDisk?: boolean
 }
 
 export interface FindObjectFilters {
@@ -66,11 +67,19 @@ export interface Database {
     >
   ): Promise<Pick<Bucket, 'id'>>
 
-  findBucketById<Filters extends FindBucketFilters = FindObjectFilters>(
+  findBucketById<Filters extends FindBucketFilters = FindBucketFilters>(
     bucketId: string,
     columns: string,
     filters?: Filters
-  ): Promise<Filters['dontErrorOnEmpty'] extends true ? Bucket | undefined : Bucket>
+  ): Promise<
+    Filters['dontErrorOnEmpty'] extends true
+      ? Filters['withDisk'] extends true
+        ? BucketWithDisk | undefined
+        : Bucket | undefined
+      : Filters['withDisk'] extends true
+      ? BucketWithDisk
+      : Bucket
+  >
 
   countObjectsInBucket(bucketId: string): Promise<number>
 
@@ -110,7 +119,7 @@ export interface Database {
 
   updateBucket(
     bucketId: string,
-    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
+    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types' | 'disk_id'>
   ): Promise<void>
 
   upsertObject(
@@ -145,7 +154,7 @@ export interface Database {
   searchObjects(bucketId: string, prefix: string, options: SearchObjectOption): Promise<Obj[]>
   healthcheck(): Promise<void>
 
-  destroyConnection(): Promise<void>
+  disposeConnection(): Promise<void>
 
   createMultipartUpload(
     uploadId: string,
@@ -176,4 +185,8 @@ export interface Database {
     uploadId: string,
     options: { afterPart?: string; maxParts: number }
   ): Promise<S3PartUpload[]>
+
+  createDisk(provider: Omit<Disk, 'id'>): Promise<Disk>
+  updateDisk(provider: Disk): Promise<Disk>
+  findDisk(providerId: string): Promise<Disk>
 }

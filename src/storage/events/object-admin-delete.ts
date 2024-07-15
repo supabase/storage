@@ -1,10 +1,10 @@
 import { BaseEvent } from './base-event'
 import { getConfig } from '../../config'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
-import { withOptionalVersion } from '../backend'
+import { withOptionalVersion } from '../disks'
 import { logger, logSchema } from '@internal/monitoring'
 import { Storage } from '../index'
-import { BasePayload } from '@internal/queue'
+import { BasePayload, Event, StaticThis } from '@internal/queue'
 
 export interface ObjectDeleteEvent extends BasePayload {
   name: string
@@ -12,10 +12,14 @@ export interface ObjectDeleteEvent extends BasePayload {
   version?: string
 }
 
-const { storageS3Bucket, adminDeleteQueueTeamSize, adminDeleteConcurrency } = getConfig()
+const { adminDeleteQueueTeamSize, adminDeleteConcurrency } = getConfig()
 
 export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
   static queueName = 'object:admin:delete'
+
+  static getBucketId(payload: ObjectDeleteEvent) {
+    return payload.bucketId
+  }
 
   static getWorkerOptions(): WorkOptions {
     return {
@@ -51,10 +55,13 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
         reqId: job.data.reqId,
       })
 
-      await storage.backend.deleteObjects(storageS3Bucket, [
-        withOptionalVersion(s3Key, version),
-        withOptionalVersion(s3Key, version) + '.info',
-      ])
+      await storage.disk.deleteMany({
+        bucket: job.data.bucketId,
+        prefixes: [
+          withOptionalVersion(job.data.name, version),
+          withOptionalVersion(job.data.name, version) + '.info',
+        ],
+      })
     } catch (e) {
       const s3Key = `${job.data.tenant.ref}/${job.data.bucketId}/${job.data.name}`
 
@@ -78,7 +85,7 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
       if (storage) {
         const tenant = storage.db.tenant()
         storage.db
-          .destroyConnection()
+          .disposeConnection()
           .then(() => {
             // no-op
           })

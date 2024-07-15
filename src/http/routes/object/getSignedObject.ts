@@ -1,20 +1,17 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { getConfig } from '../../../config'
-import { SignedToken, verifyJWT } from '../../../internal/auth'
-import { getJwtSecret } from '../../../internal/database'
+import { SignedToken, verifyJWT } from '@internal/auth'
+import { getJwtSecret } from '@internal/database'
+import { ERRORS } from '@internal/errors'
 import { ROUTE_OPERATIONS } from '../operations'
-import { ERRORS } from '../../../internal/errors'
-
-const { storageS3Bucket } = getConfig()
 
 const getSignedObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', examples: ['avatars'] },
+    Bucket: { type: 'string', examples: ['avatars'] },
     '*': { type: 'string', examples: ['folder/cat.png'] },
   },
-  required: ['bucketName', '*'],
+  required: ['Bucket', '*'],
 } as const
 
 const getSignedObjectQSSchema = {
@@ -42,7 +39,7 @@ interface GetSignedObjectRequestInterface {
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Retrieve an object via a presigned URL'
   fastify.get<GetSignedObjectRequestInterface>(
-    '/sign/:bucketName/*',
+    '/sign/:Bucket/*',
     {
       // @todo add success response schema here
       schema: {
@@ -71,24 +68,20 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const { url, exp } = payload
-      const path = `${request.params.bucketName}/${request.params['*']}`
+      const path = `${request.params.Bucket}/${request.params['*']}`
 
       if (url !== path) {
         throw ERRORS.InvalidSignature()
       }
 
-      const s3Key = `${request.tenantId}/${url}`
-      request.log.info(s3Key)
+      const [bucket, ...objParts] = url.split('/')
+      const key = objParts.join('/')
 
-      const [bucketName, ...objParts] = url.split('/')
-      const obj = await request.storage
-        .asSuperUser()
-        .from(bucketName)
-        .findObject(objParts.join('/'), 'id,version')
+      const obj = await request.storage.asSuperUser().from(bucket).findObject(key, 'id,version')
 
       return request.storage.renderer('asset').render(request, response, {
-        bucket: storageS3Bucket,
-        key: s3Key,
+        bucket: bucket,
+        key,
         version: obj.version,
         download,
         expires: new Date(exp * 1000).toUTCString(),

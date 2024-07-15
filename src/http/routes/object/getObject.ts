@@ -1,19 +1,16 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { IncomingMessage, Server, ServerResponse } from 'http'
-import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
-
-const { storageS3Bucket } = getConfig()
 
 const getObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', examples: ['avatars'] },
+    Bucket: { type: 'string', examples: ['avatars'] },
     '*': { type: 'string', examples: ['folder/cat.png'] },
   },
-  required: ['bucketName', '*'],
+  required: ['Bucket', '*'],
 } as const
 
 const getObjectQuerySchema = {
@@ -38,18 +35,15 @@ async function requestHandler(
     unknown
   >
 ) {
-  const { bucketName } = request.params
+  const { Bucket } = request.params
   const { download } = request.query
   const objectName = request.params['*']
 
-  const obj = await request.storage.from(bucketName).findObject(objectName, 'id, version')
-
-  // send the object from s3
-  const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
+  const obj = await request.storage.from(Bucket).findObject(objectName, 'id, version')
 
   return request.storage.renderer('asset').render(request, response, {
-    bucket: storageS3Bucket,
-    key: s3Key,
+    bucket: Bucket,
+    key: objectName,
     version: obj.version,
     download,
   })
@@ -58,7 +52,7 @@ async function requestHandler(
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Retrieve an object'
   fastify.get<getObjectRequestInterface>(
-    '/authenticated/:bucketName/*',
+    '/authenticated/:Bucket/*',
     {
       exposeHeadRoute: false,
       // @todo add success response schema here
@@ -79,7 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
   )
 
   fastify.get<getObjectRequestInterface>(
-    '/:bucketName/*',
+    '/:Bucket/*',
     {
       exposeHeadRoute: false,
       // @todo add success response schema here
@@ -87,7 +81,7 @@ export default async function routes(fastify: FastifyInstance) {
         params: getObjectParamsSchema,
         headers: { $ref: 'authSchema#' },
         summary: 'Get object',
-        description: 'use GET /object/authenticated/{bucketName} instead',
+        description: 'use GET /object/authenticated/{Bucket} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
         tags: ['deprecated'],
       },

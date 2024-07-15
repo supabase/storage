@@ -6,7 +6,6 @@ import {
   getTenantConfig,
   TenantMigrationStatus,
   updateTenantMigrationsState,
-  TenantConnection,
   getPostgresConnection,
   progressiveMigrations,
   runMigrationsOnTenant,
@@ -14,10 +13,11 @@ import {
 import { verifyJWT } from '@internal/auth'
 import { logSchema } from '@internal/monitoring'
 import { createMutexByKey } from '@internal/concurrency'
+import { Database, StorageKnexDB } from '@storage/database'
 
 declare module 'fastify' {
   interface FastifyRequest {
-    db: TenantConnection
+    db: Database
   }
 }
 
@@ -32,7 +32,7 @@ export const db = fastifyPlugin(async function db(fastify) {
     const userPayload =
       request.jwtPayload ?? (await verifyJWT<{ role?: string }>(request.jwt, adminUser.jwtSecret))
 
-    request.db = await getPostgresConnection({
+    const connection = await getPostgresConnection({
       user: {
         payload: userPayload,
         jwt: request.jwt,
@@ -45,11 +45,17 @@ export const db = fastifyPlugin(async function db(fastify) {
       method: request.method,
       operation: request.operation?.type,
     })
+
+    request.db = new StorageKnexDB(connection, {
+      tenantId: request.tenantId,
+      host: request.headers['x-forwarded-host'] as string,
+      reqId: request.id,
+    })
   })
 
   fastify.addHook('onSend', async (request, reply, payload) => {
     if (request.db) {
-      request.db.dispose().catch((e) => {
+      request.db.disposeConnection().catch((e) => {
         logSchema.error(request.log, 'Error disposing db connection', {
           type: 'db-connection',
           error: e,
@@ -62,7 +68,7 @@ export const db = fastifyPlugin(async function db(fastify) {
   fastify.addHook('onTimeout', async (request) => {
     if (request.db) {
       try {
-        await request.db.dispose()
+        await request.db.disposeConnection()
       } catch (e) {
         logSchema.error(request.log, 'Error disposing db connection', {
           type: 'db-connection',
@@ -75,7 +81,7 @@ export const db = fastifyPlugin(async function db(fastify) {
   fastify.addHook('onRequestAbort', async (request) => {
     if (request.db) {
       try {
-        await request.db.dispose()
+        await request.db.disposeConnection()
       } catch (e) {
         logSchema.error(request.log, 'Error disposing db connection', {
           type: 'db-connection',
@@ -100,7 +106,7 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(async functio
   fastify.addHook('preHandler', async (request) => {
     const adminUser = await getServiceKeyUser(request.tenantId)
 
-    request.db = await getPostgresConnection({
+    const connection = await getPostgresConnection({
       user: adminUser,
       superUser: adminUser,
       tenantId: request.tenantId,
@@ -110,11 +116,17 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(async functio
       headers: request.headers,
       disableHostCheck: opts.disableHostCheck,
     })
+
+    request.db = new StorageKnexDB(connection, {
+      tenantId: request.tenantId,
+      host: request.headers['x-forwarded-host'] as string,
+      reqId: request.id,
+    })
   })
 
   fastify.addHook('onSend', async (request, reply, payload) => {
     if (request.db) {
-      request.db.dispose().catch((e) => {
+      request.db.disposeConnection().catch((e) => {
         logSchema.error(request.log, 'Error disposing db connection', {
           type: 'db-connection',
           error: e,
@@ -128,7 +140,7 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(async functio
   fastify.addHook('onTimeout', async (request) => {
     if (request.db) {
       try {
-        await request.db.dispose()
+        await request.db.disposeConnection()
       } catch (e) {
         logSchema.error(request.log, 'Error disposing db connection', {
           type: 'db-connection',
@@ -141,7 +153,7 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(async functio
   fastify.addHook('onRequestAbort', async (request) => {
     if (request.db) {
       try {
-        await request.db.dispose()
+        await request.db.disposeConnection()
       } catch (e) {
         logSchema.error(request.log, 'Error disposing db connection', {
           type: 'db-connection',
@@ -234,6 +246,14 @@ export const migrations = fastifyPlugin(async function migrations(fastify) {
           .catch(() => {
             // no-op
           })
+      }).catch((e) => {
+        logSchema.error(fastify.log, '[Migrations] Error acquiring migrations lock', {
+          type: 'migrations',
+          error: e,
+          metadata: JSON.stringify({
+            strategy: 'progressive',
+          }),
+        })
       })
     })
   }

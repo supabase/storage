@@ -24,17 +24,19 @@ import {
   getFileIdFromRequest,
   SIGNED_URL_SUFFIX,
 } from './lifecycle'
-import { TenantConnection, PubSub } from '@internal/database'
+import { PubSub } from '@internal/database'
 import { S3Store } from '@tus/s3-store'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
-import { createAgent } from '@storage/backend'
+import { createAgent } from '@storage/disks'
 import { ROUTE_OPERATIONS } from '../operations'
+import { Database } from '@storage/database'
 
 const {
   storageS3Bucket,
   storageS3Endpoint,
   storageS3ForcePathStyle,
   storageS3Region,
+  storageS3MaxSockets,
   tusUrlExpiryMs,
   tusPath,
   tusPartSize,
@@ -48,7 +50,7 @@ type MultiPartRequest = http.IncomingMessage & {
     storage: Storage
     owner?: string
     tenantId: string
-    db: TenantConnection
+    db: Database
     isUpsert: boolean
     resources?: string[]
   }
@@ -56,7 +58,9 @@ type MultiPartRequest = http.IncomingMessage & {
 
 function createTusStore() {
   if (storageBackendType === 's3') {
-    const agent = createAgent(storageS3Endpoint?.includes('http://') ? 'http' : 'https')
+    const agent = createAgent({
+      maxSockets: storageS3MaxSockets,
+    })
     return new S3Store({
       partSize: tusPartSize * 1024 * 1024, // Each uploaded part will have ${tusPartSize}MB,
       expirationPeriodInMilliseconds: tusUrlExpiryMs,

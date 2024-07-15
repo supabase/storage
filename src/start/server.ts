@@ -18,6 +18,7 @@ import { registerWorkers } from '@storage/events'
 import { AsyncAbortController } from '@internal/concurrency'
 
 import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
+import { listenForS3CredentialsUpdate } from '@storage/protocols/s3'
 
 const shutdownSignal = new AsyncAbortController()
 
@@ -53,6 +54,7 @@ async function main() {
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate(PubSub)
+    await listenForS3CredentialsUpdate(PubSub)
   } else {
     await runMigrationsOnTenant(databaseURL)
   }

@@ -7,9 +7,9 @@ import { ROUTE_OPERATIONS } from '../operations'
 const getSignedURLsParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', examples: ['avatars'] },
+    Bucket: { type: 'string', examples: ['avatars'] },
   },
-  required: ['bucketName'],
+  required: ['Bucket'],
 } as const
 const getSignedURLsBodySchema = {
   type: 'object',
@@ -63,22 +63,22 @@ export default async function routes(fastify: FastifyInstance) {
   })
 
   fastify.post<getSignedURLsRequestInterface>(
-    '/sign/:bucketName',
+    '/sign/:Bucket',
     {
       schema,
       config: {
         operation: { type: ROUTE_OPERATIONS.SIGN_OBJECT_URLS },
         resources: (req: FastifyRequest<getSignedURLsRequestInterface>) => {
           const { paths } = req.body
-          return paths.map((path) => `${req.params.bucketName}/${path}`)
+          return paths.map((path) => `${req.params.Bucket}/${path}`)
         },
       },
     },
     async (request, response) => {
-      const { bucketName } = request.params
+      const { Bucket } = request.params
       const { expiresIn, paths } = request.body
 
-      const signedURLs = await request.storage.from(bucketName).signObjectUrls(paths, expiresIn)
+      const signedURLs = await request.storage.from(Bucket).signObjectUrls(paths, expiresIn)
 
       return response.status(200).send(signedURLs)
     }

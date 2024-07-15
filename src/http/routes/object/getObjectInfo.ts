@@ -1,20 +1,17 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { IncomingMessage, Server, ServerResponse } from 'http'
-import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../types'
 import { Obj } from '@storage/schemas'
 import { ROUTE_OPERATIONS } from '../operations'
 
-const { storageS3Bucket } = getConfig()
-
 const getObjectParamsSchema = {
   type: 'object',
   properties: {
-    bucketName: { type: 'string', examples: ['avatars'] },
+    Bucket: { type: 'string', examples: ['avatars'] },
     '*': { type: 'string', examples: ['folder/cat.png'] },
   },
-  required: ['bucketName', '*'],
+  required: ['Bucket', '*'],
 } as const
 
 interface getObjectRequestInterface extends AuthenticatedRangeRequest {
@@ -33,29 +30,27 @@ async function requestHandler(
   publicRoute = false,
   method: 'head' | 'info' = 'head'
 ) {
-  const { bucketName } = request.params
+  const { Bucket } = request.params
   const objectName = request.params['*']
-
-  const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
 
   let obj: Obj
   if (publicRoute) {
-    await request.storage.asSuperUser().findBucket(bucketName, 'id', {
+    await request.storage.asSuperUser().findBucket(Bucket, 'id', {
       isPublic: true,
     })
     obj = await request.storage
       .asSuperUser()
-      .from(bucketName)
+      .from(Bucket)
       .findObject(objectName, 'id,version,metadata,user_metadata,created_at')
   } else {
     obj = await request.storage
-      .from(bucketName)
+      .from(Bucket)
       .findObject(objectName, 'id,version,metadata,user_metadata,created_at')
   }
 
   return request.storage.renderer(method).render(request, response, {
-    bucket: storageS3Bucket,
-    key: s3Key,
+    bucket: Bucket,
+    key: objectName,
     version: obj.version,
     object: obj,
   })
@@ -63,7 +58,7 @@ async function requestHandler(
 
 export async function publicRoutes(fastify: FastifyInstance) {
   fastify.head<getObjectRequestInterface>(
-    '/public/:bucketName/*',
+    '/public/:Bucket/*',
     {
       schema: {
         params: getObjectParamsSchema,
@@ -82,7 +77,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
   )
 
   fastify.get<getObjectRequestInterface>(
-    '/info/public/:bucketName/*',
+    '/info/public/:Bucket/*',
     {
       exposeHeadRoute: false,
       schema: {
@@ -105,7 +100,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
 export async function authenticatedRoutes(fastify: FastifyInstance) {
   const summary = 'Retrieve object info'
   fastify.head<getObjectRequestInterface>(
-    '/authenticated/:bucketName/*',
+    '/authenticated/:Bucket/*',
     {
       schema: {
         params: getObjectParamsSchema,
@@ -124,7 +119,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
   )
 
   fastify.get<getObjectRequestInterface>(
-    '/info/authenticated/:bucketName/*',
+    '/info/authenticated/:Bucket/*',
     {
       schema: {
         params: getObjectParamsSchema,
@@ -143,13 +138,13 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
   )
 
   fastify.get<getObjectRequestInterface>(
-    '/info/:bucketName/*',
+    '/info/:Bucket/*',
     {
       schema: {
         params: getObjectParamsSchema,
         headers: { $ref: 'authSchema#' },
         summary,
-        description: 'use HEAD /object/authenticated/{bucketName} instead',
+        description: 'use HEAD /object/authenticated/{Bucket} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
         tags: ['deprecated'],
       },
@@ -163,13 +158,13 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
   )
 
   fastify.head<getObjectRequestInterface>(
-    '/:bucketName/*',
+    '/:Bucket/*',
     {
       schema: {
         params: getObjectParamsSchema,
         headers: { $ref: 'authSchema#' },
         summary,
-        description: 'use HEAD /object/authenticated/{bucketName} instead',
+        description: 'use HEAD /object/authenticated/{Bucket} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
         tags: ['deprecated'],
       },

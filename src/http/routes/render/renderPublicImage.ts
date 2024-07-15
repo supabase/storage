@@ -5,8 +5,6 @@ import { ImageRenderer } from '@storage/renderer'
 import { transformationOptionsSchema } from '../../schemas/transformations'
 import { ROUTE_OPERATIONS } from '../operations'
 
-const { storageS3Bucket } = getConfig()
-
 const renderPublicImageParamsSchema = {
   type: 'object',
   properties: {
@@ -57,13 +55,11 @@ export default async function routes(fastify: FastifyInstance) {
         request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id,version'),
       ])
 
-      const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
-
       const renderer = request.storage.renderer('image') as ImageRenderer
 
       return renderer.setTransformations(request.query).render(request, response, {
-        bucket: storageS3Bucket,
-        key: s3Key,
+        bucket: bucketName,
+        key: objectName,
         version: obj.version,
         download,
       })

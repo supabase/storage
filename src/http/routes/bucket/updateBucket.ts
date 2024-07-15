@@ -24,9 +24,9 @@ const updateBucketBodySchema = {
 const updateBucketParamsSchema = {
   type: 'object',
   properties: {
-    bucketId: { type: 'string', examples: ['avatars'] },
+    Bucket: { type: 'string', examples: ['avatars'] },
   },
-  required: ['bucketId'],
+  required: ['Bucket'],
 } as const
 
 const successResponseSchema = {
@@ -49,7 +49,7 @@ export default async function routes(fastify: FastifyInstance) {
     tags: ['bucket'],
   })
   fastify.put<updateBucketRequestInterface>(
-    '/:bucketId',
+    '/:Bucket',
     {
       schema,
       config: {
@@ -57,11 +57,11 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      const { bucketId } = request.params
+      const { Bucket } = request.params
 
       const { public: isPublic, file_size_limit, allowed_mime_types } = request.body
 
-      await request.storage.updateBucket(bucketId, {
+      await request.storage.updateBucket(Bucket, {
         public: isPublic,
         fileSizeLimit: file_size_limit,
         allowedMimeTypes: allowed_mime_types

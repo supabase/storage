@@ -1,12 +1,9 @@
-import crypto from 'crypto'
 import { getConfig } from '../../config'
-import { decrypt, encrypt, verifyJWT } from '../auth'
+import { decrypt, verifyJWT } from '../auth'
 import { multitenantKnex } from './multitenant-db'
 import { JwtPayload } from 'jsonwebtoken'
 import { PubSubAdapter } from '../pubsub'
 import { createMutexByKey } from '../concurrency'
-import { LRUCache } from 'lru-cache'
-import objectSizeOf from 'object-sizeof'
 import { lastMigrationName } from './migrations/migrate'
 import { ERRORS } from '@internal/errors'
 
@@ -47,26 +44,10 @@ export enum TenantMigrationStatus {
   FAILED_STALE = 'FAILED_STALE',
 }
 
-interface S3Credentials {
-  accessKey: string
-  secretKey: string
-  claims: { role: string; sub?: string; [key: string]: any }
-}
-
 const { isMultitenant, dbServiceRole, serviceKey, jwtSecret, jwtJWKS } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
-
-const tenantS3CredentialsCache = new LRUCache<string, S3Credentials>({
-  maxSize: 1024 * 1024 * 50, // 50MB
-  ttl: 1000 * 60 * 60, // 1 hour
-  sizeCalculation: (value) => objectSizeOf(value),
-  updateAgeOnGet: true,
-  allowStale: false,
-})
-
 const tenantMutex = createMutexByKey()
-const s3CredentialsMutex = createMutexByKey()
 
 const singleTenantServiceKey:
   | {
@@ -296,7 +277,6 @@ export async function getFeatures(tenantId: string): Promise<Features> {
 }
 
 const TENANTS_UPDATE_CHANNEL = 'tenants_update'
-const TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL = 'tenants_s3_credentials_update'
 
 /**
  * Keeps the in memory config cache up to date
@@ -305,129 +285,4 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
   await pubSub.subscribe(TENANTS_UPDATE_CHANNEL, (cacheKey) => {
     tenantConfigCache.delete(cacheKey)
   })
-
-  await pubSub.subscribe(TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL, (cacheKey) => {
-    tenantS3CredentialsCache.delete(cacheKey)
-  })
-}
-
-/**
- * Create S3 Credential for a tenant
- * @param tenantId
- * @param data
- */
-export async function createS3Credentials(
-  tenantId: string,
-  data: { description: string; claims?: S3Credentials['claims'] }
-) {
-  const existingCount = await countS3Credentials(tenantId)
-
-  if (existingCount >= 50) {
-    throw ERRORS.MaximumCredentialsLimit()
-  }
-
-  const secretAccessKeyId = crypto.randomBytes(32).toString('hex').slice(0, 32)
-  const secretAccessKey = crypto.randomBytes(64).toString('hex').slice(0, 64)
-
-  if (data.claims) {
-    delete data.claims.iss
-    delete data.claims.issuer
-    delete data.claims.exp
-    delete data.claims.iat
-  }
-
-  data.claims = {
-    ...(data.claims || {}),
-    role: data.claims?.role ?? dbServiceRole,
-    issuer: `supabase.storage.${tenantId}`,
-    sub: data.claims?.sub,
-  }
-
-  const credentials = await multitenantKnex
-    .table('tenants_s3_credentials')
-    .insert({
-      tenant_id: tenantId,
-      description: data.description,
-      access_key: secretAccessKeyId,
-      secret_key: encrypt(secretAccessKey),
-      claims: JSON.stringify(data.claims),
-    })
-    .returning('id')
-
-  return {
-    id: credentials[0].id,
-    access_key: secretAccessKeyId,
-    secret_key: secretAccessKey,
-  }
-}
-
-export async function getS3CredentialsByAccessKey(
-  tenantId: string,
-  accessKey: string
-): Promise<S3Credentials> {
-  const cacheKey = `${tenantId}:${accessKey}`
-  const cachedCredentials = tenantS3CredentialsCache.get(cacheKey)
-
-  if (cachedCredentials) {
-    return cachedCredentials
-  }
-
-  return s3CredentialsMutex(cacheKey, async () => {
-    const cachedCredentials = tenantS3CredentialsCache.get(cacheKey)
-
-    if (cachedCredentials) {
-      return cachedCredentials
-    }
-
-    const data = await multitenantKnex
-      .table('tenants_s3_credentials')
-      .select('access_key', 'secret_key', 'claims')
-      .where('tenant_id', tenantId)
-      .where('access_key', accessKey)
-      .first()
-
-    if (!data) {
-      throw ERRORS.MissingS3Credentials()
-    }
-
-    const secretKey = decrypt(data.secret_key)
-
-    tenantS3CredentialsCache.set(cacheKey, {
-      accessKey: data.access_key,
-      secretKey: secretKey,
-      claims: data.claims,
-    })
-
-    return {
-      accessKey: data.access_key,
-      secretKey: secretKey,
-      claims: data.claims,
-    }
-  })
-}
-
-export function deleteS3Credential(tenantId: string, credentialId: string) {
-  return multitenantKnex
-    .table('tenants_s3_credentials')
-    .where('tenant_id', tenantId)
-    .where('id', credentialId)
-    .delete()
-    .returning('id')
-}
-
-export function listS3Credentials(tenantId: string) {
-  return multitenantKnex
-    .table('tenants_s3_credentials')
-    .select('id', 'description', 'access_key', 'created_at')
-    .where('tenant_id', tenantId)
-    .orderBy('created_at', 'asc')
-}
-
-export async function countS3Credentials(tenantId: string) {
-  const data = await multitenantKnex
-    .table('tenants_s3_credentials')
-    .count('id')
-    .where('tenant_id', tenantId)
-
-  return Number((data as any)?.count || 0)
 }

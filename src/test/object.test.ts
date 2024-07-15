@@ -5,7 +5,7 @@ import fs from 'fs'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
 import { signJWT } from '@internal/auth'
-import { Obj, backends } from '../storage'
+import { Obj, disks } from '../storage'
 import { useMockObject, useMockQueue } from './common'
 import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
 import { Knex } from 'knex'
@@ -13,7 +13,7 @@ import { ErrorCode, StorageBackendError } from '@internal/errors'
 
 const { jwtSecret, serviceKey, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
-const S3Backend = backends.S3Backend
+const S3Backend = disks.S3Disk
 
 let tnx: Knex.Transaction | undefined
 async function getSuperuserPostgrestClient() {
@@ -62,7 +62,7 @@ describe('testing GET object', () => {
   })
 
   test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
-    const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
+    const mockGetObject = jest.spyOn(S3Backend.prototype, 'read')
     mockGetObject.mockRejectedValue({
       $metadata: {
         httpStatusCode: 304,
@@ -1949,7 +1949,7 @@ describe('testing retrieving signed URL', () => {
   })
 
   test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
-    const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
+    const mockGetObject = jest.spyOn(S3Backend.prototype, 'read')
     mockGetObject.mockRejectedValue({
       $metadata: {
         httpStatusCode: 304,

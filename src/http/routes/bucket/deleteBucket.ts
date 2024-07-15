@@ -7,9 +7,9 @@ import { ROUTE_OPERATIONS } from '../operations'
 const deleteBucketParamsSchema = {
   type: 'object',
   properties: {
-    bucketId: { type: 'string', examples: ['avatars'] },
+    Bucket: { type: 'string', examples: ['avatars'] },
   },
-  required: ['bucketId'],
+  required: ['Bucket'],
 } as const
 const successResponseSchema = {
   type: 'object',
@@ -29,7 +29,7 @@ export default async function routes(fastify: FastifyInstance) {
     tags: ['bucket'],
   })
   fastify.delete<deleteBucketRequestInterface>(
-    '/:bucketId',
+    '/:Bucket',
     {
       schema,
       config: {
@@ -37,8 +37,8 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      const { bucketId } = request.params
-      await request.storage.deleteBucket(bucketId)
+      const { Bucket } = request.params
+      await request.storage.deleteBucket(Bucket)
 
       return response.status(200).send(createResponse('Successfully deleted'))
     }

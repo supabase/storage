@@ -1,4 +1,4 @@
-import { ObjectMetadata, StorageBackendAdapter } from '../backend'
+import { ObjectMetadata, StorageDisk } from '../disks'
 import axios, { Axios, AxiosError } from 'axios'
 import { getConfig } from '../../config'
 import { FastifyRequest } from 'fastify'
@@ -78,7 +78,7 @@ export class ImageRenderer extends Renderer {
   private readonly client: Axios
   private transformOptions?: TransformOptions
 
-  constructor(private readonly backend: StorageBackendAdapter) {
+  constructor(private readonly disk: StorageDisk) {
     super()
     this.client = client
   }
@@ -186,8 +186,16 @@ export class ImageRenderer extends Renderer {
    */
   async getAsset(request: FastifyRequest, options: RenderOptions) {
     const [privateURL, headObj] = await Promise.all([
-      this.backend.privateAssetUrl(options.bucket, options.key, options.version),
-      this.backend.headObject(options.bucket, options.key, options.version),
+      this.disk.signUrl({
+        bucket: options.bucket,
+        key: options.key,
+        version: options.version,
+      }),
+      this.disk.metadata({
+        bucket: options.bucket,
+        key: options.key,
+        version: options.version,
+      }),
     ])
     const transformations = ImageRenderer.applyTransformation(this.transformOptions || {})
 

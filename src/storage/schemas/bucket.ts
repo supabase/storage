@@ -1,4 +1,5 @@
 import { FromSchema } from 'json-schema-to-ts'
+import { Disk } from './disk'
 
 export const bucketSchema = {
   $id: 'bucketSchema',
@@ -9,6 +10,7 @@ export const bucketSchema = {
     owner: { type: 'string' },
     public: { type: 'boolean' },
     file_size_limit: { type: ['integer', 'null'] },
+    disk_id: { type: ['string', 'null'] },
     allowed_mime_types: { type: ['array', 'null'], items: { type: 'string' } },
     created_at: { type: 'string' },
     updated_at: { type: 'string' },
@@ -30,3 +32,16 @@ export const bucketSchema = {
 } as const
 
 export type Bucket = FromSchema<typeof bucketSchema>
+export type BucketWithDisk = Bucket &
+  Partial<Omit<Disk, 'id' | 'name'>> & {
+    disk_id?: string
+    mount_point: string
+    credentials: {
+      bucket: string
+      access_key: string
+      secret_key: string
+      region: string
+      endpoint: string
+      force_path_style: boolean
+    }
+  }

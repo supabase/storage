@@ -60,7 +60,7 @@ export interface S3ClientOptions {
 
 /**
  * S3Backend
- * Interacts with an s3-compatible file system with this S3Adapter
+ * Interacts with a s3-compatible file system with this S3Adapter
  */
 export class S3Backend implements StorageBackendAdapter {
   client: S3Client
@@ -118,9 +118,10 @@ export class S3Backend implements StorageBackendAdapter {
         lastModified: data.LastModified,
         contentRange: data.ContentRange,
         contentLength: data.ContentLength || 0,
-        httpStatusCode: data.$metadata.httpStatusCode || 200,
         size: data.ContentLength || 0,
+        httpStatusCode: data.$metadata.httpStatusCode || 200,
       },
+      httpStatusCode: data.$metadata.httpStatusCode || 200,
       body: data.Body,
     }
   }

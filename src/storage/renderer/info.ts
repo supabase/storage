@@ -1,8 +1,7 @@
-import { HeadRenderer } from './head'
-import { FastifyRequest } from 'fastify'
-import { AssetResponse, RenderOptions } from './renderer'
 import { Obj } from '@storage/schemas'
-import { FastifyReply } from 'fastify/types/reply'
+import { HeadRenderer } from './head'
+import { FastifyRequest, FastifyReply } from 'fastify'
+import { AssetResponse, RenderOptions } from './renderer'
 
 /**
  * HeadRenderer
@@ -16,7 +15,18 @@ export class InfoRenderer extends HeadRenderer {
 
     return {
       ...headAsset,
-      body: obj,
+      body: {
+        id: obj.id,
+        name: obj.name,
+        version: obj.version,
+        size: obj.metadata?.size ?? null,
+        content_type: obj.metadata?.mimetype ?? null,
+        cache_control: obj.metadata?.cacheControl ?? null,
+        etag: obj.metadata?.eTag ?? null,
+        metadata: obj.user_metadata,
+        last_modified: obj.metadata?.lastModified ?? null,
+        created_at: obj.created_at,
+      },
     }
   }
 
@@ -26,6 +36,12 @@ export class InfoRenderer extends HeadRenderer {
     data: AssetResponse,
     options: RenderOptions
   ) {
-    // no-op
+    response
+      .status(data.metadata.httpStatusCode ?? 200)
+      .header('Content-Type', 'application/json')
+      .header('ETag', data.metadata.eTag)
+      .header('Content-Length', data.metadata.contentLength)
+      .header('Last-Modified', data.metadata.lastModified?.toUTCString())
+      .header('CacheControl', data.metadata.cacheControl)
   }
 }

@@ -297,7 +297,7 @@ export class Uploader {
 
         body = formData.file
         /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-        const customMd = formData.fields.userMetadata?.value
+        const customMd = formData.fields.metadata?.value ?? formData.fields.userMetadata?.value
         /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
         mimeType = formData.fields.contentType?.value || formData.mimetype
         cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'

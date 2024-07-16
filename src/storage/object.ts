@@ -540,6 +540,10 @@ export class ObjectStorage {
       return all
     }, metadata || {})
 
+    // security-in-depth: as signObjectUrl could be used as a signing oracle,
+    // make sure it's never able to specify a role JWT claim
+    delete metadata['role']
+
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(3).join('/'))
     const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)

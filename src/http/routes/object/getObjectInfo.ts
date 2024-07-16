@@ -46,11 +46,11 @@ async function requestHandler(
     obj = await request.storage
       .asSuperUser()
       .from(bucketName)
-      .findObject(objectName, 'id,version,metadata,user_metadata,created_at')
+      .findObject(objectName, 'id,name,version,metadata,user_metadata,created_at')
   } else {
     obj = await request.storage
       .from(bucketName)
-      .findObject(objectName, 'id,version,metadata,user_metadata,created_at')
+      .findObject(objectName, 'id,name,version,metadata,user_metadata,created_at')
   }
 
   return request.storage.renderer(method).render(request, response, {

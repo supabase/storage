@@ -358,7 +358,7 @@ describe('testing POST object via multipart upload', () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     form.append(
-      'userMetadata',
+      'metadata',
       JSON.stringify({
         test1: 'test1',
         test2: 'test2',
@@ -438,7 +438,7 @@ describe('testing POST object via multipart upload', () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     form.append(
-      'userMetadata',
+      'metadata',
       JSON.stringify({
         test1: 'test1',
         test2: 'test2',
@@ -468,7 +468,7 @@ describe('testing POST object via multipart upload', () => {
 
     const data = await response.json()
 
-    expect(data.user_metadata).toEqual({
+    expect(data.metadata).toEqual({
       test1: 'test1',
       test2: 'test2',
     })

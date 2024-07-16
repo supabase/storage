@@ -15,6 +15,7 @@ export interface BrowserCacheHeaders {
  */
 export type ObjectResponse = {
   metadata: ObjectMetadata
+  httpStatusCode: number
   body?: ReadableStream<any> | Readable | Blob | Buffer
 }
 
@@ -29,7 +30,7 @@ export type ObjectMetadata = {
   lastModified?: Date
   eTag: string
   contentRange?: string
-  httpStatusCode: number
+  httpStatusCode?: number
 }
 
 export type UploadPart = {

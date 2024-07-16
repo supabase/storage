@@ -95,6 +95,7 @@ export class FileBackend implements StorageBackendAdapter {
           eTag: checksum,
           contentLength: chunkSize,
         },
+        httpStatusCode: 206,
         body,
       }
     } else {
@@ -110,6 +111,7 @@ export class FileBackend implements StorageBackendAdapter {
           contentLength: fileSize,
         },
         body,
+        httpStatusCode: 200,
       }
     }
   }

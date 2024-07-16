@@ -75,7 +75,12 @@ export class S3Backend implements StorageBackendAdapter {
       requestHandler: new NodeHttpHandler({
         ...agent,
       }),
+      credentials: {
+        accessKeyId: options.accessKey ?? '',
+        secretAccessKey: options.secretKey ?? '',
+      },
     }
+
     if (options.endpoint) {
       params.endpoint = options.endpoint
     }

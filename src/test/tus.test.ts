@@ -95,7 +95,7 @@ describe('Tus multipart', () => {
           objectName: objectName,
           contentType: 'image/jpeg',
           cacheControl: '3600',
-          userMetadata: JSON.stringify({
+          metadata: JSON.stringify({
             test1: 'test1',
             test2: 'test2',
           }),
@@ -267,7 +267,7 @@ describe('Tus multipart', () => {
             objectName: objectName,
             contentType: 'image/jpeg',
             cacheControl: '3600',
-            userMetadata: JSON.stringify({
+            metadata: JSON.stringify({
               test1: 'test1',
               test3: 'test3',
             }),

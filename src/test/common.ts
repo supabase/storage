@@ -42,6 +42,7 @@ export function useMockObject() {
         cacheControl: 'no-cache',
         contentLength: 3746,
       },
+      httpStatusCode: 200,
       body: Buffer.from(''),
     })
 

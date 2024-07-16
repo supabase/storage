@@ -204,9 +204,9 @@ export async function onUploadFinish(
 
     const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
     let customMd: undefined | Record<string, string> = undefined
-    if (upload.metadata?.userMetadata) {
+    if (upload.metadata?.metadata) {
       try {
-        customMd = JSON.parse(upload.metadata.userMetadata)
+        customMd = JSON.parse(upload.metadata.metadata)
       } catch (e) {
         // no-op
       }

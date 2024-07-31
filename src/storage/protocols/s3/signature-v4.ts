@@ -293,6 +293,12 @@ export class SignatureV4 {
           if (header === 'host') {
             return this.getHostHeader(request)
           }
+
+          if (header === 'content-length') {
+            const headerValue = this.getHeader(request, header) ?? '0'
+            return `${header}:${headerValue}`
+          }
+
           return `${header}:${this.getHeader(request, header)}`
         })
         .join('\n') + '\n'

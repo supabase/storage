@@ -7,7 +7,7 @@ import { BasicPgClient, Migration } from 'postgres-migrations/dist/types'
 import { validateMigrationHashes } from 'postgres-migrations/dist/validation'
 import { runMigration } from 'postgres-migrations/dist/run-migration'
 import { searchPath } from '../connection'
-import { listTenantsToMigrate } from '../tenant'
+import { getTenantConfig, listTenantsToMigrate } from '../tenant'
 import { multitenantKnex } from '../multitenant-db'
 import { ProgressiveMigrations } from './progressive'
 import { RunMigrationsOnTenants } from '@storage/events'
@@ -78,6 +78,28 @@ export function startAsyncMigrations(signal: AbortSignal) {
 export async function lastMigrationName() {
   const migrations = await loadMigrationFilesCached('./migrations/tenant')
   return migrations[migrations.length - 1].name
+}
+
+export async function hasMissingSyncMigration(tenantId: string) {
+  const { migrationVersion, migrationStatus } = await getTenantConfig(tenantId)
+  const migrations = await loadMigrationFilesCached('./migrations/tenant')
+
+  if (!migrationStatus) {
+    return migrations.some((m) => {
+      return m.contents.includes('---SYNC---')
+    })
+  }
+
+  const indexLastMigration = migrations.findIndex((m) => m.name === migrationVersion)
+
+  if (indexLastMigration === -1) {
+    return true
+  }
+
+  const migrationAfterLast = migrations.slice(indexLastMigration + 1)
+  return migrationAfterLast.some((m) => {
+    return m.contents.includes('---SYNC---')
+  })
 }
 
 /**
@@ -369,7 +391,17 @@ function withAdvisoryLock<T>(
     try {
       try {
         let acquired = false
+        let tries = 1
+
+        const timeout = 3000
+        const start = Date.now()
+
         while (!acquired) {
+          const elapsed = Date.now() - start
+          if (elapsed > timeout) {
+            throw ERRORS.LockTimeout()
+          }
+
           const lockResult = await client.query(
             'SELECT pg_try_advisory_lock(-8525285245963000605);'
           )
@@ -377,11 +409,13 @@ function withAdvisoryLock<T>(
             acquired = true
           } else {
             if (waitForLock) {
-              await new Promise((res) => setTimeout(res, 700))
+              await new Promise((res) => setTimeout(res, 20 * tries))
             } else {
               return [] as unknown as Promise<T>
             }
           }
+
+          tries++
         }
       } catch (e) {
         throw e

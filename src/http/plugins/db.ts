@@ -10,6 +10,7 @@ import {
   getPostgresConnection,
   progressiveMigrations,
   runMigrationsOnTenant,
+  hasMissingSyncMigration,
 } from '@internal/database'
 import { verifyJWT } from '@internal/auth'
 import { logSchema } from '@internal/monitoring'
@@ -201,19 +202,25 @@ export const migrations = fastifyPlugin(async function migrations(fastify) {
         return
       }
 
+      const needsToRunMigrationsNow = await hasMissingSyncMigration(request.tenantId)
+
       // if the tenant is not marked as stale, add it to the progressive migrations queue
-      if (tenant.migrationStatus !== TenantMigrationStatus.FAILED_STALE) {
+      if (
+        !needsToRunMigrationsNow &&
+        tenant.migrationStatus !== TenantMigrationStatus.FAILED_STALE
+      ) {
         progressiveMigrations.addTenant(request.tenantId)
         return
       }
 
-      // if the tenant is marked as stale, try running the migrations
-      migrationsMutex(request.tenantId, async () => {
+      // if the tenant is marked as stale or there are pending SYNC migrations,
+      // try running the migrations
+      await migrationsMutex(request.tenantId, async () => {
         if (tenant.syncMigrationsDone || migrationsUpToDate) {
           return
         }
 
-        await runMigrationsOnTenant(tenant.databaseUrl, request.tenantId, false)
+        await runMigrationsOnTenant(tenant.databaseUrl, request.tenantId, needsToRunMigrationsNow)
           .then(async () => {
             await updateTenantMigrationsState(request.tenantId)
             tenant.syncMigrationsDone = true
@@ -231,9 +238,14 @@ export const migrations = fastifyPlugin(async function migrations(fastify) {
               }
             )
           })
-          .catch(() => {
-            // no-op
-          })
+      }).catch((e) => {
+        logSchema.error(fastify.log, `[Migrations] Error running migrations ${request.tenantId} `, {
+          type: 'migrations',
+          error: e,
+          metadata: JSON.stringify({
+            strategy: 'progressive',
+          }),
+        })
       })
     })
   }

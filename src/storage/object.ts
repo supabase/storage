@@ -288,32 +288,32 @@ export class ObjectStorage {
     const s3SourceKey = `${this.db.tenantId}/${bucketId}/${sourceKey}`
     const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationKey}`
 
-    try {
-      // We check if the user has permission to copy the object to the destination key
-      const originObject = await this.db.findObject(
-        this.bucketId,
-        sourceKey,
-        'bucket_id,metadata,user_metadata,version'
-      )
+    // We check if the user has permission to copy the object to the destination key
+    const originObject = await this.db.findObject(
+      this.bucketId,
+      sourceKey,
+      'bucket_id,metadata,user_metadata,version'
+    )
 
-      if (s3SourceKey === s3DestinationKey) {
-        return {
-          destObject: originObject,
-          httpStatusCode: 200,
-          eTag: originObject.metadata?.eTag,
-          lastModified: originObject.metadata?.lastModified
-            ? new Date(originObject.metadata.lastModified as string)
-            : undefined,
-        }
+    if (s3SourceKey === s3DestinationKey) {
+      return {
+        destObject: originObject,
+        httpStatusCode: 200,
+        eTag: originObject.metadata?.eTag,
+        lastModified: originObject.metadata?.lastModified
+          ? new Date(originObject.metadata.lastModified as string)
+          : undefined,
       }
+    }
 
-      await this.uploader.canUpload({
-        bucketId: destinationBucket,
-        objectName: destinationKey,
-        owner,
-        isUpsert: false,
-      })
+    await this.uploader.canUpload({
+      bucketId: destinationBucket,
+      objectName: destinationKey,
+      owner,
+      isUpsert: false,
+    })
 
+    try {
       const copyResult = await this.backend.copyObject(
         storageS3Bucket,
         s3SourceKey,

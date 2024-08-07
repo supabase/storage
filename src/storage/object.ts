@@ -33,6 +33,7 @@ interface CopyObjectParams {
   destinationKey: string
   owner?: string
   copyMetadata?: boolean
+  upsert?: boolean
   conditions?: {
     ifMatch?: string
     ifNoneMatch?: string
@@ -280,6 +281,7 @@ export class ObjectStorage {
     owner,
     conditions,
     copyMetadata,
+    upsert,
   }: CopyObjectParams) {
     mustBeValidKey(destinationKey)
 
@@ -310,7 +312,7 @@ export class ObjectStorage {
       bucketId: destinationBucket,
       objectName: destinationKey,
       owner,
-      isUpsert: false,
+      isUpsert: upsert,
     })
 
     try {
@@ -325,14 +327,42 @@ export class ObjectStorage {
 
       const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
 
-      const destObject = await this.db.createObject({
-        ...originObject,
-        bucket_id: destinationBucket,
-        name: destinationKey,
-        owner,
-        metadata,
-        user_metadata: copyMetadata ? originObject.user_metadata : undefined,
-        version: newVersion,
+      const destinationObject = await this.db.asSuperUser().withTransaction(async (db) => {
+        await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
+          timeout: 3000,
+        })
+
+        const existingDestObject = await db.findObject(
+          this.bucketId,
+          destinationKey,
+          'id,name,metadata,version,bucket_id',
+          {
+            dontErrorOnEmpty: true,
+            forUpdate: true,
+          }
+        )
+
+        const destinationObject = await db.upsertObject({
+          ...originObject,
+          bucket_id: destinationBucket,
+          name: destinationKey,
+          owner,
+          metadata,
+          user_metadata: copyMetadata ? originObject.user_metadata : undefined,
+          version: newVersion,
+        })
+
+        if (existingDestObject) {
+          await ObjectAdminDelete.send({
+            name: existingDestObject.name,
+            bucketId: existingDestObject.bucket_id,
+            tenant: this.db.tenant(),
+            version: existingDestObject.version,
+            reqId: this.db.reqId,
+          })
+        }
+
+        return destinationObject
       })
 
       await ObjectCreatedCopyEvent.sendWebhook({
@@ -345,7 +375,7 @@ export class ObjectStorage {
       })
 
       return {
-        destObject,
+        destObject: destinationObject,
         httpStatusCode: copyResult.httpStatusCode,
         eTag: copyResult.eTag,
         lastModified: copyResult.lastModified,

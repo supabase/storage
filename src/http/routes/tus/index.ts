@@ -61,7 +61,7 @@ function createTusStore() {
       partSize: tusPartSize * 1024 * 1024, // Each uploaded part will have ${tusPartSize}MB,
       expirationPeriodInMilliseconds: tusUrlExpiryMs,
       cache: new AlsMemoryKV(),
-      maxConcurrentPartUploads: 100,
+      maxConcurrentPartUploads: 500,
       s3ClientConfig: {
         requestHandler: new NodeHttpHandler({
           ...agent,

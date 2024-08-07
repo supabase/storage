@@ -996,6 +996,7 @@ export class S3ProtocolHandler {
       destinationBucket: Bucket,
       destinationKey: Key,
       owner: this.owner,
+      upsert: true,
       conditions: {
         ifMatch: command.CopySourceIfMatch,
         ifNoneMatch: command.CopySourceIfNoneMatch,

@@ -101,6 +101,7 @@ type StorageConfigType = {
   rateLimiterRedisCommandTimeout: number
   uploadSignedUrlExpirationTime: number
   tusUrlExpiryMs: number
+  tusMaxConcurrentUploads: number
   tusPath: string
   tusPartSize: number
   tusUseFileVersionSeparator: boolean
@@ -229,6 +230,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     tusPartSize: parseInt(getOptionalConfigFromEnv('TUS_PART_SIZE') || '50', 10),
     tusUrlExpiryMs: parseInt(
       getOptionalConfigFromEnv('TUS_URL_EXPIRY_MS') || (1000 * 60 * 60).toString(),
+      10
+    ),
+    tusMaxConcurrentUploads: parseInt(
+      getOptionalConfigFromEnv('TUS_MAX_CONCURRENT_UPLOADS') || '500',
       10
     ),
     tusUseFileVersionSeparator:

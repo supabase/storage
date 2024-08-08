@@ -53,21 +53,24 @@ export class PgLock implements Lock {
       this.db
         .withTransaction(async (db) => {
           const abortController = new AbortController()
-          const acquired = await Promise.race([
-            this.waitTimeout(15000, abortController.signal),
-            this.acquireLock(db, this.id, abortController.signal),
-          ])
 
-          abortController.abort()
+          try {
+            const acquired = await Promise.race([
+              this.waitTimeout(5000, abortController.signal),
+              this.acquireLock(db, this.id, abortController.signal),
+            ])
 
-          if (!acquired) {
-            throw ERRORS.LockTimeout()
+            if (!acquired) {
+              throw ERRORS.LockTimeout()
+            }
+
+            await new Promise<void>((innerResolve) => {
+              this.tnxResolver = innerResolve
+              resolve()
+            })
+          } finally {
+            abortController.abort()
           }
-
-          await new Promise<void>((innerResolve) => {
-            this.tnxResolver = innerResolve
-            resolve()
-          })
         })
         .catch(reject)
     })

@@ -22,6 +22,7 @@ export const storage = fastifyPlugin(async function storagePlugin(fastify) {
       tenantId: request.tenantId,
       host: request.headers['x-forwarded-host'] as string,
       reqId: request.id,
+      latestMigration: request.latestMigration,
     })
     request.backend = storageBackend
     request.storage = new Storage(storageBackend, database)

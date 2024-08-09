@@ -112,7 +112,7 @@ export class PgLock implements Lock {
         clearTimeout(timeoutId)
         signal.removeEventListener('abort', onAbort)
       }
-      signal.addEventListener('abort', onAbort)
+      signal.addEventListener('abort', onAbort, { once: true })
     })
   }
 }

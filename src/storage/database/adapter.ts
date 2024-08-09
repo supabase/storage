@@ -1,6 +1,6 @@
 import { Bucket, S3MultipartUpload, Obj, S3PartUpload } from '../schemas'
 import { ObjectMetadata } from '../backend'
-import { TenantConnection } from '@internal/database'
+import { DBMigration, TenantConnection } from '@internal/database'
 
 export interface SearchObjectOption {
   search?: string
@@ -36,6 +36,7 @@ export interface TransactionOptions {
 export interface DatabaseOptions<TNX> {
   tenantId: string
   reqId?: string
+  latestMigration?: keyof typeof DBMigration
   host: string
   tnx?: TNX
   parentTnx?: TNX

@@ -17,7 +17,7 @@ import {
   SearchObjectOption,
 } from './adapter'
 import { DatabaseError } from 'pg'
-import { TenantConnection } from '@internal/database'
+import { DBMigration, getTenantConfig, TenantConnection } from '@internal/database'
 import { DbQueryPerformance } from '@internal/monitoring/metrics'
 import { isUuid } from '../limits'
 
@@ -30,6 +30,7 @@ export class StorageKnexDB implements Database {
   public readonly tenantId: string
   public readonly reqId: string | undefined
   public readonly role?: string
+  public readonly latestMigration?: keyof typeof DBMigration
 
   constructor(
     public readonly connection: TenantConnection,
@@ -39,6 +40,7 @@ export class StorageKnexDB implements Database {
     this.tenantId = options.tenantId
     this.reqId = options.reqId
     this.role = connection?.role
+    this.latestMigration = options.latestMigration
   }
 
   //eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -321,7 +323,7 @@ export class StorageKnexDB implements Database {
   async upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version'>
   ) {
-    const objectData = {
+    const objectData = this.normalizeColumns({
       name: data.name,
       owner: isUuid(data.owner || '') ? data.owner : undefined,
       owner_id: data.owner,
@@ -329,19 +331,21 @@ export class StorageKnexDB implements Database {
       metadata: data.metadata,
       user_metadata: data.user_metadata,
       version: data.version,
-    }
+    })
     const [object] = await this.runQuery('UpsertObject', (knex) => {
       return knex
         .from<Obj>('objects')
         .insert(objectData)
         .onConflict(['name', 'bucket_id'])
-        .merge({
-          metadata: data.metadata,
-          user_metadata: data.user_metadata,
-          version: data.version,
-          owner: isUuid(data.owner || '') ? data.owner : undefined,
-          owner_id: data.owner,
-        })
+        .merge(
+          this.normalizeColumns({
+            metadata: data.metadata,
+            user_metadata: data.user_metadata,
+            version: data.version,
+            owner: isUuid(data.owner || '') ? data.owner : undefined,
+            owner_id: data.owner,
+          })
+        )
         .returning('*')
     })
 
@@ -359,7 +363,7 @@ export class StorageKnexDB implements Database {
         .where('bucket_id', bucketId)
         .where('name', name)
         .update(
-          {
+          this.normalizeColumns({
             name: data.name,
             bucket_id: data.bucket_id,
             owner: isUuid(data.owner || '') ? data.owner : undefined,
@@ -367,7 +371,7 @@ export class StorageKnexDB implements Database {
             metadata: data.metadata,
             user_metadata: data.user_metadata,
             version: data.version,
-          },
+          }),
           '*'
         )
     })
@@ -383,7 +387,7 @@ export class StorageKnexDB implements Database {
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
   ) {
     try {
-      const object = {
+      const object = this.normalizeColumns({
         name: data.name,
         owner: isUuid(data.owner || '') ? data.owner : undefined,
         owner_id: data.owner,
@@ -391,7 +395,7 @@ export class StorageKnexDB implements Database {
         metadata: data.metadata,
         version: data.version,
         user_metadata: data.user_metadata,
-      }
+      })
       await this.runQuery('CreateObject', (knex) => {
         return knex.from<Obj>('objects').insert(object)
       })
@@ -475,10 +479,13 @@ export class StorageKnexDB implements Database {
     filters?: FindObjectFilters
   ) {
     const object = await this.runQuery('FindObject', (knex) => {
-      const query = knex.from<Obj>('objects').select(columns.split(',')).where({
-        name: objectName,
-        bucket_id: bucketId,
-      })
+      const query = knex
+        .from<Obj>('objects')
+        .select(this.normalizeColumns(columns).split(','))
+        .where({
+          name: objectName,
+          bucket_id: bucketId,
+        })
 
       if (filters?.forUpdate) {
         query.forUpdate()
@@ -601,15 +608,17 @@ export class StorageKnexDB implements Database {
     return this.runQuery('CreateMultipartUpload', async (knex) => {
       const multipart = await knex
         .table<S3MultipartUpload>('s3_multipart_uploads')
-        .insert({
-          id: uploadId,
-          bucket_id: bucketId,
-          key: objectName,
-          version,
-          upload_signature: signature,
-          owner_id: owner,
-          user_metadata: metadata,
-        })
+        .insert(
+          this.normalizeColumns({
+            id: uploadId,
+            bucket_id: bucketId,
+            key: objectName,
+            version,
+            upload_signature: signature,
+            owner_id: owner,
+            user_metadata: metadata,
+          })
+        )
         .returning('*')
 
       return multipart[0] as S3MultipartUpload
@@ -689,6 +698,42 @@ export class StorageKnexDB implements Database {
 
   destroyConnection() {
     return this.connection.dispose()
+  }
+
+  /**
+   * Excludes columns selection if a specific migration wasn't run
+   * @param columns
+   * @protected
+   */
+  protected normalizeColumns<T extends string | Record<string, any>>(columns: T): T {
+    const latestMigration = this.latestMigration
+
+    if (!latestMigration) {
+      return columns
+    }
+
+    const rules = [{ migration: 'custom-metadata', newColumns: ['user_metadata'] }]
+
+    rules.forEach((rule) => {
+      if (DBMigration[latestMigration] < DBMigration[rule.migration as keyof typeof DBMigration]) {
+        const value = rule.newColumns
+
+        if (typeof columns === 'string') {
+          columns = columns
+            .split(',')
+            .filter((column) => !value.includes(column))
+            .join(',') as T
+        }
+
+        if (typeof columns === 'object') {
+          value.forEach((column: string) => {
+            delete (columns as Record<any, any>)[column]
+          })
+        }
+      }
+    })
+
+    return columns
   }
 
   protected async runQuery<T extends (db: Knex.Transaction) => Promise<any>>(

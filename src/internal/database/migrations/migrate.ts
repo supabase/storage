@@ -12,6 +12,7 @@ import { multitenantKnex } from '../multitenant-db'
 import { ProgressiveMigrations } from './progressive'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { ERRORS } from '@internal/errors'
+import { DBMigration } from '@internal/database'
 
 const {
   multitenantDatabaseUrl,
@@ -77,7 +78,7 @@ export function startAsyncMigrations(signal: AbortSignal) {
 
 export async function lastMigrationName() {
   const migrations = await loadMigrationFilesCached('./migrations/tenant')
-  return migrations[migrations.length - 1].name
+  return migrations[migrations.length - 1].name as keyof typeof DBMigration
 }
 
 export async function hasMissingSyncMigration(tenantId: string) {

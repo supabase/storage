@@ -9,6 +9,7 @@ import { LRUCache } from 'lru-cache'
 import objectSizeOf from 'object-sizeof'
 import { lastMigrationName } from './migrations/migrate'
 import { ERRORS } from '@internal/errors'
+import { DBMigration } from '@internal/database/migrations'
 
 interface TenantConfig {
   anonKey?: string
@@ -29,7 +30,7 @@ interface TenantConfig {
   serviceKeyPayload: {
     role: string
   }
-  migrationVersion?: string
+  migrationVersion?: keyof typeof DBMigration
   migrationStatus?: TenantMigrationStatus
   syncMigrationsDone?: boolean
   tracingMode?: string

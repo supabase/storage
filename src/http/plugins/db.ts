@@ -11,6 +11,8 @@ import {
   progressiveMigrations,
   runMigrationsOnTenant,
   hasMissingSyncMigration,
+  DBMigration,
+  lastMigrationName,
 } from '@internal/database'
 import { verifyJWT } from '@internal/auth'
 import { logSchema } from '@internal/monitoring'
@@ -19,6 +21,7 @@ import { createMutexByKey } from '@internal/concurrency'
 declare module 'fastify' {
   interface FastifyRequest {
     db: TenantConnection
+    latestMigration?: keyof typeof DBMigration
   }
 }
 
@@ -157,6 +160,16 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(async functio
  * Handle database migration for multitenant applications when a request is made
  */
 export const migrations = fastifyPlugin(async function migrations(fastify) {
+  fastify.addHook('preHandler', async (req) => {
+    if (isMultitenant) {
+      const { migrationVersion } = await getTenantConfig(req.tenantId)
+      req.latestMigration = migrationVersion
+      return
+    }
+
+    req.latestMigration = await lastMigrationName()
+  })
+
   if (dbMigrationStrategy === MultitenantMigrationStrategy.ON_REQUEST) {
     const migrationsMutex = createMutexByKey()
 

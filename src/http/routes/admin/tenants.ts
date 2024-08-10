@@ -360,7 +360,7 @@ export default async function routes(fastify: FastifyInstance) {
     const tenantId = req.params.tenantId
     const migrationsInfo = await multitenantKnex
       .table<{ databaseUrl: string }>('tenants')
-      .select('databaseUrl')
+      .select('database_url')
       .where('id', req.params.tenantId)
       .first()
 
@@ -371,7 +371,7 @@ export default async function routes(fastify: FastifyInstance) {
       return
     }
 
-    const databaseUrl = decrypt(migrationsInfo.databaseUrl)
+    const databaseUrl = decrypt(migrationsInfo.database_url)
 
     try {
       await runMigrationsOnTenant(databaseUrl, tenantId)

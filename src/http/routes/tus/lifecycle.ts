@@ -92,14 +92,15 @@ export function generateUrl(
   }
   proto = process.env.NODE_ENV === 'production' ? 'https' : proto
 
-  const url = new URL(
-    `${proto}://${(req.headers.x_forwarded_host as string) || (req.headers.host as string) || ''}`
-  )
   const isSigned = req.url?.endsWith(SIGNED_URL_SUFFIX)
   const fullPath = isSigned ? `${path}${SIGNED_URL_SUFFIX}` : path
 
-  if (url.port && req.headers['x-forwarded-port']) {
-    host += `:${req.headers['x-forwarded-port']}`
+  if (req.headers['x-forwarded-host']) {
+    const port = req.headers['x-forwarded-port']
+
+    if (typeof port === 'string' && port && !['443', '80'].includes(port)) {
+      host += `:${req.headers['x-forwarded-port']}`
+    }
   }
 
   // remove the tenant-id from the url, since we'll be using the tenant-id from the request

@@ -73,7 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
         },
       })
 
-      response.status(200).send(results)
+      return response.status(200).send(results)
     }
   )
 }

@@ -87,10 +87,20 @@ export function generateUrl(
   req: http.IncomingMessage,
   { proto, host, path, id }: { proto: string; host: string; path: string; id: string }
 ) {
+  if (!req.url) {
+    throw ERRORS.InvalidParameter('url')
+  }
   proto = process.env.NODE_ENV === 'production' ? 'https' : proto
 
+  const url = new URL(
+    `${proto}://${(req.headers.x_forwarded_host as string) || (req.headers.host as string) || ''}`
+  )
   const isSigned = req.url?.endsWith(SIGNED_URL_SUFFIX)
   const fullPath = isSigned ? `${path}${SIGNED_URL_SUFFIX}` : path
+
+  if (url.port && req.headers['x-forwarded-port']) {
+    host += `:${req.headers['x-forwarded-port']}`
+  }
 
   // remove the tenant-id from the url, since we'll be using the tenant-id from the request
   id = id.split('/').slice(1).join('/')

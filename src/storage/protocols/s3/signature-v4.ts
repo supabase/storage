@@ -325,7 +325,14 @@ export class SignatureV4 {
 
     const xForwardedHost = this.getHeader(request, 'x-forwarded-host')
     if (xForwardedHost) {
-      return `host:${xForwardedHost.toLowerCase()}`
+      const url = new URL(request.url)
+      const port = this.getHeader(request, 'x-forwarded-port')
+      const host = `host:${xForwardedHost.toLowerCase()}`
+
+      if (port && url.port) {
+        return host + ':' + port
+      }
+      return host
     }
 
     return `host:${this.getHeader(request, 'host')}`

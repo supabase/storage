@@ -18,11 +18,14 @@ import {
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc'
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node'
 import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
+import { SpanExporter, BatchSpanProcessor } from '@opentelemetry/sdk-trace-base'
 import * as grpc from '@grpc/grpc-js'
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http'
 import { IncomingMessage } from 'http'
 import { logger, logSchema } from '@internal/monitoring/logger'
+import { traceCollector } from '@internal/monitoring/otel-processor'
 
+const tracingEnabled = process.env.TRACING_ENABLED === 'true'
 const headersEnv = process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS || ''
 
 const exporterHeaders = headersEnv
@@ -40,14 +43,20 @@ Object.keys(exporterHeaders).forEach((key) => {
 })
 
 const endpoint = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+let traceExporter: SpanExporter | undefined = undefined
 
-// Create an OTLP trace exporter
-const traceExporter = new OTLPTraceExporter({
-  url: endpoint,
-  compression: process.env.OTEL_EXPORTER_OTLP_COMPRESSION as CompressionAlgorithm,
-  headers: exporterHeaders,
-  metadata: grpcMetadata,
-})
+if (tracingEnabled && endpoint) {
+  // Create an OTLP trace exporter
+  traceExporter = new OTLPTraceExporter({
+    url: endpoint,
+    compression: process.env.OTEL_EXPORTER_OTLP_COMPRESSION as CompressionAlgorithm,
+    headers: exporterHeaders,
+    metadata: grpcMetadata,
+  })
+}
+
+// Create a BatchSpanProcessor using the trace exporter
+const batchProcessor = traceExporter ? new BatchSpanProcessor(traceExporter) : undefined
 
 // Configure the OpenTelemetry Node SDK
 const sdk = new NodeSDK({
@@ -55,6 +64,7 @@ const sdk = new NodeSDK({
     [SEMRESATTRS_SERVICE_NAME]: 'storage',
     [SEMRESATTRS_SERVICE_VERSION]: version,
   }),
+  spanProcessors: batchProcessor ? [batchProcessor, traceCollector] : [traceCollector],
   traceExporter,
   instrumentations: [
     new HttpInstrumentation({
@@ -120,12 +130,12 @@ const sdk = new NodeSDK({
   ],
 })
 
-if (process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT) {
+if (tracingEnabled) {
   // Initialize the OpenTelemetry Node SDK
   sdk.start()
 
   // Gracefully shutdown the SDK on process exit
-  process.on('SIGTERM', () => {
+  process.once('SIGTERM', () => {
     logSchema.info(logger, '[Otel] Stopping', {
       type: 'otel',
     })

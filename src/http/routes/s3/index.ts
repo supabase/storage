@@ -1,7 +1,7 @@
 import { FastifyInstance, RouteHandlerMethod } from 'fastify'
 import { JSONSchema } from 'json-schema-to-ts'
 import { trace } from '@opentelemetry/api'
-import { db, jsonToXml, signatureV4, storage, tracingMode } from '../../plugins'
+import { db, jsonToXml, signatureV4, storage } from '../../plugins'
 import { findArrayPathsInSchemas, getRouter, RequestInput } from './router'
 import { s3ErrorHandler } from './error-handler'
 
@@ -110,7 +110,6 @@ export default async function routes(fastify: FastifyInstance) {
           fastify.register(signatureV4)
           fastify.register(db)
           fastify.register(storage)
-          fastify.register(tracingMode)
 
           localFastify[method](
             routePath,

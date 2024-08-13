@@ -112,7 +112,10 @@ type StorageConfigType = {
   s3ProtocolAccessKeyId?: string
   s3ProtocolAccessKeySecret?: string
   s3ProtocolNonCanonicalHostHeader?: string
+  tracingEnabled?: boolean
   tracingMode?: string
+  tracingTimeMinDuration: number
+  tracingReturnServerTimings: boolean
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -160,16 +163,18 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   }
 
   envPaths.map((envPath) => dotenv.config({ path: envPath, override: false }))
+  const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
 
   config = {
     isProduction: process.env.NODE_ENV === 'production',
     exposeDocs: getOptionalConfigFromEnv('EXPOSE_DOCS') !== 'false',
+    isMultitenant,
     // Tenant
-    tenantId:
-      getOptionalConfigFromEnv('PROJECT_REF') ||
-      getOptionalConfigFromEnv('TENANT_ID') ||
-      'storage-single-tenant',
-    isMultitenant: getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true',
+    tenantId: isMultitenant
+      ? ''
+      : getOptionalConfigFromEnv('PROJECT_REF') ||
+        getOptionalConfigFromEnv('TENANT_ID') ||
+        'storage-single-tenant',
 
     // Server
     region: getOptionalConfigFromEnv('SERVER_REGION', 'REGION') || 'not-specified',
@@ -312,7 +317,13 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     defaultMetricsEnabled: !(
       getOptionalConfigFromEnv('DEFAULT_METRICS_ENABLED', 'ENABLE_DEFAULT_METRICS') === 'false'
     ),
+    tracingEnabled: getOptionalConfigFromEnv('TRACING_ENABLED') === 'true',
     tracingMode: getOptionalConfigFromEnv('TRACING_MODE') ?? 'basic',
+    tracingTimeMinDuration: parseFloat(
+      getOptionalConfigFromEnv('TRACING_SERVER_TIME_MIN_DURATION') ?? '100.0'
+    ),
+    tracingReturnServerTimings:
+      getOptionalConfigFromEnv('TRACING_RETURN_SERVER_TIMINGS') === 'true',
 
     // Queue
     pgQueueEnable: getOptionalConfigFromEnv('PG_QUEUE_ENABLE', 'ENABLE_QUEUE_EVENTS') === 'true',

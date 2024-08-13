@@ -51,6 +51,7 @@ export interface RequestLog {
   owner?: string
   operation?: string
   resources?: string[]
+  serverTimes?: { spanName: string; duration: number }[]
 }
 
 export interface EventLog {

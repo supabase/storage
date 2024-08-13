@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { jwt, storage, dbSuperUser, db, tracingMode } from '../../plugins'
+import { jwt, storage, dbSuperUser, db } from '../../plugins'
 import copyObject from './copyObject'
 import createObject from './createObject'
 import deleteObject from './deleteObject'
@@ -24,7 +24,6 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(jwt)
     fastify.register(db)
     fastify.register(storage)
-    fastify.register(tracingMode)
 
     fastify.register(deleteObject)
     fastify.register(deleteObjects)
@@ -43,7 +42,6 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.register(async (fastify) => {
     fastify.register(dbSuperUser)
     fastify.register(storage)
-    fastify.register(tracingMode)
 
     fastify.register(getPublicObject)
     fastify.register(getSignedObject)

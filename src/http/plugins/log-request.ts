@@ -79,6 +79,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
         owner: req.owner,
         operation: req.operation?.type ?? req.routeConfig.operation?.type,
         resources: req.resources,
+        serverTimes: req.serverTimings,
       })
     })
 
@@ -112,6 +113,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
         owner: req.owner,
         resources: req.resources,
         operation: req.operation?.type ?? req.routeConfig.operation?.type,
+        serverTimes: req.serverTimings,
       })
     })
   })

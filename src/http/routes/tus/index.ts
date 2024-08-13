@@ -4,7 +4,7 @@ import * as http from 'http'
 import { ServerOptions, DataStore } from '@tus/server'
 import { getFileSizeLimit } from '@storage/limits'
 import { Storage } from '@storage/storage'
-import { jwt, storage, db, dbSuperUser, tracingMode } from '../../plugins'
+import { jwt, storage, db, dbSuperUser } from '../../plugins'
 import { getConfig } from '../../../config'
 import {
   TusServer,
@@ -38,6 +38,7 @@ const {
   tusUrlExpiryMs,
   tusPath,
   tusPartSize,
+  tusMaxConcurrentUploads,
   storageBackendType,
   storageFilePath,
 } = getConfig()
@@ -61,7 +62,7 @@ function createTusStore() {
       partSize: tusPartSize * 1024 * 1024, // Each uploaded part will have ${tusPartSize}MB,
       expirationPeriodInMilliseconds: tusUrlExpiryMs,
       cache: new AlsMemoryKV(),
-      maxConcurrentPartUploads: 500,
+      maxConcurrentPartUploads: tusMaxConcurrentUploads,
       s3ClientConfig: {
         requestHandler: new NodeHttpHandler({
           ...agent,
@@ -137,7 +138,6 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(jwt)
     fastify.register(db)
     fastify.register(storage)
-    fastify.register(tracingMode)
 
     fastify.register(authenticatedRoutes, {
       tusServer,
@@ -149,7 +149,6 @@ export default async function routes(fastify: FastifyInstance) {
     async (fastify) => {
       fastify.register(dbSuperUser)
       fastify.register(storage)
-      fastify.register(tracingMode)
 
       fastify.register(authenticatedRoutes, {
         tusServer,
@@ -163,7 +162,6 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.register(async (fastify) => {
     fastify.register(dbSuperUser)
     fastify.register(storage)
-    fastify.register(tracingMode)
 
     fastify.register(publicRoutes, {
       tusServer,
@@ -175,7 +173,6 @@ export default async function routes(fastify: FastifyInstance) {
     async (fastify) => {
       fastify.register(dbSuperUser)
       fastify.register(storage)
-      fastify.register(tracingMode)
 
       fastify.register(publicRoutes, {
         tusServer,

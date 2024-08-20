@@ -25,7 +25,7 @@
     "node": ">= 14.0.0"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "3.515.0",
+    "@aws-sdk/client-s3": "3.633.0",
     "@aws-sdk/lib-storage": "3.515.0",
     "@aws-sdk/s3-request-presigner": "3.421.0",
     "@fastify/accepts": "^4.3.0",

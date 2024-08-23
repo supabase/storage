@@ -2,6 +2,7 @@ import { Obj } from '@storage/schemas'
 import { HeadRenderer } from './head'
 import { FastifyRequest, FastifyReply } from 'fastify'
 import { AssetResponse, RenderOptions } from './renderer'
+import { ImageRenderer, TransformOptions } from '@storage/renderer/image'
 
 /**
  * HeadRenderer
@@ -15,6 +16,7 @@ export class InfoRenderer extends HeadRenderer {
 
     return {
       ...headAsset,
+      transformations: ImageRenderer.applyTransformation(request.query as TransformOptions),
       body: {
         id: obj.id,
         name: obj.name,
@@ -43,5 +45,9 @@ export class InfoRenderer extends HeadRenderer {
       .header('Content-Length', data.metadata.contentLength)
       .header('Last-Modified', data.metadata.lastModified?.toUTCString())
       .header('CacheControl', data.metadata.cacheControl)
+
+    if (data.transformations && data.transformations.length > 0) {
+      response.header('X-Transformations', data.transformations.join(','))
+    }
   }
 }

@@ -262,8 +262,11 @@ export class SignatureV4 {
     signedHeaders: string[]
   ) {
     const method = request.method
-    const canonicalUri = new URL(`http://localhost:8080${request.prefix || ''}${request.url}`)
-      .pathname
+    const xForwardedUri = this.getHeader(request, 'x-forwarded-uri')
+    const canonicalUri =
+      xForwardedUri ??
+      new URL(`http://localhost:8080${request.prefix || ''}${request.url}`).pathname
+  
     const canonicalQueryString = this.constructCanonicalQueryString(request.query || {})
     const canonicalHeaders = this.constructCanonicalHeaders(request, signedHeaders)
     const signedHeadersString = signedHeaders.sort().join(';')

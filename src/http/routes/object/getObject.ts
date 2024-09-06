@@ -4,6 +4,8 @@ import { IncomingMessage, Server, ServerResponse } from 'http'
 import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { ERRORS } from '@internal/errors'
+import { Obj } from '@storage/schemas'
 
 const { storageS3Bucket } = getConfig()
 
@@ -42,10 +44,34 @@ async function requestHandler(
   const { download } = request.query
   const objectName = request.params['*']
 
-  const obj = await request.storage.from(bucketName).findObject(objectName, 'id, version')
-
   // send the object from s3
   const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
+  const bucket = await request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
+    dontErrorOnEmpty: true,
+  })
+
+  // The request is not authenticated
+  if (!request.isAuthenticated) {
+    // The bucket must be public to access its content
+    if (!bucket?.public) {
+      throw ERRORS.AccessDenied('Access denied to this bucket')
+    }
+  }
+
+  // The request is authenticated
+  if (!bucket) {
+    throw ERRORS.NoSuchBucket(bucketName)
+  }
+
+  let obj: Obj | undefined
+
+  if (bucket.public) {
+    // request is authenticated but we still use the superUser as we don't need to check RLS
+    obj = await request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id, version')
+  } else {
+    // request is authenticated use RLS
+    obj = await request.storage.from(bucketName).findObject(objectName, 'id, version')
+  }
 
   return request.storage.renderer('asset').render(request, response, {
     bucket: storageS3Bucket,
@@ -85,14 +111,14 @@ export default async function routes(fastify: FastifyInstance) {
       // @todo add success response schema here
       schema: {
         params: getObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
         summary: 'Get object',
-        description: 'use GET /object/authenticated/{bucketName} instead',
+        description: 'Serve objects',
         response: { '4xx': { $ref: 'errorSchema#' } },
         tags: ['deprecated'],
       },
       config: {
         operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT },
+        allowInvalidJwt: true,
       },
     },
     async (request, response) => {

@@ -328,13 +328,15 @@ export class SignatureV4 {
 
     const xForwardedHost = this.getHeader(request, 'x-forwarded-host')
     if (xForwardedHost) {
-      const port = this.getHeader(request, 'x-forwarded-port')
+      return `host:${xForwardedHost.toLowerCase()}`
+      // TODO something always sets 'x-forwarded-port' to internal port, so we can't use it
+      /* const port = this.getHeader(request, 'x-forwarded-port')
       const host = `host:${xForwardedHost.toLowerCase()}`
 
       if (port && !['443', '80'].includes(port)) {
         return host + ':' + port
       }
-      return host
+      return host */
     }
 
     return `host:${this.getHeader(request, 'host')}`

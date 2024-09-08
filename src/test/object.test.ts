@@ -61,6 +61,20 @@ describe('testing GET object', () => {
     expect(S3Backend.prototype.getObject).toBeCalled()
   })
 
+  test('check if RLS policies are respected: authenticated user is able to read authenticated resource without /authenticated prefix', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/bucket2/authenticated/casestudy.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
+    expect(S3Backend.prototype.getObject).toBeCalled()
+  })
+
   test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
     const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
     mockGetObject.mockRejectedValue({
@@ -99,10 +113,48 @@ describe('testing GET object', () => {
     expect(response.headers['cache-control']).toBe('no-cache')
   })
 
+  test('get authenticated object info without the /authenticated prefix', async () => {
+    const response = await app().inject({
+      method: 'HEAD',
+      url: '/object/bucket2/authenticated/casestudy.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
+    expect(response.headers['content-length']).toBe(3746)
+    expect(response.headers['cache-control']).toBe('no-cache')
+  })
+
+  test('cannot get authenticated object info without the /authenticated prefix if no jwt is provided', async () => {
+    const response = await app().inject({
+      method: 'HEAD',
+      url: '/object/bucket2/authenticated/casestudy.png',
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('get public object info without using the /public prefix', async () => {
+    const response = await app().inject({
+      method: 'HEAD',
+      url: '/object/public-bucket-2/favicon.ico',
+      headers: {
+        authorization: ``,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
+    expect(response.headers['content-length']).toBe(3746)
+    expect(response.headers['cache-control']).toBe('no-cache')
+  })
+
   test('get public object info', async () => {
     const response = await app().inject({
       method: 'HEAD',
-      url: '/object/public/public-bucket-2/favicon.ico',
+      url: '/object/public-bucket-2/favicon.ico',
       headers: {
         authorization: ``,
       },
@@ -158,10 +210,31 @@ describe('testing GET object', () => {
     expect(S3Backend.prototype.getObject).not.toHaveBeenCalled()
   })
 
+  test('check if RLS policies are respected: anon user is not able to read authenticated resource without /authenticated prefix', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/bucket2/authenticated/casestudy.png',
+      headers: {
+        authorization: `Bearer ${anonKey}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(S3Backend.prototype.getObject).not.toHaveBeenCalled()
+  })
+
   test('user is not able to read a resource without Auth header', async () => {
     const response = await app().inject({
       method: 'GET',
       url: '/object/authenticated/bucket2/authenticated/casestudy.png',
+    })
+    expect(response.statusCode).toBe(400)
+    expect(S3Backend.prototype.getObject).not.toHaveBeenCalled()
+  })
+
+  test('user is not able to read a resource without Auth header without the /authenticated prefix', async () => {
+    const response = await app().inject({
+      method: 'GET',
+      url: '/object/bucket2/authenticated/casestudy.png',
     })
     expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.getObject).not.toHaveBeenCalled()

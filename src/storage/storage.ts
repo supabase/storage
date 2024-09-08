@@ -6,6 +6,7 @@ import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from '.
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
 import { InfoRenderer } from '@storage/renderer/info'
+import { logger, logSchema } from '@internal/monitoring'
 
 const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
 
@@ -206,7 +207,9 @@ export class Storage {
           return all
         }, [] as string[])
         // delete files from s3 asynchronously
-        this.backend.deleteObjects(storageS3Bucket, params)
+        this.backend.deleteObjects(storageS3Bucket, params).catch((e) => {
+          logSchema.error(logger, 'Failed to delete objects from s3', { type: 's3', error: e })
+        })
       }
 
       if (deleted?.length !== objects.length) {

@@ -17,7 +17,7 @@ import {
   SearchObjectOption,
 } from './adapter'
 import { DatabaseError } from 'pg'
-import { DBMigration, getTenantConfig, TenantConnection } from '@internal/database'
+import { DBMigration, TenantConnection } from '@internal/database'
 import { DbQueryPerformance } from '@internal/monitoring/metrics'
 import { isUuid } from '../limits'
 

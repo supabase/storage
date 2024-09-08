@@ -5,6 +5,7 @@ import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../types'
 import { Obj } from '@storage/schemas'
 import { ROUTE_OPERATIONS } from '../operations'
+import { ERRORS } from '@internal/errors'
 
 const { storageS3Bucket } = getConfig()
 
@@ -38,11 +39,25 @@ async function requestHandler(
 
   const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
 
+  const bucket = await request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
+    dontErrorOnEmpty: true,
+  })
+
+  // Not Authenticated flow
+  if (!request.isAuthenticated) {
+    if (!bucket?.public) {
+      throw ERRORS.AccessDenied('Access denied to this bucket')
+    }
+  }
+
+  // Authenticated flow
+  if (!bucket) {
+    throw ERRORS.NoSuchBucket(bucketName)
+  }
+
   let obj: Obj
-  if (publicRoute) {
-    await request.storage.asSuperUser().findBucket(bucketName, 'id', {
-      isPublic: true,
-    })
+
+  if (bucket.public || publicRoute) {
     obj = await request.storage
       .asSuperUser()
       .from(bucketName)
@@ -147,7 +162,6 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
     {
       schema: {
         params: getObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
         summary,
         description: 'use HEAD /object/authenticated/{bucketName} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
@@ -155,6 +169,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
       },
       config: {
         operation: { type: 'object.get_authenticated_info' },
+        allowInvalidJwt: true,
       },
     },
     async (request, response) => {
@@ -167,7 +182,6 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
     {
       schema: {
         params: getObjectParamsSchema,
-        headers: { $ref: 'authSchema#' },
         summary,
         description: 'use HEAD /object/authenticated/{bucketName} instead',
         response: { '4xx': { $ref: 'errorSchema#' } },
@@ -175,6 +189,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
       },
       config: {
         operation: { type: 'object.head_authenticated_info' },
+        allowInvalidJwt: true,
       },
     },
     async (request, response) => {

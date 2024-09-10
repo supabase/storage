@@ -329,7 +329,11 @@ export class SignatureV4 {
       const host = `host:${xForwardedHost.toLowerCase()}`
 
       if (port && !['443', '80'].includes(port)) {
-        return host + ':' + port
+        if (!host.includes(':')) {
+          return host + ':' + port
+        } else {
+          return host.replace(/:\d+$/, `:${port}`)
+        }
       }
       return host
     }

@@ -46,7 +46,7 @@ async function requestHandler(
   // Not Authenticated flow
   if (!request.isAuthenticated) {
     if (!bucket?.public) {
-      throw ERRORS.AccessDenied('Access denied to this bucket')
+      throw ERRORS.NoSuchBucket(bucketName)
     }
   }
 

@@ -54,7 +54,7 @@ async function requestHandler(
   if (!request.isAuthenticated) {
     // The bucket must be public to access its content
     if (!bucket?.public) {
-      throw ERRORS.AccessDenied('Access denied to this bucket')
+      throw ERRORS.NoSuchBucket(bucketName)
     }
   }
 

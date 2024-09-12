@@ -24,70 +24,73 @@ const {
 
 type AWSRequest = FastifyRequest<{ Querystring: { 'X-Amz-Credential'?: string } }>
 
-export const signatureV4 = fastifyPlugin(async function (fastify: FastifyInstance) {
-  fastify.addHook('preHandler', async (request: AWSRequest) => {
-    const clientSignature = extractSignature(request)
+export const signatureV4 = fastifyPlugin(
+  async function (fastify: FastifyInstance) {
+    fastify.addHook('preHandler', async (request: AWSRequest) => {
+      const clientSignature = extractSignature(request)
 
-    const sessionToken = clientSignature.sessionToken
+      const sessionToken = clientSignature.sessionToken
 
-    const {
-      signature: signatureV4,
-      claims,
-      token,
-    } = await createServerSignature(request.tenantId, clientSignature)
+      const {
+        signature: signatureV4,
+        claims,
+        token,
+      } = await createServerSignature(request.tenantId, clientSignature)
 
-    const isVerified = signatureV4.verify(clientSignature, {
-      url: request.url,
-      body: request.body as string | ReadableStream | Buffer,
-      headers: request.headers as Record<string, string | string[]>,
-      method: request.method,
-      query: request.query as Record<string, string>,
-      prefix: s3ProtocolPrefix,
+      const isVerified = signatureV4.verify(clientSignature, {
+        url: request.url,
+        body: request.body as string | ReadableStream | Buffer,
+        headers: request.headers as Record<string, string | string[]>,
+        method: request.method,
+        query: request.query as Record<string, string>,
+        prefix: s3ProtocolPrefix,
+      })
+
+      if (!isVerified && !sessionToken) {
+        throw ERRORS.SignatureDoesNotMatch(
+          'The request signature we calculated does not match the signature you provided. Check your key and signing method.'
+        )
+      }
+
+      if (!isVerified && sessionToken) {
+        throw ERRORS.SignatureDoesNotMatch(
+          'The request signature we calculated does not match the signature you provided, Check your credentials. ' +
+            'The session token should be a valid JWT token'
+        )
+      }
+
+      const jwtSecrets = {
+        jwtSecret: jwtSecret,
+        jwks: jwtJWKS,
+      }
+
+      if (isMultitenant) {
+        const tenant = await getTenantConfig(request.tenantId)
+        jwtSecrets.jwtSecret = tenant.jwtSecret
+        jwtSecrets.jwks = tenant.jwks || undefined
+      }
+
+      if (token) {
+        const payload = await verifyJWT(token, jwtSecrets.jwtSecret, jwtSecrets.jwks)
+        request.jwt = token
+        request.jwtPayload = payload
+        request.owner = payload.sub
+        return
+      }
+
+      if (!claims) {
+        throw ERRORS.AccessDenied('Missing claims')
+      }
+
+      const jwt = await signJWT(claims, jwtSecrets.jwtSecret, '5m')
+
+      request.jwt = jwt
+      request.jwtPayload = claims
+      request.owner = claims.sub
     })
-
-    if (!isVerified && !sessionToken) {
-      throw ERRORS.SignatureDoesNotMatch(
-        'The request signature we calculated does not match the signature you provided. Check your key and signing method.'
-      )
-    }
-
-    if (!isVerified && sessionToken) {
-      throw ERRORS.SignatureDoesNotMatch(
-        'The request signature we calculated does not match the signature you provided, Check your credentials. ' +
-          'The session token should be a valid JWT token'
-      )
-    }
-
-    const jwtSecrets = {
-      jwtSecret: jwtSecret,
-      jwks: jwtJWKS,
-    }
-
-    if (isMultitenant) {
-      const tenant = await getTenantConfig(request.tenantId)
-      jwtSecrets.jwtSecret = tenant.jwtSecret
-      jwtSecrets.jwks = tenant.jwks || undefined
-    }
-
-    if (token) {
-      const payload = await verifyJWT(token, jwtSecrets.jwtSecret, jwtSecrets.jwks)
-      request.jwt = token
-      request.jwtPayload = payload
-      request.owner = payload.sub
-      return
-    }
-
-    if (!claims) {
-      throw ERRORS.AccessDenied('Missing claims')
-    }
-
-    const jwt = await signJWT(claims, jwtSecrets.jwtSecret, '5m')
-
-    request.jwt = jwt
-    request.jwtPayload = claims
-    request.owner = claims.sub
-  })
-})
+  },
+  { name: 'auth-signature-v4' }
+)
 
 function extractSignature(req: AWSRequest) {
   if (typeof req.headers.authorization === 'string') {

@@ -69,10 +69,7 @@ export const searchPath = ['storage', 'public', 'extensions', ...dbSearchPath.sp
 export class TenantConnection {
   public readonly role: string
 
-  protected constructor(
-    protected readonly pool: Knex,
-    protected readonly options: TenantConnectionOptions
-  ) {
+  constructor(protected readonly pool: Knex, protected readonly options: TenantConnectionOptions) {
     this.role = options.user.payload.role || 'anon'
   }
 

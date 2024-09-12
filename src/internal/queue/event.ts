@@ -40,7 +40,7 @@ interface BaseEventConstructor<Base extends Event<any>> {
 /**
  * Base class for all events that are sent to the queue
  */
-export abstract class Event<T extends Omit<BasePayload, '$version'>> {
+export class Event<T extends Omit<BasePayload, '$version'>> {
   public static readonly version: string = 'v1'
   protected static queueName = ''
 

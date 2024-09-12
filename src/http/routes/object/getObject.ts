@@ -113,8 +113,8 @@ export default async function routes(fastify: FastifyInstance) {
         params: getObjectParamsSchema,
         summary: 'Get object',
         description: 'Serve objects',
+        tags: ['object'],
         response: { '4xx': { $ref: 'errorSchema#' } },
-        tags: ['deprecated'],
       },
       config: {
         operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT },

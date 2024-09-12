@@ -48,6 +48,7 @@ export interface RequestLog {
   res?: FastifyReply
   responseTime: number
   error?: Error | unknown
+  role?: string
   owner?: string
   operation?: string
   resources?: string[]

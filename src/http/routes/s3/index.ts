@@ -116,6 +116,9 @@ export default async function routes(fastify: FastifyInstance) {
             {
               validatorCompiler: () => () => true,
               exposeHeadRoute: false,
+              schema: {
+                tags: ['s3'],
+              },
               errorHandler: s3ErrorHandler,
             },
             routeHandler
@@ -128,6 +131,9 @@ export default async function routes(fastify: FastifyInstance) {
               {
                 validatorCompiler: () => () => true,
                 exposeHeadRoute: false,
+                schema: {
+                  tags: ['s3'],
+                },
                 errorHandler: s3ErrorHandler,
               },
               routeHandler

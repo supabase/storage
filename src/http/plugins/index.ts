@@ -1,6 +1,5 @@
 export * from './apikey'
 export * from './jwt'
-export * from './log-tenant-id'
 export * from './log-request'
 export * from './db'
 export * from './storage'

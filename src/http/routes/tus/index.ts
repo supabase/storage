@@ -39,6 +39,7 @@ const {
   tusPath,
   tusPartSize,
   tusMaxConcurrentUploads,
+  uploadFileSizeLimit,
   storageBackendType,
   storageFilePath,
 } = getConfig()
@@ -104,6 +105,10 @@ function createTusServer(lockNotifier: LockNotifier) {
     maxSize: async (rawReq, uploadId) => {
       const req = rawReq as MultiPartRequest
 
+      if (!req.upload.tenantId) {
+        return uploadFileSizeLimit
+      }
+
       if (!uploadId) {
         return getFileSizeLimit(req.upload.tenantId)
       }
@@ -160,9 +165,6 @@ export default async function routes(fastify: FastifyInstance) {
 
   // public routes
   fastify.register(async (fastify) => {
-    fastify.register(dbSuperUser)
-    fastify.register(storage)
-
     fastify.register(publicRoutes, {
       tusServer,
     })

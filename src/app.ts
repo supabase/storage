@@ -37,7 +37,6 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
           { name: 's3', description: 'S3 end-points' },
           { name: 'transformation', description: 'Image transformation' },
           { name: 'resumable', description: 'Resumable Upload end-points' },
-          { name: 'deprecated', description: 'Deprecated end-points' },
         ],
       },
     })
@@ -52,7 +51,6 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.addSchema(schemas.errorSchema)
 
   app.register(plugins.tenantId)
-  app.register(plugins.logTenantId)
   app.register(plugins.metrics({ enabledEndpoint: !isMultitenant }))
   app.register(plugins.tracing)
   app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health'] }))

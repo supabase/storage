@@ -15,16 +15,19 @@ const { storageBackendType } = getConfig()
 
 const storageBackend = createStorageBackend(storageBackendType)
 
-export const storage = fastifyPlugin(async function storagePlugin(fastify) {
-  fastify.decorateRequest('storage', undefined)
-  fastify.addHook('preHandler', async (request) => {
-    const database = new StorageKnexDB(request.db, {
-      tenantId: request.tenantId,
-      host: request.headers['x-forwarded-host'] as string,
-      reqId: request.id,
-      latestMigration: request.latestMigration,
+export const storage = fastifyPlugin(
+  async function storagePlugin(fastify) {
+    fastify.decorateRequest('storage', undefined)
+    fastify.addHook('preHandler', async (request) => {
+      const database = new StorageKnexDB(request.db, {
+        tenantId: request.tenantId,
+        host: request.headers['x-forwarded-host'] as string,
+        reqId: request.id,
+        latestMigration: request.latestMigration,
+      })
+      request.backend = storageBackend
+      request.storage = new Storage(storageBackend, database)
     })
-    request.backend = storageBackend
-    request.storage = new Storage(storageBackend, database)
-  })
-})
+  },
+  { name: 'storage-init' }
+)

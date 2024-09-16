@@ -177,6 +177,10 @@ export function deleteTenantConfig(tenantId: string): void {
  * @param tenantId
  */
 export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
+  if (!tenantId) {
+    throw ERRORS.InvalidTenantId()
+  }
+
   if (tenantConfigCache.has(tenantId)) {
     return tenantConfigCache.get(tenantId) as TenantConfig
   }

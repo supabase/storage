@@ -4,7 +4,7 @@ import { getTenantConfig } from '@internal/database'
 
 import { getConfig } from '../../config'
 import { context, trace } from '@opentelemetry/api'
-import { traceCollector } from '@internal/monitoring/otel-processor'
+import { Span, traceCollector } from '@internal/monitoring/otel-processor'
 import { ReadableSpan } from '@opentelemetry/sdk-trace-base'
 import { logger, logSchema } from '@internal/monitoring'
 
@@ -20,69 +20,93 @@ const {
   tracingEnabled,
   tracingMode: defaultTracingMode,
   tracingReturnServerTimings,
+  isProduction,
+  tracingTimeMinDuration,
 } = getConfig()
 
-export const tracing = fastifyPlugin(async function tracingMode(fastify) {
-  if (!tracingEnabled) {
-    return
-  }
-  fastify.register(traceServerTime)
-
-  fastify.addHook('onRequest', async (request) => {
-    if (isMultitenant && request.tenantId) {
-      const tenantConfig = await getTenantConfig(request.tenantId)
-      request.tracingMode = tenantConfig.tracingMode
-    } else {
-      request.tracingMode = defaultTracingMode
+export const tracing = fastifyPlugin(
+  async function tracingMode(fastify) {
+    if (!tracingEnabled) {
+      return
     }
-  })
-})
+    fastify.register(traceServerTime)
 
-export const traceServerTime = fastifyPlugin(async function traceServerTime(fastify) {
-  if (!tracingEnabled) {
-    return
-  }
-  fastify.addHook('onResponse', async (request, reply) => {
-    const traceId = trace.getSpan(context.active())?.spanContext().traceId
+    fastify.addHook('onRequest', async (request) => {
+      if (isMultitenant && request.tenantId) {
+        const tenantConfig = await getTenantConfig(request.tenantId)
+        request.tracingMode = tenantConfig.tracingMode
+      } else {
+        request.tracingMode = defaultTracingMode
+      }
 
-    if (traceId) {
-      const spans = traceCollector.getSpansForTrace(traceId)
-      if (spans) {
-        try {
-          const serverTimingHeaders = spansToServerTimings(spans)
+      const span = trace.getSpan(context.active())
 
-          request.serverTimings = serverTimingHeaders
-
-          // Return Server-Timing if enabled
-          if (tracingReturnServerTimings) {
-            const httpServerTimes = serverTimingHeaders
-              .map(({ spanName, duration }) => {
-                return `${spanName};dur=${duration.toFixed(3)}` // Convert to milliseconds
-              })
-              .join(',')
-            reply.header('Server-Timing', httpServerTimes)
-          }
-        } catch (e) {
-          logSchema.error(logger, 'failed parsing server times', { error: e, type: 'otel' })
+      if (span) {
+        // We collect logs only in full and logs mode
+        if (
+          tracingEnabled &&
+          request.tracingMode &&
+          !['full', 'logs'].includes(request.tracingMode)
+        ) {
+          traceCollector.clearTrace(span.spanContext().traceId)
         }
+      }
+    })
+  },
+  { name: 'tracing-mode' }
+)
 
+export const traceServerTime = fastifyPlugin(
+  async function traceServerTime(fastify) {
+    if (!tracingEnabled) {
+      return
+    }
+    fastify.addHook('onResponse', async (request, reply) => {
+      const traceId = trace.getSpan(context.active())?.spanContext().traceId
+
+      if (traceId) {
+        const spans = traceCollector.getSpansForTrace(traceId)
+        if (spans) {
+          try {
+            const serverTimingHeaders = spansToServerTimings(spans)
+
+            request.serverTimings = serverTimingHeaders
+
+            // Return Server-Timing if enabled
+            if (tracingReturnServerTimings) {
+              const httpServerTimes = serverTimingHeaders
+                .flatMap((span) => {
+                  return [span, ...span.children]
+                })
+                .map(({ spanName, duration }) => {
+                  return `${spanName};dur=${duration.toFixed(3)}` // Convert to milliseconds
+                })
+                .join(',')
+              reply.header('Server-Timing', httpServerTimes)
+            }
+          } catch (e) {
+            logSchema.error(logger, 'failed parsing server times', { error: e, type: 'otel' })
+          }
+
+          traceCollector.clearTrace(traceId)
+        }
+      }
+    })
+
+    fastify.addHook('onRequestAbort', async (req) => {
+      const traceId = trace.getSpan(context.active())?.spanContext().traceId
+
+      if (traceId) {
+        const spans = traceCollector.getSpansForTrace(traceId)
+        if (spans) {
+          req.serverTimings = spansToServerTimings(spans)
+        }
         traceCollector.clearTrace(traceId)
       }
-    }
-  })
-
-  fastify.addHook('onRequestAbort', async (req) => {
-    const traceId = trace.getSpan(context.active())?.spanContext().traceId
-
-    if (traceId) {
-      const spans = traceCollector.getSpansForTrace(traceId)
-      if (spans) {
-        req.serverTimings = spansToServerTimings(spans)
-      }
-      traceCollector.clearTrace(traceId)
-    }
-  })
-})
+    })
+  },
+  { name: 'tracing-server-times' }
+)
 
 function enrichSpanName(spanName: string, span: ReadableSpan) {
   if (span.attributes['knex.version']) {
@@ -101,39 +125,47 @@ function enrichSpanName(spanName: string, span: ReadableSpan) {
   return spanName
 }
 
-function spansToServerTimings(spans: ReadableSpan[]) {
-  return spans
-    .sort((a, b) => {
-      return a.startTime[1] - b.startTime[1]
-    })
-    .map((span) => {
-      const duration = span.duration[1] // Duration in nanoseconds
+function spansToServerTimings(
+  spans: Span[],
+  includeChildren = false
+): { spanName: string; duration: number; action?: any; host?: string; children: any[] }[] {
+  const minLatency = isProduction ? tracingTimeMinDuration : 50
 
+  return spans.flatMap((span) => {
+    const duration = Math.max(span.item.duration[1], span.item.duration[0]) / 1e6 // Convert nanoseconds to milliseconds
+
+    if (duration >= minLatency || includeChildren) {
       let spanName =
-        span.name
+        span.item.name
           .split('->')
           .pop()
           ?.trimStart()
           .replaceAll('\n', '')
-          .replaceAll('.', '_')
           .replaceAll(' ', '_')
           .replaceAll('-', '_')
           .replaceAll('___', '_')
           .replaceAll(':', '_')
           .replaceAll('_undefined', '') || 'UNKNOWN'
 
-      spanName = enrichSpanName(spanName, span)
-      const hostName = span.attributes['net.peer.name'] as string | undefined
+      spanName = enrichSpanName(spanName, span.item)
+      const hostName = span.item.attributes['net.peer.name'] as string | undefined
 
-      return {
-        spanName,
-        duration: duration / 1e6,
-        action: span.attributes['db.statement'],
-        host: hostName
-          ? isIP(hostName)
-            ? hostName
-            : hostName?.split('.').slice(-3).join('.')
-          : undefined,
-      }
-    })
+      return [
+        {
+          spanName,
+          duration,
+          action: span.item.attributes['db.statement'],
+          host: hostName
+            ? isIP(hostName)
+              ? hostName
+              : hostName?.split('.').slice(-3).join('.')
+            : undefined,
+          children: spansToServerTimings(span.children, true),
+        },
+      ]
+    } else {
+      // If the span doesn't meet the minimum latency, only return its children
+      return spansToServerTimings(span.children)
+    }
+  })
 }

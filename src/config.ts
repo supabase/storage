@@ -25,6 +25,9 @@ type StorageConfigType = {
   storageS3Endpoint?: string
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
+  storageS3ClientTimeout: number
+  storageS3UploadTimeout: number
+  storageS3DownloadTimeout: number
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: string
@@ -274,6 +277,15 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('STORAGE_S3_FORCE_PATH_STYLE', 'GLOBAL_S3_FORCE_PATH_STYLE') ===
       'true',
     storageS3Region: getOptionalConfigFromEnv('STORAGE_S3_REGION', 'REGION') as string,
+    storageS3ClientTimeout: Number(
+      getOptionalConfigFromEnv('STORAGE_S3_CLIENT_TIMEOUT') || `${1000 * 600}` // 10m
+    ),
+    storageS3DownloadTimeout: Number(
+      getOptionalConfigFromEnv('STORAGE_S3_DOWNLOAD_TIMEOUT') || `${1000 * 43200}` //12h
+    ),
+    storageS3UploadTimeout: Number(
+      getOptionalConfigFromEnv('STORAGE_S3_UPLOAD_TIMEOUT') || `${1000 * 1200}` // 20m
+    ),
 
     // DB - Migrations
     dbAnonRole: getOptionalConfigFromEnv('DB_ANON_ROLE') || 'anon',

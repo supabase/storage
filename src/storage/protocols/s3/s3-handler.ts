@@ -839,8 +839,9 @@ export class S3ProtocolHandler {
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html
    *
    * @param command
+   * @param options
    */
-  async getObject(command: GetObjectCommandInput) {
+  async getObject(command: GetObjectCommandInput, options?: { signal?: AbortSignal }) {
     const bucket = command.Bucket as string
     const key = command.Key as string
 
@@ -853,7 +854,8 @@ export class S3ProtocolHandler {
         ifModifiedSince: command.IfModifiedSince?.toISOString(),
         ifNoneMatch: command.IfNoneMatch,
         range: command.Range,
-      }
+      },
+      options?.signal
     )
 
     let metadataHeaders: Record<string, any> = {}

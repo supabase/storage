@@ -41,6 +41,7 @@ export function createAgent(protocol: 'http' | 'https') {
   const agentOptions = {
     maxSockets: storageS3MaxSockets,
     keepAlive: true,
+    keepAliveMsecs: 1000,
   }
 
   return protocol === 'http'
@@ -56,6 +57,9 @@ export interface S3ClientOptions {
   secretKey?: string
   role?: string
   httpAgent?: { httpAgent: Agent } | { httpsAgent: HttpsAgent }
+  requestTimeout?: number
+  downloadTimeout?: number
+  uploadTimeout?: number
 }
 
 /**
@@ -64,25 +68,27 @@ export interface S3ClientOptions {
  */
 export class S3Backend implements StorageBackendAdapter {
   client: S3Client
+  uploadClient: S3Client
+  downloadClient: S3Client
 
   constructor(options: S3ClientOptions) {
-    const storageS3Protocol = options.endpoint?.includes('http://') ? 'http' : 'https'
-    const agent = options.httpAgent ? options.httpAgent : createAgent(storageS3Protocol)
+    // Default client for API operations
+    this.client = this.createS3Client({
+      ...options,
+      requestTimeout: options.requestTimeout,
+    })
 
-    const params: S3ClientConfig = {
-      region: options.region,
-      runtime: 'node',
-      requestHandler: new NodeHttpHandler({
-        ...agent,
-      }),
-    }
-    if (options.endpoint) {
-      params.endpoint = options.endpoint
-    }
-    if (options.forcePathStyle) {
-      params.forcePathStyle = true
-    }
-    this.client = new S3Client(params)
+    // Upload client exclusively for upload operations
+    this.uploadClient = this.createS3Client({
+      ...options,
+      requestTimeout: options.uploadTimeout,
+    })
+
+    // Download client exclusively for download operations
+    this.downloadClient = this.createS3Client({
+      ...options,
+      requestTimeout: options.downloadTimeout,
+    })
   }
 
   /**
@@ -91,12 +97,14 @@ export class S3Backend implements StorageBackendAdapter {
    * @param key
    * @param version
    * @param headers
+   * @param signal
    */
   async getObject(
     bucketName: string,
     key: string,
     version: string | undefined,
-    headers?: BrowserCacheHeaders
+    headers?: BrowserCacheHeaders,
+    signal?: AbortSignal
   ): Promise<ObjectResponse> {
     const input: GetObjectCommandInput = {
       Bucket: bucketName,
@@ -108,7 +116,9 @@ export class S3Backend implements StorageBackendAdapter {
       input.IfModifiedSince = new Date(headers.ifModifiedSince)
     }
     const command = new GetObjectCommand(input)
-    const data = await this.client.send(command)
+    const data = await this.downloadClient.send(command, {
+      abortSignal: signal,
+    })
 
     return {
       metadata: {
@@ -145,7 +155,7 @@ export class S3Backend implements StorageBackendAdapter {
   ): Promise<ObjectMetadata> {
     try {
       const paralellUploadS3 = new Upload({
-        client: this.client,
+        client: this.uploadClient,
         params: {
           Bucket: bucketName,
           Key: withOptionalVersion(key, version),
@@ -221,7 +231,7 @@ export class S3Backend implements StorageBackendAdapter {
         CopySourceIfModifiedSince: conditions?.ifModifiedSince,
         CopySourceIfUnmodifiedSince: conditions?.ifUnmodifiedSince,
       })
-      const data = await this.client.send(command)
+      const data = await this.uploadClient.send(command)
       return {
         httpStatusCode: data.$metadata.httpStatusCode || 200,
         eTag: data.CopyObjectResult?.ETag || '',
@@ -335,7 +345,8 @@ export class S3Backend implements StorageBackendAdapter {
     uploadId: string,
     partNumber: number,
     body?: string | Uint8Array | Buffer | Readable,
-    length?: number
+    length?: number,
+    signal?: AbortSignal
   ) {
     const paralellUploadS3 = new UploadPartCommand({
       Bucket: bucketName,
@@ -346,7 +357,11 @@ export class S3Backend implements StorageBackendAdapter {
       ContentLength: length,
     })
 
-    const resp = await this.client.send(paralellUploadS3)
+    const resp = await this.uploadClient.send(paralellUploadS3, {
+      // overwriting the requestTimeout here to avoid the request being cancelled, as the upload can take a long time for a max 5GB upload
+      requestTimeout: 0,
+      abortSignal: signal,
+    })
 
     return {
       version,
@@ -428,11 +443,34 @@ export class S3Backend implements StorageBackendAdapter {
       CopySourceRange: bytesRange ? `bytes=${bytesRange.fromByte}-${bytesRange.toByte}` : undefined,
     })
 
-    const part = await this.client.send(uploadPartCopy)
+    const part = await this.uploadClient.send(uploadPartCopy)
 
     return {
       eTag: part.CopyPartResult?.ETag,
       lastModified: part.CopyPartResult?.LastModified,
     }
+  }
+
+  protected createS3Client(options: S3ClientOptions) {
+    const storageS3Protocol = options.endpoint?.includes('http://') ? 'http' : 'https'
+
+    const agent = options.httpAgent ? options.httpAgent : createAgent(storageS3Protocol)
+
+    const params: S3ClientConfig = {
+      region: options.region,
+      runtime: 'node',
+      requestHandler: new NodeHttpHandler({
+        ...agent,
+        connectionTimeout: 5000,
+        requestTimeout: options.requestTimeout,
+      }),
+    }
+    if (options.endpoint) {
+      params.endpoint = options.endpoint
+    }
+    if (options.forcePathStyle) {
+      params.forcePathStyle = true
+    }
+    return new S3Client(params)
   }
 }

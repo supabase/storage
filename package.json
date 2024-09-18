@@ -55,7 +55,7 @@
     "conventional-changelog-conventionalcommits": "^5.0.0",
     "crypto-js": "^4.2.0",
     "dotenv": "^16.0.0",
-    "fastify": "^4.8.1",
+    "fastify": "^4.28.1",
     "fastify-metrics": "^10.2.0",
     "fastify-plugin": "^4.0.0",
     "fastify-xml-body-parser": "^2.2.0",

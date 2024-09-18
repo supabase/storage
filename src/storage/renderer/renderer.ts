@@ -11,6 +11,7 @@ export interface RenderOptions {
   download?: string
   expires?: string
   object?: Obj
+  signal?: AbortSignal
 }
 
 export interface AssetResponse {
@@ -39,6 +40,10 @@ export abstract class Renderer {
    */
   async render(request: FastifyRequest<any>, response: FastifyReply<any>, options: RenderOptions) {
     try {
+      if (options.signal?.aborted) {
+        return response.send({ error: 'Request aborted', statusCode: '499' })
+      }
+
       const data = await this.getAsset(request, options)
 
       this.setHeaders(request, response, data, options)

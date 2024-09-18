@@ -78,6 +78,7 @@ async function requestHandler(
     key: s3Key,
     version: obj.version,
     download,
+    signal: request.signals.disconnect.signal,
   })
 }
 

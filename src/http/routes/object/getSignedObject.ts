@@ -92,6 +92,7 @@ export default async function routes(fastify: FastifyInstance) {
         version: obj.version,
         download,
         expires: new Date(exp * 1000).toUTCString(),
+        signal: request.signals.disconnect.signal,
       })
     }
   )

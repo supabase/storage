@@ -62,7 +62,8 @@ export abstract class StorageBackendAdapter {
     bucketName: string,
     key: string,
     version: string | undefined,
-    headers?: BrowserCacheHeaders
+    headers?: BrowserCacheHeaders,
+    signal?: AbortSignal
   ): Promise<ObjectResponse> {
     throw new Error('getObject not implemented')
   }

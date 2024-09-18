@@ -43,7 +43,7 @@ describe('image rendering routes', () => {
     expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
       '/public/height:100/width:100/resizing_type:fill/plain/local:///data/sadcat.jpg',
-      { responseType: 'stream' }
+      { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
   })
 
@@ -61,7 +61,7 @@ describe('image rendering routes', () => {
     expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
       '/public/height:100/width:100/resizing_type:fill/plain/local:///data/sadcat.jpg',
-      { responseType: 'stream' }
+      { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
   })
 
@@ -97,7 +97,7 @@ describe('image rendering routes', () => {
     expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
       '/public/height:100/width:100/resizing_type:fit/plain/local:///data/sadcat.jpg',
-      { responseType: 'stream' }
+      { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
   })
 })

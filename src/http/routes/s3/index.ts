@@ -60,6 +60,10 @@ export default async function routes(fastify: FastifyInstance) {
                   storage: req.storage,
                   tenantId: req.tenantId,
                   owner: req.owner,
+                  signals: {
+                    body: req.signals.body.signal,
+                    response: req.signals.response.signal,
+                  },
                 })
 
                 const headers = output.headers

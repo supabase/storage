@@ -35,6 +35,7 @@ const {
   storageS3Endpoint,
   storageS3ForcePathStyle,
   storageS3Region,
+  storageS3UploadTimeout,
   tusUrlExpiryMs,
   tusPath,
   tusPartSize,
@@ -67,6 +68,8 @@ function createTusStore() {
       s3ClientConfig: {
         requestHandler: new NodeHttpHandler({
           ...agent,
+          connectionTimeout: 5000,
+          requestTimeout: storageS3UploadTimeout,
         }),
         bucket: storageS3Bucket,
         region: storageS3Region,

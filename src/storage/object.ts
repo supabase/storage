@@ -333,7 +333,7 @@ export class ObjectStorage {
         })
 
         const existingDestObject = await db.findObject(
-          this.bucketId,
+          destinationBucket,
           destinationKey,
           'id,name,metadata,version,bucket_id',
           {

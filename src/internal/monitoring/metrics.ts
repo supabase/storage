@@ -68,3 +68,28 @@ export const DbActiveConnection = new client.Gauge({
   help: 'Number of database connections',
   labelNames: ['region', 'is_external'],
 })
+
+// Create Prometheus metrics
+export const HttpPoolSocketsGauge = new client.Gauge({
+  name: 'storage_api_http_pool_busy_sockets',
+  help: 'Number of busy sockets currently in use',
+  labelNames: ['name', 'region', 'protocol'],
+})
+
+export const HttpPoolFreeSocketsGauge = new client.Gauge({
+  name: 'storage_api_http_pool_free_sockets',
+  help: 'Number of free sockets available for reuse',
+  labelNames: ['name', 'region', 'protocol'],
+})
+
+export const HttpPoolPendingRequestsGauge = new client.Gauge({
+  name: 'storage_api_http_pool_requests',
+  help: 'Number of pending requests waiting for a socket',
+  labelNames: ['name', 'region', 'protocol'],
+})
+
+export const HttpPoolErrorGauge = new client.Gauge({
+  name: 'storage_api_http_pool_errors',
+  help: 'Number of pending requests waiting for a socket',
+  labelNames: ['name', 'region', 'type', 'protocol'],
+})

@@ -15,6 +15,7 @@ interface UploaderOptions extends UploadObjectOptions {
   fileSizeLimit?: number | null
   allowedMimeTypes?: string[] | null
   metadata?: Record<string, any>
+  signal?: AbortSignal
 }
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
@@ -106,7 +107,8 @@ export class Uploader {
         version,
         file.body,
         file.mimeType,
-        file.cacheControl
+        file.cacheControl,
+        options.signal
       )
 
       if (file.isTruncated()) {

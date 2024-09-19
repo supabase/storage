@@ -97,16 +97,19 @@ export default function UploadPart(s3Router: S3Router) {
 
       const metadata = s3Protocol.parseMetadataHeaders(req.Headers)
 
-      return s3Protocol.putObject({
-        Body: ctx.req as any,
-        Bucket: req.Params.Bucket,
-        Key: req.Params['*'],
-        CacheControl: req.Headers?.['cache-control'],
-        ContentType: req.Headers?.['content-type'],
-        Expires: req.Headers?.['expires'] ? new Date(req.Headers?.['expires']) : undefined,
-        ContentEncoding: req.Headers?.['content-encoding'],
-        Metadata: metadata,
-      })
+      return s3Protocol.putObject(
+        {
+          Body: ctx.req as any,
+          Bucket: req.Params.Bucket,
+          Key: req.Params['*'],
+          CacheControl: req.Headers?.['cache-control'],
+          ContentType: req.Headers?.['content-type'],
+          Expires: req.Headers?.['expires'] ? new Date(req.Headers?.['expires']) : undefined,
+          ContentEncoding: req.Headers?.['content-encoding'],
+          Metadata: metadata,
+        },
+        ctx.signals.body
+      )
     }
   )
 }

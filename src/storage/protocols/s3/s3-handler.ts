@@ -579,8 +579,13 @@ export class S3ProtocolHandler {
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
    * @param command
+   * @param signal
    */
-  async uploadPart(command: UploadPartCommandInput) {
+  async uploadPart(command: UploadPartCommandInput, signal?: AbortSignal) {
+    if (signal?.aborted) {
+      throw ERRORS.Aborted('UploadPart aborted')
+    }
+
     const { Bucket, PartNumber, UploadId, Key, Body, ContentLength } = command
 
     if (!UploadId) {
@@ -607,6 +612,10 @@ export class S3ProtocolHandler {
     })
 
     const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize)
+
+    if (signal?.aborted) {
+      throw ERRORS.Aborted('UploadPart aborted')
+    }
 
     const proxy = new PassThrough()
 
@@ -636,7 +645,8 @@ export class S3ProtocolHandler {
             UploadId,
             PartNumber || 0,
             stream as Readable,
-            ContentLength
+            ContentLength,
+            signal
           )
         }
       )
@@ -677,8 +687,9 @@ export class S3ProtocolHandler {
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html
    *
    * @param command
+   * @param signal
    */
-  async putObject(command: PutObjectCommandInput) {
+  async putObject(command: PutObjectCommandInput, signal?: AbortSignal) {
     const uploader = new Uploader(this.storage.backend, this.storage.db)
 
     mustBeValidBucketName(command.Bucket)
@@ -705,6 +716,7 @@ export class S3ProtocolHandler {
       fileSizeLimit: bucket.file_size_limit,
       allowedMimeTypes: bucket.allowed_mime_types,
       metadata: command.Metadata,
+      signal,
     })
 
     return {

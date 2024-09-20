@@ -82,7 +82,8 @@ export abstract class StorageBackendAdapter {
     version: string | undefined,
     body: NodeJS.ReadableStream,
     contentType: string,
-    cacheControl: string
+    cacheControl: string,
+    signal?: AbortSignal
   ): Promise<ObjectMetadata> {
     throw new Error('uploadObject not implemented')
   }
@@ -172,7 +173,8 @@ export abstract class StorageBackendAdapter {
     uploadId: string,
     partNumber: number,
     body?: string | Uint8Array | Buffer | Readable,
-    length?: number
+    length?: number,
+    signal?: AbortSignal
   ): Promise<{ ETag?: string }> {
     throw new Error('not implemented')
   }

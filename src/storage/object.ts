@@ -23,6 +23,7 @@ export interface UploadObjectOptions {
   owner?: string
   isUpsert?: boolean
   version?: string
+  signal?: AbortSignal
 }
 
 const { requestUrlLengthLimit, storageS3Bucket } = getConfig()

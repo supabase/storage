@@ -108,6 +108,13 @@ class ClassInstrumentation implements Instrumentation {
             span.setStatus({ code: SpanStatusCode.OK })
             return result
           } catch (error) {
+            if (error instanceof Error) {
+              span.setAttributes({
+                error: JSON.stringify({ message: error.message, stack: error.stack }),
+                stack: error.stack,
+              })
+            }
+
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message: error instanceof Error ? error.message : String(error),

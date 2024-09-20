@@ -5,10 +5,11 @@ import { createAgent, createStorageBackend } from '../backend'
 import { Storage } from '../storage'
 import { getConfig } from '../../config'
 import { logger } from '@internal/monitoring'
+import Agent, { HttpsAgent } from 'agentkeepalive'
 
-const { storageBackendType, storageS3Endpoint, region } = getConfig()
-const storageS3Protocol = storageS3Endpoint?.includes('http://') ? 'http' : 'https'
-const httpAgent = createAgent(storageS3Protocol)
+const { storageBackendType, region } = getConfig()
+
+let httpAgent: { httpAgent: Agent; httpsAgent: HttpsAgent } | undefined
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends QueueBaseEvent<T> {
   /**
@@ -51,6 +52,14 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     }
   }
 
+  protected static getAgent() {
+    if (httpAgent) {
+      return httpAgent
+    }
+    httpAgent = createAgent('s3_worker')
+    return httpAgent
+  }
+
   protected static async createStorage(payload: BasePayload) {
     const adminUser = await getServiceKeyUser(payload.tenant.ref)
 
@@ -68,7 +77,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     })
 
     const storageBackend = createStorageBackend(storageBackendType, {
-      httpAgent,
+      httpAgent: BaseEvent.getAgent(),
     })
 
     return new Storage(storageBackend, db)

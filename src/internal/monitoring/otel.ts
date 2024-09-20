@@ -31,6 +31,7 @@ import { S3Backend } from '@storage/backend'
 import { StorageKnexDB } from '@storage/database'
 import { TenantConnection } from '@internal/database'
 import { S3Store } from '@tus/s3-store'
+import { Upload } from '@aws-sdk/lib-storage'
 
 const tracingEnabled = process.env.TRACING_ENABLED === 'true'
 const headersEnv = process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS || ''
@@ -238,6 +239,11 @@ const sdk = new NodeSDK({
         },
       },
       setName: (name, attrs) => 'S3.' + attrs.operation,
+    }),
+    new ClassInstrumentation({
+      targetClass: Upload,
+      enabled: true,
+      methodsToInstrument: ['done', '__notifyProgress'],
     }),
     getNodeAutoInstrumentations({
       '@opentelemetry/instrumentation-http': {

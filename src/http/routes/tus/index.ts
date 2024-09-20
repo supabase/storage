@@ -59,7 +59,7 @@ type MultiPartRequest = http.IncomingMessage & {
 
 function createTusStore() {
   if (storageBackendType === 's3') {
-    const agent = createAgent(storageS3Endpoint?.includes('http://') ? 'http' : 'https')
+    const agent = createAgent('s3_tus')
     return new S3Store({
       partSize: tusPartSize * 1024 * 1024, // Each uploaded part will have ${tusPartSize}MB,
       expirationPeriodInMilliseconds: tusUrlExpiryMs,

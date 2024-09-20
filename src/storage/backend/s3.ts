@@ -30,23 +30,91 @@ import { ERRORS, StorageBackendError } from '@internal/errors'
 import { getConfig } from '../../config'
 import Agent, { HttpsAgent } from 'agentkeepalive'
 import { Readable } from 'stream'
+import {
+  HttpPoolErrorGauge,
+  HttpPoolFreeSocketsGauge,
+  HttpPoolPendingRequestsGauge,
+  HttpPoolSocketsGauge,
+} from '@internal/monitoring/metrics'
 
-const { storageS3MaxSockets } = getConfig()
+const { storageS3MaxSockets, region } = getConfig()
+
+const watchers: NodeJS.Timeout[] = []
+
+process.once('SIGTERM', () => {
+  watchers.forEach((watcher) => {
+    clearInterval(watcher)
+  })
+})
 
 /**
  * Creates an agent for the given protocol
- * @param protocol
+ * @param name
  */
-export function createAgent(protocol: 'http' | 'https') {
+export function createAgent(name: string) {
   const agentOptions = {
     maxSockets: storageS3MaxSockets,
     keepAlive: true,
     keepAliveMsecs: 1000,
+    freeSocketTimeout: 1000 * 15,
   }
 
-  return protocol === 'http'
-    ? { httpAgent: new Agent(agentOptions) }
-    : { httpsAgent: new HttpsAgent(agentOptions) }
+  const httpAgent = new Agent(agentOptions)
+  const httpsAgent = new HttpsAgent(agentOptions)
+
+  if (httpsAgent) {
+    const watcher = setInterval(() => {
+      const httpStatus = httpAgent.getCurrentStatus()
+      const httpsStatus = httpsAgent.getCurrentStatus()
+      updateHttpPoolMetrics(name, 'http', httpStatus)
+      updateHttpPoolMetrics(name, 'https', httpsStatus)
+    }, 5000)
+
+    watchers.push(watcher)
+  }
+
+  return { httpAgent, httpsAgent }
+}
+
+// Function to update Prometheus metrics based on the current status of the agent
+function updateHttpPoolMetrics(name: string, protocol: string, status: Agent.AgentStatus): void {
+  // Calculate the number of busy sockets by iterating over the `sockets` object
+  let busySocketCount = 0
+  for (const host in status.sockets) {
+    if (status.sockets.hasOwnProperty(host)) {
+      busySocketCount += status.sockets[host]
+    }
+  }
+
+  // Calculate the number of free sockets by iterating over the `freeSockets` object
+  let freeSocketCount = 0
+  for (const host in status.freeSockets) {
+    if (status.freeSockets.hasOwnProperty(host)) {
+      freeSocketCount += status.freeSockets[host]
+    }
+  }
+
+  // Calculate the number of pending requests by iterating over the `requests` object
+  let pendingRequestCount = 0
+  for (const host in status.requests) {
+    if (status.requests.hasOwnProperty(host)) {
+      pendingRequestCount += status.requests[host]
+    }
+  }
+
+  // Update the metrics with calculated values
+  HttpPoolSocketsGauge.set({ name, region, protocol }, busySocketCount)
+  HttpPoolFreeSocketsGauge.set({ name, region, protocol }, freeSocketCount)
+  HttpPoolPendingRequestsGauge.set({ name, region }, pendingRequestCount)
+  HttpPoolErrorGauge.set({ name, region, type: 'socket_error', protocol }, status.errorSocketCount)
+  HttpPoolErrorGauge.set(
+    { name, region, type: 'timeout_socket_error', protocol },
+    status.timeoutSocketCount
+  )
+  HttpPoolErrorGauge.set(
+    { name, region, type: 'create_socket_error', protocol },
+    status.createSocketErrorCount
+  )
 }
 
 export interface S3ClientOptions {
@@ -56,7 +124,7 @@ export interface S3ClientOptions {
   accessKey?: string
   secretKey?: string
   role?: string
-  httpAgent?: { httpAgent: Agent } | { httpsAgent: HttpsAgent }
+  httpAgent?: { httpAgent: Agent; httpsAgent: HttpsAgent }
   requestTimeout?: number
   downloadTimeout?: number
   uploadTimeout?: number
@@ -75,18 +143,21 @@ export class S3Backend implements StorageBackendAdapter {
     // Default client for API operations
     this.client = this.createS3Client({
       ...options,
+      name: 's3_default',
       requestTimeout: options.requestTimeout,
     })
 
     // Upload client exclusively for upload operations
     this.uploadClient = this.createS3Client({
       ...options,
+      name: 's3_upload',
       requestTimeout: options.uploadTimeout,
     })
 
     // Download client exclusively for download operations
     this.downloadClient = this.createS3Client({
       ...options,
+      name: 's3_download',
       requestTimeout: options.downloadTimeout,
     })
   }
@@ -144,6 +215,7 @@ export class S3Backend implements StorageBackendAdapter {
    * @param body
    * @param contentType
    * @param cacheControl
+   * @param signal
    */
   async uploadObject(
     bucketName: string,
@@ -151,7 +223,8 @@ export class S3Backend implements StorageBackendAdapter {
     version: string | undefined,
     body: NodeJS.ReadableStream,
     contentType: string,
-    cacheControl: string
+    cacheControl: string,
+    signal?: AbortSignal
   ): Promise<ObjectMetadata> {
     try {
       const paralellUploadS3 = new Upload({
@@ -165,6 +238,14 @@ export class S3Backend implements StorageBackendAdapter {
           CacheControl: cacheControl,
         },
       })
+
+      signal?.addEventListener(
+        'abort',
+        () => {
+          paralellUploadS3.abort()
+        },
+        { once: true }
+      )
 
       const data = (await paralellUploadS3.done()) as CompleteMultipartUploadCommandOutput
 
@@ -451,10 +532,8 @@ export class S3Backend implements StorageBackendAdapter {
     }
   }
 
-  protected createS3Client(options: S3ClientOptions) {
-    const storageS3Protocol = options.endpoint?.includes('http://') ? 'http' : 'https'
-
-    const agent = options.httpAgent ? options.httpAgent : createAgent(storageS3Protocol)
+  protected createS3Client(options: S3ClientOptions & { name: string }) {
+    const agent = options.httpAgent ?? createAgent(options.name)
 
     const params: S3ClientConfig = {
       region: options.region,

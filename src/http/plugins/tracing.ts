@@ -42,11 +42,11 @@ export const tracing = fastifyPlugin(
       const span = trace.getSpan(context.active())
 
       if (span) {
-        // We collect logs only in full and logs mode
+        // We collect logs only in full,logs,debug mode
         if (
           tracingEnabled &&
           request.tracingMode &&
-          !['full', 'logs'].includes(request.tracingMode)
+          !['full', 'logs', 'debug'].includes(request.tracingMode)
         ) {
           traceCollector.clearTrace(span.spanContext().traceId)
         }
@@ -68,7 +68,7 @@ export const traceServerTime = fastifyPlugin(
         const spans = traceCollector.getSpansForTrace(traceId)
         if (spans) {
           try {
-            const serverTimingHeaders = spansToServerTimings(spans)
+            const serverTimingHeaders = spansToServerTimings(spans, reply.statusCode >= 500)
 
             request.serverTimings = serverTimingHeaders
 
@@ -94,12 +94,15 @@ export const traceServerTime = fastifyPlugin(
     })
 
     fastify.addHook('onRequestAbort', async (req) => {
-      const traceId = trace.getSpan(context.active())?.spanContext().traceId
+      const span = trace.getSpan(context.active())
+      const traceId = span?.spanContext().traceId
+
+      span?.setAttribute('req_aborted', true)
 
       if (traceId) {
         const spans = traceCollector.getSpansForTrace(traceId)
         if (spans) {
-          req.serverTimings = spansToServerTimings(spans)
+          req.serverTimings = spansToServerTimings(spans, true)
         }
         traceCollector.clearTrace(traceId)
       }
@@ -155,6 +158,8 @@ function spansToServerTimings(
           spanName,
           duration,
           action: span.item.attributes['db.statement'],
+          error: span.item.attributes.error,
+          status: span.item.status,
           host: hostName
             ? isIP(hostName)
               ? hostName

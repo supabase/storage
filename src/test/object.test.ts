@@ -109,7 +109,7 @@ describe('testing GET object', () => {
     expect(response.statusCode).toBe(200)
     expect(response.headers['etag']).toBe('abc')
     expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
-    expect(response.headers['content-length']).toBe(3746)
+    expect(response.headers['content-length']).toBe('3746')
     expect(response.headers['cache-control']).toBe('no-cache')
   })
 
@@ -124,7 +124,7 @@ describe('testing GET object', () => {
     expect(response.statusCode).toBe(200)
     expect(response.headers['etag']).toBe('abc')
     expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
-    expect(response.headers['content-length']).toBe(3746)
+    expect(response.headers['content-length']).toBe('3746')
     expect(response.headers['cache-control']).toBe('no-cache')
   })
 
@@ -147,7 +147,7 @@ describe('testing GET object', () => {
     expect(response.statusCode).toBe(200)
     expect(response.headers['etag']).toBe('abc')
     expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
-    expect(response.headers['content-length']).toBe(3746)
+    expect(response.headers['content-length']).toBe('3746')
     expect(response.headers['cache-control']).toBe('no-cache')
   })
 
@@ -162,7 +162,7 @@ describe('testing GET object', () => {
     expect(response.statusCode).toBe(200)
     expect(response.headers['etag']).toBe('abc')
     expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
-    expect(response.headers['content-length']).toBe(3746)
+    expect(response.headers['content-length']).toBe('3746')
     expect(response.headers['cache-control']).toBe('no-cache')
   })
 

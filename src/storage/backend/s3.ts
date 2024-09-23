@@ -126,8 +126,6 @@ export interface S3ClientOptions {
   role?: string
   httpAgent?: { httpAgent: Agent; httpsAgent: HttpsAgent }
   requestTimeout?: number
-  downloadTimeout?: number
-  uploadTimeout?: number
 }
 
 /**
@@ -136,29 +134,12 @@ export interface S3ClientOptions {
  */
 export class S3Backend implements StorageBackendAdapter {
   client: S3Client
-  uploadClient: S3Client
-  downloadClient: S3Client
 
   constructor(options: S3ClientOptions) {
     // Default client for API operations
     this.client = this.createS3Client({
       ...options,
       name: 's3_default',
-      requestTimeout: options.requestTimeout,
-    })
-
-    // Upload client exclusively for upload operations
-    this.uploadClient = this.createS3Client({
-      ...options,
-      name: 's3_upload',
-      requestTimeout: options.uploadTimeout,
-    })
-
-    // Download client exclusively for download operations
-    this.downloadClient = this.createS3Client({
-      ...options,
-      name: 's3_download',
-      requestTimeout: options.downloadTimeout,
     })
   }
 
@@ -187,7 +168,7 @@ export class S3Backend implements StorageBackendAdapter {
       input.IfModifiedSince = new Date(headers.ifModifiedSince)
     }
     const command = new GetObjectCommand(input)
-    const data = await this.downloadClient.send(command, {
+    const data = await this.client.send(command, {
       abortSignal: signal,
     })
 
@@ -228,7 +209,7 @@ export class S3Backend implements StorageBackendAdapter {
   ): Promise<ObjectMetadata> {
     try {
       const paralellUploadS3 = new Upload({
-        client: this.uploadClient,
+        client: this.client,
         params: {
           Bucket: bucketName,
           Key: withOptionalVersion(key, version),
@@ -312,7 +293,7 @@ export class S3Backend implements StorageBackendAdapter {
         CopySourceIfModifiedSince: conditions?.ifModifiedSince,
         CopySourceIfUnmodifiedSince: conditions?.ifUnmodifiedSince,
       })
-      const data = await this.uploadClient.send(command)
+      const data = await this.client.send(command)
       return {
         httpStatusCode: data.$metadata.httpStatusCode || 200,
         eTag: data.CopyObjectResult?.ETag || '',
@@ -438,9 +419,7 @@ export class S3Backend implements StorageBackendAdapter {
       ContentLength: length,
     })
 
-    const resp = await this.uploadClient.send(paralellUploadS3, {
-      // overwriting the requestTimeout here to avoid the request being cancelled, as the upload can take a long time for a max 5GB upload
-      requestTimeout: 0,
+    const resp = await this.client.send(paralellUploadS3, {
       abortSignal: signal,
     })
 
@@ -524,7 +503,7 @@ export class S3Backend implements StorageBackendAdapter {
       CopySourceRange: bytesRange ? `bytes=${bytesRange.fromByte}-${bytesRange.toByte}` : undefined,
     })
 
-    const part = await this.uploadClient.send(uploadPartCopy)
+    const part = await this.client.send(uploadPartCopy)
 
     return {
       eTag: part.CopyPartResult?.ETag,

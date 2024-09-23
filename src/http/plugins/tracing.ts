@@ -32,24 +32,28 @@ export const tracing = fastifyPlugin(
     fastify.register(traceServerTime)
 
     fastify.addHook('onRequest', async (request) => {
-      if (isMultitenant && request.tenantId) {
-        const tenantConfig = await getTenantConfig(request.tenantId)
-        request.tracingMode = tenantConfig.tracingMode
-      } else {
-        request.tracingMode = defaultTracingMode
-      }
-
-      const span = trace.getSpan(context.active())
-
-      if (span) {
-        // We collect logs only in full,logs,debug mode
-        if (
-          tracingEnabled &&
-          request.tracingMode &&
-          !['full', 'logs', 'debug'].includes(request.tracingMode)
-        ) {
-          traceCollector.clearTrace(span.spanContext().traceId)
+      try {
+        if (isMultitenant && request.tenantId) {
+          const tenantConfig = await getTenantConfig(request.tenantId)
+          request.tracingMode = tenantConfig.tracingMode
+        } else {
+          request.tracingMode = defaultTracingMode
         }
+
+        const span = trace.getSpan(context.active())
+
+        if (span) {
+          // We collect logs only in full,logs,debug mode
+          if (
+            tracingEnabled &&
+            request.tracingMode &&
+            !['full', 'logs', 'debug'].includes(request.tracingMode)
+          ) {
+            traceCollector.clearTrace(span.spanContext().traceId)
+          }
+        }
+      } catch (e) {
+        logSchema.error(request.log, 'failed setting tracing mode', { error: e, type: 'tracing' })
       }
     })
   },
@@ -62,12 +66,12 @@ export const traceServerTime = fastifyPlugin(
       return
     }
     fastify.addHook('onResponse', async (request, reply) => {
-      const traceId = trace.getSpan(context.active())?.spanContext().traceId
+      try {
+        const traceId = trace.getSpan(context.active())?.spanContext().traceId
 
-      if (traceId) {
-        const spans = traceCollector.getSpansForTrace(traceId)
-        if (spans) {
-          try {
+        if (traceId) {
+          const spans = traceCollector.getSpansForTrace(traceId)
+          if (spans) {
             const serverTimingHeaders = spansToServerTimings(spans, reply.statusCode >= 500)
 
             request.serverTimings = serverTimingHeaders
@@ -84,27 +88,30 @@ export const traceServerTime = fastifyPlugin(
                 .join(',')
               reply.header('Server-Timing', httpServerTimes)
             }
-          } catch (e) {
-            logSchema.error(logger, 'failed parsing server times', { error: e, type: 'otel' })
+            traceCollector.clearTrace(traceId)
           }
-
-          traceCollector.clearTrace(traceId)
         }
+      } catch (e) {
+        logSchema.error(request.log, 'failed tracing on response', { error: e, type: 'tracing' })
       }
     })
 
     fastify.addHook('onRequestAbort', async (req) => {
-      const span = trace.getSpan(context.active())
-      const traceId = span?.spanContext().traceId
+      try {
+        const span = trace.getSpan(context.active())
+        const traceId = span?.spanContext().traceId
 
-      span?.setAttribute('req_aborted', true)
+        span?.setAttribute('req_aborted', true)
 
-      if (traceId) {
-        const spans = traceCollector.getSpansForTrace(traceId)
-        if (spans) {
-          req.serverTimings = spansToServerTimings(spans, true)
+        if (traceId) {
+          const spans = traceCollector.getSpansForTrace(traceId)
+          if (spans) {
+            req.serverTimings = spansToServerTimings(spans, true)
+          }
+          traceCollector.clearTrace(traceId)
         }
-        traceCollector.clearTrace(traceId)
+      } catch (e) {
+        logSchema.error(logger, 'failed parsing server times on abort', { error: e, type: 'otel' })
       }
     })
   },

@@ -25,9 +25,9 @@
     "node": ">= 14.0.0"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "3.633.0",
-    "@aws-sdk/lib-storage": "3.633.0",
-    "@aws-sdk/s3-request-presigner": "3.633.0",
+    "@aws-sdk/client-s3": "3.654.0",
+    "@aws-sdk/lib-storage": "3.654.0",
+    "@aws-sdk/s3-request-presigner": "3.654.0",
     "@fastify/accepts": "^4.3.0",
     "@fastify/multipart": "^8.3.0",
     "@fastify/rate-limit": "^7.6.0",
@@ -93,8 +93,8 @@
     "@types/pg": "^8.6.4",
     "@types/stream-buffers": "^3.0.7",
     "@types/xml2js": "^0.4.14",
-    "@typescript-eslint/eslint-plugin": "^5.12.1",
-    "@typescript-eslint/parser": "^5.12.1",
+    "@typescript-eslint/eslint-plugin": "^8.7.0",
+    "@typescript-eslint/parser": "^8.7.0",
     "babel-jest": "^29.2.2",
     "esbuild": "0.21.5",
     "eslint": "^8.9.0",
@@ -113,7 +113,7 @@
     "ts-node-dev": "^1.1.8",
     "tsx": "^4.16.0",
     "tus-js-client": "^3.1.0",
-    "typescript": "^5.6.2"
+    "typescript": "5.2.2"
   },
   "bin": "./dist/server.js"
 }

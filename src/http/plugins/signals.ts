@@ -22,10 +22,13 @@ export const signals = fastifyPlugin(
 
       // Client terminated the request before the body was fully received
       res.raw.once('close', () => {
-        req.signals.response.abort()
+        const aborted = !res.raw.writableFinished
+        if (aborted) {
+          req.signals.response.abort()
 
-        if (!req.signals.disconnect.signal.aborted) {
-          req.signals.disconnect.abort()
+          if (!req.signals.disconnect.signal.aborted) {
+            req.signals.disconnect.abort()
+          }
         }
       })
     })

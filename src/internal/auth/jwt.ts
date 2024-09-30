@@ -1,4 +1,4 @@
-import * as crypto from 'crypto'
+import * as crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { ERRORS } from '@internal/errors'
 

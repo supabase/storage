@@ -1,5 +1,5 @@
 import { FastifyRequest } from 'fastify'
-import { randomUUID } from 'crypto'
+import { randomUUID } from 'node:crypto'
 import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
 import { getJwtSecret } from '@internal/database'

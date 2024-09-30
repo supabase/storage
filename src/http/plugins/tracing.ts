@@ -65,6 +65,34 @@ export const traceServerTime = fastifyPlugin(
     if (!tracingEnabled) {
       return
     }
+    fastify.addHook('onRequest', async (req, res) => {
+      // Request was aborted before the server finishes to return a response
+      res.raw.once('close', () => {
+        const aborted = !res.raw.writableFinished
+        if (aborted) {
+          try {
+            const span = trace.getSpan(context.active())
+            const traceId = span?.spanContext().traceId
+
+            span?.setAttribute('res_aborted', true)
+
+            if (traceId) {
+              const spans = traceCollector.getSpansForTrace(traceId)
+              if (spans) {
+                req.serverTimings = spansToServerTimings(spans, true)
+              }
+              traceCollector.clearTrace(traceId)
+            }
+          } catch (e) {
+            logSchema.error(logger, 'failed parsing server times on abort', {
+              error: e,
+              type: 'otel',
+            })
+          }
+        }
+      })
+    })
+
     fastify.addHook('onResponse', async (request, reply) => {
       try {
         const traceId = trace.getSpan(context.active())?.spanContext().traceId

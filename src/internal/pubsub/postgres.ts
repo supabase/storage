@@ -1,4 +1,4 @@
-import EventEmitter from 'events'
+import EventEmitter from 'node:events'
 import createSubscriber, { Subscriber } from 'pg-listen'
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'

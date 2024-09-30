@@ -19,7 +19,7 @@ import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
 import { SpanExporter, BatchSpanProcessor } from '@opentelemetry/sdk-trace-base'
 import * as grpc from '@grpc/grpc-js'
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http'
-import { IncomingMessage } from 'http'
+import { IncomingMessage } from 'node:http'
 import { logger, logSchema } from '@internal/monitoring/logger'
 import { traceCollector } from '@internal/monitoring/otel-processor'
 import { ClassInstrumentation } from './otel-instrumentation'
@@ -32,6 +32,7 @@ import { StorageKnexDB } from '@storage/database'
 import { TenantConnection } from '@internal/database'
 import { S3Store } from '@tus/s3-store'
 import { Upload } from '@aws-sdk/lib-storage'
+import { StreamSplitter } from '@tus/server'
 
 const tracingEnabled = process.env.TRACING_ENABLED === 'true'
 const headersEnv = process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS || ''
@@ -222,10 +223,30 @@ const sdk = new NodeSDK({
         'getUpload',
         'declareUploadLength',
         'uploadIncompletePart',
+        'uploadPart',
         'downloadIncompletePart',
         'uploadParts',
       ],
       setName: (name) => 'Tus.' + name,
+    }),
+    new ClassInstrumentation({
+      targetClass: StreamSplitter,
+      enabled: true,
+      methodsToInstrument: ['emitEvent'],
+      setName: (name: string, attrs: any) => {
+        if (attrs.event) {
+          return name + '.' + attrs.event
+        }
+        return name
+      },
+      setAttributes: {
+        emitEvent: function (event) {
+          return {
+            part: this.part as any,
+            event,
+          }
+        },
+      },
     }),
     new ClassInstrumentation({
       targetClass: S3Client,
@@ -243,7 +264,14 @@ const sdk = new NodeSDK({
     new ClassInstrumentation({
       targetClass: Upload,
       enabled: true,
-      methodsToInstrument: ['done', '__notifyProgress'],
+      methodsToInstrument: [
+        'done',
+        '__doConcurrentUpload',
+        '__uploadUsingPut',
+        '__createMultipartUpload',
+        '__notifyProgress',
+        'markUploadAsAborted',
+      ],
     }),
     getNodeAutoInstrumentations({
       '@opentelemetry/instrumentation-http': {

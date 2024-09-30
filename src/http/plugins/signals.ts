@@ -20,7 +20,7 @@ export const signals = fastifyPlugin(
         disconnect: new AbortController(),
       }
 
-      // Client terminated the request before the body was fully received
+      // Client terminated the request before server finished sending the response
       res.raw.once('close', () => {
         const aborted = !res.raw.writableFinished
         if (aborted) {

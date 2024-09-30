@@ -47,7 +47,7 @@ export const tracing = fastifyPlugin(
           if (
             tracingEnabled &&
             request.tracingMode &&
-            !['full', 'logs', 'debug'].includes(request.tracingMode)
+            !['logs', 'debug'].includes(request.tracingMode)
           ) {
             traceCollector.clearTrace(span.spanContext().traceId)
           }

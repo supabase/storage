@@ -28,13 +28,16 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { getConfig } from '../../config'
 import Agent, { HttpsAgent } from 'agentkeepalive'
-import { Readable } from 'stream'
+import { addAbortSignal, PassThrough, Readable } from 'node:stream'
 import {
   HttpPoolErrorGauge,
   HttpPoolFreeSocketsGauge,
   HttpPoolPendingRequestsGauge,
   HttpPoolSocketsGauge,
 } from '@internal/monitoring/metrics'
+import stream from 'stream/promises'
+import { trace } from '@opentelemetry/api'
+import { createByteCounterStream } from '@internal/concurrency'
 
 const { storageS3MaxSockets, region } = getConfig()
 
@@ -201,33 +204,82 @@ export class S3Backend implements StorageBackendAdapter {
     bucketName: string,
     key: string,
     version: string | undefined,
-    body: NodeJS.ReadableStream,
+    body: Readable,
     contentType: string,
     cacheControl: string,
     signal?: AbortSignal
   ): Promise<ObjectMetadata> {
+    if (signal?.aborted) {
+      throw ERRORS.Aborted('Upload was aborted')
+    }
+
+    const passThrough = new PassThrough()
+
+    if (signal) {
+      addAbortSignal(signal, passThrough)
+    }
+
+    passThrough.on('error', () => {
+      body.unpipe(passThrough)
+    })
+
+    body.on('error', (err) => {
+      if (!passThrough.closed) {
+        passThrough.destroy(err)
+      }
+    })
+
+    const currentAverage: number[] = []
+    const byteReader = createByteCounterStream({
+      maxHistory: 100,
+      rewriteHistoryOnMax: true,
+      onMaxHistory: (history) => {
+        currentAverage.push(averageTimeBetweenDates(history))
+      },
+    })
+    const bodyStream = body.pipe(passThrough)
+
+    let upload: Upload | undefined = undefined
+    let bytesUploaded = 0
+
     try {
-      const paralellUploadS3 = new Upload({
-        client: this.client,
-        params: {
-          Bucket: bucketName,
-          Key: withOptionalVersion(key, version),
-          /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-          Body: body,
-          ContentType: contentType,
-          CacheControl: cacheControl,
-        },
-      })
+      const data = await stream.pipeline(
+        bodyStream,
+        byteReader.transformStream,
+        async (bodyStream) => {
+          if (signal?.aborted) {
+            throw ERRORS.Aborted('Upload was aborted')
+          }
 
-      signal?.addEventListener(
-        'abort',
-        () => {
-          paralellUploadS3.abort()
+          upload = new Upload({
+            client: this.client,
+            params: {
+              Bucket: bucketName,
+              Key: withOptionalVersion(key, version),
+              Body: bodyStream as Readable,
+              ContentType: contentType,
+              CacheControl: cacheControl,
+            },
+          })
+
+          upload.on('httpUploadProgress', (progress) => {
+            if (typeof progress.loaded !== 'undefined') {
+              bytesUploaded = progress.loaded
+            }
+          })
+
+          signal?.addEventListener(
+            'abort',
+            () => {
+              upload?.abort()
+            },
+            { once: true }
+          )
+
+          return await upload.done()
         },
-        { once: true }
+        { signal }
       )
-
-      const data = await paralellUploadS3.done()
 
       const metadata = await this.headObject(bucketName, key, version)
 
@@ -242,6 +294,22 @@ export class S3Backend implements StorageBackendAdapter {
         contentRange: metadata.contentRange,
       }
     } catch (err: any) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        const span = trace.getActiveSpan()
+        if (span) {
+          // Print how far we got uploading the file
+          span.setAttributes({
+            byteRead: byteReader.bytes,
+            bytesUploaded,
+            chunkTimes: JSON.stringify([
+              ...currentAverage,
+              averageTimeBetweenDates(byteReader.history),
+            ]),
+          })
+        }
+
+        throw ERRORS.AbortedTerminate('Upload was aborted', err)
+      }
       throw StorageBackendError.fromError(err)
     }
   }
@@ -409,22 +477,30 @@ export class S3Backend implements StorageBackendAdapter {
     length?: number,
     signal?: AbortSignal
   ) {
-    const paralellUploadS3 = new UploadPartCommand({
-      Bucket: bucketName,
-      Key: `${key}/${version}`,
-      UploadId: uploadId,
-      PartNumber: partNumber,
-      Body: body,
-      ContentLength: length,
-    })
+    try {
+      const paralellUploadS3 = new UploadPartCommand({
+        Bucket: bucketName,
+        Key: `${key}/${version}`,
+        UploadId: uploadId,
+        PartNumber: partNumber,
+        Body: body,
+        ContentLength: length,
+      })
 
-    const resp = await this.client.send(paralellUploadS3, {
-      abortSignal: signal,
-    })
+      const resp = await this.client.send(paralellUploadS3, {
+        abortSignal: signal,
+      })
 
-    return {
-      version,
-      ETag: resp.ETag,
+      return {
+        version,
+        ETag: resp.ETag,
+      }
+    } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') {
+        throw ERRORS.AbortedTerminate('Upload was aborted', e)
+      }
+
+      throw StorageBackendError.fromError(e)
     }
   }
 
@@ -530,4 +606,20 @@ export class S3Backend implements StorageBackendAdapter {
     }
     return new S3Client(params)
   }
+}
+
+function averageTimeBetweenDates(dates: Date[]): number {
+  if (dates.length < 2) {
+    throw new Error('At least two dates are required to calculate the average time between them.')
+  }
+
+  let totalDifference = 0
+
+  for (let i = 1; i < dates.length; i++) {
+    const diff = dates[i].getTime() - dates[i - 1].getTime()
+    totalDifference += diff
+  }
+
+  const averageDifference = totalDifference / (dates.length - 1)
+  return averageDifference
 }

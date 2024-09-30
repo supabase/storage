@@ -37,6 +37,7 @@ export enum ErrorCode {
   SlowDown = 'SlowDown',
   TusError = 'TusError',
   Aborted = 'Aborted',
+  AbortedTerminate = 'AbortedTerminate',
 }
 
 export const ERRORS = {
@@ -368,6 +369,13 @@ export const ERRORS = {
   Aborted: (message: string, originalError?: unknown) =>
     new StorageBackendError({
       code: ErrorCode.Aborted,
+      httpStatusCode: 500,
+      message: message,
+      originalError,
+    }),
+  AbortedTerminate: (message: string, originalError?: unknown) =>
+    new StorageBackendError({
+      code: ErrorCode.AbortedTerminate,
       httpStatusCode: 500,
       message: message,
       originalError,

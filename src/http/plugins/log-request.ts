@@ -32,10 +32,17 @@ export const logRequest = (options: RequestLoggerOptions) =>
       fastify.addHook('onRequest', async (req, res) => {
         req.startTime = Date.now()
 
-        // Request was aborted before the server finishes to return a response
         res.raw.once('close', () => {
-          const aborted = !res.raw.writableFinished
-          if (aborted) {
+          if (req.raw.aborted) {
+            doRequestLog(req, {
+              excludeUrls: options.excludeUrls,
+              statusCode: 'ABORTED REQ',
+              responseTime: (Date.now() - req.startTime) / 1000,
+            })
+            return
+          }
+
+          if (!res.raw.writableFinished) {
             doRequestLog(req, {
               excludeUrls: options.excludeUrls,
               statusCode: 'ABORTED RES',
@@ -71,14 +78,6 @@ export const logRequest = (options: RequestLoggerOptions) =>
         if (req.operation) {
           trace.getActiveSpan()?.setAttribute('http.operation', req.operation.type)
         }
-      })
-
-      fastify.addHook('onRequestAbort', async (req) => {
-        doRequestLog(req, {
-          excludeUrls: options.excludeUrls,
-          statusCode: 'ABORTED REQ',
-          responseTime: (Date.now() - req.startTime) / 1000,
-        })
       })
 
       fastify.addHook('onResponse', async (req, reply) => {

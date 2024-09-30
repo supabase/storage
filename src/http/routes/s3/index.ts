@@ -80,7 +80,12 @@ export default async function routes(fastify: FastifyInstance) {
                 if (route.disableContentTypeParser) {
                   reply.header('connection', 'close')
                   reply.raw.on('finish', () => {
-                    req.raw.destroy()
+                    // wait sometime so that the client can receive the response
+                    setTimeout(() => {
+                      if (!req.raw.destroyed) {
+                        req.raw.destroy()
+                      }
+                    }, 3000)
                   })
                 }
                 throw e

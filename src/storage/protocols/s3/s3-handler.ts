@@ -1275,7 +1275,7 @@ function toAwsMeatadataHeaders(records: Record<string, any>) {
   if (records) {
     Object.keys(records).forEach((key) => {
       const value = records[key]
-      if (isUSASCII(value)) {
+      if (value && isUSASCII(value)) {
         metadataHeaders['x-amz-meta-' + key.toLowerCase()] = value
       } else {
         missingCount++

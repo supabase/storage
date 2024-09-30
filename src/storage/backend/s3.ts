@@ -1,7 +1,6 @@
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
-  CompleteMultipartUploadCommandOutput,
   CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
@@ -228,7 +227,7 @@ export class S3Backend implements StorageBackendAdapter {
         { once: true }
       )
 
-      const data = (await paralellUploadS3.done()) as CompleteMultipartUploadCommandOutput
+      const data = await paralellUploadS3.done()
 
       const metadata = await this.headObject(bucketName, key, version)
 

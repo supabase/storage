@@ -27,6 +27,7 @@ import { ERRORS } from '@internal/errors'
 import { S3MultipartUpload, Obj } from '../../schemas'
 import { decrypt, encrypt } from '@internal/auth'
 import { ByteLimitTransformStream } from './byte-limit-stream'
+import { logger, logSchema } from '@internal/monitoring'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
 
@@ -583,7 +584,7 @@ export class S3ProtocolHandler {
    */
   async uploadPart(command: UploadPartCommandInput, signal?: AbortSignal) {
     if (signal?.aborted) {
-      throw ERRORS.Aborted('UploadPart aborted')
+      throw ERRORS.AbortedTerminate('UploadPart aborted')
     }
 
     const { Bucket, PartNumber, UploadId, Key, Body, ContentLength } = command
@@ -614,7 +615,7 @@ export class S3ProtocolHandler {
     const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize)
 
     if (signal?.aborted) {
-      throw ERRORS.Aborted('UploadPart aborted')
+      throw ERRORS.AbortedTerminate('UploadPart aborted')
     }
 
     const proxy = new PassThrough()
@@ -667,15 +668,26 @@ export class S3ProtocolHandler {
         },
       }
     } catch (e) {
-      await this.storage.db.asSuperUser().withTransaction(async (db) => {
-        const multipart = await db.findMultipartUpload(UploadId, 'in_progress_size', {
-          forUpdate: true,
-        })
+      try {
+        await this.storage.db.asSuperUser().withTransaction(async (db) => {
+          const multipart = await db.findMultipartUpload(UploadId, 'in_progress_size', {
+            forUpdate: true,
+          })
 
-        const diff = multipart.in_progress_size - ContentLength
-        const signature = this.uploadSignature({ in_progress_size: diff })
-        await db.updateMultipartUploadProgress(UploadId, diff, signature)
-      })
+          const diff = multipart.in_progress_size - ContentLength
+          const signature = this.uploadSignature({ in_progress_size: diff })
+          await db.updateMultipartUploadProgress(UploadId, diff, signature)
+        })
+      } catch (e) {
+        logSchema.error(logger, 'Failed to update multipart upload progress', {
+          type: 's3',
+          error: e,
+        })
+      }
+
+      if (e instanceof Error && e.name === 'AbortError') {
+        throw ERRORS.AbortedTerminate('UploadPart aborted')
+      }
 
       throw e
     }

@@ -9,4 +9,5 @@ import app from '../app'
   })
 
   await fs.writeFile('static/api.json', response.body)
+  process.exit(0)
 })()

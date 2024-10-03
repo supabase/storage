@@ -78,6 +78,14 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     return this.queueName + '-slow'
   }
 
+  static onClose() {
+    // no-op
+  }
+
+  static onStart() {
+    // no-op
+  }
+
   static batchSend<T extends Event<any>[]>(messages: T) {
     return Queue.getInstance().insert(
       messages.map((message) => {

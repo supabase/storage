@@ -464,6 +464,10 @@ export class FileBackend implements StorageBackendAdapter {
     ])
   }
 
+  close() {
+    // no-op
+  }
+
   protected async getFileMetadata(file: string) {
     const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
     const [cacheControl, contentType] = await Promise.all([

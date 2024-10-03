@@ -216,6 +216,10 @@ export abstract class StorageBackendAdapter {
   ): Promise<{ eTag?: string; lastModified?: Date }> {
     throw new Error('not implemented')
   }
+
+  close(): void {
+    // do nothing
+  }
 }
 
 const { tusUseFileVersionSeparator } = getConfig()

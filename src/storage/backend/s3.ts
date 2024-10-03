@@ -14,7 +14,7 @@ import {
   UploadPartCommand,
   UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
-import { Upload } from '@aws-sdk/lib-storage'
+import { Progress, Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import {
   StorageBackendAdapter,
@@ -27,96 +27,26 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { getConfig } from '../../config'
-import Agent, { HttpsAgent } from 'agentkeepalive'
 import { addAbortSignal, PassThrough, Readable } from 'node:stream'
-import {
-  HttpPoolErrorGauge,
-  HttpPoolFreeSocketsGauge,
-  HttpPoolPendingRequestsGauge,
-  HttpPoolSocketsGauge,
-} from '@internal/monitoring/metrics'
 import stream from 'stream/promises'
 import { trace } from '@opentelemetry/api'
 import { createByteCounterStream } from '@internal/concurrency'
+import { AgentStats, createAgent, gatherHttpAgentStats, InstrumentedAgent } from '@internal/http'
 
-const { storageS3MaxSockets, region } = getConfig()
+const { storageS3MaxSockets, tracingEnabled } = getConfig()
 
-const watchers: NodeJS.Timeout[] = []
-
-process.once('SIGTERM', () => {
-  watchers.forEach((watcher) => {
-    clearInterval(watcher)
-  })
-})
-
-/**
- * Creates an agent for the given protocol
- * @param name
- */
-export function createAgent(name: string) {
-  const agentOptions = {
-    maxSockets: storageS3MaxSockets,
-    keepAlive: true,
-    keepAliveMsecs: 1000,
-    freeSocketTimeout: 1000 * 15,
+interface StreamStatus {
+  time: Date
+  bytesUploaded: number
+  progress: Progress[]
+  dataStream: {
+    closed: boolean
+    paused: boolean
+    errored: boolean
+    writable: boolean
+    byteRead: number
   }
-
-  const httpAgent = new Agent(agentOptions)
-  const httpsAgent = new HttpsAgent(agentOptions)
-
-  if (httpsAgent) {
-    const watcher = setInterval(() => {
-      const httpStatus = httpAgent.getCurrentStatus()
-      const httpsStatus = httpsAgent.getCurrentStatus()
-      updateHttpPoolMetrics(name, 'http', httpStatus)
-      updateHttpPoolMetrics(name, 'https', httpsStatus)
-    }, 5000)
-
-    watchers.push(watcher)
-  }
-
-  return { httpAgent, httpsAgent }
-}
-
-// Function to update Prometheus metrics based on the current status of the agent
-function updateHttpPoolMetrics(name: string, protocol: string, status: Agent.AgentStatus): void {
-  // Calculate the number of busy sockets by iterating over the `sockets` object
-  let busySocketCount = 0
-  for (const host in status.sockets) {
-    if (status.sockets.hasOwnProperty(host)) {
-      busySocketCount += status.sockets[host]
-    }
-  }
-
-  // Calculate the number of free sockets by iterating over the `freeSockets` object
-  let freeSocketCount = 0
-  for (const host in status.freeSockets) {
-    if (status.freeSockets.hasOwnProperty(host)) {
-      freeSocketCount += status.freeSockets[host]
-    }
-  }
-
-  // Calculate the number of pending requests by iterating over the `requests` object
-  let pendingRequestCount = 0
-  for (const host in status.requests) {
-    if (status.requests.hasOwnProperty(host)) {
-      pendingRequestCount += status.requests[host]
-    }
-  }
-
-  // Update the metrics with calculated values
-  HttpPoolSocketsGauge.set({ name, region, protocol }, busySocketCount)
-  HttpPoolFreeSocketsGauge.set({ name, region, protocol }, freeSocketCount)
-  HttpPoolPendingRequestsGauge.set({ name, region }, pendingRequestCount)
-  HttpPoolErrorGauge.set({ name, region, type: 'socket_error', protocol }, status.errorSocketCount)
-  HttpPoolErrorGauge.set(
-    { name, region, type: 'timeout_socket_error', protocol },
-    status.timeoutSocketCount
-  )
-  HttpPoolErrorGauge.set(
-    { name, region, type: 'create_socket_error', protocol },
-    status.createSocketErrorCount
-  )
+  httpAgentStats: AgentStats
 }
 
 export interface S3ClientOptions {
@@ -126,7 +56,7 @@ export interface S3ClientOptions {
   accessKey?: string
   secretKey?: string
   role?: string
-  httpAgent?: { httpAgent: Agent; httpsAgent: HttpsAgent }
+  httpAgent?: InstrumentedAgent
   requestTimeout?: number
 }
 
@@ -136,12 +66,24 @@ export interface S3ClientOptions {
  */
 export class S3Backend implements StorageBackendAdapter {
   client: S3Client
+  agent: InstrumentedAgent
 
   constructor(options: S3ClientOptions) {
+    this.agent =
+      options.httpAgent ??
+      createAgent('s3_default', {
+        maxSockets: storageS3MaxSockets,
+      })
+
+    if (this.agent.httpsAgent && tracingEnabled) {
+      this.agent.monitor()
+    }
+
     // Default client for API operations
     this.client = this.createS3Client({
       ...options,
       name: 's3_default',
+      httpAgent: this.agent,
     })
   }
 
@@ -229,18 +171,32 @@ export class S3Backend implements StorageBackendAdapter {
       }
     })
 
-    const currentAverage: number[] = []
-    const byteReader = createByteCounterStream({
-      maxHistory: 100,
-      rewriteHistoryOnMax: true,
-      onMaxHistory: (history) => {
-        currentAverage.push(averageTimeBetweenDates(history))
-      },
-    })
+    const byteReader = createByteCounterStream()
     const bodyStream = body.pipe(passThrough)
 
     let upload: Upload | undefined = undefined
-    let bytesUploaded = 0
+
+    // Upload stats
+    const uploadProgress: Progress[] = []
+    const getStreamStatus = (): StreamStatus => ({
+      time: new Date(),
+      bytesUploaded: uploadProgress[uploadProgress.length - 1]?.loaded || 0,
+      dataStream: {
+        closed: bodyStream.closed,
+        paused: bodyStream.isPaused(),
+        errored: Boolean(bodyStream.errored),
+        writable: bodyStream.writable,
+        byteRead: byteReader.bytes,
+      },
+      httpAgentStats: gatherHttpAgentStats(this.agent.httpsAgent.getCurrentStatus()),
+      progress: uploadProgress,
+    })
+
+    let streamStatus = getStreamStatus()
+
+    const streamWatcher = setInterval(() => {
+      streamStatus = getStreamStatus()
+    }, 1000)
 
     try {
       const data = await stream.pipeline(
@@ -263,8 +219,13 @@ export class S3Backend implements StorageBackendAdapter {
           })
 
           upload.on('httpUploadProgress', (progress) => {
-            if (typeof progress.loaded !== 'undefined') {
-              bytesUploaded = progress.loaded
+            uploadProgress.push({
+              total: progress.total,
+              part: progress.part,
+              loaded: progress.loaded,
+            })
+            if (uploadProgress.length > 100) {
+              uploadProgress.shift()
             }
           })
 
@@ -298,19 +259,19 @@ export class S3Backend implements StorageBackendAdapter {
         const span = trace.getActiveSpan()
         if (span) {
           // Print how far we got uploading the file
+          const lastStreamStatus = getStreamStatus()
+          const { progress, ...lastSeenStatus } = streamStatus
           span.setAttributes({
-            byteRead: byteReader.bytes,
-            bytesUploaded,
-            chunkTimes: JSON.stringify([
-              ...currentAverage,
-              averageTimeBetweenDates(byteReader.history),
-            ]),
+            lastStreamStatus: JSON.stringify(lastStreamStatus),
+            lastSeenStatus: JSON.stringify(lastSeenStatus),
           })
         }
 
         throw ERRORS.AbortedTerminate('Upload was aborted', err)
       }
       throw StorageBackendError.fromError(err)
+    } finally {
+      clearInterval(streamWatcher)
     }
   }
 
@@ -586,14 +547,17 @@ export class S3Backend implements StorageBackendAdapter {
     }
   }
 
-  protected createS3Client(options: S3ClientOptions & { name: string }) {
-    const agent = options.httpAgent ?? createAgent(options.name)
+  close() {
+    this.agent.close()
+  }
 
+  protected createS3Client(options: S3ClientOptions & { name: string }) {
     const params: S3ClientConfig = {
       region: options.region,
       runtime: 'node',
       requestHandler: new NodeHttpHandler({
-        ...agent,
+        httpAgent: options.httpAgent?.httpAgent,
+        httpsAgent: options.httpAgent?.httpsAgent,
         connectionTimeout: 5000,
         requestTimeout: options.requestTimeout,
       }),
@@ -606,20 +570,4 @@ export class S3Backend implements StorageBackendAdapter {
     }
     return new S3Client(params)
   }
-}
-
-function averageTimeBetweenDates(dates: Date[]): number {
-  if (dates.length < 2) {
-    throw new Error('At least two dates are required to calculate the average time between them.')
-  }
-
-  let totalDifference = 0
-
-  for (let i = 1; i < dates.length; i++) {
-    const diff = dates[i].getTime() - dates[i - 1].getTime()
-    totalDifference += diff
-  }
-
-  const averageDifference = totalDifference / (dates.length - 1)
-  return averageDifference
 }

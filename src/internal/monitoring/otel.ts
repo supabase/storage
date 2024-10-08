@@ -16,7 +16,7 @@ import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc'
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node'
 import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
-import { SpanExporter, BatchSpanProcessor } from '@opentelemetry/sdk-trace-base'
+import { SpanExporter, BatchSpanProcessor, SpanProcessor } from '@opentelemetry/sdk-trace-base'
 import * as grpc from '@grpc/grpc-js'
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http'
 import { IncomingMessage } from 'node:http'
@@ -36,6 +36,7 @@ import { StreamSplitter } from '@tus/server'
 
 const tracingEnabled = process.env.TRACING_ENABLED === 'true'
 const headersEnv = process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS || ''
+const enableLogTraces = ['debug', 'logs'].includes(process.env.TRACING_MODE || '')
 
 const exporterHeaders = headersEnv
   .split(',')
@@ -67,13 +68,23 @@ if (tracingEnabled && endpoint) {
 // Create a BatchSpanProcessor using the trace exporter
 const batchProcessor = traceExporter ? new BatchSpanProcessor(traceExporter) : undefined
 
+const spanProcessors: SpanProcessor[] = []
+
+if (batchProcessor) {
+  spanProcessors.push(batchProcessor)
+}
+
+if (enableLogTraces) {
+  spanProcessors.push(traceCollector)
+}
+
 // Configure the OpenTelemetry Node SDK
 const sdk = new NodeSDK({
   resource: new Resource({
     [ATTR_SERVICE_NAME]: 'storage',
     [ATTR_SERVICE_VERSION]: version,
   }),
-  spanProcessors: batchProcessor ? [traceCollector, batchProcessor] : [traceCollector],
+  spanProcessors: spanProcessors,
   traceExporter,
   instrumentations: [
     new HttpInstrumentation({
@@ -266,10 +277,8 @@ const sdk = new NodeSDK({
       enabled: true,
       methodsToInstrument: [
         'done',
-        '__doConcurrentUpload',
         '__uploadUsingPut',
         '__createMultipartUpload',
-        '__notifyProgress',
         'markUploadAsAborted',
       ],
     }),
@@ -304,7 +313,7 @@ const sdk = new NodeSDK({
   ],
 })
 
-if (tracingEnabled) {
+if (tracingEnabled && spanProcessors.length > 0) {
   // Initialize the OpenTelemetry Node SDK
   sdk.start()
 

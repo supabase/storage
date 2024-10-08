@@ -117,6 +117,9 @@ type StorageConfigType = {
   tracingMode?: string
   tracingTimeMinDuration: number
   tracingReturnServerTimings: boolean
+  tracingFeatures?: {
+    upload: boolean
+  }
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -326,6 +329,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     tracingReturnServerTimings:
       getOptionalConfigFromEnv('TRACING_RETURN_SERVER_TIMINGS') === 'true',
+    tracingFeatures: {
+      upload: getOptionalConfigFromEnv('TRACING_FEATURE_UPLOAD') === 'true',
+    },
 
     // Queue
     pgQueueEnable: getOptionalConfigFromEnv('PG_QUEUE_ENABLE', 'ENABLE_QUEUE_EVENTS') === 'true',

@@ -54,6 +54,7 @@ jobs:
         with:
           output: swagger-ui
           spec-file: static/api.json
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3

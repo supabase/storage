@@ -67,27 +67,23 @@ export const db = fastifyPlugin(
 
     fastify.addHook('onTimeout', async (request) => {
       if (request.db) {
-        try {
-          await request.db.dispose()
-        } catch (e) {
+        request.db.dispose().catch((e) => {
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
             error: e,
           })
-        }
+        })
       }
     })
 
     fastify.addHook('onRequestAbort', async (request) => {
       if (request.db) {
-        try {
-          await request.db.dispose()
-        } catch (e) {
+        request.db.dispose().catch((e) => {
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
             error: e,
           })
-        }
+        })
       }
     })
   },
@@ -133,27 +129,23 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
 
     fastify.addHook('onTimeout', async (request) => {
       if (request.db) {
-        try {
-          await request.db.dispose()
-        } catch (e) {
+        request.db.dispose().catch((e) => {
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
             error: e,
           })
-        }
+        })
       }
     })
 
     fastify.addHook('onRequestAbort', async (request) => {
       if (request.db) {
-        try {
-          await request.db.dispose()
-        } catch (e) {
+        request.db.dispose().catch((e) => {
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
             error: e,
           })
-        }
+        })
       }
     })
   },

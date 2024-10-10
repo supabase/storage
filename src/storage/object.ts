@@ -384,7 +384,7 @@ export class ObjectStorage {
     } catch (e) {
       await ObjectAdminDelete.send({
         name: destinationKey,
-        bucketId: this.bucketId,
+        bucketId: destinationBucket,
         tenant: this.db.tenant(),
         version: newVersion,
         reqId: this.db.reqId,

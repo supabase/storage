@@ -98,7 +98,6 @@ export abstract class Queue {
           })
           return Queue.stop()
             .then(async () => {
-              await Queue.callClose()
               logSchema.info(logger, '[Queue] Exited', {
                 type: 'queue',
               })
@@ -107,6 +106,11 @@ export abstract class Queue {
               logSchema.error(logger, '[Queue] Error while stopping queue', {
                 error: e,
                 type: 'queue',
+              })
+            })
+            .finally(async () => {
+              await Queue.callClose().catch(() => {
+                // no-op
               })
             })
         },

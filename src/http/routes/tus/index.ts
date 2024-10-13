@@ -27,18 +27,22 @@ import {
 import { TenantConnection, PubSub } from '@internal/database'
 import { S3Store } from '@tus/s3-store'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
-import { createAgent } from '@storage/backend'
 import { ROUTE_OPERATIONS } from '../operations'
+import * as https from 'node:https'
+import { createAgent } from '@internal/http'
 
 const {
+  storageS3MaxSockets,
   storageS3Bucket,
   storageS3Endpoint,
   storageS3ForcePathStyle,
   storageS3Region,
+  storageS3ClientTimeout,
   tusUrlExpiryMs,
   tusPath,
   tusPartSize,
   tusMaxConcurrentUploads,
+  uploadFileSizeLimit,
   storageBackendType,
   storageFilePath,
 } = getConfig()
@@ -55,9 +59,8 @@ type MultiPartRequest = http.IncomingMessage & {
   }
 }
 
-function createTusStore() {
+function createTusStore(agent: { httpsAgent: https.Agent; httpAgent: http.Agent }) {
   if (storageBackendType === 's3') {
-    const agent = createAgent(storageS3Endpoint?.includes('http://') ? 'http' : 'https')
     return new S3Store({
       partSize: tusPartSize * 1024 * 1024, // Each uploaded part will have ${tusPartSize}MB,
       expirationPeriodInMilliseconds: tusUrlExpiryMs,
@@ -66,6 +69,8 @@ function createTusStore() {
       s3ClientConfig: {
         requestHandler: new NodeHttpHandler({
           ...agent,
+          connectionTimeout: 5000,
+          requestTimeout: storageS3ClientTimeout,
         }),
         bucket: storageS3Bucket,
         region: storageS3Region,
@@ -80,8 +85,11 @@ function createTusStore() {
   })
 }
 
-function createTusServer(lockNotifier: LockNotifier) {
-  const datastore = createTusStore()
+function createTusServer(
+  lockNotifier: LockNotifier,
+  agent: { httpsAgent: https.Agent; httpAgent: http.Agent }
+) {
+  const datastore = createTusStore(agent)
   const serverOptions: ServerOptions & {
     datastore: DataStore
   } = {
@@ -103,6 +111,10 @@ function createTusServer(lockNotifier: LockNotifier) {
     allowedHeaders: ['Authorization', 'X-Upsert', 'Upload-Expires', 'ApiKey', 'x-signature'],
     maxSize: async (rawReq, uploadId) => {
       const req = rawReq as MultiPartRequest
+
+      if (!req.upload.tenantId) {
+        return uploadFileSizeLimit
+      }
 
       if (!uploadId) {
         return getFileSizeLimit(req.upload.tenantId)
@@ -131,7 +143,16 @@ export default async function routes(fastify: FastifyInstance) {
   const lockNotifier = new LockNotifier(PubSub)
   await lockNotifier.subscribe()
 
-  const tusServer = createTusServer(lockNotifier)
+  const agent = createAgent('s3_tus', {
+    maxSockets: storageS3MaxSockets,
+  })
+  agent.monitor()
+
+  fastify.addHook('onClose', () => {
+    agent.close()
+  })
+
+  const tusServer = createTusServer(lockNotifier, agent)
 
   // authenticated routes
   fastify.register(async (fastify) => {
@@ -160,9 +181,6 @@ export default async function routes(fastify: FastifyInstance) {
 
   // public routes
   fastify.register(async (fastify) => {
-    fastify.register(dbSuperUser)
-    fastify.register(storage)
-
     fastify.register(publicRoutes, {
       tusServer,
     })

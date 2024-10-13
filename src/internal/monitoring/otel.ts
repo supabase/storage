@@ -9,24 +9,34 @@ const {
   region,
 } = getConfig()
 
+import { S3Client } from '@aws-sdk/client-s3'
 import { NodeSDK } from '@opentelemetry/sdk-node'
 import { Resource } from '@opentelemetry/resources'
-import {
-  SEMRESATTRS_SERVICE_NAME,
-  SEMRESATTRS_SERVICE_VERSION,
-} from '@opentelemetry/semantic-conventions'
+import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc'
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node'
 import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
-import { SpanExporter, BatchSpanProcessor } from '@opentelemetry/sdk-trace-base'
+import { SpanExporter, BatchSpanProcessor, SpanProcessor } from '@opentelemetry/sdk-trace-base'
 import * as grpc from '@grpc/grpc-js'
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http'
-import { IncomingMessage } from 'http'
+import { IncomingMessage } from 'node:http'
 import { logger, logSchema } from '@internal/monitoring/logger'
 import { traceCollector } from '@internal/monitoring/otel-processor'
+import { ClassInstrumentation } from './otel-instrumentation'
+import { ObjectStorage } from '@storage/object'
+import { Uploader } from '@storage/uploader'
+import { Storage } from '@storage/storage'
+import { Event as QueueBaseEvent } from '@internal/queue'
+import { S3Backend } from '@storage/backend'
+import { StorageKnexDB } from '@storage/database'
+import { TenantConnection } from '@internal/database'
+import { S3Store } from '@tus/s3-store'
+import { Upload } from '@aws-sdk/lib-storage'
+import { StreamSplitter } from '@tus/server'
 
 const tracingEnabled = process.env.TRACING_ENABLED === 'true'
 const headersEnv = process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS || ''
+const enableLogTraces = ['debug', 'logs'].includes(process.env.TRACING_MODE || '')
 
 const exporterHeaders = headersEnv
   .split(',')
@@ -58,13 +68,23 @@ if (tracingEnabled && endpoint) {
 // Create a BatchSpanProcessor using the trace exporter
 const batchProcessor = traceExporter ? new BatchSpanProcessor(traceExporter) : undefined
 
+const spanProcessors: SpanProcessor[] = []
+
+if (batchProcessor) {
+  spanProcessors.push(batchProcessor)
+}
+
+if (enableLogTraces) {
+  spanProcessors.push(traceCollector)
+}
+
 // Configure the OpenTelemetry Node SDK
 const sdk = new NodeSDK({
   resource: new Resource({
-    [SEMRESATTRS_SERVICE_NAME]: 'storage',
-    [SEMRESATTRS_SERVICE_VERSION]: version,
+    [ATTR_SERVICE_NAME]: 'storage',
+    [ATTR_SERVICE_VERSION]: version,
   }),
-  spanProcessors: batchProcessor ? [batchProcessor, traceCollector] : [traceCollector],
+  spanProcessors: spanProcessors,
   traceExporter,
   instrumentations: [
     new HttpInstrumentation({
@@ -99,6 +119,169 @@ const sdk = new NodeSDK({
         },
       },
     }),
+    new ClassInstrumentation({
+      targetClass: Storage,
+      enabled: true,
+      methodsToInstrument: [
+        'findBucket',
+        'listBuckets',
+        'createBucket',
+        'updateBucket',
+        'countObjects',
+        'deleteBucket',
+        'emptyBucket',
+        'healthcheck',
+      ],
+    }),
+    new ClassInstrumentation({
+      targetClass: ObjectStorage,
+      enabled: true,
+      methodsToInstrument: [
+        'uploadNewObject',
+        'uploadOverridingObject',
+        'deleteObject',
+        'deleteObjects',
+        'updateObjectMetadata',
+        'updateObjectOwner',
+        'findObject',
+        'findObjects',
+        'copyObject',
+        'moveObject',
+        'searchObjects',
+        'listObjectsV2',
+        'signObjectUrl',
+        'signObjectUrls',
+        'signUploadObjectUrl',
+        'verifyObjectSignature',
+      ],
+    }),
+    new ClassInstrumentation({
+      targetClass: Uploader,
+      enabled: true,
+      methodsToInstrument: ['canUpload', 'prepareUpload', 'upload', 'completeUpload'],
+    }),
+    new ClassInstrumentation({
+      targetClass: QueueBaseEvent,
+      enabled: true,
+      methodsToInstrument: ['send', 'batchSend'],
+      setName: (name, attrs, eventClass) => {
+        if (attrs.constructor.name) {
+          return name + '.' + eventClass.constructor.name
+        }
+        return name
+      },
+    }),
+    new ClassInstrumentation({
+      targetClass: S3Backend,
+      enabled: true,
+      methodsToInstrument: [
+        'getObject',
+        'putObject',
+        'deleteObject',
+        'listObjects',
+        'copyObject',
+        'headObject',
+        'createMultipartUpload',
+        'uploadPart',
+        'completeMultipartUpload',
+        'abortMultipartUpload',
+        'listMultipartUploads',
+        'listParts',
+        'getSignedUrl',
+        'createBucket',
+        'deleteBucket',
+        'listBuckets',
+        'getBucketLocation',
+        'getBucketVersioning',
+        'putBucketVersioning',
+        'getBucketLifecycleConfiguration',
+        'putBucketLifecycleConfiguration',
+        'deleteBucketLifecycle',
+        'uploadObject',
+        'privateAssetUrl',
+      ],
+    }),
+    new ClassInstrumentation({
+      targetClass: StorageKnexDB,
+      enabled: true,
+      methodsToInstrument: ['runQuery'],
+      setName: (name, attrs) => {
+        if (attrs.queryName) {
+          return name + '.' + attrs.queryName
+        }
+        return name
+      },
+      setAttributes: {
+        runQuery: (queryName) => {
+          return {
+            queryName,
+          }
+        },
+      },
+    }),
+    new ClassInstrumentation({
+      targetClass: TenantConnection,
+      enabled: true,
+      methodsToInstrument: ['transaction', 'setScope'],
+    }),
+    new ClassInstrumentation({
+      targetClass: S3Store,
+      enabled: true,
+      methodsToInstrument: [
+        'write',
+        'create',
+        'remove',
+        'getUpload',
+        'declareUploadLength',
+        'uploadIncompletePart',
+        'uploadPart',
+        'downloadIncompletePart',
+        'uploadParts',
+      ],
+      setName: (name) => 'Tus.' + name,
+    }),
+    new ClassInstrumentation({
+      targetClass: StreamSplitter,
+      enabled: true,
+      methodsToInstrument: ['emitEvent'],
+      setName: (name: string, attrs: any) => {
+        if (attrs.event) {
+          return name + '.' + attrs.event
+        }
+        return name
+      },
+      setAttributes: {
+        emitEvent: function (event) {
+          return {
+            part: this.part as any,
+            event,
+          }
+        },
+      },
+    }),
+    new ClassInstrumentation({
+      targetClass: S3Client,
+      enabled: true,
+      methodsToInstrument: ['send'],
+      setAttributes: {
+        send: (command) => {
+          return {
+            operation: command.constructor.name as string,
+          }
+        },
+      },
+      setName: (name, attrs) => 'S3.' + attrs.operation,
+    }),
+    new ClassInstrumentation({
+      targetClass: Upload,
+      enabled: true,
+      methodsToInstrument: [
+        'done',
+        '__uploadUsingPut',
+        '__createMultipartUpload',
+        'markUploadAsAborted',
+      ],
+    }),
     getNodeAutoInstrumentations({
       '@opentelemetry/instrumentation-http': {
         enabled: false,
@@ -130,7 +313,7 @@ const sdk = new NodeSDK({
   ],
 })
 
-if (tracingEnabled) {
+if (tracingEnabled && spanProcessors.length > 0) {
   // Initialize the OpenTelemetry Node SDK
   sdk.start()
 

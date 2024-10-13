@@ -77,6 +77,7 @@ export default async function routes(fastify: FastifyInstance) {
         .uploadOverridingObject(request, {
           owner,
           objectName: objectName,
+          signal: request.signals.body.signal,
         })
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({

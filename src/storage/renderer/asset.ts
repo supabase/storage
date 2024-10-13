@@ -12,10 +12,16 @@ export class AssetRenderer extends Renderer {
   }
 
   getAsset(request: FastifyRequest, options: RenderOptions) {
-    return this.backend.getObject(options.bucket, options.key, options.version, {
-      ifModifiedSince: request.headers['if-modified-since'],
-      ifNoneMatch: request.headers['if-none-match'],
-      range: request.headers.range,
-    })
+    return this.backend.getObject(
+      options.bucket,
+      options.key,
+      options.version,
+      {
+        ifModifiedSince: request.headers['if-modified-since'],
+        ifNoneMatch: request.headers['if-none-match'],
+        range: request.headers.range,
+      },
+      options.signal
+    )
   }
 }

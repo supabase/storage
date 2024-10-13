@@ -1,5 +1,5 @@
 import { FastifyRequest } from 'fastify'
-import { randomUUID } from 'crypto'
+import { randomUUID } from 'node:crypto'
 import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
 import { getJwtSecret } from '@internal/database'
@@ -23,6 +23,7 @@ export interface UploadObjectOptions {
   owner?: string
   isUpsert?: boolean
   version?: string
+  signal?: AbortSignal
 }
 
 const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
@@ -333,7 +334,7 @@ export class ObjectStorage {
         })
 
         const existingDestObject = await db.findObject(
-          this.bucketId,
+          destinationBucket,
           destinationKey,
           'id,name,metadata,version,bucket_id',
           {
@@ -383,7 +384,7 @@ export class ObjectStorage {
     } catch (e) {
       await ObjectAdminDelete.send({
         name: destinationKey,
-        bucketId: this.bucketId,
+        bucketId: destinationBucket,
         tenant: this.db.tenant(),
         version: newVersion,
         reqId: this.db.reqId,

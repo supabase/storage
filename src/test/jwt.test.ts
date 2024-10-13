@@ -43,7 +43,7 @@ describe('JWT', () => {
       kid: keys.length.toString(),
       privateKey: Buffer.from(hmacPrivateKeyWithKid, 'utf-8'),
       publicKey: {
-        export: (options?: any) => ({
+        export: () => ({
           kty: 'oct',
           k: Buffer.from(hmacPrivateKeyWithKid, 'utf-8').toString('base64url'),
         }),
@@ -52,7 +52,7 @@ describe('JWT', () => {
 
     const jwks = {
       keys: keys.map(
-        ({ publicKey, kid }, i) =>
+        ({ publicKey, kid }) =>
           ({
             ...(publicKey as unknown as crypto.KeyObject).export({ format: 'jwk' }),
             kid,

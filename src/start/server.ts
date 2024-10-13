@@ -1,6 +1,6 @@
 import '@internal/monitoring/otel'
 import { FastifyInstance } from 'fastify'
-import { IncomingMessage, Server, ServerResponse } from 'http'
+import { IncomingMessage, Server, ServerResponse } from 'node:http'
 
 import build from '../app'
 import buildAdmin from '../admin-app'

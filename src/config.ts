@@ -25,6 +25,7 @@ type StorageConfigType = {
   storageS3Endpoint?: string
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
+  storageS3ClientTimeout: number
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: string
@@ -116,6 +117,9 @@ type StorageConfigType = {
   tracingMode?: string
   tracingTimeMinDuration: number
   tracingReturnServerTimings: boolean
+  tracingFeatures?: {
+    upload: boolean
+  }
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -274,6 +278,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('STORAGE_S3_FORCE_PATH_STYLE', 'GLOBAL_S3_FORCE_PATH_STYLE') ===
       'true',
     storageS3Region: getOptionalConfigFromEnv('STORAGE_S3_REGION', 'REGION') as string,
+    storageS3ClientTimeout: Number(getOptionalConfigFromEnv('STORAGE_S3_CLIENT_TIMEOUT') || `0`),
 
     // DB - Migrations
     dbAnonRole: getOptionalConfigFromEnv('DB_ANON_ROLE') || 'anon',
@@ -324,6 +329,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     tracingReturnServerTimings:
       getOptionalConfigFromEnv('TRACING_RETURN_SERVER_TIMINGS') === 'true',
+    tracingFeatures: {
+      upload: getOptionalConfigFromEnv('TRACING_FEATURE_UPLOAD') === 'true',
+    },
 
     // Queue
     pgQueueEnable: getOptionalConfigFromEnv('PG_QUEUE_ENABLE', 'ENABLE_QUEUE_EVENTS') === 'true',

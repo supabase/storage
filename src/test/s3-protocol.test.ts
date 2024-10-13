@@ -71,7 +71,6 @@ describe('S3 Protocol', () => {
   describe('Bucket', () => {
     let testApp: FastifyInstance
     let client: S3Client
-    let clientMinio: S3Client
 
     beforeAll(async () => {
       testApp = app()
@@ -86,16 +85,16 @@ describe('S3 Protocol', () => {
         },
       })
 
-      clientMinio = new S3Client({
-        forcePathStyle: true,
-        region: storageS3Region,
-        logger: console,
-        endpoint: 'http://localhost:9000',
-        credentials: {
-          accessKeyId: 'supa-storage',
-          secretAccessKey: 'secret1234',
-        },
-      })
+      // clientMinio = new S3Client({
+      //   forcePathStyle: true,
+      //   region: storageS3Region,
+      //   logger: console,
+      //   endpoint: 'http://localhost:9000',
+      //   credentials: {
+      //     accessKeyId: 'supa-storage',
+      //     secretAccessKey: 'secret1234',
+      //   },
+      // })
     })
 
     afterAll(async () => {

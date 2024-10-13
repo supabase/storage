@@ -66,6 +66,7 @@ export default async function routes(fastify: FastifyInstance) {
         key: s3Key,
         version: obj.version,
         download,
+        signal: request.signals.disconnect.signal,
       })
     }
   )

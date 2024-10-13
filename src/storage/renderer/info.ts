@@ -21,12 +21,13 @@ export class InfoRenderer extends HeadRenderer {
         id: obj.id,
         name: obj.name,
         version: obj.version,
+        bucket_id: obj.bucket_id,
         size: obj.metadata?.size ?? null,
         content_type: obj.metadata?.mimetype ?? null,
         cache_control: obj.metadata?.cacheControl ?? null,
         etag: obj.metadata?.eTag ?? null,
         metadata: obj.user_metadata,
-        last_modified: obj.metadata?.lastModified ?? null,
+        last_modified: obj.updated_at,
         created_at: obj.created_at,
       },
     }
@@ -44,7 +45,7 @@ export class InfoRenderer extends HeadRenderer {
       .header('ETag', data.metadata.eTag)
       .header('Content-Length', data.metadata.contentLength)
       .header('Last-Modified', data.metadata.lastModified?.toUTCString())
-      .header('CacheControl', data.metadata.cacheControl)
+      .header('Cache-Control', data.metadata.cacheControl)
 
     if (data.transformations && data.transformations.length > 0) {
       response.header('X-Transformations', data.transformations.join(','))

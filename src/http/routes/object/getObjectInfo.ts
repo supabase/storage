@@ -46,7 +46,7 @@ async function requestHandler(
   // Not Authenticated flow
   if (!request.isAuthenticated) {
     if (!bucket?.public) {
-      throw ERRORS.AccessDenied('Access denied to this bucket')
+      throw ERRORS.NoSuchBucket(bucketName)
     }
   }
 
@@ -163,9 +163,9 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
       schema: {
         params: getObjectParamsSchema,
         summary,
-        description: 'use HEAD /object/authenticated/{bucketName} instead',
+        description: 'Object Info',
+        tags: ['object'],
         response: { '4xx': { $ref: 'errorSchema#' } },
-        tags: ['deprecated'],
       },
       config: {
         operation: { type: 'object.get_authenticated_info' },
@@ -183,9 +183,9 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
       schema: {
         params: getObjectParamsSchema,
         summary,
-        description: 'use HEAD /object/authenticated/{bucketName} instead',
+        description: 'Head object info',
+        tags: ['object'],
         response: { '4xx': { $ref: 'errorSchema#' } },
-        tags: ['deprecated'],
       },
       config: {
         operation: { type: 'object.head_authenticated_info' },

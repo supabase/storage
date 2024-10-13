@@ -5,7 +5,6 @@ import {
   CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
-  DeleteObjectsCommand,
   GetObjectCommand,
   GetObjectCommandInput,
   HeadObjectCommand,
@@ -30,6 +29,7 @@ import { ERRORS, StorageBackendError } from '@internal/errors'
 import { getConfig } from '../../config'
 import Agent, { HttpsAgent } from 'agentkeepalive'
 import { Readable } from 'stream'
+import { logger } from '@internal/monitoring'
 
 const { storageS3MaxSockets } = getConfig()
 
@@ -239,17 +239,25 @@ export class S3Backend implements StorageBackendAdapter {
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
     try {
-      const s3Prefixes = prefixes.map((ele) => {
-        return { Key: ele }
-      })
-
-      const command = new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: {
-          Objects: s3Prefixes,
-        },
-      })
-      await this.client.send(command)
+      await Promise.all(
+        prefixes.map((ele) =>
+          this.client
+            .send(
+              new DeleteObjectCommand({
+                Bucket: bucket,
+                Key: ele,
+              })
+            )
+            .catch((e) => {
+              const err = StorageBackendError.fromError(e)
+              if (err.code === 'NoSuchKey') {
+                return
+              }
+              logger.info(`[StorageBackendError] raw: ${JSON.stringify(err)}`)
+              throw e
+            })
+        )
+      )
     } catch (e) {
       throw StorageBackendError.fromError(e)
     }

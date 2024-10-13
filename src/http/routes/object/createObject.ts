@@ -80,6 +80,7 @@ export default async function routes(fastify: FastifyInstance) {
           objectName,
           owner,
           isUpsert,
+          signal: request.signals.body.signal,
         })
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({

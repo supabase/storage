@@ -94,7 +94,7 @@ export class Webhook extends BaseEvent<WebhookEvent> {
     } catch (e) {
       logger.error(
         {
-          error: e,
+          error: (e as any)?.message,
           jodId: job.id,
           type: 'event',
           event: job.data.event.type,

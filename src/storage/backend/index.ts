@@ -7,7 +7,8 @@ export * from './s3'
 export * from './file'
 export * from './adapter'
 
-const { storageS3Region, storageS3Endpoint, storageS3ForcePathStyle } = getConfig()
+const { storageS3Region, storageS3Endpoint, storageS3ForcePathStyle, storageS3ClientTimeout } =
+  getConfig()
 
 type ConfigForStorage<Type extends StorageBackendType> = Type extends 's3'
   ? S3ClientOptions
@@ -26,6 +27,7 @@ export function createStorageBackend<Type extends StorageBackendType>(
       region: storageS3Region,
       endpoint: storageS3Endpoint,
       forcePathStyle: storageS3ForcePathStyle,
+      requestTimeout: storageS3ClientTimeout,
       ...(config ? config : {}),
     }
     storageBackend = new S3Backend(defaultOptions)

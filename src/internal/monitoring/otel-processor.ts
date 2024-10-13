@@ -1,13 +1,15 @@
 import { SpanProcessor, ReadableSpan } from '@opentelemetry/sdk-trace-base'
 import TTLCache from '@isaacs/ttlcache'
-import { getConfig } from '../../config'
-
-const { isProduction, tracingTimeMinDuration } = getConfig()
 
 interface Trace {
   id: string
   rootSpanId: string
-  spans: ReadableSpan[]
+  spans: Span[]
+}
+
+export interface Span {
+  item: ReadableSpan
+  children: Span[]
 }
 
 export class TraceCollectorSpanProcessor implements SpanProcessor {
@@ -26,47 +28,38 @@ export class TraceCollectorSpanProcessor implements SpanProcessor {
   }
 
   onStart(span: ReadableSpan): void {
+    const traceId = span.spanContext().traceId
+    const spanId = span.spanContext().spanId
+
     // No action needed on start
     if (!span.parentSpanId) {
-      const traceId = span.spanContext().traceId
-      const spanId = span.spanContext().spanId
-
       const hasTrace = this.traces.has(traceId)
 
       if (!hasTrace) {
         this.traces.set(traceId, {
           id: traceId,
-          spans: [],
+          spans: [
+            {
+              item: span,
+              children: [],
+            },
+          ],
           rootSpanId: spanId,
         })
       }
+
+      return
+    }
+
+    const trace = this.traces.get(traceId)
+
+    if (trace) {
+      this.addChildSpan(trace.spans, span.parentSpanId, { item: span, children: [] })
     }
   }
 
   onEnd(span: ReadableSpan): void {
-    const minLatency = isProduction ? tracingTimeMinDuration : 0.01
-
-    // only add span if higher than min latency (no need to waste memory)
-    if (span.duration[1] / 1e6 > minLatency) {
-      const traceId = span.spanContext().traceId
-      const trace = this.traces.get(traceId)
-
-      if (!trace) {
-        return
-      }
-
-      const cachedSpans = trace?.spans || []
-      const whiteList = ['jwt', 'pg', 'raw', 's3', 'first', 'insert', 'select', 'delete']
-
-      // only push top level spans
-      if (whiteList.some((item) => span.name.toLowerCase().includes(item))) {
-        cachedSpans.push(span)
-        this.traces.set(traceId, {
-          ...trace,
-          spans: cachedSpans,
-        })
-      }
-    }
+    // no-op
   }
 
   shutdown(): Promise<void> {
@@ -79,12 +72,24 @@ export class TraceCollectorSpanProcessor implements SpanProcessor {
     return Promise.resolve()
   }
 
-  getSpansForTrace(traceId: string): ReadableSpan[] {
+  getSpansForTrace(traceId: string): Span[] {
     return this.traces.get(traceId)?.spans || []
   }
 
   clearTrace(traceId: string): void {
     this.traces.delete(traceId)
+  }
+
+  private addChildSpan(spans: Span[], parentId: string, childSpan: Span): void {
+    for (const span of spans) {
+      if (span.item.spanContext().spanId === parentId) {
+        span.children.push(childSpan)
+        return
+      }
+      if (span.children.length > 0) {
+        this.addChildSpan(span.children, parentId, childSpan)
+      }
+    }
   }
 }
 

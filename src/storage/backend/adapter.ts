@@ -62,7 +62,8 @@ export abstract class StorageBackendAdapter {
     bucketName: string,
     key: string,
     version: string | undefined,
-    headers?: BrowserCacheHeaders
+    headers?: BrowserCacheHeaders,
+    signal?: AbortSignal
   ): Promise<ObjectResponse> {
     throw new Error('getObject not implemented')
   }
@@ -81,7 +82,8 @@ export abstract class StorageBackendAdapter {
     version: string | undefined,
     body: NodeJS.ReadableStream,
     contentType: string,
-    cacheControl: string
+    cacheControl: string,
+    signal?: AbortSignal
   ): Promise<ObjectMetadata> {
     throw new Error('uploadObject not implemented')
   }
@@ -171,7 +173,8 @@ export abstract class StorageBackendAdapter {
     uploadId: string,
     partNumber: number,
     body?: string | Uint8Array | Buffer | Readable,
-    length?: number
+    length?: number,
+    signal?: AbortSignal
   ): Promise<{ ETag?: string }> {
     throw new Error('not implemented')
   }
@@ -212,6 +215,10 @@ export abstract class StorageBackendAdapter {
     bytes?: { fromByte: number; toByte: number }
   ): Promise<{ eTag?: string; lastModified?: Date }> {
     throw new Error('not implemented')
+  }
+
+  close(): void {
+    // do nothing
   }
 }
 

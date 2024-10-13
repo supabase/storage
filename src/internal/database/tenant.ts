@@ -1,4 +1,4 @@
-import crypto from 'crypto'
+import crypto from 'node:crypto'
 import { getConfig } from '../../config'
 import { decrypt, encrypt, verifyJWT } from '../auth'
 import { multitenantKnex } from './multitenant-db'
@@ -177,6 +177,10 @@ export function deleteTenantConfig(tenantId: string): void {
  * @param tenantId
  */
 export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
+  if (!tenantId) {
+    throw ERRORS.InvalidTenantId()
+  }
+
   if (tenantConfigCache.has(tenantId)) {
     return tenantConfigCache.get(tenantId) as TenantConfig
   }

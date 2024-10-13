@@ -86,6 +86,7 @@ export abstract class Queue {
       opts.registerWorkers()
     }
 
+    await Queue.callStart()
     await Queue.startWorkers(opts.onMessage)
 
     if (opts.signal) {
@@ -96,7 +97,7 @@ export abstract class Queue {
             type: 'queue',
           })
           return Queue.stop()
-            .then(() => {
+            .then(async () => {
               logSchema.info(logger, '[Queue] Exited', {
                 type: 'queue',
               })
@@ -105,6 +106,11 @@ export abstract class Queue {
               logSchema.error(logger, '[Queue] Error while stopping queue', {
                 error: e,
                 type: 'queue',
+              })
+            })
+            .finally(async () => {
+              await Queue.callClose().catch(() => {
+                // no-op
               })
             })
         },
@@ -142,7 +148,8 @@ export abstract class Queue {
     })
 
     await new Promise((resolve) => {
-      boss.once('stopped', () => {
+      boss.once('stopped', async () => {
+        await this.callClose()
         resolve(null)
       })
     })
@@ -164,6 +171,22 @@ export abstract class Queue {
     })
 
     return Promise.all(workers)
+  }
+
+  protected static callStart() {
+    const events = Queue.events.map((event) => {
+      return event.onStart()
+    })
+
+    return Promise.all(events)
+  }
+
+  protected static callClose() {
+    const events = Queue.events.map((event) => {
+      return event.onClose()
+    })
+
+    return Promise.all(events)
   }
 
   protected static registerTask(

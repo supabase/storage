@@ -11,19 +11,22 @@ import { getConfig } from '../../config'
  * @param feature
  */
 export const requireTenantFeature = (feature: keyof Features) =>
-  fastifyPlugin(async (fastify) => {
-    const { isMultitenant } = getConfig()
-    fastify.addHook('onRequest', async (request, reply) => {
-      if (!isMultitenant) return
+  fastifyPlugin(
+    async (fastify) => {
+      const { isMultitenant } = getConfig()
+      fastify.addHook('onRequest', async (request, reply) => {
+        if (!isMultitenant) return
 
-      const features = await getFeatures(request.tenantId)
+        const features = await getFeatures(request.tenantId)
 
-      if (!features[feature].enabled) {
-        reply.status(403).send({
-          error: 'FeatureNotEnabled',
-          statusCode: '403',
-          message: 'feature not enabled for this tenant',
-        })
-      }
-    })
-  })
+        if (!features[feature].enabled) {
+          reply.status(403).send({
+            error: 'FeatureNotEnabled',
+            statusCode: '403',
+            message: 'feature not enabled for this tenant',
+          })
+        }
+      })
+    },
+    { name: 'tenant-feature-flags' }
+  )

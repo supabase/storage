@@ -22,7 +22,13 @@ import { default as ListParts } from './commands/list-parts'
 import { default as UploadPartCopy } from './commands/upload-part-copy'
 import { JTDDataType } from 'ajv/dist/jtd'
 
-export type Context = { storage: Storage; tenantId: string; owner?: string; req: FastifyRequest }
+export type Context = {
+  storage: Storage
+  tenantId: string
+  owner?: string
+  req: FastifyRequest
+  signals: { body: AbortSignal; response: AbortSignal }
+}
 export type S3Router = Router<Context>
 
 const s3Commands = [

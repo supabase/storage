@@ -1,16 +1,25 @@
 import { Event as QueueBaseEvent, BasePayload, StaticThis, Event } from '@internal/queue'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { StorageKnexDB } from '../database'
-import { createAgent, createStorageBackend } from '../backend'
+import { createStorageBackend, StorageBackendAdapter } from '../backend'
 import { Storage } from '../storage'
 import { getConfig } from '../../config'
 import { logger } from '@internal/monitoring'
+import { createAgent } from '@internal/http'
 
-const { storageBackendType, storageS3Endpoint, region } = getConfig()
-const storageS3Protocol = storageS3Endpoint?.includes('http://') ? 'http' : 'https'
-const httpAgent = createAgent(storageS3Protocol)
+const { storageS3MaxSockets, storageBackendType, region } = getConfig()
+
+let storageBackend: StorageBackendAdapter | undefined = undefined
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends QueueBaseEvent<T> {
+  static onStart() {
+    this.getOrCreateStorageBackend()
+  }
+
+  static onClose() {
+    storageBackend?.close()
+  }
+
   /**
    * Sends a message as a webhook
    * @param payload
@@ -67,10 +76,26 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
       host: payload.tenant.host,
     })
 
-    const storageBackend = createStorageBackend(storageBackendType, {
-      httpAgent,
+    return new Storage(this.getOrCreateStorageBackend(), db)
+  }
+
+  protected static getOrCreateStorageBackend(monitor = false) {
+    if (storageBackend) {
+      return storageBackend
+    }
+
+    const httpAgent = createAgent('s3_worker', {
+      maxSockets: storageS3MaxSockets,
     })
 
-    return new Storage(storageBackend, db)
+    storageBackend = createStorageBackend(storageBackendType, {
+      httpAgent: httpAgent,
+    })
+
+    if (monitor) {
+      httpAgent.monitor()
+    }
+
+    return storageBackend
   }
 }

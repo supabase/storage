@@ -204,6 +204,7 @@ export class ImageRenderer extends Renderer {
 
       const response = await this.getClient().get(url.join('/'), {
         responseType: 'stream',
+        signal: options.signal,
         headers: acceptHeader
           ? {
               accept: acceptHeader,

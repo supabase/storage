@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [ubuntu-22.04]
-        node: ['16']
+        node: ['20']
 
     runs-on: ${{ matrix.platform }}
 
@@ -54,6 +54,7 @@ jobs:
         with:
           output: swagger-ui
           spec-file: static/api.json
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3

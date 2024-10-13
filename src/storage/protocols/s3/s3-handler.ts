@@ -27,6 +27,7 @@ import { ERRORS } from '@internal/errors'
 import { S3MultipartUpload, Obj } from '../../schemas'
 import { decrypt, encrypt } from '@internal/auth'
 import { ByteLimitTransformStream } from './byte-limit-stream'
+import { logger, logSchema } from '@internal/monitoring'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
 
@@ -579,8 +580,13 @@ export class S3ProtocolHandler {
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
    * @param command
+   * @param signal
    */
-  async uploadPart(command: UploadPartCommandInput) {
+  async uploadPart(command: UploadPartCommandInput, signal?: AbortSignal) {
+    if (signal?.aborted) {
+      throw ERRORS.AbortedTerminate('UploadPart aborted')
+    }
+
     const { Bucket, PartNumber, UploadId, Key, Body, ContentLength } = command
 
     if (!UploadId) {
@@ -607,6 +613,10 @@ export class S3ProtocolHandler {
     })
 
     const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize)
+
+    if (signal?.aborted) {
+      throw ERRORS.AbortedTerminate('UploadPart aborted')
+    }
 
     const proxy = new PassThrough()
 
@@ -636,7 +646,8 @@ export class S3ProtocolHandler {
             UploadId,
             PartNumber || 0,
             stream as Readable,
-            ContentLength
+            ContentLength,
+            signal
           )
         }
       )
@@ -657,15 +668,26 @@ export class S3ProtocolHandler {
         },
       }
     } catch (e) {
-      await this.storage.db.asSuperUser().withTransaction(async (db) => {
-        const multipart = await db.findMultipartUpload(UploadId, 'in_progress_size', {
-          forUpdate: true,
-        })
+      try {
+        await this.storage.db.asSuperUser().withTransaction(async (db) => {
+          const multipart = await db.findMultipartUpload(UploadId, 'in_progress_size', {
+            forUpdate: true,
+          })
 
-        const diff = multipart.in_progress_size - ContentLength
-        const signature = this.uploadSignature({ in_progress_size: diff })
-        await db.updateMultipartUploadProgress(UploadId, diff, signature)
-      })
+          const diff = multipart.in_progress_size - ContentLength
+          const signature = this.uploadSignature({ in_progress_size: diff })
+          await db.updateMultipartUploadProgress(UploadId, diff, signature)
+        })
+      } catch (e) {
+        logSchema.error(logger, 'Failed to update multipart upload progress', {
+          type: 's3',
+          error: e,
+        })
+      }
+
+      if (e instanceof Error && e.name === 'AbortError') {
+        throw ERRORS.AbortedTerminate('UploadPart aborted')
+      }
 
       throw e
     }
@@ -677,8 +699,9 @@ export class S3ProtocolHandler {
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html
    *
    * @param command
+   * @param signal
    */
-  async putObject(command: PutObjectCommandInput) {
+  async putObject(command: PutObjectCommandInput, signal?: AbortSignal) {
     const uploader = new Uploader(this.storage.backend, this.storage.db)
 
     mustBeValidBucketName(command.Bucket)
@@ -705,6 +728,7 @@ export class S3ProtocolHandler {
       fileSizeLimit: bucket.file_size_limit,
       allowedMimeTypes: bucket.allowed_mime_types,
       metadata: command.Metadata,
+      signal,
     })
 
     return {
@@ -839,8 +863,9 @@ export class S3ProtocolHandler {
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html
    *
    * @param command
+   * @param options
    */
-  async getObject(command: GetObjectCommandInput) {
+  async getObject(command: GetObjectCommandInput, options?: { signal?: AbortSignal }) {
     const bucket = command.Bucket as string
     const key = command.Key as string
 
@@ -853,7 +878,8 @@ export class S3ProtocolHandler {
         ifModifiedSince: command.IfModifiedSince?.toISOString(),
         ifNoneMatch: command.IfNoneMatch,
         range: command.Range,
-      }
+      },
+      options?.signal
     )
 
     let metadataHeaders: Record<string, any> = {}
@@ -1261,7 +1287,7 @@ function toAwsMeatadataHeaders(records: Record<string, any>) {
   if (records) {
     Object.keys(records).forEach((key) => {
       const value = records[key]
-      if (isUSASCII(value)) {
+      if (value && isUSASCII(value)) {
         metadataHeaders['x-amz-meta-' + key.toLowerCase()] = value
       } else {
         missingCount++

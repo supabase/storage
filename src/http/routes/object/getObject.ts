@@ -54,7 +54,7 @@ async function requestHandler(
   if (!request.isAuthenticated) {
     // The bucket must be public to access its content
     if (!bucket?.public) {
-      throw ERRORS.AccessDenied('Access denied to this bucket')
+      throw ERRORS.NoSuchBucket(bucketName)
     }
   }
 
@@ -78,6 +78,7 @@ async function requestHandler(
     key: s3Key,
     version: obj.version,
     download,
+    signal: request.signals.disconnect.signal,
   })
 }
 
@@ -113,8 +114,8 @@ export default async function routes(fastify: FastifyInstance) {
         params: getObjectParamsSchema,
         summary: 'Get object',
         description: 'Serve objects',
+        tags: ['object'],
         response: { '4xx': { $ref: 'errorSchema#' } },
-        tags: ['deprecated'],
       },
       config: {
         operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT },

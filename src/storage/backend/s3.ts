@@ -1,7 +1,6 @@
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
-  CompleteMultipartUploadCommandOutput,
   CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
@@ -14,7 +13,7 @@ import {
   UploadPartCommand,
   UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
-import { Upload } from '@aws-sdk/lib-storage'
+import { Progress, Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import {
   StorageBackendAdapter,
@@ -27,25 +26,26 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { getConfig } from '../../config'
-import Agent, { HttpsAgent } from 'agentkeepalive'
-import { Readable } from 'stream'
+import { addAbortSignal, PassThrough, Readable } from 'node:stream'
+import { trace } from '@opentelemetry/api'
+import { createByteCounterStream } from '@internal/concurrency'
+import { AgentStats, createAgent, gatherHttpAgentStats, InstrumentedAgent } from '@internal/http'
 import { logger } from '@internal/monitoring'
 
-const { storageS3MaxSockets } = getConfig()
+const { tracingFeatures, storageS3MaxSockets, tracingEnabled } = getConfig()
 
-/**
- * Creates an agent for the given protocol
- * @param protocol
- */
-export function createAgent(protocol: 'http' | 'https') {
-  const agentOptions = {
-    maxSockets: storageS3MaxSockets,
-    keepAlive: true,
+interface StreamStatus {
+  time: Date
+  bytesUploaded: number
+  progress: Progress[]
+  dataStream: {
+    closed: boolean
+    paused: boolean
+    errored: boolean
+    writable: boolean
+    byteRead: number
   }
-
-  return protocol === 'http'
-    ? { httpAgent: new Agent(agentOptions) }
-    : { httpsAgent: new HttpsAgent(agentOptions) }
+  httpAgentStats: AgentStats
 }
 
 export interface S3ClientOptions {
@@ -55,7 +55,8 @@ export interface S3ClientOptions {
   accessKey?: string
   secretKey?: string
   role?: string
-  httpAgent?: { httpAgent: Agent } | { httpsAgent: HttpsAgent }
+  httpAgent?: InstrumentedAgent
+  requestTimeout?: number
 }
 
 /**
@@ -64,25 +65,25 @@ export interface S3ClientOptions {
  */
 export class S3Backend implements StorageBackendAdapter {
   client: S3Client
+  agent: InstrumentedAgent
 
   constructor(options: S3ClientOptions) {
-    const storageS3Protocol = options.endpoint?.includes('http://') ? 'http' : 'https'
-    const agent = options.httpAgent ? options.httpAgent : createAgent(storageS3Protocol)
+    this.agent =
+      options.httpAgent ??
+      createAgent('s3_default', {
+        maxSockets: storageS3MaxSockets,
+      })
 
-    const params: S3ClientConfig = {
-      region: options.region,
-      runtime: 'node',
-      requestHandler: new NodeHttpHandler({
-        ...agent,
-      }),
+    if (this.agent.httpsAgent && tracingEnabled) {
+      this.agent.monitor()
     }
-    if (options.endpoint) {
-      params.endpoint = options.endpoint
-    }
-    if (options.forcePathStyle) {
-      params.forcePathStyle = true
-    }
-    this.client = new S3Client(params)
+
+    // Default client for API operations
+    this.client = this.createS3Client({
+      ...options,
+      name: 's3_default',
+      httpAgent: this.agent,
+    })
   }
 
   /**
@@ -91,12 +92,14 @@ export class S3Backend implements StorageBackendAdapter {
    * @param key
    * @param version
    * @param headers
+   * @param signal
    */
   async getObject(
     bucketName: string,
     key: string,
     version: string | undefined,
-    headers?: BrowserCacheHeaders
+    headers?: BrowserCacheHeaders,
+    signal?: AbortSignal
   ): Promise<ObjectResponse> {
     const input: GetObjectCommandInput = {
       Bucket: bucketName,
@@ -108,7 +111,9 @@ export class S3Backend implements StorageBackendAdapter {
       input.IfModifiedSince = new Date(headers.ifModifiedSince)
     }
     const command = new GetObjectCommand(input)
-    const data = await this.client.send(command)
+    const data = await this.client.send(command, {
+      abortSignal: signal,
+    })
 
     return {
       metadata: {
@@ -134,30 +139,47 @@ export class S3Backend implements StorageBackendAdapter {
    * @param body
    * @param contentType
    * @param cacheControl
+   * @param signal
    */
   async uploadObject(
     bucketName: string,
     key: string,
     version: string | undefined,
-    body: NodeJS.ReadableStream,
+    body: Readable,
     contentType: string,
-    cacheControl: string
+    cacheControl: string,
+    signal?: AbortSignal
   ): Promise<ObjectMetadata> {
+    if (signal?.aborted) {
+      throw ERRORS.Aborted('Upload was aborted')
+    }
+
+    const streamWatcher = tracingFeatures?.upload ? this.watchUploadStream(body, signal) : undefined
+    const uploadStream = streamWatcher ? streamWatcher.dataStream : body
+
+    const upload = new Upload({
+      client: this.client,
+      params: {
+        Bucket: bucketName,
+        Key: withOptionalVersion(key, version),
+        Body: uploadStream,
+        ContentType: contentType,
+        CacheControl: cacheControl,
+      },
+    })
+
+    streamWatcher?.watchUpload(upload)
+
+    signal?.addEventListener(
+      'abort',
+      () => {
+        upload.abort()
+      },
+      { once: true }
+    )
+
     try {
-      const paralellUploadS3 = new Upload({
-        client: this.client,
-        params: {
-          Bucket: bucketName,
-          Key: withOptionalVersion(key, version),
-          /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-          Body: body,
-          ContentType: contentType,
-          CacheControl: cacheControl,
-        },
-      })
-
-      const data = (await paralellUploadS3.done()) as CompleteMultipartUploadCommandOutput
-
+      const data = await upload.done()
       const metadata = await this.headObject(bucketName, key, version)
 
       return {
@@ -170,8 +192,28 @@ export class S3Backend implements StorageBackendAdapter {
         size: metadata.size,
         contentRange: metadata.contentRange,
       }
-    } catch (err: any) {
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        const span = trace.getActiveSpan()
+        if (span) {
+          // Print how far we got uploading the file
+          const lastSeenStatus = streamWatcher?.lastSeenStreamStatus
+          const lastStreamStatus = streamWatcher?.getStreamStatus()
+
+          if (lastSeenStatus && lastStreamStatus) {
+            const { progress, ...lastSeenStream } = lastSeenStatus
+            span.setAttributes({
+              lastStreamStatus: JSON.stringify(lastStreamStatus),
+              lastSeenStatus: JSON.stringify(lastSeenStream),
+            })
+          }
+        }
+
+        throw ERRORS.AbortedTerminate('Upload was aborted', err)
+      }
       throw StorageBackendError.fromError(err)
+    } finally {
+      streamWatcher?.stop()
     }
   }
 
@@ -343,22 +385,33 @@ export class S3Backend implements StorageBackendAdapter {
     uploadId: string,
     partNumber: number,
     body?: string | Uint8Array | Buffer | Readable,
-    length?: number
+    length?: number,
+    signal?: AbortSignal
   ) {
-    const paralellUploadS3 = new UploadPartCommand({
-      Bucket: bucketName,
-      Key: `${key}/${version}`,
-      UploadId: uploadId,
-      PartNumber: partNumber,
-      Body: body,
-      ContentLength: length,
-    })
+    try {
+      const paralellUploadS3 = new UploadPartCommand({
+        Bucket: bucketName,
+        Key: `${key}/${version}`,
+        UploadId: uploadId,
+        PartNumber: partNumber,
+        Body: body,
+        ContentLength: length,
+      })
 
-    const resp = await this.client.send(paralellUploadS3)
+      const resp = await this.client.send(paralellUploadS3, {
+        abortSignal: signal,
+      })
 
-    return {
-      version,
-      ETag: resp.ETag,
+      return {
+        version,
+        ETag: resp.ETag,
+      }
+    } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') {
+        throw ERRORS.AbortedTerminate('Upload was aborted', e)
+      }
+
+      throw StorageBackendError.fromError(e)
     }
   }
 
@@ -442,5 +495,115 @@ export class S3Backend implements StorageBackendAdapter {
       eTag: part.CopyPartResult?.ETag,
       lastModified: part.CopyPartResult?.LastModified,
     }
+  }
+
+  close() {
+    this.agent.close()
+  }
+
+  protected watchUploadStream(body: Readable, signal?: AbortSignal) {
+    const passThrough = new PassThrough()
+
+    if (signal) {
+      addAbortSignal(signal, passThrough)
+    }
+
+    passThrough.on('error', () => {
+      body.unpipe(passThrough)
+    })
+
+    body.on('error', (err) => {
+      if (!passThrough.closed) {
+        passThrough.destroy(err)
+      }
+    })
+
+    const byteReader = createByteCounterStream()
+    const bodyStream = body.pipe(passThrough)
+
+    // Upload stats
+    const uploadProgress: Progress[] = []
+    const getStreamStatus = (): StreamStatus => ({
+      time: new Date(),
+      bytesUploaded: uploadProgress[uploadProgress.length - 1]?.loaded || 0,
+      dataStream: {
+        closed: bodyStream.closed,
+        paused: bodyStream.isPaused(),
+        errored: Boolean(bodyStream.errored),
+        writable: bodyStream.writable,
+        byteRead: byteReader.bytes,
+      },
+      httpAgentStats: gatherHttpAgentStats(this.agent.httpsAgent.getCurrentStatus()),
+      progress: uploadProgress,
+    })
+
+    let streamStatus = getStreamStatus()
+
+    const streamWatcher = setInterval(() => {
+      streamStatus = getStreamStatus()
+    }, 1000)
+
+    const dataStream = passThrough.pipe(byteReader.transformStream)
+
+    body.on('error', (err) => {
+      passThrough.destroy(err)
+    })
+
+    passThrough.on('error', (err) => {
+      body.destroy(err)
+    })
+
+    passThrough.on('close', () => {
+      body.unpipe(passThrough)
+    })
+
+    function watchUpload(upload: Upload) {
+      upload.on('httpUploadProgress', (progress) => {
+        uploadProgress.push({
+          total: progress.total,
+          part: progress.part,
+          loaded: progress.loaded,
+        })
+        if (uploadProgress.length > 100) {
+          uploadProgress.shift()
+        }
+      })
+    }
+
+    return {
+      dataStream,
+      byteReader,
+      get uploadProgress() {
+        return uploadProgress
+      },
+      get lastSeenStreamStatus() {
+        return streamStatus
+      },
+      getStreamStatus,
+      stop() {
+        clearInterval(streamWatcher)
+      },
+      watchUpload,
+    }
+  }
+
+  protected createS3Client(options: S3ClientOptions & { name: string }) {
+    const params: S3ClientConfig = {
+      region: options.region,
+      runtime: 'node',
+      requestHandler: new NodeHttpHandler({
+        httpAgent: options.httpAgent?.httpAgent,
+        httpsAgent: options.httpAgent?.httpsAgent,
+        connectionTimeout: 5000,
+        requestTimeout: options.requestTimeout,
+      }),
+    }
+    if (options.endpoint) {
+      params.endpoint = options.endpoint
+    }
+    if (options.forcePathStyle) {
+      params.forcePathStyle = true
+    }
+    return new S3Client(params)
   }
 }

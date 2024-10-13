@@ -60,6 +60,10 @@ export default async function routes(fastify: FastifyInstance) {
                   storage: req.storage,
                   tenantId: req.tenantId,
                   owner: req.owner,
+                  signals: {
+                    body: req.signals.body.signal,
+                    response: req.signals.response.signal,
+                  },
                 })
 
                 const headers = output.headers
@@ -76,7 +80,12 @@ export default async function routes(fastify: FastifyInstance) {
                 if (route.disableContentTypeParser) {
                   reply.header('connection', 'close')
                   reply.raw.on('finish', () => {
-                    req.raw.destroy()
+                    // wait sometime so that the client can receive the response
+                    setTimeout(() => {
+                      if (!req.raw.destroyed) {
+                        req.raw.destroy()
+                      }
+                    }, 3000)
                   })
                 }
                 throw e
@@ -116,6 +125,9 @@ export default async function routes(fastify: FastifyInstance) {
             {
               validatorCompiler: () => () => true,
               exposeHeadRoute: false,
+              schema: {
+                tags: ['s3'],
+              },
               errorHandler: s3ErrorHandler,
             },
             routeHandler
@@ -128,6 +140,9 @@ export default async function routes(fastify: FastifyInstance) {
               {
                 validatorCompiler: () => () => true,
                 exposeHeadRoute: false,
+                schema: {
+                  tags: ['s3'],
+                },
                 errorHandler: s3ErrorHandler,
               },
               routeHandler

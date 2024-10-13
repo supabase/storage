@@ -1,7 +1,7 @@
 import pino, { BaseLogger } from 'pino'
 import { getConfig } from '../../config'
 import { FastifyReply, FastifyRequest } from 'fastify'
-import { URL } from 'url'
+import { URL } from 'node:url'
 import { normalizeRawError } from '@internal/errors'
 
 const { logLevel, logflareApiKey, logflareSourceToken, logflareEnabled, region } = getConfig()
@@ -48,6 +48,7 @@ export interface RequestLog {
   res?: FastifyReply
   responseTime: number
   error?: Error | unknown
+  role?: string
   owner?: string
   operation?: string
   resources?: string[]

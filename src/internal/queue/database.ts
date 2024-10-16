@@ -1,5 +1,5 @@
 import { Db } from 'pg-boss'
-import EventEmitter from 'events'
+import EventEmitter from 'node:events'
 import pg from 'pg'
 import { ERRORS } from '@internal/errors'
 

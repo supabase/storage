@@ -20,8 +20,8 @@ import {
   UploadPartCommandInput,
   UploadPartCopyCommandInput,
 } from '@aws-sdk/client-s3'
-import { PassThrough, Readable } from 'stream'
-import stream from 'stream/promises'
+import { PassThrough, Readable } from 'node:stream'
+import stream from 'node:stream/promises'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
 import { ERRORS } from '@internal/errors'
 import { S3MultipartUpload, Obj } from '../../schemas'

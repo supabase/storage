@@ -1,4 +1,4 @@
-import crypto from 'crypto'
+import crypto from 'node:crypto'
 import { ERRORS } from '@internal/errors'
 
 interface SignatureV4Options {

@@ -1,9 +1,9 @@
 import * as xattr from 'fs-xattr'
 import fs from 'fs-extra'
-import path from 'path'
+import path from 'node:path'
 import fileChecksum from 'md5-file'
-import { promisify } from 'util'
-import stream from 'stream'
+import { promisify } from 'node:util'
+import stream from 'node:stream'
 import MultiStream from 'multistream'
 import { getConfig } from '../../config'
 import {
@@ -15,7 +15,7 @@ import {
   UploadPart,
 } from './adapter'
 import { ERRORS, StorageBackendError } from '@internal/errors'
-import { randomUUID } from 'crypto'
+import { randomUUID } from 'node:crypto'
 import fsExtra from 'fs-extra'
 const pipeline = promisify(stream.pipeline)
 

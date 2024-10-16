@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto'
+import { randomUUID } from 'node:crypto'
 import { FastifyRequest } from 'fastify'
 
 import { ERRORS } from '@internal/errors'

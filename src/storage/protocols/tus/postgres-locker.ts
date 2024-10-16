@@ -1,6 +1,6 @@
 import { Lock, Locker, RequestRelease } from '@tus/server'
-import { clearTimeout } from 'timers'
-import EventEmitter from 'events'
+import { clearTimeout } from 'node:timers'
+import EventEmitter from 'node:events'
 import { Database, DBError } from '../../database'
 import { PubSubAdapter } from '@internal/pubsub'
 import { UploadId } from './upload-id'

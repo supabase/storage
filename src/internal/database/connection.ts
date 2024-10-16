@@ -1,5 +1,6 @@
-import pg, { DatabaseError } from 'pg'
-import { Knex, knex } from 'knex'
+import pg from 'pg'
+import { Knex } from 'knex'
+import knex from 'knex'
 import { JwtPayload } from 'jsonwebtoken'
 import retry from 'async-retry'
 import TTLCache from '@isaacs/ttlcache'
@@ -163,7 +164,7 @@ export class TenantConnection {
             return await pool.transaction()
           } catch (e) {
             if (
-              e instanceof DatabaseError &&
+              e instanceof pg.DatabaseError &&
               e.code === '08P01' &&
               e.message.includes('no more connections allowed')
             ) {

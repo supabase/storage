@@ -1,6 +1,6 @@
 import { FastifyReply, FastifyRequest } from 'fastify'
 import { ObjectMetadata } from '../backend'
-import { Readable } from 'stream'
+import { Readable } from 'node:stream'
 import { getConfig } from '../../config'
 import { Obj } from '../schemas'
 

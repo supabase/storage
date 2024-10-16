@@ -1,1 +1,1 @@
-import './start/server'
+import './start/server.ts'

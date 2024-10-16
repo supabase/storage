@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { IncomingMessage, Server, ServerResponse } from 'http'
+import { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'

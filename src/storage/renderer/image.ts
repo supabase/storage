@@ -5,7 +5,7 @@ import { FastifyRequest } from 'fastify'
 import { Renderer, RenderOptions } from './renderer'
 import axiosRetry from 'axios-retry'
 import { ERRORS } from '@internal/errors'
-import { Stream } from 'stream'
+import { Stream } from 'node:stream'
 import Agent from 'agentkeepalive'
 
 /**

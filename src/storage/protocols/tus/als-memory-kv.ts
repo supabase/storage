@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from 'async_hooks'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { KvStore } from '@tus/server'
 import { MetadataValue } from '@tus/s3-store'
 

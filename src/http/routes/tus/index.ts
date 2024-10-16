@@ -1,6 +1,6 @@
 import { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
-import * as http from 'http'
+import * as http from 'node:http'
 import { ServerOptions, DataStore } from '@tus/server'
 import { getFileSizeLimit } from '@storage/limits'
 import { Storage } from '@storage/storage'

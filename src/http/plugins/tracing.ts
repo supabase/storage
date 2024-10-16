@@ -1,5 +1,5 @@
 import fastifyPlugin from 'fastify-plugin'
-import { isIP } from 'net'
+import { isIP } from 'node:net'
 import { getTenantConfig } from '@internal/database'
 
 import { getConfig } from '../../config'

@@ -583,6 +583,7 @@ export class S3Backend implements StorageBackendAdapter {
     const params: S3ClientConfig = {
       region: options.region,
       runtime: 'node',
+      cacheMiddleware: true,
       requestHandler: new NodeHttpHandler({
         httpAgent: options.httpAgent?.httpAgent,
         httpsAgent: options.httpAgent?.httpsAgent,

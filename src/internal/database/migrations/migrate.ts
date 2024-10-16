@@ -1,11 +1,11 @@
-import { Client, ClientConfig } from 'pg'
+import pg from 'pg'
 import SQL from 'sql-template-strings'
 import { loadMigrationFiles, MigrationError } from 'postgres-migrations'
 import { getConfig, MultitenantMigrationStrategy } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
-import { BasicPgClient, Migration } from 'postgres-migrations/dist/types'
-import { validateMigrationHashes } from 'postgres-migrations/dist/validation'
-import { runMigration } from 'postgres-migrations/dist/run-migration'
+import type { BasicPgClient, Migration } from 'postgres-migrations/dist/types'
+import { validateMigrationHashes } from 'postgres-migrations/dist/validation.js'
+import { runMigration } from 'postgres-migrations/dist/run-migration.js'
 import { searchPath } from '../connection'
 import { getTenantConfig, listTenantsToMigrate } from '../tenant'
 import { multitenantKnex } from '../multitenant-db'
@@ -179,7 +179,7 @@ export async function runMigrationsOnTenant(
   tenantId?: string,
   waitForLock = true
 ): Promise<void> {
-  let ssl: ClientConfig['ssl'] | undefined = undefined
+  let ssl: pg.ClientConfig['ssl'] | undefined = undefined
 
   if (databaseSSLRootCert) {
     ssl = { ca: databaseSSLRootCert }
@@ -202,7 +202,7 @@ export async function runMigrationsOnTenant(
 async function connectAndMigrate(options: {
   databaseUrl: string | undefined
   migrationsDirectory: string
-  ssl?: ClientConfig['ssl']
+  ssl?: pg.ClientConfig['ssl']
   shouldCreateStorageSchema?: boolean
   tenantId?: string
   waitForLock?: boolean
@@ -216,14 +216,14 @@ async function connectAndMigrate(options: {
     waitForLock,
   } = options
 
-  const dbConfig: ClientConfig = {
+  const dbConfig: pg.ClientConfig = {
     connectionString: databaseUrl,
     connectionTimeoutMillis: 60_000,
     options: `-c search_path=${searchPath}`,
     ssl,
   }
 
-  const client = new Client(dbConfig)
+  const client = new pg.Client(dbConfig)
   client.on('error', (err) => {
     logSchema.error(logger, 'Error on database connection', {
       type: 'error',

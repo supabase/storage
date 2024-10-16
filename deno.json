@@ -1,0 +1,13 @@
+{
+  "tasks": {
+    "dev": "deno run --watch main.ts"
+  },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@1",
+    "@internal/": "./src/internal/",
+    "@storage/": "./src/storage/",
+    "postgres-migrations/": "npm:postgres-migrations/",
+    "postgres-migrations/dist/": "npm:postgres-migrations/dist/",
+    "ajv": "npm:ajv"
+  }
+}

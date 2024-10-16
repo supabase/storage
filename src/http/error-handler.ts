@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { FastifyError } from '@fastify/error'
-import { DatabaseError } from 'pg'
+import pg from 'pg'
 import { ErrorCode, isRenderableError } from '@internal/errors'
 
 /**
@@ -17,7 +17,7 @@ export const setErrorHandler = (app: FastifyInstance) => {
 
     // database error
     if (
-      error instanceof DatabaseError &&
+      error instanceof pg.DatabaseError &&
       [
         'Authentication error', // supavisor specific
         'Max client connections reached',
@@ -25,7 +25,7 @@ export const setErrorHandler = (app: FastifyInstance) => {
         'no more connections allowed',
         'sorry, too many clients already',
         'server login has been failing, try again later',
-      ].some((msg) => (error as DatabaseError).message.includes(msg))
+      ].some((msg) => (error as pg.DatabaseError).message.includes(msg))
     ) {
       return reply.status(429).send({
         statusCode: `429`,

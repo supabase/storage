@@ -1,4 +1,4 @@
-import { Transform, TransformCallback } from 'stream'
+import { Transform, TransformCallback } from 'node:stream'
 import { ERRORS } from '@internal/errors'
 
 export class ByteLimitTransformStream extends Transform {

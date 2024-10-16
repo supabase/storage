@@ -33,6 +33,7 @@ import { TenantConnection } from '@internal/database'
 import { S3Store } from '@tus/s3-store'
 import { Upload } from '@aws-sdk/lib-storage'
 import { StreamSplitter } from '@tus/server'
+import { PgLock } from '@storage/protocols/tus'
 
 const tracingEnabled = process.env.TRACING_ENABLED === 'true'
 const headersEnv = process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS || ''
@@ -258,6 +259,11 @@ const sdk = new NodeSDK({
           }
         },
       },
+    }),
+    new ClassInstrumentation({
+      targetClass: PgLock,
+      enabled: true,
+      methodsToInstrument: ['lock', 'unlock', 'acquireLock'],
     }),
     new ClassInstrumentation({
       targetClass: S3Client,

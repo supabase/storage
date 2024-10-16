@@ -1,10 +1,10 @@
 import { Lock, Locker, RequestRelease } from '@tus/server'
-import { clearTimeout } from 'timers'
-import EventEmitter from 'events'
-import { Database, DBError } from '../../database'
+import { clearTimeout } from 'node:timers'
+import EventEmitter from 'node:events'
+import { Database } from '../../database'
 import { PubSubAdapter } from '@internal/pubsub'
 import { UploadId } from './upload-id'
-import { ERRORS } from '@internal/errors'
+import { ErrorCode, ERRORS, StorageBackendError } from '@internal/errors'
 
 const REQUEST_LOCK_RELEASE_MESSAGE = 'REQUEST_LOCK_RELEASE'
 
@@ -94,7 +94,7 @@ export class PgLock implements Lock {
         await db.mustLockObject(uploadId.bucket, uploadId.objectName, uploadId.version)
         return true
       } catch (e) {
-        if (e instanceof DBError && e.message === 'resource_locked') {
+        if (e instanceof StorageBackendError && e.code === ErrorCode.ResourceLocked) {
           await this.notifier.release(id)
           await new Promise((resolve) => {
             setTimeout(resolve, 500)

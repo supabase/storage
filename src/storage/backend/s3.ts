@@ -27,26 +27,11 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { getConfig } from '../../config'
-import { addAbortSignal, PassThrough, Readable } from 'node:stream'
-import { trace } from '@opentelemetry/api'
-import { createByteCounterStream } from '@internal/concurrency'
-import { AgentStats, createAgent, gatherHttpAgentStats, InstrumentedAgent } from '@internal/http'
+import { Readable } from 'node:stream'
+import { createAgent, InstrumentedAgent } from '@internal/http'
+import { monitorStream } from '@internal/streams'
 
 const { tracingFeatures, storageS3MaxSockets, tracingEnabled } = getConfig()
-
-interface StreamStatus {
-  time: Date
-  bytesUploaded: number
-  progress: Progress[]
-  dataStream: {
-    closed: boolean
-    paused: boolean
-    errored: boolean
-    writable: boolean
-    byteRead: number
-  }
-  httpAgentStats: AgentStats
-}
 
 export interface S3ClientOptions {
   endpoint?: string
@@ -154,21 +139,18 @@ export class S3Backend implements StorageBackendAdapter {
       throw ERRORS.Aborted('Upload was aborted')
     }
 
-    const streamWatcher = tracingFeatures?.upload ? this.watchUploadStream(body, signal) : undefined
-    const uploadStream = streamWatcher ? streamWatcher.dataStream : body
+    const dataStream = tracingFeatures?.upload ? monitorStream(body) : body
 
     const upload = new Upload({
       client: this.client,
       params: {
         Bucket: bucketName,
         Key: withOptionalVersion(key, version),
-        Body: uploadStream,
+        Body: dataStream,
         ContentType: contentType,
         CacheControl: cacheControl,
       },
     })
-
-    streamWatcher?.watchUpload(upload)
 
     signal?.addEventListener(
       'abort',
@@ -177,6 +159,12 @@ export class S3Backend implements StorageBackendAdapter {
       },
       { once: true }
     )
+
+    if (tracingFeatures?.upload) {
+      upload.on('httpUploadProgress', (progress: Progress) => {
+        dataStream.emit('s3_progress', JSON.stringify(progress))
+      })
+    }
 
     try {
       const data = await upload.done()
@@ -194,26 +182,9 @@ export class S3Backend implements StorageBackendAdapter {
       }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        const span = trace.getActiveSpan()
-        if (span) {
-          // Print how far we got uploading the file
-          const lastSeenStatus = streamWatcher?.lastSeenStreamStatus
-          const lastStreamStatus = streamWatcher?.getStreamStatus()
-
-          if (lastSeenStatus && lastStreamStatus) {
-            const { progress, ...lastSeenStream } = lastSeenStatus
-            span.setAttributes({
-              lastStreamStatus: JSON.stringify(lastStreamStatus),
-              lastSeenStatus: JSON.stringify(lastSeenStream),
-            })
-          }
-        }
-
         throw ERRORS.AbortedTerminate('Upload was aborted', err)
       }
       throw StorageBackendError.fromError(err)
-    } finally {
-      streamWatcher?.stop()
     }
   }
 
@@ -491,92 +462,6 @@ export class S3Backend implements StorageBackendAdapter {
 
   close() {
     this.agent.close()
-  }
-
-  protected watchUploadStream(body: Readable, signal?: AbortSignal) {
-    const passThrough = new PassThrough()
-
-    if (signal) {
-      addAbortSignal(signal, passThrough)
-    }
-
-    passThrough.on('error', () => {
-      body.unpipe(passThrough)
-    })
-
-    body.on('error', (err) => {
-      if (!passThrough.closed) {
-        passThrough.destroy(err)
-      }
-    })
-
-    const byteReader = createByteCounterStream()
-    const bodyStream = body.pipe(passThrough)
-
-    // Upload stats
-    const uploadProgress: Progress[] = []
-    const getStreamStatus = (): StreamStatus => ({
-      time: new Date(),
-      bytesUploaded: uploadProgress[uploadProgress.length - 1]?.loaded || 0,
-      dataStream: {
-        closed: bodyStream.closed,
-        paused: bodyStream.isPaused(),
-        errored: Boolean(bodyStream.errored),
-        writable: bodyStream.writable,
-        byteRead: byteReader.bytes,
-      },
-      httpAgentStats: gatherHttpAgentStats(this.agent.httpsAgent.getCurrentStatus()),
-      progress: uploadProgress,
-    })
-
-    let streamStatus = getStreamStatus()
-
-    const streamWatcher = setInterval(() => {
-      streamStatus = getStreamStatus()
-    }, 1000)
-
-    const dataStream = passThrough.pipe(byteReader.transformStream)
-
-    body.on('error', (err) => {
-      passThrough.destroy(err)
-    })
-
-    passThrough.on('error', (err) => {
-      body.destroy(err)
-    })
-
-    passThrough.on('close', () => {
-      body.unpipe(passThrough)
-    })
-
-    function watchUpload(upload: Upload) {
-      upload.on('httpUploadProgress', (progress) => {
-        uploadProgress.push({
-          total: progress.total,
-          part: progress.part,
-          loaded: progress.loaded,
-        })
-        if (uploadProgress.length > 100) {
-          uploadProgress.shift()
-        }
-      })
-    }
-
-    return {
-      dataStream,
-      byteReader,
-      get uploadProgress() {
-        return uploadProgress
-      },
-      get lastSeenStreamStatus() {
-        return streamStatus
-      },
-      getStreamStatus,
-      stop() {
-        clearInterval(streamWatcher)
-      },
-      watchUpload,
-    }
   }
 
   protected createS3Client(options: S3ClientOptions & { name: string }) {

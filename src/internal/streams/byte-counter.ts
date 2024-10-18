@@ -1,4 +1,4 @@
-import { Transform, TransformCallback } from 'stream'
+import { Transform, TransformCallback } from 'node:stream'
 
 export const createByteCounterStream = () => {
   let bytes = 0

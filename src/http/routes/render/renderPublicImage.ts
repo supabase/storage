@@ -4,8 +4,9 @@ import { FastifyInstance } from 'fastify'
 import { ImageRenderer } from '@storage/renderer'
 import { transformationOptionsSchema } from '../../schemas/transformations'
 import { ROUTE_OPERATIONS } from '../operations'
+import { getTenantConfig } from '@internal/database'
 
-const { storageS3Bucket } = getConfig()
+const { storageS3Bucket, isMultitenant } = getConfig()
 
 const renderPublicImageParamsSchema = {
   type: 'object',
@@ -60,6 +61,13 @@ export default async function routes(fastify: FastifyInstance) {
       const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
 
       const renderer = request.storage.renderer('image') as ImageRenderer
+
+      if (isMultitenant) {
+        const tenantConfig = await getTenantConfig(request.tenantId)
+        renderer.setLimits({
+          maxResolution: tenantConfig.features.imageTransformation.maxResolution,
+        })
+      }
 
       return renderer.setTransformations(request.query).render(request, response, {
         bucket: storageS3Bucket,

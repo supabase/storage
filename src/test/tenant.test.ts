@@ -21,6 +21,7 @@ const payload = {
   features: {
     imageTransformation: {
       enabled: true,
+      maxResolution: null,
     },
   },
 }
@@ -40,6 +41,7 @@ const payload2 = {
   features: {
     imageTransformation: {
       enabled: false,
+      maxResolution: null,
     },
   },
 }

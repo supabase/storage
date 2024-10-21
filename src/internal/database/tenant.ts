@@ -39,6 +39,7 @@ interface TenantConfig {
 export interface Features {
   imageTransformation: {
     enabled: boolean
+    maxResolution?: number
   }
 }
 
@@ -202,6 +203,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       jwks,
       service_key,
       feature_image_transformation,
+      image_transformation_max_resolution,
       database_pool_url,
       max_connections,
       migrations_version,
@@ -227,6 +229,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       features: {
         imageTransformation: {
           enabled: feature_image_transformation,
+          maxResolution: image_transformation_max_resolution,
         },
       },
       migrationVersion: migrations_version,

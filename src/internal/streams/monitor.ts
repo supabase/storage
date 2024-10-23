@@ -10,19 +10,28 @@ import { Readable } from 'node:stream'
 export function monitorStream(dataStream: Readable) {
   const speedMonitor = monitorStreamSpeed(dataStream)
   const byteCounter = createByteCounterStream()
+  const span = trace.getActiveSpan()
 
-  let measures: number[] = []
+  let measures: any[] = []
 
   // Handle the 'speed' event to collect speed measurements
   speedMonitor.on('speed', (bps) => {
-    measures.push(bps)
-    const span = trace.getActiveSpan()
-    span?.setAttributes({ 'stream.speed': measures, bytesRead: byteCounter.bytes })
+    measures.push({
+      'stream.speed': bps,
+      'stream.bytesRead': byteCounter.bytes,
+      'stream.status': {
+        paused: dataStream.isPaused(),
+        closed: dataStream.closed,
+      },
+    })
+
+    span?.setAttributes({
+      stream: JSON.stringify(measures),
+    })
   })
 
   speedMonitor.on('close', () => {
     measures = []
-    const span = trace.getActiveSpan()
     span?.setAttributes({ uploadRead: byteCounter.bytes })
   })
 

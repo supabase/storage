@@ -17,6 +17,9 @@ export interface TransformOptions {
   resize?: 'cover' | 'contain' | 'fill'
   format?: 'origin' | 'avif'
   quality?: number
+  gravity?: 'no' | 'so' | 'ea' | 'we' | 'noea' | 'nowe' | 'soea' | 'sowe' | 'ce' | 'sm' | 'fp'
+  x_offset?: number
+  y_offset?: number
 }
 
 const {
@@ -120,6 +123,40 @@ export class ImageRenderer extends Renderer {
       segments.push(`format:${options.format}`)
     }
 
+    if (options.gravity) {
+      switch (options.gravity) {
+        case 'sm': {
+          segments.push(`gravity:${options.gravity}`)
+          break
+        }
+        case 'fp': {
+          if (
+            !(
+              options.x_offset &&
+              options.y_offset &&
+              options.x_offset <= 1 &&
+              options.y_offset <= 1 &&
+              options.x_offset >= 0 &&
+              options.y_offset >= 0
+            )
+          ) {
+            throw new StorageBackendError(
+              'Invalid focus point',
+              400,
+              'Focal point requires x and y coordinates within 0-1 range'
+            )
+          }
+          segments.push(`gravity:${options.gravity}:${options.x_offset}:${options.y_offset}`)
+          break
+        }
+        default: {
+          segments.push(
+            `gravity:${options.gravity}:${options.x_offset ?? 0}:${options.y_offset ?? 0}`
+          )
+        }
+      }
+    }
+
     return segments
   }
 
@@ -188,6 +225,15 @@ export class ImageRenderer extends Renderer {
           break
         case 'quality':
           all.quality = parseInt(value, 10)
+          break
+        case 'gravity':
+          all.gravity = value
+          break
+        case 'x_offset':
+          all.x_offset = parseFloat(value)
+          break
+        case 'y_offset':
+          all.y_offset = parseFloat(value)
           break
       }
       return all

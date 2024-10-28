@@ -32,13 +32,14 @@ const patchSchema = {
             type: 'object',
             properties: {
               enabled: { type: 'boolean' },
+              maxResolution: { type: 'number', nullable: true },
             },
           },
         },
       },
     },
   },
-  optional: ['tracingMode'],
+  optional: ['tracingMode', 'maxResolution'],
 } as const
 
 const schema = {
@@ -75,6 +76,7 @@ interface tenantDBInterface {
   service_key: string
   file_size_limit?: number
   feature_image_transformation?: boolean
+  image_transformation_max_resolution?: number
 }
 
 export default async function routes(fastify: FastifyInstance) {
@@ -94,6 +96,7 @@ export default async function routes(fastify: FastifyInstance) {
         jwks,
         service_key,
         feature_image_transformation,
+        image_transformation_max_resolution,
         migrations_version,
         migrations_status,
         tracing_mode,
@@ -113,6 +116,7 @@ export default async function routes(fastify: FastifyInstance) {
         features: {
           imageTransformation: {
             enabled: feature_image_transformation,
+            maxResolution: image_transformation_max_resolution,
           },
         },
       })
@@ -134,6 +138,7 @@ export default async function routes(fastify: FastifyInstance) {
         jwks,
         service_key,
         feature_image_transformation,
+        image_transformation_max_resolution,
         migrations_version,
         migrations_status,
         tracing_mode,
@@ -156,6 +161,7 @@ export default async function routes(fastify: FastifyInstance) {
         features: {
           imageTransformation: {
             enabled: feature_image_transformation,
+            maxResolution: image_transformation_max_resolution,
           },
         },
         migrationVersion: migrations_version,
@@ -244,6 +250,10 @@ export default async function routes(fastify: FastifyInstance) {
           jwks,
           service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
           feature_image_transformation: features?.imageTransformation?.enabled,
+          image_transformation_max_resolution:
+            features?.imageTransformation?.maxResolution === null
+              ? null
+              : features?.imageTransformation?.maxResolution,
           tracing_mode: tracingMode,
         })
         .where('id', tenantId)
@@ -298,6 +308,11 @@ export default async function routes(fastify: FastifyInstance) {
 
     if (typeof features?.imageTransformation?.enabled !== 'undefined') {
       tenantInfo.feature_image_transformation = features?.imageTransformation?.enabled
+    }
+
+    if (typeof features?.imageTransformation?.maxResolution !== 'undefined') {
+      tenantInfo.image_transformation_max_resolution = features?.imageTransformation
+        ?.image_transformation_max_resolution as number | undefined
     }
 
     if (databasePoolUrl) {

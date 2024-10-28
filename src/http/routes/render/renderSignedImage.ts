@@ -2,14 +2,14 @@ import { FromSchema } from 'json-schema-to-ts'
 import { FastifyInstance } from 'fastify'
 
 import { SignedToken, verifyJWT } from '@internal/auth'
-import { getJwtSecret } from '@internal/database'
+import { getJwtSecret, getTenantConfig } from '@internal/database'
 import { ERRORS } from '@internal/errors'
 
 import { ImageRenderer } from '@storage/renderer'
 import { getConfig } from '../../../config'
 import { ROUTE_OPERATIONS } from '../operations'
 
-const { storageS3Bucket } = getConfig()
+const { storageS3Bucket, isMultitenant } = getConfig()
 
 const renderAuthenticatedImageParamsSchema = {
   type: 'object',
@@ -86,6 +86,14 @@ export default async function routes(fastify: FastifyInstance) {
         .findObject(objParts.join('/'), 'id,version')
 
       const renderer = request.storage.renderer('image') as ImageRenderer
+
+      if (isMultitenant) {
+        const tenantConfig = await getTenantConfig(request.tenantId)
+        renderer.setLimits({
+          maxResolution: tenantConfig.features.imageTransformation.maxResolution,
+        })
+      }
+
       return renderer
         .setTransformationsFromString(transformations || '')
         .render(request, response, {

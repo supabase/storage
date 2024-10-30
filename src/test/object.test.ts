@@ -13,7 +13,7 @@ import { ErrorCode, StorageBackendError } from '@internal/errors'
 
 const { jwtSecret, serviceKey, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
-const S3Backend = backends.S3Backend
+const S3Backend = backends.S3Disk
 
 let tnx: Knex.Transaction | undefined
 async function getSuperuserPostgrestClient() {

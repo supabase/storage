@@ -1,6 +1,7 @@
-import { Bucket, S3MultipartUpload, Obj, S3PartUpload } from '../schemas'
-import { ObjectMetadata } from '../backend'
+import { Bucket, S3MultipartUpload, Obj, S3PartUpload, BucketWithDisk } from '../schemas'
+import { ObjectMetadata } from '../disks'
 import { DBMigration, TenantConnection } from '@internal/database'
+import { Disk } from '@storage/schemas/disk'
 
 export interface SearchObjectOption {
   search?: string
@@ -17,6 +18,7 @@ export interface FindBucketFilters {
   forUpdate?: boolean
   forShare?: boolean
   dontErrorOnEmpty?: boolean
+  withDisk?: boolean
 }
 
 export interface FindObjectFilters {
@@ -67,11 +69,19 @@ export interface Database {
     >
   ): Promise<Pick<Bucket, 'id'>>
 
-  findBucketById<Filters extends FindBucketFilters = FindObjectFilters>(
+  findBucketById<Filters extends FindBucketFilters = FindBucketFilters>(
     bucketId: string,
     columns: string,
     filters?: Filters
-  ): Promise<Filters['dontErrorOnEmpty'] extends true ? Bucket | undefined : Bucket>
+  ): Promise<
+    Filters['dontErrorOnEmpty'] extends true
+      ? Filters['withDisk'] extends true
+        ? BucketWithDisk | undefined
+        : Bucket | undefined
+      : Filters['withDisk'] extends true
+      ? BucketWithDisk
+      : Bucket
+  >
 
   countObjectsInBucket(bucketId: string): Promise<number>
 
@@ -177,4 +187,8 @@ export interface Database {
     uploadId: string,
     options: { afterPart?: string; maxParts: number }
   ): Promise<S3PartUpload[]>
+
+  createDisk(provider: Omit<Disk, 'id'>): Promise<Disk>
+  updateDisk(provider: Disk): Promise<Disk>
+  findDisk(providerId: string): Promise<Disk>
 }

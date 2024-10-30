@@ -38,6 +38,7 @@ export enum ErrorCode {
   TusError = 'TusError',
   Aborted = 'Aborted',
   AbortedTerminate = 'AbortedTerminate',
+  NoSuchDisk = 'NoSuchDisk',
 }
 
 export const ERRORS = {
@@ -73,6 +74,16 @@ export const ERRORS = {
       error: 'not_found',
       httpStatusCode: 404,
       message: `Object not found`,
+      originalError: e,
+    }),
+
+  NoSuchDisk: (resource: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.NoSuchDisk,
+      resource,
+      error: 'not_found',
+      httpStatusCode: 404,
+      message: `Disk not found`,
       originalError: e,
     }),
 

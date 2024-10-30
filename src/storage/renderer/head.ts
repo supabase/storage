@@ -1,6 +1,6 @@
 import { AssetResponse, Renderer, RenderOptions } from './renderer'
 import { FastifyReply, FastifyRequest } from 'fastify'
-import { ObjectMetadata } from '../backend'
+import { ObjectMetadata } from '../disks'
 import { ImageRenderer, TransformOptions } from './image'
 import { ERRORS } from '@internal/errors'
 

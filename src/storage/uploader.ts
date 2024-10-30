@@ -4,12 +4,13 @@ import { FastifyRequest } from 'fastify'
 import { ERRORS } from '@internal/errors'
 import { FileUploadedSuccess, FileUploadStarted } from '@internal/monitoring/metrics'
 
-import { ObjectMetadata, StorageBackendAdapter } from './backend'
+import { ObjectMetadata, StorageDisk } from './disks'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { Database } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getConfig } from '../config'
 import { logger, logSchema } from '@internal/monitoring'
+import stream from 'stream'
 
 interface UploaderOptions extends UploadObjectOptions {
   fileSizeLimit?: number | null
@@ -35,7 +36,7 @@ const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
  * Handles the upload of a multi-part request or binary body
  */
 export class Uploader {
-  constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
+  constructor(private readonly disk: StorageDisk, private readonly db: Database) {}
 
   async canUpload(
     options: Pick<UploadObjectOptions, 'bucketId' | 'objectName' | 'isUpsert' | 'owner'>
@@ -101,15 +102,15 @@ export class Uploader {
       const path = `${options.bucketId}/${options.objectName}`
       const s3Key = `${this.db.tenantId}/${path}`
 
-      const objectMetadata = await this.backend.uploadObject(
-        storageS3Bucket,
-        s3Key,
+      const objectMetadata = await this.disk.save({
+        bucket: storageS3Bucket,
+        key: s3Key,
         version,
-        file.body,
-        file.mimeType,
-        file.cacheControl,
-        options.signal
-      )
+        body: file.body,
+        contentType: file.mimeType,
+        cacheControl: file.cacheControl,
+        signal: options.signal,
+      })
 
       if (file.isTruncated()) {
         throw ERRORS.EntityTooLarge()
@@ -279,7 +280,7 @@ export class Uploader {
       options?.fileSizeLimit
     )
 
-    let body: NodeJS.ReadableStream
+    let body: stream.Readable
     let userMetadata: Record<string, any> | undefined
     let mimeType: string
     let isTruncated: () => boolean

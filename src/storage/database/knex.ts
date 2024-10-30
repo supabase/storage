@@ -1,4 +1,4 @@
-import { Bucket, S3MultipartUpload, Obj, S3PartUpload } from '../schemas'
+import { Bucket, S3MultipartUpload, Obj, S3PartUpload, BucketWithDisk } from '../schemas'
 import {
   ErrorCode,
   ERRORS,
@@ -7,7 +7,7 @@ import {
   StorageBackendError,
   StorageErrorOptions,
 } from '@internal/errors'
-import { ObjectMetadata } from '../backend'
+import { ObjectMetadata } from '../disks'
 import { Knex } from 'knex'
 import {
   Database,
@@ -20,6 +20,7 @@ import { DatabaseError } from 'pg'
 import { DBMigration, TenantConnection } from '@internal/database'
 import { DbQueryPerformance } from '@internal/monitoring/metrics'
 import { isUuid } from '../limits'
+import { Disk } from '@storage/schemas/disk'
 
 /**
  * Database
@@ -81,6 +82,47 @@ export class StorageKnexDB implements Database {
     })
   }
 
+  createDisk(disk: Disk) {
+    return this.runQuery('CreateDisk', async (knex) => {
+      const insert = await knex
+        .table<Disk>('disks')
+        .insert({
+          name: disk.name,
+          mount_point: disk.mount_point,
+          credentials: disk.credentials,
+        })
+        .returning('*')
+
+      return insert[0]
+    })
+  }
+
+  updateDisk(disk: Disk) {
+    return this.runQuery('InsertDisk', async (knex) => {
+      const insert = await knex
+        .table<Disk>('disks')
+        .update({
+          name: disk.name,
+          credentials: disk.credentials,
+        })
+        .returning('*')
+
+      return insert[0]
+    })
+  }
+
+  async findDisk(diskId: string) {
+    return this.runQuery('FindDisk', async (knex) => {
+      const provider = await knex.table<Disk>('disks').select('*').where('id', diskId).first()
+
+      if (!provider) {
+        throw ERRORS.NoSuchDisk(diskId)
+      }
+
+      return provider
+    })
+  }
+
   async testPermission<T extends (db: Database) => any>(fn: T) {
     let result: any
     try {
@@ -130,9 +172,27 @@ export class StorageKnexDB implements Database {
     }
   }
 
-  async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
+  async findBucketById<Filters extends FindBucketFilters = FindBucketFilters>(
+    bucketId: string,
+    columns = 'id',
+    filters?: Filters
+  ) {
     const result = await this.runQuery('FindBucketById', async (knex) => {
-      const query = knex.from<Bucket>('buckets').select(columns.split(',')).where('id', bucketId)
+      let fields = columns.split(',')
+
+      if (filters?.withDisk) {
+        fields = fields.map((field) => {
+          if (field.startsWith('buckets.')) {
+            return field
+          }
+          return `buckets.${field}`
+        })
+
+        fields.push('disks.credentials')
+        fields.push('disks.mount_point')
+      }
+
+      const query = knex.from<Bucket>('buckets').select(fields).where('buckets.id', bucketId)
 
       if (typeof filters?.isPublic !== 'undefined') {
         query.where('public', filters.isPublic)
@@ -146,7 +206,11 @@ export class StorageKnexDB implements Database {
         query.forShare()
       }
 
-      return query.first() as Promise<Bucket>
+      if (filters?.withDisk) {
+        query.leftJoin('disks', 'disks.id', 'buckets.disk_id')
+      }
+
+      return query.first() as Promise<Filters['withDisk'] extends true ? BucketWithDisk : Bucket>
     })
 
     if (!result && !filters?.dontErrorOnEmpty) {

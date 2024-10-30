@@ -70,7 +70,7 @@ export async function onIncomingRequest(
 
   // All other requests need to be authorized if they have permission to upload
   const isUpsert = req.upload.isUpsert
-  const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+  const uploader = new Uploader(req.upload.storage.disk, req.upload.storage.db)
 
   await uploader.canUpload({
     owner: req.upload.owner,
@@ -179,7 +179,7 @@ export async function onCreate(
     .asSuperUser()
     .findBucket(uploadID.bucket, 'id, file_size_limit, allowed_mime_types')
 
-  const uploader = new Uploader(storage.backend, storage.db)
+  const uploader = new Uploader(storage.disk, storage.db)
 
   const metadata = {
     ...(upload.metadata ? upload.metadata : {}),
@@ -211,13 +211,13 @@ export async function onUploadFinish(
 
   try {
     const s3Key = `${req.upload.tenantId}/${resourceId.bucket}/${resourceId.objectName}`
-    const metadata = await req.upload.storage.backend.headObject(
+    const metadata = await req.upload.storage.disk.headObject(
       storageS3Bucket,
       s3Key,
       resourceId.version
     )
 
-    const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+    const uploader = new Uploader(req.upload.storage.disk, req.upload.storage.db)
     let customMd: undefined | Record<string, string> = undefined
     if (upload.metadata?.metadata) {
       try {

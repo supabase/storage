@@ -20,7 +20,7 @@ const { serviceKey, tenantId, storageS3Bucket, storageBackendType } = getConfig(
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
 const localServerAddress = 'http://127.0.0.1:8999'
 
-const backend = backends.createStorageBackend(storageBackendType)
+const backend = backends.createDisk(storageBackendType)
 const client = backend.client
 
 describe('Tus multipart', () => {

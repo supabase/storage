@@ -1,5 +1,5 @@
 import { FastifyReply, FastifyRequest } from 'fastify'
-import { ObjectMetadata } from '../backend'
+import { ObjectMetadata } from '../disks'
 import { Readable } from 'stream'
 import { getConfig } from '../../config'
 import { Obj } from '../schemas'

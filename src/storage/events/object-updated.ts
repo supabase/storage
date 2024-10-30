@@ -1,6 +1,6 @@
 import { BasePayload } from '@internal/queue'
 import { BaseEvent } from './base-event'
-import { ObjectMetadata } from '../backend'
+import { ObjectMetadata } from '../disks'
 
 interface ObjectUpdatedMetadataEvent extends BasePayload {
   name: string

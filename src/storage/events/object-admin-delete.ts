@@ -1,7 +1,7 @@
 import { BaseEvent } from './base-event'
 import { getConfig } from '../../config'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
-import { withOptionalVersion } from '../backend'
+import { withOptionalVersion } from '../disks'
 import { logger, logSchema } from '@internal/monitoring'
 import { Storage } from '../index'
 import { BasePayload } from '@internal/queue'
@@ -51,10 +51,10 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
         reqId: job.data.reqId,
       })
 
-      await storage.backend.deleteObjects(storageS3Bucket, [
-        withOptionalVersion(s3Key, version),
-        withOptionalVersion(s3Key, version) + '.info',
-      ])
+      await storage.disk.deleteMany({
+        bucket: storageS3Bucket,
+        keys: [withOptionalVersion(s3Key, version), withOptionalVersion(s3Key, version) + '.info'],
+      })
     } catch (e) {
       const s3Key = `${job.data.tenant.ref}/${job.data.bucketId}/${job.data.name}`
 

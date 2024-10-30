@@ -1,7 +1,7 @@
 import dotenv from 'dotenv'
 import jwt from 'jsonwebtoken'
 
-export type StorageBackendType = 'file' | 's3'
+export type StorageDiskType = 'file' | 's3'
 export enum MultitenantMigrationStrategy {
   PROGRESSIVE = 'progressive',
   ON_REQUEST = 'on_request',
@@ -52,7 +52,7 @@ type StorageConfigType = {
   responseSMaxAge: number
   anonKey: string
   serviceKey: string
-  storageBackendType: StorageBackendType
+  storageBackendType: StorageDiskType
   tenantId: string
   requestUrlLengthLimit: number
   requestXForwardedHostRegExp?: string
@@ -259,7 +259,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'S3_PROTOCOL_NON_CANONICAL_HOST_HEADER'
     ),
     // Storage
-    storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
+    storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageDiskType,
 
     // Storage - File
     storageFilePath: getOptionalConfigFromEnv(

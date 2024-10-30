@@ -2,7 +2,7 @@ import dotenv from 'dotenv'
 import fs from 'fs/promises'
 import { getConfig } from '../config'
 import app from '../app'
-import { S3Backend } from '../storage/backend'
+import { S3Disk } from '../storage/disks'
 import path from 'path'
 import { ImageRenderer } from '../storage/renderer'
 import axios from 'axios'
@@ -40,7 +40,7 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
+    expect(S3Disk.prototype.privateAssetUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
       '/public/height:100/width:100/resizing_type:fill/plain/local:///data/sadcat.jpg',
       { responseType: 'stream', signal: expect.any(AbortSignal) }
@@ -58,7 +58,7 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
+    expect(S3Disk.prototype.privateAssetUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
       '/public/height:100/width:100/resizing_type:fill/plain/local:///data/sadcat.jpg',
       { responseType: 'stream', signal: expect.any(AbortSignal) }
@@ -94,7 +94,7 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
+    expect(S3Disk.prototype.privateAssetUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
       '/public/height:100/width:100/resizing_type:fit/plain/local:///data/sadcat.jpg',
       { responseType: 'stream', signal: expect.any(AbortSignal) }

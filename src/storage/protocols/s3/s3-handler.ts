@@ -435,7 +435,7 @@ export class S3ProtocolHandler {
    * @param command
    */
   async createMultiPartUpload(command: CreateMultipartUploadCommandInput) {
-    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    const uploader = new Uploader(this.storage.disk, this.storage.db)
     const { Bucket, Key } = command
 
     mustBeValidBucketName(Bucket)
@@ -455,13 +455,13 @@ export class S3ProtocolHandler {
       owner: this.owner,
     })
 
-    const uploadId = await this.storage.backend.createMultiPartUpload(
-      storageS3Bucket,
-      `${this.tenantId}/${command.Bucket}/${command.Key}`,
+    const uploadId = await this.storage.disk.createMultiPartUpload({
+      bucket: storageS3Bucket,
+      key: `${this.tenantId}/${Bucket}/${Key}`,
       version,
-      command.ContentType || '',
-      command.CacheControl || ''
-    )
+      contentType: command.ContentType || '',
+      cacheControl: command.CacheControl || '',
+    })
 
     if (!uploadId) {
       throw ERRORS.InvalidUploadId(uploadId)
@@ -499,7 +499,7 @@ export class S3ProtocolHandler {
    * @param command
    */
   async completeMultiPartUpload(command: CompleteMultipartUploadCommandInput) {
-    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    const uploader = new Uploader(this.storage.disk, this.storage.db)
     const { Bucket, Key, UploadId } = command
 
     if (!UploadId) {
@@ -532,19 +532,19 @@ export class S3ProtocolHandler {
       )
     }
 
-    const resp = await this.storage.backend.completeMultipartUpload(
-      storageS3Bucket,
-      `${this.tenantId}/${Bucket}/${Key}`,
-      UploadId as string,
-      multiPartUpload.version,
-      parts
-    )
+    const resp = await this.storage.disk.completeMultipartUpload({
+      bucket: storageS3Bucket,
+      key: `${this.tenantId}/${Bucket}/${Key}`,
+      uploadId: UploadId,
+      version: multiPartUpload.version,
+      parts,
+    })
 
-    const metadata = await this.storage.backend.headObject(
-      storageS3Bucket,
-      `${this.tenantId}/${Bucket}/${Key}`,
-      resp.version
-    )
+    const metadata = await this.storage.disk.metadata({
+      bucket: storageS3Bucket,
+      key: `${this.tenantId}/${Bucket}/${Key}`,
+      version: resp.version,
+    })
 
     await uploader.completeUpload({
       bucketId: Bucket as string,
@@ -604,7 +604,7 @@ export class S3ProtocolHandler {
     const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'file_size_limit')
     const maxFileSize = await getFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
 
-    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    const uploader = new Uploader(this.storage.disk, this.storage.db)
     await uploader.canUpload({
       bucketId: Bucket as string,
       objectName: Key as string,
@@ -639,16 +639,16 @@ export class S3ProtocolHandler {
         body,
         new ByteLimitTransformStream(ContentLength),
         async (stream) => {
-          return this.storage.backend.uploadPart(
-            storageS3Bucket,
-            `${this.tenantId}/${Bucket}/${Key}`,
-            multipart.version,
-            UploadId,
-            PartNumber || 0,
-            stream as Readable,
-            ContentLength,
-            signal
-          )
+          return this.storage.disk.uploadPart({
+            bucket: storageS3Bucket,
+            key: `${this.tenantId}/${Bucket}/${Key}`,
+            version: multipart.version,
+            uploadId: UploadId,
+            partNumber: PartNumber || 0,
+            body: stream as Readable,
+            length: ContentLength,
+            signal,
+          })
         }
       )
 
@@ -702,7 +702,7 @@ export class S3ProtocolHandler {
    * @param signal
    */
   async putObject(command: PutObjectCommandInput, signal?: AbortSignal) {
-    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    const uploader = new Uploader(this.storage.disk, this.storage.db)
 
     mustBeValidBucketName(command.Bucket)
     mustBeValidKey(command.Key)
@@ -764,7 +764,7 @@ export class S3ProtocolHandler {
       .asSuperUser()
       .findMultipartUpload(UploadId, 'id,version')
 
-    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    const uploader = new Uploader(this.storage.disk, this.storage.db)
     await uploader.canUpload({
       bucketId: Bucket,
       objectName: Key,
@@ -772,12 +772,12 @@ export class S3ProtocolHandler {
       isUpsert: true,
     })
 
-    await this.storage.backend.abortMultipartUpload(
-      storageS3Bucket,
-      `${this.tenantId}/${Bucket}/${Key}`,
-      UploadId,
-      multipart.version
-    )
+    await this.storage.disk.abortMultipartUpload({
+      bucket: storageS3Bucket,
+      key: `${this.tenantId}/${Bucket}/${Key}`,
+      version: multipart.version,
+      uploadId: UploadId,
+    })
 
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
 
@@ -870,17 +870,18 @@ export class S3ProtocolHandler {
     const key = command.Key as string
 
     const object = await this.storage.from(bucket).findObject(key, 'version,user_metadata')
-    const response = await this.storage.backend.getObject(
-      storageS3Bucket,
-      `${this.tenantId}/${bucket}/${key}`,
-      object.version,
-      {
+
+    const response = await this.storage.disk.read({
+      bucket: storageS3Bucket,
+      key: `${this.tenantId}/${bucket}/${key}`,
+      version: object.version,
+      headers: {
         ifModifiedSince: command.IfModifiedSince?.toISOString(),
         ifNoneMatch: command.IfNoneMatch,
         range: command.Range,
       },
-      options?.signal
-    )
+      signal: options?.signal,
+    })
 
     let metadataHeaders: Record<string, any> = {}
 
@@ -1170,7 +1171,7 @@ export class S3ProtocolHandler {
       copySize = toByte - fromByte
     }
 
-    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    const uploader = new Uploader(this.storage.disk, this.storage.db)
 
     await uploader.canUpload({
       bucketId: Bucket,
@@ -1192,16 +1193,21 @@ export class S3ProtocolHandler {
 
     const multipart = await this.shouldAllowPartUpload(UploadId, Number(copySize), maxFileSize)
 
-    const uploadPart = await this.storage.backend.uploadPartCopy(
-      storageS3Bucket,
-      `${this.tenantId}/${Bucket}/${Key}`,
-      multipart.version,
-      UploadId,
-      PartNumber,
-      `${this.tenantId}/${sourceBucketName}/${copySource.name}`,
-      copySource.version,
-      rangeBytes
-    )
+    const uploadPart = await this.storage.disk.uploadPartCopy({
+      uploadId: UploadId,
+      partNumber: PartNumber,
+      bytes: rangeBytes,
+      from: {
+        bucket: storageS3Bucket,
+        key: `${this.tenantId}/${sourceBucketName}/${sourceKey}`,
+        version: copySource.version,
+      },
+      to: {
+        bucket: storageS3Bucket,
+        key: `${this.tenantId}/${Bucket}/${Key}`,
+        version: multipart.version,
+      },
+    })
 
     await this.storage.db.asSuperUser().insertUploadPart({
       upload_id: UploadId,

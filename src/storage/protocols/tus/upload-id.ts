@@ -1,7 +1,7 @@
 import { getConfig } from '../../../config'
 import { ERRORS } from '@internal/errors'
 import { mustBeValidBucketName, mustBeValidKey } from '../../limits'
-import { FILE_VERSION_SEPARATOR, PATH_SEPARATOR, SEPARATOR } from '../../backend'
+import { FILE_VERSION_SEPARATOR, PATH_SEPARATOR, SEPARATOR } from '../../disks'
 
 interface ResourceIDOptions {
   tenant: string

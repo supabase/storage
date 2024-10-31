@@ -74,21 +74,6 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
         `[Admin]: ObjectAdminDelete ${s3Key} - FAILED`
       )
       throw e
-    } finally {
-      if (storage) {
-        const tenant = storage.db.tenant()
-        storage.db
-          .destroyConnection()
-          .then(() => {
-            // no-op
-          })
-          .catch((e) => {
-            logger.error(
-              { error: e },
-              `[Admin]: ObjectAdminDelete ${tenant.ref} - FAILED DISPOSING CONNECTION`
-            )
-          })
-      }
     }
   }
 }

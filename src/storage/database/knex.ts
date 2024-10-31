@@ -696,10 +696,6 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  destroyConnection() {
-    return this.connection.dispose()
-  }
-
   /**
    * Excludes columns selection if a specific migration wasn't run
    * @param columns

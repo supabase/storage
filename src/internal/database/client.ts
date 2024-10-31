@@ -1,6 +1,6 @@
 import { getConfig } from '../../config'
 import { getTenantConfig } from './tenant'
-import { User, TenantConnection } from './connection'
+import { User, TenantConnection, ConnectionManager } from './connection'
 import { ERRORS } from '@internal/errors'
 
 interface ConnectionOptions {
@@ -24,7 +24,7 @@ export async function getPostgresConnection(options: ConnectionOptions): Promise
     disableHostCheck: options.disableHostCheck,
   })
 
-  return await TenantConnection.create({
+  return ConnectionManager.acquire({
     ...dbCredentials,
     ...options,
   })

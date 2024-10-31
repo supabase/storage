@@ -6,30 +6,27 @@ import { PassThrough } from 'node:stream'
  * @param stream
  * @param frequency
  */
-/**
- * Keep track of a stream's speed
- * @param stream
- * @param frequency
- */
 export function monitorStreamSpeed(stream: Readable, frequency = 1000) {
-  let totalBytes = 0
-  const startTime = Date.now()
+  let lastIntervalBytes = 0
 
   const passThrough = new PassThrough()
 
-  const interval = setInterval(() => {
-    const currentTime = Date.now()
-    const elapsedTime = (currentTime - startTime) / 1000
-    const currentSpeedBytesPerSecond = totalBytes / elapsedTime
-
+  const emitSpeed = () => {
+    const currentSpeedBytesPerSecond = lastIntervalBytes / (frequency / 1000)
     passThrough.emit('speed', currentSpeedBytesPerSecond)
+    lastIntervalBytes = 0 // Reset for the next interval
+  }
+
+  const interval = setInterval(() => {
+    emitSpeed()
   }, frequency)
 
   passThrough.on('data', (chunk) => {
-    totalBytes += chunk.length
+    lastIntervalBytes += chunk.length // Increment bytes for the current interval
   })
 
   const cleanup = () => {
+    emitSpeed()
     clearInterval(interval)
     passThrough.removeAllListeners('speed')
   }

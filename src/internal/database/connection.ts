@@ -43,54 +43,66 @@ export interface User {
 }
 
 const multiTenantLRUConfig = {
-  ttl: 1000 * 10,
+  ttl: 1000 * 30,
   updateAgeOnGet: true,
   checkAgeOnGet: true,
+  noDisponseOnSet: true,
 }
-export const connections = new TTLCache<string, Knex>({
-  ...(isMultitenant ? multiTenantLRUConfig : { max: 1, ttl: Infinity }),
-  dispose: async (pool) => {
-    if (!pool) return
-    try {
-      await pool.destroy()
-    } catch (e) {
-      logSchema.error(logger, 'pool was not able to be destroyed', {
-        type: 'db',
-        error: e,
-      })
-    }
-  },
-})
 
 export const searchPath = ['storage', 'public', 'extensions', ...dbSearchPath.split(',')].filter(
   Boolean
 )
 
-export class TenantConnection {
-  public readonly role: string
+/**
+ * Manages connections to tenant databases
+ * Connections pools expire after a certain amount of time as well as idle connections
+ */
+export class ConnectionManager {
+  /**
+   * Connections map, the string is the connection string and the value is the knex pool
+   * @protected
+   */
+  protected static connections = new TTLCache<string, Knex>({
+    ...multiTenantLRUConfig,
+    dispose: async (pool) => {
+      if (!pool) return
+      try {
+        await pool.destroy()
+      } catch (e) {
+        logSchema.error(logger, 'pool was not able to be destroyed', {
+          type: 'db',
+          error: e,
+        })
+      }
+    },
+  })
 
-  constructor(protected readonly pool: Knex, protected readonly options: TenantConnectionOptions) {
-    this.role = options.user.payload.role || 'anon'
-  }
-
+  /**
+   * Stop the pool manager and destroy all connections
+   */
   static stop() {
+    this.connections.cancelTimer()
     const promises: Promise<void>[] = []
 
-    for (const [connectionString, pool] of connections) {
+    for (const [connectionString, pool] of this.connections) {
       promises.push(pool.destroy())
-      connections.delete(connectionString)
+      this.connections.delete(connectionString)
     }
 
     return Promise.allSettled(promises)
   }
 
-  static async create(options: TenantConnectionOptions) {
+  /**
+   * Acquire a pool for a tenant database
+   * @param options
+   */
+  static acquirePool(options: TenantConnectionOptions): Knex {
     const connectionString = options.dbUrl
 
-    let knexPool = connections.get(connectionString)
+    let knexPool = this.connections.get(connectionString)
 
     if (knexPool) {
-      return new this(knexPool, options)
+      return knexPool
     }
 
     const isExternalPool = Boolean(options.isExternalPool)
@@ -101,12 +113,14 @@ export class TenantConnection {
       searchPath: isExternalPool ? undefined : searchPath,
       pool: {
         min: 0,
-        max: isExternalPool ? 1 : options.maxConnections || databaseMaxConnections,
+        max: isExternalPool
+          ? options.maxConnections || databaseMaxConnections
+          : databaseMaxConnections,
         acquireTimeoutMillis: databaseConnectionTimeout,
         idleTimeoutMillis: isExternalPool
-          ? options.idleTimeoutMillis || 100
+          ? options.idleTimeoutMillis || 5000
           : databaseFreePoolAfterInactivity,
-        reapIntervalMillis: isExternalPool ? 50 : undefined,
+        reapIntervalMillis: isExternalPool ? 1000 : undefined,
       },
       connection: {
         connectionString: connectionString,
@@ -134,11 +148,9 @@ export class TenantConnection {
       DbActivePool.dec({ is_external: isExternalPool.toString() })
     })
 
-    if (!isExternalPool) {
-      connections.set(connectionString, knexPool)
-    }
+    this.connections.set(connectionString, knexPool)
 
-    return new this(knexPool, options)
+    return knexPool
   }
 
   protected static sslSettings() {
@@ -147,11 +159,20 @@ export class TenantConnection {
     }
     return {}
   }
+}
+
+/**
+ * Represent a connection to a tenant database
+ */
+export class TenantConnection {
+  public readonly role: string
+
+  constructor(protected readonly options: TenantConnectionOptions) {
+    this.role = options.user.payload.role || 'anon'
+  }
 
   async dispose() {
-    if (this.options.isExternalPool) {
-      await this.pool.destroy()
-    }
+    // TODO: remove this method
   }
 
   async transaction(instance?: Knex) {
@@ -159,7 +180,7 @@ export class TenantConnection {
       const tnx = await retry(
         async (bail) => {
           try {
-            const pool = instance || this.pool
+            const pool = instance || ConnectionManager.acquirePool(this.options)
             return await pool.transaction()
           } catch (e) {
             if (
@@ -222,10 +243,11 @@ export class TenantConnection {
   }
 
   asSuperUser() {
-    return new TenantConnection(this.pool, {
+    const newOptions = {
       ...this.options,
       user: this.options.superUser,
-    })
+    }
+    return new TenantConnection(newOptions)
   }
 
   async setScope(tnx: Knex) {

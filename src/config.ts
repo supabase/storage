@@ -56,6 +56,7 @@ type StorageConfigType = {
   tenantId: string
   requestUrlLengthLimit: number
   requestXForwardedHostRegExp?: string
+  requestAllowXForwardedPrefix?: boolean
   logLevel?: string
   logflareEnabled?: boolean
   logflareApiKey?: string
@@ -194,6 +195,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'REQUEST_X_FORWARDED_HOST_REGEXP',
       'X_FORWARDED_HOST_REGEXP'
     ),
+    requestAllowXForwardedPrefix:
+      getOptionalConfigFromEnv('REQUEST_ALLOW_X_FORWARDED_PATH') === 'true',
     requestUrlLengthLimit:
       Number(getOptionalConfigFromEnv('REQUEST_URL_LENGTH_LIMIT', 'URL_LENGTH_LIMIT')) || 7_500,
     requestTraceHeader: getOptionalConfigFromEnv('REQUEST_TRACE_HEADER', 'REQUEST_ID_HEADER'),

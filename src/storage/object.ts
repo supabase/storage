@@ -35,6 +35,11 @@ interface CopyObjectParams {
   owner?: string
   copyMetadata?: boolean
   upsert?: boolean
+  metadata?: {
+    cacheControl?: string
+    mimetype?: string
+  }
+  userMetadata?: Record<string, any>
   conditions?: {
     ifMatch?: string
     ifNoneMatch?: string
@@ -283,6 +288,8 @@ export class ObjectStorage {
     conditions,
     copyMetadata,
     upsert,
+    metadata: fileMetadata,
+    userMetadata,
   }: CopyObjectParams) {
     mustBeValidKey(destinationKey)
 
@@ -323,6 +330,7 @@ export class ObjectStorage {
         originObject.version,
         s3DestinationKey,
         newVersion,
+        fileMetadata,
         conditions
       )
 
@@ -343,13 +351,15 @@ export class ObjectStorage {
           }
         )
 
+        const destinationMetadata = copyMetadata ? originObject.metadata : fileMetadata || {}
+
         const destinationObject = await db.upsertObject({
           ...originObject,
           bucket_id: destinationBucket,
           name: destinationKey,
           owner,
-          metadata,
-          user_metadata: copyMetadata ? originObject.user_metadata : undefined,
+          metadata: destinationMetadata,
+          user_metadata: copyMetadata ? originObject.user_metadata : userMetadata,
           version: newVersion,
         })
 

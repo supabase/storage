@@ -1029,6 +1029,11 @@ export class S3ProtocolHandler {
         ifModifiedSince: command.CopySourceIfModifiedSince,
         ifUnmodifiedSince: command.CopySourceIfUnmodifiedSince,
       },
+      metadata: {
+        cacheControl: command.CacheControl,
+        mimetype: command.ContentType,
+      },
+      userMetadata: command.Metadata,
       copyMetadata: command.MetadataDirective === 'COPY',
     })
 

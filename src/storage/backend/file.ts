@@ -182,13 +182,15 @@ export class FileBackend implements StorageBackendAdapter {
    * @param version
    * @param destination
    * @param destinationVersion
+   * @param metadata
    */
   async copyObject(
     bucket: string,
     source: string,
     version: string | undefined,
     destination: string,
-    destinationVersion: string
+    destinationVersion: string,
+    metadata: { cacheControl?: string; contentType?: string }
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     const srcFile = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${source}`, version))
     const destFile = path.resolve(
@@ -199,7 +201,8 @@ export class FileBackend implements StorageBackendAdapter {
     await fs.ensureFile(destFile)
     await fs.copyFile(srcFile, destFile)
 
-    await this.setFileMetadata(destFile, await this.getFileMetadata(srcFile))
+    const originalMetadata = await this.getFileMetadata(srcFile)
+    await this.setFileMetadata(destFile, Object.assign({}, originalMetadata, metadata))
 
     const fileStat = await fs.lstat(destFile)
     const checksum = await fileChecksum(destFile)

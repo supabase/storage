@@ -209,6 +209,7 @@ export class S3Backend implements StorageBackendAdapter {
    * @param version
    * @param destination
    * @param destinationVersion
+   * @param metadata
    * @param conditions
    */
   async copyObject(
@@ -217,6 +218,7 @@ export class S3Backend implements StorageBackendAdapter {
     version: string | undefined,
     destination: string,
     destinationVersion: string | undefined,
+    metadata?: { cacheControl?: string; mimetype?: string },
     conditions?: {
       ifMatch?: string
       ifNoneMatch?: string
@@ -233,6 +235,8 @@ export class S3Backend implements StorageBackendAdapter {
         CopySourceIfNoneMatch: conditions?.ifNoneMatch,
         CopySourceIfModifiedSince: conditions?.ifModifiedSince,
         CopySourceIfUnmodifiedSince: conditions?.ifUnmodifiedSince,
+        ContentType: metadata?.mimetype,
+        CacheControl: metadata?.cacheControl,
       })
       const data = await this.client.send(command)
       return {

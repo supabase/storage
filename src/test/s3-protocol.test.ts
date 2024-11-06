@@ -887,6 +887,31 @@ describe('S3 Protocol', () => {
         expect(resp.CopyObjectResult?.ETag).toBeTruthy()
       })
 
+      it('will copy an object overwriting the metadata', async () => {
+        const bucketName = await createBucket(client)
+        await uploadFile(client, bucketName, 'test-copy-1.jpg', 1)
+
+        const copyObjectCommand = new CopyObjectCommand({
+          Bucket: bucketName,
+          Key: 'test-copied-2.png',
+          CopySource: `${bucketName}/test-copy-1.jpg`,
+          ContentType: 'image/png',
+          CacheControl: 'max-age=2009',
+        })
+
+        const resp = await client.send(copyObjectCommand)
+        expect(resp.CopyObjectResult?.ETag).toBeTruthy()
+
+        const headObjectCommand = new HeadObjectCommand({
+          Bucket: bucketName,
+          Key: 'test-copied-2.png',
+        })
+
+        const headObj = await client.send(headObjectCommand)
+        expect(headObj.ContentType).toBe('image/png')
+        expect(headObj.CacheControl).toBe('max-age=2009')
+      })
+
       it('will not be able to copy an object that doesnt exists', async () => {
         const bucketName1 = await createBucket(client)
         await uploadFile(client, bucketName1, 'test-copy-1.jpg', 1)

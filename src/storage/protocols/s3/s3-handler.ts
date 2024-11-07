@@ -970,7 +970,7 @@ export class S3ProtocolHandler {
 
     return {
       responseBody: {
-        DeletedResult: {
+        DeleteResult: {
           Deleted: deleted,
           Error: errors,
         },

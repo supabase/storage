@@ -139,6 +139,7 @@ const whitelistHeaders = (headers: Record<string, unknown>) => {
     'x-forwarded-proto',
     'x-forwarded-host',
     'x-forwarded-port',
+    'x-forwarded-prefix',
     'referer',
     'content-length',
     'x-real-ip',

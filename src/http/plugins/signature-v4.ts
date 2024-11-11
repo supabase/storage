@@ -14,6 +14,7 @@ const {
   serviceKey,
   storageS3Region,
   isMultitenant,
+  requestAllowXForwardedPrefix,
   s3ProtocolPrefix,
   s3ProtocolAllowForwardedHeader,
   s3ProtocolEnforceRegion,
@@ -37,13 +38,21 @@ export const signatureV4 = fastifyPlugin(
         token,
       } = await createServerSignature(request.tenantId, clientSignature)
 
+      let storagePrefix = s3ProtocolPrefix
+      if (
+        requestAllowXForwardedPrefix &&
+        typeof request.headers['x-forwarded-prefix'] === 'string'
+      ) {
+        storagePrefix = request.headers['x-forwarded-prefix']
+      }
+
       const isVerified = signatureV4.verify(clientSignature, {
         url: request.url,
         body: request.body as string | ReadableStream | Buffer,
         headers: request.headers as Record<string, string | string[]>,
         method: request.method,
         query: request.query as Record<string, string>,
-        prefix: s3ProtocolPrefix,
+        prefix: storagePrefix,
       })
 
       if (!isVerified && !sessionToken) {

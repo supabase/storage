@@ -10,7 +10,7 @@ import { UploadId } from '@storage/protocols/tus'
 
 import { getConfig } from '../../../config'
 
-const { storageS3Bucket, tusPath } = getConfig()
+const { storageS3Bucket, tusPath, requestAllowXForwardedPrefix } = getConfig()
 const reExtractFileID = /([^/]+)\/?$/
 
 export const SIGNED_URL_SUFFIX = '/sign'
@@ -92,8 +92,15 @@ export function generateUrl(
   }
   proto = process.env.NODE_ENV === 'production' ? 'https' : proto
 
+  let basePath = path
+
+  const forwardedPath = req.headers['x-forwarded-prefix']
+  if (requestAllowXForwardedPrefix && typeof forwardedPath === 'string') {
+    basePath = forwardedPath + path
+  }
+
   const isSigned = req.url?.endsWith(SIGNED_URL_SUFFIX)
-  const fullPath = isSigned ? `${path}${SIGNED_URL_SUFFIX}` : path
+  const fullPath = isSigned ? `${basePath}${SIGNED_URL_SUFFIX}` : basePath
 
   if (req.headers['x-forwarded-host']) {
     const port = req.headers['x-forwarded-port']

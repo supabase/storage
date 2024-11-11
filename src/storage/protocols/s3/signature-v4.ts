@@ -184,7 +184,7 @@ export class SignatureV4 {
     const serverSignature = this.sign(clientSignature, request)
     return crypto.timingSafeEqual(
       Buffer.from(clientSignature.signature),
-      Buffer.from(serverSignature)
+      Buffer.from(serverSignature.signature)
     )
   }
 
@@ -223,7 +223,7 @@ export class SignatureV4 {
       serverCredentials.service
     )
 
-    return this.hmac(signingKey, stringToSign).toString('hex')
+    return { signature: this.hmac(signingKey, stringToSign).toString('hex'), canonicalRequest }
   }
 
   protected getPayloadHash(clientSignature: ClientSignature, request: SignatureRequest) {

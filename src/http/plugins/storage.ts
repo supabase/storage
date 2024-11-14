@@ -1,5 +1,5 @@
 import fastifyPlugin from 'fastify-plugin'
-import { StorageBackendAdapter, createStorageBackend } from '@storage/backend'
+import { StorageDisk, createDefaultDisk } from '@storage/disks'
 import { Storage } from '@storage/storage'
 import { StorageKnexDB } from '@storage/database'
 import { getConfig } from '../../config'
@@ -7,17 +7,16 @@ import { getConfig } from '../../config'
 declare module 'fastify' {
   interface FastifyRequest {
     storage: Storage
-    backend: StorageBackendAdapter
+    disk: StorageDisk
   }
 }
 
 const { storageBackendType } = getConfig()
 
-const storageBackend = createStorageBackend(storageBackendType)
-
 export const storage = fastifyPlugin(
   async function storagePlugin(fastify) {
-    fastify.decorateRequest('storage', null)
+    const defaultDisk = createDefaultDisk(storageBackendType)
+
     fastify.addHook('preHandler', async (request) => {
       const database = new StorageKnexDB(request.db, {
         tenantId: request.tenantId,
@@ -25,12 +24,12 @@ export const storage = fastifyPlugin(
         reqId: request.id,
         latestMigration: request.latestMigration,
       })
-      request.backend = storageBackend
-      request.storage = new Storage(storageBackend, database)
+      request.disk = defaultDisk.withPrefix(request.tenantId)
+      request.storage = new Storage(request.disk, database)
     })
 
     fastify.addHook('onClose', async () => {
-      storageBackend.close()
+      defaultDisk.close()
     })
   },
   { name: 'storage-init' }

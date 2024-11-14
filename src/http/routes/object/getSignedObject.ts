@@ -1,12 +1,9 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { getConfig } from '../../../config'
-import { SignedToken, verifyJWT } from '../../../internal/auth'
-import { getJwtSecret } from '../../../internal/database'
+import { SignedToken, verifyJWT } from '@internal/auth'
+import { getJwtSecret } from '@internal/database'
 import { ROUTE_OPERATIONS } from '../operations'
-import { ERRORS } from '../../../internal/errors'
-
-const { storageS3Bucket } = getConfig()
+import { ERRORS } from '@internal/errors'
 
 const getSignedObjectParamsSchema = {
   type: 'object',
@@ -77,18 +74,16 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.InvalidSignature()
       }
 
-      const s3Key = `${request.tenantId}/${url}`
-      request.log.info(s3Key)
-
       const [bucketName, ...objParts] = url.split('/')
+      const objectName = objParts.join('/')
       const obj = await request.storage
         .asSuperUser()
         .from(bucketName)
-        .findObject(objParts.join('/'), 'id,version')
+        .findObject(objectName, 'id,version')
 
       return request.storage.renderer('asset').render(request, response, {
-        bucket: storageS3Bucket,
-        key: s3Key,
+        bucket: bucketName,
+        key: objectName,
         version: obj.version,
         download,
         expires: new Date(exp * 1000).toUTCString(),

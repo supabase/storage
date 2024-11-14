@@ -1,4 +1,4 @@
-import { ObjectMetadata, StorageBackendAdapter } from '../backend'
+import { ObjectMetadata, StorageDisk } from '../disks'
 import axios, { Axios, AxiosError } from 'axios'
 import { getConfig } from '../../config'
 import { FastifyRequest } from 'fastify'
@@ -83,7 +83,7 @@ export class ImageRenderer extends Renderer {
   private transformOptions?: TransformOptions
   private limits?: TransformLimits
 
-  constructor(private readonly backend: StorageBackendAdapter) {
+  constructor(private readonly backend: StorageDisk) {
     super()
     this.client = client
   }
@@ -205,8 +205,16 @@ export class ImageRenderer extends Renderer {
    */
   async getAsset(request: FastifyRequest, options: RenderOptions) {
     const [privateURL, headObj] = await Promise.all([
-      this.backend.privateAssetUrl(options.bucket, options.key, options.version),
-      this.backend.headObject(options.bucket, options.key, options.version),
+      this.backend.privateAssetUrl({
+        bucket: options.bucket,
+        key: options.key,
+        version: options.version,
+      }),
+      this.backend.info({
+        bucket: options.bucket,
+        key: options.key,
+        version: options.version,
+      }),
     ])
     const transformations = ImageRenderer.applyTransformation(this.transformOptions || {})
     const transformLimits = ImageRenderer.applyTransformationLimits(this.limits || {})

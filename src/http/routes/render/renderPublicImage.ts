@@ -6,7 +6,7 @@ import { transformationOptionsSchema } from '../../schemas/transformations'
 import { ROUTE_OPERATIONS } from '../operations'
 import { getTenantConfig } from '@internal/database'
 
-const { storageS3Bucket, isMultitenant } = getConfig()
+const { isMultitenant } = getConfig()
 
 const renderPublicImageParamsSchema = {
   type: 'object',
@@ -58,8 +58,6 @@ export default async function routes(fastify: FastifyInstance) {
         request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id,version'),
       ])
 
-      const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
-
       const renderer = request.storage.renderer('image') as ImageRenderer
 
       if (isMultitenant) {
@@ -70,8 +68,8 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       return renderer.setTransformations(request.query).render(request, response, {
-        bucket: storageS3Bucket,
-        key: s3Key,
+        bucket: bucketName,
+        key: objectName,
         version: obj.version,
         download,
         signal: request.signals.disconnect.signal,

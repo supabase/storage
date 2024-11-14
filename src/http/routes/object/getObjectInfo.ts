@@ -7,8 +7,6 @@ import { Obj } from '@storage/schemas'
 import { ROUTE_OPERATIONS } from '../operations'
 import { ERRORS } from '@internal/errors'
 
-const { storageS3Bucket } = getConfig()
-
 const getObjectParamsSchema = {
   type: 'object',
   properties: {
@@ -36,8 +34,6 @@ async function requestHandler(
 ) {
   const { bucketName } = request.params
   const objectName = request.params['*']
-
-  const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
 
   const bucket = await request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
     dontErrorOnEmpty: true,
@@ -69,8 +65,8 @@ async function requestHandler(
   }
 
   return request.storage.renderer(method).render(request, response, {
-    bucket: storageS3Bucket,
-    key: s3Key,
+    bucket: bucketName,
+    key: objectName,
     version: obj.version,
     object: obj,
   })

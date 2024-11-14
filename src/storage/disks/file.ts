@@ -5,13 +5,24 @@ import fileChecksum from 'md5-file'
 import { promisify } from 'util'
 import stream from 'stream'
 import MultiStream from 'multistream'
-import { getConfig } from '../../config'
 import {
-  StorageBackendAdapter,
+  StorageDisk,
   ObjectMetadata,
   ObjectResponse,
   withOptionalVersion,
-  BrowserCacheHeaders,
+  ReadParams,
+  UploadObjectParams,
+  DeleteObjectParams,
+  CopyObjectParams,
+  DeleteObjectsParams,
+  HeadObjectParams,
+  PrivateAssetUrlParams,
+  CreateMultiPartUploadParams,
+  UploadPartParams,
+  CompleteMultipartUploadParams,
+  AbortMultipartUploadParams,
+  UploadPartCopyParams,
+  DiskAdapterOptions,
   UploadPart,
 } from './adapter'
 import { ERRORS, StorageBackendError } from '@internal/errors'
@@ -42,32 +53,20 @@ const METADATA_ATTR_KEYS = {
  * FileBackend
  * Interacts with the file system with this FileBackend adapter
  */
-export class FileBackend implements StorageBackendAdapter {
-  client = null
+export class FileDisk implements StorageDisk {
   filePath: string
 
-  constructor() {
-    const { storageFilePath } = getConfig()
-    if (!storageFilePath) {
-      throw new Error('FILE_STORAGE_BACKEND_PATH env variable not set')
-    }
-    this.filePath = storageFilePath
+  constructor(protected readonly options: DiskAdapterOptions) {
+    this.filePath = options.prefix
+      ? path.join(options.prefix, options.mountPoint)
+      : options.mountPoint
   }
 
-  /**
-   * Gets an object body and metadata
-   * @param bucketName
-   * @param key
-   * @param version
-   * @param headers
-   */
-  async getObject(
-    bucketName: string,
-    key: string,
-    version: string | undefined,
-    headers?: BrowserCacheHeaders
-  ): Promise<ObjectResponse> {
-    // 'Range: bytes=#######-######
+  withPrefix(prefix: string): StorageDisk {
+    return new FileDisk({ ...this.options, prefix })
+  }
+
+  async read({ bucketName, key, version, headers }: ReadParams): Promise<ObjectResponse> {
     const file = path.resolve(this.filePath, withOptionalVersion(`${bucketName}/${key}`, version))
     const data = await fs.stat(file)
     const checksum = await fileChecksum(file)
@@ -88,121 +87,91 @@ export class FileBackend implements StorageBackendAdapter {
         metadata: {
           cacheControl: cacheControl || 'no-cache',
           mimetype: contentType || 'application/octet-stream',
-          lastModified: lastModified,
+          lastModified,
           contentRange: `bytes ${startRange}-${endRange}/${fileSize}`,
           httpStatusCode: 206,
-          size: size,
+          size,
           eTag: checksum,
           contentLength: chunkSize,
         },
         httpStatusCode: 206,
         body,
       }
-    } else {
-      const body = fs.createReadStream(file)
-      return {
-        metadata: {
-          cacheControl: cacheControl || 'no-cache',
-          mimetype: contentType || 'application/octet-stream',
-          lastModified: lastModified,
-          httpStatusCode: 200,
-          size: data.size,
-          eTag: checksum,
-          contentLength: fileSize,
-        },
-        body,
+    }
+
+    const body = fs.createReadStream(file)
+    return {
+      metadata: {
+        cacheControl: cacheControl || 'no-cache',
+        mimetype: contentType || 'application/octet-stream',
+        lastModified,
         httpStatusCode: 200,
-      }
+        size: data.size,
+        eTag: checksum,
+        contentLength: fileSize,
+      },
+      body,
+      httpStatusCode: 200,
     }
   }
 
-  /**
-   * Uploads and store an object
-   * @param bucketName
-   * @param key
-   * @param version
-   * @param body
-   * @param contentType
-   * @param cacheControl
-   */
-  async uploadObject(
-    bucketName: string,
-    key: string,
-    version: string | undefined,
-    body: NodeJS.ReadableStream,
-    contentType: string,
-    cacheControl: string
-  ): Promise<ObjectMetadata> {
+  async save({
+    bucketName,
+    key,
+    version,
+    body,
+    contentType,
+    cacheControl,
+  }: UploadObjectParams): Promise<ObjectMetadata> {
     try {
       const file = path.resolve(this.filePath, withOptionalVersion(`${bucketName}/${key}`, version))
       await fs.ensureFile(file)
       const destFile = fs.createWriteStream(file)
       await pipeline(body, destFile)
 
-      await this.setFileMetadata(file, {
-        contentType,
-        cacheControl,
-      })
+      await this.setFileMetadata(file, { contentType, cacheControl })
 
-      const metadata = await this.headObject(bucketName, key, version)
-
+      const metadata = await this.info({ bucket: bucketName, key, version })
       return {
         ...metadata,
         httpStatusCode: 200,
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       throw StorageBackendError.fromError(err)
     }
   }
 
-  /**
-   * Deletes an object from the file system
-   * @param bucket
-   * @param key
-   * @param version
-   */
-  async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
+  async delete({ bucket, key, version }: DeleteObjectParams): Promise<void> {
     try {
       const file = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
       await fs.remove(file)
     } catch (e) {
-      if (e instanceof Error && 'code' in e) {
-        if ((e as any).code === 'ENOENT') {
-          return
-        }
-        throw e
+      if (e instanceof Error && 'code' in e && (e as any).code === 'ENOENT') {
+        return
       }
+      throw e
     }
   }
 
-  /**
-   * Copies an existing object to the given location
-   * @param bucket
-   * @param source
-   * @param version
-   * @param destination
-   * @param destinationVersion
-   * @param metadata
-   */
-  async copyObject(
-    bucket: string,
-    source: string,
-    version: string | undefined,
-    destination: string,
-    destinationVersion: string,
-    metadata: { cacheControl?: string; contentType?: string }
-  ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
-    const srcFile = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${source}`, version))
+  async copy({
+    source,
+    destination,
+    metadata,
+  }: CopyObjectParams): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
+    const srcFile = path.resolve(
+      this.filePath,
+      withOptionalVersion(`${source.bucket}/${source.key}`, source.version)
+    )
     const destFile = path.resolve(
       this.filePath,
-      withOptionalVersion(`${bucket}/${destination}`, destinationVersion)
+      withOptionalVersion(`${destination.bucket}/${destination.key}`, destination.version)
     )
 
     await fs.ensureFile(destFile)
     await fs.copyFile(srcFile, destFile)
 
     const originalMetadata = await this.getFileMetadata(srcFile)
-    await this.setFileMetadata(destFile, Object.assign({}, originalMetadata, metadata))
+    await this.setFileMetadata(destFile, { ...originalMetadata, ...metadata })
 
     const fileStat = await fs.lstat(destFile)
     const checksum = await fileChecksum(destFile)
@@ -214,38 +183,20 @@ export class FileBackend implements StorageBackendAdapter {
     }
   }
 
-  /**
-   * Deletes multiple objects
-   * @param bucket
-   * @param prefixes
-   */
-  async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
-    const promises = prefixes.map((prefix) => {
-      return fs.rm(path.resolve(this.filePath, bucket, prefix))
+  async deleteMany({ bucket, keys }: DeleteObjectsParams): Promise<void> {
+    const promises = keys.map((key) => {
+      return fs.rm(path.resolve(this.filePath, bucket, key))
     })
     const results = await Promise.allSettled(promises)
 
     results.forEach((result) => {
-      if (result.status === 'rejected') {
-        if (result.reason.code === 'ENOENT') {
-          return
-        }
+      if (result.status === 'rejected' && result.reason.code !== 'ENOENT') {
         throw result.reason
       }
     })
   }
 
-  /**
-   * Returns metadata information of a specific object
-   * @param bucket
-   * @param key
-   * @param version
-   */
-  async headObject(
-    bucket: string,
-    key: string,
-    version: string | undefined
-  ): Promise<ObjectMetadata> {
+  async info({ bucket, key, version }: HeadObjectParams): Promise<ObjectMetadata> {
     const file = path.join(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
 
     const data = await fs.stat(file)
@@ -266,13 +217,17 @@ export class FileBackend implements StorageBackendAdapter {
     }
   }
 
-  async createMultiPartUpload(
-    bucketName: string,
-    key: string,
-    version: string | undefined,
-    contentType: string,
-    cacheControl: string
-  ): Promise<string | undefined> {
+  async privateAssetUrl({ bucket, key, version }: PrivateAssetUrlParams): Promise<string> {
+    return 'local:///' + path.join(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
+  }
+
+  async createMultiPartUpload({
+    bucketName,
+    key,
+    version,
+    contentType,
+    cacheControl,
+  }: CreateMultiPartUploadParams): Promise<string | undefined> {
     const uploadId = randomUUID()
     const multiPartFolder = path.join(
       this.filePath,
@@ -289,14 +244,14 @@ export class FileBackend implements StorageBackendAdapter {
     return uploadId
   }
 
-  async uploadPart(
-    bucketName: string,
-    key: string,
-    version: string,
-    uploadId: string,
-    partNumber: number,
-    body: stream.Readable
-  ): Promise<{ ETag?: string }> {
+  async uploadPart({
+    bucketName,
+    key,
+    version,
+    uploadId,
+    partNumber,
+    body,
+  }: UploadPartParams): Promise<{ ETag?: string }> {
     const multiPartFolder = path.join(
       this.filePath,
       'multiparts',
@@ -306,26 +261,25 @@ export class FileBackend implements StorageBackendAdapter {
     )
 
     const partPath = path.join(multiPartFolder, `part-${partNumber}`)
-
     const writeStream = fsExtra.createWriteStream(partPath)
 
+    if (!body) throw new Error('Body is required')
     await pipeline(body, writeStream)
 
     const etag = await fileChecksum(partPath)
-
     const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
     await this.setMetadataAttr(partPath, METADATA_ATTR_KEYS[platform]['etag'], etag)
 
     return { ETag: etag }
   }
 
-  async completeMultipartUpload(
-    bucketName: string,
-    key: string,
-    uploadId: string,
-    version: string,
-    parts: UploadPart[]
-  ): Promise<
+  async completeMultipartUpload({
+    bucketName,
+    key,
+    uploadId,
+    version,
+    parts,
+  }: CompleteMultipartUploadParams): Promise<
     Omit<UploadPart, 'PartNumber'> & {
       location?: string
       bucket?: string
@@ -359,83 +313,72 @@ export class FileBackend implements StorageBackendAdapter {
     const finalParts = await Promise.all(partsByEtags)
     finalParts.sort((a, b) => parseInt(a.split('-')[1]) - parseInt(b.split('-')[1]))
 
-    const fileStreams = finalParts.map((partPath) => {
-      return fs.createReadStream(partPath)
-    })
-
+    const fileStreams = finalParts.map((partPath) => fs.createReadStream(partPath))
     const multistream = new MultiStream(fileStreams)
     const metadataContent = await fsExtra.readFile(
       path.join(multiPartFolder, 'metadata.json'),
       'utf-8'
     )
-
     const metadata = JSON.parse(metadataContent)
 
-    const uploaded = await this.uploadObject(
+    const uploaded = await this.save({
       bucketName,
       key,
       version,
-      multistream,
-      metadata.contentType,
-      metadata.cacheControl
-    )
+      body: multistream,
+      contentType: metadata.contentType,
+      cacheControl: metadata.cacheControl,
+    })
 
     fsExtra.remove(path.join(this.filePath, 'multiparts', uploadId)).catch(() => {
       // no-op
     })
 
     return {
-      version: version,
+      version,
       ETag: uploaded.eTag,
       bucket: bucketName,
       location: `${bucketName}/${key}`,
     }
   }
 
-  async abortMultipartUpload(
-    bucketName: string,
-    key: string,
-    uploadId: string,
-    version?: string
-  ): Promise<void> {
+  async abortMultipartUpload({
+    bucketName,
+    key,
+    uploadId,
+    version,
+  }: AbortMultipartUploadParams): Promise<void> {
     const multiPartFolder = path.join(this.filePath, 'multiparts', uploadId)
-
     await fsExtra.remove(multiPartFolder)
   }
 
-  async uploadPartCopy(
-    storageS3Bucket: string,
-    key: string,
-    version: string,
-    UploadId: string,
-    PartNumber: number,
-    sourceKey: string,
-    sourceVersion?: string,
-    rangeBytes?: { fromByte: number; toByte: number }
-  ): Promise<{ eTag?: string; lastModified?: Date }> {
+  async uploadPartCopy({
+    UploadId,
+    PartNumber,
+    bytes,
+    source,
+    destination,
+  }: UploadPartCopyParams): Promise<{ eTag?: string; lastModified?: Date }> {
     const multiPartFolder = path.join(
       this.filePath,
       'multiparts',
       UploadId,
-      storageS3Bucket,
-      withOptionalVersion(key, version)
+      destination.bucket,
+      withOptionalVersion(destination.key, destination.version)
     )
 
     const partFilePath = path.join(multiPartFolder, `part-${PartNumber}`)
     const sourceFilePath = path.join(
       this.filePath,
-      storageS3Bucket,
-      withOptionalVersion(sourceKey, sourceVersion)
+      source.bucket,
+      withOptionalVersion(source.key, source.version)
     )
 
     const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
-
-    const readStreamOptions = rangeBytes
-      ? { start: rangeBytes.fromByte, end: rangeBytes.toByte }
-      : {}
+    const readStreamOptions = bytes ? { start: bytes.fromByte, end: bytes.toByte } : {}
     const partStream = fs.createReadStream(sourceFilePath, readStreamOptions)
-
     const writePart = fs.createWriteStream(partFilePath)
+
     await pipeline(partStream, writePart)
 
     const etag = await fileChecksum(partFilePath)
@@ -447,16 +390,6 @@ export class FileBackend implements StorageBackendAdapter {
       eTag: etag,
       lastModified: fileStat.mtime,
     }
-  }
-
-  /**
-   * Returns a private url that can only be accessed internally by the system
-   * @param bucket
-   * @param key
-   * @param version
-   */
-  async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
-    return 'local:///' + path.join(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
   }
 
   async setFileMetadata(file: string, { contentType, cacheControl }: FileMetadata) {

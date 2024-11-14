@@ -4,7 +4,7 @@ import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
 import { getJwtSecret } from '@internal/database'
 
-import { StorageBackendAdapter, ObjectMetadata, withOptionalVersion } from './backend'
+import { ObjectMetadata, StorageDisk, withOptionalVersion } from './disks'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
 import { Uploader } from './uploader'
@@ -26,12 +26,17 @@ export interface UploadObjectOptions {
   signal?: AbortSignal
 }
 
-const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
+const { requestUrlLengthLimit } = getConfig()
 
 interface CopyObjectParams {
-  sourceKey: string
-  destinationBucket: string
-  destinationKey: string
+  source: {
+    bucket: string
+    key: string
+  }
+  destination: {
+    bucket: string
+    key: string
+  }
   owner?: string
   copyMetadata?: boolean
   upsert?: boolean
@@ -39,7 +44,7 @@ interface CopyObjectParams {
     cacheControl?: string
     mimetype?: string
   }
-  userMetadata?: Record<string, any>
+  userMetadata?: Record<string, unknown>
   conditions?: {
     ifMatch?: string
     ifNoneMatch?: string
@@ -56,11 +61,11 @@ export class ObjectStorage {
   protected readonly uploader: Uploader
 
   constructor(
-    private readonly backend: StorageBackendAdapter,
+    private readonly disk: StorageDisk,
     private readonly db: Database,
     private readonly bucketId: string
   ) {
-    this.uploader = new Uploader(backend, db)
+    this.uploader = new Uploader(disk, db)
   }
 
   /**
@@ -68,7 +73,7 @@ export class ObjectStorage {
    * as superUser bypassing RLS rules
    */
   asSuperUser() {
-    return new ObjectStorage(this.backend, this.db.asSuperUser(), this.bucketId)
+    return new ObjectStorage(this.disk, this.db.asSuperUser(), this.bucketId)
   }
 
   /**
@@ -142,11 +147,11 @@ export class ObjectStorage {
         throw ERRORS.NoSuchKey(objectName)
       }
 
-      await this.backend.deleteObject(
-        storageS3Bucket,
-        `${this.db.tenantId}/${this.bucketId}/${objectName}`,
-        obj.version
-      )
+      await this.disk.delete({
+        bucket: this.bucketId,
+        key: objectName,
+        version: obj?.version,
+      })
 
       return obj
     })
@@ -188,17 +193,18 @@ export class ObjectStorage {
           // if successfully deleted, delete from s3 too
           // todo: consider moving this to a queue
           const prefixesToDelete = data.reduce((all, { name, version }) => {
-            all.push(withOptionalVersion(`${db.tenantId}/${this.bucketId}/${name}`, version))
+            all.push(withOptionalVersion(name, version))
 
             if (version) {
-              all.push(
-                withOptionalVersion(`${db.tenantId}/${this.bucketId}/${name}`, version) + '.info'
-              )
+              all.push(withOptionalVersion(name, version) + '.info')
             }
             return all
           }, [] as string[])
 
-          await this.backend.deleteObjects(storageS3Bucket, prefixesToDelete)
+          await this.disk.deleteMany({
+            bucket: this.bucketId,
+            keys: prefixesToDelete,
+          })
 
           await Promise.allSettled(
             data.map((object) =>
@@ -273,17 +279,18 @@ export class ObjectStorage {
 
   /**
    * Copies an existing remote object to a given location
-   * @param sourceKey
-   * @param destinationBucket
-   * @param destinationKey
+   * @param source
+   * @param destination
    * @param owner
    * @param conditions
    * @param copyMetadata
+   * @param upsert
+   * @param fileMetadata
+   * @param userMetadata
    */
   async copyObject({
-    sourceKey,
-    destinationBucket,
-    destinationKey,
+    source,
+    destination,
     owner,
     conditions,
     copyMetadata,
@@ -291,20 +298,20 @@ export class ObjectStorage {
     metadata: fileMetadata,
     userMetadata,
   }: CopyObjectParams) {
-    mustBeValidKey(destinationKey)
+    mustBeValidKey(destination.key)
 
     const newVersion = randomUUID()
-    const bucketId = this.bucketId
-    const s3SourceKey = `${this.db.tenantId}/${bucketId}/${sourceKey}`
-    const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationKey}`
+    const s3SourceKey = `${this.bucketId}/${source.key}`
+    const s3DestinationKey = `${destination.bucket}/${destination.key}`
 
     // We check if the user has permission to copy the object to the destination key
     const originObject = await this.db.findObject(
       this.bucketId,
-      sourceKey,
+      source.key,
       'bucket_id,metadata,user_metadata,version'
     )
 
+    // Cannot copy on the same destination path
     if (s3SourceKey === s3DestinationKey) {
       return {
         destObject: originObject,
@@ -317,33 +324,42 @@ export class ObjectStorage {
     }
 
     await this.uploader.canUpload({
-      bucketId: destinationBucket,
-      objectName: destinationKey,
+      bucketId: destination.bucket,
+      objectName: destination.key,
       owner,
       isUpsert: upsert,
     })
 
     try {
-      const copyResult = await this.backend.copyObject(
-        storageS3Bucket,
-        s3SourceKey,
-        originObject.version,
-        s3DestinationKey,
-        newVersion,
-        fileMetadata,
-        conditions
-      )
+      const copyResult = await this.disk.copy({
+        source: {
+          bucket: this.bucketId,
+          key: source.key,
+          version: originObject.version,
+        },
+        destination: {
+          bucket: destination.bucket,
+          key: destination.key,
+          version: newVersion,
+        },
+        conditions,
+        metadata: fileMetadata,
+      })
 
-      const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
+      const metadata = await this.disk.info({
+        bucket: destination.bucket,
+        key: destination.key,
+        version: newVersion,
+      })
 
       const destinationObject = await this.db.asSuperUser().withTransaction(async (db) => {
-        await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
+        await db.waitObjectLock(destination.bucket, destination.key, undefined, {
           timeout: 3000,
         })
 
         const existingDestObject = await db.findObject(
-          destinationBucket,
-          destinationKey,
+          destination.bucket,
+          destination.key,
           'id,name,metadata,version,bucket_id',
           {
             dontErrorOnEmpty: true,
@@ -355,8 +371,8 @@ export class ObjectStorage {
 
         const destinationObject = await db.upsertObject({
           ...originObject,
-          bucket_id: destinationBucket,
-          name: destinationKey,
+          bucket_id: destination.bucket,
+          name: destination.key,
           owner,
           metadata: destinationMetadata,
           user_metadata: copyMetadata ? originObject.user_metadata : userMetadata,
@@ -378,7 +394,7 @@ export class ObjectStorage {
 
       await ObjectCreatedCopyEvent.sendWebhook({
         tenant: this.db.tenant(),
-        name: destinationKey,
+        name: destination.key,
         version: newVersion,
         bucketId: this.bucketId,
         metadata,
@@ -393,8 +409,8 @@ export class ObjectStorage {
       }
     } catch (e) {
       await ObjectAdminDelete.send({
-        name: destinationKey,
-        bucketId: destinationBucket,
+        name: destination.key,
+        bucketId: destination.bucket,
         tenant: this.db.tenant(),
         version: newVersion,
         reqId: this.db.reqId,
@@ -419,8 +435,6 @@ export class ObjectStorage {
     mustBeValidKey(destinationObjectName)
 
     const newVersion = randomUUID()
-    const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
-    const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationObjectName}`
 
     await this.db.testPermission((db) => {
       return Promise.all([
@@ -438,6 +452,10 @@ export class ObjectStorage {
       .asSuperUser()
       .findObject(this.bucketId, sourceObjectName, 'id, version,user_metadata')
 
+    const s3SourceKey = `${this.bucketId}/${sourceObjectName}`
+    const s3DestinationKey = `${destinationBucket}/${destinationObjectName}`
+
+    // Not possible to move an object on the same path
     if (s3SourceKey === s3DestinationKey) {
       return {
         destObject: sourceObj,
@@ -445,15 +463,24 @@ export class ObjectStorage {
     }
 
     try {
-      await this.backend.copyObject(
-        storageS3Bucket,
-        s3SourceKey,
-        sourceObj.version,
-        s3DestinationKey,
-        newVersion
-      )
+      await this.disk.copy({
+        source: {
+          bucket: this.bucketId,
+          key: sourceObjectName,
+          version: sourceObj.version,
+        },
+        destination: {
+          bucket: destinationBucket,
+          key: destinationObjectName,
+          version: newVersion,
+        },
+      })
 
-      const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
+      const metadata = await this.disk.info({
+        bucket: destinationBucket,
+        key: destinationObjectName,
+        version: newVersion,
+      })
 
       return this.db.asSuperUser().withTransaction(async (db) => {
         await db.waitObjectLock(this.bucketId, destinationObjectName, undefined, {

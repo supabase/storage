@@ -7,7 +7,7 @@ import {
   StorageBackendError,
   StorageErrorOptions,
 } from '@internal/errors'
-import { ObjectMetadata } from '../backend'
+import { ObjectMetadata } from '../disks'
 import { Knex } from 'knex'
 import {
   Database,

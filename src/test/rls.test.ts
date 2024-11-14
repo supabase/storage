@@ -8,7 +8,7 @@ import Mustache from 'mustache'
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
 
 import { StorageKnexDB } from '@storage/database'
-import { createStorageBackend } from '@storage/backend'
+import { createDefaultDisk } from '@storage/disks'
 import { getPostgresConnection } from '@internal/database'
 import { getServiceKeyUser } from '@internal/database'
 import { signJWT } from '@internal/auth'
@@ -70,8 +70,8 @@ const testSpec = yaml.load(
 
 const { serviceKey, tenantId, jwtSecret, databaseURL, storageS3Bucket, storageBackendType } =
   getConfig()
-const backend = createStorageBackend(storageBackendType)
-const client = backend.client
+const backend = createDefaultDisk(storageBackendType)
+const client = (backend as any).client
 
 jest.setTimeout(10000)
 

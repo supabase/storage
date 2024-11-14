@@ -1,13 +1,10 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { IncomingMessage, Server, ServerResponse } from 'http'
-import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 import { ERRORS } from '@internal/errors'
 import { Obj } from '@storage/schemas'
-
-const { storageS3Bucket } = getConfig()
 
 const getObjectParamsSchema = {
   type: 'object',
@@ -45,7 +42,6 @@ async function requestHandler(
   const objectName = request.params['*']
 
   // send the object from s3
-  const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
   const bucket = await request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
     dontErrorOnEmpty: true,
   })
@@ -74,8 +70,8 @@ async function requestHandler(
   }
 
   return request.storage.renderer('asset').render(request, response, {
-    bucket: storageS3Bucket,
-    key: s3Key,
+    bucket: bucketName,
+    key: objectName,
     version: obj.version,
     download,
     signal: request.signals.disconnect.signal,

@@ -4,21 +4,22 @@ import { FastifyRequest } from 'fastify'
 import { ERRORS } from '@internal/errors'
 import { FileUploadedSuccess, FileUploadStarted } from '@internal/monitoring/metrics'
 
-import { ObjectMetadata, StorageBackendAdapter } from './backend'
+import { ObjectMetadata, StorageDisk } from './disks'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { Database } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getConfig } from '../config'
 import { logger, logSchema } from '@internal/monitoring'
+import { Readable } from 'stream'
 
 interface UploaderOptions extends UploadObjectOptions {
   fileSizeLimit?: number | null
   allowedMimeTypes?: string[] | null
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
   signal?: AbortSignal
 }
 
-const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
+const { uploadFileSizeLimitStandard } = getConfig()
 
 export interface UploadObjectOptions {
   bucketId: string
@@ -32,10 +33,10 @@ const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
 
 /**
  * Uploader
- * Handles the upload of a multi-part request or binary body
+ * Handles the upload of a multipart request or binary stream
  */
 export class Uploader {
-  constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
+  constructor(private readonly disk: StorageDisk, private readonly db: Database) {}
 
   async canUpload(
     options: Pick<UploadObjectOptions, 'bucketId' | 'objectName' | 'isUpsert' | 'owner'>
@@ -98,18 +99,15 @@ export class Uploader {
         this.validateMimeType(file.mimeType, options.allowedMimeTypes)
       }
 
-      const path = `${options.bucketId}/${options.objectName}`
-      const s3Key = `${this.db.tenantId}/${path}`
-
-      const objectMetadata = await this.backend.uploadObject(
-        storageS3Bucket,
-        s3Key,
+      const objectMetadata = await this.disk.save({
+        bucketName: options.bucketId,
+        key: options.objectName,
         version,
-        file.body,
-        file.mimeType,
-        file.cacheControl,
-        options.signal
-      )
+        body: file.body as Readable,
+        contentType: file.mimeType,
+        cacheControl: file.cacheControl,
+        signal: options.signal,
+      })
 
       if (file.isTruncated()) {
         throw ERRORS.EntityTooLarge()
@@ -280,7 +278,7 @@ export class Uploader {
     )
 
     let body: NodeJS.ReadableStream
-    let userMetadata: Record<string, any> | undefined
+    let userMetadata: Record<string, unknown> | undefined
     let mimeType: string
     let isTruncated: () => boolean
 
@@ -312,7 +310,7 @@ export class Uploader {
 
           try {
             userMetadata = JSON.parse(customMd)
-          } catch (e) {
+          } catch (e: unknown) {
             // no-op
           }
         }

@@ -27,7 +27,7 @@ import { ObjectStorage } from '@storage/object'
 import { Uploader } from '@storage/uploader'
 import { Storage } from '@storage/storage'
 import { Event as QueueBaseEvent } from '@internal/queue'
-import { S3Backend } from '@storage/backend'
+import { S3Disk } from '../../storage/disks'
 import { StorageKnexDB } from '@storage/database'
 import { TenantConnection } from '@internal/database'
 import { S3Store } from '@tus/s3-store'
@@ -174,7 +174,7 @@ const sdk = new NodeSDK({
       },
     }),
     new ClassInstrumentation({
-      targetClass: S3Backend,
+      targetClass: S3Disk,
       enabled: true,
       methodsToInstrument: [
         'getObject',

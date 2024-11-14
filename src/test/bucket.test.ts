@@ -1,17 +1,17 @@
 'use strict'
 import dotenv from 'dotenv'
 import app from '../app'
-import { S3Backend } from '../storage/backend'
+import { S3Disk } from '../storage/disks'
 
 dotenv.config({ path: '.env.test' })
 const anonKey = process.env.ANON_KEY || ''
 
 beforeAll(() => {
-  jest.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {
+  jest.spyOn(S3Disk.prototype, 'deleteMany').mockImplementation(() => {
     return Promise.resolve()
   })
 
-  jest.spyOn(S3Backend.prototype, 'getObject').mockImplementation(() => {
+  jest.spyOn(S3Disk.prototype, 'read').mockImplementation(() => {
     return Promise.resolve({
       metadata: {
         httpStatusCode: 200,
@@ -241,7 +241,7 @@ describe('testing public bucket functionality', () => {
     expect(publicResponse.headers['etag']).toBe('abc')
     expect(publicResponse.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
 
-    const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
+    const mockGetObject = jest.spyOn(S3Disk.prototype, 'read')
     mockGetObject.mockRejectedValue({
       $metadata: {
         httpStatusCode: 304,
@@ -256,7 +256,12 @@ describe('testing public bucket functionality', () => {
       },
     })
     expect(notModifiedResponse.statusCode).toBe(304)
-    expect(mockGetObject.mock.calls[1][3]).toMatchObject({
+
+    const toMatch = mockGetObject.mock.calls[1][0] as any
+    expect({
+      ifModifiedSince: toMatch.headers.ifModifiedSince,
+      ifNoneMatch: toMatch.headers.ifNoneMatch,
+    }).toMatchObject({
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })

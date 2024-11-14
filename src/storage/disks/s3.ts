@@ -17,79 +17,107 @@ import {
 import { Progress, Upload } from '@aws-sdk/lib-storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import {
-  StorageBackendAdapter,
-  BrowserCacheHeaders,
+  StorageDisk,
   ObjectMetadata,
   ObjectResponse,
   withOptionalVersion,
-  UploadPart,
+  ReadParams,
+  UploadObjectParams,
+  DeleteObjectParams,
+  CopyObjectParams,
+  DeleteObjectsParams,
+  HeadObjectParams,
+  PrivateAssetUrlParams,
+  CreateMultiPartUploadParams,
+  UploadPartParams,
+  CompleteMultipartUploadParams,
+  AbortMultipartUploadParams,
+  UploadPartCopyParams,
+  DiskAdapterOptions,
 } from './adapter'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { getConfig } from '../../config'
-import { Readable } from 'node:stream'
-import { createAgent, InstrumentedAgent } from '@internal/http'
+import { createAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
 
 const { tracingFeatures, storageS3MaxSockets, tracingEnabled } = getConfig()
 
-export interface S3ClientOptions {
-  endpoint?: string
-  region?: string
-  forcePathStyle?: boolean
-  accessKey?: string
-  secretKey?: string
-  role?: string
-  httpAgent?: InstrumentedAgent
+export interface S3DiskOptions extends DiskAdapterOptions {
+  client: S3Client
   requestTimeout?: number
+}
+
+export interface S3Credentials {
+  name: string
+  region: string
+  endpoint?: string
+  forcePathStyle?: boolean
+  requestTimeout?: number
+}
+
+export function createS3Client(options: S3Credentials): S3Client {
+  const agent = createAgent(options.name, {
+    maxSockets: storageS3MaxSockets,
+  })
+
+  const params: S3ClientConfig = {
+    region: options.region,
+    runtime: 'node',
+    requestHandler: new NodeHttpHandler({
+      httpAgent: agent?.httpAgent,
+      httpsAgent: agent?.httpsAgent,
+      connectionTimeout: 5000,
+      requestTimeout: options.requestTimeout,
+    }),
+  }
+  if (options.endpoint) {
+    params.endpoint = options.endpoint
+  }
+  if (options.forcePathStyle) {
+    params.forcePathStyle = true
+  }
+
+  if (agent && tracingEnabled) {
+    agent.monitor()
+  }
+
+  return new S3Client(params)
 }
 
 /**
  * S3Backend
  * Interacts with a s3-compatible file system with this S3Adapter
  */
-export class S3Backend implements StorageBackendAdapter {
+export class S3Disk implements StorageDisk {
   client: S3Client
-  agent: InstrumentedAgent
+  mountBucket: string
+  prefix?: string
 
-  constructor(options: S3ClientOptions) {
-    this.agent =
-      options.httpAgent ??
-      createAgent('s3_default', {
-        maxSockets: storageS3MaxSockets,
-      })
+  constructor(protected readonly options: S3DiskOptions) {
+    this.client = options.client
+    this.mountBucket = options.mountPoint
+    this.prefix = options.prefix
+  }
 
-    if (this.agent.httpsAgent && tracingEnabled) {
-      this.agent.monitor()
-    }
-
-    // Default client for API operations
-    this.client = this.createS3Client({
-      ...options,
-      name: 's3_default',
-      httpAgent: this.agent,
+  withPrefix(prefix: string) {
+    return new S3Disk({
+      ...this.options,
+      prefix,
     })
   }
 
   /**
    * Gets an object body and metadata
-   * @param bucketName
-   * @param key
-   * @param version
-   * @param headers
-   * @param signal
+   * @param params
    */
-  async getObject(
-    bucketName: string,
-    key: string,
-    version: string | undefined,
-    headers?: BrowserCacheHeaders,
-    signal?: AbortSignal
-  ): Promise<ObjectResponse> {
+  async read(params: ReadParams): Promise<ObjectResponse> {
+    const { bucketName, key, version, headers, signal } = params
+
     const input: GetObjectCommandInput = {
-      Bucket: bucketName,
+      Bucket: this.mountBucket,
       IfNoneMatch: headers?.ifNoneMatch,
-      Key: withOptionalVersion(key, version),
+      Key: this.makeObjectKey(bucketName, key, version),
       Range: headers?.range,
     }
     if (headers?.ifModifiedSince) {
@@ -118,23 +146,11 @@ export class S3Backend implements StorageBackendAdapter {
 
   /**
    * Uploads and store an object
-   * @param bucketName
-   * @param key
-   * @param version
-   * @param body
-   * @param contentType
-   * @param cacheControl
-   * @param signal
+   * @param params
    */
-  async uploadObject(
-    bucketName: string,
-    key: string,
-    version: string | undefined,
-    body: Readable,
-    contentType: string,
-    cacheControl: string,
-    signal?: AbortSignal
-  ): Promise<ObjectMetadata> {
+  async save(params: UploadObjectParams): Promise<ObjectMetadata> {
+    const { bucketName, key, version, body, contentType, cacheControl, signal } = params
+
     if (signal?.aborted) {
       throw ERRORS.Aborted('Upload was aborted')
     }
@@ -144,8 +160,8 @@ export class S3Backend implements StorageBackendAdapter {
     const upload = new Upload({
       client: this.client,
       params: {
-        Bucket: bucketName,
-        Key: withOptionalVersion(key, version),
+        Bucket: this.mountBucket,
+        Key: this.makeObjectKey(bucketName, key, version),
         Body: dataStream,
         ContentType: contentType,
         CacheControl: cacheControl,
@@ -168,7 +184,7 @@ export class S3Backend implements StorageBackendAdapter {
 
     try {
       const data = await upload.done()
-      const metadata = await this.headObject(bucketName, key, version)
+      const metadata = await this.info({ bucket: bucketName, key, version })
 
       return {
         httpStatusCode: data.$metadata.httpStatusCode || metadata.httpStatusCode,
@@ -190,47 +206,36 @@ export class S3Backend implements StorageBackendAdapter {
 
   /**
    * Deletes an object
-   * @param bucket
-   * @param key
-   * @param version
+   * @param params
    */
-  async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
+  async delete(params: DeleteObjectParams): Promise<void> {
+    const { bucket, key, version } = params
+
     const command = new DeleteObjectCommand({
-      Bucket: bucket,
-      Key: withOptionalVersion(key, version),
+      Bucket: this.mountBucket,
+      Key: this.makeObjectKey(bucket, key, version),
     })
     await this.client.send(command)
   }
 
   /**
    * Copies an existing object to the given location
-   * @param bucket
-   * @param source
-   * @param version
-   * @param destination
-   * @param destinationVersion
-   * @param metadata
-   * @param conditions
+   * @param params
    */
-  async copyObject(
-    bucket: string,
-    source: string,
-    version: string | undefined,
-    destination: string,
-    destinationVersion: string | undefined,
-    metadata?: { cacheControl?: string; mimetype?: string },
-    conditions?: {
-      ifMatch?: string
-      ifNoneMatch?: string
-      ifModifiedSince?: Date
-      ifUnmodifiedSince?: Date
-    }
+  async copy(
+    params: CopyObjectParams
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
+    const { source, destination, metadata, conditions } = params
+
     try {
       const command = new CopyObjectCommand({
-        Bucket: bucket,
-        CopySource: `${bucket}/${withOptionalVersion(source, version)}`,
-        Key: withOptionalVersion(destination, destinationVersion),
+        Bucket: this.mountBucket,
+        Key: this.makeObjectKey(destination.bucket, destination.key, destination.version),
+        CopySource: `${this.mountBucket}/${this.makeObjectKey(
+          source.bucket,
+          source.key,
+          source.version
+        )}`,
         CopySourceIfMatch: conditions?.ifMatch,
         CopySourceIfNoneMatch: conditions?.ifNoneMatch,
         CopySourceIfModifiedSince: conditions?.ifModifiedSince,
@@ -244,26 +249,26 @@ export class S3Backend implements StorageBackendAdapter {
         eTag: data.CopyObjectResult?.ETag || '',
         lastModified: data.CopyObjectResult?.LastModified,
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       throw StorageBackendError.fromError(e)
     }
   }
 
   /**
    * Deletes multiple objects
-   * @param bucket
-   * @param prefixes
+   * @param params
    */
-  async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
+  async deleteMany(params: DeleteObjectsParams): Promise<void> {
+    const { keys, bucket } = params
     try {
-      const s3Prefixes = prefixes.map((ele) => {
-        return { Key: ele }
+      const s3Keys = keys.map((ele) => {
+        return { Key: `${bucket}/${ele}` }
       })
 
       const command = new DeleteObjectsCommand({
-        Bucket: bucket,
+        Bucket: this.mountBucket,
         Delete: {
-          Objects: s3Prefixes,
+          Objects: s3Keys,
         },
       })
       await this.client.send(command)
@@ -274,19 +279,14 @@ export class S3Backend implements StorageBackendAdapter {
 
   /**
    * Returns metadata information of a specific object
-   * @param bucket
-   * @param key
-   * @param version
+   * @param params
    */
-  async headObject(
-    bucket: string,
-    key: string,
-    version: string | undefined
-  ): Promise<ObjectMetadata> {
+  async info(params: HeadObjectParams): Promise<ObjectMetadata> {
+    const { bucket, key, version } = params
     try {
       const command = new HeadObjectCommand({
-        Bucket: bucket,
-        Key: withOptionalVersion(key, version),
+        Bucket: this.mountBucket,
+        Key: this.makeObjectKey(bucket, key, version),
       })
       const data = await this.client.send(command)
       return {
@@ -298,37 +298,31 @@ export class S3Backend implements StorageBackendAdapter {
         httpStatusCode: data.$metadata.httpStatusCode || 200,
         size: data.ContentLength || 0,
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       throw StorageBackendError.fromError(e)
     }
   }
 
   /**
    * Returns a private url that can only be accessed internally by the system
-   * @param bucket
-   * @param key
-   * @param version
+   * @param params
    */
-  async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
+  async privateAssetUrl(params: PrivateAssetUrlParams): Promise<string> {
+    const { bucket, key, version } = params
     const input: GetObjectCommandInput = {
-      Bucket: bucket,
-      Key: withOptionalVersion(key, version),
+      Bucket: this.mountBucket,
+      Key: this.makeObjectKey(bucket, key, version),
     }
 
     const command = new GetObjectCommand(input)
     return getSignedUrl(this.client, command, { expiresIn: 600 })
   }
 
-  async createMultiPartUpload(
-    bucketName: string,
-    key: string,
-    version: string | undefined,
-    contentType: string,
-    cacheControl: string
-  ) {
+  async createMultiPartUpload(params: CreateMultiPartUploadParams) {
+    const { bucketName, key, version, cacheControl, contentType } = params
     const createMultiPart = new CreateMultipartUploadCommand({
-      Bucket: bucketName,
-      Key: withOptionalVersion(key, version),
+      Bucket: this.mountBucket,
+      Key: this.makeObjectKey(bucketName, key, version),
       CacheControl: cacheControl,
       ContentType: contentType,
       Metadata: {
@@ -345,20 +339,12 @@ export class S3Backend implements StorageBackendAdapter {
     return resp.UploadId
   }
 
-  async uploadPart(
-    bucketName: string,
-    key: string,
-    version: string,
-    uploadId: string,
-    partNumber: number,
-    body?: string | Uint8Array | Buffer | Readable,
-    length?: number,
-    signal?: AbortSignal
-  ) {
+  async uploadPart(params: UploadPartParams) {
+    const { bucketName, key, version, uploadId, partNumber, body, length, signal } = params
     try {
       const paralellUploadS3 = new UploadPartCommand({
-        Bucket: bucketName,
-        Key: `${key}/${version}`,
+        Bucket: this.mountBucket,
+        Key: this.makeObjectKey(bucketName, key, version),
         UploadId: uploadId,
         PartNumber: partNumber,
         Body: body,
@@ -382,19 +368,19 @@ export class S3Backend implements StorageBackendAdapter {
     }
   }
 
-  async completeMultipartUpload(
-    bucketName: string,
-    key: string,
-    uploadId: string,
-    version: string,
-    parts: UploadPart[]
-  ) {
+  async completeMultipartUpload({
+    bucketName,
+    key,
+    uploadId,
+    version,
+    parts,
+  }: CompleteMultipartUploadParams) {
     const keyParts = key.split('/')
 
     if (parts.length === 0) {
       const listPartsInput = new ListPartsCommand({
-        Bucket: bucketName,
-        Key: key + '/' + version,
+        Bucket: this.mountBucket,
+        Key: this.makeObjectKey(bucketName, key, version),
         UploadId: uploadId,
       })
 
@@ -403,8 +389,8 @@ export class S3Backend implements StorageBackendAdapter {
     }
 
     const completeUpload = new CompleteMultipartUploadCommand({
-      Bucket: bucketName,
-      Key: key + '/' + version,
+      Bucket: this.mountBucket,
+      Key: this.makeObjectKey(bucketName, key, version),
       UploadId: uploadId,
       MultipartUpload:
         parts.length === 0
@@ -428,32 +414,38 @@ export class S3Backend implements StorageBackendAdapter {
     }
   }
 
-  async abortMultipartUpload(bucketName: string, key: string, uploadId: string): Promise<void> {
+  /**
+   * Aborts a multipart upload
+   * @param params
+   */
+  async abortMultipartUpload(params: AbortMultipartUploadParams): Promise<void> {
+    const { bucketName, key, uploadId } = params
     const abortUpload = new AbortMultipartUploadCommand({
-      Bucket: bucketName,
-      Key: key,
+      Bucket: this.mountBucket,
+      Key: this.makeObjectKey(bucketName, key),
       UploadId: uploadId,
     })
     await this.client.send(abortUpload)
   }
 
-  async uploadPartCopy(
-    storageS3Bucket: string,
-    key: string,
-    version: string,
-    UploadId: string,
-    PartNumber: number,
-    sourceKey: string,
-    sourceKeyVersion?: string,
-    bytesRange?: { fromByte: number; toByte: number }
-  ) {
+  /**
+   * Uploads a part from an existing object
+   * @param params
+   */
+  async uploadPartCopy(params: UploadPartCopyParams) {
+    const { source, destination, UploadId, PartNumber, bytes } = params
+
     const uploadPartCopy = new UploadPartCopyCommand({
-      Bucket: storageS3Bucket,
-      Key: withOptionalVersion(key, version),
+      Bucket: this.mountBucket,
+      Key: this.makeObjectKey(destination.bucket, destination.key, destination.version),
       UploadId,
       PartNumber,
-      CopySource: `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceKeyVersion)}`,
-      CopySourceRange: bytesRange ? `bytes=${bytesRange.fromByte}-${bytesRange.toByte}` : undefined,
+      CopySource: `${this.mountBucket}/${this.makeObjectKey(
+        source.bucket,
+        source.key,
+        source.version
+      )}`,
+      CopySourceRange: bytes ? `bytes=${bytes.fromByte}-${bytes.toByte}` : undefined,
     })
 
     const part = await this.client.send(uploadPartCopy)
@@ -464,27 +456,19 @@ export class S3Backend implements StorageBackendAdapter {
     }
   }
 
+  /**
+   * Closes the agent
+   */
   close() {
-    this.agent.close()
+    this.client.destroy()
   }
 
-  protected createS3Client(options: S3ClientOptions & { name: string }) {
-    const params: S3ClientConfig = {
-      region: options.region,
-      runtime: 'node',
-      requestHandler: new NodeHttpHandler({
-        httpAgent: options.httpAgent?.httpAgent,
-        httpsAgent: options.httpAgent?.httpsAgent,
-        connectionTimeout: 5000,
-        requestTimeout: options.requestTimeout,
-      }),
+  protected makeObjectKey(bucket: string, key: string, version?: string) {
+    const keyPath = `${bucket}/${withOptionalVersion(key, version)}`
+
+    if (this.prefix) {
+      return `${this.prefix}/${keyPath}`
     }
-    if (options.endpoint) {
-      params.endpoint = options.endpoint
-    }
-    if (options.forcePathStyle) {
-      params.forcePathStyle = true
-    }
-    return new S3Client(params)
+    return keyPath
   }
 }

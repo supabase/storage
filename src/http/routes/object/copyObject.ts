@@ -53,9 +53,14 @@ export default async function routes(fastify: FastifyInstance) {
       const destinationBucketId = destinationBucket || bucketId
 
       const result = await request.storage.from(bucketId).copyObject({
-        sourceKey,
-        destinationBucket: destinationBucketId,
-        destinationKey,
+        source: {
+          bucket: bucketId,
+          key: sourceKey,
+        },
+        destination: {
+          bucket: destinationBucketId,
+          key: destinationKey,
+        },
         owner: request.owner,
         copyMetadata: request.body.copyMetadata ?? true,
       })

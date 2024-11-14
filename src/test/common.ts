@@ -1,6 +1,6 @@
 import { HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import app from '../admin-app'
-import { S3Backend } from '../storage/backend'
+import { S3Disk } from '../storage/disks'
 import { Queue } from '@internal/queue'
 import { isS3Error } from '@internal/errors'
 
@@ -32,7 +32,7 @@ export function useMockObject() {
     process.env = { ...ENV }
 
     jest.clearAllMocks()
-    jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
+    jest.spyOn(S3Disk.prototype, 'read').mockResolvedValue({
       metadata: {
         httpStatusCode: 200,
         size: 3746,
@@ -46,7 +46,7 @@ export function useMockObject() {
       body: Buffer.from(''),
     })
 
-    jest.spyOn(S3Backend.prototype, 'uploadObject').mockResolvedValue({
+    jest.spyOn(S3Disk.prototype, 'save').mockResolvedValue({
       httpStatusCode: 200,
       size: 3746,
       mimetype: 'image/png',
@@ -56,17 +56,17 @@ export function useMockObject() {
       contentLength: 3746,
     })
 
-    jest.spyOn(S3Backend.prototype, 'copyObject').mockResolvedValue({
+    jest.spyOn(S3Disk.prototype, 'copy').mockResolvedValue({
       httpStatusCode: 200,
       lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
       eTag: 'abc',
     })
 
-    jest.spyOn(S3Backend.prototype, 'deleteObject').mockResolvedValue()
+    jest.spyOn(S3Disk.prototype, 'delete').mockResolvedValue()
 
-    jest.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue()
+    jest.spyOn(S3Disk.prototype, 'deleteMany').mockResolvedValue()
 
-    jest.spyOn(S3Backend.prototype, 'headObject').mockResolvedValue({
+    jest.spyOn(S3Disk.prototype, 'info').mockResolvedValue({
       httpStatusCode: 200,
       size: 3746,
       mimetype: 'image/png',
@@ -76,7 +76,7 @@ export function useMockObject() {
       contentLength: 3746,
     })
 
-    jest.spyOn(S3Backend.prototype, 'privateAssetUrl').mockResolvedValue('local:///data/sadcat.jpg')
+    jest.spyOn(S3Disk.prototype, 'privateAssetUrl').mockResolvedValue('local:///data/sadcat.jpg')
   })
 
   afterEach(() => {

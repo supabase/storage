@@ -1,5 +1,5 @@
 import { Bucket, S3MultipartUpload, Obj, S3PartUpload } from '../schemas'
-import { ObjectMetadata } from '../backend'
+import { ObjectMetadata } from '../disks'
 import { DBMigration, TenantConnection } from '@internal/database'
 
 export interface SearchObjectOption {

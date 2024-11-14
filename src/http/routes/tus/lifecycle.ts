@@ -106,7 +106,7 @@ export function generateUrl(
     const port = req.headers['x-forwarded-port']
 
     if (typeof port === 'string' && port && !['443', '80'].includes(port)) {
-      if (!host.includes(':')) {
+      if (!host.includes(':') && !host.includes('/')) {
         host += `:${req.headers['x-forwarded-port']}`
       } else {
         host = host.replace(/:\d+$/, `:${req.headers['x-forwarded-port']}`)

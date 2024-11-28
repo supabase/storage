@@ -49,7 +49,7 @@ export const db = fastifyPlugin(
         headers: request.headers,
         path: request.url,
         method: request.method,
-        operation: request.operation?.type,
+        operation: () => request.operation?.type,
       })
     })
 
@@ -111,6 +111,7 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
         method: request.method,
         headers: request.headers,
         disableHostCheck: opts.disableHostCheck,
+        operation: () => request.operation?.type,
       })
     })
 

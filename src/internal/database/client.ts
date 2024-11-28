@@ -12,7 +12,7 @@ interface ConnectionOptions {
   user: User
   superUser: User
   disableHostCheck?: boolean
-  operation?: string
+  operation?: () => string | undefined
 }
 
 /**

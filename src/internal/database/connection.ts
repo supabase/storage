@@ -34,7 +34,7 @@ interface TenantConnectionOptions {
   headers?: Record<string, string | undefined | string[]>
   method?: string
   path?: string
-  operation?: string
+  operation?: () => string | undefined
 }
 
 export interface User {
@@ -252,7 +252,7 @@ export class TenantConnection {
         headers,
         this.options.method || '',
         this.options.path || '',
-        this.options.operation || '',
+        this.options.operation?.() || '',
       ]
     )
   }

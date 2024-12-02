@@ -17,7 +17,7 @@ export const jsonToXml = fastifyPlugin(
 
     if (!opts.disableContentParser) {
       fastify.register(xmlBodyParser, {
-        contentType: ['text/xml', 'application/xml', '*'],
+        contentType: ['text/xml', 'application/xml'],
         isArray: (_: string, jpath: string) => {
           return opts.parseAsArray?.includes(jpath)
         },

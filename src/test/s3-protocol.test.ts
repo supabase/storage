@@ -30,6 +30,8 @@ import { Upload } from '@aws-sdk/lib-storage'
 import { ReadableStreamBuffer } from 'stream-buffers'
 import { randomUUID } from 'crypto'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import axios from 'axios'
+import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
 
 const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
 
@@ -367,6 +369,34 @@ describe('S3 Protocol', () => {
         expect(objectsPage3.CommonPrefixes?.length).toBe(undefined)
         expect(objectsPage3.Contents?.[0].Key).toBe('test-1.jpg')
         expect(objectsPage3.IsTruncated).toBe(false)
+      })
+    })
+
+    describe('MultiPart Form Data Upload', () => {
+      it('can upload using multipart/form-data', async () => {
+        const bucketName = await createBucket(client)
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          Key: 'test.jpg',
+          Expires: 5000,
+          Fields: {
+            'Content-Type': 'image/jpg',
+          },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+
+        const data = Buffer.alloc(1024 * 1024)
+        formData.set('file', new Blob([data]), 'test.jpg')
+
+        const resp = await axios.post(signedURL.url, formData, {
+          validateStatus: () => true,
+        })
+
+        expect(resp.status).toBe(200)
       })
     })
 

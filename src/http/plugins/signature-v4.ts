@@ -6,6 +6,7 @@ import { signJWT, verifyJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
 
 import { getConfig } from '../../config'
+import { MultipartFile } from '@fastify/multipart'
 
 const {
   anonKey,
@@ -25,10 +26,16 @@ const {
 
 type AWSRequest = FastifyRequest<{ Querystring: { 'X-Amz-Credential'?: string } }>
 
+declare module 'fastify' {
+  interface FastifyRequest {
+    multiPartFileStream?: MultipartFile
+  }
+}
+
 export const signatureV4 = fastifyPlugin(
   async function (fastify: FastifyInstance) {
     fastify.addHook('preHandler', async (request: AWSRequest) => {
-      const clientSignature = extractSignature(request)
+      const clientSignature = await extractSignature(request)
 
       const sessionToken = clientSignature.sessionToken
 
@@ -101,13 +108,35 @@ export const signatureV4 = fastifyPlugin(
   { name: 'auth-signature-v4' }
 )
 
-function extractSignature(req: AWSRequest) {
+async function extractSignature(req: AWSRequest) {
   if (typeof req.headers.authorization === 'string') {
     return SignatureV4.parseAuthorizationHeader(req.headers)
   }
 
   if (typeof req.query['X-Amz-Credential'] === 'string') {
     return SignatureV4.parseQuerySignature(req.query)
+  }
+
+  if (typeof req.isMultipart === 'function' && req.isMultipart()) {
+    const formData = new FormData()
+    const data = await req.file({
+      limits: {
+        fields: 20,
+        files: 1,
+      },
+    })
+
+    const fields = data?.fields
+    if (fields) {
+      for (const key in fields) {
+        if (fields.hasOwnProperty(key) && (fields[key] as any).fieldname !== 'file') {
+          formData.append(key, (fields[key] as any).value)
+        }
+      }
+    }
+    // Assign the multipartFileStream for later use
+    req.multiPartFileStream = data
+    return SignatureV4.parseMultipartSignature(formData)
   }
 
   throw ERRORS.AccessDenied('Missing signature')

@@ -3,6 +3,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
 import { ROUTE_OPERATIONS } from '../operations'
 import fastifyMultipart from '@fastify/multipart'
+import { fileUploadFromRequest } from '@storage/uploader'
 
 const createObjectParamsSchema = {
   type: 'object',
@@ -72,15 +73,15 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
 
       const isUpsert = request.headers['x-upsert'] === 'true'
-      const owner = request.owner as string
+      const owner = request.owner
 
       const { objectMetadata, path, id } = await request.storage
         .from(bucketName)
-        .uploadNewObject(request, {
+        .uploadFromRequest(request, {
           objectName,
-          owner,
-          isUpsert,
           signal: request.signals.body.signal,
+          owner: owner,
+          isUpsert,
         })
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({

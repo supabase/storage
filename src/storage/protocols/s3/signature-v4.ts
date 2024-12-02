@@ -15,6 +15,10 @@ export interface ClientSignature {
   sessionToken?: string
   longDate: string
   contentSha?: string
+  policy?: {
+    raw: string
+    value: Policy
+  }
 }
 
 interface SignatureRequest {
@@ -31,6 +35,26 @@ interface Credentials {
   shortDate: string
   region: string
   service: string
+}
+
+export interface Policy {
+  expiration: string
+  conditions: PolicyConditions
+}
+
+interface PolicyConditions {
+  policies: PolicyEntry[]
+  contentLengthRange: {
+    min: number
+    max: number
+    valid: boolean
+  }
+}
+
+interface PolicyEntry {
+  operator: string
+  key: string
+  value: string
 }
 
 /**
@@ -145,6 +169,44 @@ export class SignatureV4 {
     }
   }
 
+  static parseMultipartSignature(form: FormData) {
+    const credentialPart = form.get('X-Amz-Credential') as string
+    const signature = form.get('X-Amz-Signature') as string
+    const longDate = form.get('X-Amz-Date') as string
+    const contentSha = form.get('X-Amz-Content-Sha256') as string
+    const sessionToken = form.get('X-Amz-Security-Token') as string
+    const policy = form.get('Policy') as string
+
+    if (!validateTypeOfStrings(credentialPart, signature, policy, longDate)) {
+      throw ERRORS.InvalidSignature('Invalid signature format')
+    }
+
+    const xPolicy: Policy = JSON.parse(Buffer.from(policy, 'base64').toString('utf-8'))
+
+    if (xPolicy.expiration) {
+      this.checkExpiration(longDate, xPolicy.expiration)
+    }
+
+    const credentialsPart = credentialPart.split('/') as string[]
+    if (credentialsPart.length !== 5) {
+      throw ERRORS.InvalidSignature('Invalid credentials')
+    }
+
+    const [accessKey, shortDate, region, service] = credentialsPart
+    return {
+      credentials: { accessKey, shortDate, region, service },
+      signedHeaders: [],
+      signature,
+      longDate,
+      contentSha,
+      sessionToken,
+      policy: {
+        raw: policy,
+        value: xPolicy,
+      },
+    }
+  }
+
   protected static checkExpiration(longDate: string, expires: string) {
     const expiresSec = parseInt(expires, 10)
     if (isNaN(expiresSec) || expiresSec < 0) {
@@ -181,11 +243,44 @@ export class SignatureV4 {
    * @param request
    */
   verify(clientSignature: ClientSignature, request: SignatureRequest) {
+    if (typeof clientSignature.policy?.raw === 'string') {
+      return this.verifyPostPolicySignature(clientSignature, clientSignature.policy.raw)
+    }
+
     const serverSignature = this.sign(clientSignature, request)
     return crypto.timingSafeEqual(
       Buffer.from(clientSignature.signature),
       Buffer.from(serverSignature.signature)
     )
+  }
+
+  /**
+   * Verifies signature for POST upload requests
+   * @param clientSignature
+   * @param policy
+   */
+  verifyPostPolicySignature(clientSignature: ClientSignature, policy: string) {
+    const serverSignature = this.signPostPolicy(clientSignature, policy)
+    return crypto.timingSafeEqual(
+      Buffer.from(clientSignature.signature),
+      Buffer.from(serverSignature)
+    )
+  }
+
+  signPostPolicy(clientSignature: ClientSignature, policy: string) {
+    const serverCredentials = this.serverCredentials
+
+    this.validateCredentials(clientSignature.credentials)
+    const selectedRegion = this.getSelectedRegion(clientSignature.credentials.region)
+
+    const signingKey = this.signingKey(
+      serverCredentials.secretKey,
+      clientSignature.credentials.shortDate,
+      selectedRegion,
+      serverCredentials.service
+    )
+
+    return this.hmac(signingKey, policy).toString('hex')
   }
 
   /**

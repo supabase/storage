@@ -4,6 +4,7 @@ import { trace } from '@opentelemetry/api'
 import { db, jsonToXml, signatureV4, storage } from '../../plugins'
 import { findArrayPathsInSchemas, getRouter, RequestInput } from './router'
 import { s3ErrorHandler } from './error-handler'
+import fastifyMultipart from '@fastify/multipart'
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(async (fastify) => {
@@ -97,28 +98,26 @@ export default async function routes(fastify: FastifyInstance) {
         }
 
         fastify.register(async (localFastify) => {
-          const disableContentParser = routesByMethod?.some(
-            (route) => route.disableContentTypeParser
-          )
+          // const disableContentParser = routesByMethod?.some(
+          //   (route) => route.disableContentTypeParser
+          // )
 
-          if (disableContentParser) {
-            localFastify.addContentTypeParser(
-              ['application/json', 'text/plain', 'application/xml'],
-              function (request, payload, done) {
-                done(null)
-              }
-            )
-          }
+          localFastify.register(fastifyMultipart, {
+            limits: {
+              fields: 20,
+              files: 1,
+            },
+            throwFileSizeLimit: false,
+          })
 
-          fastify.register(jsonToXml, {
-            disableContentParser,
+          localFastify.register(jsonToXml, {
             parseAsArray: findArrayPathsInSchemas(
               routesByMethod.filter((r) => r.schema.Body).map((r) => r.schema.Body as JSONSchema)
             ),
           })
-          fastify.register(signatureV4)
-          fastify.register(db)
-          fastify.register(storage)
+          localFastify.register(signatureV4)
+          localFastify.register(db)
+          localFastify.register(storage)
 
           localFastify[method](
             routePath,

@@ -1,13 +1,12 @@
-import { FastifyRequest } from 'fastify'
 import { randomUUID } from 'node:crypto'
 import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
 import { getJwtSecret } from '@internal/database'
 
-import { StorageBackendAdapter, ObjectMetadata, withOptionalVersion } from './backend'
+import { ObjectMetadata, StorageBackendAdapter, withOptionalVersion } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
-import { Uploader } from './uploader'
+import { fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
 import { getConfig } from '../config'
 import {
   ObjectAdminDelete,
@@ -17,14 +16,7 @@ import {
   ObjectRemovedMove,
   ObjectUpdatedMetadata,
 } from './events'
-
-export interface UploadObjectOptions {
-  objectName: string
-  owner?: string
-  isUpsert?: boolean
-  version?: string
-  signal?: AbortSignal
-}
+import { FastifyRequest } from 'fastify/types/request'
 
 const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
 
@@ -39,7 +31,7 @@ interface CopyObjectParams {
     cacheControl?: string
     mimetype?: string
   }
-  userMetadata?: Record<string, any>
+  userMetadata?: Record<string, unknown>
   conditions?: {
     ifMatch?: string
     ifNoneMatch?: string
@@ -71,54 +63,46 @@ export class ObjectStorage {
     return new ObjectStorage(this.backend, this.db.asSuperUser(), this.bucketId)
   }
 
+  async uploadFromRequest(
+    request: FastifyRequest,
+    file: {
+      objectName: string
+      owner?: string
+      isUpsert: boolean
+      signal?: AbortSignal
+    }
+  ) {
+    const bucket = await this.db
+      .asSuperUser()
+      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
+
+    const uploadRequest = await fileUploadFromRequest(request, {
+      objectName: file.objectName,
+      fileSizeLimit: bucket.file_size_limit,
+      allowedMimeTypes: bucket.allowed_mime_types || [],
+    })
+
+    return this.uploadNewObject({
+      file: uploadRequest,
+      objectName: file.objectName,
+      owner: file.owner,
+      isUpsert: Boolean(file.isUpsert),
+      signal: file.signal,
+    })
+  }
+
   /**
    * Upload a new object to a storage
    * @param request
-   * @param options
    */
-  async uploadNewObject(request: FastifyRequest, options: UploadObjectOptions) {
-    mustBeValidKey(options.objectName)
+  async uploadNewObject(request: Omit<UploadRequest, 'bucketId' | 'uploadType'>) {
+    mustBeValidKey(request.objectName)
 
-    const path = `${this.bucketId}/${options.objectName}`
+    const path = `${this.bucketId}/${request.objectName}`
 
-    const bucket = await this.db
-      .asSuperUser()
-      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
-
-    const { metadata, obj } = await this.uploader.upload(request, {
-      ...options,
+    const { metadata, obj } = await this.uploader.upload({
+      ...request,
       bucketId: this.bucketId,
-      fileSizeLimit: bucket.file_size_limit,
-      allowedMimeTypes: bucket.allowed_mime_types,
-      uploadType: 'standard',
-    })
-
-    return { objectMetadata: metadata, path, id: obj.id }
-  }
-
-  public async uploadOverridingObject(request: FastifyRequest, options: UploadObjectOptions) {
-    mustBeValidKey(options.objectName)
-
-    const path = `${this.bucketId}/${options.objectName}`
-
-    const bucket = await this.db
-      .asSuperUser()
-      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
-
-    await this.db.testPermission((db) => {
-      return db.updateObject(this.bucketId, options.objectName, {
-        name: options.objectName,
-        owner: options.owner,
-        version: '1',
-      })
-    })
-
-    const { metadata, obj } = await this.uploader.upload(request, {
-      ...options,
-      bucketId: this.bucketId,
-      fileSizeLimit: bucket.file_size_limit,
-      allowedMimeTypes: bucket.allowed_mime_types,
-      isUpsert: true,
       uploadType: 'standard',
     })
 
@@ -294,8 +278,7 @@ export class ObjectStorage {
     mustBeValidKey(destinationKey)
 
     const newVersion = randomUUID()
-    const bucketId = this.bucketId
-    const s3SourceKey = `${this.db.tenantId}/${bucketId}/${sourceKey}`
+    const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceKey}`
     const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationKey}`
 
     // We check if the user has permission to copy the object to the destination key

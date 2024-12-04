@@ -108,6 +108,7 @@ type StorageConfigType = {
   tusPartSize: number
   tusUseFileVersionSeparator: boolean
   defaultMetricsEnabled: boolean
+  s3ProtocolEnabled: boolean
   s3ProtocolPrefix: string
   s3ProtocolAllowForwardedHeader: boolean
   s3ProtocolEnforceRegion: boolean
@@ -252,6 +253,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
 
     // S3 Protocol
+    s3ProtocolEnabled: getOptionalConfigFromEnv('S3_PROTOCOL_ENABLED') !== 'false',
     s3ProtocolPrefix: getOptionalConfigFromEnv('S3_PROTOCOL_PREFIX') || '',
     s3ProtocolAllowForwardedHeader:
       getOptionalConfigFromEnv('S3_ALLOW_FORWARDED_HEADER') === 'true',

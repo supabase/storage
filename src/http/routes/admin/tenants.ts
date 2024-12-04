@@ -1,7 +1,7 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import apiKey from '../../plugins/apikey'
-import { decrypt, encrypt } from '../../../internal/auth'
+import { decrypt, encrypt } from '@internal/auth'
 import {
   deleteTenantConfig,
   TenantMigrationStatus,
@@ -9,7 +9,7 @@ import {
   lastMigrationName,
   runMigrationsOnTenant,
   progressiveMigrations,
-} from '../../../internal/database'
+} from '@internal/database'
 import { dbSuperUser, storage } from '../../plugins'
 
 const patchSchema = {
@@ -33,6 +33,12 @@ const patchSchema = {
             properties: {
               enabled: { type: 'boolean' },
               maxResolution: { type: 'number', nullable: true },
+            },
+          },
+          s3Protocol: {
+            type: 'object',
+            properties: {
+              enabled: { type: 'boolean' },
             },
           },
         },
@@ -75,6 +81,7 @@ interface tenantDBInterface {
   } | null
   service_key: string
   file_size_limit?: number
+  feature_s3_protocol?: boolean
   feature_image_transformation?: boolean
   image_transformation_max_resolution?: number
 }
@@ -96,6 +103,7 @@ export default async function routes(fastify: FastifyInstance) {
         jwks,
         service_key,
         feature_image_transformation,
+        feature_s3_protocol,
         image_transformation_max_resolution,
         migrations_version,
         migrations_status,
@@ -118,6 +126,9 @@ export default async function routes(fastify: FastifyInstance) {
             enabled: feature_image_transformation,
             maxResolution: image_transformation_max_resolution,
           },
+          s3Protocol: {
+            enabled: feature_s3_protocol,
+          },
         },
       })
     )
@@ -137,6 +148,7 @@ export default async function routes(fastify: FastifyInstance) {
         jwt_secret,
         jwks,
         service_key,
+        feature_s3_protocol,
         feature_image_transformation,
         image_transformation_max_resolution,
         migrations_version,
@@ -162,6 +174,9 @@ export default async function routes(fastify: FastifyInstance) {
           imageTransformation: {
             enabled: feature_image_transformation,
             maxResolution: image_transformation_max_resolution,
+          },
+          s3Protocol: {
+            enabled: feature_s3_protocol,
           },
         },
         migrationVersion: migrations_version,
@@ -197,6 +212,7 @@ export default async function routes(fastify: FastifyInstance) {
       jwks,
       service_key: encrypt(serviceKey),
       feature_image_transformation: features?.imageTransformation?.enabled ?? false,
+      feature_s3_protocol: features?.s3Protocol?.enabled ?? true,
       migrations_version: null,
       migrations_status: null,
       tracing_mode: tracingMode,
@@ -250,6 +266,7 @@ export default async function routes(fastify: FastifyInstance) {
           jwks,
           service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
           feature_image_transformation: features?.imageTransformation?.enabled,
+          feature_s3_protocol: features?.s3Protocol?.enabled,
           image_transformation_max_resolution:
             features?.imageTransformation?.maxResolution === null
               ? null
@@ -313,6 +330,10 @@ export default async function routes(fastify: FastifyInstance) {
     if (typeof features?.imageTransformation?.maxResolution !== 'undefined') {
       tenantInfo.image_transformation_max_resolution = features?.imageTransformation
         ?.image_transformation_max_resolution as number | undefined
+    }
+
+    if (typeof features?.s3Protocol?.enabled !== 'undefined') {
+      tenantInfo.feature_s3_protocol = features?.s3Protocol?.enabled
     }
 
     if (databasePoolUrl) {

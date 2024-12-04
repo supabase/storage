@@ -26,6 +26,9 @@ beforeAll(async () => {
       imageTransformation: {
         enabled: true,
       },
+      s3Protocol: {
+        enabled: true,
+      },
     },
   }))
 

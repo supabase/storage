@@ -23,6 +23,9 @@ const payload = {
       enabled: true,
       maxResolution: null,
     },
+    s3Protocol: {
+      enabled: true,
+    },
   },
 }
 
@@ -42,6 +45,9 @@ const payload2 = {
     imageTransformation: {
       enabled: false,
       maxResolution: null,
+    },
+    s3Protocol: {
+      enabled: true,
     },
   },
 }

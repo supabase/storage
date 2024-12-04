@@ -41,6 +41,9 @@ export interface Features {
     enabled: boolean
     maxResolution?: number
   }
+  s3Protocol: {
+    enabled: boolean
+  }
 }
 
 export enum TenantMigrationStatus {
@@ -203,6 +206,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       jwks,
       service_key,
       feature_image_transformation,
+      feature_s3_protocol,
       image_transformation_max_resolution,
       database_pool_url,
       max_connections,
@@ -230,6 +234,9 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
         imageTransformation: {
           enabled: feature_image_transformation,
           maxResolution: image_transformation_max_resolution,
+        },
+        s3Protocol: {
+          enabled: feature_s3_protocol,
         },
       },
       migrationVersion: migrations_version,

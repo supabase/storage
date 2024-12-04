@@ -1,11 +1,18 @@
 import { FastifyInstance, RouteHandlerMethod } from 'fastify'
 import { JSONSchema } from 'json-schema-to-ts'
 import { trace } from '@opentelemetry/api'
-import { db, jsonToXml, signatureV4, storage } from '../../plugins'
+import { db, jsonToXml, requireTenantFeature, signatureV4, storage } from '../../plugins'
 import { findArrayPathsInSchemas, getRouter, RequestInput } from './router'
 import { s3ErrorHandler } from './error-handler'
+import { getConfig } from '../../../config'
+
+const { s3ProtocolEnabled } = getConfig()
 
 export default async function routes(fastify: FastifyInstance) {
+  if (!s3ProtocolEnabled) {
+    return
+  }
+
   fastify.register(async (fastify) => {
     const s3Router = getRouter()
     const s3Routes = s3Router.routes()
@@ -97,6 +104,8 @@ export default async function routes(fastify: FastifyInstance) {
         }
 
         fastify.register(async (localFastify) => {
+          localFastify.register(requireTenantFeature('s3Protocol'))
+
           const disableContentParser = routesByMethod?.some(
             (route) => route.disableContentTypeParser
           )

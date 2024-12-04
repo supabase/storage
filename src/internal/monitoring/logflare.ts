@@ -22,6 +22,9 @@ export default function () {
   return createLogFlareWriteStream({
     apiKey: logflareApiKey,
     sourceToken: logflareSourceToken,
+    onError: (err: Error) => {
+      console.error(`[Logflare][Error] ${err.message} - ${err.stack}`)
+    },
     onPreparePayload: (payload: any, meta: any) => {
       const item = defaultPreparePayload(payload, meta)
       item.project = payload.project

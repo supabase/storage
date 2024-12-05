@@ -37,12 +37,6 @@ export async function onIncomingRequest(
 ) {
   const req = rawReq as MultiPartRequest
 
-  res.on('finish', () => {
-    req.upload.db.dispose().catch((e) => {
-      req.log.error({ error: e }, 'Error disposing db connection')
-    })
-  })
-
   const uploadID = UploadId.fromString(id)
 
   req.upload.resources = [`${uploadID.bucket}/${uploadID.objectName}`]

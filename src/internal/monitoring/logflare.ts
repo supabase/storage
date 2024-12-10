@@ -22,6 +22,7 @@ export default function () {
   return createLogFlareWriteStream({
     apiKey: logflareApiKey,
     sourceToken: logflareSourceToken,
+    batchMaxSize: 100,
     onError: (err: Error) => {
       console.error(`[Logflare][Error] ${err.message} - ${err.stack}`)
     },

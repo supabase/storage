@@ -798,10 +798,7 @@ export class DBError extends StorageBackendError implements RenderableError {
   static fromDBError(pgError: DatabaseError, query?: string) {
     switch (pgError.code) {
       case '42501':
-        return ERRORS.AccessDenied(
-          'new row violates row-level security policy',
-          pgError
-        ).withMetadata({
+        return ERRORS.AccessDenied('Database error: insufficient privilege', pgError).withMetadata({
           query,
           code: pgError.code,
         })

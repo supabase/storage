@@ -52,40 +52,6 @@ export const db = fastifyPlugin(
         operation: () => request.operation?.type,
       })
     })
-
-    fastify.addHook('onSend', async (request, reply, payload) => {
-      if (request.db) {
-        request.db.dispose().catch((e) => {
-          logSchema.error(request.log, 'Error disposing db connection', {
-            type: 'db-connection',
-            error: e,
-          })
-        })
-      }
-      return payload
-    })
-
-    fastify.addHook('onTimeout', async (request) => {
-      if (request.db) {
-        request.db.dispose().catch((e) => {
-          logSchema.error(request.log, 'Error disposing db connection', {
-            type: 'db-connection',
-            error: e,
-          })
-        })
-      }
-    })
-
-    fastify.addHook('onRequestAbort', async (request) => {
-      if (request.db) {
-        request.db.dispose().catch((e) => {
-          logSchema.error(request.log, 'Error disposing db connection', {
-            type: 'db-connection',
-            error: e,
-          })
-        })
-      }
-    })
   },
   { name: 'db-init' }
 )
@@ -113,41 +79,6 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
         disableHostCheck: opts.disableHostCheck,
         operation: () => request.operation?.type,
       })
-    })
-
-    fastify.addHook('onSend', async (request, reply, payload) => {
-      if (request.db) {
-        request.db.dispose().catch((e) => {
-          logSchema.error(request.log, 'Error disposing db connection', {
-            type: 'db-connection',
-            error: e,
-          })
-        })
-      }
-
-      return payload
-    })
-
-    fastify.addHook('onTimeout', async (request) => {
-      if (request.db) {
-        request.db.dispose().catch((e) => {
-          logSchema.error(request.log, 'Error disposing db connection', {
-            type: 'db-connection',
-            error: e,
-          })
-        })
-      }
-    })
-
-    fastify.addHook('onRequestAbort', async (request) => {
-      if (request.db) {
-        request.db.dispose().catch((e) => {
-          logSchema.error(request.log, 'Error disposing db connection', {
-            type: 'db-connection',
-            error: e,
-          })
-        })
-      }
     })
   },
   { name: 'db-superuser-init' }

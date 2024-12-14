@@ -10,7 +10,7 @@ import { UploadId } from '@storage/protocols/tus'
 
 import { getConfig } from '../../../config'
 
-const { storageS3Bucket, tusPath, requestAllowXForwardedPrefix } = getConfig()
+const { storageS3Bucket, tusPath, requestAllowXForwardedPrefix, tusPort } = getConfig()
 const reExtractFileID = /([^/]+)\/?$/
 
 export const SIGNED_URL_SUFFIX = '/sign'
@@ -102,15 +102,13 @@ export function generateUrl(
   const isSigned = req.url?.endsWith(SIGNED_URL_SUFFIX)
   const fullPath = isSigned ? `${basePath}${SIGNED_URL_SUFFIX}` : basePath
 
-  if (req.headers['x-forwarded-host']) {
-    const port = req.headers['x-forwarded-port']
+  const port = tusPort || req.headers['x-forwarded-port']
 
-    if (typeof port === 'string' && port && !['443', '80'].includes(port)) {
-      if (!host.includes(':')) {
-        host += `:${req.headers['x-forwarded-port']}`
-      } else {
-        host = host.replace(/:\d+$/, `:${req.headers['x-forwarded-port']}`)
-      }
+  if (typeof port === 'string' && port && !['443', '80'].includes(port)) {
+    if (!host.includes(':')) {
+      host += `:${port}`
+    } else {
+      host = host.replace(/:\d+$/, `:${port}`)
     }
   }
 

@@ -122,6 +122,7 @@ type StorageConfigType = {
   tracingFeatures?: {
     upload: boolean
   }
+  tusPort?: string
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -251,6 +252,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     tusUseFileVersionSeparator:
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
+    tusPort: getOptionalConfigFromEnv('TUS_PORT'),
 
     // S3 Protocol
     s3ProtocolEnabled: getOptionalConfigFromEnv('S3_PROTOCOL_ENABLED') !== 'false',

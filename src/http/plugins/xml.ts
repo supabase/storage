@@ -6,6 +6,18 @@ import xml from 'xml2js'
 type XmlParserOptions = { disableContentParser?: boolean; parseAsArray?: string[] }
 type RequestError = Error & { statusCode?: number }
 
+function decodeXmlNumericCharacterReferences(value: string): string {
+  return value.replace(/&#([xX][0-9a-fA-F]{1,6}|[0-9]{1,7});/g, (match: string, rawValue: string) => {
+    const isHex = rawValue[0].toLowerCase() === 'x'
+    const codePoint = Number.parseInt(isHex ? rawValue.slice(1) : rawValue, isHex ? 16 : 10)
+    if (codePoint > 0x10ffff) {
+      return match
+    }
+
+    return String.fromCodePoint(codePoint)
+  })
+}
+
 function forcePathAsArray(node: unknown, pathSegments: string[]): void {
   if (pathSegments.length === 0 || node === null || node === undefined) {
     return
@@ -57,7 +69,11 @@ export const xmlParser = fastifyPlugin(
             {
               explicitArray: false,
               trim: true,
-              valueProcessors: [xml.processors.parseNumbers, xml.processors.parseBooleans],
+              valueProcessors: [
+                decodeXmlNumericCharacterReferences,
+                xml.processors.parseNumbers,
+                xml.processors.parseBooleans,
+              ],
             },
             (err: Error | null, parsed: unknown) => {
               if (err) {

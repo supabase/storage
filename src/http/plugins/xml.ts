@@ -21,6 +21,10 @@ export const xmlParser = fastifyPlugin(
         isArray: (_: string, jpath: string) => {
           return opts.parseAsArray?.includes(jpath)
         },
+        tagValueProcessor: (name: string, value: string) =>
+          value.replace(/&#x([0-9a-fA-F]{1,6});/g, (_, str: string) =>
+            String.fromCharCode(Number.parseInt(str, 16))
+          ),
       })
     }
 

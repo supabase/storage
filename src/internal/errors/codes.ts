@@ -265,7 +265,7 @@ export const ERRORS = {
       code: ErrorCode.InvalidKey,
       resource: key,
       httpStatusCode: 400,
-      message: `Invalid key: ${key}`,
+      message: `Invalid key: ${encodeURIComponent(key)}`,
       originalError: e,
     }),
 

@@ -32,6 +32,7 @@ import { randomUUID } from 'crypto'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import axios from 'axios'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
+import { getInvalidObjectName, getUnicodeObjectName } from './common'
 
 const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
 
@@ -1400,6 +1401,151 @@ describe('S3 Protocol', () => {
         const resp = await fetch(getUrl)
 
         expect(resp.ok).toBeTruthy()
+      })
+    })
+
+    describe('Object key names with Unicode characters', () => {
+      it('can be used with MultipartUpload commands', async () => {
+        const bucketName = await createBucket(client)
+        const objectName = getUnicodeObjectName()
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: objectName,
+          ContentType: 'image/jpg',
+          CacheControl: 'max-age=2000',
+        })
+        const createMultipartResp = await client.send(createMultiPartUpload)
+        expect(createMultipartResp.UploadId).toBeTruthy()
+        const uploadId = createMultipartResp.UploadId
+
+        const listMultipartUploads = new ListMultipartUploadsCommand({
+          Bucket: bucketName,
+        })
+        const listMultipartResp = await client.send(listMultipartUploads)
+        expect(listMultipartResp.Uploads?.length).toBe(1)
+        expect(listMultipartResp.Uploads?.[0].Key).toBe(objectName)
+
+        const data = Buffer.alloc(1024 * 1024 * 2)
+        const uploadPart = new UploadPartCommand({
+          Bucket: bucketName,
+          Key: objectName,
+          ContentLength: data.length,
+          UploadId: uploadId,
+          Body: data,
+          PartNumber: 1,
+        })
+        const uploadPartResp = await client.send(uploadPart)
+        expect(uploadPartResp.ETag).toBeTruthy()
+
+        const listParts = new ListPartsCommand({
+          Bucket: bucketName,
+          Key: objectName,
+          UploadId: uploadId,
+        })
+        const listPartsResp = await client.send(listParts)
+        expect(listPartsResp.Parts?.length).toBe(1)
+
+        const completeMultiPartUpload = new CompleteMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: objectName,
+          UploadId: uploadId,
+          MultipartUpload: {
+            Parts: [
+              {
+                PartNumber: 1,
+                ETag: uploadPartResp.ETag,
+              },
+            ],
+          },
+        })
+        const completeMultipartResp = await client.send(completeMultiPartUpload)
+        expect(completeMultipartResp.$metadata.httpStatusCode).toBe(200)
+        expect(completeMultipartResp.Key).toEqual(objectName)
+      })
+
+      it('can be used with Put, List, and Delete Object commands', async () => {
+        const bucketName = await createBucket(client)
+        const objectName = getUnicodeObjectName()
+        const putObject = new PutObjectCommand({
+          Bucket: bucketName,
+          Key: objectName,
+          Body: Buffer.alloc(1024 * 1024 * 1),
+        })
+        const putObjectResp = await client.send(putObject)
+        expect(putObjectResp.$metadata.httpStatusCode).toEqual(200)
+
+        const listObjects = new ListObjectsCommand({
+          Bucket: bucketName,
+        })
+        const listObjectsResp = await client.send(listObjects)
+        expect(listObjectsResp.Contents?.length).toBe(1)
+        expect(listObjectsResp.Contents?.[0].Key).toBe(objectName)
+
+        const listObjectsV2 = new ListObjectsV2Command({
+          Bucket: bucketName,
+        })
+        const listObjectsV2Resp = await client.send(listObjectsV2)
+        expect(listObjectsV2Resp.Contents?.length).toBe(1)
+        expect(listObjectsV2Resp.Contents?.[0].Key).toBe(objectName)
+
+        const getObject = new GetObjectCommand({
+          Bucket: bucketName,
+          Key: objectName,
+        })
+        const getObjectResp = await client.send(getObject)
+        const getObjectRespData = await getObjectResp.Body?.transformToByteArray()
+        expect(getObjectRespData).toBeTruthy()
+        expect(getObjectResp.ETag).toBeTruthy()
+
+        const deleteObjects = new DeleteObjectsCommand({
+          Bucket: bucketName,
+          Delete: {
+            Objects: [
+              {
+                Key: objectName,
+              },
+            ],
+          },
+        })
+        const deleteObjectsResp = await client.send(deleteObjects)
+        expect(deleteObjectsResp.Errors).toBeFalsy()
+        expect(deleteObjectsResp.Deleted).toEqual([
+          {
+            Key: objectName,
+          },
+        ])
+
+        const getObjectDeleted = new GetObjectCommand({
+          Bucket: bucketName,
+          Key: objectName,
+        })
+        try {
+          await client.send(getObjectDeleted)
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+        }
+      })
+
+      it('should not upload if the name contains invalid characters', async () => {
+        const bucketName = await createBucket(client)
+        const invalidObjectName = getInvalidObjectName()
+        try {
+          const putObject = new PutObjectCommand({
+            Bucket: bucketName,
+            Key: invalidObjectName,
+            Body: Buffer.alloc(1024 * 1024 * 1),
+          })
+          await client.send(putObject)
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toBe('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(400)
+          expect((e as S3ServiceException).name).toEqual('InvalidKey')
+          expect((e as S3ServiceException).message).toEqual(
+            `Invalid key: ${encodeURIComponent(invalidObjectName)}`
+          )
+        }
       })
     })
   })

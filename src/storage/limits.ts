@@ -52,9 +52,15 @@ export async function isImageTransformationEnabled(tenantId: string) {
  * @param key
  */
 export function isValidKey(key: string): boolean {
-  // only allow s3 safe characters and characters which require special handling for now
-  // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
-  return key.length > 0 && /^(\w|\/|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(key)
+  // Allow any sequence of Unicode characters with UTF-8 encoding,
+  // except characters not allowed in XML 1.0.
+  // See: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+  // See: https://www.w3.org/TR/REC-xml/#charsets
+  //
+  const regex =
+    /[\0-\x08\x0B\f\x0E-\x1F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/
+
+  return key.length > 0 && !regex.test(key)
 }
 
 /**

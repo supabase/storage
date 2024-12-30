@@ -8,7 +8,7 @@ import { getConfig, JwksConfig, JwksConfigKeyOCT, mergeConfig } from '../config'
 import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
 import { Obj, backends } from '../storage'
 import { ObjectAdminDelete } from '../storage/events'
-import { useMockObject, useMockQueue } from './common'
+import { getInvalidObjectName, getUnicodeObjectName, useMockObject, useMockQueue } from './common'
 import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
 import { Knex } from 'knex'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
@@ -2729,5 +2729,94 @@ describe('x-robots-tag header', () => {
       error: 'invalid_x_robots_tag',
       message: 'Invalid X-Robots-Tag header: Invalid X-Robots-Tag rule: "invalidrule"',
     })
+  })
+})
+
+describe('Object key names with Unicode characters', () => {
+  test('can upload, get, list, and delete', async () => {
+    const prefix = `test-utf8-${randomUUID()}`
+    const objectName = getUnicodeObjectName()
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization,
+      'x-upsert': 'true',
+    })
+
+    const uploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/bucket2/${prefix}/${encodeURIComponent(objectName)}`,
+      headers: {
+        ...headers,
+        ...form.getHeaders(),
+      },
+      payload: form,
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const getResponse = await appInstance.inject({
+      method: 'GET',
+      url: `/object/bucket2/${prefix}/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(getResponse.headers['etag']).toBe('abc')
+    expect(getResponse.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
+    expect(getResponse.headers['cache-control']).toBe('no-cache')
+
+    const listResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list/bucket2`,
+      headers: {
+        authorization,
+      },
+      payload: { prefix },
+    })
+    expect(listResponse.statusCode).toBe(200)
+    const listResponseJSON = JSON.parse(listResponse.body)
+    expect(listResponseJSON).toHaveLength(1)
+    expect(listResponseJSON[0].name).toBe(objectName.split('/')[0])
+
+    const deleteResponse = await appInstance.inject({
+      method: 'DELETE',
+      url: `/object/bucket2/${prefix}/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(deleteResponse.statusCode).toBe(200)
+  })
+
+  test('should not upload if the name contains invalid characters', async () => {
+    const invalidObjectName = getInvalidObjectName()
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization,
+      'x-upsert': 'true',
+    })
+    const uploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/bucket2/${encodeURIComponent(invalidObjectName)}`,
+      headers: {
+        ...headers,
+        ...form.getHeaders(),
+      },
+      payload: form,
+    })
+    expect(uploadResponse.statusCode).toBe(400)
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+    expect(uploadResponse.body).toBe(
+      JSON.stringify({
+        statusCode: '400',
+        error: 'InvalidKey',
+        message: `Invalid key: ${encodeURIComponent(invalidObjectName)}`,
+      })
+    )
   })
 })

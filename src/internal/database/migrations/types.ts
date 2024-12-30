@@ -56,4 +56,5 @@ export const DBMigration = {
   'drop-index-object-level': 54,
   'prevent-direct-deletes': 55,
   'fix-optimized-search-function': 56,
-}
+  'unicode-object-names': 57,
+} as const

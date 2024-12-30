@@ -21,6 +21,16 @@ export const xmlParser = fastifyPlugin(
         isArray: (_: string, jpath: string) => {
           return opts.parseAsArray?.includes(jpath)
         },
+        tagValueProcessor: (_name: string, value: string) =>
+          value.replace(/&#([xX][0-9a-fA-F]{1,6}|[0-9]{1,7});/g, (match: string, rawValue: string) => {
+            const isHex = rawValue[0].toLowerCase() === 'x'
+            const codePoint = Number.parseInt(isHex ? rawValue.slice(1) : rawValue, isHex ? 16 : 10)
+            if (codePoint > 0x10ffff) {
+              return match
+            }
+
+            return String.fromCodePoint(codePoint)
+          }),
       })
     }
 

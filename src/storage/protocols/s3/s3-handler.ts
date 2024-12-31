@@ -1,6 +1,6 @@
 import { Storage } from '../../storage'
 import { getConfig } from '../../../config'
-import { Uploader } from '../../uploader'
+import { Uploader, validateMimeType } from '../../uploader'
 import {
   AbortMultipartUploadCommandInput,
   CompleteMultipartUploadCommandInput,
@@ -444,7 +444,7 @@ export class S3ProtocolHandler {
     const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'id,allowed_mime_types')
 
     if (command.ContentType && bucket.allowed_mime_types && bucket.allowed_mime_types.length > 0) {
-      uploader.validateMimeType(command.ContentType, bucket.allowed_mime_types || [])
+      validateMimeType(command.ContentType, bucket.allowed_mime_types || [])
     }
 
     // Create Multi Part Upload
@@ -699,36 +699,31 @@ export class S3ProtocolHandler {
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html
    *
    * @param command
-   * @param signal
+   * @param options
    */
-  async putObject(command: PutObjectCommandInput, signal?: AbortSignal) {
+  async putObject(
+    command: PutObjectCommandInput,
+    options: { signal?: AbortSignal; isTruncated: () => boolean }
+  ) {
     const uploader = new Uploader(this.storage.backend, this.storage.db)
 
     mustBeValidBucketName(command.Bucket)
     mustBeValidKey(command.Key)
 
-    if (
-      command.Key.endsWith('/') &&
-      (command.ContentLength === undefined || command.ContentLength === 0)
-    ) {
-      // Consistent with how supabase Storage handles empty folders
-      command.Key += '.emptyFolderPlaceholder'
-    }
-
-    const bucket = await this.storage
-      .asSuperUser()
-      .findBucket(command.Bucket, 'id,file_size_limit,allowed_mime_types')
-
-    const upload = await uploader.upload(command.Body as any, {
+    const upload = await uploader.upload({
       bucketId: command.Bucket as string,
+      file: {
+        body: command.Body as Readable,
+        cacheControl: command.CacheControl!,
+        mimeType: command.ContentType!,
+        isTruncated: options.isTruncated,
+        userMetadata: command.Metadata,
+      },
       objectName: command.Key as string,
       owner: this.owner,
       isUpsert: true,
       uploadType: 's3',
-      fileSizeLimit: bucket.file_size_limit,
-      allowedMimeTypes: bucket.allowed_mime_types,
-      metadata: command.Metadata,
-      signal,
+      signal: options.signal,
     })
 
     return {
@@ -1227,7 +1222,7 @@ export class S3ProtocolHandler {
   }
 
   parseMetadataHeaders(headers: Record<string, any>) {
-    let metadata: undefined | Record<string, any> = undefined
+    let metadata: Record<string, any> | undefined = undefined
 
     Object.keys(headers)
       .filter((key) => key.startsWith('x-amz-meta-'))

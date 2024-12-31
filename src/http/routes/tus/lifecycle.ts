@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto'
 import { TenantConnection } from '@internal/database'
 import { ERRORS, isRenderableError } from '@internal/errors'
 import { Storage } from '@storage/storage'
-import { Uploader } from '@storage/uploader'
+import { Uploader, validateMimeType } from '@storage/uploader'
 import { UploadId } from '@storage/protocols/tus'
 
 import { getConfig } from '../../../config'
@@ -186,8 +186,6 @@ export async function onCreate(
     .asSuperUser()
     .findBucket(uploadID.bucket, 'id, file_size_limit, allowed_mime_types')
 
-  const uploader = new Uploader(storage.backend, storage.db)
-
   const metadata = {
     ...(upload.metadata ? upload.metadata : {}),
   }
@@ -199,7 +197,7 @@ export async function onCreate(
   }
 
   if (metadata?.contentType && bucket.allowed_mime_types) {
-    uploader.validateMimeType(metadata.contentType, bucket.allowed_mime_types)
+    validateMimeType(metadata.contentType, bucket.allowed_mime_types)
   }
 
   return { res, metadata }

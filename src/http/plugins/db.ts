@@ -92,6 +92,7 @@ export const db = fastifyPlugin(
 
 interface DbSuperUserPluginOptions {
   disableHostCheck?: boolean
+  maxConnections?: number
 }
 
 export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
@@ -111,6 +112,7 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
         method: request.method,
         headers: request.headers,
         disableHostCheck: opts.disableHostCheck,
+        maxConnections: opts.maxConnections,
         operation: () => request.operation?.type,
       })
     })

@@ -6,6 +6,7 @@ import { ERRORS } from '@internal/errors'
 interface ConnectionOptions {
   host: string
   tenantId: string
+  maxConnections?: number
   headers?: Record<string, string | undefined | string[]>
   method?: string
   path?: string

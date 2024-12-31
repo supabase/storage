@@ -54,6 +54,18 @@ export class FileBackend implements StorageBackendAdapter {
     this.filePath = storageFilePath
   }
 
+  async list(
+    bucket: string,
+    options?: {
+      prefix?: string
+      delimiter?: string
+      nextToken?: string
+      startAfter?: string
+    }
+  ): Promise<{ keys: { name: string; size: number }[]; nextToken?: string }> {
+    return Promise.resolve({ keys: [] })
+  }
+
   /**
    * Gets an object body and metadata
    * @param bucketName

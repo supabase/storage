@@ -8,6 +8,7 @@ import {
   GetObjectCommand,
   GetObjectCommandInput,
   HeadObjectCommand,
+  ListObjectsV2Command,
   ListPartsCommand,
   S3Client,
   S3ClientConfig,
@@ -243,6 +244,52 @@ export class S3Backend implements StorageBackendAdapter {
         httpStatusCode: data.$metadata.httpStatusCode || 200,
         eTag: data.CopyObjectResult?.ETag || '',
         lastModified: data.CopyObjectResult?.LastModified,
+      }
+    } catch (e: any) {
+      throw StorageBackendError.fromError(e)
+    }
+  }
+
+  async list(
+    bucket: string,
+    options?: {
+      prefix?: string
+      delimiter?: string
+      nextToken?: string
+      startAfter?: string
+      beforeDate?: Date
+    }
+  ): Promise<{ keys: string[]; nextToken?: string }> {
+    try {
+      const command = new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: options?.prefix,
+        Delimiter: options?.delimiter,
+        ContinuationToken: options?.nextToken || undefined,
+        StartAfter: options?.startAfter,
+      })
+      const data = await this.client.send(command)
+      const keys =
+        data.Contents?.filter((ele) => {
+          if (options?.beforeDate) {
+            console.log(ele.LastModified, options.beforeDate)
+            if (ele.LastModified && ele.LastModified < options.beforeDate) {
+              return ele.Key as string
+            }
+            return false
+          }
+          return ele.Key
+        }).map((ele) => {
+          if (options?.prefix) {
+            return (ele.Key as string).replace(options.prefix, '').replace('/', '')
+          }
+
+          return ele.Key as string
+        }) || []
+
+      return {
+        keys,
+        nextToken: data.NextContinuationToken,
       }
     } catch (e: any) {
       throw StorageBackendError.fromError(e)

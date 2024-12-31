@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { getConfig } from '../config'
 import {
   getFileSizeLimit as getFileSizeLimitForTenant,
@@ -47,9 +48,10 @@ export async function isImageTransformationEnabled(tenantId: string) {
  * @param key
  */
 export function isValidKey(key: string): boolean {
-  // only allow s3 safe characters and characters which require special handling for now
+  // Allow any sequence of Unicode characters with UTF-8 encoding.
   // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
-  return key.length > 0 && /^(\w|\/|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(key)
+  const utfEncoded = Buffer.from(key, 'utf8')
+  return key.length > 0 && utfEncoded.toString('utf8') === key
 }
 
 /**

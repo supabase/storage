@@ -66,6 +66,18 @@ export class FileBackend implements StorageBackendAdapter {
     throw new Error('FILE_STORAGE_ETAG_ALGORITHM env variable must be either "mtime" or "md5"')
   }
 
+  async list(
+    bucket: string,
+    options?: {
+      prefix?: string
+      delimiter?: string
+      nextToken?: string
+      startAfter?: string
+    }
+  ): Promise<{ keys: { name: string; size: number }[]; nextToken?: string }> {
+    return Promise.resolve({ keys: [] })
+  }
+
   /**
    * Gets an object body and metadata
    * @param bucketName

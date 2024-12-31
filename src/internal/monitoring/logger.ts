@@ -32,7 +32,7 @@ export const baseLogger = pino({
         headers: whitelistHeaders(request.headers),
         hostname: request.hostname,
         remoteAddress: request.ip,
-        remotePort: request.socket.remotePort,
+        remotePort: request.socket?.remotePort,
       }
     },
   },

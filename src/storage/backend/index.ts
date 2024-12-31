@@ -1,6 +1,6 @@
 import { StorageBackendAdapter } from './adapter'
 import { FileBackend } from './file'
-import { S3Backend, S3ClientOptions } from './s3'
+import { S3Backend, S3ClientOptions } from './s3/adapter'
 import { getConfig, StorageBackendType } from '../../config'
 
 export * from './s3'

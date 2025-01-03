@@ -69,7 +69,7 @@ export const searchPath = ['storage', 'public', 'extensions', ...dbSearchPath.sp
 export class TenantConnection {
   public readonly role: string
 
-  constructor(protected readonly pool: Knex, protected readonly options: TenantConnectionOptions) {
+  constructor(public readonly pool: Knex, protected readonly options: TenantConnectionOptions) {
     this.role = options.user.payload.role || 'anon'
   }
 
@@ -101,7 +101,9 @@ export class TenantConnection {
       searchPath: isExternalPool ? undefined : searchPath,
       pool: {
         min: 0,
-        max: isExternalPool ? 1 : options.maxConnections || databaseMaxConnections,
+        max: isExternalPool
+          ? options.maxConnections || 1
+          : options.maxConnections || databaseMaxConnections,
         acquireTimeoutMillis: databaseConnectionTimeout,
         idleTimeoutMillis: isExternalPool
           ? options.idleTimeoutMillis || 100

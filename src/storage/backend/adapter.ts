@@ -52,6 +52,19 @@ export abstract class StorageBackendAdapter {
     this.client = null
   }
 
+  async list(
+    bucket: string,
+    options?: {
+      prefix?: string
+      delimiter?: string
+      nextToken?: string
+      startAfter?: string
+      beforeDate?: Date
+    }
+  ): Promise<{ keys: string[]; nextToken?: string }> {
+    throw new Error('list not implemented')
+  }
+
   /**
    * Gets an object body and metadata
    * @param bucketName

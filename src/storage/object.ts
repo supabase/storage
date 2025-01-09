@@ -402,7 +402,9 @@ export class ObjectStorage {
     mustBeValidKey(destinationObjectName)
 
     const newVersion = randomUUID()
-    const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
+    const s3SourceKey = encodeURIComponent(
+      `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
+    )
     const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationObjectName}`
 
     await this.db.testPermission((db) => {

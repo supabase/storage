@@ -31,7 +31,7 @@ export const db = fastifyPlugin(
   async function db(fastify) {
     fastify.register(migrations)
 
-    fastify.decorateRequest('db', null)
+    fastify.decorateRequest('db')
 
     fastify.addHook('preHandler', async (request) => {
       const adminUser = await getServiceKeyUser(request.tenantId)
@@ -97,7 +97,7 @@ interface DbSuperUserPluginOptions {
 export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
   async function dbSuperUser(fastify, opts) {
     fastify.register(migrations)
-    fastify.decorateRequest('db', null)
+    fastify.decorateRequest('db')
 
     fastify.addHook('preHandler', async (request) => {
       const adminUser = await getServiceKeyUser(request.tenantId)

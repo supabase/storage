@@ -92,7 +92,7 @@ async function httpServer(signal: AbortSignal) {
   const { exposeDocs, requestTraceHeader, port, host } = getConfig()
 
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
-    logger,
+    loggerInstance: logger,
     disableRequestLogging: true,
     exposeDocs,
     requestIdHeader: requestTraceHeader,
@@ -141,7 +141,7 @@ async function httpAdminServer(
 
   const adminApp = buildAdmin(
     {
-      logger,
+      loggerInstance: logger,
       disableRequestLogging: true,
       requestIdHeader: adminRequestIdHeader,
     },

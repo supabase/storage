@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch src/start/server.ts | pino-pretty",
-    "build": "node ./build.js && resolve-tspaths",
+    "build": "tsc -noEmit && node ./build.js && resolve-tspaths",
     "start": "NODE_ENV=production node dist/start/server.js",
     "format": "prettier -c --write src/**",
     "lint": "prettier -v && prettier -c src/**",

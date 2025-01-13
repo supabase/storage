@@ -1,6 +1,7 @@
 import { logger, logSchema } from '../../monitoring'
-import { areMigrationsUpToDate, getTenantConfig, TenantMigrationStatus } from '../tenant'
+import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { RunMigrationsOnTenants } from '@storage/events'
+import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
 
 export class ProgressiveMigrations {
   protected tenants: string[] = []

@@ -1,9 +1,10 @@
 import { FastifyInstance } from 'fastify'
 import { Queue } from '@internal/queue'
-import { multitenantKnex, runMigrationsOnAllTenants } from '@internal/database'
+import { multitenantKnex } from '@internal/database'
 import { RunMigrationsOnTenants } from '@storage/events'
 import apiKey from '../../plugins/apikey'
 import { getConfig } from '../../../config'
+import { runMigrationsOnAllTenants } from '@internal/database/migrations'
 
 const { pgQueueEnable } = getConfig()
 

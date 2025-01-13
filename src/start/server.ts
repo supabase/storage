@@ -5,19 +5,18 @@ import { IncomingMessage, Server, ServerResponse } from 'node:http'
 import build from '../app'
 import buildAdmin from '../admin-app'
 import { getConfig } from '../config'
-import {
-  runMultitenantMigrations,
-  runMigrationsOnTenant,
-  startAsyncMigrations,
-  listenForTenantUpdate,
-  PubSub,
-} from '@internal/database'
+import { listenForTenantUpdate, PubSub } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import { Queue } from '@internal/queue'
 import { registerWorkers } from '@storage/events'
 import { AsyncAbortController } from '@internal/concurrency'
 
 import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
+import {
+  runMigrationsOnTenant,
+  runMultitenantMigrations,
+  startAsyncMigrations,
+} from '@internal/database/migrations'
 
 const shutdownSignal = new AsyncAbortController()
 

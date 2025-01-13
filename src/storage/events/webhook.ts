@@ -22,7 +22,7 @@ interface WebhookEvent {
   event: {
     $version: string
     type: string
-    payload: object & { reqId?: string }
+    payload: object & { reqId?: string; bucketId: string; name: string }
     applyTime: number
   }
   sentAt: string
@@ -70,7 +70,12 @@ export class Webhook extends BaseEvent<WebhookEvent> {
       // Do not send an event if disabled for this specific tenant
       const tenant = await getTenantConfig(payload.tenant.ref)
       const disabledEvents = tenant.disableEvents || []
-      if (disabledEvents.includes(`Webhook:${payload.event.type}`)) {
+      if (
+        disabledEvents.includes(`Webhook:${payload.event.type}`) ||
+        disabledEvents.includes(
+          `Webhook:${payload.event.type}:${payload.event.payload.bucketId}/${payload.event.payload.name}`
+        )
+      ) {
         return false
       }
     }

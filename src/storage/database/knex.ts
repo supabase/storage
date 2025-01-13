@@ -17,9 +17,10 @@ import {
   SearchObjectOption,
 } from './adapter'
 import { DatabaseError } from 'pg'
-import { DBMigration, TenantConnection } from '@internal/database'
+import { TenantConnection } from '@internal/database'
 import { DbQueryPerformance } from '@internal/monitoring/metrics'
 import { isUuid } from '../limits'
+import { DBMigration } from '@internal/database/migrations'
 
 /**
  * Database

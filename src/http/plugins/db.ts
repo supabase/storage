@@ -1,22 +1,24 @@
 import fastifyPlugin from 'fastify-plugin'
 import { getConfig, MultitenantMigrationStrategy } from '../../config'
 import {
-  areMigrationsUpToDate,
   getServiceKeyUser,
   getTenantConfig,
   TenantMigrationStatus,
-  updateTenantMigrationsState,
   TenantConnection,
   getPostgresConnection,
-  progressiveMigrations,
-  runMigrationsOnTenant,
-  hasMissingSyncMigration,
-  DBMigration,
-  lastMigrationName,
 } from '@internal/database'
 import { verifyJWT } from '@internal/auth'
 import { logSchema } from '@internal/monitoring'
 import { createMutexByKey } from '@internal/concurrency'
+import {
+  areMigrationsUpToDate,
+  DBMigration,
+  hasMissingSyncMigration,
+  lastMigrationName,
+  progressiveMigrations,
+  runMigrationsOnTenant,
+  updateTenantMigrationsState,
+} from '@internal/database/migrations'
 
 declare module 'fastify' {
   interface FastifyRequest {

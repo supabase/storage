@@ -1,14 +1,13 @@
 import { BaseEvent } from './base-event'
-import {
-  areMigrationsUpToDate,
-  getTenantConfig,
-  TenantMigrationStatus,
-  updateTenantMigrationsState,
-  runMigrationsOnTenant,
-} from '@internal/database'
+import { getTenantConfig, TenantMigrationStatus } from '@internal/database'
 import { JobWithMetadata, SendOptions, WorkOptions } from 'pg-boss'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
+import {
+  areMigrationsUpToDate,
+  runMigrationsOnTenant,
+  updateTenantMigrationsState,
+} from '@internal/database/migrations'
 
 interface RunMigrationsPayload extends BasePayload {
   tenantId: string

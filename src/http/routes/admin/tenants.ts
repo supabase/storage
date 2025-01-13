@@ -2,15 +2,13 @@ import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import apiKey from '../../plugins/apikey'
 import { decrypt, encrypt } from '@internal/auth'
-import {
-  deleteTenantConfig,
-  TenantMigrationStatus,
-  multitenantKnex,
-  lastMigrationName,
-  runMigrationsOnTenant,
-  progressiveMigrations,
-} from '@internal/database'
+import { deleteTenantConfig, TenantMigrationStatus, multitenantKnex } from '@internal/database'
 import { dbSuperUser, storage } from '../../plugins'
+import {
+  lastMigrationName,
+  progressiveMigrations,
+  runMigrationsOnTenant,
+} from '@internal/database/migrations'
 
 const patchSchema = {
   body: {
@@ -292,6 +290,9 @@ export default async function routes(fastify: FastifyInstance) {
               migrations_status: TenantMigrationStatus.COMPLETED,
             })
         } catch (e) {
+          if (e instanceof Error) {
+            request.executionError = e
+          }
           progressiveMigrations.addTenant(tenantId)
         }
       }

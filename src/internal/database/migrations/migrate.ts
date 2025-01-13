@@ -7,12 +7,12 @@ import { BasicPgClient, Migration } from 'postgres-migrations/dist/types'
 import { validateMigrationHashes } from 'postgres-migrations/dist/validation'
 import { runMigration } from 'postgres-migrations/dist/run-migration'
 import { searchPath } from '../connection'
-import { getTenantConfig, listTenantsToMigrate } from '../tenant'
+import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { multitenantKnex } from '../multitenant-db'
 import { ProgressiveMigrations } from './progressive'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { ERRORS } from '@internal/errors'
-import { DBMigration } from '@internal/database'
+import { DBMigration } from './types'
 
 const {
   multitenantDatabaseUrl,
@@ -79,6 +79,86 @@ export function startAsyncMigrations(signal: AbortSignal) {
 export async function lastMigrationName() {
   const migrations = await loadMigrationFilesCached('./migrations/tenant')
   return migrations[migrations.length - 1].name as keyof typeof DBMigration
+}
+
+/**
+ * List all tenants that needs to have the migrations run
+ */
+export async function* listTenantsToMigrate(signal: AbortSignal) {
+  let lastCursor = 0
+
+  while (true) {
+    if (signal.aborted) {
+      break
+    }
+
+    const migrationVersion = await lastMigrationName()
+
+    const data = await multitenantKnex
+      .table<{ id: string; cursor_id: number }>('tenants')
+      .select('id', 'cursor_id')
+      .where('cursor_id', '>', lastCursor)
+      .where((builder) => {
+        builder
+          .where((whereBuilder) => {
+            whereBuilder
+              .where('migrations_version', '!=', migrationVersion)
+              .whereNotIn('migrations_status', [
+                TenantMigrationStatus.FAILED,
+                TenantMigrationStatus.FAILED_STALE,
+              ])
+          })
+          .orWhere('migrations_status', null)
+      })
+      .orderBy('cursor_id', 'asc')
+      .limit(200)
+
+    if (data.length === 0) {
+      break
+    }
+
+    lastCursor = data[data.length - 1].cursor_id
+    yield data.map((tenant) => tenant.id)
+  }
+}
+
+/**
+ * Update tenant migration version and status
+ * @param tenantId
+ * @param options
+ */
+export async function updateTenantMigrationsState(
+  tenantId: string,
+  options?: { state: TenantMigrationStatus }
+) {
+  const migrationVersion = await lastMigrationName()
+  const state = options?.state || TenantMigrationStatus.COMPLETED
+  return multitenantKnex
+    .table('tenants')
+    .where('id', tenantId)
+    .update({
+      migrations_version: [
+        TenantMigrationStatus.FAILED,
+        TenantMigrationStatus.FAILED_STALE,
+      ].includes(state)
+        ? undefined
+        : migrationVersion,
+      migrations_status: state,
+    })
+}
+
+/**
+ * Determine if a tenant has the migrations up to date
+ * @param tenantId
+ */
+export async function areMigrationsUpToDate(tenantId: string) {
+  const latestMigrationVersion = await lastMigrationName()
+  const tenant = await getTenantConfig(tenantId)
+
+  return (
+    latestMigrationVersion === tenant.migrationVersion &&
+    tenant.migrationStatus === TenantMigrationStatus.COMPLETED
+  )
 }
 
 export async function hasMissingSyncMigration(tenantId: string) {

@@ -3,6 +3,7 @@ import PgBoss, { BatchWorkOptions, Job, SendOptions, WorkOptions } from 'pg-boss
 import { getConfig } from '../../config'
 import { QueueJobScheduled, QueueJobSchedulingTime } from '@internal/monitoring/metrics'
 import { logger, logSchema } from '@internal/monitoring'
+import { getTenantConfig } from '@internal/database'
 
 export interface BasePayload {
   $version?: string
@@ -19,7 +20,7 @@ export interface SlowRetryQueueOptions {
   retryDelay: number
 }
 
-const { pgQueueEnable, region } = getConfig()
+const { pgQueueEnable, region, isMultitenant } = getConfig()
 
 export type StaticThis<T extends Event<any>> = BaseEventConstructor<T>
 
@@ -125,8 +126,26 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     throw new Error('not implemented')
   }
 
+  static async shouldSend(payload: any) {
+    if (isMultitenant) {
+      // Do not send an event if disabled for this specific tenant
+      const tenant = await getTenantConfig(payload.tenant.ref)
+      const disabledEvents = tenant.disableEvents || []
+      if (disabledEvents.includes(this.eventName())) {
+        return false
+      }
+    }
+    return true
+  }
+
   async send(): Promise<string | void | null> {
     const constructor = this.constructor as typeof Event
+
+    const shouldSend = await constructor.shouldSend(this.payload)
+
+    if (!shouldSend) {
+      return
+    }
 
     if (!pgQueueEnable) {
       return constructor.handle({

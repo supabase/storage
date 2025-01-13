@@ -27,6 +27,7 @@ const payload = {
       enabled: true,
     },
   },
+  disableEvents: null,
 }
 
 const payload2 = {
@@ -50,6 +51,7 @@ const payload2 = {
       enabled: true,
     },
   },
+  disableEvents: null,
 }
 
 beforeAll(async () => {

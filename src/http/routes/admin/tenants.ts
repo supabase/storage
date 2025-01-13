@@ -25,6 +25,7 @@ const patchSchema = {
       jwks: { type: 'object', nullable: true },
       serviceKey: { type: 'string' },
       tracingMode: { type: 'string' },
+      disableEvents: { type: 'array', items: { type: 'string' }, nullable: true },
       features: {
         type: 'object',
         properties: {
@@ -108,6 +109,7 @@ export default async function routes(fastify: FastifyInstance) {
         migrations_version,
         migrations_status,
         tracing_mode,
+        disable_events,
       }) => ({
         id,
         anonKey: decrypt(anon_key),
@@ -130,6 +132,7 @@ export default async function routes(fastify: FastifyInstance) {
             enabled: feature_s3_protocol,
           },
         },
+        disableEvents: disable_events,
       })
     )
   })
@@ -154,6 +157,7 @@ export default async function routes(fastify: FastifyInstance) {
         migrations_version,
         migrations_status,
         tracing_mode,
+        disable_events,
       } = tenant
 
       return {
@@ -182,6 +186,7 @@ export default async function routes(fastify: FastifyInstance) {
         migrationVersion: migrations_version,
         migrationStatus: migrations_status,
         tracingMode: tracing_mode,
+        disableEvents: disable_events,
       }
     }
   })
@@ -248,6 +253,7 @@ export default async function routes(fastify: FastifyInstance) {
         databasePoolUrl,
         maxConnections,
         tracingMode,
+        disableEvents,
       } = request.body
       const { tenantId } = request.params
 
@@ -272,6 +278,7 @@ export default async function routes(fastify: FastifyInstance) {
               ? null
               : features?.imageTransformation?.maxResolution,
           tracing_mode: tracingMode,
+          disable_events: disableEvents,
         })
         .where('id', tenantId)
 

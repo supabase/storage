@@ -123,6 +123,7 @@ async function extractSignature(req: AWSRequest) {
       limits: {
         fields: 20,
         files: 1,
+        fileSize: 5 * (1024 * 1024 * 1024),
       },
     })
 

@@ -385,6 +385,7 @@ describe('S3 Protocol', () => {
           Expires: 5000,
           Fields: {
             'Content-Type': 'image/jpg',
+            'X-Amz-Meta-Custom': 'meta-field',
           },
         })
 

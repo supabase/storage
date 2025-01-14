@@ -274,7 +274,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'STORAGE_FILE_BACKEND_PATH',
       'FILE_STORAGE_BACKEND_PATH'
     ),
-    storageFileEtagAlgorithm: getOptionalConfigFromEnv('STORAGE_FILE_ETAG_ALGORITHM') || 'mtime',
+    storageFileEtagAlgorithm: getOptionalConfigFromEnv('STORAGE_FILE_ETAG_ALGORITHM') || 'md5',
 
     // Storage - S3
     storageS3MaxSockets: parseInt(

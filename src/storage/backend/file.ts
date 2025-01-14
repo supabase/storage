@@ -45,17 +45,25 @@ const METADATA_ATTR_KEYS = {
 export class FileBackend implements StorageBackendAdapter {
   client = null
   filePath: string
+  etagAlgorithm: 'mtime' | 'md5'
 
   constructor() {
-    const { storageFilePath } = getConfig()
+    const { storageFilePath, storageFileEtagAlgorithm } = getConfig()
     if (!storageFilePath) {
       throw new Error('FILE_STORAGE_BACKEND_PATH env variable not set')
     }
     this.filePath = storageFilePath
+    this.etagAlgorithm = storageFileEtagAlgorithm
   }
 
-  private etag(stats: fs.Stats): string {
-    return `"${stats.mtimeMs.toString(16)}-${stats.size.toString(16)}"`
+  private async etag(file: string, stats: fs.Stats): Promise<string> {
+    if (this.etagAlgorithm === 'md5') {
+      const checksum = await fileChecksum(file)
+      return `"${checksum}"`
+    } else if (this.etagAlgorithm === 'mtime') {
+      return `"${stats.mtimeMs.toString(16)}-${stats.size.toString(16)}"`
+    }
+    throw new Error('FILE_STORAGE_ETAG_ALGORITHM env variable must be either "mtime" or "md5"')
   }
 
   /**
@@ -74,7 +82,7 @@ export class FileBackend implements StorageBackendAdapter {
     // 'Range: bytes=#######-######
     const file = path.resolve(this.filePath, withOptionalVersion(`${bucketName}/${key}`, version))
     const data = await fs.stat(file)
-    const eTag = this.etag(data)
+    const eTag = await this.etag(file, data)
     const fileSize = data.size
     const { cacheControl, contentType } = await this.getFileMetadata(file)
     const lastModified = new Date(0)
@@ -209,7 +217,7 @@ export class FileBackend implements StorageBackendAdapter {
     await this.setFileMetadata(destFile, Object.assign({}, originalMetadata, metadata))
 
     const fileStat = await fs.lstat(destFile)
-    const eTag = this.etag(fileStat)
+    const eTag = await this.etag(destFile, fileStat)
 
     return {
       httpStatusCode: 200,
@@ -256,7 +264,7 @@ export class FileBackend implements StorageBackendAdapter {
     const { cacheControl, contentType } = await this.getFileMetadata(file)
     const lastModified = new Date(0)
     lastModified.setUTCMilliseconds(data.mtimeMs)
-    const eTag = this.etag(data)
+    const eTag = await this.etag(file, data)
 
     return {
       httpStatusCode: 200,

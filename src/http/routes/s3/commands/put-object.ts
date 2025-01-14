@@ -1,7 +1,7 @@
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
-import { Multipart, MultipartValue } from '@fastify/multipart'
+import { MultipartFields } from '@fastify/multipart'
 import { fileUploadFromRequest, getStandardMaxFileSizeLimit } from '@storage/uploader'
 import { ERRORS } from '@internal/errors'
 import { pipeline } from 'stream/promises'
@@ -116,8 +116,9 @@ export default function PutObject(s3Router: S3Router) {
         .asSuperUser()
         .findBucket(req.Params.Bucket, 'id,file_size_limit,allowed_mime_types')
 
-      const metadata = s3Protocol.parseMetadataHeaders(file?.fields || {})
-      const expiresField = normaliseFormDataField(file?.fields?.Expires) as string | undefined
+      const fieldsObject = fieldsToObject(file?.fields || {})
+      const metadata = s3Protocol.parseMetadataHeaders(fieldsObject)
+      const expiresField = fieldsObject.expires
 
       const maxFileSize = await getStandardMaxFileSizeLimit(ctx.tenantId, bucket.file_size_limit)
 
@@ -126,11 +127,11 @@ export default function PutObject(s3Router: S3Router) {
           {
             Body: fileStream as stream.Readable,
             Bucket: req.Params.Bucket,
-            Key: normaliseFormDataField(file?.fields?.key) as string,
-            CacheControl: normaliseFormDataField(file?.fields?.['Cache-Control']) as string,
-            ContentType: normaliseFormDataField(file?.fields?.['Content-Type']) as string,
+            Key: fieldsObject.key as string,
+            CacheControl: fieldsObject['cache-control'] as string,
+            ContentType: fieldsObject['content-type'] as string,
             Expires: expiresField ? new Date(expiresField) : undefined,
-            ContentEncoding: normaliseFormDataField(file?.fields?.['Content-Encoding']) as string,
+            ContentEncoding: fieldsObject['content-encoding'] as string,
             Metadata: metadata,
           },
           { signal: ctx.signals.body, isTruncated: () => file.file.truncated }
@@ -140,18 +141,24 @@ export default function PutObject(s3Router: S3Router) {
   )
 }
 
-function normaliseFormDataField(value: Multipart | Multipart[] | undefined) {
-  if (!value) {
-    return undefined
-  }
+function fieldsToObject(fields: MultipartFields) {
+  return Object.keys(fields).reduce((acc, key) => {
+    const field = fields[key]
+    if (Array.isArray(field)) {
+      return acc
+    }
 
-  if (Array.isArray(value)) {
-    return (value[0] as MultipartValue).value as string
-  }
+    if (!field) {
+      return acc
+    }
 
-  if (value.type === 'field') {
-    return value.value
-  }
+    if (
+      field.type === 'field' &&
+      (typeof field.value === 'string' || field.value === 'number' || field.value === 'boolean')
+    ) {
+      acc[field.fieldname.toLowerCase()] = field.value
+    }
 
-  return value.file
+    return acc
+  }, {} as Record<string, string>)
 }

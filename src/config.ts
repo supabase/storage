@@ -20,6 +20,7 @@ type StorageConfigType = {
   uploadFileSizeLimit: number
   uploadFileSizeLimitStandard?: number
   storageFilePath?: string
+  storageFileEtagAlgorithm: 'mtime' | 'md5'
   storageS3MaxSockets: number
   storageS3Bucket: string
   storageS3Endpoint?: string
@@ -273,6 +274,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'STORAGE_FILE_BACKEND_PATH',
       'FILE_STORAGE_BACKEND_PATH'
     ),
+    storageFileEtagAlgorithm: getOptionalConfigFromEnv('STORAGE_FILE_ETAG_ALGORITHM') || 'md5',
 
     // Storage - S3
     storageS3MaxSockets: parseInt(

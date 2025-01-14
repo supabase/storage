@@ -562,6 +562,20 @@ describe('S3 Protocol', () => {
         expect(resp.$metadata.httpStatusCode).toEqual(200)
       })
 
+      it('upload a broken JSON body using putObject ', async () => {
+        const bucketName = await createBucket(client)
+
+        const putObject = new PutObjectCommand({
+          Bucket: bucketName,
+          Key: 'test-1-put-object.jpg',
+          ContentType: 'application/json',
+          Body: '{"hello": "world"', // (no-closing tag)
+        })
+
+        const resp = await client.send(putObject)
+        expect(resp.$metadata.httpStatusCode).toEqual(200)
+      })
+
       it('upload a file using putObject with custom metadata', async () => {
         const bucketName = await createBucket(client)
 

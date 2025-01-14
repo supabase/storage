@@ -117,6 +117,15 @@ export default async function routes(fastify: FastifyInstance) {
             (route) => route.disableContentTypeParser
           )
 
+          if (disableContentParser) {
+            localFastify.addContentTypeParser(
+              ['application/json', 'text/plain', 'application/xml'],
+              function (request, payload, done) {
+                done(null)
+              }
+            )
+          }
+
           localFastify.register(fastifyMultipart, {
             limits: {
               fields: 20,

@@ -85,7 +85,7 @@ export class Webhook extends BaseEvent<WebhookEvent> {
 
   static async handle(job: Job<WebhookEvent>) {
     if (!webhookURL) {
-      logger.info('skipping webhook, no WEBHOOK_URL set')
+      logger.debug('skipping webhook, no WEBHOOK_URL set')
       return job
     }
 

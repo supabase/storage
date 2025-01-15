@@ -49,6 +49,7 @@ export interface Database {
   tenantId: string
   reqId?: string
   role?: string
+  connection: TenantConnection
 
   tenant(): { ref: string; host: string }
 
@@ -78,7 +79,13 @@ export interface Database {
 
   deleteBucket(bucketId: string | string[]): Promise<Bucket[]>
 
-  listObjects(bucketId: string, columns: string, limit: number): Promise<Obj[]>
+  listObjects(
+    bucketId: string,
+    columns: string,
+    limit: number,
+    before?: Date,
+    nextToken?: string
+  ): Promise<Obj[]>
   listObjectsV2(
     bucketId: string,
     options?: {
@@ -131,12 +138,21 @@ export interface Database {
   deleteObject(bucketId: string, objectName: string, version?: string): Promise<Obj | undefined>
 
   deleteObjects(bucketId: string, objectNames: string[], by: keyof Obj): Promise<Obj[]>
+  deleteObjectVersions(
+    bucketId: string,
+    objectNames: { name: string; version: string }[]
+  ): Promise<Obj[]>
 
   updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata): Promise<Obj>
 
   updateObjectOwner(bucketId: string, objectName: string, owner?: string): Promise<Obj>
 
   findObjects(bucketId: string, objectNames: string[], columns: string): Promise<Obj[]>
+  findObjectVersions(
+    bucketId: string,
+    objectNames: { name: string; version: string }[],
+    columns: string
+  ): Promise<Obj[]>
   findObject<Filters extends FindObjectFilters = FindObjectFilters>(
     bucketId: string,
     objectName: string,

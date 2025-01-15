@@ -88,6 +88,10 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
   }
 
   static batchSend<T extends Event<any>[]>(messages: T) {
+    if (!pgQueueEnable) {
+      return Promise.all(messages.map((message) => message.send()))
+    }
+
     return Queue.getInstance().insert(
       messages.map((message) => {
         const sendOptions = (this.getQueueOptions(message.payload) as PgBoss.JobInsert) || {}

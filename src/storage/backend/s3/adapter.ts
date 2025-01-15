@@ -8,6 +8,7 @@ import {
   GetObjectCommand,
   GetObjectCommandInput,
   HeadObjectCommand,
+  ListObjectsV2Command,
   ListPartsCommand,
   S3Client,
   S3ClientConfig,
@@ -23,13 +24,14 @@ import {
   ObjectResponse,
   withOptionalVersion,
   UploadPart,
-} from './adapter'
+} from './../adapter'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ERRORS, StorageBackendError } from '@internal/errors'
-import { getConfig } from '../../config'
+import { getConfig } from '../../../config'
 import { Readable } from 'node:stream'
 import { createAgent, InstrumentedAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
+import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
 
 const { tracingFeatures, storageS3MaxSockets, tracingEnabled } = getConfig()
 
@@ -249,6 +251,54 @@ export class S3Backend implements StorageBackendAdapter {
     }
   }
 
+  async list(
+    bucket: string,
+    options?: {
+      prefix?: string
+      delimiter?: string
+      nextToken?: string
+      startAfter?: string
+      beforeDate?: Date
+    }
+  ): Promise<{ keys: { name: string; size: number }[]; nextToken?: string }> {
+    try {
+      const command = new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: options?.prefix,
+        Delimiter: options?.delimiter,
+        ContinuationToken: options?.nextToken || undefined,
+        StartAfter: options?.startAfter,
+      })
+      const data = await this.client.send(command)
+      const keys =
+        data.Contents?.filter((ele) => {
+          if (options?.beforeDate) {
+            if (ele.LastModified && ele.LastModified < options.beforeDate) {
+              return ele.Key as string
+            }
+            return false
+          }
+          return ele.Key
+        }).map((ele) => {
+          if (options?.prefix) {
+            return {
+              name: (ele.Key as string).replace(options.prefix, '').replace('/', ''),
+              size: ele.Size as number,
+            }
+          }
+
+          return { name: ele.Key as string, size: ele.Size as number }
+        }) || []
+
+      return {
+        keys,
+        nextToken: data.NextContinuationToken,
+      }
+    } catch (e: any) {
+      throw StorageBackendError.fromError(e)
+    }
+  }
+
   /**
    * Deletes multiple objects
    * @param bucket
@@ -462,6 +512,10 @@ export class S3Backend implements StorageBackendAdapter {
       eTag: part.CopyPartResult?.ETag,
       lastModified: part.CopyPartResult?.LastModified,
     }
+  }
+
+  async backup(backupInfo: BackupObjectInfo) {
+    return new ObjectBackup(this.client, backupInfo).backup()
   }
 
   close() {

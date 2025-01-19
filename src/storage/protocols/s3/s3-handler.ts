@@ -808,7 +808,7 @@ export class S3ProtocolHandler {
     let metadataHeaders: Record<string, any> = {}
 
     if (object.user_metadata) {
-      metadataHeaders = toAwsMeatadataHeaders(object.user_metadata)
+      metadataHeaders = toAwsMetadataHeaders(object.user_metadata)
     }
 
     return {
@@ -880,7 +880,7 @@ export class S3ProtocolHandler {
     let metadataHeaders: Record<string, any> = {}
 
     if (object.user_metadata) {
-      metadataHeaders = toAwsMeatadataHeaders(object.user_metadata)
+      metadataHeaders = toAwsMetadataHeaders(object.user_metadata)
     }
 
     return {
@@ -1280,7 +1280,7 @@ export class S3ProtocolHandler {
   }
 }
 
-function toAwsMeatadataHeaders(records: Record<string, any>) {
+function toAwsMetadataHeaders(records: Record<string, any>) {
   const metadataHeaders: Record<string, any> = {}
   let missingCount = 0
 

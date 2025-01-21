@@ -231,7 +231,7 @@ export class S3Backend implements StorageBackendAdapter {
     try {
       const command = new CopyObjectCommand({
         Bucket: bucket,
-        CopySource: `${bucket}/${withOptionalVersion(source, version)}`,
+        CopySource: encodeURIComponent(`${bucket}/${withOptionalVersion(source, version)}`),
         Key: withOptionalVersion(destination, destinationVersion),
         CopySourceIfMatch: conditions?.ifMatch,
         CopySourceIfNoneMatch: conditions?.ifNoneMatch,

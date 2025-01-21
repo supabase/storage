@@ -354,8 +354,6 @@ export async function fileUploadFromRequest(
     mimeType = request.headers['content-type'] || 'application/octet-stream'
     cacheControl = request.headers['cache-control'] ?? 'no-cache'
 
-    const customMd = request.headers['x-metadata']
-
     if (
       options.allowedMimeTypes &&
       options.allowedMimeTypes.length > 0 &&
@@ -364,13 +362,10 @@ export async function fileUploadFromRequest(
       validateMimeType(mimeType, options.allowedMimeTypes)
     }
 
+    const customMd = request.headers['x-metadata']
+
     if (typeof customMd === 'string') {
-      try {
-        const json = Buffer.from(customMd, 'base64').toString('utf8')
-        userMetadata = JSON.parse(json)
-      } catch (e) {
-        // no-op
-      }
+      userMetadata = parseUserMetadata(customMd)
     }
     isTruncated = () => {
       // @todo more secure to get this from the stream or from s3 in the next step
@@ -384,6 +379,16 @@ export async function fileUploadFromRequest(
     cacheControl,
     isTruncated,
     userMetadata,
+  }
+}
+
+export function parseUserMetadata(metadata: string) {
+  try {
+    const json = Buffer.from(metadata, 'base64').toString('utf8')
+    return JSON.parse(json) as Record<string, string>
+  } catch (e) {
+    // no-op
+    return undefined
   }
 }
 

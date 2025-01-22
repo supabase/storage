@@ -976,6 +976,7 @@ describe('S3 Protocol', () => {
           CopySource: `${bucketName}/test-copy-1.jpg`,
           ContentType: 'image/png',
           CacheControl: 'max-age=2009',
+          MetadataDirective: 'REPLACE',
         })
 
         const resp = await client.send(copyObjectCommand)
@@ -984,6 +985,34 @@ describe('S3 Protocol', () => {
         const headObjectCommand = new HeadObjectCommand({
           Bucket: bucketName,
           Key: 'test-copied-2.png',
+        })
+
+        const headObj = await client.send(headObjectCommand)
+        expect(headObj.ContentType).toBe('image/png')
+        expect(headObj.CacheControl).toBe('max-age=2009')
+      })
+
+      it('will allow copying an object in the same path, just altering its metadata', async () => {
+        const bucketName = await createBucket(client)
+        const fileName = 'test-copy-1.jpg'
+
+        await uploadFile(client, bucketName, fileName, 1)
+
+        const copyObjectCommand = new CopyObjectCommand({
+          Bucket: bucketName,
+          Key: fileName,
+          CopySource: `${bucketName}/${fileName}`,
+          ContentType: 'image/png',
+          CacheControl: 'max-age=2009',
+          MetadataDirective: 'REPLACE',
+        })
+
+        const resp = await client.send(copyObjectCommand)
+        expect(resp.CopyObjectResult?.ETag).toBeTruthy()
+
+        const headObjectCommand = new HeadObjectCommand({
+          Bucket: bucketName,
+          Key: fileName,
         })
 
         const headObj = await client.send(headObjectCommand)

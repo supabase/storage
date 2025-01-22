@@ -1216,7 +1216,8 @@ describe('testing copy object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toBeCalled()
-    expect(response.body).toBe(`{"Key":"bucket2/authenticated/casestudy11.png"}`)
+    const jsonResponse = await response.json()
+    expect(jsonResponse.Key).toBe(`bucket2/authenticated/casestudy11.png`)
   })
 
   test('can copy objects across buckets', async () => {
@@ -1235,7 +1236,9 @@ describe('testing copy object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toBeCalled()
-    expect(response.body).toBe(`{"Key":"bucket3/authenticated/casestudy11.png"}`)
+    const jsonResponse = await response.json()
+
+    expect(jsonResponse.Key).toBe(`bucket3/authenticated/casestudy11.png`)
   })
 
   test('can copy objects keeping their metadata', async () => {
@@ -1255,7 +1258,8 @@ describe('testing copy object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toBeCalled()
-    expect(response.body).toBe(`{"Key":"bucket2/authenticated/${copiedKey}"}`)
+    const jsonResponse = response.json()
+    expect(jsonResponse.Key).toBe(`bucket2/authenticated/${copiedKey}`)
 
     const conn = await getSuperuserPostgrestClient()
     const object = await conn
@@ -1269,6 +1273,65 @@ describe('testing copy object', () => {
     expect(object.user_metadata).toEqual({
       test1: 1234,
     })
+  })
+
+  test('can copy objects to itself overwriting their metadata', async () => {
+    const copiedKey = 'casestudy-2349.png'
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/copy',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        'x-upsert': 'true',
+        'x-metadata': Buffer.from(
+          JSON.stringify({
+            newMetadata: 'test1',
+          })
+        ).toString('base64'),
+      },
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey: `authenticated/${copiedKey}`,
+        destinationKey: `authenticated/${copiedKey}`,
+        metadata: {
+          cacheControl: 'max-age=999',
+          mimetype: 'image/gif',
+        },
+        copyMetadata: false,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.copyObject).toBeCalled()
+    const parsedBody = JSON.parse(response.body)
+
+    expect(parsedBody.Key).toBe(`bucket2/authenticated/${copiedKey}`)
+    expect(parsedBody.name).toBe(`authenticated/${copiedKey}`)
+    expect(parsedBody.bucket_id).toBe(`bucket2`)
+    expect(parsedBody.metadata).toEqual(
+      expect.objectContaining({
+        cacheControl: 'max-age=999',
+        mimetype: 'image/gif',
+      })
+    )
+
+    const conn = await getSuperuserPostgrestClient()
+    const object = await conn
+      .table('objects')
+      .select('*')
+      .where('bucket_id', 'bucket2')
+      .where('name', `authenticated/${copiedKey}`)
+      .first()
+
+    expect(object).not.toBeFalsy()
+    expect(object.user_metadata).toEqual({
+      newMetadata: 'test1',
+    })
+    expect(object.metadata).toEqual(
+      expect.objectContaining({
+        cacheControl: 'max-age=999',
+        mimetype: 'image/gif',
+      })
+    )
   })
 
   test('can copy objects excluding their metadata', async () => {
@@ -1288,7 +1351,8 @@ describe('testing copy object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toBeCalled()
-    expect(response.body).toBe(`{"Key":"bucket2/authenticated/${copiedKey}"}`)
+    const jsonResponse = response.json()
+    expect(jsonResponse.Key).toBe(`bucket2/authenticated/${copiedKey}`)
 
     const conn = await getSuperuserPostgrestClient()
     const object = await conn

@@ -263,6 +263,9 @@ export class ObjectStorage {
    * @param owner
    * @param conditions
    * @param copyMetadata
+   * @param upsert
+   * @param fileMetadata
+   * @param userMetadata
    */
   async copyObject({
     sourceKey,
@@ -288,16 +291,14 @@ export class ObjectStorage {
       'bucket_id,metadata,user_metadata,version'
     )
 
-    if (s3SourceKey === s3DestinationKey) {
-      return {
-        destObject: originObject,
-        httpStatusCode: 200,
-        eTag: originObject.metadata?.eTag,
-        lastModified: originObject.metadata?.lastModified
-          ? new Date(originObject.metadata.lastModified as string)
-          : undefined,
-      }
-    }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const baseMetadata = originObject.metadata || {}
+    const destinationMetadata = copyMetadata
+      ? baseMetadata
+      : {
+          ...baseMetadata,
+          ...(fileMetadata || {}),
+        }
 
     await this.uploader.canUpload({
       bucketId: destinationBucket,
@@ -313,7 +314,7 @@ export class ObjectStorage {
         originObject.version,
         s3DestinationKey,
         newVersion,
-        fileMetadata,
+        destinationMetadata,
         conditions
       )
 
@@ -334,14 +335,16 @@ export class ObjectStorage {
           }
         )
 
-        const destinationMetadata = copyMetadata ? originObject.metadata : fileMetadata || {}
-
         const destinationObject = await db.upsertObject({
           ...originObject,
           bucket_id: destinationBucket,
           name: destinationKey,
           owner,
-          metadata: destinationMetadata,
+          metadata: {
+            ...destinationMetadata,
+            lastModified: copyResult.lastModified,
+            eTag: copyResult.eTag,
+          },
           user_metadata: copyMetadata ? originObject.user_metadata : userMetadata,
           version: newVersion,
         })
@@ -402,9 +405,8 @@ export class ObjectStorage {
     mustBeValidKey(destinationObjectName)
 
     const newVersion = randomUUID()
-    const s3SourceKey = encodeURIComponent(
-      `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
-    )
+    const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
+
     const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationObjectName}`
 
     await this.db.testPermission((db) => {

@@ -29,7 +29,7 @@
     "@aws-sdk/lib-storage": "3.654.0",
     "@aws-sdk/s3-request-presigner": "3.654.0",
     "@fastify/accepts": "^4.3.0",
-    "@fastify/multipart": "^8.3.0",
+    "@fastify/multipart": "^8.3.1",
     "@fastify/rate-limit": "^7.6.0",
     "@fastify/swagger": "^8.3.1",
     "@fastify/swagger-ui": "^4.1.0",

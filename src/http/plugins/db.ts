@@ -3,7 +3,6 @@ import { getConfig, MultitenantMigrationStrategy } from '../../config'
 import {
   getServiceKeyUser,
   getTenantConfig,
-  TenantMigrationStatus,
   TenantConnection,
   getPostgresConnection,
 } from '@internal/database'
@@ -13,8 +12,7 @@ import { createMutexByKey } from '@internal/concurrency'
 import {
   areMigrationsUpToDate,
   DBMigration,
-  hasMissingSyncMigration,
-  lastMigrationName,
+  lastLocalMigrationName,
   progressiveMigrations,
   runMigrationsOnTenant,
   updateTenantMigrationsState,
@@ -169,7 +167,7 @@ export const migrations = fastifyPlugin(
         return
       }
 
-      req.latestMigration = await lastMigrationName()
+      req.latestMigration = await lastLocalMigrationName()
     })
 
     if (dbMigrationStrategy === MultitenantMigrationStrategy.ON_REQUEST) {
@@ -203,7 +201,6 @@ export const migrations = fastifyPlugin(
     }
 
     if (dbMigrationStrategy === MultitenantMigrationStrategy.PROGRESSIVE) {
-      const migrationsMutex = createMutexByKey()
       fastify.addHook('preHandler', async (request) => {
         if (!isMultitenant) {
           return
@@ -217,55 +214,7 @@ export const migrations = fastifyPlugin(
           return
         }
 
-        const needsToRunMigrationsNow = await hasMissingSyncMigration(request.tenantId)
-
-        // if the tenant is not marked as stale, add it to the progressive migrations queue
-        if (
-          !needsToRunMigrationsNow &&
-          tenant.migrationStatus !== TenantMigrationStatus.FAILED_STALE
-        ) {
-          progressiveMigrations.addTenant(request.tenantId)
-          return
-        }
-
-        // if the tenant is marked as stale or there are pending SYNC migrations,
-        // try running the migrations
-        await migrationsMutex(request.tenantId, async () => {
-          if (tenant.syncMigrationsDone || migrationsUpToDate) {
-            return
-          }
-
-          await runMigrationsOnTenant(tenant.databaseUrl, request.tenantId, needsToRunMigrationsNow)
-            .then(async () => {
-              await updateTenantMigrationsState(request.tenantId)
-              tenant.syncMigrationsDone = true
-            })
-            .catch((e) => {
-              logSchema.error(
-                fastify.log,
-                `[Migrations] Error running migrations ${request.tenantId} `,
-                {
-                  type: 'migrations',
-                  error: e,
-                  metadata: JSON.stringify({
-                    strategy: 'progressive',
-                  }),
-                }
-              )
-            })
-        }).catch((e) => {
-          logSchema.error(
-            fastify.log,
-            `[Migrations] Error running migrations ${request.tenantId} `,
-            {
-              type: 'migrations',
-              error: e,
-              metadata: JSON.stringify({
-                strategy: 'progressive',
-              }),
-            }
-          )
-        })
+        progressiveMigrations.addTenant(request.tenantId)
       })
     }
   },

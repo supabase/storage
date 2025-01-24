@@ -207,78 +207,31 @@ export class S3ProtocolHandler {
 
     const limit = Math.min(maxKeys || 1000, 1000)
 
-    const objects = await this.storage.from(bucket).listObjectsV2({
+    const results = await this.storage.from(bucket).listObjectsV2({
       prefix,
       delimiter: delimiter,
-      maxKeys: limit + 1,
-      nextToken: continuationToken ? decodeContinuationToken(continuationToken) : undefined,
-      startAfter,
+      maxKeys: limit,
+      cursor: continuationToken,
+      startAfter: startAfter,
+      encodingType: command.EncodingType,
     })
 
-    let results = objects
-    let prevPrefix = ''
-
-    if (delimiter) {
-      const delimitedResults: Obj[] = []
-      for (const object of objects) {
-        let idx = object.name.replace(prefix, '').indexOf(delimiter)
-
-        if (idx >= 0) {
-          idx = prefix.length + idx + delimiter.length
-          const currPrefix = object.name.substring(0, idx)
-          if (currPrefix === prevPrefix) {
-            continue
-          }
-          prevPrefix = currPrefix
-          delimitedResults.push({
-            id: null,
-            name: command.EncodingType === 'url' ? encodeURIComponent(currPrefix) : currPrefix,
-            bucket_id: bucket,
-            owner: '',
-            metadata: null,
-            created_at: '',
-            updated_at: '',
-            version: '',
-          })
-          continue
-        }
-
-        delimitedResults.push(object)
+    const commonPrefixes = results.folders.map((object) => {
+      return {
+        Prefix: object.name,
       }
-      results = delimitedResults
-    }
-
-    let isTruncated = false
-
-    if (results.length > limit) {
-      results = results.slice(0, limit)
-      isTruncated = true
-    }
-
-    const commonPrefixes = results
-      .filter((e) => e.id === null)
-      .map((object) => {
-        return {
-          Prefix: object.name,
-        }
-      })
+    })
 
     const contents =
-      results
-        .filter((o) => o.id)
-        .map((o) => ({
-          Key: command.EncodingType === 'url' ? encodeURIComponent(o.name) : o.name,
-          LastModified: (o.updated_at ? new Date(o.updated_at).toISOString() : undefined) as
-            | Date
-            | undefined,
-          ETag: o.metadata?.eTag as string,
-          Size: o.metadata?.size as number,
-          StorageClass: 'STANDARD' as const,
-        })) || []
-
-    const nextContinuationToken = isTruncated
-      ? encodeContinuationToken(results[results.length - 1].name)
-      : undefined
+      results.objects.map((o) => ({
+        Key: o.name,
+        LastModified: (o.updated_at ? new Date(o.updated_at).toISOString() : undefined) as
+          | Date
+          | undefined,
+        ETag: o.metadata?.eTag as string,
+        Size: o.metadata?.size as number,
+        StorageClass: 'STANDARD' as const,
+      })) || []
 
     const response: { ListBucketResult: ListObjectsV2Output } = {
       ListBucketResult: {
@@ -286,17 +239,17 @@ export class S3ProtocolHandler {
         Prefix: prefix,
         ContinuationToken: continuationToken,
         Contents: contents,
-        IsTruncated: isTruncated,
+        IsTruncated: results.hasNext,
         MaxKeys: limit,
         Delimiter: delimiter,
         EncodingType: encodingType,
-        KeyCount: results.length,
+        KeyCount: results.folders.length + results.folders.length,
         CommonPrefixes: commonPrefixes,
       },
     }
 
-    if (nextContinuationToken) {
-      response.ListBucketResult.NextContinuationToken = nextContinuationToken
+    if (results.nextCursor) {
+      response.ListBucketResult.NextContinuationToken = results.nextCursor
     }
 
     return {

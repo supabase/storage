@@ -16,7 +16,7 @@ const payload = {
   serviceKey: 'd',
   jwks: { keys: [] },
   migrationStatus: 'COMPLETED',
-  migrationVersion: 'custom-metadata',
+  migrationVersion: 'add-insert-trigger-prefixes',
   tracingMode: 'basic',
   features: {
     imageTransformation: {
@@ -40,7 +40,7 @@ const payload2 = {
   serviceKey: 'h',
   jwks: null,
   migrationStatus: 'COMPLETED',
-  migrationVersion: 'custom-metadata',
+  migrationVersion: 'add-insert-trigger-prefixes',
   tracingMode: 'basic',
   features: {
     imageTransformation: {

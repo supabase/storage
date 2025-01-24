@@ -17,10 +17,13 @@ import {
   SearchObjectOption,
 } from './adapter'
 import { DatabaseError } from 'pg'
-import { TenantConnection } from '@internal/database'
+import { getTenantConfig, TenantConnection } from '@internal/database'
 import { DbQueryPerformance } from '@internal/monitoring/metrics'
 import { isUuid } from '../limits'
 import { DBMigration } from '@internal/database/migrations'
+import { getConfig } from '../../config'
+
+const { isMultitenant } = getConfig()
 
 /**
  * Database
@@ -232,7 +235,7 @@ export class StorageKnexDB implements Database {
         query.orderBy(knex.raw('name COLLATE "C"'))
 
         if (options?.prefix) {
-          query.where('name', 'ilike', `${options.prefix}%`)
+          query.where('name', 'like', `${options.prefix}%`)
         }
 
         if (options?.nextToken) {
@@ -240,6 +243,28 @@ export class StorageKnexDB implements Database {
         }
 
         return query
+      }
+
+      let useNewSearchVersion2 = true
+
+      if (isMultitenant) {
+        const { migrationVersion } = await getTenantConfig(this.tenantId)
+        if (migrationVersion) {
+          useNewSearchVersion2 = DBMigration[migrationVersion] >= DBMigration['search-v2']
+        }
+      }
+
+      if (useNewSearchVersion2 && options?.delimiter === '/') {
+        const levels = !options?.prefix ? 1 : options.prefix.split('/').length
+        const query = await knex.raw('select * from storage.search_v2(?,?,?,?,?)', [
+          options?.prefix || '',
+          bucketId,
+          options?.maxKeys || 1000,
+          levels,
+          options?.startAfter || '',
+        ])
+
+        return query.rows
       }
 
       const query = await knex.raw(

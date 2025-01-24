@@ -2,11 +2,18 @@ import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import apiKey from '../../plugins/apikey'
 import { decrypt, encrypt } from '@internal/auth'
-import { deleteTenantConfig, TenantMigrationStatus, multitenantKnex } from '@internal/database'
+import {
+  deleteTenantConfig,
+  TenantMigrationStatus,
+  multitenantKnex,
+  getTenantConfig,
+} from '@internal/database'
 import { dbSuperUser, storage } from '../../plugins'
 import {
-  lastMigrationName,
+  DBMigration,
+  lastLocalMigrationName,
   progressiveMigrations,
+  resetMigration,
   runMigrationsOnTenant,
 } from '@internal/database/migrations'
 
@@ -226,7 +233,7 @@ export default async function routes(fastify: FastifyInstance) {
       await multitenantKnex('tenants')
         .where('id', tenantId)
         .update({
-          migrations_version: await lastMigrationName(),
+          migrations_version: await lastLocalMigrationName(),
           migrations_status: TenantMigrationStatus.COMPLETED,
         })
     } catch (e) {
@@ -286,7 +293,7 @@ export default async function routes(fastify: FastifyInstance) {
           await multitenantKnex('tenants')
             .where('id', tenantId)
             .update({
-              migrations_version: await lastMigrationName(),
+              migrations_version: await lastLocalMigrationName(),
               migrations_status: TenantMigrationStatus.COMPLETED,
             })
         } catch (e) {
@@ -363,7 +370,7 @@ export default async function routes(fastify: FastifyInstance) {
       await multitenantKnex('tenants')
         .where('id', tenantId)
         .update({
-          migrations_version: await lastMigrationName(),
+          migrations_version: await lastLocalMigrationName(),
           migrations_status: TenantMigrationStatus.COMPLETED,
         })
     } catch (e) {
@@ -394,7 +401,7 @@ export default async function routes(fastify: FastifyInstance) {
     }
 
     reply.send({
-      isLatest: (await lastMigrationName()) === migrationsInfo?.migrations_version,
+      isLatest: (await lastLocalMigrationName()) === migrationsInfo?.migrations_version,
       migrationsVersion: migrationsInfo?.migrations_version,
       migrationsStatus: migrationsInfo?.migrations_status,
     })
@@ -423,10 +430,47 @@ export default async function routes(fastify: FastifyInstance) {
         migrated: true,
       })
     } catch (e) {
+      req.executionError = e as Error
       reply.status(400).send({
         migrated: false,
         error: JSON.stringify(e),
       })
+    }
+  })
+
+  fastify.post<tenantRequestInterface>('/:tenantId/migrations/reset', async (req, reply) => {
+    const { untilMigration, markCompletedTillMigration } = req.body as any
+
+    const { databaseUrl } = await getTenantConfig(req.params.tenantId)
+
+    if (
+      typeof untilMigration !== 'string' ||
+      !DBMigration[untilMigration as keyof typeof DBMigration]
+    ) {
+      return reply.status(400).send({ message: 'Invalid migration' })
+    }
+
+    if (
+      typeof markCompletedTillMigration === 'string' &&
+      !DBMigration[untilMigration as keyof typeof DBMigration]
+    ) {
+      return reply.status(400).send({ message: 'Invalid migration' })
+    }
+
+    try {
+      await resetMigration({
+        tenantId: req.params.tenantId,
+        databaseUrl,
+        untilMigration: untilMigration as keyof typeof DBMigration,
+        markCompletedTillMigration: markCompletedTillMigration
+          ? (markCompletedTillMigration as keyof typeof DBMigration)
+          : undefined,
+      })
+
+      return reply.send({ message: 'Migrations reset' })
+    } catch (e) {
+      req.executionError = e as Error
+      return reply.status(400).send({ message: 'Failed to reset migration' })
     }
   })
 

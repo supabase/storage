@@ -8,6 +8,7 @@ import { getTenantConfig } from '@internal/database'
 export interface BasePayload {
   $version?: string
   singletonKey?: string
+  scheduleAt?: Date
   reqId?: string
   tenant: {
     ref: string
@@ -98,6 +99,11 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         if (!message.payload.$version) {
           ;(message.payload as (typeof message)['payload']).$version = this.version
         }
+
+        if (message.payload.scheduleAt) {
+          sendOptions.startAfter = new Date(message.payload.scheduleAt)
+        }
+
         return {
           ...sendOptions,
           name: this.getQueueName(),
@@ -164,7 +170,14 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     }
 
     const timer = QueueJobSchedulingTime.startTimer()
-    const sendOptions = constructor.getQueueOptions(this.payload)
+    let sendOptions = constructor.getQueueOptions(this.payload)
+
+    if (this.payload.scheduleAt) {
+      if (!sendOptions) {
+        sendOptions = {}
+      }
+      sendOptions.startAfter = new Date(this.payload.scheduleAt)
+    }
 
     try {
       const res = await Queue.getInstance().send({

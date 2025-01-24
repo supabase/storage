@@ -10,6 +10,7 @@ import getSignedObject from './getSignedObject'
 import getSignedURL from './getSignedURL'
 import getSignedURLs from './getSignedURLs'
 import listObjects from './listObjects'
+import listObjectsV2 from './listObjectsV2'
 import moveObject from './moveObject'
 import updateObject from './updateObject'
 import {
@@ -33,6 +34,7 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(getSignedURLs)
     fastify.register(moveObject)
     fastify.register(updateObject)
+    fastify.register(listObjectsV2)
     fastify.register(listObjects)
     fastify.register(getObjectInfoAuth)
     fastify.register(copyObject)

@@ -10,7 +10,7 @@ import { searchPath } from '../connection'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { multitenantKnex } from '../multitenant-db'
 import { ProgressiveMigrations } from './progressive'
-import { RunMigrationsOnTenants } from '@storage/events'
+import { RunMigrationsOnTenants, ResetMigrationsOnTenant } from '@storage/events'
 import { ERRORS } from '@internal/errors'
 import { DBMigration } from './types'
 
@@ -76,7 +76,7 @@ export function startAsyncMigrations(signal: AbortSignal) {
   }
 }
 
-export async function lastMigrationName() {
+export async function lastLocalMigrationName() {
   const migrations = await loadMigrationFilesCached('./migrations/tenant')
   return migrations[migrations.length - 1].name as keyof typeof DBMigration
 }
@@ -92,7 +92,7 @@ export async function* listTenantsToMigrate(signal: AbortSignal) {
       break
     }
 
-    const migrationVersion = await lastMigrationName()
+    const migrationVersion = await lastLocalMigrationName()
 
     const data = await multitenantKnex
       .table<{ id: string; cursor_id: number }>('tenants')
@@ -122,6 +122,38 @@ export async function* listTenantsToMigrate(signal: AbortSignal) {
   }
 }
 
+export async function* listTenantsToResetMigrations(
+  migration: keyof typeof DBMigration,
+  signal: AbortSignal
+) {
+  let lastCursor = 0
+
+  while (true) {
+    if (signal.aborted) {
+      break
+    }
+
+    const afterMigrations = Object.keys(DBMigration).filter((migrationName) => {
+      return DBMigration[migrationName as keyof typeof DBMigration] > DBMigration[migration]
+    })
+
+    const data = await multitenantKnex
+      .table<{ id: string; cursor_id: number }>('tenants')
+      .select('id', 'cursor_id')
+      .where('cursor_id', '>', lastCursor)
+      .whereIn('migrations_version', afterMigrations)
+      .orderBy('cursor_id', 'asc')
+      .limit(200)
+
+    if (data.length === 0) {
+      break
+    }
+
+    lastCursor = data[data.length - 1].cursor_id
+    yield data.map((tenant) => tenant.id)
+  }
+}
+
 /**
  * Update tenant migration version and status
  * @param tenantId
@@ -129,9 +161,9 @@ export async function* listTenantsToMigrate(signal: AbortSignal) {
  */
 export async function updateTenantMigrationsState(
   tenantId: string,
-  options?: { state: TenantMigrationStatus }
+  options?: { migration?: keyof typeof DBMigration; state: TenantMigrationStatus }
 ) {
-  const migrationVersion = await lastMigrationName()
+  const migrationVersion = options?.migration || (await lastLocalMigrationName())
   const state = options?.state || TenantMigrationStatus.COMPLETED
   return multitenantKnex
     .table('tenants')
@@ -152,7 +184,7 @@ export async function updateTenantMigrationsState(
  * @param tenantId
  */
 export async function areMigrationsUpToDate(tenantId: string) {
-  const latestMigrationVersion = await lastMigrationName()
+  const latestMigrationVersion = await lastLocalMigrationName()
   const tenant = await getTenantConfig(tenantId)
 
   return (
@@ -161,25 +193,60 @@ export async function areMigrationsUpToDate(tenantId: string) {
   )
 }
 
-export async function hasMissingSyncMigration(tenantId: string) {
-  const { migrationVersion, migrationStatus } = await getTenantConfig(tenantId)
-  const migrations = await loadMigrationFilesCached('./migrations/tenant')
+export async function obtainLockOnMultitenantDB<T>(fn: () => Promise<T>) {
+  try {
+    const result = await multitenantKnex.raw(`SELECT pg_try_advisory_lock(?);`, [
+      '-8575985245963000605',
+    ])
+    const lockAcquired = result.rows.shift()?.pg_try_advisory_lock || false
 
-  if (!migrationStatus) {
-    return migrations.some((m) => {
-      return m.contents.includes('---SYNC---')
+    if (!lockAcquired) {
+      return
+    }
+
+    logSchema.info(logger, '[Migrations] Instance acquired the lock', {
+      type: 'migrations',
     })
+
+    return await fn()
+  } finally {
+    try {
+      await multitenantKnex.raw(`SELECT pg_advisory_unlock(?);`, ['-8575985245963000605'])
+    } catch (e) {}
   }
+}
 
-  const indexLastMigration = migrations.findIndex((m) => m.name === migrationVersion)
+export async function resetMigrationsOnTenants(options: {
+  till: keyof typeof DBMigration
+  markCompletedTillMigration?: keyof typeof DBMigration
+  signal: AbortSignal
+}) {
+  await obtainLockOnMultitenantDB(async () => {
+    logSchema.info(logger, '[Migrations] Listing all tenants', {
+      type: 'migrations',
+    })
 
-  if (indexLastMigration === -1) {
-    return true
-  }
+    const tenants = listTenantsToResetMigrations(options.till, options.signal)
 
-  const migrationAfterLast = migrations.slice(indexLastMigration + 1)
-  return migrationAfterLast.some((m) => {
-    return m.contents.includes('---SYNC---')
+    for await (const tenantBatch of tenants) {
+      await ResetMigrationsOnTenant.batchSend(
+        tenantBatch.map((tenant) => {
+          return new ResetMigrationsOnTenant({
+            tenantId: tenant,
+            untilMigration: options.till,
+            markCompletedTillMigration: options.markCompletedTillMigration,
+            tenant: {
+              host: '',
+              ref: tenant,
+            },
+          })
+        })
+      )
+    }
+
+    logSchema.info(logger, '[Migrations] reset migrations jobs scheduled', {
+      type: 'migrations',
+    })
   })
 }
 
@@ -191,20 +258,10 @@ export async function runMigrationsOnAllTenants(signal: AbortSignal) {
   if (!pgQueueEnable) {
     return
   }
-  const result = await multitenantKnex.raw(`SELECT pg_try_advisory_lock(?);`, [
-    '-8575985245963000605',
-  ])
-  const lockAcquired = result.rows.shift()?.pg_try_advisory_lock || false
-
-  if (!lockAcquired) {
-    return
-  }
-
-  logSchema.info(logger, '[Migrations] Instance acquired the lock', {
-    type: 'migrations',
-  })
-
-  try {
+  await obtainLockOnMultitenantDB(async () => {
+    logSchema.info(logger, '[Migrations] Listing all tenants', {
+      type: 'migrations',
+    })
     const tenants = listTenantsToMigrate(signal)
     for await (const tenantBatch of tenants) {
       await RunMigrationsOnTenants.batchSend(
@@ -223,11 +280,7 @@ export async function runMigrationsOnAllTenants(signal: AbortSignal) {
     logSchema.info(logger, '[Migrations] Async migrations jobs completed', {
       type: 'migrations',
     })
-  } finally {
-    try {
-      await multitenantKnex.raw(`SELECT pg_advisory_unlock(?);`, ['-8575985245963000605'])
-    } catch (e) {}
-  }
+  })
 }
 
 /**
@@ -275,29 +328,131 @@ export async function runMigrationsOnTenant(
   })
 }
 
+export async function resetMigration(options: {
+  tenantId: string
+  untilMigration: keyof typeof DBMigration
+  markCompletedTillMigration?: keyof typeof DBMigration
+  databaseUrl: string | undefined
+}): Promise<boolean> {
+  const dbConfig: ClientConfig = {
+    connectionString: options.databaseUrl,
+    connectionTimeoutMillis: 60_000,
+    options: `-c search_path=${searchPath}`,
+  }
+
+  if (databaseSSLRootCert) {
+    dbConfig.ssl = { ca: databaseSSLRootCert }
+  }
+
+  const client = await connect(dbConfig)
+
+  try {
+    const queryWithAdvisory = withAdvisoryLock(false, async (pgClient) => {
+      await pgClient.query(`BEGIN`)
+
+      try {
+        await client.query(`SET search_path TO ${searchPath.join(',')}`)
+
+        const migrationsRowsResult = await pgClient.query(`SELECT * from migrations`)
+        const currentTenantMigrations = migrationsRowsResult.rows as { id: number; name: string }[]
+
+        if (!currentTenantMigrations.length) {
+          return false
+        }
+
+        const currentLastMigration = currentTenantMigrations[currentTenantMigrations.length - 1]
+        const localMigration = DBMigration[options.untilMigration]
+
+        // This tenant migration is already at the desired migration
+        if (currentLastMigration.id === localMigration) {
+          return false
+        }
+
+        // This tenant migration is behind of the desired migration
+        if (currentLastMigration.id < localMigration) {
+          return false
+        }
+
+        // This tenant migration is ahead the desired migration
+        await pgClient.query(SQL`DELETE FROM migrations WHERE id > ${localMigration}`)
+
+        // latest run migration
+        let latestRunMigration = options.untilMigration
+
+        // If we want to prevent the migrations to run in the future
+        // we need to update the tenant migration state
+        if (options.markCompletedTillMigration) {
+          const markCompletedTillMigration = DBMigration[options.markCompletedTillMigration]
+
+          const aheadMigrations = Object.keys(DBMigration).filter((migrationName) => {
+            return (
+              DBMigration[migrationName as keyof typeof DBMigration] >
+                DBMigration[options.untilMigration] &&
+              DBMigration[migrationName as keyof typeof DBMigration] <= markCompletedTillMigration
+            )
+          })
+
+          if (aheadMigrations.length) {
+            const localFileMigrations = await loadMigrationFilesCached('./migrations/tenant')
+
+            const query = SQL`INSERT INTO `
+              .append('migrations')
+              .append('(id, name, hash, executed_at) VALUES ')
+
+            aheadMigrations.forEach((migrationName, index) => {
+              const migration = localFileMigrations.find(
+                (m) => m.id === DBMigration[migrationName as keyof typeof DBMigration]
+              )
+
+              if (!migration) {
+                throw Error(`Migration ${migrationName} not found`)
+              }
+
+              query.append(SQL`(${migration.id}, ${migration.name}, ${migration.hash}, NOW())`)
+              if (index !== aheadMigrations.length - 1) {
+                query.append(',')
+              }
+            })
+
+            await pgClient.query(query)
+
+            latestRunMigration = options.markCompletedTillMigration
+          }
+        }
+
+        await updateTenantMigrationsState(options.tenantId, {
+          migration: latestRunMigration,
+          state: TenantMigrationStatus.COMPLETED,
+        })
+
+        await pgClient.query(`COMMIT`)
+
+        return true
+      } catch (e) {
+        await pgClient.query(`ROLLBACK`)
+        throw e
+      }
+    })
+
+    return await queryWithAdvisory(client)
+  } finally {
+    await client.end()
+  }
+}
+
 /**
- * Connect and migrate the database
+ * Connect to the database
  * @param options
  */
-async function connectAndMigrate(options: {
-  databaseUrl: string | undefined
-  migrationsDirectory: string
+async function connect(options: {
+  connectionString?: string | undefined
   ssl?: ClientConfig['ssl']
-  shouldCreateStorageSchema?: boolean
   tenantId?: string
-  waitForLock?: boolean
 }) {
-  const {
-    shouldCreateStorageSchema,
-    migrationsDirectory,
-    ssl,
-    tenantId,
-    databaseUrl,
-    waitForLock,
-  } = options
+  const { ssl, tenantId, connectionString } = options
 
   const dbConfig: ClientConfig = {
-    connectionString: databaseUrl,
+    connectionString: connectionString,
     connectionTimeoutMillis: 60_000,
     options: `-c search_path=${searchPath}`,
     ssl,
@@ -311,8 +466,36 @@ async function connectAndMigrate(options: {
       project: tenantId,
     })
   })
+  await client.connect()
+  return client
+}
+
+/**
+ * Connect and migrate the database
+ * @param options
+ */
+async function connectAndMigrate(options: {
+  databaseUrl: string | undefined
+  migrationsDirectory: string
+  ssl?: ClientConfig['ssl']
+  shouldCreateStorageSchema?: boolean
+  tenantId?: string
+  waitForLock?: boolean
+}) {
+  const { shouldCreateStorageSchema, migrationsDirectory, ssl, databaseUrl, waitForLock } = options
+
+  const dbConfig: ClientConfig = {
+    connectionString: databaseUrl,
+    connectionTimeoutMillis: 60_000,
+    options: `-c search_path=${searchPath}`,
+    statement_timeout: 1000 * 60 * 60 * 3, // 3 hours
+    ssl,
+  }
+
+  const client = await connect(dbConfig)
+
   try {
-    await client.connect()
+    await client.query(`SET statement_timeout TO '3h'`)
     await migrate({ client }, migrationsDirectory, Boolean(waitForLock), shouldCreateStorageSchema)
   } finally {
     await client.end()
@@ -492,7 +675,7 @@ function withAdvisoryLock<T>(
             if (waitForLock) {
               await new Promise((res) => setTimeout(res, 20 * tries))
             } else {
-              return [] as unknown as Promise<T>
+              throw ERRORS.LockTimeout()
             }
           }
 
@@ -547,6 +730,8 @@ async function refreshMigrationHash(
       throw e
     }
   }
+
+  return invalidHashes
 }
 
 /**

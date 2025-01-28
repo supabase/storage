@@ -24,4 +24,5 @@ export const DBMigration = {
   'optimize-search-function': 22,
   'operation-function': 23,
   'custom-metadata': 24,
+  'unicode-object-names': 25,
 } as const

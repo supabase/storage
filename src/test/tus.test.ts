@@ -13,7 +13,7 @@ import { logger } from '@internal/monitoring'
 import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
 import { getConfig } from '../config'
 import app from '../app'
-import { checkBucketExists } from './common'
+import { checkBucketExists, getInvalidObjectName, getUnicodeObjectName } from './common'
 import { Storage, backends, StorageKnexDB } from '../storage'
 
 const { serviceKey, tenantId, storageS3Bucket, storageBackendType } = getConfig()
@@ -522,6 +522,136 @@ describe('Tus multipart', () => {
         const err = e as DetailedError
         expect(err.originalResponse.getBody()).toEqual('Missing x-signature header')
         expect(err.originalResponse.getStatus()).toEqual(400)
+      }
+    })
+  })
+
+  describe('Object key names with Unicode characters', () => {
+    it('can be uploaded with the TUS protocol', async () => {
+      const objectName = randomUUID() + '-' + getUnicodeObjectName()
+
+      const bucket = await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+      })
+
+      const result = await new Promise((resolve, reject) => {
+        const upload = new tus.Upload(oneChunkFile, {
+          endpoint: `${localServerAddress}/upload/resumable`,
+          onShouldRetry: () => false,
+          uploadDataDuringCreation: false,
+          headers: {
+            authorization: `Bearer ${serviceKey}`,
+            'x-upsert': 'true',
+          },
+          metadata: {
+            bucketName: bucketName,
+            objectName: objectName,
+            contentType: 'image/jpeg',
+            cacheControl: '3600',
+            metadata: JSON.stringify({
+              test1: 'test1',
+              test2: 'test2',
+            }),
+          },
+          onError: function (error) {
+            reject(error)
+          },
+          onSuccess: () => {
+            resolve(true)
+          },
+        })
+
+        upload.start()
+      })
+
+      expect(result).toEqual(true)
+
+      const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+      expect(dbAsset).toEqual({
+        bucket_id: bucket.id,
+        created_at: expect.any(Date),
+        id: expect.any(String),
+        last_accessed_at: expect.any(Date),
+        metadata: {
+          cacheControl: 'max-age=3600',
+          contentLength: 29526,
+          eTag: '"53e1323c929d57b09b95fbe6d531865c-1"',
+          httpStatusCode: 200,
+          lastModified: expect.any(String),
+          mimetype: 'image/jpeg',
+          size: 29526,
+        },
+        user_metadata: {
+          test1: 'test1',
+          test2: 'test2',
+        },
+        name: objectName,
+        owner: null,
+        owner_id: null,
+        path_tokens: objectName.split('/'),
+        updated_at: expect.any(Date),
+        version: expect.any(String),
+      })
+
+      const getResponse = await app().inject({
+        method: 'GET',
+        url: `/object/${bucketName}/${encodeURIComponent(objectName)}`,
+        headers: {
+          authorization: `Bearer ${serviceKey}`,
+        },
+      })
+      expect(getResponse.statusCode).toBe(200)
+      expect(getResponse.headers['etag']).toBe('"53e1323c929d57b09b95fbe6d531865c-1"')
+      expect(getResponse.headers['cache-control']).toBe('max-age=3600')
+      expect(getResponse.headers['content-length']).toBe('29526')
+      expect(getResponse.headers['content-type']).toBe('image/jpeg')
+    })
+
+    it('should not upload if the name contains invalid characters', async () => {
+      await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+      })
+
+      const invalidObjectName = randomUUID() + '-' + getInvalidObjectName()
+      try {
+        await new Promise((resolve, reject) => {
+          const upload = new tus.Upload(oneChunkFile, {
+            endpoint: `${localServerAddress}/upload/resumable`,
+            onShouldRetry: () => false,
+            uploadDataDuringCreation: false,
+            headers: {
+              authorization: `Bearer ${serviceKey}`,
+              'x-upsert': 'true',
+            },
+            metadata: {
+              bucketName: bucketName,
+              objectName: invalidObjectName,
+              contentType: 'image/jpeg',
+              cacheControl: '3600',
+            },
+            onError: function (error) {
+              reject(error)
+            },
+            onSuccess: () => {
+              resolve(true)
+            },
+          })
+
+          upload.start()
+        })
+
+        throw new Error('it should error with invalid key')
+      } catch (e) {
+        expect((e as Error).message).not.toEqual('it should error with invalid key')
+        const err = e as DetailedError
+        expect(err.originalResponse.getStatus()).toEqual(400)
+        expect(err.originalResponse.getBody()).toEqual(
+          `Invalid key: ${encodeURIComponent(invalidObjectName)}`
+        )
       }
     })
   })

@@ -8,6 +8,7 @@ import {
   runMigrationsOnTenant,
   updateTenantMigrationsState,
 } from '@internal/database/migrations'
+import { ErrorCode, StorageBackendError } from '@internal/errors'
 
 interface RunMigrationsPayload extends BasePayload {
   tenantId: string
@@ -26,7 +27,9 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
 
   static getQueueOptions(payload: RunMigrationsPayload): SendOptions {
     return {
+      expireInHours: 2,
       singletonKey: payload.tenantId,
+      useSingletonQueue: true,
       retryLimit: 3,
       retryDelay: 5,
       priority: 10,
@@ -48,7 +51,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
         type: 'migrations',
         project: tenantId,
       })
-      await runMigrationsOnTenant(tenant.databaseUrl, tenantId)
+      await runMigrationsOnTenant(tenant.databaseUrl, tenantId, false)
       await updateTenantMigrationsState(tenantId)
 
       logSchema.info(logger, `[Migrations] completed for tenant ${tenantId}`, {
@@ -56,6 +59,14 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
         project: tenantId,
       })
     } catch (e) {
+      if (e instanceof StorageBackendError && e.code === ErrorCode.LockTimeout) {
+        logSchema.info(logger, `[Migrations] lock timeout for tenant ${tenantId}`, {
+          type: 'migrations',
+          project: tenantId,
+        })
+        return
+      }
+
       logSchema.error(logger, `[Migrations] failed for tenant ${tenantId}`, {
         type: 'migrations',
         error: e,

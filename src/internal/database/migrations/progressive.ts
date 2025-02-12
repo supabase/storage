@@ -101,16 +101,20 @@ export class ProgressiveMigrations {
         const tenantConfig = await getTenantConfig(tenant)
         const migrationsUpToDate = await areMigrationsUpToDate(tenant)
 
-        if (
-          migrationsUpToDate ||
-          tenantConfig.syncMigrationsDone ||
-          tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
-        ) {
+        if (migrationsUpToDate || tenantConfig.syncMigrationsDone) {
           return
         }
 
+        const scheduleAt = new Date()
+        scheduleAt.setMinutes(scheduleAt.getMinutes() + 5)
+        const scheduleForLater =
+          tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
+            ? scheduleAt
+            : undefined
+
         return new RunMigrationsOnTenants({
           tenantId: tenant,
+          scheduleAt: scheduleForLater,
           tenant: {
             host: '',
             ref: tenant,

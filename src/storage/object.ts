@@ -17,6 +17,7 @@ import {
   ObjectUpdatedMetadata,
 } from './events'
 import { FastifyRequest } from 'fastify/types/request'
+import { Obj } from '@storage/schemas'
 
 const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
 
@@ -539,11 +540,75 @@ export class ObjectStorage {
   async listObjectsV2(options?: {
     prefix?: string
     delimiter?: string
-    nextToken?: string
+    cursor?: string
     startAfter?: string
     maxKeys?: number
+    encodingType?: 'url'
   }) {
-    return this.db.listObjectsV2(this.bucketId, options)
+    const limit = Math.min(options?.maxKeys || 1000, 1000)
+    const prefix = options?.prefix || ''
+    const delimiter = options?.delimiter
+
+    const cursor = options?.cursor ? decodeContinuationToken(options?.cursor) : undefined
+    const searchResult = await this.db.listObjectsV2(this.bucketId, {
+      prefix: options?.prefix,
+      delimiter: options?.delimiter,
+      maxKeys: limit + 1,
+      nextToken: cursor,
+      startAfter: cursor || options?.startAfter,
+    })
+
+    let results = searchResult
+    let prevPrefix = ''
+
+    if (delimiter) {
+      const delimitedResults: Obj[] = []
+      for (const object of searchResult) {
+        let idx = object.name.replace(prefix, '').indexOf(delimiter)
+
+        if (idx >= 0) {
+          idx = prefix.length + idx + delimiter.length
+          const currPrefix = object.name.substring(0, idx)
+          if (currPrefix === prevPrefix) {
+            continue
+          }
+          prevPrefix = currPrefix
+          delimitedResults.push({
+            id: null,
+            name: options?.encodingType === 'url' ? encodeURIComponent(currPrefix) : currPrefix,
+            bucket_id: object.bucket_id,
+          })
+          continue
+        }
+
+        delimitedResults.push({
+          ...object,
+          name: options?.encodingType === 'url' ? encodeURIComponent(object.name) : object.name,
+        })
+      }
+      results = delimitedResults
+    }
+
+    let isTruncated = false
+
+    if (results.length > limit) {
+      results = results.slice(0, limit)
+      isTruncated = true
+    }
+
+    const folders = results.filter((obj) => obj.id === null)
+    const objects = results.filter((obj) => obj.id !== null)
+
+    const nextContinuationToken = isTruncated
+      ? encodeContinuationToken(results[results.length - 1].name)
+      : undefined
+
+    return {
+      hasNext: isTruncated,
+      nextCursor: nextContinuationToken,
+      folders: folders,
+      objects: objects,
+    }
   }
 
   /**
@@ -694,4 +759,18 @@ export class ObjectStorage {
 
     return payload
   }
+}
+
+function encodeContinuationToken(name: string) {
+  return Buffer.from(`l:${name}`).toString('base64')
+}
+
+function decodeContinuationToken(token: string) {
+  const decoded = Buffer.from(token, 'base64').toString().split(':')
+
+  if (decoded.length === 0) {
+    throw new Error('Invalid continuation token')
+  }
+
+  return decoded[1]
 }

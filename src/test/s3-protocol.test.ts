@@ -278,6 +278,7 @@ describe('S3 Protocol', () => {
         const resp = await client.send(listBuckets)
         expect(resp.Contents?.length).toBe(1)
         expect(resp.CommonPrefixes?.length).toBe(2)
+        expect(resp.KeyCount).toBe(3)
       })
 
       it('paginate keys and common prefixes', async () => {

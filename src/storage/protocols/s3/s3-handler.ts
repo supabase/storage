@@ -243,7 +243,7 @@ export class S3ProtocolHandler {
         MaxKeys: limit,
         Delimiter: delimiter,
         EncodingType: encodingType,
-        KeyCount: results.folders.length + results.folders.length,
+        KeyCount: results.objects.length + results.folders.length,
         CommonPrefixes: commonPrefixes,
       },
     }

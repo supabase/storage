@@ -1,0 +1,1 @@
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS migrations_feature_flags text[] NULL;

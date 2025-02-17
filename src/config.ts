@@ -40,6 +40,7 @@ type StorageConfigType = {
   dbSuperUser: string
   dbSearchPath: string
   dbMigrationStrategy: MultitenantMigrationStrategy
+  dbMigrationFeatureFlagsEnabled: boolean
   dbPostgresVersion?: string
   databaseURL: string
   databaseSSLRootCert?: string
@@ -299,6 +300,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     dbSuperUser: getOptionalConfigFromEnv('DB_SUPER_USER') || 'postgres',
     dbMigrationStrategy: getOptionalConfigFromEnv('DB_MIGRATIONS_STRATEGY') || 'on_request',
+    dbMigrationFeatureFlagsEnabled: getOptionalConfigFromEnv('DB_FEATURE_FLAGS_ENABLED') === 'true',
 
     // Database - Connection
     dbSearchPath: getOptionalConfigFromEnv('DATABASE_SEARCH_PATH', 'DB_SEARCH_PATH') || '',

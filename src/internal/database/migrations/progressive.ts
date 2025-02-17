@@ -2,6 +2,10 @@ import { logger, logSchema } from '../../monitoring'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
+import { getConfig } from '../../../config'
+import { DBMigration } from '@internal/database/migrations/types'
+
+const { dbMigrationFeatureFlagsEnabled } = getConfig()
 
 export class ProgressiveMigrations {
   protected tenants: string[] = []
@@ -48,11 +52,29 @@ export class ProgressiveMigrations {
     })
   }
 
-  addTenant(tenant: string) {
+  async addTenant(tenant: string, forceMigrate?: boolean) {
     const tenantIndex = this.tenants.indexOf(tenant)
 
     if (tenantIndex !== -1) {
       return
+    }
+
+    // check feature flags
+    if (dbMigrationFeatureFlagsEnabled && !forceMigrate) {
+      const { migrationFeatureFlags, migrationVersion } = await getTenantConfig(tenant)
+      if (!migrationFeatureFlags || !migrationVersion) {
+        return
+      }
+
+      // we only want to run migrations for tenants that have the feature flag enabled
+      // a feature flag can be any migration version that is greater than the current migration version
+      const migrationFeatureFlagsEnabled = migrationFeatureFlags.some(
+        (flag) => DBMigration[flag as keyof typeof DBMigration] > DBMigration[migrationVersion]
+      )
+
+      if (!migrationFeatureFlagsEnabled) {
+        return
+      }
     }
 
     this.tenants.push(tenant)
@@ -95,43 +117,46 @@ export class ProgressiveMigrations {
 
   protected async createJobs(maxJobs: number) {
     this.emittingJobs = true
-    const tenantsBatch = this.tenants.splice(0, maxJobs)
-    const jobs = await Promise.allSettled(
-      tenantsBatch.map(async (tenant) => {
-        const tenantConfig = await getTenantConfig(tenant)
-        const migrationsUpToDate = await areMigrationsUpToDate(tenant)
+    try {
+      const tenantsBatch = this.tenants.splice(0, maxJobs)
+      const jobs = await Promise.allSettled(
+        tenantsBatch.map(async (tenant) => {
+          const tenantConfig = await getTenantConfig(tenant)
+          const migrationsUpToDate = await areMigrationsUpToDate(tenant)
 
-        if (migrationsUpToDate || tenantConfig.syncMigrationsDone) {
-          return
-        }
+          if (migrationsUpToDate || tenantConfig.syncMigrationsDone) {
+            return
+          }
 
-        const scheduleAt = new Date()
-        scheduleAt.setMinutes(scheduleAt.getMinutes() + 5)
-        const scheduleForLater =
-          tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
-            ? scheduleAt
-            : undefined
+          const scheduleAt = new Date()
+          scheduleAt.setMinutes(scheduleAt.getMinutes() + 5)
+          const scheduleForLater =
+            tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
+              ? scheduleAt
+              : undefined
 
-        return new RunMigrationsOnTenants({
-          tenantId: tenant,
-          scheduleAt: scheduleForLater,
-          tenant: {
-            host: '',
-            ref: tenant,
-          },
+          return new RunMigrationsOnTenants({
+            tenantId: tenant,
+            scheduleAt: scheduleForLater,
+            tenant: {
+              host: '',
+              ref: tenant,
+            },
+          })
         })
-      })
-    )
+      )
 
-    const validJobs = jobs
-      .map((job) => {
-        if (job.status === 'fulfilled' && job.value) {
-          return job.value
-        }
-      })
-      .filter((job) => job)
+      const validJobs = jobs
+        .map((job) => {
+          if (job.status === 'fulfilled' && job.value) {
+            return job.value
+          }
+        })
+        .filter((job) => job)
 
-    await RunMigrationsOnTenants.batchSend(validJobs as RunMigrationsOnTenants[])
-    this.emittingJobs = false
+      await RunMigrationsOnTenants.batchSend(validJobs as RunMigrationsOnTenants[])
+    } finally {
+      this.emittingJobs = false
+    }
   }
 }

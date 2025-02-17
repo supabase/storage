@@ -31,6 +31,7 @@ interface TenantConfig {
   }
   migrationVersion?: keyof typeof DBMigration
   migrationStatus?: TenantMigrationStatus
+  migrationFeatureFlags?: string[]
   syncMigrationsDone?: boolean
   tracingMode?: string
   disableEvents?: string[]
@@ -134,6 +135,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       migrations_status,
       tracing_mode,
       disable_events,
+      migrations_feature_flags,
     } = tenant
 
     const serviceKey = decrypt(service_key)
@@ -163,6 +165,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       migrationVersion: migrations_version,
       migrationStatus: migrations_status,
       migrationsRun: false,
+      migrationFeatureFlags: migrations_feature_flags,
       tracingMode: tracing_mode,
       disableEvents: disable_events,
     }

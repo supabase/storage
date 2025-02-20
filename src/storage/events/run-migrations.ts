@@ -20,6 +20,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
   static getWorkerOptions(): WorkOptions {
     return {
       teamSize: 200,
+      enforceSingletonQueueActiveLimit: true,
       teamConcurrency: 10,
       includeMetadata: true,
     }

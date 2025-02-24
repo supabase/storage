@@ -20,6 +20,7 @@ type StorageConfigType = {
   uploadFileSizeLimit: number
   uploadFileSizeLimitStandard?: number
   storageFilePath?: string
+  storageFileEtagAlgorithm: 'mtime' | 'md5'
   storageS3MaxSockets: number
   storageS3Bucket: string
   storageS3Endpoint?: string
@@ -56,6 +57,7 @@ type StorageConfigType = {
   tenantId: string
   requestUrlLengthLimit: number
   requestXForwardedHostRegExp?: string
+  requestAllowXForwardedPrefix?: boolean
   logLevel?: string
   logflareEnabled?: boolean
   logflareApiKey?: string
@@ -106,7 +108,9 @@ type StorageConfigType = {
   tusPath: string
   tusPartSize: number
   tusUseFileVersionSeparator: boolean
+  tusAllowS3Tags: boolean
   defaultMetricsEnabled: boolean
+  s3ProtocolEnabled: boolean
   s3ProtocolPrefix: string
   s3ProtocolAllowForwardedHeader: boolean
   s3ProtocolEnforceRegion: boolean
@@ -194,6 +198,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'REQUEST_X_FORWARDED_HOST_REGEXP',
       'X_FORWARDED_HOST_REGEXP'
     ),
+    requestAllowXForwardedPrefix:
+      getOptionalConfigFromEnv('REQUEST_ALLOW_X_FORWARDED_PATH') === 'true',
     requestUrlLengthLimit:
       Number(getOptionalConfigFromEnv('REQUEST_URL_LENGTH_LIMIT', 'URL_LENGTH_LIMIT')) || 7_500,
     requestTraceHeader: getOptionalConfigFromEnv('REQUEST_TRACE_HEADER', 'REQUEST_ID_HEADER'),
@@ -247,8 +253,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     tusUseFileVersionSeparator:
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
+    tusAllowS3Tags: getOptionalConfigFromEnv('TUS_ALLOW_S3_TAGS') !== 'false',
 
     // S3 Protocol
+    s3ProtocolEnabled: getOptionalConfigFromEnv('S3_PROTOCOL_ENABLED') !== 'false',
     s3ProtocolPrefix: getOptionalConfigFromEnv('S3_PROTOCOL_PREFIX') || '',
     s3ProtocolAllowForwardedHeader:
       getOptionalConfigFromEnv('S3_ALLOW_FORWARDED_HEADER') === 'true',
@@ -266,6 +274,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'STORAGE_FILE_BACKEND_PATH',
       'FILE_STORAGE_BACKEND_PATH'
     ),
+    storageFileEtagAlgorithm: getOptionalConfigFromEnv('STORAGE_FILE_ETAG_ALGORITHM') || 'md5',
 
     // Storage - S3
     storageS3MaxSockets: parseInt(

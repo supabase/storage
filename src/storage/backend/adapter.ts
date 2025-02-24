@@ -52,6 +52,19 @@ export abstract class StorageBackendAdapter {
     this.client = null
   }
 
+  async list(
+    bucket: string,
+    options?: {
+      prefix?: string
+      delimiter?: string
+      nextToken?: string
+      startAfter?: string
+      beforeDate?: Date
+    }
+  ): Promise<{ keys: { name: string; size: number }[]; nextToken?: string }> {
+    throw new Error('list not implemented')
+  }
+
   /**
    * Gets an object body and metadata
    * @param bucketName
@@ -105,6 +118,7 @@ export abstract class StorageBackendAdapter {
    * @param version
    * @param destination
    * @param destinationVersion
+   * @param metadata
    * @param conditions
    */
   async copyObject(
@@ -113,6 +127,7 @@ export abstract class StorageBackendAdapter {
     version: string | undefined,
     destination: string,
     destinationVersion: string | undefined,
+    metadata?: { cacheControl?: string; mimetype?: string },
     conditions?: {
       ifMatch?: string
       ifNoneMatch?: string

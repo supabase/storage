@@ -11,6 +11,7 @@ import { default as CompleteMultipartUpload } from './commands/complete-multipar
 import { default as DeleteBucket } from './commands/delete-bucket'
 import { default as CreateMultipartUpload } from './commands/create-multipart-upload'
 import { default as UploadPart } from './commands/upload-part'
+import { default as PutObject } from './commands/put-object'
 import { default as HeadObject } from './commands/head-object'
 import { default as DeleteObject } from './commands/delete-object'
 import { default as AbortMultiPartUpload } from './commands/abort-multipart-upload'
@@ -40,6 +41,7 @@ const s3Commands = [
   CompleteMultipartUpload,
   CreateMultipartUpload,
   UploadPart,
+  PutObject,
   AbortMultiPartUpload,
   ListMultipartUploads,
   DeleteObject,
@@ -105,12 +107,14 @@ type Route<S extends Schema, Context> = {
   handler?: Handler<S, Context>
   schema: S
   disableContentTypeParser?: boolean
+  acceptMultiformData?: boolean
   operation: string
   compiledSchema: () => ValidateFunction<JTDDataType<S>>
 }
 
 interface RouteOptions<S extends JSONSchema> {
   disableContentTypeParser?: boolean
+  acceptMultiformData?: boolean
   operation: string
   schema: S
 }
@@ -133,7 +137,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     options: RouteOptions<R>,
     handler: Handler<R, Context>
   ) {
-    const { query, headers } = this.parseQueryString(url)
+    const { query, headers } = this.parseRequestInfo(url)
     const normalizedUrl = url.split('?')[0].split('|')[0]
 
     const existingPath = this._routes.get(normalizedUrl)
@@ -144,7 +148,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       Body?: JSONSchema
     } = {}
 
-    const { schema, disableContentTypeParser, operation } = options
+    const { schema, disableContentTypeParser, acceptMultiformData, operation } = options
 
     if (schema.Params) {
       schemaToCompile.Params = schema.Params
@@ -191,7 +195,8 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       schema: schema,
       compiledSchema: () => this.ajv.getSchema(method + url) as ValidateFunction<JTDDataType<R>>,
       handler: handler as Handler<R, Context>,
-      disableContentTypeParser: disableContentTypeParser,
+      disableContentTypeParser,
+      acceptMultiformData,
       operation,
     } as const
 
@@ -229,7 +234,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     return { key, value }
   }
 
-  parseQueryString(queryString: string) {
+  parseRequestInfo(queryString: string) {
     const queries = queryString.replace(/\|.*/, '').split('?')[1]?.split('&') || []
     const headers = queryString.split('|').splice(1)
 
@@ -262,7 +267,16 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       return headers.length === 0
     }
 
-    return headers.every((header) => received[header] !== undefined)
+    return headers.every((header) => {
+      const headerParts = header.split('=')
+      const headerName = headerParts[0]
+      const headerValue = headerParts[1]
+
+      const matchHeaderName = received[headerName] !== undefined
+      const matchHeaderValue = headerValue ? received[headerName].startsWith(headerValue) : true
+
+      return matchHeaderName && matchHeaderValue
+    })
   }
 
   protected matchQueryString(

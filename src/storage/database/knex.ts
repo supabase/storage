@@ -17,9 +17,13 @@ import {
   SearchObjectOption,
 } from './adapter'
 import { DatabaseError } from 'pg'
-import { DBMigration, TenantConnection } from '@internal/database'
+import { getTenantConfig, TenantConnection } from '@internal/database'
 import { DbQueryPerformance } from '@internal/monitoring/metrics'
 import { isUuid } from '../limits'
+import { DBMigration } from '@internal/database/migrations'
+import { getConfig } from '../../config'
+
+const { isMultitenant } = getConfig()
 
 /**
  * Database
@@ -177,13 +181,31 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async listObjects(bucketId: string, columns = 'id', limit = 10) {
+  async listObjects(
+    bucketId: string,
+    columns = 'id',
+    limit = 10,
+    before?: Date,
+    nextToken?: string
+  ) {
     const data = await this.runQuery('ListObjects', (knex) => {
-      return knex
+      const query = knex
         .from<Obj>('objects')
         .select(columns.split(','))
         .where('bucket_id', bucketId)
-        .limit(limit) as Promise<Obj[]>
+        // @ts-expect-error knex typing is wrong, it doesn't accept a knex raw on orderBy, even though is totally legit
+        .orderBy(knex.raw('name COLLATE "C"'))
+        .limit(limit)
+
+      if (before) {
+        query.andWhere('created_at', '<', before.toISOString())
+      }
+
+      if (nextToken) {
+        query.andWhere(knex.raw('name COLLATE "C" > ?', [nextToken]))
+      }
+
+      return query as Promise<Obj[]>
     })
 
     return data
@@ -213,7 +235,7 @@ export class StorageKnexDB implements Database {
         query.orderBy(knex.raw('name COLLATE "C"'))
 
         if (options?.prefix) {
-          query.where('name', 'ilike', `${options.prefix}%`)
+          query.where('name', 'like', `${options.prefix}%`)
         }
 
         if (options?.nextToken) {
@@ -221,6 +243,28 @@ export class StorageKnexDB implements Database {
         }
 
         return query
+      }
+
+      let useNewSearchVersion2 = true
+
+      if (isMultitenant) {
+        const { migrationVersion } = await getTenantConfig(this.tenantId)
+        if (migrationVersion) {
+          useNewSearchVersion2 = DBMigration[migrationVersion] >= DBMigration['search-v2']
+        }
+      }
+
+      if (useNewSearchVersion2 && options?.delimiter === '/') {
+        const levels = !options?.prefix ? 1 : options.prefix.split('/').length
+        const query = await knex.raw('select * from storage.search_v2(?,?,?,?,?)', [
+          options?.prefix || '',
+          bucketId,
+          options?.maxKeys || 1000,
+          levels,
+          options?.startAfter || '',
+        ])
+
+        return query.rows
       }
 
       const query = await knex.raw(
@@ -438,6 +482,24 @@ export class StorageKnexDB implements Database {
     return objects
   }
 
+  async deleteObjectVersions(bucketId: string, objectNames: { name: string; version: string }[]) {
+    const objects = await this.runQuery('DeleteObjects', (knex) => {
+      const placeholders = objectNames.map(() => '(?, ?)').join(', ')
+
+      // Step 2: Flatten the array of tuples into a single array of values
+      const flatParams = objectNames.flatMap(({ name, version }) => [name, version])
+
+      return knex
+        .from<Obj>('objects')
+        .delete()
+        .where('bucket_id', bucketId)
+        .whereRaw(`(name, version) IN (${placeholders})`, flatParams)
+        .returning('*')
+    })
+
+    return objects
+  }
+
   async updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata) {
     const [object] = await this.runQuery('UpdateObjectMetadata', (knex) => {
       return knex
@@ -524,6 +586,24 @@ export class StorageKnexDB implements Database {
         .select(columns)
         .where('bucket_id', bucketId)
         .whereIn('name', objectNames)
+    })
+
+    return objects
+  }
+
+  async findObjectVersions(bucketId: string, obj: { name: string; version: string }[]) {
+    const objects = await this.runQuery('FindObjectVersions', (knex) => {
+      // Step 1: Generate placeholders for each tuple
+      const placeholders = obj.map(() => '(?, ?)').join(', ')
+
+      // Step 2: Flatten the array of tuples into a single array of values
+      const flatParams = obj.flatMap(({ name, version }) => [name, version])
+
+      return knex
+        .from<Obj>('objects')
+        .select('objects.name', 'objects.version')
+        .where('bucket_id', bucketId)
+        .whereRaw(`(name, version) IN (${placeholders})`, flatParams)
     })
 
     return objects

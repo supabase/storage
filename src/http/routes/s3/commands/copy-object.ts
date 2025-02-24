@@ -1,6 +1,7 @@
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
+import { MetadataDirective } from '@aws-sdk/client-s3'
 
 const CopyObjectInput = {
   summary: 'Copy Object',
@@ -20,6 +21,7 @@ const CopyObjectInput = {
       'x-amz-copy-source-if-modified-since': { type: 'string' },
       'x-amz-copy-source-if-none-match': { type: 'string' },
       'x-amz-copy-source-if-unmodified-since': { type: 'string' },
+      'x-amz-metadata-directive': { type: 'string' },
       'content-encoding': { type: 'string' },
       'content-type': { type: 'string' },
       'cache-control': { type: 'string' },
@@ -42,6 +44,7 @@ export default function CopyObject(s3Router: S3Router) {
         CopySource: req.Headers['x-amz-copy-source'],
         ContentType: req.Headers['content-type'],
         CacheControl: req.Headers['cache-control'],
+        MetadataDirective: req.Headers['x-amz-metadata-directive'] as MetadataDirective | undefined,
         Expires: req.Headers.expires ? new Date(req.Headers.expires) : undefined,
         ContentEncoding: req.Headers['content-encoding'],
         CopySourceIfMatch: req.Headers['x-amz-copy-source-if-match'],

@@ -10,6 +10,7 @@ export default function () {
 
   const logflareApiKey = process.env.LOGFLARE_API_KEY
   const logflareSourceToken = process.env.LOGFLARE_SOURCE_TOKEN
+  const batchSizeEnv = process.env.LOGFLARE_BATCH_SIZE
 
   if (!logflareApiKey) {
     throw new Error('must provide a logflare api key')
@@ -22,6 +23,10 @@ export default function () {
   return createLogFlareWriteStream({
     apiKey: logflareApiKey,
     sourceToken: logflareSourceToken,
+    size: batchSizeEnv ? parseInt(batchSizeEnv, 10) : 100,
+    onError: (err: Error) => {
+      console.error(`[Logflare][Error] ${err.message} - ${err.stack}`)
+    },
     onPreparePayload: (payload: any, meta: any) => {
       const item = defaultPreparePayload(payload, meta)
       item.project = payload.project

@@ -90,7 +90,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { objectMetadata, path } = await request.storage
         .asSuperUser()
         .from(bucketName)
-        .uploadNewObject(request, {
+        .uploadFromRequest(request, {
           owner,
           objectName,
           isUpsert: upsert,

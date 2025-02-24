@@ -42,6 +42,7 @@ const {
   tusPath,
   tusPartSize,
   tusMaxConcurrentUploads,
+  tusAllowS3Tags,
   uploadFileSizeLimit,
   storageBackendType,
   storageFilePath,
@@ -66,6 +67,7 @@ function createTusStore(agent: { httpsAgent: https.Agent; httpAgent: http.Agent 
       expirationPeriodInMilliseconds: tusUrlExpiryMs,
       cache: new AlsMemoryKV(),
       maxConcurrentPartUploads: tusMaxConcurrentUploads,
+      useTags: tusAllowS3Tags,
       s3ClientConfig: {
         requestHandler: new NodeHttpHandler({
           ...agent,

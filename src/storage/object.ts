@@ -1,13 +1,12 @@
-import { FastifyRequest } from 'fastify'
 import { randomUUID } from 'node:crypto'
 import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
 import { getJwtSecret } from '@internal/database'
 
-import { StorageBackendAdapter, ObjectMetadata, withOptionalVersion } from './backend'
+import { ObjectMetadata, StorageBackendAdapter, withOptionalVersion } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
-import { Uploader } from './uploader'
+import { fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
 import { getConfig } from '../config'
 import {
   ObjectAdminDelete,
@@ -17,14 +16,8 @@ import {
   ObjectRemovedMove,
   ObjectUpdatedMetadata,
 } from './events'
-
-export interface UploadObjectOptions {
-  objectName: string
-  owner?: string
-  isUpsert?: boolean
-  version?: string
-  signal?: AbortSignal
-}
+import { FastifyRequest } from 'fastify/types/request'
+import { Obj } from '@storage/schemas'
 
 const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
 
@@ -35,6 +28,11 @@ interface CopyObjectParams {
   owner?: string
   copyMetadata?: boolean
   upsert?: boolean
+  metadata?: {
+    cacheControl?: string
+    mimetype?: string
+  }
+  userMetadata?: Record<string, unknown>
   conditions?: {
     ifMatch?: string
     ifNoneMatch?: string
@@ -66,54 +64,46 @@ export class ObjectStorage {
     return new ObjectStorage(this.backend, this.db.asSuperUser(), this.bucketId)
   }
 
+  async uploadFromRequest(
+    request: FastifyRequest,
+    file: {
+      objectName: string
+      owner?: string
+      isUpsert: boolean
+      signal?: AbortSignal
+    }
+  ) {
+    const bucket = await this.db
+      .asSuperUser()
+      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
+
+    const uploadRequest = await fileUploadFromRequest(request, {
+      objectName: file.objectName,
+      fileSizeLimit: bucket.file_size_limit,
+      allowedMimeTypes: bucket.allowed_mime_types || [],
+    })
+
+    return this.uploadNewObject({
+      file: uploadRequest,
+      objectName: file.objectName,
+      owner: file.owner,
+      isUpsert: Boolean(file.isUpsert),
+      signal: file.signal,
+    })
+  }
+
   /**
    * Upload a new object to a storage
    * @param request
-   * @param options
    */
-  async uploadNewObject(request: FastifyRequest, options: UploadObjectOptions) {
-    mustBeValidKey(options.objectName)
+  async uploadNewObject(request: Omit<UploadRequest, 'bucketId' | 'uploadType'>) {
+    mustBeValidKey(request.objectName)
 
-    const path = `${this.bucketId}/${options.objectName}`
+    const path = `${this.bucketId}/${request.objectName}`
 
-    const bucket = await this.db
-      .asSuperUser()
-      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
-
-    const { metadata, obj } = await this.uploader.upload(request, {
-      ...options,
+    const { metadata, obj } = await this.uploader.upload({
+      ...request,
       bucketId: this.bucketId,
-      fileSizeLimit: bucket.file_size_limit,
-      allowedMimeTypes: bucket.allowed_mime_types,
-      uploadType: 'standard',
-    })
-
-    return { objectMetadata: metadata, path, id: obj.id }
-  }
-
-  public async uploadOverridingObject(request: FastifyRequest, options: UploadObjectOptions) {
-    mustBeValidKey(options.objectName)
-
-    const path = `${this.bucketId}/${options.objectName}`
-
-    const bucket = await this.db
-      .asSuperUser()
-      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
-
-    await this.db.testPermission((db) => {
-      return db.updateObject(this.bucketId, options.objectName, {
-        name: options.objectName,
-        owner: options.owner,
-        version: '1',
-      })
-    })
-
-    const { metadata, obj } = await this.uploader.upload(request, {
-      ...options,
-      bucketId: this.bucketId,
-      fileSizeLimit: bucket.file_size_limit,
-      allowedMimeTypes: bucket.allowed_mime_types,
-      isUpsert: true,
       uploadType: 'standard',
     })
 
@@ -274,6 +264,9 @@ export class ObjectStorage {
    * @param owner
    * @param conditions
    * @param copyMetadata
+   * @param upsert
+   * @param fileMetadata
+   * @param userMetadata
    */
   async copyObject({
     sourceKey,
@@ -283,12 +276,13 @@ export class ObjectStorage {
     conditions,
     copyMetadata,
     upsert,
+    metadata: fileMetadata,
+    userMetadata,
   }: CopyObjectParams) {
     mustBeValidKey(destinationKey)
 
     const newVersion = randomUUID()
-    const bucketId = this.bucketId
-    const s3SourceKey = `${this.db.tenantId}/${bucketId}/${sourceKey}`
+    const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceKey}`
     const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationKey}`
 
     // We check if the user has permission to copy the object to the destination key
@@ -298,16 +292,14 @@ export class ObjectStorage {
       'bucket_id,metadata,user_metadata,version'
     )
 
-    if (s3SourceKey === s3DestinationKey) {
-      return {
-        destObject: originObject,
-        httpStatusCode: 200,
-        eTag: originObject.metadata?.eTag,
-        lastModified: originObject.metadata?.lastModified
-          ? new Date(originObject.metadata.lastModified as string)
-          : undefined,
-      }
-    }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const baseMetadata = originObject.metadata || {}
+    const destinationMetadata = copyMetadata
+      ? baseMetadata
+      : {
+          ...baseMetadata,
+          ...(fileMetadata || {}),
+        }
 
     await this.uploader.canUpload({
       bucketId: destinationBucket,
@@ -323,6 +315,7 @@ export class ObjectStorage {
         originObject.version,
         s3DestinationKey,
         newVersion,
+        destinationMetadata,
         conditions
       )
 
@@ -348,8 +341,12 @@ export class ObjectStorage {
           bucket_id: destinationBucket,
           name: destinationKey,
           owner,
-          metadata,
-          user_metadata: copyMetadata ? originObject.user_metadata : undefined,
+          metadata: {
+            ...destinationMetadata,
+            lastModified: copyResult.lastModified,
+            eTag: copyResult.eTag,
+          },
+          user_metadata: copyMetadata ? originObject.user_metadata : userMetadata,
           version: newVersion,
         })
 
@@ -410,6 +407,7 @@ export class ObjectStorage {
 
     const newVersion = randomUUID()
     const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
+
     const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationObjectName}`
 
     await this.db.testPermission((db) => {
@@ -542,11 +540,75 @@ export class ObjectStorage {
   async listObjectsV2(options?: {
     prefix?: string
     delimiter?: string
-    nextToken?: string
+    cursor?: string
     startAfter?: string
     maxKeys?: number
+    encodingType?: 'url'
   }) {
-    return this.db.listObjectsV2(this.bucketId, options)
+    const limit = Math.min(options?.maxKeys || 1000, 1000)
+    const prefix = options?.prefix || ''
+    const delimiter = options?.delimiter
+
+    const cursor = options?.cursor ? decodeContinuationToken(options?.cursor) : undefined
+    const searchResult = await this.db.listObjectsV2(this.bucketId, {
+      prefix: options?.prefix,
+      delimiter: options?.delimiter,
+      maxKeys: limit + 1,
+      nextToken: cursor,
+      startAfter: cursor || options?.startAfter,
+    })
+
+    let results = searchResult
+    let prevPrefix = ''
+
+    if (delimiter) {
+      const delimitedResults: Obj[] = []
+      for (const object of searchResult) {
+        let idx = object.name.replace(prefix, '').indexOf(delimiter)
+
+        if (idx >= 0) {
+          idx = prefix.length + idx + delimiter.length
+          const currPrefix = object.name.substring(0, idx)
+          if (currPrefix === prevPrefix) {
+            continue
+          }
+          prevPrefix = currPrefix
+          delimitedResults.push({
+            id: null,
+            name: options?.encodingType === 'url' ? encodeURIComponent(currPrefix) : currPrefix,
+            bucket_id: object.bucket_id,
+          })
+          continue
+        }
+
+        delimitedResults.push({
+          ...object,
+          name: options?.encodingType === 'url' ? encodeURIComponent(object.name) : object.name,
+        })
+      }
+      results = delimitedResults
+    }
+
+    let isTruncated = false
+
+    if (results.length > limit) {
+      results = results.slice(0, limit)
+      isTruncated = true
+    }
+
+    const folders = results.filter((obj) => obj.id === null)
+    const objects = results.filter((obj) => obj.id !== null)
+
+    const nextContinuationToken = isTruncated
+      ? encodeContinuationToken(results[results.length - 1].name)
+      : undefined
+
+    return {
+      hasNext: isTruncated,
+      nextCursor: nextContinuationToken,
+      folders: folders,
+      objects: objects,
+    }
   }
 
   /**
@@ -697,4 +759,18 @@ export class ObjectStorage {
 
     return payload
   }
+}
+
+function encodeContinuationToken(name: string) {
+  return Buffer.from(`l:${name}`).toString('base64')
+}
+
+function decodeContinuationToken(token: string) {
+  const decoded = Buffer.from(token, 'base64').toString().split(':')
+
+  if (decoded.length === 0) {
+    throw new Error('Invalid continuation token')
+  }
+
+  return decoded[1]
 }

@@ -5,6 +5,7 @@ services:
 
   tenant_db:
     image: postgres:15
+    shm_size: '1gb'
     ports:
       - '5432:5432'
     healthcheck:

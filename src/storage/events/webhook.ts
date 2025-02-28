@@ -5,8 +5,10 @@ import HttpAgent from 'agentkeepalive'
 import axios from 'axios'
 import { getConfig } from '../../config'
 import { logger, logSchema } from '@internal/monitoring'
+import { getTenantConfig } from '@internal/database'
 
 const {
+  isMultitenant,
   webhookURL,
   webhookApiKey,
   webhookQueuePullInterval,
@@ -20,7 +22,7 @@ interface WebhookEvent {
   event: {
     $version: string
     type: string
-    payload: object & { reqId?: string }
+    payload: object & { reqId?: string; bucketId: string; name: string }
     applyTime: number
   }
   sentAt: string
@@ -63,9 +65,27 @@ export class Webhook extends BaseEvent<WebhookEvent> {
     }
   }
 
+  static async shouldSend(payload: WebhookEvent) {
+    if (isMultitenant) {
+      // Do not send an event if disabled for this specific tenant
+      const tenant = await getTenantConfig(payload.tenant.ref)
+      const disabledEvents = tenant.disableEvents || []
+      if (
+        disabledEvents.includes(`Webhook:${payload.event.type}`) ||
+        disabledEvents.includes(
+          `Webhook:${payload.event.type}:${payload.event.payload.bucketId}/${payload.event.payload.name}`
+        )
+      ) {
+        return false
+      }
+    }
+
+    return true
+  }
+
   static async handle(job: Job<WebhookEvent>) {
     if (!webhookURL) {
-      logger.info('skipping webhook, no WEBHOOK_URL set')
+      logger.debug('skipping webhook, no WEBHOOK_URL set')
       return job
     }
 

@@ -7,7 +7,6 @@ import { PubSubAdapter } from '../pubsub'
 import { createMutexByKey } from '../concurrency'
 import { LRUCache } from 'lru-cache'
 import objectSizeOf from 'object-sizeof'
-import { lastMigrationName } from './migrations/migrate'
 import { ERRORS } from '@internal/errors'
 import { DBMigration } from '@internal/database/migrations'
 
@@ -34,12 +33,16 @@ interface TenantConfig {
   migrationStatus?: TenantMigrationStatus
   syncMigrationsDone?: boolean
   tracingMode?: string
+  disableEvents?: string[]
 }
 
 export interface Features {
   imageTransformation: {
     enabled: boolean
     maxResolution?: number
+  }
+  s3Protocol: {
+    enabled: boolean
   }
 }
 
@@ -85,86 +88,6 @@ const singleTenantServiceKey:
   : undefined
 
 /**
- * List all tenants that needs to have the migrations run
- */
-export async function* listTenantsToMigrate(signal: AbortSignal) {
-  let lastCursor = 0
-
-  while (true) {
-    if (signal.aborted) {
-      break
-    }
-
-    const migrationVersion = await lastMigrationName()
-
-    const data = await multitenantKnex
-      .table<{ id: string; cursor_id: number }>('tenants')
-      .select('id', 'cursor_id')
-      .where('cursor_id', '>', lastCursor)
-      .where((builder) => {
-        builder
-          .where((whereBuilder) => {
-            whereBuilder
-              .where('migrations_version', '!=', migrationVersion)
-              .whereNotIn('migrations_status', [
-                TenantMigrationStatus.FAILED,
-                TenantMigrationStatus.FAILED_STALE,
-              ])
-          })
-          .orWhere('migrations_status', null)
-      })
-      .orderBy('cursor_id', 'asc')
-      .limit(200)
-
-    if (data.length === 0) {
-      break
-    }
-
-    lastCursor = data[data.length - 1].cursor_id
-    yield data.map((tenant) => tenant.id)
-  }
-}
-
-/**
- * Update tenant migration version and status
- * @param tenantId
- * @param options
- */
-export async function updateTenantMigrationsState(
-  tenantId: string,
-  options?: { state: TenantMigrationStatus }
-) {
-  const migrationVersion = await lastMigrationName()
-  const state = options?.state || TenantMigrationStatus.COMPLETED
-  return multitenantKnex
-    .table('tenants')
-    .where('id', tenantId)
-    .update({
-      migrations_version: [
-        TenantMigrationStatus.FAILED,
-        TenantMigrationStatus.FAILED_STALE,
-      ].includes(state)
-        ? undefined
-        : migrationVersion,
-      migrations_status: state,
-    })
-}
-
-/**
- * Determine if a tenant has the migrations up to date
- * @param tenantId
- */
-export async function areMigrationsUpToDate(tenantId: string) {
-  const latestMigrationVersion = await lastMigrationName()
-  const tenant = await getTenantConfig(tenantId)
-
-  return (
-    latestMigrationVersion === tenant.migrationVersion &&
-    tenant.migrationStatus === TenantMigrationStatus.COMPLETED
-  )
-}
-
-/**
  * Deletes tenants config from the in-memory cache
  * @param tenantId
  */
@@ -203,12 +126,14 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       jwks,
       service_key,
       feature_image_transformation,
+      feature_s3_protocol,
       image_transformation_max_resolution,
       database_pool_url,
       max_connections,
       migrations_version,
       migrations_status,
       tracing_mode,
+      disable_events,
     } = tenant
 
     const serviceKey = decrypt(service_key)
@@ -231,11 +156,15 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
           enabled: feature_image_transformation,
           maxResolution: image_transformation_max_resolution,
         },
+        s3Protocol: {
+          enabled: feature_s3_protocol,
+        },
       },
       migrationVersion: migrations_version,
       migrationStatus: migrations_status,
       migrationsRun: false,
       tracingMode: tracing_mode,
+      disableEvents: disable_events,
     }
     tenantConfigCache.set(tenantId, config)
 

@@ -1,10 +1,6 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import apiKey from '../../plugins/apikey'
-import {
-  createS3Credentials,
-  deleteS3Credential,
-  listS3Credentials,
-} from '../../../internal/database'
+import { createS3Credentials, deleteS3Credential, listS3Credentials } from '@internal/database'
 import { FromSchema } from 'json-schema-to-ts'
 
 const createCredentialsSchema = {

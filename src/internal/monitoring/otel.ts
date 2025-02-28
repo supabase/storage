@@ -95,22 +95,25 @@ const sdk = new NodeSDK({
         const ignoreRoutes = ['/metrics', '/status', '/health', '/healthcheck']
         return ignoreRoutes.some((url) => req.url?.includes(url)) ?? false
       },
-      applyCustomAttributesOnSpan: (span, req) => {
+      startIncomingSpanHook: (req) => {
         let tenantId = ''
         if (isMultitenant) {
           if (requestXForwardedHostRegExp) {
-            const serverRequest = req as IncomingMessage
+            const serverRequest = req
             const xForwardedHost = serverRequest.headers['x-forwarded-host']
-            if (typeof xForwardedHost !== 'string') return
+            if (typeof xForwardedHost !== 'string') return {}
             const result = xForwardedHost.match(requestXForwardedHostRegExp)
-            if (!result) return
+            if (!result) return {}
             tenantId = result[1]
           }
         } else {
           tenantId = defaultTenantId
         }
-        span.setAttribute('tenant.ref', tenantId)
-        span.setAttribute('region', region)
+
+        return {
+          'tenant.ref': tenantId,
+          region,
+        }
       },
       headersToSpanAttributes: {
         client: {

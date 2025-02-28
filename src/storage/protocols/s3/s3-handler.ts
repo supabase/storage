@@ -1,6 +1,6 @@
 import { Storage } from '../../storage'
 import { getConfig } from '../../../config'
-import { Uploader } from '../../uploader'
+import { Uploader, validateMimeType } from '../../uploader'
 import {
   AbortMultipartUploadCommandInput,
   CompleteMultipartUploadCommandInput,
@@ -207,78 +207,31 @@ export class S3ProtocolHandler {
 
     const limit = Math.min(maxKeys || 1000, 1000)
 
-    const objects = await this.storage.from(bucket).listObjectsV2({
+    const results = await this.storage.from(bucket).listObjectsV2({
       prefix,
       delimiter: delimiter,
-      maxKeys: limit + 1,
-      nextToken: continuationToken ? decodeContinuationToken(continuationToken) : undefined,
-      startAfter,
+      maxKeys: limit,
+      cursor: continuationToken,
+      startAfter: startAfter,
+      encodingType: command.EncodingType,
     })
 
-    let results = objects
-    let prevPrefix = ''
-
-    if (delimiter) {
-      const delimitedResults: Obj[] = []
-      for (const object of objects) {
-        let idx = object.name.replace(prefix, '').indexOf(delimiter)
-
-        if (idx >= 0) {
-          idx = prefix.length + idx + delimiter.length
-          const currPrefix = object.name.substring(0, idx)
-          if (currPrefix === prevPrefix) {
-            continue
-          }
-          prevPrefix = currPrefix
-          delimitedResults.push({
-            id: null,
-            name: command.EncodingType === 'url' ? encodeURIComponent(currPrefix) : currPrefix,
-            bucket_id: bucket,
-            owner: '',
-            metadata: null,
-            created_at: '',
-            updated_at: '',
-            version: '',
-          })
-          continue
-        }
-
-        delimitedResults.push(object)
+    const commonPrefixes = results.folders.map((object) => {
+      return {
+        Prefix: object.name,
       }
-      results = delimitedResults
-    }
-
-    let isTruncated = false
-
-    if (results.length > limit) {
-      results = results.slice(0, limit)
-      isTruncated = true
-    }
-
-    const commonPrefixes = results
-      .filter((e) => e.id === null)
-      .map((object) => {
-        return {
-          Prefix: object.name,
-        }
-      })
+    })
 
     const contents =
-      results
-        .filter((o) => o.id)
-        .map((o) => ({
-          Key: command.EncodingType === 'url' ? encodeURIComponent(o.name) : o.name,
-          LastModified: (o.updated_at ? new Date(o.updated_at).toISOString() : undefined) as
-            | Date
-            | undefined,
-          ETag: o.metadata?.eTag as string,
-          Size: o.metadata?.size as number,
-          StorageClass: 'STANDARD' as const,
-        })) || []
-
-    const nextContinuationToken = isTruncated
-      ? encodeContinuationToken(results[results.length - 1].name)
-      : undefined
+      results.objects.map((o) => ({
+        Key: o.name,
+        LastModified: (o.updated_at ? new Date(o.updated_at).toISOString() : undefined) as
+          | Date
+          | undefined,
+        ETag: o.metadata?.eTag as string,
+        Size: o.metadata?.size as number,
+        StorageClass: 'STANDARD' as const,
+      })) || []
 
     const response: { ListBucketResult: ListObjectsV2Output } = {
       ListBucketResult: {
@@ -286,17 +239,17 @@ export class S3ProtocolHandler {
         Prefix: prefix,
         ContinuationToken: continuationToken,
         Contents: contents,
-        IsTruncated: isTruncated,
+        IsTruncated: results.hasNext,
         MaxKeys: limit,
         Delimiter: delimiter,
         EncodingType: encodingType,
-        KeyCount: results.length,
+        KeyCount: results.objects.length + results.folders.length,
         CommonPrefixes: commonPrefixes,
       },
     }
 
-    if (nextContinuationToken) {
-      response.ListBucketResult.NextContinuationToken = nextContinuationToken
+    if (results.nextCursor) {
+      response.ListBucketResult.NextContinuationToken = results.nextCursor
     }
 
     return {
@@ -444,7 +397,7 @@ export class S3ProtocolHandler {
     const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'id,allowed_mime_types')
 
     if (command.ContentType && bucket.allowed_mime_types && bucket.allowed_mime_types.length > 0) {
-      uploader.validateMimeType(command.ContentType, bucket.allowed_mime_types || [])
+      validateMimeType(command.ContentType, bucket.allowed_mime_types || [])
     }
 
     // Create Multi Part Upload
@@ -699,36 +652,31 @@ export class S3ProtocolHandler {
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html
    *
    * @param command
-   * @param signal
+   * @param options
    */
-  async putObject(command: PutObjectCommandInput, signal?: AbortSignal) {
+  async putObject(
+    command: PutObjectCommandInput,
+    options: { signal?: AbortSignal; isTruncated: () => boolean }
+  ) {
     const uploader = new Uploader(this.storage.backend, this.storage.db)
 
     mustBeValidBucketName(command.Bucket)
     mustBeValidKey(command.Key)
 
-    if (
-      command.Key.endsWith('/') &&
-      (command.ContentLength === undefined || command.ContentLength === 0)
-    ) {
-      // Consistent with how supabase Storage handles empty folders
-      command.Key += '.emptyFolderPlaceholder'
-    }
-
-    const bucket = await this.storage
-      .asSuperUser()
-      .findBucket(command.Bucket, 'id,file_size_limit,allowed_mime_types')
-
-    const upload = await uploader.upload(command.Body as any, {
+    const upload = await uploader.upload({
       bucketId: command.Bucket as string,
+      file: {
+        body: command.Body as Readable,
+        cacheControl: command.CacheControl!,
+        mimeType: command.ContentType!,
+        isTruncated: options.isTruncated,
+        userMetadata: command.Metadata,
+      },
       objectName: command.Key as string,
       owner: this.owner,
       isUpsert: true,
       uploadType: 's3',
-      fileSizeLimit: bucket.file_size_limit,
-      allowedMimeTypes: bucket.allowed_mime_types,
-      metadata: command.Metadata,
-      signal,
+      signal: options.signal,
     })
 
     return {
@@ -970,7 +918,7 @@ export class S3ProtocolHandler {
 
     return {
       responseBody: {
-        DeletedResult: {
+        DeleteResult: {
           Deleted: deleted,
           Error: errors,
         },
@@ -1017,6 +965,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
+    if (!command.MetadataDirective) {
+      // default metadata directive is copy
+      command.MetadataDirective = 'COPY'
+    }
+
     const copyResult = await this.storage.from(sourceBucket).copyObject({
       sourceKey,
       destinationBucket: Bucket,
@@ -1029,6 +982,11 @@ export class S3ProtocolHandler {
         ifModifiedSince: command.CopySourceIfModifiedSince,
         ifUnmodifiedSince: command.CopySourceIfUnmodifiedSince,
       },
+      metadata: {
+        cacheControl: command.CacheControl,
+        mimetype: command.ContentType,
+      },
+      userMetadata: command.Metadata,
       copyMetadata: command.MetadataDirective === 'COPY',
     })
 
@@ -1222,7 +1180,7 @@ export class S3ProtocolHandler {
   }
 
   parseMetadataHeaders(headers: Record<string, any>) {
-    let metadata: undefined | Record<string, any> = undefined
+    let metadata: Record<string, any> | undefined = undefined
 
     Object.keys(headers)
       .filter((key) => key.startsWith('x-amz-meta-'))

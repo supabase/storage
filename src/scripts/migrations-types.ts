@@ -7,13 +7,15 @@ function main() {
   const files = glob.sync(migrationsPath).sort()
 
   const migrations = files.map((file, index) => {
+    const fileName = file
+      .split(path.sep)
+      .pop()
+      ?.replace(/[0-9]+-/, '')
+      .replace('.sql', '')
+
     return {
-      file: file
-        .split(path.sep)
-        .pop()
-        ?.replace(/[0-9]+-/, '')
-        .replace('.sql', ''),
-      index,
+      file: fileName,
+      index: index + 1,
     }
   })
 

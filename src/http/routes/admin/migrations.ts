@@ -1,9 +1,14 @@
 import { FastifyInstance } from 'fastify'
 import { Queue } from '@internal/queue'
-import { multitenantKnex, runMigrationsOnAllTenants } from '@internal/database'
+import { multitenantKnex } from '@internal/database'
 import { RunMigrationsOnTenants } from '@storage/events'
 import apiKey from '../../plugins/apikey'
 import { getConfig } from '../../../config'
+import {
+  DBMigration,
+  resetMigrationsOnTenants,
+  runMigrationsOnAllTenants,
+} from '@internal/database/migrations'
 
 const { pgQueueEnable } = getConfig()
 
@@ -14,13 +19,40 @@ export default async function routes(fastify: FastifyInstance) {
     if (!pgQueueEnable) {
       return reply.status(400).send({ message: 'Queue is not enabled' })
     }
-    const abortController = new AbortController()
 
-    req.raw.on('error', () => {
-      abortController.abort()
+    await runMigrationsOnAllTenants(req.signals.disconnect.signal)
+
+    return reply.send({ message: 'Migrations scheduled' })
+  })
+
+  fastify.post('/reset/fleet', async (req, reply) => {
+    if (!pgQueueEnable) {
+      return reply.status(400).send({ message: 'Queue is not enabled' })
+    }
+
+    const { untilMigration, markCompletedTillMigration } = req.body as any
+
+    if (
+      typeof untilMigration !== 'string' ||
+      !DBMigration[untilMigration as keyof typeof DBMigration]
+    ) {
+      return reply.status(400).send({ message: 'Invalid migration' })
+    }
+
+    if (
+      typeof markCompletedTillMigration === 'string' &&
+      !DBMigration[untilMigration as keyof typeof DBMigration]
+    ) {
+      return reply.status(400).send({ message: 'Invalid migration' })
+    }
+
+    await resetMigrationsOnTenants({
+      till: untilMigration as keyof typeof DBMigration,
+      markCompletedTillMigration: markCompletedTillMigration
+        ? markCompletedTillMigration
+        : undefined,
+      signal: req.signals.disconnect.signal,
     })
-
-    await runMigrationsOnAllTenants(abortController.signal)
 
     return reply.send({ message: 'Migrations scheduled' })
   })

@@ -16,14 +16,18 @@ const payload = {
   serviceKey: 'd',
   jwks: { keys: [] },
   migrationStatus: 'COMPLETED',
-  migrationVersion: 'custom-metadata',
+  migrationVersion: 'add-insert-trigger-prefixes',
   tracingMode: 'basic',
   features: {
     imageTransformation: {
       enabled: true,
       maxResolution: null,
     },
+    s3Protocol: {
+      enabled: true,
+    },
   },
+  disableEvents: null,
 }
 
 const payload2 = {
@@ -36,14 +40,18 @@ const payload2 = {
   serviceKey: 'h',
   jwks: null,
   migrationStatus: 'COMPLETED',
-  migrationVersion: 'custom-metadata',
+  migrationVersion: 'add-insert-trigger-prefixes',
   tracingMode: 'basic',
   features: {
     imageTransformation: {
       enabled: false,
       maxResolution: null,
     },
+    s3Protocol: {
+      enabled: true,
+    },
   },
+  disableEvents: null,
 }
 
 beforeAll(async () => {

@@ -72,15 +72,15 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
 
       const isUpsert = request.headers['x-upsert'] === 'true'
-      const owner = request.owner as string
+      const owner = request.owner
 
       const { objectMetadata, path, id } = await request.storage
         .from(bucketName)
-        .uploadNewObject(request, {
+        .uploadFromRequest(request, {
           objectName,
-          owner,
-          isUpsert,
           signal: request.signals.body.signal,
+          owner: owner,
+          isUpsert,
         })
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({

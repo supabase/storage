@@ -1,22 +1,22 @@
 import fastifyPlugin from 'fastify-plugin'
 import { getConfig, MultitenantMigrationStrategy } from '../../config'
 import {
-  areMigrationsUpToDate,
   getServiceKeyUser,
   getTenantConfig,
-  TenantMigrationStatus,
-  updateTenantMigrationsState,
   TenantConnection,
   getPostgresConnection,
-  progressiveMigrations,
-  runMigrationsOnTenant,
-  hasMissingSyncMigration,
-  DBMigration,
-  lastMigrationName,
 } from '@internal/database'
 import { verifyJWT } from '@internal/auth'
 import { logSchema } from '@internal/monitoring'
 import { createMutexByKey } from '@internal/concurrency'
+import {
+  areMigrationsUpToDate,
+  DBMigration,
+  lastLocalMigrationName,
+  progressiveMigrations,
+  runMigrationsOnTenant,
+  updateTenantMigrationsState,
+} from '@internal/database/migrations'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -49,7 +49,7 @@ export const db = fastifyPlugin(
         headers: request.headers,
         path: request.url,
         method: request.method,
-        operation: request.operation?.type,
+        operation: () => request.operation?.type,
       })
     })
 
@@ -92,6 +92,7 @@ export const db = fastifyPlugin(
 
 interface DbSuperUserPluginOptions {
   disableHostCheck?: boolean
+  maxConnections?: number
 }
 
 export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
@@ -111,6 +112,8 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
         method: request.method,
         headers: request.headers,
         disableHostCheck: opts.disableHostCheck,
+        maxConnections: opts.maxConnections,
+        operation: () => request.operation?.type,
       })
     })
 
@@ -164,7 +167,7 @@ export const migrations = fastifyPlugin(
         return
       }
 
-      req.latestMigration = await lastMigrationName()
+      req.latestMigration = await lastLocalMigrationName()
     })
 
     if (dbMigrationStrategy === MultitenantMigrationStrategy.ON_REQUEST) {
@@ -198,7 +201,6 @@ export const migrations = fastifyPlugin(
     }
 
     if (dbMigrationStrategy === MultitenantMigrationStrategy.PROGRESSIVE) {
-      const migrationsMutex = createMutexByKey()
       fastify.addHook('preHandler', async (request) => {
         if (!isMultitenant) {
           return
@@ -212,55 +214,7 @@ export const migrations = fastifyPlugin(
           return
         }
 
-        const needsToRunMigrationsNow = await hasMissingSyncMigration(request.tenantId)
-
-        // if the tenant is not marked as stale, add it to the progressive migrations queue
-        if (
-          !needsToRunMigrationsNow &&
-          tenant.migrationStatus !== TenantMigrationStatus.FAILED_STALE
-        ) {
-          progressiveMigrations.addTenant(request.tenantId)
-          return
-        }
-
-        // if the tenant is marked as stale or there are pending SYNC migrations,
-        // try running the migrations
-        await migrationsMutex(request.tenantId, async () => {
-          if (tenant.syncMigrationsDone || migrationsUpToDate) {
-            return
-          }
-
-          await runMigrationsOnTenant(tenant.databaseUrl, request.tenantId, needsToRunMigrationsNow)
-            .then(async () => {
-              await updateTenantMigrationsState(request.tenantId)
-              tenant.syncMigrationsDone = true
-            })
-            .catch((e) => {
-              logSchema.error(
-                fastify.log,
-                `[Migrations] Error running migrations ${request.tenantId} `,
-                {
-                  type: 'migrations',
-                  error: e,
-                  metadata: JSON.stringify({
-                    strategy: 'progressive',
-                  }),
-                }
-              )
-            })
-        }).catch((e) => {
-          logSchema.error(
-            fastify.log,
-            `[Migrations] Error running migrations ${request.tenantId} `,
-            {
-              type: 'migrations',
-              error: e,
-              metadata: JSON.stringify({
-                strategy: 'progressive',
-              }),
-            }
-          )
-        })
+        progressiveMigrations.addTenant(request.tenantId)
       })
     }
   },

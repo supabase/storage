@@ -34,7 +34,7 @@ const CompletedMultipartUpload = {
       CompleteMultipartUpload: {
         type: 'object',
         properties: {
-          Parts: {
+          Part: {
             type: 'array',
             items: {
               type: 'object',
@@ -62,7 +62,7 @@ export default function CompleteMultipartUpload(s3Router: S3Router) {
         Key: req.Params['*'],
         UploadId: req.Querystring.uploadId,
         MultipartUpload: {
-          Parts: req.Body?.CompleteMultipartUpload?.Parts || [],
+          Parts: req.Body?.CompleteMultipartUpload?.Part || [],
         },
       })
     }

@@ -59,7 +59,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
         const resourceFromParams = Object.values(req.params || {}).join('/')
         const resources = getFirstDefined<string[]>(
           req.resources,
-          req.routeConfig.resources?.(req),
+          req.routeOptions.config.resources?.(req),
           (req.raw as any).resources,
           resourceFromParams ? [resourceFromParams] : ([] as string[])
         )
@@ -73,7 +73,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
         }
 
         req.resources = resources
-        req.operation = req.routeConfig.operation
+        req.operation = req.routeOptions.config.operation
 
         if (req.operation) {
           trace.getActiveSpan()?.setAttribute('http.operation', req.operation.type)
@@ -129,7 +129,7 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     owner: req.owner,
     role: req.jwtPayload?.role,
     resources: req.resources,
-    operation: req.operation?.type ?? req.routeConfig.operation?.type,
+    operation: req.operation?.type ?? req.routeOptions.config.operation?.type,
     serverTimes: req.serverTimings,
   })
 }

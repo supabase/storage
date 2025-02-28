@@ -21,6 +21,7 @@ export const ROUTE_OPERATIONS = {
   SIGN_OBJECT_URL: 'storage.object.sign',
   SIGN_OBJECT_URLS: 'storage.object.sign_many',
   LIST_OBJECTS: 'storage.object.list',
+  LIST_OBJECTS_V2: 'storage.object.list_v2',
   MOVE_OBJECT: 'storage.object.move',
   UPDATE_OBJECT: 'storage.object.upload_update',
   UPLOAD_SIGN_OBJECT: 'storage.object.upload_signed',

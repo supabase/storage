@@ -10,22 +10,26 @@ import { Database } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getConfig } from '../config'
 import { logger, logSchema } from '@internal/monitoring'
-
-interface UploaderOptions extends UploadObjectOptions {
-  fileSizeLimit?: number | null
-  allowedMimeTypes?: string[] | null
-  metadata?: Record<string, any>
-  signal?: AbortSignal
-}
+import { Readable } from 'stream'
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
 
-export interface UploadObjectOptions {
+interface FileUpload {
+  body: Readable
+  mimeType: string
+  cacheControl: string
+  isTruncated: () => boolean
+  userMetadata?: Record<string, any>
+}
+
+export interface UploadRequest {
   bucketId: string
   objectName: string
+  file: FileUpload
   owner?: string
   isUpsert?: boolean
   uploadType?: 'standard' | 's3' | 'resumable'
+  signal?: AbortSignal
 }
 
 const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
@@ -37,9 +41,7 @@ const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
 export class Uploader {
   constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
 
-  async canUpload(
-    options: Pick<UploadObjectOptions, 'bucketId' | 'objectName' | 'isUpsert' | 'owner'>
-  ) {
+  async canUpload(options: Pick<UploadRequest, 'bucketId' | 'objectName' | 'isUpsert' | 'owner'>) {
     const shouldCreateObject = !options.isUpsert
 
     if (shouldCreateObject) {
@@ -68,7 +70,7 @@ export class Uploader {
    * We check RLS policies before proceeding
    * @param options
    */
-  async prepareUpload(options: UploadObjectOptions) {
+  async prepareUpload(options: Omit<UploadRequest, 'file'>) {
     await this.canUpload(options)
     FileUploadStarted.inc({
       is_multipart: Boolean(options.uploadType).toString(),
@@ -83,22 +85,13 @@ export class Uploader {
    * @param request
    * @param options
    */
-  async upload(request: FastifyRequest, options: UploaderOptions) {
-    const version = await this.prepareUpload(options)
-
-    // When is an empty folder we restrict it to 0 bytes
-    if (isEmptyFolder(options.objectName)) {
-      options.fileSizeLimit = 0
-    }
+  async upload(request: UploadRequest) {
+    const version = await this.prepareUpload(request)
 
     try {
-      const file = await this.incomingFileInfo(request, options)
+      const file = request.file
 
-      if (options.allowedMimeTypes && !isEmptyFolder(options.objectName)) {
-        this.validateMimeType(file.mimeType, options.allowedMimeTypes)
-      }
-
-      const path = `${options.bucketId}/${options.objectName}`
+      const path = `${request.bucketId}/${request.objectName}`
       const s3Key = `${this.db.tenantId}/${path}`
 
       const objectMetadata = await this.backend.uploadObject(
@@ -108,7 +101,7 @@ export class Uploader {
         file.body,
         file.mimeType,
         file.cacheControl,
-        options.signal
+        request.signal
       )
 
       if (file.isTruncated()) {
@@ -116,15 +109,15 @@ export class Uploader {
       }
 
       return this.completeUpload({
-        ...options,
+        ...request,
         version,
         objectMetadata: objectMetadata,
-        userMetadata: { ...file.userMetadata, ...(options.metadata || {}) },
+        userMetadata: { ...file.userMetadata },
       })
     } catch (e) {
       await ObjectAdminDelete.send({
-        name: options.objectName,
-        bucketId: options.bucketId,
+        name: request.objectName,
+        bucketId: request.bucketId,
         tenant: this.db.tenant(),
         version: version,
         reqId: this.db.reqId,
@@ -133,6 +126,17 @@ export class Uploader {
     }
   }
 
+  /**
+   * Completes the upload process by updating the object metadata
+   * @param version
+   * @param bucketId
+   * @param objectName
+   * @param owner
+   * @param objectMetadata
+   * @param uploadType
+   * @param isUpsert
+   * @param userMetadata
+   */
   async completeUpload({
     version,
     bucketId,
@@ -142,7 +146,7 @@ export class Uploader {
     uploadType,
     isUpsert,
     userMetadata,
-  }: UploadObjectOptions & {
+  }: Omit<UploadRequest, 'file'> & {
     objectMetadata: ObjectMetadata
     version: string
     emitEvent?: boolean
@@ -238,116 +242,153 @@ export class Uploader {
       throw e
     }
   }
+}
 
-  validateMimeType(mimeType: string, allowedMimeTypes: string[]) {
-    const requestedMime = mimeType.split('/')
+/**
+ * Validates the mime type of the incoming file
+ * @param mimeType
+ * @param allowedMimeTypes
+ */
+export function validateMimeType(mimeType: string, allowedMimeTypes: string[]) {
+  const requestedMime = mimeType.split('/')
 
-    if (requestedMime.length < 2) {
-      throw ERRORS.InvalidMimeType(mimeType)
-    }
-
-    const [type, ext] = requestedMime
-
-    for (const allowedMimeType of allowedMimeTypes) {
-      const allowedMime = allowedMimeType.split('/')
-
-      if (requestedMime.length < 2) {
-        continue
-      }
-
-      const [allowedType, allowedExtension] = allowedMime
-
-      if (allowedType === type && allowedExtension === '*') {
-        return true
-      }
-
-      if (allowedType === type && allowedExtension === ext) {
-        return true
-      }
-    }
-
+  if (requestedMime.length < 2) {
     throw ERRORS.InvalidMimeType(mimeType)
   }
 
-  protected async incomingFileInfo(
-    request: FastifyRequest,
-    options?: Pick<UploaderOptions, 'fileSizeLimit'>
-  ) {
-    const contentType = request.headers['content-type']
-    const fileSizeLimit = await getStandardMaxFileSizeLimit(
-      this.db.tenantId,
-      options?.fileSizeLimit
-    )
+  const [type, ext] = requestedMime
 
-    let body: NodeJS.ReadableStream
-    let userMetadata: Record<string, any> | undefined
-    let mimeType: string
-    let isTruncated: () => boolean
+  for (const allowedMimeType of allowedMimeTypes) {
+    const allowedMime = allowedMimeType.split('/')
 
-    let cacheControl: string
-    if (contentType?.startsWith('multipart/form-data')) {
-      try {
-        const formData = await request.file({ limits: { fileSize: fileSizeLimit } })
+    if (requestedMime.length < 2) {
+      continue
+    }
 
-        if (!formData) {
-          throw ERRORS.NoContentProvided()
-        }
+    const [allowedType, allowedExtension] = allowedMime
 
-        // https://github.com/fastify/fastify-multipart/issues/162
-        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-        const cacheTime = formData.fields.cacheControl?.value
+    if (allowedType === type && allowedExtension === '*') {
+      return true
+    }
 
-        body = formData.file
-        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-        const customMd = formData.fields.metadata?.value ?? formData.fields.userMetadata?.value
-        /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-        mimeType = formData.fields.contentType?.value || formData.mimetype
-        cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
-        isTruncated = () => formData.file.truncated
+    if (allowedType === type && allowedExtension === ext) {
+      return true
+    }
+  }
 
-        if (typeof customMd === 'string') {
-          if (Buffer.byteLength(customMd, 'utf8') > MAX_CUSTOM_METADATA_SIZE) {
-            throw ERRORS.EntityTooLarge(undefined, 'user_metadata')
-          }
+  throw ERRORS.InvalidMimeType(mimeType)
+}
 
-          try {
-            userMetadata = JSON.parse(customMd)
-          } catch (e) {
-            // no-op
-          }
-        }
-      } catch (e) {
-        throw ERRORS.NoContentProvided(e as Error)
+/**
+ * Extracts the file information from the request
+ * @param request
+ * @param options
+ */
+export async function fileUploadFromRequest(
+  request: FastifyRequest,
+  options: {
+    fileSizeLimit?: number | null
+    allowedMimeTypes?: string[]
+    objectName: string
+  }
+): Promise<FileUpload> {
+  const contentType = request.headers['content-type']
+
+  let body: Readable
+  let userMetadata: Record<string, any> | undefined
+  let mimeType: string
+  let isTruncated: () => boolean
+  let maxFileSize = 0
+
+  // When is an empty folder we restrict it to 0 bytes
+  if (!isEmptyFolder(options.objectName)) {
+    maxFileSize = await getStandardMaxFileSizeLimit(request.tenantId, options?.fileSizeLimit)
+  }
+
+  let cacheControl: string
+  if (contentType?.startsWith('multipart/form-data')) {
+    try {
+      const formData = await request.file({ limits: { fileSize: maxFileSize } })
+
+      if (!formData) {
+        throw ERRORS.NoContentProvided()
       }
-    } else {
-      // just assume it's a binary file
-      body = request.raw
-      mimeType = request.headers['content-type'] || 'application/octet-stream'
-      cacheControl = request.headers['cache-control'] ?? 'no-cache'
 
-      const customMd = request.headers['x-metadata']
+      // https://github.com/fastify/fastify-multipart/issues/162
+      /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+      const cacheTime = formData.fields.cacheControl?.value
+
+      body = formData.file
+      /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+      const customMd = formData.fields.metadata?.value ?? formData.fields.userMetadata?.value
+      /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
+      mimeType = formData.fields.contentType?.value || formData.mimetype
+      cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
+      isTruncated = () => formData.file.truncated
+
+      if (
+        options.allowedMimeTypes &&
+        options.allowedMimeTypes.length > 0 &&
+        !isEmptyFolder(options.objectName)
+      ) {
+        validateMimeType(mimeType, options.allowedMimeTypes)
+      }
 
       if (typeof customMd === 'string') {
+        if (Buffer.byteLength(customMd, 'utf8') > MAX_CUSTOM_METADATA_SIZE) {
+          throw ERRORS.EntityTooLarge(undefined, 'user_metadata')
+        }
+
         try {
-          const json = Buffer.from(customMd, 'base64').toString('utf8')
-          userMetadata = JSON.parse(json)
+          userMetadata = JSON.parse(customMd)
         } catch (e) {
           // no-op
         }
       }
-      isTruncated = () => {
-        // @todo more secure to get this from the stream or from s3 in the next step
-        return Number(request.headers['content-length']) > fileSizeLimit
-      }
+    } catch (e) {
+      throw ERRORS.NoContentProvided(e as Error)
+    }
+  } else {
+    // just assume it's a binary file
+    body = request.raw
+    mimeType = request.headers['content-type'] || 'application/octet-stream'
+    cacheControl = request.headers['cache-control'] ?? 'no-cache'
+
+    if (
+      options.allowedMimeTypes &&
+      options.allowedMimeTypes.length > 0 &&
+      !isEmptyFolder(options.objectName)
+    ) {
+      validateMimeType(mimeType, options.allowedMimeTypes)
     }
 
-    return {
-      body,
-      mimeType,
-      cacheControl,
-      isTruncated,
-      userMetadata,
+    const customMd = request.headers['x-metadata']
+
+    if (typeof customMd === 'string') {
+      userMetadata = parseUserMetadata(customMd)
     }
+    isTruncated = () => {
+      // @todo more secure to get this from the stream or from s3 in the next step
+      return Number(request.headers['content-length']) > maxFileSize
+    }
+  }
+
+  return {
+    body,
+    mimeType,
+    cacheControl,
+    isTruncated,
+    userMetadata,
+  }
+}
+
+export function parseUserMetadata(metadata: string) {
+  try {
+    const json = Buffer.from(metadata, 'base64').toString('utf8')
+    return JSON.parse(json) as Record<string, string>
+  } catch (e) {
+    // no-op
+    return undefined
   }
 }
 

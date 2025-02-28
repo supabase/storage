@@ -6,13 +6,14 @@ import { ERRORS } from '@internal/errors'
 interface ConnectionOptions {
   host: string
   tenantId: string
+  maxConnections?: number
   headers?: Record<string, string | undefined | string[]>
   method?: string
   path?: string
   user: User
   superUser: User
   disableHostCheck?: boolean
-  operation?: string
+  operation?: () => string | undefined
 }
 
 /**

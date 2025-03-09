@@ -8,6 +8,7 @@ import { DbActiveConnection, DbActivePool } from '../monitoring/metrics'
 import KnexTimeoutError = knex.KnexTimeoutError
 import { logger, logSchema } from '../monitoring'
 import { ERRORS } from '@internal/errors'
+import { getSslSettings } from './util'
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)
@@ -95,6 +96,8 @@ export class TenantConnection {
 
     const isExternalPool = Boolean(options.isExternalPool)
 
+    const sslSettings = getSslSettings({ connectionString, databaseSSLRootCert })
+
     knexPool = knex({
       client: 'pg',
       version: dbPostgresVersion,
@@ -113,7 +116,7 @@ export class TenantConnection {
       connection: {
         connectionString: connectionString,
         connectionTimeoutMillis: databaseConnectionTimeout,
-        ...this.sslSettings(connectionString),
+        ssl: sslSettings ? { ...sslSettings } : undefined,
       },
       acquireConnectionTimeout: databaseConnectionTimeout,
     })
@@ -141,26 +144,6 @@ export class TenantConnection {
     }
 
     return new this(knexPool, options)
-  }
-
-  protected static sslSettings(connectionString: string) {
-    if (databaseSSLRootCert) {
-      try {
-        // When connecting through PGBouncer, we connect through an IPv6 address rather than a hostname
-        // When passing in the root CA for SSL, this will always fail, so we need to skip passing in the SSL root cert
-        // in case the hostname is an IP address
-        const url = new URL(connectionString)
-        if (url.hostname && isIpAddress(url.hostname)) {
-          return {}
-        }
-      } catch (err) {
-        // ignore to ensure this never breaks the connection in case of an invalid URL
-        logger.warn(err, 'Failed to parse connection string')
-      }
-
-      return { ssl: { ca: databaseSSLRootCert } }
-    }
-    return {}
   }
 
   async dispose() {
@@ -271,10 +254,4 @@ export class TenantConnection {
       ]
     )
   }
-}
-
-export function isIpAddress(ip: string) {
-  const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/
-  const ipv6Pattern = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/
-  return ipv4Pattern.test(ip) || ipv6Pattern.test(ip)
 }

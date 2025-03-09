@@ -13,6 +13,7 @@ import { ProgressiveMigrations } from './progressive'
 import { RunMigrationsOnTenants, ResetMigrationsOnTenant } from '@storage/events'
 import { ERRORS } from '@internal/errors'
 import { DBMigration } from './types'
+import { getSslSettings } from '../util'
 
 const {
   multitenantDatabaseUrl,
@@ -312,16 +313,10 @@ export async function runMigrationsOnTenant(
   tenantId?: string,
   waitForLock = true
 ): Promise<void> {
-  let ssl: ClientConfig['ssl'] | undefined = undefined
-
-  if (databaseSSLRootCert) {
-    ssl = { ca: databaseSSLRootCert }
-  }
-
   await connectAndMigrate({
     databaseUrl,
     migrationsDirectory: './migrations/tenant',
-    ssl,
+    ssl: getSslSettings({ connectionString: databaseUrl, databaseSSLRootCert }),
     shouldCreateStorageSchema: true,
     tenantId,
     waitForLock,

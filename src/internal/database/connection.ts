@@ -8,6 +8,7 @@ import { DbActiveConnection, DbActivePool } from '../monitoring/metrics'
 import KnexTimeoutError = knex.KnexTimeoutError
 import { logger, logSchema } from '../monitoring'
 import { ERRORS } from '@internal/errors'
+import { getSslSettings } from './util'
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)
@@ -95,6 +96,8 @@ export class TenantConnection {
 
     const isExternalPool = Boolean(options.isExternalPool)
 
+    const sslSettings = getSslSettings({ connectionString, databaseSSLRootCert })
+
     knexPool = knex({
       client: 'pg',
       version: dbPostgresVersion,
@@ -113,7 +116,7 @@ export class TenantConnection {
       connection: {
         connectionString: connectionString,
         connectionTimeoutMillis: databaseConnectionTimeout,
-        ...this.sslSettings(),
+        ssl: sslSettings ? { ...sslSettings } : undefined,
       },
       acquireConnectionTimeout: databaseConnectionTimeout,
     })
@@ -141,13 +144,6 @@ export class TenantConnection {
     }
 
     return new this(knexPool, options)
-  }
-
-  protected static sslSettings() {
-    if (databaseSSLRootCert) {
-      return { ssl: { ca: databaseSSLRootCert } }
-    }
-    return {}
   }
 
   async dispose() {

@@ -28,5 +28,8 @@ export function getSslSettings({
 export function isIpAddress(ip: string) {
   const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/
   const ipv6Pattern = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/
-  return ipv4Pattern.test(ip) || ipv6Pattern.test(ip)
+
+  // IP might be URL-encoded and won't match the regex unless we decode first
+  const decodedIp = decodeURIComponent(ip)
+  return ipv4Pattern.test(decodedIp) || ipv6Pattern.test(decodedIp)
 }

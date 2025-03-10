@@ -11,6 +11,7 @@ describe('database utils', () => {
     ['121.212.187.5', true],
     ['2001:db8:3333:4444:5555:6666:7777:8888', true],
     ['2001:db8:3333:4444:CCCC:DDDD:EEEE:FFFF', true],
+    ['2406%3Ada18%3A4fd%3A9b09%3A2c76%3A5d38%3Ade30%3A7904', true],
   ])('is %s ip address, expected %s', (text: string, expected: boolean) => {
     expect(isIpAddress(text)).toBe(expected)
   })

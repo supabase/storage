@@ -23,13 +23,13 @@ describe('database utils', () => {
       ).toBeUndefined()
     })
 
-    test('should return no SSL settings if hostname is an IP address', () => {
+    test('should return SSL settings if hostname is an IP address', () => {
       expect(
         getSslSettings({
           connectionString: 'postgres://foo:bar@1.2.3.4:5432/postgres',
           databaseSSLRootCert: '<cert>',
         })
-      ).toBeUndefined()
+      ).toStrictEqual({ ca: '<cert>', rejectUnauthorized: false })
     })
 
     test('should return SSL settings if hostname is not an IP address', () => {

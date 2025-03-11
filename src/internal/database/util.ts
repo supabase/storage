@@ -1,4 +1,5 @@
 import { logger } from '@internal/monitoring'
+import { ConnectionOptions } from 'tls'
 
 export function getSslSettings({
   connectionString,
@@ -6,7 +7,7 @@ export function getSslSettings({
 }: {
   connectionString: string
   databaseSSLRootCert: string | undefined
-}): { ca: string } | undefined {
+}): ConnectionOptions | undefined {
   if (!databaseSSLRootCert) return undefined
 
   try {
@@ -15,7 +16,7 @@ export function getSslSettings({
     // in case the hostname is an IP address
     const url = new URL(connectionString)
     if (url.hostname && isIpAddress(url.hostname)) {
-      return undefined
+      return { ca: databaseSSLRootCert, rejectUnauthorized: false }
     }
   } catch (err) {
     // ignore to ensure this never breaks the connection in case of an invalid URL

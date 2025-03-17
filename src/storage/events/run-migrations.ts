@@ -22,6 +22,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
       teamSize: 200,
       teamConcurrency: 10,
       includeMetadata: true,
+      enforceSingletonQueueActiveLimit: true,
     }
   }
 

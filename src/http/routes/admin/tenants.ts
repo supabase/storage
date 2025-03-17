@@ -508,6 +508,30 @@ export default async function routes(fastify: FastifyInstance) {
     }
   })
 
+  fastify.get<tenantRequestInterface>('/:tenantId/migrations/jobs', async (req, reply) => {
+    const data = await multitenantKnex
+      .table('pgboss.job')
+      .select('*')
+      .whereRaw("data->'tenant'->>'ref' = ?", [req.params.tenantId])
+      .where('name', 'tenants-migrations')
+      .orderBy('createdon', 'desc')
+      .limit(100)
+
+    reply.send(data)
+  })
+
+  fastify.delete<tenantRequestInterface>('/:tenantId/migrations/jobs', async (req, reply) => {
+    const data = await multitenantKnex
+      .table('pgboss.job')
+      .whereRaw("data->'tenant'->>'ref' = ?", [req.params.tenantId])
+      .where('name', 'tenants-migrations')
+      .orderBy('createdon', 'desc')
+      .limit(100)
+      .delete()
+
+    reply.send(data)
+  })
+
   fastify.register(async (fastify) => {
     fastify.register(dbSuperUser, {
       disableHostCheck: true,

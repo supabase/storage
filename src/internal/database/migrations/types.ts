@@ -34,4 +34,5 @@ export const DBMigration = {
   'backward-compatible-index-on-prefixes': 33,
   'optimize-search-function-v1': 34,
   'add-insert-trigger-prefixes': 35,
+  'optimise-existing-functions': 36,
 }

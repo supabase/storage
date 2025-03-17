@@ -45,6 +45,7 @@ interface BaseEventConstructor<Base extends Event<any>> {
 export class Event<T extends Omit<BasePayload, '$version'>> {
   public static readonly version: string = 'v1'
   protected static queueName = ''
+  protected static allowSync = true
 
   constructor(public readonly payload: T & BasePayload) {}
 
@@ -90,7 +91,15 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
 
   static batchSend<T extends Event<any>[]>(messages: T) {
     if (!pgQueueEnable) {
-      return Promise.all(messages.map((message) => message.send()))
+      if (this.allowSync) {
+        return Promise.all(messages.map((message) => message.send()))
+      } else {
+        logger.warn('[Queue] skipped sending batch messages', {
+          type: 'queue',
+          eventType: this.eventName(),
+        })
+        return
+      }
     }
 
     return Queue.getInstance().insert(
@@ -158,15 +167,23 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     }
 
     if (!pgQueueEnable) {
-      return constructor.handle({
-        id: '__sync',
-        name: constructor.getQueueName(),
-        data: {
-          region,
-          ...this.payload,
-          $version: constructor.version,
-        },
-      })
+      if (constructor.allowSync) {
+        return constructor.handle({
+          id: '__sync',
+          name: constructor.getQueueName(),
+          data: {
+            region,
+            ...this.payload,
+            $version: constructor.version,
+          },
+        })
+      } else {
+        logger.warn('[Queue] skipped sending message', {
+          type: 'queue',
+          eventType: constructor.eventName(),
+        })
+        return
+      }
     }
 
     const timer = QueueJobSchedulingTime.startTimer()

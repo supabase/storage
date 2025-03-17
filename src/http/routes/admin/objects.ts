@@ -103,7 +103,7 @@ export default async function routes(fastify: FastifyInstance) {
         keepTmpTable: Boolean(req.query.keepTmpTable),
       })
 
-      reply.header('Content-Type', 'application/json; charset=utf-8')
+      reply.header('Content-Type', 'application/x-ndjson; charset=utf-8')
 
       // Do not let the connection time out, periodically send
       // a ping message to keep the connection alive
@@ -117,7 +117,7 @@ export default async function routes(fastify: FastifyInstance) {
               JSON.stringify({
                 ...result,
                 event: 'data',
-              })
+              }) + '\n'
             )
           }
         }
@@ -150,6 +150,8 @@ export default async function routes(fastify: FastifyInstance) {
         before.setHours(before.getHours() - 1)
       }
 
+      reply.header('Content-Type', 'application/x-ndjson; charset=utf-8')
+
       const respPing = ping(reply)
 
       try {
@@ -168,7 +170,7 @@ export default async function routes(fastify: FastifyInstance) {
             JSON.stringify({
               ...deleted,
               event: 'data',
-            })
+            }) + '\n'
           )
         }
       } catch (e) {
@@ -193,7 +195,7 @@ function ping(reply: FastifyReply) {
       reply.raw.write(
         JSON.stringify({
           event: 'ping',
-        })
+        }) + '\n'
       )
     }
   }, 1000 * 10)

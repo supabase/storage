@@ -5,6 +5,7 @@ import {
   RunMigrationsOnTenants,
   BackupObjectEvent,
   ResetMigrationsOnTenant,
+  JwksCreateSigningSecret,
 } from './index'
 
 export function registerWorkers() {
@@ -13,4 +14,5 @@ export function registerWorkers() {
   Queue.register(RunMigrationsOnTenants)
   Queue.register(BackupObjectEvent)
   Queue.register(ResetMigrationsOnTenant)
+  Queue.register(JwksCreateSigningSecret)
 }

@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { ERRORS } from '@internal/errors'
 
-import { getConfig } from '../../config'
+import { getConfig, JwksConfigKeyOct } from '../../config'
 
 const { jwtAlgorithm } = getConfig()
 
@@ -10,6 +10,8 @@ const JWT_HMAC_ALGOS: jwt.Algorithm[] = ['HS256', 'HS384', 'HS512']
 const JWT_RSA_ALGOS: jwt.Algorithm[] = ['RS256', 'RS384', 'RS512']
 const JWT_ECC_ALGOS: jwt.Algorithm[] = ['ES256', 'ES384', 'ES512']
 const JWT_ED_ALGOS: jwt.Algorithm[] = ['EdDSA'] as unknown as jwt.Algorithm[] // types for EdDSA not yet updated
+
+export const JWK_KIND_STORAGE_URL_SIGNING = 'storage-url-signing-key'
 
 export type SignedToken = {
   url: string
@@ -43,7 +45,8 @@ export function findJWKFromHeader(
 
     // find the first key without a kid or with the matching kid and the "oct" type
     const jwk = jwks.keys.find(
-      (key) => (!key.kid || key.kid === header.kid) && key.kty === 'oct' && (key as any).k
+      (key) =>
+        (!key.kid || key.kid === header.kid) && key.kty === 'oct' && (key as JwksConfigKeyOct).k
     )
 
     if (!jwk) {
@@ -51,7 +54,7 @@ export function findJWKFromHeader(
       return secret
     }
 
-    return Buffer.from((jwk as any).k, 'base64')
+    return Buffer.from((jwk as JwksConfigKeyOct).k, 'base64')
   }
 
   // jwt is using an asymmetric algorithm
@@ -84,7 +87,7 @@ function getJWTVerificationKey(
   jwks: { keys: { kid?: string; kty: string }[] } | null
 ): jwt.GetPublicKeyOrSecret {
   return (header: jwt.JwtHeader, callback: jwt.SigningKeyCallback) => {
-    let result: any = null
+    let result: jwt.Secret | null = null
 
     try {
       result = findJWKFromHeader(header, secret, jwks)
@@ -154,19 +157,38 @@ export function verifyJWT<T>(
  */
 export function signJWT(
   payload: string | object | Buffer,
-  secret: string,
+  secret: string | JwksConfigKeyOct,
   expiresIn: string | number | undefined
 ): Promise<string> {
   const options: jwt.SignOptions = { algorithm: jwtAlgorithm as jwt.Algorithm }
+
+  let signingSecret: string | Buffer = typeof secret === 'string' ? secret : ''
+  if (typeof secret === 'object' && secret?.kid && secret?.k) {
+    options.keyid = secret.kid
+    if (secret.alg) {
+      options.algorithm = secret.alg as jwt.Algorithm
+    }
+    signingSecret = Buffer.from(secret.k, 'base64')
+  }
 
   if (expiresIn) {
     options.expiresIn = expiresIn
   }
 
   return new Promise<string>((resolve, reject) => {
-    jwt.sign(payload, secret, options, (err, token) => {
+    jwt.sign(payload, signingSecret, options, (err, token) => {
       if (err) return reject(err)
       resolve(token as string)
     })
   })
+}
+
+/**
+ * Generate a new random HS256 JWK that can be used for signing JWTs
+ */
+export function generateHS256JWK(): JwksConfigKeyOct {
+  // Generate a 256-bit (32-byte) random key
+  // Convert the secret key to Base64URL encoding (JWK standard)
+  const k = crypto.randomBytes(32).toString('base64url')
+  return { kty: 'oct', alg: 'HS256', k }
 }

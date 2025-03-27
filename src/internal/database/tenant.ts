@@ -1,6 +1,12 @@
 import crypto from 'node:crypto'
-import { getConfig } from '../../config'
-import { decrypt, encrypt, verifyJWT } from '../auth'
+import { getConfig, JwksConfig, JwksConfigKeyOct } from '../../config'
+import {
+  decrypt,
+  encrypt,
+  generateHS256JWK,
+  JWK_KIND_STORAGE_URL_SIGNING,
+  verifyJWT,
+} from '../auth'
 import { multitenantKnex } from './multitenant-db'
 import { JwtPayload } from 'jsonwebtoken'
 import { PubSubAdapter } from '../pubsub'
@@ -18,13 +24,6 @@ interface TenantConfig {
   fileSizeLimit: number
   features: Features
   jwtSecret: string
-  jwks?: {
-    keys: {
-      kid?: string
-      kty: string
-      // other fields are present too but are dependent on kid, alg and other fields, cast to unknown to access those
-    }[]
-  } | null
   serviceKey: string
   serviceKeyPayload: {
     role: string
@@ -61,9 +60,10 @@ interface S3Credentials {
   claims: { role: string; sub?: string; [key: string]: any }
 }
 
-const { isMultitenant, dbServiceRole, serviceKey, jwtSecret, jwtJWKS } = getConfig()
+const { isMultitenant, dbServiceRole, serviceKey, jwtSecret } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
+const tenantJwksConfigCache = new Map<string, JwksConfig>()
 
 const tenantS3CredentialsCache = new LRUCache<string, S3Credentials>({
   maxSize: 1024 * 1024 * 50, // 50MB
@@ -74,6 +74,7 @@ const tenantS3CredentialsCache = new LRUCache<string, S3Credentials>({
 })
 
 const tenantMutex = createMutexByKey()
+const tenantJwksMutex = createMutexByKey()
 const s3CredentialsMutex = createMutexByKey()
 
 const singleTenantServiceKey:
@@ -212,13 +213,22 @@ export async function getServiceKey(tenantId: string): Promise<string> {
  */
 export async function getJwtSecret(
   tenantId: string
-): Promise<{ secret: string; jwks: TenantConfig['jwks'] | null }> {
+): Promise<{ secret: string; urlSigningKey: string | JwksConfigKeyOct; jwks: JwksConfig }> {
+  const { jwtJWKS } = getConfig()
+  let secret = jwtSecret
+  let jwks = jwtJWKS || { keys: [] }
+
   if (isMultitenant) {
-    const { jwtSecret, jwks } = await getTenantConfig(tenantId)
-    return { secret: jwtSecret, jwks: jwks || null }
+    const [config, tenantJwks] = await Promise.all([
+      getTenantConfig(tenantId),
+      getJwksTenantConfig(tenantId),
+    ])
+    secret = config.jwtSecret
+    jwks = tenantJwks
   }
 
-  return { secret: jwtSecret, jwks: jwtJWKS || null }
+  const urlSigningKey = jwks.urlSigningKey || secret
+  return { secret, urlSigningKey, jwks }
 }
 
 /**
@@ -240,6 +250,7 @@ export async function getFeatures(tenantId: string): Promise<Features> {
 }
 
 const TENANTS_UPDATE_CHANNEL = 'tenants_update'
+const TENANTS_JWKS_UPDATE_CHANNEL = 'tenants_jwks_update'
 const TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL = 'tenants_s3_credentials_update'
 
 /**
@@ -250,8 +261,141 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
     tenantConfigCache.delete(cacheKey)
   })
 
+  await pubSub.subscribe(TENANTS_JWKS_UPDATE_CHANNEL, (cacheKey) => {
+    tenantJwksConfigCache.delete(cacheKey)
+  })
+
   await pubSub.subscribe(TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL, (cacheKey) => {
     tenantS3CredentialsCache.delete(cacheKey)
+  })
+}
+
+/**
+ * Gets a list of all tenants that do not have a signing url associated
+ */
+export async function* listTenantsMissingUrlSigningJwk(
+  signal: AbortSignal,
+  batchSize = 200
+): AsyncGenerator<string[]> {
+  let lastCursor = 0
+
+  while (!signal.aborted) {
+    const data = await multitenantKnex('tenants')
+      .select('id', 'cursor_id')
+      .where('cursor_id', '>', lastCursor)
+      .whereNotExists(function () {
+        this.select(1)
+          .from('tenants_jwks')
+          .whereRaw('tenants_jwks.tenant_id = tenants.id')
+          .andWhere('tenants_jwks.kind', JWK_KIND_STORAGE_URL_SIGNING)
+          .andWhere('tenants_jwks.active', true)
+      })
+      .orderBy('cursor_id', 'asc')
+      .limit(batchSize)
+
+    if (data.length === 0) {
+      break
+    }
+
+    lastCursor = data[data.length - 1].cursor_id
+    yield data.map((tenant) => tenant.id)
+  }
+}
+
+/**
+ * Generates a new url signing jwk and stores it in the database
+ * @param tenantId
+ */
+export function generateUrlSigningJwk(tenantId: string): Promise<{ kid: string }> {
+  const newJwk = generateHS256JWK()
+  return addJwk(tenantId, newJwk, JWK_KIND_STORAGE_URL_SIGNING)
+}
+
+/**
+ * Adds a new jwk that can be used for signing urls
+ * @param tenantId
+ * @param jwk jwk content
+ * @param kind string used to identify the purpose or source of each jwk
+ */
+export async function addJwk(
+  tenantId: string,
+  jwk: object,
+  kind: string
+): Promise<{ kid: string }> {
+  const createdJwk = await multitenantKnex
+    .table('tenants_jwks')
+    .insert({
+      tenant_id: tenantId,
+      content: encrypt(JSON.stringify(jwk)),
+      kind,
+      active: true,
+    })
+    .returning('id')
+
+  return { kid: kind + '_' + createdJwk[0].id }
+}
+
+/**
+ * Disables an existing jwk, is no longer valid for signed urls
+ * @param tenantId
+ * @param kid
+ */
+export async function toggleJwkActive(
+  tenantId: string,
+  kid: string,
+  newState: boolean
+): Promise<boolean> {
+  const id = kid.split('_').pop()
+  const updated = await multitenantKnex
+    .table('tenants_jwks')
+    .where('id', id)
+    .where('tenant_id', tenantId)
+    .where('active', !newState)
+    .update({ active: newState })
+  return updated > 0
+}
+
+/**
+ * Queries the tenant jwks from the multi-tenant database and stores them in a local cache
+ * for quick subsequent access. Only includes jwks marked as active
+ * @param tenantId
+ */
+export async function getJwksTenantConfig(tenantId: string): Promise<JwksConfig> {
+  const cachedJwks = tenantJwksConfigCache.get(tenantId)
+
+  if (cachedJwks) {
+    return cachedJwks
+  }
+
+  return tenantJwksMutex(tenantId, async () => {
+    const cachedJwks = tenantJwksConfigCache.get(tenantId)
+
+    if (cachedJwks) {
+      return cachedJwks
+    }
+
+    const data = await multitenantKnex
+      .table('tenants_jwks')
+      .select('id', 'kind', 'content')
+      .where('tenant_id', tenantId)
+      .where('active', true)
+
+    let urlSigningKey: JwksConfigKeyOct | undefined
+    const jwksConfig: JwksConfig = {
+      keys: data.map(({ id, kind, content }) => {
+        const jwk = JSON.parse(decrypt(content))
+        jwk.kid = kind + '_' + id
+        if (kind === JWK_KIND_STORAGE_URL_SIGNING && jwk.kty === 'oct' && jwk.k && !urlSigningKey) {
+          urlSigningKey = jwk
+        }
+        return jwk
+      }),
+    }
+    jwksConfig.urlSigningKey = urlSigningKey
+
+    tenantJwksConfigCache.set(tenantId, jwksConfig)
+
+    return jwksConfig
   })
 }
 

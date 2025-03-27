@@ -639,8 +639,8 @@ export class ObjectStorage {
 
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(3).join('/'))
-    const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
-    const token = await signJWT({ url: urlToSign, ...metadata }, jwtSecret, expiresIn)
+    const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
+    const token = await signJWT({ url: urlToSign, ...metadata }, urlSigningKey, expiresIn)
 
     let urlPath = 'object'
 
@@ -676,7 +676,7 @@ export class ObjectStorage {
 
     const nameSet = new Set(results.map(({ name }) => name))
 
-    const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
+    const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
 
     return Promise.all(
       paths.map(async (path) => {
@@ -684,7 +684,7 @@ export class ObjectStorage {
         let signedURL = null
         if (nameSet.has(path)) {
           const urlToSign = `${this.bucketId}/${path}`
-          const token = await signJWT({ url: urlToSign }, jwtSecret, expiresIn)
+          const token = await signJWT({ url: urlToSign }, urlSigningKey, expiresIn)
           signedURL = `/object/sign/${urlToSign}?token=${token}`
         } else {
           error = 'Either the object does not exist or you do not have access to it'
@@ -721,10 +721,10 @@ export class ObjectStorage {
       isUpsert: options?.upsert ?? false,
     })
 
-    const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
+    const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
     const token = await signJWT(
       { owner, url, upsert: Boolean(options?.upsert) },
-      jwtSecret,
+      urlSigningKey,
       expiresIn
     )
 
@@ -737,11 +737,11 @@ export class ObjectStorage {
    * @param objectName
    */
   async verifyObjectSignature(token: string, objectName: string) {
-    const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
+    const { secret: jwtSecret, jwks } = await getJwtSecret(this.db.tenantId)
 
     let payload: SignedUploadToken
     try {
-      payload = (await verifyJWT(token, jwtSecret)) as SignedUploadToken
+      payload = (await verifyJWT(token, jwtSecret, jwks)) as SignedUploadToken
     } catch (e) {
       const err = e as Error
       throw ERRORS.InvalidJWT(err)

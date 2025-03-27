@@ -8,6 +8,23 @@ export enum MultitenantMigrationStrategy {
   FULL_FLEET = 'full_fleet',
 }
 
+export interface JwksConfigKey {
+  kid?: string
+  kty: string
+  // other fields are present too but are dependent on kid, alg and other fields, cast to unknown to access those
+}
+
+export interface JwksConfigKeyOct extends JwksConfigKey {
+  k: string
+  kty: 'oct'
+  alg: string
+}
+
+export interface JwksConfig {
+  keys: (JwksConfigKey | JwksConfigKeyOct)[]
+  urlSigningKey?: JwksConfigKeyOct
+}
+
 type StorageConfigType = {
   isProduction: boolean
   version: string
@@ -30,7 +47,7 @@ type StorageConfigType = {
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: string
-  jwtJWKS?: { keys: { kid?: string; kty: string }[] }
+  jwtJWKS?: JwksConfig
   multitenantDatabaseUrl?: string
   dbAnonRole: string
   dbAuthenticatedRole: string

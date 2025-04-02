@@ -24,7 +24,7 @@ export function mockQueue() {
     send: sendSpy,
     insert: insertSpy,
   })
-  jest.spyOn(Queue, 'getInstance').mockImplementation(queueSpy as any)
+  jest.spyOn(Queue, 'getInstance').mockImplementation(queueSpy)
 
   return { queueSpy, sendSpy, insertSpy }
 }

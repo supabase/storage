@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { getConfig, JwksConfig, JwksConfigKeyOct } from '../../config'
+import { getConfig, JwksConfig, JwksConfigKeyOCT } from '../../config'
 import {
   decrypt,
   encrypt,
@@ -15,6 +15,7 @@ import { LRUCache } from 'lru-cache'
 import objectSizeOf from 'object-sizeof'
 import { ERRORS } from '@internal/errors'
 import { DBMigration } from '@internal/database/migrations'
+import { Knex } from 'knex'
 
 interface TenantConfig {
   anonKey?: string
@@ -57,7 +58,7 @@ export enum TenantMigrationStatus {
 interface S3Credentials {
   accessKey: string
   secretKey: string
-  claims: { role: string; sub?: string; [key: string]: any }
+  claims: { role: string; sub?: string; [key: string]: unknown }
 }
 
 const { isMultitenant, dbServiceRole, serviceKey, jwtSecret } = getConfig()
@@ -213,7 +214,7 @@ export async function getServiceKey(tenantId: string): Promise<string> {
  */
 export async function getJwtSecret(
   tenantId: string
-): Promise<{ secret: string; urlSigningKey: string | JwksConfigKeyOct; jwks: JwksConfig }> {
+): Promise<{ secret: string; urlSigningKey: string | JwksConfigKeyOCT; jwks: JwksConfig }> {
   const { jwtJWKS } = getConfig()
   let secret = jwtSecret
   let jwks = jwtJWKS || { keys: [] }
@@ -303,12 +304,35 @@ export async function* listTenantsMissingUrlSigningJwk(
 }
 
 /**
- * Generates a new url signing jwk and stores it in the database
+ * Generates a new URL signing JWK and stores it in the database if one does not already exist.
+ * Only one active url signing jwk can exist, this function is idempotent and will create a new entry or return the kid of the existing
  * @param tenantId
+ * @param trx optional transaction to add the jwk within
  */
-export function generateUrlSigningJwk(tenantId: string): Promise<{ kid: string }> {
-  const newJwk = generateHS256JWK()
-  return addJwk(tenantId, newJwk, JWK_KIND_STORAGE_URL_SIGNING)
+export async function generateUrlSigningJwk(
+  tenantId: string,
+  trx?: Knex.Transaction
+): Promise<{ kid: string }> {
+  const query = trx || multitenantKnex
+
+  return await query.transaction(async (transaction) => {
+    const activeJwk = await transaction('tenants_jwks')
+      .where({
+        tenant_id: tenantId,
+        kind: JWK_KIND_STORAGE_URL_SIGNING,
+        active: true,
+      })
+      .forUpdate()
+      .first()
+
+    if (activeJwk) {
+      return { kid: JWK_KIND_STORAGE_URL_SIGNING + '_' + activeJwk.id }
+    }
+
+    // Generate and insert a new JWK
+    const newJwk = generateHS256JWK()
+    return addJwk(tenantId, newJwk, JWK_KIND_STORAGE_URL_SIGNING, transaction)
+  })
 }
 
 /**
@@ -316,14 +340,16 @@ export function generateUrlSigningJwk(tenantId: string): Promise<{ kid: string }
  * @param tenantId
  * @param jwk jwk content
  * @param kind string used to identify the purpose or source of each jwk
+ * @param trx optional transaction to add the jwk within
  */
 export async function addJwk(
   tenantId: string,
   jwk: object,
-  kind: string
+  kind: string,
+  trx?: Knex.Transaction
 ): Promise<{ kid: string }> {
-  const createdJwk = await multitenantKnex
-    .table('tenants_jwks')
+  const query = trx || multitenantKnex // Use the provided transaction or default to knex
+  const createdJwk = await query('tenants_jwks')
     .insert({
       tenant_id: tenantId,
       content: encrypt(JSON.stringify(jwk)),
@@ -380,7 +406,7 @@ export async function getJwksTenantConfig(tenantId: string): Promise<JwksConfig>
       .where('tenant_id', tenantId)
       .where('active', true)
 
-    let urlSigningKey: JwksConfigKeyOct | undefined
+    let urlSigningKey: JwksConfigKeyOCT | undefined
     const jwksConfig: JwksConfig = {
       keys: data.map(({ id, kind, content }) => {
         const jwk = JSON.parse(decrypt(content))
@@ -514,8 +540,8 @@ export function listS3Credentials(tenantId: string) {
 export async function countS3Credentials(tenantId: string) {
   const data = await multitenantKnex
     .table('tenants_s3_credentials')
-    .count('id')
+    .count<{ count: number }>('id')
     .where('tenant_id', tenantId)
 
-  return Number((data as any)?.count || 0)
+  return Number(data?.count || 0)
 }

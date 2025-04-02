@@ -1,8 +1,14 @@
-import { FastifyInstance, RequestGenericInterface } from 'fastify'
+import {
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest,
+  HookHandlerDoneFunction,
+  RequestGenericInterface,
+} from 'fastify'
 import apiKey from '../../plugins/apikey'
 import { addJwk, toggleJwkActive } from '@internal/database'
 import { FromSchema } from 'json-schema-to-ts'
-import { UrlSigningJwkGenerator } from '@internal/database/url-signing-jwk-generator'
+import { UrlSigningJwkGenerator } from '@internal/auth/generators/jwk-generator'
 
 const addSchema = {
   body: {
@@ -50,66 +56,85 @@ interface JwksUpdateRequestInterface extends RequestGenericInterface {
   }
 }
 
+function validateAddJwkRequest(
+  request: FastifyRequest<JwksAddRequestInterface>,
+  reply: FastifyReply,
+  done: HookHandlerDoneFunction
+) {
+  const {
+    body: { jwk, kind },
+  } = request
+
+  if (kind.includes('_')) {
+    return reply.status(400).send({ message: 'Kind cannot contain underscore characters' })
+  }
+
+  if (kind.length > 50) {
+    return reply.status(400).send({ message: 'Kind cannot exceed 50 characters' })
+  }
+
+  switch (jwk.kty) {
+    case 'oct':
+      if (!jwk.k) {
+        return reply.status(400).send({ message: 'Invalid symmetric jwk. k is required' })
+      }
+      break
+    case 'RSA':
+      if (!jwk.n || !jwk.e) {
+        return reply
+          .status(400)
+          .send({ message: 'Invalid asymmetric jwk. RSA must include n and e' })
+      }
+      if (jwk.d || jwk.p || jwk.q || jwk.dp || jwk.dq || jwk.qi) {
+        return reply
+          .status(400)
+          .send('Invalid asymmetric public jwk. Private fields are not allowed')
+      }
+      break
+    case 'EC':
+      if (!jwk.crv || !jwk.x || !jwk.y) {
+        return reply
+          .status(400)
+          .send({ message: 'Invalid asymmetric jwk. EC must include crv, x, and y' })
+      }
+      if (jwk.d) {
+        return reply
+          .status(400)
+          .send('Invalid asymmetric public jwk. Private fields are not allowed')
+      }
+      break
+    case 'OKP':
+      if (!jwk.crv || !jwk.x) {
+        return reply
+          .status(400)
+          .send({ message: 'Invalid asymmetric jwk. OKP must include crv and x' })
+      }
+      if (jwk.d) {
+        return reply
+          .status(400)
+          .send('Invalid asymmetric public jwk. Private fields are not allowed')
+      }
+      // jsonwebtoken does not support OKP (ed25519/Ed448) keys yet, if/when this changes replace this with a break and we should be good to go
+      return reply
+        .status(400)
+        .send({ message: 'OKP jwks are not yet supported. Please use RSA or EC' })
+    default:
+      return reply.status(400).send({ message: 'Unsupported jwk algorithm ' + jwk.kty })
+  }
+  done()
+}
+
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
 
   fastify.post<JwksAddRequestInterface>(
     '/:tenantId/jwks',
-    { schema: addSchema },
+    { schema: addSchema, preHandler: validateAddJwkRequest },
     async (request, reply) => {
       const {
         params: { tenantId },
         body: { jwk, kind },
       } = request
-
-      if (kind.includes('_')) {
-        return reply.status(400).send('Kind cannot contain underscore characters')
-      }
-
-      if (kind.length > 50) {
-        return reply.status(400).send('Kind cannot exceed 50 characters')
-      }
-
-      switch (jwk.kty) {
-        case 'oct':
-          if (!jwk.k) {
-            return reply.status(400).send('Invalid symmetric jwk. k is required')
-          }
-          break
-        case 'RSA':
-          if (!jwk.n || !jwk.e) {
-            return reply.status(400).send('Invalid asymmetric jwk. RSA must include n and e')
-          }
-          if (jwk.d || jwk.p || jwk.q || jwk.dp || jwk.dq || jwk.qi) {
-            return reply
-              .status(400)
-              .send('Invalid asymmetric public jwk. Private fields are not allowed')
-          }
-          break
-        case 'EC':
-          if (!jwk.crv || !jwk.x || !jwk.y) {
-            return reply.status(400).send('Invalid asymmetric jwk. EC must include crv, x, and y')
-          }
-          if (jwk.d) {
-            return reply
-              .status(400)
-              .send('Invalid asymmetric public jwk. Private fields are not allowed')
-          }
-          break
-        case 'OKP':
-          if (!jwk.crv || !jwk.x) {
-            return reply.status(400).send('Invalid asymmetric jwk. OKP must include crv and x')
-          }
-          if (jwk.d) {
-            return reply
-              .status(400)
-              .send('Invalid asymmetric public jwk. Private fields are not allowed')
-          }
-          // jsonwebtoken does not support OKP (ed25519/Ed448) keys yet, if/when this changes replace this with a break and we should be good to go
-          return reply.status(400).send('OKP jwks are not yet supported. Please use RSA or EC')
-        default:
-          return reply.status(400).send('Unsupported jwk algorithm ' + jwk.kty)
-      }
 
       const result = await addJwk(tenantId, jwk, kind)
       return reply.send(result)
@@ -136,7 +161,8 @@ export default async function routes(fastify: FastifyInstance) {
         .status(400)
         .send(`Generate missing jwks is already running, and has sent ${sent} items so far`)
     }
-    UrlSigningJwkGenerator.generateUrlSigningJwksOnAllTenants()
+
+    UrlSigningJwkGenerator.generateUrlSigningJwksOnAllTenants(request.signals.disconnect.signal)
     return reply.send({ started: true })
   })
 

@@ -14,7 +14,7 @@ import { adminApp, mockQueue } from './common'
 import { generateUrlSigningJwk, getJwksTenantConfig, getJwtSecret } from '@internal/database'
 import { listenForTenantUpdate } from '@internal/database'
 import { PostgresPubSub } from '@internal/pubsub'
-import { UrlSigningJwkGenerator } from '@internal/database/url-signing-jwk-generator'
+import { UrlSigningJwkGenerator } from '@internal/auth/generators/jwk-generator'
 import { signJWT } from '@internal/auth'
 
 dotenv.config({ path: '.env.test' })
@@ -295,7 +295,6 @@ describe('Tenant jwks configs', () => {
       queueInsertSpy.mockImplementationOnce((...args) => resolve(args))
     })
 
-    UrlSigningJwkGenerator.Init(new AbortController().signal)
     const response = await adminApp.inject({
       method: 'POST',
       url: `/tenants/jwks/generate-all-missing`,
@@ -358,5 +357,20 @@ describe('Tenant jwks configs', () => {
     const secretWithoutJwk = await getJwtSecret(tenantId)
     expect(secretWithoutJwk.urlSigningKey).toBe(secretWithoutJwk.secret)
     expect(secretWithoutJwk.jwks.keys.length).toBe(0)
+  })
+
+  test('Ensure url signing jwk is idempotent', async () => {
+    const config = await getJwksTenantConfig(tenantId)
+    // signing jwk created automatically for new tenant
+    expect(config.keys.length).toBe(1)
+    const kidBefore = config.keys[0].kid
+
+    const results = await Promise.all([
+      generateUrlSigningJwk(tenantId),
+      generateUrlSigningJwk(tenantId),
+      generateUrlSigningJwk(tenantId),
+    ])
+
+    results.forEach((result) => expect(result.kid).toBe(kidBefore))
   })
 })

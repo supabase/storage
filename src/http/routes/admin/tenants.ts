@@ -218,23 +218,25 @@ export default async function routes(fastify: FastifyInstance) {
       tracingMode,
     } = request.body
 
-    await multitenantKnex('tenants').insert({
-      id: tenantId,
-      anon_key: encrypt(anonKey),
-      database_url: encrypt(databaseUrl),
-      database_pool_url: databasePoolUrl ? encrypt(databasePoolUrl) : undefined,
-      max_connections: maxConnections ? Number(maxConnections) : undefined,
-      file_size_limit: fileSizeLimit,
-      jwt_secret: encrypt(jwtSecret),
-      service_key: encrypt(serviceKey),
-      feature_image_transformation: features?.imageTransformation?.enabled ?? false,
-      feature_purge_cache: features?.purgeCache?.enabled ?? false,
-      feature_s3_protocol: features?.s3Protocol?.enabled ?? true,
-      migrations_version: null,
-      migrations_status: null,
-      tracing_mode: tracingMode,
+    await multitenantKnex.transaction(async (trx) => {
+      await multitenantKnex('tenants').insert({
+        id: tenantId,
+        anon_key: encrypt(anonKey),
+        database_url: encrypt(databaseUrl),
+        database_pool_url: databasePoolUrl ? encrypt(databasePoolUrl) : undefined,
+        max_connections: maxConnections ? Number(maxConnections) : undefined,
+        file_size_limit: fileSizeLimit,
+        jwt_secret: encrypt(jwtSecret),
+        service_key: encrypt(serviceKey),
+        feature_image_transformation: features?.imageTransformation?.enabled ?? false,
+        feature_purge_cache: features?.purgeCache?.enabled ?? false,
+        feature_s3_protocol: features?.s3Protocol?.enabled ?? true,
+        migrations_version: null,
+        migrations_status: null,
+        tracing_mode: tracingMode,
+      })
+      await generateUrlSigningJwk(tenantId, trx)
     })
-    await generateUrlSigningJwk(tenantId)
 
     try {
       await runMigrationsOnTenant(databaseUrl, tenantId)
@@ -244,7 +246,7 @@ export default async function routes(fastify: FastifyInstance) {
           migrations_version: await lastLocalMigrationName(),
           migrations_status: TenantMigrationStatus.COMPLETED,
         })
-    } catch (e) {
+    } catch {
       progressiveMigrations.addTenant(tenantId)
     }
 
@@ -372,8 +374,10 @@ export default async function routes(fastify: FastifyInstance) {
       tenantInfo.tracing_mode = tracingMode
     }
 
-    await multitenantKnex('tenants').insert(tenantInfo).onConflict('id').merge()
-    await generateUrlSigningJwk(tenantId)
+    await multitenantKnex.transaction(async (trx) => {
+      await trx('tenants').insert(tenantInfo).onConflict('id').merge()
+      await generateUrlSigningJwk(tenantId, trx)
+    })
 
     try {
       await runMigrationsOnTenant(databaseUrl, tenantId)
@@ -383,7 +387,7 @@ export default async function routes(fastify: FastifyInstance) {
           migrations_version: await lastLocalMigrationName(),
           migrations_status: TenantMigrationStatus.COMPLETED,
         })
-    } catch (e) {
+    } catch {
       progressiveMigrations.addTenant(tenantId)
     }
 
@@ -449,7 +453,7 @@ export default async function routes(fastify: FastifyInstance) {
   })
 
   fastify.post<tenantRequestInterface>('/:tenantId/migrations/reset', async (req, reply) => {
-    const { untilMigration, markCompletedTillMigration } = req.body as any
+    const { untilMigration, markCompletedTillMigration } = req.body
 
     const { databaseUrl } = await getTenantConfig(req.params.tenantId)
 

@@ -25,6 +25,7 @@ export const ROUTE_OPERATIONS = {
   MOVE_OBJECT: 'storage.object.move',
   UPDATE_OBJECT: 'storage.object.upload_update',
   UPLOAD_SIGN_OBJECT: 'storage.object.upload_signed',
+  PURGE_OBJECT_CACHE: 'storage.object.purge_cache',
 
   // Image Transformation
   RENDER_AUTH_IMAGE: 'storage.render.image_authenticated',

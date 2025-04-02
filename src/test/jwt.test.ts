@@ -7,10 +7,12 @@ describe('JWT', () => {
   describe('verifyJWT with JWKS', () => {
     const keys: {
       type?: string
-      options?: any
+      options?: object
       alg: string
       kid?: string
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       publicKey: any
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       privateKey: any
     }[] = [
       { type: 'rsa', options: { modulusLength: 2048 }, alg: 'RS256' },
@@ -20,7 +22,10 @@ describe('JWT', () => {
     ].map((desc, i) => ({
       kid: i.toString(),
       ...desc,
-      ...crypto.generateKeyPairSync(desc.type as any, (desc.options || undefined) as any),
+      ...crypto.generateKeyPairSync(
+        desc.type as 'rsa' & 'ec',
+        (desc.options || undefined) as object
+      ),
     }))
 
     const hmacPrivateKeyWithoutKid = crypto.randomBytes(256 / 8).toString('hex')

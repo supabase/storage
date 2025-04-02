@@ -3,7 +3,7 @@
 import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
-import { getConfig, JwksConfig, JwksConfigKeyOct, mergeConfig } from '../config'
+import { getConfig, JwksConfig, JwksConfigKeyOCT, mergeConfig } from '../config'
 import { generateHS256JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
 import { Obj, backends } from '../storage'
 import { useMockObject, useMockQueue } from './common'
@@ -1643,7 +1643,7 @@ describe('testing generating signed URL', () => {
   })
 
   test('check if url signing key is used to sign urls (instead of jwtSecret) if it is present', async () => {
-    const signingJwk = { ...generateHS256JWK(), kid: 'qwerty-09876' } as JwksConfigKeyOct
+    const signingJwk = { ...generateHS256JWK(), kid: 'qwerty-09876' } as JwksConfigKeyOCT
     const jwtJWKS: JwksConfig = { keys: [signingJwk], urlSigningKey: signingJwk }
     mergeConfig({ jwtJWKS })
 
@@ -2120,7 +2120,7 @@ describe('testing retrieving signed URL', () => {
   })
 
   test('get object with jwk generated token', async () => {
-    const signingJwk = { ...generateHS256JWK(), kid: 'abc-123' } as JwksConfigKeyOct
+    const signingJwk = { ...generateHS256JWK(), kid: 'abc-123' } as JwksConfigKeyOCT
     mergeConfig({ jwtJWKS: { keys: [signingJwk] } })
 
     const urlToSign = 'bucket2/public/sadcat-upload.png'
@@ -2357,9 +2357,9 @@ describe('testing list objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    const responseJSON = JSON.parse(response.body)
+    const responseJSON = JSON.parse(response.body) as { name: string }[]
     expect(responseJSON).toHaveLength(9)
-    const names = responseJSON.map((ele: any) => ele.name)
+    const names = responseJSON.map((ele) => ele.name)
     expect(names).toContain('curlimage.jpg')
     expect(names).toContain('private')
     expect(names).toContain('folder')
@@ -2381,9 +2381,9 @@ describe('testing list objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    const responseJSON = JSON.parse(response.body)
+    const responseJSON = JSON.parse(response.body) as { name: string }[]
     expect(responseJSON).toHaveLength(2)
-    const names = responseJSON.map((ele: any) => ele.name)
+    const names = responseJSON.map((ele) => ele.name)
     expect(names).toContain('only_uid.jpg')
     expect(names).toContain('subfolder')
   })

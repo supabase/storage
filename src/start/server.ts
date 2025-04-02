@@ -17,7 +17,6 @@ import {
   runMultitenantMigrations,
   startAsyncMigrations,
 } from '@internal/database/migrations'
-import { UrlSigningJwkGenerator } from '@internal/database/url-signing-jwk-generator'
 
 const shutdownSignal = new AsyncAbortController()
 
@@ -74,9 +73,6 @@ async function main() {
   if (isMultitenant && pgQueueEnable) {
     startAsyncMigrations(shutdownSignal.nextGroup.signal)
   }
-
-  // Attach abort signal to jwk generation runner
-  UrlSigningJwkGenerator.Init(shutdownSignal.nextGroup.signal)
 
   // HTTP Server
   const app = await httpServer(shutdownSignal.signal)

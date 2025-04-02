@@ -1,7 +1,7 @@
-import { logger, logSchema } from '../monitoring'
+import { logger, logSchema } from '../../monitoring'
 import { JwksCreateSigningSecret } from '@storage/events'
-import { listTenantsMissingUrlSigningJwk } from './tenant'
-import { getConfig } from '../../config'
+import { listTenantsMissingUrlSigningJwk } from '../../database/tenant'
+import { getConfig } from '../../../config'
 
 const { isMultitenant, pgQueueEnable } = getConfig()
 
@@ -11,13 +11,8 @@ export interface UrlSigningJwkGeneratorStatus {
 }
 
 export class UrlSigningJwkGenerator {
-  private static signal: AbortSignal
   private static isRunning: boolean = false
   private static countSent: number = 0
-
-  static Init(signal: AbortSignal) {
-    UrlSigningJwkGenerator.signal = signal
-  }
 
   static getGenerationStatus(): UrlSigningJwkGeneratorStatus {
     return {
@@ -29,7 +24,7 @@ export class UrlSigningJwkGenerator {
   /**
    * Generates url signing jwks for all tenants
    */
-  static async generateUrlSigningJwksOnAllTenants() {
+  static async generateUrlSigningJwksOnAllTenants(signal: AbortSignal) {
     if (!pgQueueEnable || !isMultitenant || UrlSigningJwkGenerator.isRunning) {
       return
     }
@@ -39,7 +34,7 @@ export class UrlSigningJwkGenerator {
       type: 'jwk-generator',
     })
     try {
-      const tenants = listTenantsMissingUrlSigningJwk(UrlSigningJwkGenerator.signal)
+      const tenants = listTenantsMissingUrlSigningJwk(signal)
       for await (const tenantBatch of tenants) {
         await JwksCreateSigningSecret.batchSend(
           tenantBatch.map((tenant) => {

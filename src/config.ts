@@ -8,21 +8,44 @@ export enum MultitenantMigrationStrategy {
   FULL_FLEET = 'full_fleet',
 }
 
-export interface JwksConfigKey {
+export interface JwksConfigKeyBase {
   kid?: string
   kty: string
-  // other fields are present too but are dependent on kid, alg and other fields, cast to unknown to access those
+  alg?: string
 }
 
-export interface JwksConfigKeyOct extends JwksConfigKey {
+export interface JwksConfigKeyOCT extends JwksConfigKeyBase {
   k: string
   kty: 'oct'
-  alg: string
 }
 
+export interface JwksConfigKeyRSA extends JwksConfigKeyBase {
+  k: string
+  kty: 'RSA'
+  n: string
+  e: string
+}
+
+export interface JwksConfigKeyEC extends JwksConfigKeyBase {
+  k: string
+  kty: 'EC'
+  crv: string
+  x: string
+  y: string
+}
+
+export interface JwksConfigKeyOKP extends JwksConfigKeyBase {
+  k: string
+  kty: 'OKP'
+  crv: string
+  x: string
+}
+
+export type JwksConfigKey = JwksConfigKeyOCT | JwksConfigKeyRSA | JwksConfigKeyEC | JwksConfigKeyOKP
+
 export interface JwksConfig {
-  keys: (JwksConfigKey | JwksConfigKeyOct)[]
-  urlSigningKey?: JwksConfigKeyOct
+  keys: JwksConfigKey[]
+  urlSigningKey?: JwksConfigKeyOCT
 }
 
 type StorageConfigType = {

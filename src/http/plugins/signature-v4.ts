@@ -6,7 +6,7 @@ import { signJWT, verifyJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
 
 import { getConfig } from '../../config'
-import { MultipartFile } from '@fastify/multipart'
+import { MultipartFile, MultipartValue } from '@fastify/multipart'
 
 const {
   anonKey,
@@ -119,8 +119,9 @@ async function extractSignature(req: AWSRequest) {
     const fields = data?.fields
     if (fields) {
       for (const key in fields) {
-        if (fields.hasOwnProperty(key) && (fields[key] as any).fieldname !== 'file') {
-          formData.append(key, (fields[key] as any).value)
+        const field = fields[key] as MultipartValue<string | Blob>
+        if (fields.hasOwnProperty(key) && field.fieldname !== 'file') {
+          formData.append(key, field.value)
         }
       }
     }

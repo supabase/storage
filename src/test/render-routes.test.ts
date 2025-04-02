@@ -1,6 +1,6 @@
 import dotenv from 'dotenv'
 import fs from 'fs/promises'
-import { getConfig, JwksConfig, JwksConfigKeyOct, mergeConfig } from '../config'
+import { getConfig, JwksConfig, mergeConfig } from '../config'
 import app from '../app'
 import { S3Backend } from '../storage/backend'
 import path from 'path'
@@ -113,8 +113,8 @@ describe('image rendering routes', () => {
     )
   })
 
-  it('will render a transformed image providing a signed url', async () => {
-    const signingJwk = { ...generateHS256JWK(), kid: 'qwerty-09876' } as JwksConfigKeyOct
+  it('will render a transformed image providing a signed url (using url signing jwk if set)', async () => {
+    const signingJwk = { ...generateHS256JWK(), kid: 'qwerty-09876' }
     const jwtJWKS: JwksConfig = { keys: [signingJwk], urlSigningKey: signingJwk }
     mergeConfig({ jwtJWKS })
 

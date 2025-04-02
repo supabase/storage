@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { ERRORS } from '@internal/errors'
 
-import { getConfig, JwksConfigKeyOct } from '../../config'
+import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 
 const { jwtAlgorithm } = getConfig()
 
@@ -26,11 +26,7 @@ export type SignedUploadToken = {
   exp: number
 }
 
-export function findJWKFromHeader(
-  header: jwt.JwtHeader,
-  secret: string,
-  jwks: { keys: { kid?: string; kty: string }[] } | null
-) {
+export function findJWKFromHeader(header: jwt.JwtHeader, secret: string, jwks: JwksConfig | null) {
   if (!jwks || !jwks.keys) {
     return secret
   }
@@ -45,8 +41,7 @@ export function findJWKFromHeader(
 
     // find the first key without a kid or with the matching kid and the "oct" type
     const jwk = jwks.keys.find(
-      (key) =>
-        (!key.kid || key.kid === header.kid) && key.kty === 'oct' && (key as JwksConfigKeyOct).k
+      (key) => (!key.kid || key.kid === header.kid) && key.kty === 'oct' && key.k
     )
 
     if (!jwk) {
@@ -54,7 +49,7 @@ export function findJWKFromHeader(
       return secret
     }
 
-    return Buffer.from((jwk as JwksConfigKeyOct).k, 'base64')
+    return Buffer.from(jwk.k, 'base64')
   }
 
   // jwt is using an asymmetric algorithm
@@ -78,21 +73,18 @@ export function findJWKFromHeader(
 
   return crypto.createPublicKey({
     format: 'jwk',
-    key: jwk,
+    key: jwk as crypto.JsonWebKey,
   })
 }
 
-function getJWTVerificationKey(
-  secret: string,
-  jwks: { keys: { kid?: string; kty: string }[] } | null
-): jwt.GetPublicKeyOrSecret {
+function getJWTVerificationKey(secret: string, jwks: JwksConfig | null): jwt.GetPublicKeyOrSecret {
   return (header: jwt.JwtHeader, callback: jwt.SigningKeyCallback) => {
     let result: jwt.Secret | null = null
 
     try {
       result = findJWKFromHeader(header, secret, jwks)
-    } catch (e: any) {
-      callback(e)
+    } catch (e) {
+      callback(e as Error)
       return
     }
 
@@ -100,16 +92,16 @@ function getJWTVerificationKey(
   }
 }
 
-export function getJWTAlgorithms(jwks: { keys: { kid?: string; kty: string }[] } | null) {
+export function getJWTAlgorithms(jwks: JwksConfig | null) {
   let algorithms: jwt.Algorithm[]
 
   if (jwks && jwks.keys && jwks.keys.length) {
     const hasRSA = jwks.keys.find((key) => key.kty === 'RSA')
     const hasECC = jwks.keys.find((key) => key.kty === 'EC')
     const hasED = jwks.keys.find(
-      (key) => key.kty === 'OKP' && ((key as any).crv === 'Ed25519' || (key as any).crv === 'Ed448')
+      (key) => key.kty === 'OKP' && (key.crv === 'Ed25519' || key.crv === 'Ed448')
     )
-    const hasHS = jwks.keys.find((key) => key.kty === 'oct' && (key as any).k)
+    const hasHS = jwks.keys.find((key) => key.kty === 'oct' && key.k)
 
     algorithms = [
       jwtAlgorithm as jwt.Algorithm,
@@ -134,7 +126,7 @@ export function getJWTAlgorithms(jwks: { keys: { kid?: string; kty: string }[] }
 export function verifyJWT<T>(
   token: string,
   secret: string,
-  jwks?: { keys: { kid?: string; kty: string }[] } | null
+  jwks?: { keys: JwksConfigKey[] } | null
 ): Promise<jwt.JwtPayload & T> {
   return new Promise((resolve, reject) => {
     jwt.verify(
@@ -157,7 +149,7 @@ export function verifyJWT<T>(
  */
 export function signJWT(
   payload: string | object | Buffer,
-  secret: string | JwksConfigKeyOct,
+  secret: string | JwksConfigKeyOCT,
   expiresIn: string | number | undefined
 ): Promise<string> {
   const options: jwt.SignOptions = { algorithm: jwtAlgorithm as jwt.Algorithm }
@@ -186,9 +178,8 @@ export function signJWT(
 /**
  * Generate a new random HS256 JWK that can be used for signing JWTs
  */
-export function generateHS256JWK(): JwksConfigKeyOct {
-  // Generate a 256-bit (32-byte) random key
-  // Convert the secret key to Base64URL encoding (JWK standard)
-  const k = crypto.randomBytes(32).toString('base64url')
+export function generateHS256JWK(): JwksConfigKeyOCT {
+  // Generate a 64-byte random key, convert the secret key to Base64URL encoding (JWK standard)
+  const k = crypto.randomBytes(64).toString('base64url')
   return { kty: 'oct', alg: 'HS256', k }
 }

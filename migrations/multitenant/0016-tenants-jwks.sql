@@ -11,6 +11,11 @@ ALTER TABLE tenants DROP COLUMN IF EXISTS jwks;
 CREATE INDEX IF NOT EXISTS tenants_jwks_tenant_id_idx ON tenants_jwks(tenant_id);
 CREATE INDEX IF NOT EXISTS tenants_jwks_active_idx ON tenants_jwks(tenant_id, active);
 
+-- Only one active 'storage-url-signing-key' per tenant
+CREATE UNIQUE INDEX IF NOT EXISTS tenants_jwks_unique_active_signing_key_idx
+ON tenants_jwks(tenant_id)
+WHERE active = true AND kind = 'storage-url-signing-key';
+
 CREATE OR REPLACE FUNCTION tenants_jwks_update_notify_trigger ()
     RETURNS TRIGGER
 AS $$

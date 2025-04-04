@@ -499,7 +499,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     try {
       const parsed = JSON.parse(jwtJWKS)
       config.jwtJWKS = parsed
-    } catch (e: any) {
+    } catch {
       throw new Error('Unable to parse JWT_JWKS value to JSON')
     }
   }

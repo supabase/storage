@@ -303,6 +303,10 @@ export async function* listTenantsMissingUrlSigningJwk(
   }
 }
 
+function createJwkKid({ kind, id }: { id: string; kind: string }): string {
+  return kind + '_' + id
+}
+
 /**
  * Generates a new URL signing JWK and stores it in the database if one does not already exist.
  * Only one active url signing jwk can exist, this function is idempotent and will create a new entry or return the kid of the existing
@@ -314,25 +318,28 @@ export async function generateUrlSigningJwk(
   trx?: Knex.Transaction
 ): Promise<{ kid: string }> {
   const query = trx || multitenantKnex
+  const jwk = generateHS256JWK()
+  const insertResult = await query('tenants_jwks')
+    .insert({
+      tenant_id: tenantId,
+      content: encrypt(JSON.stringify(jwk)),
+      kind: JWK_KIND_STORAGE_URL_SIGNING,
+      active: true,
+    })
+    .onConflict()
+    .ignore()
+    .returning('id')
 
-  return await query.transaction(async (transaction) => {
-    const activeJwk = await transaction('tenants_jwks')
-      .where({
-        tenant_id: tenantId,
-        kind: JWK_KIND_STORAGE_URL_SIGNING,
-        active: true,
-      })
-      .forUpdate()
-      .first()
-
-    if (activeJwk) {
-      return { kid: JWK_KIND_STORAGE_URL_SIGNING + '_' + activeJwk.id }
-    }
-
-    // Generate and insert a new JWK
-    const newJwk = generateHS256JWK()
-    return addJwk(tenantId, newJwk, JWK_KIND_STORAGE_URL_SIGNING, transaction)
-  })
+  if (insertResult.length > 0) {
+    return { kid: createJwkKid({ kind: JWK_KIND_STORAGE_URL_SIGNING, id: insertResult[0].id }) }
+  } else {
+    // if insert failed due to the unique constraint return the conflicting existing entry instead
+    const { id } = await query('tenants_jwks')
+      .select('id')
+      .where({ tenant_id: tenantId, kind: JWK_KIND_STORAGE_URL_SIGNING, active: true })
+      .first<{ id: string }>()
+    return { kid: createJwkKid({ kind: JWK_KIND_STORAGE_URL_SIGNING, id }) }
+  }
 }
 
 /**
@@ -340,16 +347,13 @@ export async function generateUrlSigningJwk(
  * @param tenantId
  * @param jwk jwk content
  * @param kind string used to identify the purpose or source of each jwk
- * @param trx optional transaction to add the jwk within
  */
 export async function addJwk(
   tenantId: string,
   jwk: object,
-  kind: string,
-  trx?: Knex.Transaction
+  kind: string
 ): Promise<{ kid: string }> {
-  const query = trx || multitenantKnex // Use the provided transaction or default to knex
-  const createdJwk = await query('tenants_jwks')
+  const createdJwk = await multitenantKnex('tenants_jwks')
     .insert({
       tenant_id: tenantId,
       content: encrypt(JSON.stringify(jwk)),
@@ -358,7 +362,7 @@ export async function addJwk(
     })
     .returning('id')
 
-  return { kid: kind + '_' + createdJwk[0].id }
+  return { kid: createJwkKid({ kind, id: createdJwk[0].id }) }
 }
 
 /**
@@ -410,7 +414,7 @@ export async function getJwksTenantConfig(tenantId: string): Promise<JwksConfig>
     const jwksConfig: JwksConfig = {
       keys: data.map(({ id, kind, content }) => {
         const jwk = JSON.parse(decrypt(content))
-        jwk.kid = kind + '_' + id
+        jwk.kid = createJwkKid({ kind, id })
         if (kind === JWK_KIND_STORAGE_URL_SIGNING && jwk.kty === 'oct' && jwk.k && !urlSigningKey) {
           urlSigningKey = jwk
         }

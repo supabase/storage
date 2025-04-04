@@ -3,11 +3,13 @@ import { StorageBackendAdapter, createStorageBackend } from '@storage/backend'
 import { Storage } from '@storage/storage'
 import { StorageKnexDB } from '@storage/database'
 import { getConfig } from '../../config'
+import { CdnCacheManager } from '@storage/cdn/cdn-cache-manager'
 
 declare module 'fastify' {
   interface FastifyRequest {
     storage: Storage
     backend: StorageBackendAdapter
+    cdnCache: CdnCacheManager
   }
 }
 
@@ -27,6 +29,7 @@ export const storage = fastifyPlugin(
       })
       request.backend = storageBackend
       request.storage = new Storage(storageBackend, database)
+      request.cdnCache = new CdnCacheManager(request.storage)
     })
 
     fastify.addHook('onClose', async () => {

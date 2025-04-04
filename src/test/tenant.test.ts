@@ -26,6 +26,9 @@ const payload = {
     s3Protocol: {
       enabled: true,
     },
+    purgeCache: {
+      enabled: false,
+    },
   },
   disableEvents: null,
 }
@@ -48,6 +51,9 @@ const payload2 = {
       maxResolution: null,
     },
     s3Protocol: {
+      enabled: true,
+    },
+    purgeCache: {
       enabled: true,
     },
   },

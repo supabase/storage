@@ -29,6 +29,9 @@ beforeAll(async () => {
       s3Protocol: {
         enabled: true,
       },
+      purgeCache: {
+        enabled: true,
+      },
     },
   }))
 

@@ -124,6 +124,8 @@ type StorageConfigType = {
   tracingFeatures?: {
     upload: boolean
   }
+  cdnPurgeEndpointURL?: string
+  cdnPurgeEndpointKey?: string
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -322,6 +324,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '3000',
       10
     ),
+
+    // CDN
+    cdnPurgeEndpointURL: getOptionalConfigFromEnv('CDN_PURGE_ENDPOINT_URL'),
+    cdnPurgeEndpointKey: getOptionalConfigFromEnv('CDN_PURGE_ENDPOINT_KEY'),
 
     // Monitoring
     logLevel: getOptionalConfigFromEnv('LOG_LEVEL') || 'info',

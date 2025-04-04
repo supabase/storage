@@ -44,6 +44,9 @@ export interface Features {
   s3Protocol: {
     enabled: boolean
   }
+  purgeCache: {
+    enabled: boolean
+  }
 }
 
 export enum TenantMigrationStatus {
@@ -125,6 +128,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       jwt_secret,
       jwks,
       service_key,
+      feature_purge_cache,
       feature_image_transformation,
       feature_s3_protocol,
       image_transformation_max_resolution,
@@ -158,6 +162,9 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
         },
         s3Protocol: {
           enabled: feature_s3_protocol,
+        },
+        purgeCache: {
+          enabled: feature_purge_cache,
         },
       },
       migrationVersion: migrations_version,

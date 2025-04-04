@@ -41,6 +41,12 @@ const patchSchema = {
               maxResolution: { type: 'number', nullable: true },
             },
           },
+          purgeCache: {
+            type: 'object',
+            properties: {
+              enabled: { type: 'boolean' },
+            },
+          },
           s3Protocol: {
             type: 'object',
             properties: {
@@ -88,6 +94,7 @@ interface tenantDBInterface {
   service_key: string
   file_size_limit?: number
   feature_s3_protocol?: boolean
+  feature_purge_cache?: boolean
   feature_image_transformation?: boolean
   image_transformation_max_resolution?: number
 }
@@ -108,6 +115,7 @@ export default async function routes(fastify: FastifyInstance) {
         jwt_secret,
         jwks,
         service_key,
+        feature_purge_cache,
         feature_image_transformation,
         feature_s3_protocol,
         image_transformation_max_resolution,
@@ -133,6 +141,9 @@ export default async function routes(fastify: FastifyInstance) {
             enabled: feature_image_transformation,
             maxResolution: image_transformation_max_resolution,
           },
+          purgeCache: {
+            enabled: feature_purge_cache,
+          },
           s3Protocol: {
             enabled: feature_s3_protocol,
           },
@@ -156,6 +167,7 @@ export default async function routes(fastify: FastifyInstance) {
         jwt_secret,
         jwks,
         service_key,
+        feature_purge_cache,
         feature_s3_protocol,
         feature_image_transformation,
         image_transformation_max_resolution,
@@ -183,6 +195,9 @@ export default async function routes(fastify: FastifyInstance) {
           imageTransformation: {
             enabled: feature_image_transformation,
             maxResolution: image_transformation_max_resolution,
+          },
+          purgeCache: {
+            enabled: feature_purge_cache,
           },
           s3Protocol: {
             enabled: feature_s3_protocol,
@@ -222,6 +237,7 @@ export default async function routes(fastify: FastifyInstance) {
       jwks,
       service_key: encrypt(serviceKey),
       feature_image_transformation: features?.imageTransformation?.enabled ?? false,
+      feature_purge_cache: features?.purgeCache?.enabled ?? false,
       feature_s3_protocol: features?.s3Protocol?.enabled ?? true,
       migrations_version: null,
       migrations_status: null,
@@ -277,6 +293,7 @@ export default async function routes(fastify: FastifyInstance) {
           jwks,
           service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
           feature_image_transformation: features?.imageTransformation?.enabled,
+          feature_purge_cache: features?.purgeCache?.enabled,
           feature_s3_protocol: features?.s3Protocol?.enabled,
           image_transformation_max_resolution:
             features?.imageTransformation?.maxResolution === null
@@ -340,6 +357,10 @@ export default async function routes(fastify: FastifyInstance) {
 
     if (typeof features?.imageTransformation?.enabled !== 'undefined') {
       tenantInfo.feature_image_transformation = features?.imageTransformation?.enabled
+    }
+
+    if (typeof features?.purgeCache?.enabled !== 'undefined') {
+      tenantInfo.feature_purge_cache = features?.purgeCache?.enabled
     }
 
     if (typeof features?.imageTransformation?.maxResolution !== 'undefined') {

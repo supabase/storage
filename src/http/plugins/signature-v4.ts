@@ -73,7 +73,7 @@ export const signatureV4 = fastifyPlugin(
         )
       }
 
-      const { secret: jwtSecret, jwks, urlSigningKey } = await getJwtSecret(request.tenantId)
+      const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId)
 
       if (token) {
         const payload = await verifyJWT(token, jwtSecret, jwks)
@@ -87,7 +87,7 @@ export const signatureV4 = fastifyPlugin(
         throw ERRORS.AccessDenied('Missing claims')
       }
 
-      const jwt = await signJWT(claims, urlSigningKey, '5m')
+      const jwt = await signJWT(claims, jwtSecret, '5m')
 
       request.jwt = jwt
       request.jwtPayload = claims

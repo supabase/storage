@@ -129,6 +129,38 @@ BEGIN
 END;
 $func$ LANGUAGE plpgsql VOLATILE;
 
+CREATE OR REPLACE FUNCTION "storage"."objects_update_prefix_trigger"()
+    RETURNS trigger
+AS $func$
+DECLARE
+    old_prefixes TEXT[];
+BEGIN
+    -- Ensure this is an update operation and the name has changed
+    IF TG_OP = 'UPDATE' AND NEW."name" <> OLD."name" THEN
+        -- Retrieve old prefixes
+        old_prefixes := "storage"."get_prefixes"(OLD."name");
+        -- Remove old prefixes that are only used by this object
+        FOR i IN 1..array_length(old_prefixes, 1) LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM "storage"."objects"
+                WHERE "bucket_id" = OLD."bucket_id"
+                AND "name" <> OLD."name"
+                AND "name" LIKE (old_prefixes[i] || '%')
+            ) THEN
+                DELETE FROM "storage"."prefixes"
+                WHERE "bucket_id" = OLD."bucket_id" AND "name" = old_prefixes[i];
+            END IF;
+        END LOOP;
+        -- Add new prefixes  
+        PERFORM "storage"."add_prefixes"(NEW."bucket_id", NEW."name");  
+    END IF;  
+    -- Set the new level  
+    NEW."level" := "storage"."get_level"(NEW."name");  
+
+    RETURN NEW;  
+END;
+$func$ LANGUAGE plpgsql VOLATILE;
+
 CREATE OR REPLACE FUNCTION "storage"."delete_prefix_hierarchy_trigger"()
     RETURNS trigger
 AS $func$
@@ -161,7 +193,7 @@ CREATE OR REPLACE TRIGGER "objects_update_create_prefix"
     BEFORE UPDATE ON "storage"."objects"
     FOR EACH ROW
     WHEN (NEW.name != OLD.name)
-EXECUTE FUNCTION "storage"."objects_insert_prefix_trigger"();
+EXECUTE FUNCTION "storage"."objects_update_prefix_trigger"();
 
 CREATE OR REPLACE TRIGGER "objects_delete_delete_prefix"
     AFTER DELETE ON "storage"."objects"

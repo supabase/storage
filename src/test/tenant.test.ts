@@ -3,8 +3,12 @@ import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { multitenantKnex } from '../internal/database/multitenant-db'
 import { adminApp } from './common'
+import { getFeatures, getFileSizeLimit, getServiceKey } from '@internal/database/tenant'
+import { signJWT } from '@internal/auth'
 
 dotenv.config({ path: '.env.test' })
+
+const serviceKeyPayload = { abc: 123 }
 
 const payload = {
   anonKey: 'a',
@@ -14,7 +18,6 @@ const payload = {
   fileSizeLimit: 1,
   jwtSecret: 'c',
   serviceKey: 'd',
-  jwks: { keys: [] },
   migrationStatus: 'COMPLETED',
   migrationVersion: 'add-insert-trigger-prefixes',
   tracingMode: 'basic',
@@ -41,7 +44,6 @@ const payload2 = {
   fileSizeLimit: 2,
   jwtSecret: 'g',
   serviceKey: 'h',
-  jwks: null,
   migrationStatus: 'COMPLETED',
   migrationVersion: 'add-insert-trigger-prefixes',
   tracingMode: 'basic',
@@ -63,6 +65,7 @@ const payload2 = {
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
   jest.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  payload.serviceKey = await signJWT(serviceKeyPayload, payload.jwtSecret, 100)
 })
 
 afterEach(async () => {
@@ -136,6 +139,10 @@ describe('Tenant configs', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON).toEqual(payload)
+
+    expect(getServiceKey('abc')).resolves.toBe(payload.serviceKey)
+    expect(getFileSizeLimit('abc')).resolves.toBe(payload.fileSizeLimit)
+    expect(getFeatures('abc')).resolves.toEqual(payload.features)
   })
 
   test('Insert tenant config without required properties', async () => {

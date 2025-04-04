@@ -8,6 +8,46 @@ export enum MultitenantMigrationStrategy {
   FULL_FLEET = 'full_fleet',
 }
 
+export interface JwksConfigKeyBase {
+  kid?: string
+  kty: string
+  alg?: string
+}
+
+export interface JwksConfigKeyOCT extends JwksConfigKeyBase {
+  k: string
+  kty: 'oct'
+}
+
+export interface JwksConfigKeyRSA extends JwksConfigKeyBase {
+  k: string
+  kty: 'RSA'
+  n: string
+  e: string
+}
+
+export interface JwksConfigKeyEC extends JwksConfigKeyBase {
+  k: string
+  kty: 'EC'
+  crv: string
+  x: string
+  y: string
+}
+
+export interface JwksConfigKeyOKP extends JwksConfigKeyBase {
+  k: string
+  kty: 'OKP'
+  crv: string
+  x: string
+}
+
+export type JwksConfigKey = JwksConfigKeyOCT | JwksConfigKeyRSA | JwksConfigKeyEC | JwksConfigKeyOKP
+
+export interface JwksConfig {
+  keys: JwksConfigKey[]
+  urlSigningKey?: JwksConfigKeyOCT
+}
+
 type StorageConfigType = {
   isProduction: boolean
   version: string
@@ -30,7 +70,7 @@ type StorageConfigType = {
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: string
-  jwtJWKS?: { keys: { kid?: string; kty: string }[] }
+  jwtJWKS?: JwksConfig
   multitenantDatabaseUrl?: string
   dbAnonRole: string
   dbAuthenticatedRole: string
@@ -459,7 +499,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     try {
       const parsed = JSON.parse(jwtJWKS)
       config.jwtJWKS = parsed
-    } catch (e: any) {
+    } catch {
       throw new Error('Unable to parse JWT_JWKS value to JSON')
     }
   }

@@ -1,6 +1,5 @@
 import { logger } from '@internal/monitoring'
 import { ConnectionOptions } from 'tls'
-import ipAddr from 'ip-address'
 
 export function getSslSettings({
   connectionString,
@@ -28,7 +27,10 @@ export function getSslSettings({
 }
 
 export function isIpAddress(ip: string) {
-  // IP might be URL-encoded
+  const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/
+  const ipv6Pattern = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/
+
+  // IP might be URL-encoded and won't match the regex unless we decode first
   const decodedIp = decodeURIComponent(ip)
-  return ipAddr.Address6.isValid(decodedIp) || ipAddr.Address4.isValid(decodedIp)
+  return ipv4Pattern.test(decodedIp) || ipv6Pattern.test(decodedIp)
 }

@@ -26,6 +26,7 @@ const {
   dbServiceRole,
   dbInstallRoles,
   dbRefreshMigrationHashesOnMismatch,
+  dbMigrationFreezeAt,
 } = getConfig()
 
 const loadMigrationFilesCached = memoizePromise(loadMigrationFiles)
@@ -79,7 +80,16 @@ export function startAsyncMigrations(signal: AbortSignal) {
 
 export async function lastLocalMigrationName() {
   const migrations = await loadMigrationFilesCached('./migrations/tenant')
-  return migrations[migrations.length - 1].name as keyof typeof DBMigration
+
+  if (!dbMigrationFreezeAt) {
+    return migrations[migrations.length - 1].name as keyof typeof DBMigration
+  }
+
+  const migrationIndex = migrations.findIndex((m) => m.name === dbMigrationFreezeAt)
+  if (migrationIndex === -1) {
+    throw ERRORS.InternalError(undefined, `Migration ${dbMigrationFreezeAt} not found`)
+  }
+  return migrations[migrationIndex].name as keyof typeof DBMigration
 }
 
 /**
@@ -189,7 +199,8 @@ export async function areMigrationsUpToDate(tenantId: string) {
   const tenant = await getTenantConfig(tenantId)
 
   return (
-    latestMigrationVersion === tenant.migrationVersion &&
+    tenant.migrationVersion &&
+    DBMigration[latestMigrationVersion] <= DBMigration[tenant.migrationVersion] &&
     tenant.migrationStatus === TenantMigrationStatus.COMPLETED
   )
 }
@@ -302,17 +313,31 @@ export async function runMultitenantMigrations(): Promise<void> {
   })
 }
 
+interface MigrateOnTenantOptions {
+  databaseUrl: string
+  tenantId?: string
+  waitForLock?: boolean
+  upToMigration?: keyof typeof DBMigration
+}
+
 /**
  * Runs migrations on a specific tenant by providing its database DSN
  * @param databaseUrl
  * @param tenantId
  * @param waitForLock
+ * @param upToMigration
  */
-export async function runMigrationsOnTenant(
-  databaseUrl: string,
-  tenantId?: string,
-  waitForLock = true
-): Promise<void> {
+export async function runMigrationsOnTenant({
+  databaseUrl,
+  tenantId,
+  waitForLock,
+  upToMigration,
+}: MigrateOnTenantOptions): Promise<void> {
+  // default waitForLock to true
+  if (typeof waitForLock === 'undefined') {
+    waitForLock = true
+  }
+
   await connectAndMigrate({
     databaseUrl,
     migrationsDirectory: './migrations/tenant',
@@ -320,6 +345,7 @@ export async function runMigrationsOnTenant(
     shouldCreateStorageSchema: true,
     tenantId,
     waitForLock,
+    upToMigration,
   })
 }
 
@@ -476,6 +502,7 @@ async function connectAndMigrate(options: {
   shouldCreateStorageSchema?: boolean
   tenantId?: string
   waitForLock?: boolean
+  upToMigration?: keyof typeof DBMigration
 }) {
   const { shouldCreateStorageSchema, migrationsDirectory, ssl, databaseUrl, waitForLock } = options
 
@@ -491,10 +518,24 @@ async function connectAndMigrate(options: {
 
   try {
     await client.query(`SET statement_timeout TO '3h'`)
-    await migrate({ client }, migrationsDirectory, Boolean(waitForLock), shouldCreateStorageSchema)
+    await migrate({
+      client,
+      migrationsDirectory,
+      waitForLock: Boolean(waitForLock),
+      shouldCreateStorageSchema,
+      upToMigration: options.upToMigration,
+    })
   } finally {
     await client.end()
   }
+}
+
+interface MigrateOptions {
+  client: BasicPgClient
+  migrationsDirectory: string
+  waitForLock: boolean
+  shouldCreateStorageSchema?: boolean
+  upToMigration?: keyof typeof DBMigration
 }
 
 /**
@@ -504,26 +545,52 @@ async function connectAndMigrate(options: {
  * @param waitForLock
  * @param shouldCreateStorageSchema
  */
-export async function migrate(
-  dbConfig: { client: BasicPgClient },
-  migrationsDirectory: string,
-  waitForLock: boolean,
-  shouldCreateStorageSchema?: boolean
-): Promise<Array<Migration>> {
+export async function migrate({
+  client,
+  migrationsDirectory,
+  waitForLock,
+  shouldCreateStorageSchema,
+  upToMigration,
+}: MigrateOptions): Promise<Array<Migration>> {
   return withAdvisoryLock(
     waitForLock,
-    runMigrations(migrationsDirectory, shouldCreateStorageSchema)
-  )(dbConfig.client)
+    runMigrations({
+      migrationsDirectory,
+      shouldCreateStorageSchema,
+      upToMigration,
+    })
+  )(client)
+}
+
+interface RunMigrationOptions {
+  migrationsDirectory: string
+  shouldCreateStorageSchema?: boolean
+  upToMigration?: keyof typeof DBMigration
 }
 
 /**
  * Run Migration from a specific directory
  * @param migrationsDirectory
  * @param shouldCreateStorageSchema
+ * @param upToMigration
  */
-function runMigrations(migrationsDirectory: string, shouldCreateStorageSchema = true) {
+function runMigrations({
+  migrationsDirectory,
+  shouldCreateStorageSchema,
+  upToMigration,
+}: RunMigrationOptions) {
   return async (client: BasicPgClient) => {
-    const intendedMigrations = await loadMigrationFilesCached(migrationsDirectory)
+    let intendedMigrations = await loadMigrationFilesCached(migrationsDirectory)
+    let lastMigrationId = intendedMigrations[intendedMigrations.length - 1].id
+
+    if (upToMigration) {
+      const migrationIndex = intendedMigrations.findIndex((m) => m.name === upToMigration)
+      if (migrationIndex === -1) {
+        throw ERRORS.InternalError(undefined, `Migration ${dbMigrationFreezeAt} not found`)
+      }
+      intendedMigrations = intendedMigrations.slice(0, migrationIndex + 1)
+      lastMigrationId = intendedMigrations[migrationIndex].id
+    }
 
     try {
       const migrationTableName = 'migrations'
@@ -532,7 +599,11 @@ function runMigrations(migrationsDirectory: string, shouldCreateStorageSchema = 
 
       let appliedMigrations: Migration[] = []
       if (await doesTableExist(client, migrationTableName)) {
-        const { rows } = await client.query(`SELECT * FROM ${migrationTableName} ORDER BY id`)
+        const selectQueryCurrentMigration = SQL`SELECT * FROM `
+          .append(migrationTableName)
+          .append(SQL` WHERE id <= ${lastMigrationId}`)
+
+        const { rows } = await client.query(selectQueryCurrentMigration)
         appliedMigrations = rows
 
         if (rows.length > 0) {

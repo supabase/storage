@@ -1,5 +1,6 @@
 import dotenv from 'dotenv'
 import jwt from 'jsonwebtoken'
+import type { DBMigration } from '@internal/database/migrations'
 
 export type StorageBackendType = 'file' | 's3'
 export enum MultitenantMigrationStrategy {
@@ -80,6 +81,7 @@ type StorageConfigType = {
   dbSuperUser: string
   dbSearchPath: string
   dbMigrationStrategy: MultitenantMigrationStrategy
+  dbMigrationFreezeAt?: keyof typeof DBMigration
   dbPostgresVersion?: string
   databaseURL: string
   databaseSSLRootCert?: string
@@ -341,6 +343,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     dbSuperUser: getOptionalConfigFromEnv('DB_SUPER_USER') || 'postgres',
     dbMigrationStrategy: getOptionalConfigFromEnv('DB_MIGRATIONS_STRATEGY') || 'on_request',
+    dbMigrationFreezeAt: getOptionalConfigFromEnv('DB_MIGRATIONS_FREEZE_AT') as
+      | keyof typeof DBMigration
+      | undefined,
 
     // Database - Connection
     dbSearchPath: getOptionalConfigFromEnv('DATABASE_SEARCH_PATH', 'DB_SEARCH_PATH') || '',

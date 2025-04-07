@@ -17,6 +17,7 @@ import {
   resetMigration,
   runMigrationsOnTenant,
 } from '@internal/database/migrations'
+import { getConfig } from '../../../config'
 
 const patchSchema = {
   body: {
@@ -96,6 +97,8 @@ interface tenantDBInterface {
   image_transformation_max_resolution?: number
 }
 
+const { dbMigrationFreezeAt } = getConfig()
+
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
 
@@ -151,56 +154,57 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get<tenantRequestInterface>('/:tenantId', async (request, reply) => {
     const tenant = await multitenantKnex('tenants').first().where('id', request.params.tenantId)
     if (!tenant) {
-      reply.code(404).send()
-    } else {
-      const {
-        anon_key,
-        database_url,
-        database_pool_url,
-        max_connections,
-        file_size_limit,
-        jwt_secret,
-        service_key,
-        feature_purge_cache,
-        feature_s3_protocol,
-        feature_image_transformation,
-        image_transformation_max_resolution,
-        migrations_version,
-        migrations_status,
-        tracing_mode,
-        disable_events,
-      } = tenant
+      return reply.code(404).send()
+    }
+    const {
+      anon_key,
+      database_url,
+      database_pool_url,
+      max_connections,
+      file_size_limit,
+      jwt_secret,
 
-      return {
-        anonKey: decrypt(anon_key),
-        databaseUrl: decrypt(database_url),
-        databasePoolUrl:
-          typeof database_pool_url === null
-            ? null
-            : database_pool_url
-            ? decrypt(database_pool_url)
-            : undefined,
-        maxConnections: max_connections ? Number(max_connections) : undefined,
-        fileSizeLimit: Number(file_size_limit),
-        jwtSecret: decrypt(jwt_secret),
-        serviceKey: decrypt(service_key),
-        features: {
-          imageTransformation: {
-            enabled: feature_image_transformation,
-            maxResolution: image_transformation_max_resolution,
-          },
-          purgeCache: {
-            enabled: feature_purge_cache,
-          },
-          s3Protocol: {
-            enabled: feature_s3_protocol,
-          },
+      service_key,
+      feature_purge_cache,
+      feature_s3_protocol,
+      feature_image_transformation,
+      image_transformation_max_resolution,
+      migrations_version,
+      migrations_status,
+      tracing_mode,
+      disable_events,
+    } = tenant
+
+    return {
+      anonKey: decrypt(anon_key),
+      databaseUrl: decrypt(database_url),
+      databasePoolUrl:
+        typeof database_pool_url === null
+          ? null
+          : database_pool_url
+          ? decrypt(database_pool_url)
+          : undefined,
+      maxConnections: max_connections ? Number(max_connections) : undefined,
+      fileSizeLimit: Number(file_size_limit),
+      jwtSecret: decrypt(jwt_secret),
+
+      serviceKey: decrypt(service_key),
+      features: {
+        imageTransformation: {
+          enabled: feature_image_transformation,
+          maxResolution: image_transformation_max_resolution,
         },
-        migrationVersion: migrations_version,
-        migrationStatus: migrations_status,
-        tracingMode: tracing_mode,
-        disableEvents: disable_events,
-      }
+        purgeCache: {
+          enabled: feature_purge_cache,
+        },
+        s3Protocol: {
+          enabled: feature_s3_protocol,
+        },
+      },
+      migrationVersion: migrations_version,
+      migrationStatus: migrations_status,
+      tracingMode: tracing_mode,
+      disableEvents: disable_events,
     }
   })
 
@@ -239,7 +243,11 @@ export default async function routes(fastify: FastifyInstance) {
     })
 
     try {
-      await runMigrationsOnTenant(databaseUrl, tenantId)
+      await runMigrationsOnTenant({
+        databaseUrl,
+        tenantId,
+        upToMigration: dbMigrationFreezeAt,
+      })
       await multitenantKnex('tenants')
         .where('id', tenantId)
         .update({
@@ -298,7 +306,11 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (databaseUrl) {
         try {
-          await runMigrationsOnTenant(databaseUrl, tenantId)
+          await runMigrationsOnTenant({
+            databaseUrl,
+            tenantId,
+            upToMigration: dbMigrationFreezeAt,
+          })
           await multitenantKnex('tenants')
             .where('id', tenantId)
             .update({
@@ -380,7 +392,11 @@ export default async function routes(fastify: FastifyInstance) {
     })
 
     try {
-      await runMigrationsOnTenant(databaseUrl, tenantId)
+      await runMigrationsOnTenant({
+        databaseUrl,
+        tenantId,
+        upToMigration: dbMigrationFreezeAt,
+      })
       await multitenantKnex('tenants')
         .where('id', tenantId)
         .update({
@@ -439,7 +455,11 @@ export default async function routes(fastify: FastifyInstance) {
     const databaseUrl = decrypt(migrationsInfo.database_url)
 
     try {
-      await runMigrationsOnTenant(databaseUrl, tenantId)
+      await runMigrationsOnTenant({
+        databaseUrl,
+        tenantId,
+        upToMigration: dbMigrationFreezeAt,
+      })
       reply.send({
         migrated: true,
       })

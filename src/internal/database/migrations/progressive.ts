@@ -2,6 +2,9 @@ import { logger, logSchema } from '../../monitoring'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
+import { getConfig } from '../../../config'
+
+const { dbMigrationFreezeAt } = getConfig()
 
 export class ProgressiveMigrations {
   protected tenants: string[] = []
@@ -115,6 +118,7 @@ export class ProgressiveMigrations {
         return new RunMigrationsOnTenants({
           tenantId: tenant,
           scheduleAt: scheduleForLater,
+          upToMigration: dbMigrationFreezeAt,
           tenant: {
             host: '',
             ref: tenant,

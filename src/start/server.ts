@@ -46,14 +46,17 @@ main()
  * Start Storage API server
  */
 async function main() {
-  const { databaseURL, isMultitenant, pgQueueEnable } = getConfig()
+  const { databaseURL, isMultitenant, pgQueueEnable, dbMigrationFreezeAt } = getConfig()
 
   // Migrations
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate(PubSub)
   } else {
-    await runMigrationsOnTenant(databaseURL)
+    await runMigrationsOnTenant({
+      databaseUrl: databaseURL,
+      upToMigration: dbMigrationFreezeAt,
+    })
   }
 
   // Queue

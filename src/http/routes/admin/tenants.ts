@@ -31,6 +31,7 @@ const patchSchema = {
       serviceKey: { type: 'string' },
       tracingMode: { type: 'string' },
       disableEvents: { type: 'array', items: { type: 'string' }, nullable: true },
+      migrationsFeatureFlags: { type: 'array', items: { type: 'string' }, nullable: true },
       features: {
         type: 'object',
         properties: {
@@ -97,6 +98,7 @@ interface tenantDBInterface {
   feature_purge_cache?: boolean
   feature_image_transformation?: boolean
   image_transformation_max_resolution?: number
+  migrations_feature_flags?: string[]
 }
 
 export default async function routes(fastify: FastifyInstance) {
@@ -175,6 +177,7 @@ export default async function routes(fastify: FastifyInstance) {
         migrations_status,
         tracing_mode,
         disable_events,
+        migrations_feature_flags,
       } = tenant
 
       return {
@@ -207,6 +210,7 @@ export default async function routes(fastify: FastifyInstance) {
         migrationStatus: migrations_status,
         tracingMode: tracing_mode,
         disableEvents: disable_events,
+        migrationsFeatureFlags: migrations_feature_flags,
       }
     }
   })
@@ -275,6 +279,7 @@ export default async function routes(fastify: FastifyInstance) {
         maxConnections,
         tracingMode,
         disableEvents,
+        migrationsFeatureFlags,
       } = request.body
       const { tenantId } = request.params
 
@@ -301,6 +306,7 @@ export default async function routes(fastify: FastifyInstance) {
               : features?.imageTransformation?.maxResolution,
           tracing_mode: tracingMode,
           disable_events: disableEvents,
+          migrations_feature_flags: migrationsFeatureFlags,
         })
         .where('id', tenantId)
 
@@ -317,7 +323,7 @@ export default async function routes(fastify: FastifyInstance) {
           if (e instanceof Error) {
             request.executionError = e
           }
-          progressiveMigrations.addTenant(tenantId)
+          progressiveMigrations.addTenant(tenantId, true)
         }
       }
 

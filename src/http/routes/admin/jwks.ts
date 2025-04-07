@@ -1,6 +1,6 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import apiKey from '../../plugins/apikey'
-import { addJwk, toggleJwkActive } from '@internal/database'
+import { jwksManager } from '@internal/database'
 import { FromSchema } from 'json-schema-to-ts'
 import { UrlSigningJwkGenerator } from '@internal/auth/generators/jwk-generator'
 
@@ -109,7 +109,7 @@ export default async function routes(fastify: FastifyInstance) {
         return reply.status(400).send(validationResult.message)
       }
 
-      const result = await addJwk(params.tenantId, body.jwk, body.kind)
+      const result = await jwksManager.addJwk(params.tenantId, body.jwk, body.kind)
       return reply.send(result)
     }
   )
@@ -122,7 +122,7 @@ export default async function routes(fastify: FastifyInstance) {
         params: { tenantId, kid },
         body: { active },
       } = request
-      const result = await toggleJwkActive(tenantId, kid, active)
+      const result = await jwksManager.toggleJwkActive(tenantId, kid, active)
       return reply.send({ result })
     }
   )

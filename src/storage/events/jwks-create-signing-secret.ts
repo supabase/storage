@@ -2,7 +2,7 @@ import { BaseEvent } from './base-event'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
-import { generateUrlSigningJwk } from '@internal/database'
+import { jwksManager } from '@internal/database'
 
 interface JwksCreateSigningSecretPayload extends BasePayload {
   tenantId: string
@@ -34,7 +34,7 @@ export class JwksCreateSigningSecret extends BaseEvent<JwksCreateSigningSecretPa
     const { tenantId } = job.data
 
     try {
-      const { kid } = await generateUrlSigningJwk(tenantId)
+      const { kid } = await jwksManager.generateUrlSigningJwk(tenantId)
 
       logSchema.info(
         logger,

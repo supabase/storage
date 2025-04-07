@@ -7,7 +7,7 @@ import {
   TenantMigrationStatus,
   multitenantKnex,
   getTenantConfig,
-  generateUrlSigningJwk,
+  jwksManager,
 } from '@internal/database'
 import { dbSuperUser, storage } from '../../plugins'
 import {
@@ -235,7 +235,7 @@ export default async function routes(fastify: FastifyInstance) {
         migrations_status: null,
         tracing_mode: tracingMode,
       })
-      await generateUrlSigningJwk(tenantId, trx)
+      await jwksManager.generateUrlSigningJwk(tenantId, trx)
     })
 
     try {
@@ -376,7 +376,7 @@ export default async function routes(fastify: FastifyInstance) {
 
     await multitenantKnex.transaction(async (trx) => {
       await trx('tenants').insert(tenantInfo).onConflict('id').merge()
-      await generateUrlSigningJwk(tenantId, trx)
+      await jwksManager.generateUrlSigningJwk(tenantId, trx)
     })
 
     try {

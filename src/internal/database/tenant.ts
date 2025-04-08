@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { getConfig } from '../../config'
+import { getConfig, JwksConfig, JwksConfigKeyOCT } from '../../config'
 import { decrypt, encrypt, verifyJWT } from '../auth'
 import { multitenantKnex } from './multitenant-db'
 import { JwtPayload } from 'jsonwebtoken'
@@ -9,6 +9,8 @@ import { LRUCache } from 'lru-cache'
 import objectSizeOf from 'object-sizeof'
 import { ERRORS } from '@internal/errors'
 import { DBMigration } from '@internal/database/migrations'
+import { JWKSManager } from './jwks-manager'
+import { JWKSManagerStoreKnex } from './jwks-manager/store-knex'
 
 interface TenantConfig {
   anonKey?: string
@@ -18,13 +20,6 @@ interface TenantConfig {
   fileSizeLimit: number
   features: Features
   jwtSecret: string
-  jwks?: {
-    keys: {
-      kid?: string
-      kty: string
-      // other fields are present too but are dependent on kid, alg and other fields, cast to unknown to access those
-    }[]
-  } | null
   serviceKey: string
   serviceKeyPayload: {
     role: string
@@ -58,10 +53,10 @@ export enum TenantMigrationStatus {
 interface S3Credentials {
   accessKey: string
   secretKey: string
-  claims: { role: string; sub?: string; [key: string]: any }
+  claims: { role: string; sub?: string; [key: string]: unknown }
 }
 
-const { isMultitenant, dbServiceRole, serviceKey, jwtSecret, jwtJWKS } = getConfig()
+const { isMultitenant, dbServiceRole, serviceKey, jwtSecret } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
 
@@ -75,6 +70,8 @@ const tenantS3CredentialsCache = new LRUCache<string, S3Credentials>({
 
 const tenantMutex = createMutexByKey()
 const s3CredentialsMutex = createMutexByKey()
+
+export const jwksManager = new JWKSManager(new JWKSManagerStoreKnex(multitenantKnex))
 
 const singleTenantServiceKey:
   | {
@@ -212,13 +209,22 @@ export async function getServiceKey(tenantId: string): Promise<string> {
  */
 export async function getJwtSecret(
   tenantId: string
-): Promise<{ secret: string; jwks: TenantConfig['jwks'] | null }> {
+): Promise<{ secret: string; urlSigningKey: string | JwksConfigKeyOCT; jwks: JwksConfig }> {
+  const { jwtJWKS } = getConfig()
+  let secret = jwtSecret
+  let jwks = jwtJWKS || { keys: [] }
+
   if (isMultitenant) {
-    const { jwtSecret, jwks } = await getTenantConfig(tenantId)
-    return { secret: jwtSecret, jwks: jwks || null }
+    const [config, tenantJwks] = await Promise.all([
+      getTenantConfig(tenantId),
+      jwksManager.getJwksTenantConfig(tenantId),
+    ])
+    secret = config.jwtSecret
+    jwks = tenantJwks
   }
 
-  return { secret: jwtSecret, jwks: jwtJWKS || null }
+  const urlSigningKey = jwks.urlSigningKey || secret
+  return { secret, urlSigningKey, jwks }
 }
 
 /**
@@ -249,10 +255,11 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
   await pubSub.subscribe(TENANTS_UPDATE_CHANNEL, (cacheKey) => {
     tenantConfigCache.delete(cacheKey)
   })
-
   await pubSub.subscribe(TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL, (cacheKey) => {
     tenantS3CredentialsCache.delete(cacheKey)
   })
+
+  await jwksManager.listenForTenantUpdate(pubSub)
 }
 
 /**
@@ -370,8 +377,8 @@ export function listS3Credentials(tenantId: string) {
 export async function countS3Credentials(tenantId: string) {
   const data = await multitenantKnex
     .table('tenants_s3_credentials')
-    .count('id')
+    .count<{ count: number }>('id')
     .where('tenant_id', tenantId)
 
-  return Number((data as any)?.count || 0)
+  return Number(data?.count || 0)
 }

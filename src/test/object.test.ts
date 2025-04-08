@@ -3,8 +3,8 @@
 import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
-import { getConfig, mergeConfig } from '../config'
-import { signJWT } from '@internal/auth'
+import { getConfig, JwksConfig, JwksConfigKeyOCT, mergeConfig } from '../config'
+import { generateHS256JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
 import { Obj, backends } from '../storage'
 import { useMockObject, useMockQueue } from './common'
 import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
@@ -1620,9 +1620,10 @@ describe('testing deleting multiple objects', () => {
  */
 describe('testing generating signed URL', () => {
   test('check if RLS policies are respected: authenticated user is able to sign URL for an authenticated resource', async () => {
+    const assetUrl = 'bucket2/authenticated/cat.jpg'
     const response = await app().inject({
       method: 'POST',
-      url: '/object/sign/bucket2/authenticated/cat.jpg',
+      url: '/object/sign/' + assetUrl,
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
@@ -1633,6 +1634,39 @@ describe('testing generating signed URL', () => {
     expect(response.statusCode).toBe(200)
     const result = JSON.parse(response.body)
     expect(result.signedURL).toBeTruthy()
+    expect(result.signedURL).toContain('?token=')
+
+    // verify was correctly signed with jwtSecret
+    const token = result.signedURL.split('?token=').pop()
+    const jwtData = (await verifyJWT(token, jwtSecret)) as SignedToken
+    expect(jwtData.url).toBe(assetUrl)
+  })
+
+  test('check if url signing key is used to sign urls (instead of jwtSecret) if it is present', async () => {
+    const signingJwk = { ...generateHS256JWK(), kid: 'qwerty-09876' } as JwksConfigKeyOCT
+    const jwtJWKS: JwksConfig = { keys: [signingJwk], urlSigningKey: signingJwk }
+    mergeConfig({ jwtJWKS })
+
+    const assetUrl = 'bucket2/authenticated/cat.jpg'
+    const response = await app().inject({
+      method: 'POST',
+      url: '/object/sign/' + assetUrl,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const result = JSON.parse(response.body)
+    expect(result.signedURL).toBeTruthy()
+    expect(result.signedURL).toContain('?token=')
+
+    // verify was correctly signed with url signing key (jwk)
+    const token = result.signedURL.split('?token=').pop()
+    const jwtData = (await verifyJWT(token, 'invalid-old-jwt-secret', jwtJWKS)) as SignedToken
+    expect(jwtData.url).toBe(assetUrl)
   })
 
   test('check if RLS policies are respected: anon user is not able to generate signedURL for authenticated resource', async () => {
@@ -2085,6 +2119,21 @@ describe('testing retrieving signed URL', () => {
     expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
   })
 
+  test('get object with jwk generated token', async () => {
+    const signingJwk = { ...generateHS256JWK(), kid: 'abc-123' } as JwksConfigKeyOCT
+    mergeConfig({ jwtJWKS: { keys: [signingJwk] } })
+
+    const urlToSign = 'bucket2/public/sadcat-upload.png'
+    const jwtToken = await signJWT({ url: urlToSign }, signingJwk, 100)
+    const response = await app().inject({
+      method: 'GET',
+      url: `/object/sign/${urlToSign}?token=${jwtToken}`,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
+  })
+
   test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
     const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
     mockGetObject.mockRejectedValue({
@@ -2107,6 +2156,18 @@ describe('testing retrieving signed URL', () => {
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })
+  })
+
+  test('get object with incorrect url in jwt', async () => {
+    const urlToSign = 'bucket2/public/sadcat-upload.png'
+    const jwtToken = await signJWT({ url: 'some/other/weird-path.png' }, jwtSecret, 100)
+    const response = await app().inject({
+      method: 'GET',
+      url: `/object/sign/${urlToSign}?token=${jwtToken}`,
+    })
+    expect(response.statusCode).toBe(400)
+    const body = response.json<{ error: string }>()
+    expect(body.error).toBe('InvalidSignature')
   })
 
   test('get object without a token', async () => {
@@ -2296,9 +2357,9 @@ describe('testing list objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    const responseJSON = JSON.parse(response.body)
+    const responseJSON = JSON.parse(response.body) as { name: string }[]
     expect(responseJSON).toHaveLength(9)
-    const names = responseJSON.map((ele: any) => ele.name)
+    const names = responseJSON.map((ele) => ele.name)
     expect(names).toContain('curlimage.jpg')
     expect(names).toContain('private')
     expect(names).toContain('folder')
@@ -2320,9 +2381,9 @@ describe('testing list objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    const responseJSON = JSON.parse(response.body)
+    const responseJSON = JSON.parse(response.body) as { name: string }[]
     expect(responseJSON).toHaveLength(2)
-    const names = responseJSON.map((ele: any) => ele.name)
+    const names = responseJSON.map((ele) => ele.name)
     expect(names).toContain('only_uid.jpg')
     expect(names).toContain('subfolder')
   })

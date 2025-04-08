@@ -1,17 +1,15 @@
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
-import { getS3CredentialsByAccessKey, getTenantConfig } from '@internal/database'
+import { getJwtSecret, getS3CredentialsByAccessKey, getTenantConfig } from '@internal/database'
 import { ClientSignature, SignatureV4 } from '@storage/protocols/s3'
 import { signJWT, verifyJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
 
 import { getConfig } from '../../config'
-import { MultipartFile } from '@fastify/multipart'
+import { MultipartFile, MultipartValue } from '@fastify/multipart'
 
 const {
   anonKey,
-  jwtSecret,
-  jwtJWKS,
   serviceKey,
   storageS3Region,
   isMultitenant,
@@ -75,19 +73,10 @@ export const signatureV4 = fastifyPlugin(
         )
       }
 
-      const jwtSecrets = {
-        jwtSecret: jwtSecret,
-        jwks: jwtJWKS,
-      }
-
-      if (isMultitenant) {
-        const tenant = await getTenantConfig(request.tenantId)
-        jwtSecrets.jwtSecret = tenant.jwtSecret
-        jwtSecrets.jwks = tenant.jwks || undefined
-      }
+      const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId)
 
       if (token) {
-        const payload = await verifyJWT(token, jwtSecrets.jwtSecret, jwtSecrets.jwks)
+        const payload = await verifyJWT(token, jwtSecret, jwks)
         request.jwt = token
         request.jwtPayload = payload
         request.owner = payload.sub
@@ -98,7 +87,7 @@ export const signatureV4 = fastifyPlugin(
         throw ERRORS.AccessDenied('Missing claims')
       }
 
-      const jwt = await signJWT(claims, jwtSecrets.jwtSecret, '5m')
+      const jwt = await signJWT(claims, jwtSecret, '5m')
 
       request.jwt = jwt
       request.jwtPayload = claims
@@ -130,8 +119,9 @@ async function extractSignature(req: AWSRequest) {
     const fields = data?.fields
     if (fields) {
       for (const key in fields) {
-        if (fields.hasOwnProperty(key) && (fields[key] as any).fieldname !== 'file') {
-          formData.append(key, (fields[key] as any).value)
+        const field = fields[key] as MultipartValue<string | Blob>
+        if (fields.hasOwnProperty(key) && field.fieldname !== 'file') {
+          formData.append(key, field.value)
         }
       }
     }

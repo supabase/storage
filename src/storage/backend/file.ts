@@ -533,13 +533,13 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   protected getMetadataAttr(file: string, attribute: string): Promise<string | undefined> {
-    return xattr.getAttribute(file, attribute).then((value) => {
+    return xattr.get(file, attribute).then((value) => {
       return value?.toString() ?? undefined
     })
   }
 
   protected setMetadataAttr(file: string, attribute: string, value: string): Promise<void> {
-    return xattr.setAttribute(file, attribute, value)
+    return xattr.set(file, attribute, value)
   }
 
   private async etag(file: string, stats: fs.Stats): Promise<string> {

@@ -19,7 +19,7 @@ const payload = {
   jwtSecret: 'c',
   serviceKey: 'd',
   migrationStatus: 'COMPLETED',
-  migrationVersion: 'add-insert-trigger-prefixes',
+  migrationVersion: 'use-big-int-for-size-function',
   tracingMode: 'basic',
   features: {
     imageTransformation: {
@@ -45,7 +45,7 @@ const payload2 = {
   jwtSecret: 'g',
   serviceKey: 'h',
   migrationStatus: 'COMPLETED',
-  migrationVersion: 'add-insert-trigger-prefixes',
+  migrationVersion: 'use-big-int-for-size-function',
   tracingMode: 'basic',
   features: {
     imageTransformation: {

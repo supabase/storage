@@ -25,6 +25,35 @@ export default async function routes(fastify: FastifyInstance) {
     return reply.send({ message: 'Migrations scheduled' })
   })
 
+  fastify.get('/active', async (req, reply) => {
+    if (!pgQueueEnable) {
+      return reply.code(400).send({ message: 'Queue is not enabled' })
+    }
+    const data = await multitenantKnex
+      .table('pgboss.job')
+      .where('state', 'active')
+      .where('name', 'tenants-migrations')
+      .orderBy('createdon', 'desc')
+      .limit(2000)
+
+    return reply.send(data)
+  })
+
+  fastify.delete('/active', async (req, reply) => {
+    if (!pgQueueEnable) {
+      return reply.code(400).send({ message: 'Queue is not enabled' })
+    }
+    const data = await multitenantKnex
+      .table('pgboss.job')
+      .where('state', 'active')
+      .where('name', 'tenants-migrations')
+      .orderBy('createdon', 'desc')
+      .update({ state: 'completed' })
+      .limit(2000)
+
+    return reply.send(data)
+  })
+
   fastify.post('/reset/fleet', async (req, reply) => {
     if (!pgQueueEnable) {
       return reply.status(400).send({ message: 'Queue is not enabled' })

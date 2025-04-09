@@ -146,10 +146,12 @@ export class TenantConnection {
     return new this(knexPool, options)
   }
 
-  async dispose() {
+  dispose() {
     if (this.options.isExternalPool) {
-      await this.pool.destroy()
+      return this.pool.destroy()
     }
+
+    return Promise.resolve()
   }
 
   async transaction(instance?: Knex) {

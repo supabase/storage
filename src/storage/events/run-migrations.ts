@@ -18,19 +18,22 @@ interface RunMigrationsPayload extends BasePayload {
 
 export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
   static queueName = 'tenants-migrations'
+  static allowSync = false
 
   static getWorkerOptions(): WorkOptions {
     return {
       teamSize: 200,
       teamConcurrency: 10,
       includeMetadata: true,
+      enforceSingletonQueueActiveLimit: true,
     }
   }
 
   static getQueueOptions(payload: RunMigrationsPayload): SendOptions {
     return {
-      expireInHours: 2,
-      singletonKey: payload.tenantId,
+      expireInHours: 48,
+      singletonKey: `migrations_${payload.tenantId}`,
+      singletonHours: 1,
       useSingletonQueue: true,
       retryLimit: 3,
       retryDelay: 5,

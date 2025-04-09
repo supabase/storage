@@ -10,7 +10,7 @@ import { searchPath } from '../connection'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { multitenantKnex } from '../multitenant-db'
 import { ProgressiveMigrations } from './progressive'
-import { RunMigrationsOnTenants, ResetMigrationsOnTenant } from '@storage/events'
+import { ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events'
 import { ERRORS } from '@internal/errors'
 import { DBMigration } from './types'
 import { getSslSettings } from '../util'
@@ -353,7 +353,7 @@ export async function resetMigration(options: {
   tenantId: string
   untilMigration: keyof typeof DBMigration
   markCompletedTillMigration?: keyof typeof DBMigration
-  databaseUrl: string | undefined
+  databaseUrl: string
 }): Promise<boolean> {
   const dbConfig: ClientConfig = {
     connectionString: options.databaseUrl,
@@ -361,9 +361,7 @@ export async function resetMigration(options: {
     options: `-c search_path=${searchPath}`,
   }
 
-  if (databaseSSLRootCert) {
-    dbConfig.ssl = { ca: databaseSSLRootCert }
-  }
+  dbConfig.ssl = getSslSettings({ connectionString: options.databaseUrl, databaseSSLRootCert })
 
   const client = await connect(dbConfig)
 
@@ -510,14 +508,14 @@ async function connectAndMigrate(options: {
     connectionString: databaseUrl,
     connectionTimeoutMillis: 60_000,
     options: `-c search_path=${searchPath}`,
-    statement_timeout: 1000 * 60 * 60 * 3, // 3 hours
+    statement_timeout: 1000 * 60 * 60 * 12, // 12 hours
     ssl,
   }
 
   const client = await connect(dbConfig)
 
   try {
-    await client.query(`SET statement_timeout TO '3h'`)
+    await client.query(`SET statement_timeout TO '12h'`)
     await migrate({
       client,
       migrationsDirectory,
@@ -751,8 +749,7 @@ function withAdvisoryLock<T>(
         throw e
       }
 
-      const result = await f(client)
-      return result
+      return await f(client)
     } catch (e) {
       throw e
     } finally {

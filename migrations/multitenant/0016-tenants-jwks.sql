@@ -6,7 +6,6 @@ CREATE TABLE IF NOT EXISTS tenants_jwks (
     active boolean NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-ALTER TABLE tenants DROP COLUMN IF EXISTS jwks;
 
 CREATE INDEX IF NOT EXISTS tenants_jwks_tenant_id_idx ON tenants_jwks(tenant_id);
 CREATE INDEX IF NOT EXISTS tenants_jwks_active_idx ON tenants_jwks(tenant_id, active);

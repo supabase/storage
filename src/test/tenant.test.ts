@@ -3,7 +3,12 @@ import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { multitenantKnex } from '../internal/database/multitenant-db'
 import { adminApp } from './common'
-import { getFeatures, getFileSizeLimit, getServiceKey } from '@internal/database/tenant'
+import {
+  getFeatures,
+  getFileSizeLimit,
+  getServiceKey,
+  getTenantConfig,
+} from '@internal/database/tenant'
 import { signJWT } from '@internal/auth'
 
 dotenv.config({ path: '.env.test' })
@@ -302,5 +307,50 @@ describe('Tenant configs', () => {
       },
     })
     expect(getResponse.statusCode).toBe(404)
+  })
+
+  test('Get tenant config with invalid tenant id expected error', () => {
+    expect(getTenantConfig('')).rejects.toThrowError('Invalid tenant id')
+  })
+
+  test('Get tenant config with unknown tenant id expected error', () => {
+    expect(getTenantConfig('zzz')).rejects.toThrowError('Missing tenant config for tenant zzz')
+  })
+
+  test('Get tenant config always retrieves concurrent requests from cache', async () => {
+    const knexTableSpy = jest.spyOn(multitenantKnex, 'table')
+    try {
+      const tenantId = 'cache-test-abc'
+      await adminApp.inject({
+        method: 'POST',
+        url: `/tenants/${tenantId}`,
+        payload,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      await getTenantConfig(tenantId)
+      expect(knexTableSpy).toHaveBeenCalledTimes(1)
+      expect(knexTableSpy).toHaveBeenCalledWith('tenants')
+
+      const results = await Promise.all([
+        getTenantConfig(tenantId),
+        getTenantConfig(tenantId),
+        getTenantConfig(tenantId),
+      ])
+      expect(knexTableSpy).toHaveBeenCalledTimes(1)
+      results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
+
+      await adminApp.inject({
+        method: 'DELETE',
+        url: `/tenants/${tenantId}`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+    } finally {
+      knexTableSpy.mockRestore()
+    }
   })
 })

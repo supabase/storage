@@ -164,7 +164,7 @@ describe('Tenant jwks configs', () => {
         // jsonwebtoken does not support OKP (ed25519/Ed448) keys yet
         expect(response.statusCode).toBe(400)
       } else {
-        expect(response.statusCode).toBe(200)
+        expect(response.statusCode).toBe(201)
         const data = response.json<{ kid: string }>()
         expect(data.kid).toBeTruthy()
         expect(data.kid.startsWith(kind)).toBe(true)
@@ -285,14 +285,17 @@ describe('Tenant jwks configs', () => {
 
   test('Config always retrieves concurrent requests from cache', async () => {
     const listActiveSpy = jest.spyOn(jwksManager['storage'], 'listActive')
-    const results = await Promise.all([
-      jwksManager.getJwksTenantConfig(tenantId),
-      jwksManager.getJwksTenantConfig(tenantId),
-      jwksManager.getJwksTenantConfig(tenantId),
-    ])
-    expect(listActiveSpy).toHaveBeenCalledTimes(1)
-    results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
-    listActiveSpy.mockRestore()
+    try {
+      const results = await Promise.all([
+        jwksManager.getJwksTenantConfig(tenantId),
+        jwksManager.getJwksTenantConfig(tenantId),
+        jwksManager.getJwksTenantConfig(tenantId),
+      ])
+      expect(listActiveSpy).toHaveBeenCalledTimes(1)
+      results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
+    } finally {
+      listActiveSpy.mockRestore()
+    }
   })
 
   test('Generate all jwks status', async () => {
@@ -326,25 +329,27 @@ describe('Tenant jwks configs', () => {
     const queueSpyAwaiter = new Promise((resolve) => {
       queueInsertSpy.mockImplementationOnce((...args) => resolve(args))
     })
+    try {
+      const response = await adminApp.inject({
+        method: 'POST',
+        url: `/tenants/jwks/generate-all-missing`,
+        payload: {},
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      const startData = response.json<{ started: boolean }>()
+      expect(startData.started).toBe(true)
 
-    const response = await adminApp.inject({
-      method: 'POST',
-      url: `/tenants/jwks/generate-all-missing`,
-      payload: {},
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(response.statusCode).toBe(200)
-    const startData = response.json<{ started: boolean }>()
-    expect(startData.started).toBe(true)
-
-    await queueSpyAwaiter
-    expect(queueInsertSpy).toHaveBeenCalledTimes(1)
-    const [[callArg]] = queueInsertSpy.mock.calls
-    expect(callArg).toHaveLength(1)
-    expect(callArg[0]).toMatchObject({ data: { tenantId }, name: 'tenants-jwks-create' })
-    queueInsertSpy.mockRestore()
+      await queueSpyAwaiter
+      expect(queueInsertSpy).toHaveBeenCalledTimes(1)
+      const [[callArg]] = queueInsertSpy.mock.calls
+      expect(callArg).toHaveLength(1)
+      expect(callArg[0]).toMatchObject({ data: { tenantId }, name: 'tenants-jwks-create' })
+    } finally {
+      queueInsertSpy.mockRestore()
+    }
   })
 
   test('Generate all jwks when already running', async () => {
@@ -352,32 +357,38 @@ describe('Tenant jwks configs', () => {
       .spyOn(UrlSigningJwkGenerator, 'getGenerationStatus')
       .mockReturnValueOnce({ running: true, sent: 99 })
 
-    const response = await adminApp.inject({
-      method: 'POST',
-      url: `/tenants/jwks/generate-all-missing`,
-      payload: {},
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(response.statusCode).toBe(400)
-    expect(statusSpy).toHaveBeenCalledTimes(1)
-    statusSpy.mockRestore()
+    try {
+      const response = await adminApp.inject({
+        method: 'POST',
+        url: `/tenants/jwks/generate-all-missing`,
+        payload: {},
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(response.statusCode).toBe(400)
+      expect(statusSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      statusSpy.mockRestore()
+    }
   })
 
   test('Ensure list tenants exits before yield if no items are returned', async () => {
     const listTenantsSpy = jest
       .spyOn(jwksManager['storage'], 'listTenantsWithoutKindPaginated')
       .mockResolvedValue([])
-    const result = jwksManager.listTenantsMissingUrlSigningJwk(new AbortController().signal)
+    try {
+      const result = jwksManager.listTenantsMissingUrlSigningJwk(new AbortController().signal)
 
-    let iterations = 0
-    for await (const _ of result) {
-      iterations++
+      let iterations = 0
+      for await (const _ of result) {
+        iterations++
+      }
+      expect(iterations).toBe(0)
+      expect(listTenantsSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      listTenantsSpy.mockRestore()
     }
-    expect(iterations).toBe(0)
-    expect(listTenantsSpy).toHaveBeenCalledTimes(1)
-    listTenantsSpy.mockRestore()
   })
 
   test('Should use url signing jwk and fall back to old jwt secret when the jwk is removed', async () => {

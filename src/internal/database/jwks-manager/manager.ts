@@ -9,7 +9,7 @@ const TENANTS_JWKS_UPDATE_CHANNEL = 'tenants_jwks_update'
 const JWK_KIND_STORAGE_URL_SIGNING = 'storage-url-signing-key'
 const JWK_KID_SEPARATOR = '_'
 
-const tenantJwksMutex = createMutexByKey()
+const tenantJwksMutex = createMutexByKey<JwksConfig>()
 const tenantJwksConfigCache = new Map<string, JwksConfig>()
 
 function createJwkKid({ kind, id }: { id: string; kind: string }): string {

@@ -12,7 +12,7 @@ export function monitorStream(dataStream: Readable) {
   const byteCounter = createByteCounterStream()
   const span = trace.getActiveSpan()
 
-  let measures: any[] = []
+  let measures: object[] = []
 
   // Handle the 'speed' event to collect speed measurements
   speedMonitor.on('speed', (bps) => {

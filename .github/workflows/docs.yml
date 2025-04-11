@@ -6,6 +6,10 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pages: write
+
 jobs:
   test:
     name: Test / OS ${{ matrix.platform }} / Node ${{ matrix.node }}

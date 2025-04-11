@@ -4,6 +4,9 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 env:
   service_to_update: 'storage-api'
   cli_repo_owner: supabase

@@ -3,5 +3,5 @@ export interface Persistence {
   beginTransaction(): Promise<void>
   commitTransaction(): Promise<void>
   rollbackTransaction(): Promise<void>
-  rawQuery(query: string, bindings?: any[]): Promise<any>
+  rawQuery(query: string, bindings?: object[]): Promise<object>
 }

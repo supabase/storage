@@ -36,7 +36,7 @@ export class KnexPersistence implements Persistence {
     }
   }
 
-  async rawQuery(query: string, bindings: any[] = []): Promise<any> {
+  async rawQuery(query: string, bindings: object[] = []): Promise<object> {
     if (this.trx) {
       return this.trx.raw(query, bindings)
     }

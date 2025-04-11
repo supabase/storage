@@ -1,7 +1,9 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import apiKey from '../../plugins/apikey'
-import { createS3Credentials, deleteS3Credential, listS3Credentials } from '@internal/database'
+import { s3CredentialsManager } from '@internal/database'
 import { FromSchema } from 'json-schema-to-ts'
+import { isUuid } from '@storage/limits'
+import { ERRORS } from '@internal/errors'
 
 const createCredentialsSchema = {
   description: 'Create S3 Credentials',
@@ -88,7 +90,7 @@ export default async function routes(fastify: FastifyInstance) {
       schema: createCredentialsSchema,
     },
     async (req, reply) => {
-      const credentials = await createS3Credentials(req.params.tenantId, {
+      const credentials = await s3CredentialsManager.createS3Credentials(req.params.tenantId, {
         description: req.body.description,
         claims: req.body.claims,
       })
@@ -106,8 +108,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/credentials',
     { schema: listCredentialsSchema },
     async (req, reply) => {
-      const credentials = await listS3Credentials(req.params.tenantId)
-
+      const credentials = await s3CredentialsManager.listS3Credentials(req.params.tenantId)
       return reply.send(credentials)
     }
   )
@@ -116,7 +117,10 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/credentials',
     { schema: deleteCredentialsSchema },
     async (req, reply) => {
-      await deleteS3Credential(req.params.tenantId, req.body.id)
+      if (!isUuid(req.body.id)) {
+        throw ERRORS.InvalidParameter('id not uuid')
+      }
+      await s3CredentialsManager.deleteS3Credential(req.params.tenantId, req.body.id)
 
       return reply.code(204).send()
     }

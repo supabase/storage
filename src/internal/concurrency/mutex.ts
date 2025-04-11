@@ -1,9 +1,9 @@
 import { Semaphore } from '@shopify/semaphore'
 
-export function createMutexByKey() {
+export function createMutexByKey<T>() {
   const semaphoreMap = new Map<string, { semaphore: Semaphore; count: number }>()
 
-  return async (key: string, fn: () => Promise<any>) => {
+  return async (key: string, fn: () => Promise<T>) => {
     let entry = semaphoreMap.get(key)
     if (!entry) {
       entry = { semaphore: new Semaphore(1), count: 0 }

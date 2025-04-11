@@ -25,7 +25,7 @@ export const jwt = fastifyPlugin(
     fastify.decorateRequest('jwt', '')
     fastify.decorateRequest('jwtPayload', undefined)
 
-    fastify.addHook('preHandler', async (request, reply) => {
+    fastify.addHook('preHandler', async (request) => {
       request.jwt = (request.headers.authorization || '').replace(BEARER, '')
 
       if (!request.jwt && request.routeOptions.config.allowInvalidJwt) {
@@ -41,13 +41,14 @@ export const jwt = fastifyPlugin(
         request.jwtPayload = payload
         request.owner = payload.sub
         request.isAuthenticated = true
-      } catch (err: any) {
+      } catch (e) {
         request.jwtPayload = { role: 'anon' }
         request.isAuthenticated = false
 
         if (request.routeOptions.config.allowInvalidJwt) {
           return
         }
+        const err = e as Error
         throw ERRORS.AccessDenied(err.message, err)
       }
     })

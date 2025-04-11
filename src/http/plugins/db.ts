@@ -171,7 +171,7 @@ export const migrations = fastifyPlugin(
     })
 
     if (dbMigrationStrategy === MultitenantMigrationStrategy.ON_REQUEST) {
-      const migrationsMutex = createMutexByKey()
+      const migrationsMutex = createMutexByKey<void>()
 
       fastify.addHook('preHandler', async (request) => {
         // migrations are handled via async migrations

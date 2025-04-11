@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
-import { getJwtSecret, getS3CredentialsByAccessKey, getTenantConfig } from '@internal/database'
+import { getJwtSecret, getTenantConfig, s3CredentialsManager } from '@internal/database'
 import { ClientSignature, SignatureV4 } from '@storage/protocols/s3'
 import { signJWT, verifyJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
@@ -160,7 +160,7 @@ async function createServerSignature(tenantId: string, clientSignature: ClientSi
   }
 
   if (isMultitenant) {
-    const credential = await getS3CredentialsByAccessKey(
+    const credential = await s3CredentialsManager.getS3CredentialsByAccessKey(
       tenantId,
       clientSignature.credentials.accessKey
     )

@@ -64,7 +64,7 @@ export const setErrorHandler = (app: FastifyInstance) => {
     // Fastify errors
     if ('statusCode' in error) {
       const err = error as FastifyError
-      return reply.status((error as any).statusCode || 500).send({
+      return reply.status(err.statusCode || 500).send({
         statusCode: `${err.statusCode}`,
         error: err.name,
         message: err.message,

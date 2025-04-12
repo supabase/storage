@@ -178,6 +178,24 @@ describe('Tenant jwks configs', () => {
       }
     })
 
+    test(`Add ${type} jwk via tenant patch (legacy)`, async () => {
+      const patchResponse = await adminApp.inject({
+        method: 'PATCH',
+        url: `/tenants/${tenantId}`,
+        payload: {
+          jwks: { keys: [jwk] },
+        },
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(patchResponse.statusCode).toBe(204)
+
+      const { jwks } = await getJwtSecret(tenantId)
+      expect(jwks.keys.length).toBe(2)
+      expect(jwks.keys[1]).toEqual(jwk)
+    })
+
     test(`Add ${type} jwk with missing data`, async () => {
       const response = await adminApp.inject({
         method: 'POST',

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { getConfig, JwksConfig, JwksConfigKeyOCT } from '../../config'
+import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import { decrypt, encrypt, verifyJWT } from '../auth'
 import { multitenantKnex } from './multitenant-db'
 import { JwtPayload } from 'jsonwebtoken'
@@ -20,6 +20,7 @@ interface TenantConfig {
   fileSizeLimit: number
   features: Features
   jwtSecret: string
+  jwks?: { keys: JwksConfigKey[] } | null
   serviceKey: string
   serviceKeyPayload: {
     role: string
@@ -215,10 +216,12 @@ export async function getJwtSecret(
   let jwks = jwtJWKS || { keys: [] }
 
   if (isMultitenant) {
-    const [config, tenantJwks] = await Promise.all([
-      getTenantConfig(tenantId),
-      jwksManager.getJwksTenantConfig(tenantId),
-    ])
+    const config = await getTenantConfig(tenantId)
+    const tenantJwks = await jwksManager.getJwksTenantConfig(tenantId)
+    if (config.jwks?.keys) {
+      // merge jwks from legacy jwks column if they exist
+      tenantJwks.keys = [...tenantJwks.keys, ...config.jwks.keys]
+    }
     secret = config.jwtSecret
     jwks = tenantJwks
   }

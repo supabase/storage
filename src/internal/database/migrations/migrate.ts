@@ -551,7 +551,7 @@ export async function migrate({
   shouldCreateStorageSchema,
   upToMigration,
 }: MigrateOptions): Promise<Array<Migration>> {
-  // const accessMethod = await getDefaultAccessMethod(client)
+  const accessMethod = await getDefaultAccessMethod(client)
   return withAdvisoryLock(
     waitForLock,
     runMigrations({
@@ -559,7 +559,7 @@ export async function migrate({
       shouldCreateStorageSchema,
       upToMigration,
       // Remove concurrent index creation if we're using oriole db as it does not support it currently
-      // transformers: accessMethod === 'orioledb' ? [new DisableConcurrentIndexTransformer()] : [],
+      transformers: accessMethod === 'orioledb' ? [new DisableConcurrentIndexTransformer()] : [],
     })
   )(client)
 }

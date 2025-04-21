@@ -1,4 +1,3 @@
-version: '3'
 services:
   tenant_db:
     image: orioledb/orioledb:latest-pg17

@@ -100,8 +100,15 @@ export const logSchema = {
 }
 
 export function buildTransport(): pino.TransportMultiOptions | undefined {
+  const stdOutTarget = {
+    level: logLevel || 'info',
+    target: 'pino/file',
+    // omitting options.destination logs to stdout using a worker thread
+    options: {},
+  }
+
   if (!logflareEnabled) {
-    return undefined
+    return { targets: [stdOutTarget] }
   }
 
   if (!logflareApiKey) {
@@ -119,11 +126,7 @@ export function buildTransport(): pino.TransportMultiOptions | undefined {
         target: './logflare',
         options: {},
       },
-      {
-        level: logLevel || 'info',
-        target: 'pino/file',
-        options: {},
-      },
+      stdOutTarget,
     ],
   }
 }

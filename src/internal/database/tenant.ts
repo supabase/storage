@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import { decrypt, encrypt, verifyJWT } from '../auth'
 import { multitenantKnex } from './multitenant-db'
-import { JwtPayload } from 'jsonwebtoken'
+import { JWTPayload } from 'jose'
 import { PubSubAdapter } from '../pubsub'
 import { createMutexByKey } from '../concurrency'
 import { LRUCache } from 'lru-cache'
@@ -77,7 +77,7 @@ export const jwksManager = new JWKSManager(new JWKSManagerStoreKnex(multitenantK
 const singleTenantServiceKey:
   | {
       jwt: string
-      payload: { role: string } & JwtPayload
+      payload: { role: string } & JWTPayload
     }
   | undefined = !isMultitenant
   ? {

@@ -153,8 +153,10 @@ export function signJWT(
   const options: jwt.SignOptions = { algorithm: jwtAlgorithm as jwt.Algorithm }
 
   let signingSecret: string | Buffer = typeof secret === 'string' ? secret : ''
-  if (typeof secret === 'object' && secret?.kid && secret?.k) {
-    options.keyid = secret.kid
+  if (typeof secret === 'object' && secret?.k) {
+    if (secret.kid) {
+      options.keyid = secret.kid
+    }
     if (secret.alg) {
       options.algorithm = secret.alg as jwt.Algorithm
     }

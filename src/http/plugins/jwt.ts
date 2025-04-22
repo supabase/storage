@@ -1,5 +1,5 @@
 import fastifyPlugin from 'fastify-plugin'
-import { JwtPayload } from 'jsonwebtoken'
+import { JWTPayload } from 'jose'
 
 import { verifyJWT } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
@@ -9,7 +9,7 @@ declare module 'fastify' {
   interface FastifyRequest {
     isAuthenticated: boolean
     jwt: string
-    jwtPayload?: JwtPayload & { role?: string }
+    jwtPayload?: JWTPayload & { role?: string }
     owner?: string
   }
 

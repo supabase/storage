@@ -3,6 +3,8 @@ import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
 import { routes, schemas, plugins, setErrorHandler } from './http'
 import { getConfig } from './config'
+import { generateHS256JWK, signJWT } from '@internal/auth'
+import { signJWT as signJWTJose } from '@internal/auth/jwt-jose'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -69,6 +71,39 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
     reply.send(version)
   })
   app.get('/status', async (request, response) => response.status(200).send())
+
+  const testingJwkSecret = generateHS256JWK()
+
+  app.get('/test-jwt-jsonwebtoken', async (_, reply) => {
+    console.log('...', testingJwkSecret)
+    const start = performance.now()
+    const jwt = await signJWT(
+      {
+        url: '/blah/blah/blah',
+        when: Date.now(),
+        what: Math.random() + 'abc123',
+      },
+      testingJwkSecret,
+      2000
+    )
+    const end = performance.now()
+    reply.send({ jwt, time: end - start })
+  })
+
+  app.get('/test-jwt-jose', async (_, reply) => {
+    const start = performance.now()
+    const jwt = await signJWTJose(
+      {
+        url: '/blah/blah/blah',
+        when: Date.now(),
+        what: Math.random() + 'abc123',
+      },
+      testingJwkSecret,
+      2000
+    )
+    const end = performance.now()
+    reply.send({ jwt, time: end - start })
+  })
 
   return app
 }

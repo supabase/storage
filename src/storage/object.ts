@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
+import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth/jwt-jose'
 import { ERRORS } from '@internal/errors'
 import { getJwtSecret } from '@internal/database'
 

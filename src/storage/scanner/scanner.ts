@@ -213,7 +213,7 @@ export class ObjectScanner {
       const result = await query.limit(1000)
 
       if (result.length === 1000) {
-        nextItem = result[result.length - 1].name
+        nextItem = result[result.length - 1].key
       }
 
       if (result.length === 0) {

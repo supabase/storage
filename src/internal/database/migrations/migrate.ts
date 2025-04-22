@@ -14,7 +14,7 @@ import { ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events
 import { ERRORS } from '@internal/errors'
 import { DBMigration } from './types'
 import { getSslSettings } from '../util'
-import { MigrationTransformer, DisableConcurrentIndexTransformer } from './migration-transformer'
+import { MigrationTransformer, DisableConcurrentIndexTransformer } from './transformers'
 
 const {
   multitenantDatabaseUrl,

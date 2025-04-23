@@ -1,6 +1,6 @@
 import pg, { DatabaseError } from 'pg'
 import { Knex, knex } from 'knex'
-import { JwtPayload } from 'jsonwebtoken'
+import { JWTPayload } from 'jose'
 import retry from 'async-retry'
 import TTLCache from '@isaacs/ttlcache'
 import { getConfig } from '../../config'
@@ -40,7 +40,7 @@ interface TenantConnectionOptions {
 
 export interface User {
   jwt: string
-  payload: { role?: string } & JwtPayload
+  payload: { role?: string } & JWTPayload
 }
 
 const multiTenantLRUConfig = {

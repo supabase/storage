@@ -4,14 +4,14 @@ import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
 import { getConfig, JwksConfig, JwksConfigKeyOCT, mergeConfig } from '../config'
-import { generateHS256JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
+import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
 import { Obj, backends } from '../storage'
 import { useMockObject, useMockQueue } from './common'
 import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
 import { Knex } from 'knex'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
 
-const { jwtSecret, serviceKey, tenantId } = getConfig()
+const { jwtSecret, serviceKeyAsync, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
 const S3Backend = backends.S3Backend
 
@@ -371,7 +371,7 @@ describe('testing POST object via multipart upload', () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
-      authorization: `Bearer ${serviceKey}`,
+      authorization: `Bearer ${await serviceKeyAsync}`,
       'x-upsert': 'true',
     })
 
@@ -389,7 +389,7 @@ describe('testing POST object via multipart upload', () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
-      authorization: `Bearer ${serviceKey}`,
+      authorization: `Bearer ${await serviceKeyAsync}`,
       'x-upsert': 'true',
     })
 
@@ -412,7 +412,7 @@ describe('testing POST object via multipart upload', () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
-      authorization: `Bearer ${serviceKey}`,
+      authorization: `Bearer ${await serviceKeyAsync}`,
       'x-upsert': 'true',
       'content-type': 'image/jpeg',
     })
@@ -438,7 +438,7 @@ describe('testing POST object via multipart upload', () => {
       })
     )
     const headers = Object.assign({}, form.getHeaders(), {
-      authorization: `Bearer ${serviceKey}`,
+      authorization: `Bearer ${await serviceKeyAsync}`,
       'x-upsert': 'true',
       ...form.getHeaders(),
     })
@@ -472,7 +472,7 @@ describe('testing POST object via multipart upload', () => {
     const file = fs.createReadStream(`./src/test/assets/sadcat.jpg`)
 
     const headers = {
-      authorization: `Bearer ${serviceKey}`,
+      authorization: `Bearer ${await serviceKeyAsync}`,
       'x-upsert': 'true',
       'x-metadata': Buffer.from(
         JSON.stringify({
@@ -518,7 +518,7 @@ describe('testing POST object via multipart upload', () => {
       })
     )
     const headers = Object.assign({}, form.getHeaders(), {
-      authorization: `Bearer ${serviceKey}`,
+      authorization: `Bearer ${await serviceKeyAsync}`,
       'x-upsert': 'true',
     })
 
@@ -551,7 +551,7 @@ describe('testing POST object via multipart upload', () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
-      authorization: `Bearer ${serviceKey}`,
+      authorization: `Bearer ${await serviceKeyAsync}`,
       'x-upsert': 'true',
       'content-type': 'image/png',
     })
@@ -574,7 +574,7 @@ describe('testing POST object via multipart upload', () => {
   test('can create an empty folder when mime-type is set', async () => {
     const form = new FormData()
     const headers = Object.assign({}, form.getHeaders(), {
-      authorization: `Bearer ${serviceKey}`,
+      authorization: `Bearer ${await serviceKeyAsync}`,
       'x-upsert': 'true',
     })
 
@@ -593,7 +593,7 @@ describe('testing POST object via multipart upload', () => {
   test('cannot create an empty folder with more than 0kb', async () => {
     const form = new FormData()
     const headers = Object.assign({}, form.getHeaders(), {
-      authorization: `Bearer ${serviceKey}`,
+      authorization: `Bearer ${await serviceKeyAsync}`,
       'x-upsert': 'true',
     })
 
@@ -612,7 +612,7 @@ describe('testing POST object via multipart upload', () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
-      authorization: `Bearer ${serviceKey}`,
+      authorization: `Bearer ${await serviceKeyAsync}`,
       'x-upsert': 'true',
       'content-type': 'thisisnotarealmimetype',
     })
@@ -1643,7 +1643,7 @@ describe('testing generating signed URL', () => {
   })
 
   test('check if url signing key is used to sign urls (instead of jwtSecret) if it is present', async () => {
-    const signingJwk = { ...generateHS256JWK(), kid: 'qwerty-09876' } as JwksConfigKeyOCT
+    const signingJwk = { ...(await generateHS512JWK()), kid: 'qwerty-09876' } as JwksConfigKeyOCT
     const jwtJWKS: JwksConfig = { keys: [signingJwk], urlSigningKey: signingJwk }
     mergeConfig({ jwtJWKS })
 
@@ -1952,7 +1952,7 @@ describe('testing uploading with generated signed upload URL', () => {
       payload: createUpload(),
       headers: {
         'x-upsert': 'true',
-        authorization: serviceKey,
+        authorization: await serviceKeyAsync,
       },
     })
 
@@ -1964,7 +1964,7 @@ describe('testing uploading with generated signed upload URL', () => {
       url: `/object/upload/sign/${urlToSign}`,
       headers: {
         'x-upsert': 'true',
-        authorization: serviceKey,
+        authorization: await serviceKeyAsync,
       },
     })
     expect(signedUrlResp.statusCode).toBe(200)
@@ -1997,7 +1997,7 @@ describe('testing uploading with generated signed upload URL', () => {
       url: `/object/${urlToSign}`,
       payload: createUpload(),
       headers: {
-        authorization: serviceKey,
+        authorization: await serviceKeyAsync,
       },
     })
 
@@ -2120,7 +2120,7 @@ describe('testing retrieving signed URL', () => {
   })
 
   test('get object with jwk generated token', async () => {
-    const signingJwk = { ...generateHS256JWK(), kid: 'abc-123' } as JwksConfigKeyOCT
+    const signingJwk = { ...(await generateHS512JWK()), kid: 'abc-123' } as JwksConfigKeyOCT
     mergeConfig({ jwtJWKS: { keys: [signingJwk] } })
 
     const urlToSign = 'bucket2/public/sadcat-upload.png'
@@ -2348,7 +2348,7 @@ describe('testing list objects', () => {
       method: 'POST',
       url: '/object/list/bucket2',
       headers: {
-        authorization: `Bearer ${serviceKey}`,
+        authorization: `Bearer ${await serviceKeyAsync}`,
       },
       payload: {
         prefix: '',
@@ -2372,7 +2372,7 @@ describe('testing list objects', () => {
       method: 'POST',
       url: '/object/list/bucket2',
       headers: {
-        authorization: `Bearer ${serviceKey}`,
+        authorization: `Bearer ${await serviceKeyAsync}`,
       },
       payload: {
         prefix: 'folder',
@@ -2393,7 +2393,7 @@ describe('testing list objects', () => {
       method: 'POST',
       url: '/object/list/bucket2',
       headers: {
-        authorization: `Bearer ${serviceKey}`,
+        authorization: `Bearer ${await serviceKeyAsync}`,
       },
       payload: {
         prefix: 'notfound',
@@ -2411,7 +2411,7 @@ describe('testing list objects', () => {
       method: 'POST',
       url: '/object/list/bucket2',
       headers: {
-        authorization: `Bearer ${serviceKey}`,
+        authorization: `Bearer ${await serviceKeyAsync}`,
       },
       payload: {
         prefix: '',
@@ -2465,7 +2465,7 @@ describe('testing list objects', () => {
         offset: 0,
       },
       headers: {
-        authorization: `Bearer ${serviceKey}`,
+        authorization: `Bearer ${await serviceKeyAsync}`,
       },
     })
     expect(response.statusCode).toBe(200)
@@ -2485,7 +2485,7 @@ describe('testing list objects', () => {
         },
       },
       headers: {
-        authorization: `Bearer ${serviceKey}`,
+        authorization: `Bearer ${await serviceKeyAsync}`,
       },
     })
     expect(response.statusCode).toBe(200)
@@ -2507,7 +2507,7 @@ describe('testing list objects', () => {
         },
       },
       headers: {
-        authorization: `Bearer ${serviceKey}`,
+        authorization: `Bearer ${await serviceKeyAsync}`,
       },
     })
     expect(response.statusCode).toBe(200)

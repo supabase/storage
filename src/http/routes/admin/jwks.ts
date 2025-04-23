@@ -90,8 +90,7 @@ function validateAddJwkRequest({ jwk, kind }: JwksAddRequestInterface['Body']): 
       if (jwk.d) {
         return { message: 'Invalid asymmetric public jwk. Private fields are not allowed' }
       }
-      // jsonwebtoken does not support OKP (ed25519/Ed448) keys yet, if/when this changes replace this with a break and we should be good to go
-      return { message: 'OKP jwks are not yet supported. Please use RSA or EC' }
+      break
     default:
       return { message: 'Unsupported jwk algorithm ' + jwk.kty }
   }

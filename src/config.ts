@@ -1,6 +1,6 @@
 import dotenv from 'dotenv'
-import jwt from 'jsonwebtoken'
 import type { DBMigration } from '@internal/database/migrations'
+import { SignJWT } from 'jose'
 
 export type StorageBackendType = 'file' | 's3'
 export enum MultitenantMigrationStrategy {
@@ -93,8 +93,8 @@ type StorageConfigType = {
   requestTraceHeader?: string
   requestEtagHeaders: string[]
   responseSMaxAge: number
-  anonKey: string
-  serviceKey: string
+  anonKeyAsync: Promise<string>
+  serviceKeyAsync: Promise<string>
   storageBackendType: StorageBackendType
   tenantId: string
   requestUrlLengthLimit: number
@@ -258,10 +258,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'REQUEST_TRACE_HEADER',
       'REQUEST_ADMIN_TRACE_HEADER'
     ),
-
-    // Auth
-    serviceKey: getOptionalConfigFromEnv('SERVICE_KEY') || '',
-    anonKey: getOptionalConfigFromEnv('ANON_KEY') || '',
 
     encryptionKey: getOptionalConfigFromEnv('AUTH_ENCRYPTION_KEY', 'ENCRYPTION_KEY') || '',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('AUTH_JWT_SECRET', 'PGRST_JWT_SECRET') || '',
@@ -484,18 +480,26 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
   } as StorageConfigType
 
-  if (!config.isMultitenant && !config.serviceKey) {
-    config.serviceKey = jwt.sign({ role: config.dbServiceRole }, config.jwtSecret, {
-      expiresIn: '10y',
-      algorithm: config.jwtAlgorithm as jwt.Algorithm,
-    })
+  const serviceKey = getOptionalConfigFromEnv('SERVICE_KEY') || ''
+  if (!config.isMultitenant && !serviceKey) {
+    config.serviceKeyAsync = new SignJWT({ role: config.dbServiceRole })
+      .setIssuedAt()
+      .setExpirationTime('10y')
+      .setProtectedHeader({ alg: 'HS256' })
+      .sign(new TextEncoder().encode(config.jwtSecret))
+  } else {
+    config.serviceKeyAsync = Promise.resolve(serviceKey)
   }
 
-  if (!config.isMultitenant && !config.anonKey) {
-    config.anonKey = jwt.sign({ role: config.dbAnonRole }, config.jwtSecret, {
-      expiresIn: '10y',
-      algorithm: config.jwtAlgorithm as jwt.Algorithm,
-    })
+  const anonKey = getOptionalConfigFromEnv('ANON_KEY') || ''
+  if (!config.isMultitenant && !anonKey) {
+    config.anonKeyAsync = new SignJWT({ role: config.dbAnonRole })
+      .setIssuedAt()
+      .setExpirationTime('10y')
+      .setProtectedHeader({ alg: 'HS256' })
+      .sign(new TextEncoder().encode(config.jwtSecret))
+  } else {
+    config.anonKeyAsync = Promise.resolve(anonKey)
   }
 
   const jwtJWKS = getOptionalConfigFromEnv('JWT_JWKS') || null

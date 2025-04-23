@@ -9,8 +9,8 @@ import { getConfig } from '../../config'
 import { MultipartFile, MultipartValue } from '@fastify/multipart'
 
 const {
-  anonKey,
-  serviceKey,
+  anonKeyAsync,
+  serviceKeyAsync,
   storageS3Region,
   isMultitenant,
   requestAllowXForwardedPrefix,
@@ -138,7 +138,9 @@ async function createServerSignature(tenantId: string, clientSignature: ClientSi
   const awsService = 's3'
 
   if (clientSignature?.sessionToken) {
-    const tenantAnonKey = isMultitenant ? (await getTenantConfig(tenantId)).anonKey : anonKey
+    const tenantAnonKey = isMultitenant
+      ? (await getTenantConfig(tenantId)).anonKey
+      : await anonKeyAsync
 
     if (!tenantAnonKey) {
       throw ERRORS.AccessDenied('Missing tenant anon key')
@@ -198,5 +200,5 @@ async function createServerSignature(tenantId: string, clientSignature: ClientSi
     },
   })
 
-  return { signature, claims: undefined, token: serviceKey }
+  return { signature, claims: undefined, token: await serviceKeyAsync }
 }

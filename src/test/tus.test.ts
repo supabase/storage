@@ -16,7 +16,7 @@ import app from '../app'
 import { checkBucketExists } from './common'
 import { Storage, backends, StorageKnexDB } from '../storage'
 
-const { serviceKey, tenantId, storageS3Bucket, storageBackendType } = getConfig()
+const { serviceKeyAsync, tenantId, storageS3Bucket, storageBackendType } = getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
 const localServerAddress = 'http://127.0.0.1:8999'
 
@@ -81,13 +81,15 @@ describe('Tus multipart', () => {
       public: true,
     })
 
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
     const result = await new Promise((resolve, reject) => {
       const upload = new tus.Upload(oneChunkFile, {
         endpoint: `${localServerAddress}/upload/resumable`,
         onShouldRetry: () => false,
         uploadDataDuringCreation: false,
         headers: {
-          authorization: `Bearer ${serviceKey}`,
+          authorization,
           'x-upsert': 'true',
         },
         metadata: {
@@ -155,13 +157,14 @@ describe('Tus multipart', () => {
       })
 
       try {
+        const authorization = `Bearer ${await serviceKeyAsync}`
         await new Promise((resolve, reject) => {
           const upload = new tus.Upload(oneChunkFile, {
             endpoint: `${localServerAddress}/upload/resumable`,
             onShouldRetry: () => false,
             uploadDataDuringCreation: false,
             headers: {
-              authorization: `Bearer ${serviceKey}`,
+              authorization,
               'x-upsert': 'true',
             },
             metadata: {
@@ -203,13 +206,14 @@ describe('Tus multipart', () => {
       })
 
       try {
+        const authorization = `Bearer ${await serviceKeyAsync}`
         await new Promise((resolve, reject) => {
           const upload = new tus.Upload(oneChunkFile, {
             endpoint: `${localServerAddress}/upload/resumable`,
             onShouldRetry: () => false,
             uploadDataDuringCreation: false,
             headers: {
-              authorization: `Bearer ${serviceKey}`,
+              authorization,
               'x-upsert': 'true',
             },
             metadata: {
@@ -430,7 +434,7 @@ describe('Tus multipart', () => {
         expect((e as Error).message).not.toEqual('it should error with expired token')
 
         const err = e as DetailedError
-        expect(err.originalResponse.getBody()).toEqual('jwt expired')
+        expect(err.originalResponse.getBody()).toEqual('"exp" claim timestamp check failed')
         expect(err.originalResponse.getStatus()).toEqual(400)
       }
     })
@@ -478,7 +482,7 @@ describe('Tus multipart', () => {
         expect((e as Error).message).not.toEqual('it should error with expired token')
 
         const err = e as DetailedError
-        expect(err.originalResponse.getBody()).toEqual('jwt malformed')
+        expect(err.originalResponse.getBody()).toEqual('Invalid Compact JWS')
         expect(err.originalResponse.getStatus()).toEqual(400)
       }
     })

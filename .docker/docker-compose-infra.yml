@@ -1,6 +1,5 @@
 # docker-compose.yml
 
-version: '3'
 services:
 
   tenant_db:

@@ -82,8 +82,18 @@ jobs:
           S3_PROTOCOL_ACCESS_KEY_ID: ${{ secrets.TENANT_ID }}
           S3_PROTOCOL_ACCESS_KEY_SECRET: ${{ secrets.SERVICE_KEY }}
 
-
       - name: Upload coverage results to Coveralls
         uses: coverallsapp/github-action@master
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure OrioleDB migration compatibility
+        run: |
+          npm run infra:restart:oriole
+        env:
+          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
+          DB_INSTALL_ROLES: true
+          ENABLE_DEFAULT_METRICS: false
+          PG_QUEUE_ENABLE: false
+          MULTI_TENANT: false

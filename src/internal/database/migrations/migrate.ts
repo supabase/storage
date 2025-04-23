@@ -14,6 +14,7 @@ import { ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events
 import { ERRORS } from '@internal/errors'
 import { DBMigration } from './types'
 import { getSslSettings } from '../util'
+import { MigrationTransformer, DisableConcurrentIndexTransformer } from './transformers'
 
 const {
   multitenantDatabaseUrl,
@@ -224,7 +225,7 @@ export async function obtainLockOnMultitenantDB<T>(fn: () => Promise<T>) {
   } finally {
     try {
       await multitenantKnex.raw(`SELECT pg_advisory_unlock(?);`, ['-8575985245963000605'])
-    } catch (e) {}
+    } catch {}
   }
 }
 
@@ -550,12 +551,15 @@ export async function migrate({
   shouldCreateStorageSchema,
   upToMigration,
 }: MigrateOptions): Promise<Array<Migration>> {
+  const accessMethod = await getDefaultAccessMethod(client)
   return withAdvisoryLock(
     waitForLock,
     runMigrations({
       migrationsDirectory,
       shouldCreateStorageSchema,
       upToMigration,
+      // Remove concurrent index creation if we're using oriole db as it does not support it currently
+      transformers: accessMethod === 'orioledb' ? [new DisableConcurrentIndexTransformer()] : [],
     })
   )(client)
 }
@@ -564,6 +568,7 @@ interface RunMigrationOptions {
   migrationsDirectory: string
   shouldCreateStorageSchema?: boolean
   upToMigration?: keyof typeof DBMigration
+  transformers?: MigrationTransformer[]
 }
 
 /**
@@ -576,6 +581,7 @@ function runMigrations({
   migrationsDirectory,
   shouldCreateStorageSchema,
   upToMigration,
+  transformers = [],
 }: RunMigrationOptions) {
   return async (client: BasicPgClient) => {
     let intendedMigrations = await loadMigrationFilesCached(migrationsDirectory)
@@ -648,14 +654,17 @@ function runMigrations({
       }
 
       for (const migration of migrationsToRun) {
-        const result = await runMigration(migrationTableName, client)(migration)
+        const result = await runMigration(
+          migrationTableName,
+          client
+        )(runMigrationTransformers(migration, transformers))
         completedMigrations.push(result)
       }
 
       return completedMigrations
-    } catch (e: any) {
-      const error: MigrationError = new Error(`Migration failed. Reason: ${e.message}`)
-      error.cause = e
+    } catch (e) {
+      const error: MigrationError = new Error(`Migration failed. Reason: ${(e as Error).message}`)
+      error.cause = e + ''
       throw error
     }
   }
@@ -673,6 +682,30 @@ function filterMigrations(
   const notAppliedMigration = (migration: Migration) => !appliedMigrations[migration.id]
 
   return migrations.filter(notAppliedMigration)
+}
+
+/**
+ * Transforms provided migration by running all transformers
+ * @param migration
+ * @param transformers
+ */
+function runMigrationTransformers(
+  migration: Migration,
+  transformers: MigrationTransformer[]
+): Migration {
+  for (const transformer of transformers) {
+    migration = transformer.transform(migration)
+  }
+  return migration
+}
+
+/**
+ * Get the current default access method for this database
+ * @param client
+ */
+async function getDefaultAccessMethod(client: BasicPgClient): Promise<string> {
+  const result = await client.query(`SHOW default_table_access_method`)
+  return result.rows?.[0]?.default_table_access_method || ''
 }
 
 /**
@@ -755,7 +788,7 @@ function withAdvisoryLock<T>(
     } finally {
       try {
         await client.query('SELECT pg_advisory_unlock(-8525285245963000605);')
-      } catch (e) {}
+      } catch {}
     }
   }
 }
@@ -828,11 +861,11 @@ async function refreshMigrationPosition(
     migrations.push(intendedMigrations[migration.index])
 
     // add the other run migrations by updating their id and hash
-    const afterMigration = newMigrations.slice(migration.index).map((m) => {
-      ;(m as any).id = m.id + 1
-      ;(m as any).hash = intendedMigrations[m.id].hash
-      return m
-    })
+    const afterMigration = newMigrations.slice(migration.index).map((m) => ({
+      ...m,
+      id: m.id + 1,
+      hash: intendedMigrations[m.id].hash,
+    }))
 
     migrations.push(...afterMigration)
     newMigrations = migrations
@@ -868,7 +901,7 @@ async function refreshMigrationPosition(
  * Memoizes a promise
  * @param func
  */
-function memoizePromise<T, Args extends any[]>(
+function memoizePromise<T, Args extends unknown[]>(
   func: (...args: Args) => Promise<T>
 ): (...args: Args) => Promise<T> {
   const cache = new Map<string, Promise<T>>()
@@ -876,10 +909,10 @@ function memoizePromise<T, Args extends any[]>(
   function generateKey(args: Args): string {
     return args
       .map((arg) => {
-        if (typeof arg === 'object') {
+        if (typeof arg === 'object' && arg !== null) {
           return Object.entries(arg).sort().toString()
         }
-        return arg.toString()
+        return String(arg)
       })
       .join('|')
   }

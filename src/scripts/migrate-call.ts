@@ -1,7 +1,8 @@
 import dotenv from 'dotenv'
 dotenv.config()
 
-import { getConfig, runMigrationsOnTenant } from '@internal/database/migrations'
+import { runMigrationsOnTenant } from '@internal/database/migrations'
+import { getConfig } from '../config'
 ;(async () => {
   const { databaseURL, dbMigrationFreezeAt } = getConfig()
   await runMigrationsOnTenant({

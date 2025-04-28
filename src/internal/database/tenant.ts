@@ -8,8 +8,8 @@ import { ERRORS } from '@internal/errors'
 import { DBMigration } from '@internal/database/migrations'
 import { JWKSManager } from './jwks-manager'
 import { JWKSManagerStoreKnex } from './jwks-manager/store-knex'
-import { S3CredentialsManagerStoreKnex } from './s3-credentials-manager/store-knex'
-import { S3CredentialsManager } from './s3-credentials-manager'
+import { S3CredentialsManagerStoreKnex } from '../../storage/protocols/s3/credentials-manager/store-knex'
+import { S3CredentialsManager } from '../../storage/protocols/s3/credentials-manager'
 
 interface TenantConfig {
   anonKey?: string

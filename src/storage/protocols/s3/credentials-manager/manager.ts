@@ -4,7 +4,7 @@ import objectSizeOf from 'object-sizeof'
 import { S3Credentials, S3CredentialsManagerStore, S3CredentialsRaw } from './store'
 import { createMutexByKey } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
-import { getConfig } from '../../../config'
+import { getConfig } from '../../../../config'
 import { decrypt, encrypt } from '@internal/auth'
 import { PubSubAdapter } from '@internal/pubsub'
 

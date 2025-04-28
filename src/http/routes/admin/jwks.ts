@@ -110,7 +110,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const result = await jwksManager.addJwk(params.tenantId, body.jwk, body.kind)
-      return reply.send(result)
+      return reply.status(201).send(result)
     }
   )
 

@@ -2,7 +2,7 @@ import { createMutexByKey } from '@internal/concurrency'
 import { JwksConfig, JwksConfigKeyOCT } from '../../../config'
 import { JWKSManagerStore } from './store'
 import { PubSubAdapter } from '@internal/pubsub'
-import { decrypt, encrypt, generateHS256JWK } from '@internal/auth'
+import { decrypt, encrypt, generateHS512JWK } from '@internal/auth'
 import { Knex } from 'knex'
 
 const TENANTS_JWKS_UPDATE_CHANNEL = 'tenants_jwks_update'
@@ -39,7 +39,7 @@ export class JWKSManager {
    * @param trx optional transaction to add the jwk within
    */
   async generateUrlSigningJwk(tenantId: string, trx?: Knex.Transaction): Promise<{ kid: string }> {
-    const content = encrypt(JSON.stringify(generateHS256JWK()))
+    const content = encrypt(JSON.stringify(await generateHS512JWK()))
     const id = await this.storage.insert(tenantId, content, JWK_KIND_STORAGE_URL_SIGNING, true, trx)
     return { kid: createJwkKid({ kind: JWK_KIND_STORAGE_URL_SIGNING, id }) }
   }

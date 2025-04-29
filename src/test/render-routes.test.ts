@@ -7,7 +7,7 @@ import path from 'path'
 import { ImageRenderer } from '../storage/renderer'
 import axios from 'axios'
 import { useMockObject } from './common'
-import { generateHS256JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
+import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
 
 dotenv.config({ path: '.env.test' })
 const { imgProxyURL, jwtSecret } = getConfig()
@@ -114,7 +114,7 @@ describe('image rendering routes', () => {
   })
 
   it('will render a transformed image providing a signed url (using url signing jwk if set)', async () => {
-    const signingJwk = { ...generateHS256JWK(), kid: 'qwerty-09876' }
+    const signingJwk = { ...(await generateHS512JWK()), kid: 'qwerty-09876' }
     const jwtJWKS: JwksConfig = { keys: [signingJwk], urlSigningKey: signingJwk }
     mergeConfig({ jwtJWKS })
 

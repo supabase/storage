@@ -1,7 +1,7 @@
 import { TenantConnection } from '@internal/database'
 import { getConfig, mergeConfig } from '../config'
 
-const { serviceKey, tenantId } = getConfig()
+const { serviceKeyAsync, tenantId } = getConfig()
 
 mergeConfig({
   pgQueueEnable: true,
@@ -44,9 +44,10 @@ describe('Webhooks', () => {
   it('will emit a webhook upon object creation', async () => {
     const form = new FormData()
 
+    const authorization = `Bearer ${await serviceKeyAsync}`
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
-      authorization: `Bearer ${serviceKey}`,
+      authorization,
     })
 
     const fileName = (Math.random() + 1).toString(36).substring(7)
@@ -97,11 +98,12 @@ describe('Webhooks', () => {
   it('will emit a webhook upon object deletion', async () => {
     const obj = await createObject(pg, 'bucket6')
 
+    const authorization = `Bearer ${await serviceKeyAsync}`
     const response = await app().inject({
       method: 'DELETE',
       url: `/object/bucket6/${obj.name}`,
       headers: {
-        Authorization: `Bearer ${serviceKey}`,
+        authorization,
       },
     })
     expect(response.statusCode).toBe(200)
@@ -140,11 +142,12 @@ describe('Webhooks', () => {
   it('will emit a webhook upon object moved', async () => {
     const obj = await createObject(pg, 'bucket6')
 
+    const authorization = `Bearer ${await serviceKeyAsync}`
     const response = await app().inject({
       method: 'POST',
       url: `/object/move`,
       headers: {
-        Authorization: `Bearer ${serviceKey}`,
+        authorization,
       },
       payload: {
         bucketId: 'bucket6',
@@ -235,11 +238,12 @@ describe('Webhooks', () => {
   it('will emit a webhook upon object copied', async () => {
     const obj = await createObject(pg, 'bucket6')
 
+    const authorization = `Bearer ${await serviceKeyAsync}`
     const response = await app().inject({
       method: 'POST',
       url: `/object/copy`,
       headers: {
-        Authorization: `Bearer ${serviceKey}`,
+        authorization,
       },
       payload: {
         bucketId: 'bucket6',

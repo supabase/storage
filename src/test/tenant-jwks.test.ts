@@ -160,22 +160,18 @@ describe('Tenant jwks configs', () => {
           apikey: process.env.ADMIN_API_KEYS,
         },
       })
-      if (type === 'okp') {
-        // jsonwebtoken does not support OKP (ed25519/Ed448) keys yet
-        expect(response.statusCode).toBe(400)
-      } else {
-        expect(response.statusCode).toBe(201)
-        const data = response.json<{ kid: string }>()
-        expect(data.kid).toBeTruthy()
-        expect(data.kid.startsWith(kind)).toBe(true)
 
-        const cacheKey = await configAwaiter
-        expect(cacheKey).toBe(tenantId)
+      expect(response.statusCode).toBe(201)
+      const data = response.json<{ kid: string }>()
+      expect(data.kid).toBeTruthy()
+      expect(data.kid.startsWith(kind)).toBe(true)
 
-        const config = await jwksManager.getJwksTenantConfig(tenantId)
-        expect(config.keys.length - keysBefore.length).toBe(1)
-        expect(config.keys.find((v) => v.kid === data.kid)).toBeTruthy()
-      }
+      const cacheKey = await configAwaiter
+      expect(cacheKey).toBe(tenantId)
+
+      const config = await jwksManager.getJwksTenantConfig(tenantId)
+      expect(config.keys.length - keysBefore.length).toBe(1)
+      expect(config.keys.find((v) => v.kid === data.kid)).toBeTruthy()
     })
 
     test(`Add ${type} jwk via tenant patch (legacy)`, async () => {

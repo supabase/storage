@@ -29,10 +29,10 @@ jest.mock('axios', () => {
 
 import { useStorage } from './utils/storage'
 import axios from 'axios'
-import jwt from 'jsonwebtoken'
 import { Readable } from 'stream'
+import { SignJWT } from 'jose'
 
-const { serviceKey, anonKey, tenantId, jwtSecret } = getConfig()
+const { serviceKeyAsync, anonKeyAsync, tenantId, jwtSecret } = getConfig()
 
 describe('CDN Cache Manager', () => {
   const storageHook = useStorage()
@@ -59,16 +59,17 @@ describe('CDN Cache Manager', () => {
       method: 'DELETE',
       url: `/cdn/${bucketName}/test-anon.txt§`,
       headers: {
-        authorization: `Bearer ${anonKey}`,
+        authorization: `Bearer ${await anonKeyAsync}`,
       },
     })
 
     expect(responseAnon.statusCode).toBe(403)
 
     // Cannot call with authenticated token
-    const authenticatedJwt = jwt.sign({ role: 'authenticated' }, jwtSecret, {
-      subject: 'user-id',
-    })
+    const authenticatedJwt = await new SignJWT({ role: 'authenticated', sub: 'user-id' })
+      .setIssuedAt()
+      .setProtectedHeader({ alg: 'HS256' })
+      .sign(new TextEncoder().encode(jwtSecret))
 
     const responseAuthenticated = await app().inject({
       method: 'DELETE',
@@ -103,7 +104,7 @@ describe('CDN Cache Manager', () => {
       method: 'DELETE',
       url: `/cdn/${bucketName}/${objectName}`,
       headers: {
-        authorization: `Bearer ${serviceKey}`,
+        authorization: `Bearer ${await serviceKeyAsync}`,
       },
     })
 

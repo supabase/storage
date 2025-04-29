@@ -1,7 +1,7 @@
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import { decrypt, verifyJWT } from '../auth'
 import { multitenantKnex } from './multitenant-db'
-import { JwtPayload } from 'jsonwebtoken'
+import { JWTPayload } from 'jose'
 import { PubSubAdapter } from '../pubsub'
 import { createMutexByKey } from '../concurrency'
 import { ERRORS } from '@internal/errors'
@@ -50,7 +50,7 @@ export enum TenantMigrationStatus {
   FAILED_STALE = 'FAILED_STALE',
 }
 
-const { isMultitenant, dbServiceRole, serviceKey, jwtSecret } = getConfig()
+const { isMultitenant, dbServiceRole, serviceKeyAsync, jwtSecret } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
 
@@ -63,12 +63,12 @@ export const s3CredentialsManager = new S3CredentialsManager(
 
 const singleTenantServiceKey:
   | {
-      jwt: string
-      payload: { role: string } & JwtPayload
+      jwt: Promise<string>
+      payload: { role: string } & JWTPayload
     }
   | undefined = !isMultitenant
   ? {
-      jwt: serviceKey,
+      jwt: serviceKeyAsync,
       payload: {
         role: dbServiceRole,
       },
@@ -176,7 +176,7 @@ export async function getServiceKeyUser(tenantId: string) {
   }
 
   return {
-    jwt: singleTenantServiceKey!.jwt,
+    jwt: await singleTenantServiceKey!.jwt,
     payload: singleTenantServiceKey!.payload,
     jwtSecret: jwtSecret,
   }

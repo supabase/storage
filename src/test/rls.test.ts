@@ -68,7 +68,7 @@ const testSpec = yaml.load(
   fs.readFileSync(path.resolve(__dirname, 'rls_tests.yaml'), 'utf8')
 ) as RlsTestSpec
 
-const { serviceKey, tenantId, jwtSecret, databaseURL, storageS3Bucket, storageBackendType } =
+const { serviceKeyAsync, tenantId, jwtSecret, databaseURL, storageS3Bucket, storageBackendType } =
   getConfig()
 const backend = createStorageBackend(storageBackendType)
 const client = backend.client
@@ -229,7 +229,7 @@ describe('RLS policies', () => {
             const response = await runOperation(assert.operation, {
               bucket: bucketName,
               objectName: objectName,
-              jwt: assert.role === 'service' ? serviceKey : jwt,
+              jwt: assert.role === 'service' ? await serviceKeyAsync : jwt,
             })
 
             console.log(

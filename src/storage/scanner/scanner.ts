@@ -70,7 +70,7 @@ export class ObjectScanner {
       throw e
     } finally {
       if (!options.keepTmpTable) {
-        await this.storage.db.connection.pool.raw(`DROP TABLE IF EXISTS ${tmpTable}`)
+        await this.storage.db.connection.pool.acquire().raw(`DROP TABLE IF EXISTS ${tmpTable}`)
       }
     }
   }
@@ -139,7 +139,7 @@ export class ObjectScanner {
     } catch (e) {
       throw e
     } finally {
-      await this.storage.db.connection.pool.raw(`DROP TABLE IF EXISTS ${tmpTable}`)
+      await this.storage.db.connection.pool.acquire().raw(`DROP TABLE IF EXISTS ${tmpTable}`)
     }
   }
 
@@ -202,6 +202,7 @@ export class ObjectScanner {
         break
       }
       const query = this.storage.db.connection.pool
+        .acquire()
         .table(tableName)
         .select('key', 'size')
         .orderBy('key', 'asc')
@@ -242,6 +243,7 @@ export class ObjectScanner {
     // { before }: { before?: Date }
   ) {
     return this.storage.db.connection.pool
+      .acquire()
       .table(table)
       .select<{ key: string }[]>('key')
       .whereIn('key', keys)
@@ -252,7 +254,7 @@ export class ObjectScanner {
     bucket: string,
     { signal, before }: { signal: AbortSignal; before?: Date }
   ) {
-    await this.storage.db.connection.pool.raw(`
+    await this.storage.db.connection.pool.acquire().raw(`
       CREATE UNLOGGED TABLE IF NOT EXISTS ${tmpTable} (
         key TEXT COLLATE "C" PRIMARY KEY,
         size BIGINT NOT NULL
@@ -266,6 +268,7 @@ export class ObjectScanner {
 
     for await (const s3ObjectKeys of s3ObjectsStream) {
       const stored = await this.storage.db.connection.pool
+        .acquire()
         .table(tmpTable)
         .insert(
           s3ObjectKeys.map((k) => ({

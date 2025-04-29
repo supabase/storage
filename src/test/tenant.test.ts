@@ -17,6 +17,7 @@ const serviceKeyPayload = { abc: 123 }
 
 const payload = {
   anonKey: 'a',
+  databasePoolMode: null,
   databaseUrl: 'b',
   databasePoolUrl: 'v',
   maxConnections: 12,
@@ -44,6 +45,7 @@ const payload = {
 
 const payload2 = {
   anonKey: 'e',
+  databasePoolMode: null,
   databaseUrl: 'f',
   databasePoolUrl: 'm',
   maxConnections: 14,

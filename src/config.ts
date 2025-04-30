@@ -71,6 +71,7 @@ type StorageConfigType = {
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: string
+  jwtCachingEnabled: boolean
   jwtJWKS?: JwksConfig
   multitenantDatabaseUrl?: string
   dbAnonRole: string
@@ -86,6 +87,7 @@ type StorageConfigType = {
   databaseURL: string
   databaseSSLRootCert?: string
   databasePoolURL?: string
+  databasePoolMode?: 'single_use' | 'recycle'
   databaseMaxConnections: number
   databaseFreePoolAfterInactivity: number
   databaseConnectionTimeout: number
@@ -262,6 +264,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     encryptionKey: getOptionalConfigFromEnv('AUTH_ENCRYPTION_KEY', 'ENCRYPTION_KEY') || '',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('AUTH_JWT_SECRET', 'PGRST_JWT_SECRET') || '',
     jwtAlgorithm: getOptionalConfigFromEnv('AUTH_JWT_ALGORITHM', 'PGRST_JWT_ALGORITHM') || 'HS256',
+    jwtCachingEnabled: getOptionalConfigFromEnv('JWT_CACHING_ENABLED') === 'true',
 
     // Upload
     uploadFileSizeLimit: Number(
@@ -353,6 +356,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     databaseSSLRootCert: getOptionalConfigFromEnv('DATABASE_SSL_ROOT_CERT'),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
     databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
+    databasePoolMode: getOptionalConfigFromEnv('DATABASE_POOL_MODE'),
     databaseMaxConnections: parseInt(
       getOptionalConfigFromEnv('DATABASE_MAX_CONNECTIONS') || '20',
       10
@@ -506,8 +510,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
   if (jwtJWKS) {
     try {
-      const parsed = JSON.parse(jwtJWKS)
-      config.jwtJWKS = parsed
+      config.jwtJWKS = JSON.parse(jwtJWKS)
     } catch {
       throw new Error('Unable to parse JWT_JWKS value to JSON')
     }

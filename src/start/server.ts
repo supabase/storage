@@ -5,7 +5,7 @@ import { IncomingMessage, Server, ServerResponse } from 'node:http'
 import build from '../app'
 import buildAdmin from '../admin-app'
 import { getConfig } from '../config'
-import { listenForTenantUpdate, PubSub } from '@internal/database'
+import { listenForTenantUpdate, PubSub, TenantConnection } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import { Queue } from '@internal/queue'
 import { registerWorkers } from '@storage/events'
@@ -17,6 +17,7 @@ import {
   runMultitenantMigrations,
   startAsyncMigrations,
 } from '@internal/database/migrations'
+import { Cluster } from '@internal/cluster/cluster'
 
 const shutdownSignal = new AsyncAbortController()
 
@@ -76,6 +77,19 @@ async function main() {
   if (isMultitenant && pgQueueEnable) {
     startAsyncMigrations(shutdownSignal.nextGroup.signal)
   }
+
+  // Cluster information
+  await Cluster.init(shutdownSignal.nextGroup.signal)
+
+  Cluster.on('change', (data) => {
+    logger.info(`[Cluster] Cluster size changed to ${data.size}`, {
+      type: 'cluster',
+      clusterSize: data.size,
+    })
+    TenantConnection.poolManager.rebalanceAll({
+      clusterSize: data.size,
+    })
+  })
 
   // HTTP Server
   const app = await httpServer(shutdownSignal.signal)

@@ -8,13 +8,20 @@ import { ERRORS } from '@internal/errors'
 import { DBMigration } from '@internal/database/migrations'
 import { JWKSManager } from './jwks-manager'
 import { JWKSManagerStoreKnex } from './jwks-manager/store-knex'
-import { S3CredentialsManagerStoreKnex } from '../../storage/protocols/s3/credentials-manager/store-knex'
-import { S3CredentialsManager } from '../../storage/protocols/s3/credentials-manager'
+import {
+  S3CredentialsManagerStoreKnex,
+  S3CredentialsManager,
+} from '@storage/protocols/s3/credentials-manager'
+import { TenantConnection } from '@internal/database/connection'
+import { logger, logSchema } from '@internal/monitoring'
+
+type DBPoolMode = 'single_use' | 'recycled'
 
 interface TenantConfig {
   anonKey?: string
   databaseUrl: string
   databasePoolUrl?: string
+  databasePoolMode?: DBPoolMode
   maxConnections?: number
   fileSizeLimit: number
   features: Features
@@ -57,6 +64,7 @@ const tenantConfigCache = new Map<string, TenantConfig>()
 const tenantMutex = createMutexByKey<TenantConfig>()
 
 export const jwksManager = new JWKSManager(new JWKSManagerStoreKnex(multitenantKnex))
+
 export const s3CredentialsManager = new S3CredentialsManager(
   new S3CredentialsManagerStoreKnex(multitenantKnex)
 )
@@ -109,6 +117,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
     const {
       anon_key,
       database_url,
+      database_pool_mode,
       file_size_limit,
       jwt_secret,
       jwks,
@@ -134,6 +143,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       anonKey: decrypt(anon_key),
       databaseUrl: decrypt(database_url),
       databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
+      databasePoolMode: database_pool_mode,
       fileSizeLimit: Number(file_size_limit),
       jwtSecret: jwtSecret,
       jwks,
@@ -241,9 +251,47 @@ const TENANTS_UPDATE_CHANNEL = 'tenants_update'
  * Keeps the in memory config cache up to date
  */
 export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void> {
-  await pubSub.subscribe(TENANTS_UPDATE_CHANNEL, (cacheKey) => {
-    tenantConfigCache.delete(cacheKey)
-  })
+  await pubSub.subscribe(TENANTS_UPDATE_CHANNEL, onTenantConfigChange)
   await s3CredentialsManager.listenForTenantUpdate(pubSub)
   await jwksManager.listenForTenantUpdate(pubSub)
+}
+
+/**
+ * Handles the tenant config change event
+ * @param cacheKey
+ */
+async function onTenantConfigChange(cacheKey: string) {
+  const oldConfig = tenantConfigCache.get(cacheKey)
+  tenantConfigCache.delete(cacheKey)
+
+  if (!oldConfig) {
+    return
+  }
+
+  try {
+    const newConfig = await getTenantConfig(cacheKey)
+
+    if (newConfig.databasePoolMode === 'single_use' && oldConfig.databasePoolMode === 'recycled') {
+      // if the pool mode changed to single use, we need destroy the current pool
+      return TenantConnection.poolManager.destroy(cacheKey).catch((e) => {
+        logSchema.error(logger, 'Error destroying the pool', {
+          type: 'pool',
+          error: e as Error,
+          project: cacheKey,
+        })
+      })
+    }
+
+    // Rebalance the pool if the max connections changed
+    if (newConfig.maxConnections && newConfig.maxConnections !== oldConfig.maxConnections) {
+      TenantConnection.poolManager.rebalance(cacheKey, {
+        clusterSize: newConfig.maxConnections,
+      })
+    }
+  } catch {
+    // if the tenant config is not found, we can ignore it
+    // this can happen if the tenant was deleted
+    // or if the tenant was updated and the cache was invalidated
+    // before we could get the new config
+  }
 }

@@ -1,9 +1,10 @@
 import fastifyPlugin from 'fastify-plugin'
 import { JWTPayload } from 'jose'
 
-import { verifyJWT } from '@internal/auth'
+import { verifyJWTWithCache, verifyJWT } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
 import { ERRORS } from '@internal/errors'
+import { getConfig } from '../../config'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -17,6 +18,8 @@ declare module 'fastify' {
     allowInvalidJwt?: boolean
   }
 }
+
+const { jwtCachingEnabled } = getConfig()
 
 const BEARER = /^Bearer\s+/i
 
@@ -37,7 +40,10 @@ export const jwt = fastifyPlugin(
       const { secret, jwks } = await getJwtSecret(request.tenantId)
 
       try {
-        const payload = await verifyJWT(request.jwt, secret, jwks || null)
+        const payload = await (jwtCachingEnabled
+          ? verifyJWTWithCache(request.jwt, secret, jwks || null)
+          : verifyJWT(request.jwt, secret, jwks || null))
+
         request.jwtPayload = payload
         request.owner = payload.sub
         request.isAuthenticated = true

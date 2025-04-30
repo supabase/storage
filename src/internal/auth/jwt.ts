@@ -10,6 +10,8 @@ import {
   JWTVerifyGetKey,
   SignJWT,
 } from 'jose'
+import { LRUCache } from 'lru-cache'
+import objectSizeOf from 'object-sizeof'
 
 const { jwtAlgorithm } = getConfig()
 
@@ -109,6 +111,54 @@ function getJWTAlgorithms(jwks: JwksConfig | null) {
   }
 
   return algorithms
+}
+
+const jwtCache = new LRUCache<string, { token: string; payload: JWTPayload }>({
+  maxSize: 1024 * 1024 * 50, // 50MB
+  sizeCalculation: (value) => {
+    return objectSizeOf(value)
+  },
+  ttlResolution: 5000, // 5 seconds
+})
+
+/**
+ * Verifies if a JWT is valid and caches the payload
+ * for the duration of the token's expiration time
+ * @param token
+ * @param secret
+ * @param jwks
+ */
+export async function verifyJWTWithCache(
+  token: string,
+  secret: string,
+  jwks?: { keys: JwksConfigKey[] } | null
+) {
+  const cachedVerification = jwtCache.get(token)
+  if (
+    cachedVerification &&
+    cachedVerification.payload.exp &&
+    cachedVerification.payload.exp * 1000 > Date.now()
+  ) {
+    return Promise.resolve(cachedVerification.payload)
+  }
+
+  try {
+    const payload = await verifyJWT(token, secret, jwks)
+    if (!payload.exp) {
+      return payload
+    }
+
+    jwtCache.set(
+      token,
+      { token, payload: payload },
+      {
+        ttl: payload.exp * 1000 - Date.now(),
+      }
+    )
+    return payload
+  } catch (e) {
+    throw e
+  }
 }
 
 /**

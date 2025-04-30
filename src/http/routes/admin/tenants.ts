@@ -26,6 +26,7 @@ const patchSchema = {
       anonKey: { type: 'string' },
       databaseUrl: { type: 'string' },
       databasePoolUrl: { type: 'string', nullable: true },
+      databasePoolMode: { type: 'string', nullable: true },
       maxConnections: { type: 'number' },
       jwks: { type: 'object', nullable: true },
       fileSizeLimit: { type: 'number' },
@@ -112,6 +113,7 @@ export default async function routes(fastify: FastifyInstance) {
         anon_key,
         database_url,
         database_pool_url,
+        database_pool_mode,
         max_connections,
         file_size_limit,
         jwt_secret,
@@ -130,6 +132,7 @@ export default async function routes(fastify: FastifyInstance) {
         anonKey: decrypt(anon_key),
         databaseUrl: decrypt(database_url),
         databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
+        databasePoolMode: database_pool_mode,
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),
@@ -164,6 +167,7 @@ export default async function routes(fastify: FastifyInstance) {
       anon_key,
       database_url,
       database_pool_url,
+      database_pool_mode,
       max_connections,
       file_size_limit,
       jwt_secret,
@@ -188,6 +192,7 @@ export default async function routes(fastify: FastifyInstance) {
           : database_pool_url
           ? decrypt(database_pool_url)
           : undefined,
+      databasePoolMode: database_pool_mode,
       maxConnections: max_connections ? Number(max_connections) : undefined,
       fileSizeLimit: Number(file_size_limit),
       jwtSecret: decrypt(jwt_secret),
@@ -217,6 +222,7 @@ export default async function routes(fastify: FastifyInstance) {
     const {
       anonKey,
       databaseUrl,
+      databasePoolMode,
       fileSizeLimit,
       jwtSecret,
       jwks,
@@ -233,6 +239,7 @@ export default async function routes(fastify: FastifyInstance) {
         anon_key: encrypt(anonKey),
         database_url: encrypt(databaseUrl),
         database_pool_url: databasePoolUrl ? encrypt(databasePoolUrl) : undefined,
+        database_pool_mode: databasePoolMode,
         max_connections: maxConnections ? Number(maxConnections) : undefined,
         file_size_limit: fileSizeLimit,
         jwt_secret: encrypt(jwtSecret),
@@ -280,6 +287,7 @@ export default async function routes(fastify: FastifyInstance) {
         serviceKey,
         features,
         databasePoolUrl,
+        databasePoolMode,
         maxConnections,
         tracingMode,
         disableEvents,
@@ -295,6 +303,7 @@ export default async function routes(fastify: FastifyInstance) {
             : databasePoolUrl === null
             ? null
             : undefined,
+          database_pool_mode: databasePoolMode,
           max_connections: maxConnections ? Number(maxConnections) : undefined,
           file_size_limit: fileSizeLimit,
           jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,

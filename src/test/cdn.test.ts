@@ -31,11 +31,13 @@ import { useStorage } from './utils/storage'
 import axios from 'axios'
 import { Readable } from 'stream'
 import { SignJWT } from 'jose'
+import { FastifyInstance } from 'fastify'
 
 const { serviceKeyAsync, anonKeyAsync, tenantId, jwtSecret } = getConfig()
 
 describe('CDN Cache Manager', () => {
   const storageHook = useStorage()
+  let appInstance: FastifyInstance
 
   const bucketName = 'cdn-cache-manager-test-' + Date.now()
   beforeAll(async () => {
@@ -45,7 +47,12 @@ describe('CDN Cache Manager', () => {
     })
   })
 
-  afterEach(() => {
+  beforeEach(() => {
+    appInstance = app()
+  })
+
+  afterEach(async () => {
+    await appInstance.close()
     jest.clearAllMocks()
   })
 
@@ -55,7 +62,7 @@ describe('CDN Cache Manager', () => {
 
   it('will not allowing calling the purge endpoint without service_key', async () => {
     // cannot call with anon key
-    const responseAnon = await app().inject({
+    const responseAnon = await appInstance.inject({
       method: 'DELETE',
       url: `/cdn/${bucketName}/test-anon.txt§`,
       headers: {
@@ -71,7 +78,7 @@ describe('CDN Cache Manager', () => {
       .setProtectedHeader({ alg: 'HS256' })
       .sign(new TextEncoder().encode(jwtSecret))
 
-    const responseAuthenticated = await app().inject({
+    const responseAuthenticated = await appInstance.inject({
       method: 'DELETE',
       url: `/cdn/${bucketName}/test-anon.txt§`,
       headers: {
@@ -100,7 +107,7 @@ describe('CDN Cache Manager', () => {
       .spyOn(axios, 'post')
       .mockReturnValue(Promise.resolve({ data: { message: 'success' } }))
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: `/cdn/${bucketName}/${objectName}`,
       headers: {

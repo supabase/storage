@@ -5,8 +5,8 @@ import { Database, StorageKnexDB } from '@storage/database'
 import { ObjectScanner } from '@storage/scanner/scanner'
 import { getConfig } from '../../config'
 import { Uploader } from '@storage/uploader'
-import { CreateBucketCommand, HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
-import { isS3Error } from '@internal/errors'
+// import { CreateBucketCommand, HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
+// import { isS3Error } from '@internal/errors'
 
 const { tenantId, storageBackendType } = getConfig()
 
@@ -42,9 +42,9 @@ export function useStorage() {
   })
 
   return {
-    get connection() {
-      return connection
-    },
+    // get connection() {
+    //   return connection
+    // },
     get storage() {
       return storage
     },
@@ -63,36 +63,36 @@ export function useStorage() {
   }
 }
 
-export function createBucketIfNotExists(bucket: string, client: S3Client) {
-  return checkBucketExists(client, bucket).then((exists) => {
-    if (!exists) {
-      return createS3Bucket(bucket, client)
-    }
-  })
-}
+// export function createBucketIfNotExists(bucket: string, client: S3Client) {
+//   return checkBucketExists(client, bucket).then((exists) => {
+//     if (!exists) {
+//       return createS3Bucket(bucket, client)
+//     }
+//   })
+// }
 
-export function createS3Bucket(bucketName: string, client: S3Client) {
-  const createBucketCommand = new CreateBucketCommand({
-    Bucket: bucketName,
-  })
+// export function createS3Bucket(bucketName: string, client: S3Client) {
+//   const createBucketCommand = new CreateBucketCommand({
+//     Bucket: bucketName,
+//   })
 
-  return client.send(createBucketCommand)
-}
+//   return client.send(createBucketCommand)
+// }
 
-export const checkBucketExists = async (client: S3Client, bucket: string) => {
-  const options = {
-    Bucket: bucket,
-  }
+// export const checkBucketExists = async (client: S3Client, bucket: string) => {
+//   const options = {
+//     Bucket: bucket,
+//   }
 
-  try {
-    await client.send(new HeadBucketCommand(options))
-    return true
-  } catch (error) {
-    const err = error as Error
+//   try {
+//     await client.send(new HeadBucketCommand(options))
+//     return true
+//   } catch (error) {
+//     const err = error as Error
 
-    if (err && isS3Error(err) && err.$metadata.httpStatusCode === 404) {
-      return false
-    }
-    throw error
-  }
-}
+//     if (err && isS3Error(err) && err.$metadata.httpStatusCode === 404) {
+//       return false
+//     }
+//     throw error
+//   }
+// }

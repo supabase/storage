@@ -186,7 +186,7 @@ describe('Tus multipart', () => {
         })
 
         throw Error('it should error with max-size exceeded')
-      } catch (e: any) {
+      } catch (e) {
         expect(e).toBeInstanceOf(DetailedError)
 
         const err = e as DetailedError
@@ -235,7 +235,7 @@ describe('Tus multipart', () => {
         })
 
         throw Error('it should error with max-size exceeded')
-      } catch (e: any) {
+      } catch (e) {
         expect(e).toBeInstanceOf(DetailedError)
 
         const err = e as DetailedError

@@ -16,6 +16,7 @@ import { getPostgresConnection } from '@internal/database'
 import { Obj } from '@storage/schemas'
 import { randomUUID } from 'crypto'
 import { getServiceKeyUser } from '@internal/database'
+import { FastifyInstance } from 'fastify'
 
 describe('Webhooks', () => {
   useMockObject()
@@ -31,13 +32,16 @@ describe('Webhooks', () => {
     })
   })
 
+  let appInstance: FastifyInstance
   let sendSpy: jest.SpyInstance
   beforeEach(() => {
     const mocks = mockQueue()
     sendSpy = mocks.sendSpy
+    appInstance = app()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
+    await appInstance.close()
     jest.clearAllMocks()
   })
 
@@ -52,7 +56,7 @@ describe('Webhooks', () => {
 
     const fileName = (Math.random() + 1).toString(36).substring(7)
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/bucket6/public/${fileName}.png`,
       headers,
@@ -99,7 +103,7 @@ describe('Webhooks', () => {
     const obj = await createObject(pg, 'bucket6')
 
     const authorization = `Bearer ${await serviceKeyAsync}`
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: `/object/bucket6/${obj.name}`,
       headers: {
@@ -143,7 +147,7 @@ describe('Webhooks', () => {
     const obj = await createObject(pg, 'bucket6')
 
     const authorization = `Bearer ${await serviceKeyAsync}`
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
       headers: {
@@ -239,7 +243,7 @@ describe('Webhooks', () => {
     const obj = await createObject(pg, 'bucket6')
 
     const authorization = `Bearer ${await serviceKeyAsync}`
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/copy`,
       headers: {

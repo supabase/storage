@@ -236,7 +236,7 @@ const authenticatedRoutes = fastifyPlugin(
           },
         },
         (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+          return options.tusServer.handle(req.raw, res.raw)
         }
       )
 
@@ -249,7 +249,7 @@ const authenticatedRoutes = fastifyPlugin(
           },
         },
         (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+          return options.tusServer.handle(req.raw, res.raw)
         }
       )
 
@@ -262,7 +262,7 @@ const authenticatedRoutes = fastifyPlugin(
           },
         },
         (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+          return options.tusServer.handle(req.raw, res.raw)
         }
       )
       fastify.patch(
@@ -277,7 +277,7 @@ const authenticatedRoutes = fastifyPlugin(
           },
         },
         (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+          return options.tusServer.handle(req.raw, res.raw)
         }
       )
       fastify.head(
@@ -289,7 +289,7 @@ const authenticatedRoutes = fastifyPlugin(
           },
         },
         (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+          return options.tusServer.handle(req.raw, res.raw)
         }
       )
       fastify.delete(
@@ -304,7 +304,7 @@ const authenticatedRoutes = fastifyPlugin(
           },
         },
         (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+          return options.tusServer.handle(req.raw, res.raw)
         }
       )
     })
@@ -342,7 +342,7 @@ const publicRoutes = fastifyPlugin(
           },
         },
         (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+          return options.tusServer.handle(req.raw, res.raw)
         }
       )
 
@@ -359,7 +359,7 @@ const publicRoutes = fastifyPlugin(
           },
         },
         (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+          return options.tusServer.handle(req.raw, res.raw)
         }
       )
     })

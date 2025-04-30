@@ -18,6 +18,7 @@ import { getConfig } from '../config'
 import { checkBucketExists } from './common'
 import { Storage } from '../storage'
 import { FastifyInstance } from 'fastify'
+import { wait } from '@internal/concurrency'
 
 interface Policy {
   name: string
@@ -276,7 +277,7 @@ describe('RLS policies', () => {
         console.error('error', e)
         throw e
       } finally {
-        await sleep(2000)
+        await wait(2000)
         const policiesToDelete = allPolicies.reduce((acc, policy) => {
           acc.push(...policy)
           return acc
@@ -467,8 +468,4 @@ async function uploadFile(bucket: string, fileName: string, jwt: string, upsert?
     headers,
     payload: form,
   })
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }

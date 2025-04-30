@@ -13,4 +13,4 @@ import app from '../app'
   await fs.writeFile('static/api.json', response.body)
 
   await storageApp.close()
-})()
+})().catch(console.error)

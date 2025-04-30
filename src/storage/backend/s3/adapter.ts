@@ -154,13 +154,7 @@ export class S3Backend implements StorageBackendAdapter {
       },
     })
 
-    signal?.addEventListener(
-      'abort',
-      () => {
-        upload.abort()
-      },
-      { once: true }
-    )
+    signal?.addEventListener('abort', () => upload.abort(), { once: true })
 
     if (tracingFeatures?.upload) {
       upload.on('httpUploadProgress', (progress: Progress) => {

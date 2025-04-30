@@ -9,4 +9,4 @@ import { getConfig } from '../config'
     databaseUrl: databaseURL,
     upToMigration: dbMigrationFreezeAt,
   })
-})()
+})().catch(console.error)

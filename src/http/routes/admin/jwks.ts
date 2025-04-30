@@ -3,6 +3,7 @@ import apiKey from '../../plugins/apikey'
 import { jwksManager } from '@internal/database'
 import { FromSchema } from 'json-schema-to-ts'
 import { UrlSigningJwkGenerator } from '@internal/auth/generators/jwk-generator'
+import { logSchema } from '@internal/monitoring'
 
 const addSchema = {
   body: {
@@ -126,7 +127,7 @@ export default async function routes(fastify: FastifyInstance) {
     }
   )
 
-  fastify.post('/jwks/generate-all-missing', (request, reply) => {
+  fastify.post('/jwks/generate-all-missing', async (request, reply) => {
     const { running, sent } = UrlSigningJwkGenerator.getGenerationStatus()
     if (running) {
       return reply
@@ -134,7 +135,14 @@ export default async function routes(fastify: FastifyInstance) {
         .send(`Generate missing jwks is already running, and has sent ${sent} items so far`)
     }
 
-    UrlSigningJwkGenerator.generateUrlSigningJwksOnAllTenants(request.signals.disconnect.signal)
+    UrlSigningJwkGenerator.generateUrlSigningJwksOnAllTenants(
+      request.signals.disconnect.signal
+    ).catch((e) => {
+      logSchema.error(request.log, 'Error generating url signing jwks for all tenants', {
+        type: 'jwk-generator',
+        error: e,
+      })
+    })
     return reply.send({ started: true })
   })
 

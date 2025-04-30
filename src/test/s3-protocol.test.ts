@@ -32,6 +32,7 @@ import { randomUUID } from 'crypto'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import axios from 'axios'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
+import { wait } from '@internal/concurrency'
 
 const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
 
@@ -1340,7 +1341,7 @@ describe('S3 Protocol', () => {
           Bucket: bucket,
         })
         const signedUrl = await getSignedUrl(client, bucketVersioningCommand, { expiresIn: 1 })
-        await new Promise((resolve) => setTimeout(resolve, 1500))
+        await wait(1500)
         const resp = await fetch(signedUrl)
 
         expect(resp.ok).toBeFalsy()

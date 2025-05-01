@@ -8,13 +8,14 @@ mergeConfig({
 })
 
 import dotenv from 'dotenv'
-import * as migrate from '../internal/database/migrations/migrate'
-import { multitenantKnex } from '../internal/database/multitenant-db'
+import * as migrate from '@internal/database/migrations/migrate'
 import { adminApp } from './common'
-import { s3CredentialsManager } from '@internal/database'
-import { listenForTenantUpdate } from '@internal/database'
+import { listenForTenantUpdate, multitenantKnex } from '@internal/database'
 import { PostgresPubSub } from '@internal/pubsub'
 import { encrypt, signJWT } from '@internal/auth'
+import { getDefaultS3CredentialsManager } from '@storage/protocols/s3/credentials'
+
+const s3CredentialsManager = getDefaultS3CredentialsManager()
 
 dotenv.config({ path: '.env.test' })
 

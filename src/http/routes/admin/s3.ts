@@ -1,9 +1,11 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import apiKey from '../../plugins/apikey'
-import { s3CredentialsManager } from '@internal/database'
 import { FromSchema } from 'json-schema-to-ts'
 import { isUuid } from '@storage/limits'
 import { ERRORS } from '@internal/errors'
+import { getDefaultS3CredentialsManager } from '@storage/protocols/s3/credentials'
+
+const s3CredentialsManager = getDefaultS3CredentialsManager()
 
 const createCredentialsSchema = {
   description: 'Create S3 Credentials',

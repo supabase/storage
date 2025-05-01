@@ -7,7 +7,6 @@ import {
   TenantMigrationStatus,
   multitenantKnex,
   getTenantConfig,
-  jwksManager,
 } from '@internal/database'
 import { dbSuperUser, storage } from '../../plugins'
 import {
@@ -17,7 +16,10 @@ import {
   resetMigration,
   runMigrationsOnTenant,
 } from '@internal/database/migrations'
+import { getDefaultJWKSManager } from '@internal/auth/jwks'
 import { getConfig, JwksConfigKey } from '../../../config'
+
+const jwksManager = getDefaultJWKSManager()
 
 const patchSchema = {
   body: {

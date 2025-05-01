@@ -1,21 +1,16 @@
-import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
-import { decrypt, verifyJWT } from '../auth'
-import { multitenantKnex } from './multitenant-db'
 import { JWTPayload } from 'jose'
-import { PubSubAdapter } from '../pubsub'
-import { createMutexByKey } from '../concurrency'
+import { decrypt, verifyJWT } from '@internal/auth'
+import { PubSubAdapter } from '@internal/pubsub'
+import { createMutexByKey } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { DBMigration } from '@internal/database/migrations'
-import { JWKSManager } from './jwks-manager'
-import { JWKSManagerStoreKnex } from './jwks-manager/store-knex'
-import {
-  S3CredentialsManagerStoreKnex,
-  S3CredentialsManager,
-} from '@storage/protocols/s3/credentials-manager'
+import { createDefaultJWKSManager } from '@internal/auth/jwks'
+import { createDefaultS3CredentialsManager } from '@storage/protocols/s3/credentials'
 import { TenantConnection } from '@internal/database/connection'
 import { logger, logSchema } from '@internal/monitoring'
 
-type DBPoolMode = 'single_use' | 'recycled'
+import { multitenantKnex } from './multitenant-db'
+import { DBPoolMode, getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 
 interface TenantConfig {
   anonKey?: string
@@ -63,11 +58,8 @@ const tenantConfigCache = new Map<string, TenantConfig>()
 
 const tenantMutex = createMutexByKey<TenantConfig>()
 
-export const jwksManager = new JWKSManager(new JWKSManagerStoreKnex(multitenantKnex))
-
-export const s3CredentialsManager = new S3CredentialsManager(
-  new S3CredentialsManagerStoreKnex(multitenantKnex)
-)
+const jwksManager = createDefaultJWKSManager(multitenantKnex)
+const s3CredentialsManager = createDefaultS3CredentialsManager(multitenantKnex)
 
 const singleTenantServiceKey:
   | {

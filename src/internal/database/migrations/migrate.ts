@@ -576,6 +576,7 @@ interface RunMigrationOptions {
  * @param migrationsDirectory
  * @param shouldCreateStorageSchema
  * @param upToMigration
+ * @param transformers
  */
 function runMigrations({
   migrationsDirectory,

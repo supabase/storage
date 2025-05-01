@@ -49,6 +49,8 @@ export interface JwksConfig {
   urlSigningKey?: JwksConfigKeyOCT
 }
 
+export type DBPoolMode = 'single_use' | 'recycled'
+
 type StorageConfigType = {
   isProduction: boolean
   version: string
@@ -87,7 +89,7 @@ type StorageConfigType = {
   databaseURL: string
   databaseSSLRootCert?: string
   databasePoolURL?: string
-  databasePoolMode?: 'single_use' | 'recycle'
+  databasePoolMode?: DBPoolMode
   databaseMaxConnections: number
   databaseFreePoolAfterInactivity: number
   databaseConnectionTimeout: number

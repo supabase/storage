@@ -6,7 +6,7 @@ import { fileUploadFromRequest, getStandardMaxFileSizeLimit } from '@storage/upl
 import { ERRORS } from '@internal/errors'
 import { pipeline } from 'stream/promises'
 import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
-import stream from 'stream'
+import stream, { PassThrough, Readable } from 'stream'
 
 const PutObjectInput = {
   summary: 'Put Object',
@@ -35,7 +35,6 @@ const PutObjectInput = {
       'content-encoding': { type: 'string' },
       expires: { type: 'string' },
     },
-    required: ['content-length'],
   },
 } as const
 
@@ -80,18 +79,25 @@ export default function PutObject(s3Router: S3Router) {
         fileSizeLimit: bucket.file_size_limit || undefined,
       })
 
-      return s3Protocol.putObject(
-        {
-          Body: uploadRequest.body,
-          Bucket: req.Params.Bucket,
-          Key: key,
-          CacheControl: uploadRequest.cacheControl,
-          ContentType: uploadRequest.mimeType,
-          Expires: req.Headers?.['expires'] ? new Date(req.Headers?.['expires']) : undefined,
-          ContentEncoding: req.Headers?.['content-encoding'],
-          Metadata: metadata,
-        },
-        { signal: ctx.signals.body, isTruncated: uploadRequest.isTruncated }
+      return pipeline(
+        uploadRequest.body,
+        new ByteLimitTransformStream(uploadRequest.maxFileSize),
+        ctx.req.streamingSignatureV4 || new PassThrough(),
+        async (fileStream) => {
+          return s3Protocol.putObject(
+            {
+              Body: fileStream as Readable,
+              Bucket: req.Params.Bucket,
+              Key: key,
+              CacheControl: uploadRequest.cacheControl,
+              ContentType: uploadRequest.mimeType,
+              Expires: req.Headers?.['expires'] ? new Date(req.Headers?.['expires']) : undefined,
+              ContentEncoding: req.Headers?.['content-encoding'],
+              Metadata: metadata,
+            },
+            { signal: ctx.signals.body, isTruncated: uploadRequest.isTruncated }
+          )
+        }
       )
     }
   )

@@ -1,6 +1,8 @@
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
+import { pipeline } from 'stream/promises'
+import { PassThrough, Readable } from 'stream'
 
 const UploadPartInput = {
   summary: 'Upload Part',
@@ -25,11 +27,11 @@ const UploadPartInput = {
     properties: {
       host: { type: 'string' },
       'x-amz-content-sha256': { type: 'string' },
+      'x-amz-decoded-content-length': { type: 'integer' },
       'x-amz-date': { type: 'string' },
       'content-type': { type: 'string' },
       'content-length': { type: 'integer' },
     },
-    required: ['content-length'],
   },
 } as const
 
@@ -44,14 +46,39 @@ export default function UploadPart(s3Router: S3Router) {
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-      return s3Protocol.uploadPart({
-        Body: ctx.req.raw,
-        UploadId: req.Querystring?.uploadId,
-        Bucket: req.Params.Bucket,
-        Key: req.Params['*'],
-        PartNumber: req.Querystring?.partNumber,
-        ContentLength: req.Headers?.['content-length'],
-      })
+      if (ctx.req.streamingSignatureV4) {
+        const passThrough = new PassThrough()
+        ctx.req.raw.pipe(passThrough)
+        ctx.req.raw.on('error', (err) => {
+          passThrough.destroy(err)
+        })
+
+        return pipeline(passThrough, ctx.req.streamingSignatureV4, async (body) => {
+          return s3Protocol.uploadPart(
+            {
+              Body: body as Readable,
+              UploadId: req.Querystring?.uploadId,
+              Bucket: req.Params.Bucket,
+              Key: req.Params['*'],
+              ContentLength: req.Headers?.['x-amz-decoded-content-length'],
+              PartNumber: req.Querystring?.partNumber,
+            },
+            { signal: ctx.req.signals.body.signal }
+          )
+        })
+      }
+
+      return s3Protocol.uploadPart(
+        {
+          Body: ctx.req.raw,
+          UploadId: req.Querystring?.uploadId,
+          Bucket: req.Params.Bucket,
+          Key: req.Params['*'],
+          PartNumber: req.Querystring?.partNumber,
+          ContentLength: req.Headers?.['content-length'],
+        },
+        { signal: ctx.req.signals.body.signal }
+      )
     }
   )
 }

@@ -535,7 +535,7 @@ export class S3ProtocolHandler {
    * @param command
    * @param signal
    */
-  async uploadPart(command: UploadPartCommandInput, signal?: AbortSignal) {
+  async uploadPart(command: UploadPartCommandInput, { signal }: { signal?: AbortSignal }) {
     if (signal?.aborted) {
       throw ERRORS.AbortedTerminate('UploadPart aborted')
     }

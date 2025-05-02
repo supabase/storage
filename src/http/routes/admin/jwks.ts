@@ -1,8 +1,10 @@
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import apiKey from '../../plugins/apikey'
-import { jwksManager } from '@internal/database'
 import { FromSchema } from 'json-schema-to-ts'
-import { UrlSigningJwkGenerator } from '@internal/auth/generators/jwk-generator'
+import { getDefaultJWKSManager } from '@internal/auth/jwks'
+import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
+
+const jwksManager = getDefaultJWKSManager()
 
 const addSchema = {
   body: {

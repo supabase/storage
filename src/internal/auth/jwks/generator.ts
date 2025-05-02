@@ -1,9 +1,10 @@
 import { logger, logSchema } from '../../monitoring'
-import { JwksCreateSigningSecret } from '@storage/events'
-import { jwksManager } from '../../database/tenant'
 import { getConfig } from '../../../config'
+import { getDefaultJWKSManager } from './instance'
+import { JwksCreateSigningSecret } from '@storage/events'
 
 const { isMultitenant, pgQueueEnable } = getConfig()
+const jwksManager = getDefaultJWKSManager()
 
 export interface UrlSigningJwkGeneratorStatus {
   running: boolean

@@ -2,7 +2,9 @@ import { BaseEvent } from './base-event'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
-import { jwksManager } from '@internal/database'
+import { getDefaultJWKSManager } from '@internal/auth/jwks'
+
+const jwksManager = getDefaultJWKSManager()
 
 interface JwksCreateSigningSecretPayload extends BasePayload {
   tenantId: string

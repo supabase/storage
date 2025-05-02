@@ -1,12 +1,15 @@
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
-import { getJwtSecret, getTenantConfig, s3CredentialsManager } from '@internal/database'
+import { MultipartFile, MultipartValue } from '@fastify/multipart'
+import { getJwtSecret, getTenantConfig } from '@internal/database'
 import { ClientSignature, SignatureV4 } from '@storage/protocols/s3'
-import { signJWT, verifyJWT } from '@internal/auth'
+import { getDefaultS3CredentialsManager } from '@storage/protocols/s3/credentials'
 import { ERRORS } from '@internal/errors'
+import { signJWT, verifyJWT } from '@internal/auth'
 
 import { getConfig } from '../../config'
-import { MultipartFile, MultipartValue } from '@fastify/multipart'
+
+const s3CredentialsManager = getDefaultS3CredentialsManager()
 
 const {
   anonKeyAsync,

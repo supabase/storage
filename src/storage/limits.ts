@@ -59,9 +59,12 @@ export function isValidKey(key: string): boolean {
 export function isValidBucketName(bucketName: string): boolean {
   // only allow s3 safe characters and characters which require special handling for now
   // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+  // https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
   // excluding / for bucketName
   return (
-    bucketName.length > 0 && /^(\w|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(bucketName)
+    bucketName.length > 0 &&
+    bucketName.length < 64 &&
+    /^(\w|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(bucketName)
   )
 }
 

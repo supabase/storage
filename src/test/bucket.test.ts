@@ -211,6 +211,25 @@ describe('testing POST bucket', () => {
     })
     expect(response.statusCode).toBe(400)
   })
+
+  test('user is not able to create a bucket with a name longer than 63 characters', async () => {
+    const longBucketName = 'a'.repeat(64)
+    const response = await app().inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        name: longBucketName,
+      },
+    })
+    expect(response.json()).toEqual({
+      error: 'Invalid Input',
+      message: 'Bucket name invalid',
+      statusCode: '400',
+    })
+  })
 })
 
 /*

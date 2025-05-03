@@ -901,6 +901,13 @@ export class DBError extends StorageBackendError implements RenderableError {
           query,
           code: pgError.code,
         })
+      case '23514': {
+        const bucketName = pgError.detail ? pgError.detail.split(' ')[4]?.slice(0, -1) : 'unknown'
+        return ERRORS.InvalidBucketName(bucketName, pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
+      }
       default:
         return ERRORS.DatabaseError(pgError.message, pgError).withMetadata({
           query,

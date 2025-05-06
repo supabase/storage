@@ -16,6 +16,7 @@ import {
   ListMultipartUploadsCommand,
   ListObjectsCommand,
   ListObjectsV2Command,
+  ListObjectsV2CommandOutput,
   ListPartsCommand,
   PutObjectCommand,
   S3Client,
@@ -376,6 +377,56 @@ describe('S3 Protocol', () => {
         expect(objectsPage3.IsTruncated).toBe(false)
       })
     })
+
+    for (const urlEncode of [true, false]) {
+      const enc = urlEncode ? 'url' : undefined
+      it(`paginate objects in folder with prefix, Encoding=${enc}`, async () => {
+        const bucket = await createBucket(client)
+        const prefixPath = 'this/is/the/path/'
+
+        await Promise.all(
+          new Array(11)
+            .fill(1)
+            .map((_, i) => uploadFile(client, bucket, prefixPath + `a-video-file-${i}.mp4`, 1))
+        )
+
+        const seenTokens = new Set()
+
+        let continuationToken: string | undefined = undefined
+        let isTruncated = true
+        let totalCount = 0
+        let totalPages = 0
+
+        while (isTruncated) {
+          const resp: ListObjectsV2CommandOutput = await client.send(
+            new ListObjectsV2Command({
+              Bucket: bucket,
+              Prefix: prefixPath,
+              MaxKeys: 3,
+              ContinuationToken: continuationToken,
+              EncodingType: enc,
+              Delimiter: '/',
+            })
+          )
+
+          isTruncated = resp.IsTruncated ?? false
+          totalCount += resp.Contents?.length ?? 0
+          totalPages++
+
+          if (isTruncated) {
+            expect(resp.Contents?.length ?? 0).toBeGreaterThan(0)
+            expect(resp.NextContinuationToken).toBeTruthy()
+          }
+
+          expect(seenTokens.has(resp.NextContinuationToken)).toBe(false)
+          seenTokens.add(resp.NextContinuationToken)
+
+          continuationToken = resp.NextContinuationToken
+        }
+        expect(totalCount).toBe(11)
+        expect(totalPages).toBe(4)
+      })
+    }
 
     describe('MultiPart Form Data Upload', () => {
       it('can upload using multipart/form-data', async () => {

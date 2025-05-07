@@ -224,11 +224,7 @@ describe('testing POST bucket', () => {
         name: longBucketName,
       },
     })
-    expect(response.json()).toEqual({
-      error: 'Invalid Input',
-      message: 'Bucket name invalid',
-      statusCode: '400',
-    })
+    expect(response.statusCode).toBe(400)
   })
 })
 

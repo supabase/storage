@@ -7,6 +7,10 @@ import { ERRORS } from '@internal/errors'
 
 import { getConfig } from '../../config'
 import { MultipartFile, MultipartValue } from '@fastify/multipart'
+import {
+  ChunkSignatureV4Parser,
+  V4StreamingAlgorithm,
+} from '@storage/protocols/s3/signature-v4-stream'
 
 const {
   anonKeyAsync,
@@ -27,6 +31,7 @@ type AWSRequest = FastifyRequest<{ Querystring: { 'X-Amz-Credential'?: string } 
 declare module 'fastify' {
   interface FastifyRequest {
     multiPartFileStream?: MultipartFile
+    streamingSignatureV4?: ChunkSignatureV4Parser
   }
 }
 
@@ -80,6 +85,15 @@ export const signatureV4 = fastifyPlugin(
         request.jwt = token
         request.jwtPayload = payload
         request.owner = payload.sub
+
+        if (SignatureV4.isChunkedUpload(request.headers)) {
+          request.streamingSignatureV4 = createStreamingSignatureV4Parser({
+            signatureV4,
+            streamAlgorithm: request.headers['x-amz-content-sha256'] as V4StreamingAlgorithm,
+            clientSignature,
+            trailers: request.headers['x-amz-trailer'] as string,
+          })
+        }
         return
       }
 
@@ -92,6 +106,15 @@ export const signatureV4 = fastifyPlugin(
       request.jwt = jwt
       request.jwtPayload = claims
       request.owner = claims.sub
+
+      if (SignatureV4.isChunkedUpload(request.headers)) {
+        request.streamingSignatureV4 = createStreamingSignatureV4Parser({
+          signatureV4,
+          streamAlgorithm: request.headers['x-amz-content-sha256'] as V4StreamingAlgorithm,
+          clientSignature,
+          trailers: request.headers['x-amz-trailer'] as string,
+        })
+      }
     })
   },
   { name: 'auth-signature-v4' }
@@ -201,4 +224,44 @@ async function createServerSignature(tenantId: string, clientSignature: ClientSi
   })
 
   return { signature, claims: undefined, token: await serviceKeyAsync }
+}
+
+interface CreateSignatureV3ParserOpts {
+  signatureV4: SignatureV4
+  streamAlgorithm: string
+  clientSignature: ClientSignature
+  trailers: string
+}
+
+function createStreamingSignatureV4Parser(opts: CreateSignatureV3ParserOpts) {
+  const algorithm = opts.streamAlgorithm as V4StreamingAlgorithm
+  const trailers = opts.trailers
+
+  const chunkedSignatureV4 = new ChunkSignatureV4Parser({
+    maxChunkSize: 8 * 1024 * 1024,
+    maxHeaderLength: 256,
+    streamingAlgorithm: algorithm,
+    trailerHeaderNames: trailers.split(','),
+  })
+
+  chunkedSignatureV4.on(
+    'signatureReadyForVerification',
+    (signature: string, _: number, hash: string, previousSign) => {
+      const isValid = opts.signatureV4.validateChunkSignature(
+        algorithm,
+        opts.clientSignature,
+        hash,
+        signature,
+        previousSign || opts.clientSignature.signature
+      )
+
+      if (!isValid) {
+        throw ERRORS.SignatureDoesNotMatch(
+          'The request signature we calculated does not match the signature you provided. Check your key and signing method.'
+        )
+      }
+    }
+  )
+
+  return chunkedSignatureV4
 }

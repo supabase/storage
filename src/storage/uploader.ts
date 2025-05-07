@@ -291,7 +291,7 @@ export async function fileUploadFromRequest(
     allowedMimeTypes?: string[]
     objectName: string
   }
-): Promise<FileUpload> {
+): Promise<FileUpload & { maxFileSize: number }> {
   const contentType = request.headers['content-type']
 
   let body: Readable
@@ -379,6 +379,7 @@ export async function fileUploadFromRequest(
     cacheControl,
     isTruncated,
     userMetadata,
+    maxFileSize,
   }
 }
 

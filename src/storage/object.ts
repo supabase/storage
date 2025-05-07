@@ -550,7 +550,7 @@ export class ObjectStorage {
     const delimiter = options?.delimiter
 
     const cursor = options?.cursor ? decodeContinuationToken(options?.cursor) : undefined
-    const searchResult = await this.db.listObjectsV2(this.bucketId, {
+    let searchResult = await this.db.listObjectsV2(this.bucketId, {
       prefix: options?.prefix,
       delimiter: options?.delimiter,
       maxKeys: limit + 1,
@@ -558,7 +558,6 @@ export class ObjectStorage {
       startAfter: cursor || options?.startAfter,
     })
 
-    let results = searchResult
     let prevPrefix = ''
 
     if (delimiter) {
@@ -575,32 +574,36 @@ export class ObjectStorage {
           prevPrefix = currPrefix
           delimitedResults.push({
             id: null,
-            name: options?.encodingType === 'url' ? encodeURIComponent(currPrefix) : currPrefix,
+            name: currPrefix,
             bucket_id: object.bucket_id,
           })
           continue
         }
 
-        delimitedResults.push({
-          ...object,
-          name: options?.encodingType === 'url' ? encodeURIComponent(object.name) : object.name,
-        })
+        delimitedResults.push(object)
       }
-      results = delimitedResults
+      searchResult = delimitedResults
     }
 
     let isTruncated = false
 
-    if (results.length > limit) {
-      results = results.slice(0, limit)
+    if (searchResult.length > limit) {
+      searchResult = searchResult.slice(0, limit)
       isTruncated = true
     }
 
-    const folders = results.filter((obj) => obj.id === null)
-    const objects = results.filter((obj) => obj.id !== null)
+    const folders: Obj[] = []
+    const objects: Obj[] = []
+    searchResult.forEach((obj) => {
+      const target = obj.id === null ? folders : objects
+      target.push({
+        ...obj,
+        name: options?.encodingType === 'url' ? encodeURIComponent(obj.name) : obj.name,
+      })
+    })
 
     const nextContinuationToken = isTruncated
-      ? encodeContinuationToken(results[results.length - 1].name)
+      ? encodeContinuationToken(searchResult[searchResult.length - 1].name)
       : undefined
 
     return {

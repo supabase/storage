@@ -15,6 +15,7 @@ import { getConfig } from '../config'
 import app from '../app'
 import { checkBucketExists } from './common'
 import { Storage, backends, StorageKnexDB } from '../storage'
+import { wait } from '@internal/concurrency'
 
 const { serviceKeyAsync, tenantId, storageS3Bucket, storageBackendType } = getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
@@ -186,7 +187,7 @@ describe('Tus multipart', () => {
         })
 
         throw Error('it should error with max-size exceeded')
-      } catch (e: any) {
+      } catch (e) {
         expect(e).toBeInstanceOf(DetailedError)
 
         const err = e as DetailedError
@@ -235,7 +236,7 @@ describe('Tus multipart', () => {
         })
 
         throw Error('it should error with max-size exceeded')
-      } catch (e: any) {
+      } catch (e) {
         expect(e).toBeInstanceOf(DetailedError)
 
         const err = e as DetailedError
@@ -400,7 +401,7 @@ describe('Tus multipart', () => {
         .from(bucketName)
         .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 1)
 
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+      await wait(2000)
 
       try {
         await new Promise((resolve, reject) => {
@@ -448,7 +449,7 @@ describe('Tus multipart', () => {
 
       const objectName = randomUUID() + '-cat.jpeg'
 
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+      await wait(2000)
 
       try {
         await new Promise((resolve, reject) => {
@@ -496,7 +497,7 @@ describe('Tus multipart', () => {
 
       const objectName = randomUUID() + '-cat.jpeg'
 
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+      await wait(2000)
 
       try {
         await new Promise((resolve, reject) => {

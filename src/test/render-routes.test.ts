@@ -8,9 +8,11 @@ import { ImageRenderer } from '../storage/renderer'
 import axios from 'axios'
 import { useMockObject } from './common'
 import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
+import { FastifyInstance } from 'fastify'
 
 dotenv.config({ path: '.env.test' })
 const { imgProxyURL, jwtSecret } = getConfig()
+let appInstance: FastifyInstance
 
 describe('image rendering routes', () => {
   beforeAll(async () => {
@@ -25,9 +27,11 @@ describe('image rendering routes', () => {
 
   beforeEach(() => {
     getConfig({ reload: true })
+    appInstance = app()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
+    await appInstance.close()
     jest.clearAllMocks()
   })
 
@@ -36,7 +40,7 @@ describe('image rendering routes', () => {
     jest.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
     const axiosSpy = jest.spyOn(testAxios, 'get')
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/render/image/authenticated/bucket2/authenticated/casestudy.png?width=100&height=100',
       headers: {
@@ -57,7 +61,7 @@ describe('image rendering routes', () => {
     jest.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
     const axiosSpy = jest.spyOn(testAxios, 'get')
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/render/image/public/public-bucket-2/favicon.ico?width=100&height=100',
     })
@@ -72,7 +76,7 @@ describe('image rendering routes', () => {
 
   it('will render a transformed image providing a signed url', async () => {
     const assetUrl = 'bucket2/authenticated/casestudy.png'
-    const signURLResponse = await app().inject({
+    const signURLResponse = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/' + assetUrl,
       payload: {
@@ -100,7 +104,7 @@ describe('image rendering routes', () => {
     jest.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
     const axiosSpy = jest.spyOn(testAxios, 'get')
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: signedURLBody.signedURL,
     })
@@ -119,7 +123,7 @@ describe('image rendering routes', () => {
     mergeConfig({ jwtJWKS })
 
     const assetUrl = 'bucket2/authenticated/casestudy.png'
-    const signURLResponse = await app().inject({
+    const signURLResponse = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/' + assetUrl,
       payload: {
@@ -147,7 +151,7 @@ describe('image rendering routes', () => {
     jest.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
     const axiosSpy = jest.spyOn(testAxios, 'get')
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: signedURLBody.signedURL,
     })
@@ -163,7 +167,7 @@ describe('image rendering routes', () => {
   it('will reject malformed jwt', async () => {
     const token = 'this is not a jwt'
     const url = '/render/image/sign/bucket2/authenticated/casestudy.png?token=' + token
-    const response = await app().inject({ method: 'GET', url })
+    const response = await appInstance.inject({ method: 'GET', url })
 
     expect(S3Backend.prototype.privateAssetUrl).not.toHaveBeenCalled()
     expect(response.statusCode).toBe(400)
@@ -181,7 +185,7 @@ describe('image rendering routes', () => {
       100
     )
     const url = '/render/image/sign/bucket2/authenticated/casestudy.png?token=' + token
-    const response = await app().inject({ method: 'GET', url })
+    const response = await appInstance.inject({ method: 'GET', url })
 
     expect(S3Backend.prototype.privateAssetUrl).not.toHaveBeenCalled()
     expect(response.statusCode).toBe(400)

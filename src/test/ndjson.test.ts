@@ -8,9 +8,9 @@ import { NdJsonTransform } from '@internal/streams/ndjson'
  * collects all the parsed objects (in order), and resolves
  * them—or rejects on error.
  */
-function collect(transform: NdJsonTransform, chunks: Buffer[]): Promise<any[]> {
+function collect(transform: NdJsonTransform, chunks: Buffer[]): Promise<object[]> {
   return new Promise((resolve, reject) => {
-    const out: any[] = []
+    const out: object[] = []
     transform.on('data', (obj) => out.push(obj))
     transform.on('error', (err) => reject(err))
     transform.on('end', () => resolve(out))

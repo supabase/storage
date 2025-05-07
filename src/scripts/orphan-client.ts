@@ -177,9 +177,9 @@ async function writeStreamToJsonArray(
 }
 
 main()
-  .catch((e) => {
-    console.error('Error:', e)
-  })
   .then(() => {
     console.log('Done')
+  })
+  .catch((e) => {
+    console.error('Error:', e)
   })

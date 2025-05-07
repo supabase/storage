@@ -235,8 +235,8 @@ const authenticatedRoutes = fastifyPlugin(
             operation: { type: `${ROUTE_OPERATIONS.TUS_CREATE_UPLOAD}${options.operation || ''}` },
           },
         },
-        (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+        async (req, res) => {
+          await options.tusServer.handle(req.raw, res.raw)
         }
       )
 
@@ -248,8 +248,8 @@ const authenticatedRoutes = fastifyPlugin(
             operation: { type: `${ROUTE_OPERATIONS.TUS_CREATE_UPLOAD}${options.operation || ''}` },
           },
         },
-        (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+        async (req, res) => {
+          await options.tusServer.handle(req.raw, res.raw)
         }
       )
 
@@ -261,8 +261,8 @@ const authenticatedRoutes = fastifyPlugin(
             operation: { type: `${ROUTE_OPERATIONS.TUS_UPLOAD_PART}${options.operation || ''}` },
           },
         },
-        (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+        async (req, res) => {
+          await options.tusServer.handle(req.raw, res.raw)
         }
       )
       fastify.patch(
@@ -276,8 +276,8 @@ const authenticatedRoutes = fastifyPlugin(
             operation: { type: `${ROUTE_OPERATIONS.TUS_UPLOAD_PART}${options.operation || ''}` },
           },
         },
-        (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+        async (req, res) => {
+          await options.tusServer.handle(req.raw, res.raw)
         }
       )
       fastify.head(
@@ -288,8 +288,8 @@ const authenticatedRoutes = fastifyPlugin(
             operation: { type: `${ROUTE_OPERATIONS.TUS_GET_UPLOAD}${options.operation || ''}` },
           },
         },
-        (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+        async (req, res) => {
+          await options.tusServer.handle(req.raw, res.raw)
         }
       )
       fastify.delete(
@@ -303,8 +303,8 @@ const authenticatedRoutes = fastifyPlugin(
             operation: { type: `${ROUTE_OPERATIONS.TUS_DELETE_UPLOAD}${options.operation || ''}` },
           },
         },
-        (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+        async (req, res) => {
+          await options.tusServer.handle(req.raw, res.raw)
         }
       )
     })
@@ -341,8 +341,8 @@ const publicRoutes = fastifyPlugin(
             operation: { type: `${ROUTE_OPERATIONS.TUS_OPTIONS}${options.operation || ''}` },
           },
         },
-        (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+        async (req, res) => {
+          await options.tusServer.handle(req.raw, res.raw)
         }
       )
 
@@ -358,8 +358,8 @@ const publicRoutes = fastifyPlugin(
             operation: { type: `${ROUTE_OPERATIONS.TUS_OPTIONS}${options.operation || ''}` },
           },
         },
-        (req, res) => {
-          options.tusServer.handle(req.raw, res.raw)
+        async (req, res) => {
+          await options.tusServer.handle(req.raw, res.raw)
         }
       )
     })

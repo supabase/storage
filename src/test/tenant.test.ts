@@ -149,9 +149,9 @@ describe('Tenant configs', () => {
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON).toEqual(payload)
 
-    expect(getServiceKey('abc')).resolves.toBe(payload.serviceKey)
-    expect(getFileSizeLimit('abc')).resolves.toBe(payload.fileSizeLimit)
-    expect(getFeatures('abc')).resolves.toEqual(payload.features)
+    await expect(getServiceKey('abc')).resolves.toBe(payload.serviceKey)
+    await expect(getFileSizeLimit('abc')).resolves.toBe(payload.fileSizeLimit)
+    await expect(getFeatures('abc')).resolves.toEqual(payload.features)
   })
 
   test('Insert tenant config without required properties', async () => {
@@ -311,12 +311,14 @@ describe('Tenant configs', () => {
     expect(getResponse.statusCode).toBe(404)
   })
 
-  test('Get tenant config with invalid tenant id expected error', () => {
-    expect(getTenantConfig('')).rejects.toThrowError('Invalid tenant id')
+  test('Get tenant config with invalid tenant id expected error', async () => {
+    await expect(getTenantConfig('')).rejects.toThrowError('Invalid tenant id')
   })
 
-  test('Get tenant config with unknown tenant id expected error', () => {
-    expect(getTenantConfig('zzz')).rejects.toThrowError('Missing tenant config for tenant zzz')
+  test('Get tenant config with unknown tenant id expected error', async () => {
+    await expect(getTenantConfig('zzz')).rejects.toThrowError(
+      'Missing tenant config for tenant zzz'
+    )
   })
 
   test('Get tenant config always retrieves concurrent requests from cache', async () => {

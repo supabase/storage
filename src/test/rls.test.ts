@@ -17,6 +17,8 @@ import app from '../app'
 import { getConfig } from '../config'
 import { checkBucketExists } from './common'
 import { Storage } from '../storage'
+import { FastifyInstance } from 'fastify'
+import { wait } from '@internal/concurrency'
 
 interface Policy {
   name: string
@@ -72,6 +74,7 @@ const { serviceKeyAsync, tenantId, jwtSecret, databaseURL, storageS3Bucket, stor
   getConfig()
 const backend = createStorageBackend(storageBackendType)
 const client = backend.client
+let appInstance: FastifyInstance
 
 jest.setTimeout(10000)
 
@@ -101,6 +104,7 @@ describe('RLS policies', () => {
   let jwt: string
   let storage: Storage
   beforeEach(async () => {
+    appInstance = app()
     userId = randomUUID()
     jwt = (await signJWT({ sub: userId, role: 'authenticated' }, jwtSecret, '1h')) as string
 
@@ -130,6 +134,7 @@ describe('RLS policies', () => {
   })
 
   afterEach(async () => {
+    await appInstance.close()
     jest.clearAllMocks()
   })
 
@@ -272,7 +277,7 @@ describe('RLS policies', () => {
         console.error('error', e)
         throw e
       } finally {
-        await sleep(2000)
+        await wait(2000)
         const policiesToDelete = allPolicies.reduce((acc, policy) => {
           acc.push(...policy)
           return acc
@@ -298,7 +303,7 @@ async function runOperation(
     case 'upload.upsert':
       return uploadFile(bucket, objectName, jwt, true)
     case 'bucket.list':
-      return app().inject({
+      return appInstance.inject({
         method: 'GET',
         url: `/bucket`,
         headers: {
@@ -306,7 +311,7 @@ async function runOperation(
         },
       })
     case 'bucket.get':
-      return app().inject({
+      return appInstance.inject({
         method: 'GET',
         url: `/bucket/${bucket}`,
         headers: {
@@ -314,7 +319,7 @@ async function runOperation(
         },
       })
     case 'bucket.create':
-      return app().inject({
+      return appInstance.inject({
         method: 'POST',
         url: `/bucket`,
         headers: {
@@ -326,7 +331,7 @@ async function runOperation(
       })
     case 'bucket.update':
       console.log(`updating bucket ${bucket}`)
-      return app().inject({
+      return appInstance.inject({
         method: 'PUT',
         url: `/bucket/${bucket}`,
         headers: {
@@ -337,7 +342,7 @@ async function runOperation(
         },
       })
     case 'bucket.delete':
-      return app().inject({
+      return appInstance.inject({
         method: 'DELETE',
         url: `/bucket/${bucket}`,
         headers: {
@@ -345,7 +350,7 @@ async function runOperation(
         },
       })
     case 'object.delete':
-      return app().inject({
+      return appInstance.inject({
         method: 'DELETE',
         url: `/object/${bucket}/${objectName}`,
         headers: {
@@ -353,7 +358,7 @@ async function runOperation(
         },
       })
     case 'object.get':
-      return app().inject({
+      return appInstance.inject({
         method: 'GET',
         url: `/object/authenticated/${bucket}/${objectName}`,
         headers: {
@@ -361,7 +366,7 @@ async function runOperation(
         },
       })
     case 'object.list':
-      return app().inject({
+      return appInstance.inject({
         method: 'POST',
         url: `/object/list/${bucket}`,
         headers: {
@@ -376,7 +381,7 @@ async function runOperation(
         },
       })
     case 'object.move':
-      return app().inject({
+      return appInstance.inject({
         method: 'POST',
         url: `/object/move`,
         headers: {
@@ -389,7 +394,7 @@ async function runOperation(
         },
       })
     case 'object.copy':
-      return app().inject({
+      return appInstance.inject({
         method: 'POST',
         url: `/object/copy`,
         headers: {
@@ -457,14 +462,10 @@ async function uploadFile(bucket: string, fileName: string, jwt: string, upsert?
     ...(upsert ? { 'x-upsert': 'true' } : {}),
   })
 
-  return app().inject({
+  return appInstance.inject({
     method: 'POST',
     url: `/object/${bucket}/${fileName}`,
     headers,
     payload: form,
   })
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }

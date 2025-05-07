@@ -439,6 +439,6 @@ describe('Tenant jwks configs', () => {
   test('Storage.insert correctly throws if fails to find conflicting row during idempotent insert', async () => {
     const storage = new JWKSManagerStoreKnex(createMockKnexReturning({}))
     const insert = storage.insert('tenant-id', 'encrypted', 'kind', true)
-    expect(insert).rejects.toThrow('failed to find existing jwk on idempotent insert')
+    await expect(insert).rejects.toThrow('failed to find existing jwk on idempotent insert')
   })
 })

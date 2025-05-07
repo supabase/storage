@@ -10,10 +10,12 @@ import { useMockObject, useMockQueue } from './common'
 import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
 import { Knex } from 'knex'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { FastifyInstance } from 'fastify'
 
 const { jwtSecret, serviceKeyAsync, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
 const S3Backend = backends.S3Backend
+let appInstance: FastifyInstance
 
 let tnx: Knex.Transaction | undefined
 async function getSuperuserPostgrestClient() {
@@ -35,12 +37,14 @@ useMockQueue()
 
 beforeEach(() => {
   getConfig({ reload: true })
+  appInstance = app()
 })
 
 afterEach(async () => {
   if (tnx) {
     await tnx.commit()
   }
+  await appInstance.close()
 })
 
 /*
@@ -48,7 +52,7 @@ afterEach(async () => {
  */
 describe('testing GET object', () => {
   test('check if RLS policies are respected: authenticated user is able to read authenticated resource', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/authenticated/bucket2/authenticated/casestudy.png',
       headers: {
@@ -62,7 +66,7 @@ describe('testing GET object', () => {
   })
 
   test('check if RLS policies are respected: authenticated user is able to read authenticated resource without /authenticated prefix', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/bucket2/authenticated/casestudy.png',
       headers: {
@@ -82,7 +86,7 @@ describe('testing GET object', () => {
         httpStatusCode: 304,
       },
     })
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/authenticated/bucket2/authenticated/casestudy.png',
       headers: {
@@ -99,7 +103,7 @@ describe('testing GET object', () => {
   })
 
   test('get authenticated object info', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'HEAD',
       url: '/object/authenticated/bucket2/authenticated/casestudy.png',
       headers: {
@@ -114,7 +118,7 @@ describe('testing GET object', () => {
   })
 
   test('get authenticated object info without the /authenticated prefix', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'HEAD',
       url: '/object/bucket2/authenticated/casestudy.png',
       headers: {
@@ -129,7 +133,7 @@ describe('testing GET object', () => {
   })
 
   test('cannot get authenticated object info without the /authenticated prefix if no jwt is provided', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'HEAD',
       url: '/object/bucket2/authenticated/casestudy.png',
     })
@@ -137,7 +141,7 @@ describe('testing GET object', () => {
   })
 
   test('get public object info without using the /public prefix', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'HEAD',
       url: '/object/public-bucket-2/favicon.ico',
       headers: {
@@ -152,7 +156,7 @@ describe('testing GET object', () => {
   })
 
   test('get public object info', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'HEAD',
       url: '/object/public-bucket-2/favicon.ico',
       headers: {
@@ -167,7 +171,7 @@ describe('testing GET object', () => {
   })
 
   test('force downloading file with default name', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/authenticated/bucket2/authenticated/casestudy.png?download',
       headers: {
@@ -183,7 +187,7 @@ describe('testing GET object', () => {
   })
 
   test('force downloading file with a custom name', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/authenticated/bucket2/authenticated/casestudy.png?download=testname.png',
       headers: {
@@ -199,7 +203,7 @@ describe('testing GET object', () => {
   })
 
   test('check if RLS policies are respected: anon user is not able to read authenticated resource', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/authenticated/bucket2/authenticated/casestudy.png',
       headers: {
@@ -211,7 +215,7 @@ describe('testing GET object', () => {
   })
 
   test('check if RLS policies are respected: anon user is not able to read authenticated resource without /authenticated prefix', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/bucket2/authenticated/casestudy.png',
       headers: {
@@ -223,7 +227,7 @@ describe('testing GET object', () => {
   })
 
   test('user is not able to read a resource without Auth header', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/authenticated/bucket2/authenticated/casestudy.png',
     })
@@ -232,7 +236,7 @@ describe('testing GET object', () => {
   })
 
   test('user is not able to read a resource without Auth header without the /authenticated prefix', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/bucket2/authenticated/casestudy.png',
     })
@@ -241,7 +245,7 @@ describe('testing GET object', () => {
   })
 
   test('return 400 when reading a non existent object', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/authenticated/bucket2/authenticated/notfound',
       headers: {
@@ -253,7 +257,7 @@ describe('testing GET object', () => {
   })
 
   test('return 400 when reading a non existent bucket', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/authenticated/notfound/authenticated/casestudy.png',
       headers: {
@@ -278,7 +282,7 @@ describe('testing POST object via multipart upload', () => {
       'x-upsert': 'true',
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/authenticated/casestudy1.png',
       headers,
@@ -302,7 +306,7 @@ describe('testing POST object via multipart upload', () => {
       'x-upsert': 'true',
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/authenticated/casestudy.png',
       headers,
@@ -323,7 +327,7 @@ describe('testing POST object via multipart upload', () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/authenticated/casestudy.png',
       headers: form.getHeaders(),
@@ -340,7 +344,7 @@ describe('testing POST object via multipart upload', () => {
       authorization: `Bearer ${anonKey}`,
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/notfound/authenticated/casestudy.png',
       headers,
@@ -357,7 +361,7 @@ describe('testing POST object via multipart upload', () => {
       authorization: `Bearer ${anonKey}`,
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/public/sadcat-upload23.png',
       headers,
@@ -375,7 +379,7 @@ describe('testing POST object via multipart upload', () => {
       'x-upsert': 'true',
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/public-limit-max-size-2/sadcat-upload25.png',
       headers,
@@ -393,7 +397,7 @@ describe('testing POST object via multipart upload', () => {
       'x-upsert': 'true',
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/public-limit-max-size/sadcat-upload23.png',
       headers,
@@ -417,7 +421,7 @@ describe('testing POST object via multipart upload', () => {
       'content-type': 'image/jpeg',
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/public-limit-mime-types/sadcat-upload23.png',
       headers,
@@ -443,7 +447,7 @@ describe('testing POST object via multipart upload', () => {
       ...form.getHeaders(),
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/sadcat-upload3012.png',
       headers,
@@ -482,7 +486,7 @@ describe('testing POST object via multipart upload', () => {
       ).toString('base64'),
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/sadcat-upload3018.png',
       headers,
@@ -522,7 +526,7 @@ describe('testing POST object via multipart upload', () => {
       'x-upsert': 'true',
     })
 
-    const uploadResponse = await app().inject({
+    const uploadResponse = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/sadcat-upload3019.png',
       headers: {
@@ -533,7 +537,7 @@ describe('testing POST object via multipart upload', () => {
     })
     expect(uploadResponse.statusCode).toBe(200)
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/info/bucket2/sadcat-upload3019.png',
       headers,
@@ -556,7 +560,7 @@ describe('testing POST object via multipart upload', () => {
       'content-type': 'image/png',
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/public-limit-mime-types/sadcat-upload23.png',
       headers,
@@ -580,7 +584,7 @@ describe('testing POST object via multipart upload', () => {
 
     form.append('file', Buffer.alloc(0))
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/public-limit-mime-types/nested/.emptyFolderPlaceholder',
       headers,
@@ -599,7 +603,7 @@ describe('testing POST object via multipart upload', () => {
 
     form.append('file', Buffer.alloc(1))
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/public-limit-mime-types/nested-2/.emptyFolderPlaceholder',
       headers,
@@ -617,7 +621,7 @@ describe('testing POST object via multipart upload', () => {
       'content-type': 'thisisnotarealmimetype',
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/public-limit-mime-types/sadcat-upload23.png',
       headers,
@@ -640,7 +644,7 @@ describe('testing POST object via multipart upload', () => {
       'x-upsert': 'true',
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/public/sadcat-upload23.png',
       headers,
@@ -661,7 +665,7 @@ describe('testing POST object via multipart upload', () => {
       // 'x-upsert': 'true',
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/public/sadcat55.jpg',
       headers,
@@ -684,7 +688,7 @@ describe('testing POST object via multipart upload', () => {
       authorization: `Bearer ${anonKey}`,
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket4/',
       headers,
@@ -717,7 +721,7 @@ describe('testing POST object via multipart upload', () => {
     const BUCKET_ID = 'bucket2'
     const OBJECT_NAME = 'public/should-not-insert/sadcat.jpg'
 
-    const createObjectResponse = await app().inject({
+    const createObjectResponse = await appInstance.inject({
       method: 'POST',
       url: `/object/${BUCKET_ID}/${OBJECT_NAME}`,
       headers,
@@ -762,7 +766,7 @@ describe('testing POST object via binary upload', () => {
       'x-upsert': 'true',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/authenticated/binary-casestudy1.png',
       headers,
@@ -788,7 +792,7 @@ describe('testing POST object via binary upload', () => {
       'Content-Type': 'image/jpeg',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/authenticated/binary-casestudy.png',
       headers,
@@ -814,7 +818,7 @@ describe('testing POST object via binary upload', () => {
       'Content-Type': 'image/jpeg',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/authenticated/binary-casestudy1.png',
       headers,
@@ -834,7 +838,7 @@ describe('testing POST object via binary upload', () => {
       'Content-Type': 'image/jpeg',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/notfound/authenticated/binary-casestudy1.png',
       headers,
@@ -854,7 +858,7 @@ describe('testing POST object via binary upload', () => {
       'Content-Type': 'image/jpeg',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/public/sadcat-upload23.png',
       headers,
@@ -875,7 +879,7 @@ describe('testing POST object via binary upload', () => {
       'x-upsert': 'true',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/public/sadcat-upload23.png',
       headers,
@@ -898,7 +902,7 @@ describe('testing POST object via binary upload', () => {
       'Content-Type': 'image/jpeg',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket2/public/sadcat.jpg',
       headers,
@@ -925,7 +929,7 @@ describe('testing POST object via binary upload', () => {
       'x-upsert': 'true',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/bucket4/',
       headers,
@@ -961,7 +965,7 @@ describe('testing POST object via binary upload', () => {
     const BUCKET_ID = 'bucket2'
     const OBJECT_NAME = 'public/should-not-insert/sadcat.jpg'
 
-    const createObjectResponse = await app().inject({
+    const createObjectResponse = await appInstance.inject({
       method: 'POST',
       url: `/object/${BUCKET_ID}/${OBJECT_NAME}`,
       headers,
@@ -1001,7 +1005,7 @@ describe('testing PUT object', () => {
       authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: '/object/bucket2/authenticated/cat.jpg',
       headers,
@@ -1024,7 +1028,7 @@ describe('testing PUT object', () => {
       authorization: `Bearer ${anonKey}`,
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: '/object/bucket2/authenticated/cat.jpg',
       headers,
@@ -1040,7 +1044,7 @@ describe('testing PUT object', () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: '/object/bucket2/authenticated/cat.jpg',
       headers: form.getHeaders(),
@@ -1057,7 +1061,7 @@ describe('testing PUT object', () => {
       authorization: `Bearer ${anonKey}`,
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: '/object/notfound/authenticated/cat.jpg',
       headers,
@@ -1075,7 +1079,7 @@ describe('testing PUT object', () => {
       authorization: `Bearer ${anonKey}`,
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: '/object/notfound/authenticated/notfound.jpg',
       headers,
@@ -1101,7 +1105,7 @@ describe('testing PUT object via binary upload', () => {
       'Content-Type': 'image/jpeg',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: '/object/bucket2/authenticated/cat.jpg',
       headers,
@@ -1127,7 +1131,7 @@ describe('testing PUT object via binary upload', () => {
       'Content-Type': 'image/jpeg',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: '/object/bucket2/authenticated/cat.jpg',
       headers,
@@ -1146,7 +1150,7 @@ describe('testing PUT object via binary upload', () => {
       'Content-Type': 'image/jpeg',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: '/object/bucket2/authenticated/cat.jpg',
       headers,
@@ -1166,7 +1170,7 @@ describe('testing PUT object via binary upload', () => {
       'Content-Type': 'image/jpeg',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: '/object/notfound/authenticated/binary-casestudy1.png',
       headers,
@@ -1186,7 +1190,7 @@ describe('testing PUT object via binary upload', () => {
       'Content-Type': 'image/jpeg',
     }
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: '/object/notfound/authenticated/notfound.jpg',
       headers,
@@ -1202,7 +1206,7 @@ describe('testing PUT object via binary upload', () => {
  */
 describe('testing copy object', () => {
   test('check if RLS policies are respected: authenticated user is able to copy authenticated resource', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/copy',
       headers: {
@@ -1221,7 +1225,7 @@ describe('testing copy object', () => {
   })
 
   test('can copy objects across buckets', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/copy',
       headers: {
@@ -1243,7 +1247,7 @@ describe('testing copy object', () => {
 
   test('can copy objects keeping their metadata', async () => {
     const copiedKey = 'casestudy-2349.png'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/copy',
       headers: {
@@ -1277,7 +1281,7 @@ describe('testing copy object', () => {
 
   test('can copy objects to itself overwriting their metadata', async () => {
     const copiedKey = 'casestudy-2349.png'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/copy',
       headers: {
@@ -1336,7 +1340,7 @@ describe('testing copy object', () => {
 
   test('can copy objects excluding their metadata', async () => {
     const copiedKey = 'casestudy-2450.png'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/copy',
       headers: {
@@ -1367,7 +1371,7 @@ describe('testing copy object', () => {
   })
 
   test('cannot copy objects across buckets when RLS dont allow it', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/copy',
       headers: {
@@ -1384,7 +1388,7 @@ describe('testing copy object', () => {
   })
 
   test('check if RLS policies are respected: anon user is not able to update authenticated resource', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/copy',
       headers: {
@@ -1401,7 +1405,7 @@ describe('testing copy object', () => {
   })
 
   test('user is not able to copy a resource without Auth header', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/copy',
       payload: {
@@ -1415,7 +1419,7 @@ describe('testing copy object', () => {
   })
 
   test('return 400 when copy from a non existent bucket', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/copy',
       headers: {
@@ -1432,7 +1436,7 @@ describe('testing copy object', () => {
   })
 
   test('return 400 when copying a non existent key', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/copy',
       headers: {
@@ -1454,7 +1458,7 @@ describe('testing copy object', () => {
  * */
 describe('testing delete object', () => {
   test('check if RLS policies are respected: authenticated user is able to delete authenticated resource', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/bucket2/authenticated/delete.png',
       headers: {
@@ -1466,7 +1470,7 @@ describe('testing delete object', () => {
   })
 
   test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/bucket2/authenticated/delete1.png',
       headers: {
@@ -1478,7 +1482,7 @@ describe('testing delete object', () => {
   })
 
   test('user is not able to delete a resource without Auth header', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/bucket2/authenticated/delete1.png',
     })
@@ -1487,7 +1491,7 @@ describe('testing delete object', () => {
   })
 
   test('return 400 when delete from a non existent bucket', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/notfound/authenticated/delete1.png',
       headers: {
@@ -1499,7 +1503,7 @@ describe('testing delete object', () => {
   })
 
   test('return 400 when deleting a non existent key', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/notfound/authenticated/notfound.jpg',
       headers: {
@@ -1516,7 +1520,7 @@ describe('testing delete object', () => {
  * */
 describe('testing deleting multiple objects', () => {
   test('check if RLS policies are respected: authenticated user is able to delete authenticated resource', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/bucket2',
       headers: {
@@ -1536,7 +1540,7 @@ describe('testing deleting multiple objects', () => {
   })
 
   test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/bucket2',
       headers: {
@@ -1553,7 +1557,7 @@ describe('testing deleting multiple objects', () => {
   })
 
   test('user is not able to delete a resource without Auth header', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/bucket2',
       payload: {
@@ -1565,7 +1569,7 @@ describe('testing deleting multiple objects', () => {
   })
 
   test('deleting from a non existent bucket', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/notfound',
       headers: {
@@ -1580,7 +1584,7 @@ describe('testing deleting multiple objects', () => {
   })
 
   test('deleting a non existent key', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/bucket2',
       headers: {
@@ -1597,7 +1601,7 @@ describe('testing deleting multiple objects', () => {
   })
 
   test('check if RLS policies are respected: user has permission to delete only one of the objects', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/bucket2',
       headers: {
@@ -1621,7 +1625,7 @@ describe('testing deleting multiple objects', () => {
 describe('testing generating signed URL', () => {
   test('check if RLS policies are respected: authenticated user is able to sign URL for an authenticated resource', async () => {
     const assetUrl = 'bucket2/authenticated/cat.jpg'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/' + assetUrl,
       headers: {
@@ -1648,7 +1652,7 @@ describe('testing generating signed URL', () => {
     mergeConfig({ jwtJWKS })
 
     const assetUrl = 'bucket2/authenticated/cat.jpg'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/' + assetUrl,
       headers: {
@@ -1670,7 +1674,7 @@ describe('testing generating signed URL', () => {
   })
 
   test('check if RLS policies are respected: anon user is not able to generate signedURL for authenticated resource', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/bucket2/authenticated/cat.jpg',
       headers: {
@@ -1684,7 +1688,7 @@ describe('testing generating signed URL', () => {
   })
 
   test('user is not able to generate signedURLs without Auth header', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/bucket2/authenticated/cat.jpg',
       payload: {
@@ -1695,7 +1699,7 @@ describe('testing generating signed URL', () => {
   })
 
   test('return 400 when generate signed urls from a non existent bucket', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/notfound/authenticated/cat.jpg',
       headers: {
@@ -1709,7 +1713,7 @@ describe('testing generating signed URL', () => {
   })
 
   test('signing url of a non existent key', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/bucket2/authenticated/notfound.jpg',
       headers: {
@@ -1731,7 +1735,7 @@ describe('testing generating signed URL for upload', () => {
     const BUCKET_ID = 'bucket2'
     const OBJECT_NAME = 'authenticated/cat1.jpg'
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/upload/sign/${BUCKET_ID}/${OBJECT_NAME}`,
       headers: {
@@ -1758,7 +1762,7 @@ describe('testing generating signed URL for upload', () => {
     const BUCKET_ID = 'bucket2'
     const OBJECT_NAME = 'authenticated/cat1.jpg'
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/upload/sign/${BUCKET_ID}/${OBJECT_NAME}`,
       headers: {
@@ -1787,7 +1791,7 @@ describe('testing generating signed URL for upload', () => {
   })
 
   test('user is not able to sign a upload url without Auth header', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/upload/sign/bucket2/authenticated/cat.jpg',
     })
@@ -1795,7 +1799,7 @@ describe('testing generating signed URL for upload', () => {
   })
 
   test('return 400 when generating signed upload urls from a non existent bucket', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/upload/sign/notfound/authenticated/cat.jpg',
       headers: {
@@ -1806,7 +1810,7 @@ describe('testing generating signed URL for upload', () => {
   })
 
   test('signing upload url of a non existent key', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/upload/sign/bucket2/authenticated/notfound.jpg',
       headers: {
@@ -1817,7 +1821,7 @@ describe('testing generating signed URL for upload', () => {
   })
 
   test('signing upload url of an existent key', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/upload/sign/bucket2/authenticated/cat.jpg',
       headers: {
@@ -1846,7 +1850,7 @@ describe('testing uploading with generated signed upload URL', () => {
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
     const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, 100)
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
       headers,
@@ -1884,7 +1888,7 @@ describe('testing uploading with generated signed upload URL', () => {
       'content-type': 'image/jpeg',
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: `/object/upload/sign/bucket2/public/sadcat-upload1.png`,
       headers,
@@ -1901,7 +1905,7 @@ describe('testing uploading with generated signed upload URL', () => {
       'content-type': 'image/jpeg',
     })
 
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: `/object/upload/sign/bucket2/public/sadcat-upload1.png?token=xxx`,
       headers,
@@ -1924,7 +1928,7 @@ describe('testing uploading with generated signed upload URL', () => {
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
     const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, -1)
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
       headers,
@@ -1946,7 +1950,7 @@ describe('testing uploading with generated signed upload URL', () => {
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
 
     // Upload a file first
-    const resp = await app().inject({
+    const resp = await appInstance.inject({
       method: 'POST',
       url: `/object/${urlToSign}`,
       payload: createUpload(),
@@ -1959,7 +1963,7 @@ describe('testing uploading with generated signed upload URL', () => {
     expect(resp.statusCode).toBe(200)
 
     // generate signed upload url with upsert
-    const signedUrlResp = await app().inject({
+    const signedUrlResp = await appInstance.inject({
       method: 'POST',
       url: `/object/upload/sign/${urlToSign}`,
       headers: {
@@ -1970,7 +1974,7 @@ describe('testing uploading with generated signed upload URL', () => {
     expect(signedUrlResp.statusCode).toBe(200)
 
     const jwtToken = (await signedUrlResp.json()).token
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
       payload: createUpload(),
@@ -1992,7 +1996,7 @@ describe('testing uploading with generated signed upload URL', () => {
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
     // Upload a file first
-    const resp = await app().inject({
+    const resp = await appInstance.inject({
       method: 'POST',
       url: `/object/${urlToSign}`,
       payload: createUpload(),
@@ -2004,7 +2008,7 @@ describe('testing uploading with generated signed upload URL', () => {
     expect(resp.statusCode).toBe(200)
 
     const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, 100)
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
       payload: createUpload(),
@@ -2018,7 +2022,7 @@ describe('testing uploading with generated signed upload URL', () => {
  */
 describe('testing generating signed URLs', () => {
   test('check if RLS policies are respected: authenticated user is able to sign URLs for an authenticated resource', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/bucket2',
       headers: {
@@ -2035,7 +2039,7 @@ describe('testing generating signed URLs', () => {
   })
 
   test('check if RLS policies are respected: anon user is not able to generate signedURLs for authenticated resource', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/bucket2',
       headers: {
@@ -2052,7 +2056,7 @@ describe('testing generating signed URLs', () => {
   })
 
   test('user is not able to generate signedURLs without Auth header', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/bucket2',
       payload: {
@@ -2064,7 +2068,7 @@ describe('testing generating signed URLs', () => {
   })
 
   test('return 400 when generate signed urls from a non existent bucket', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/notfound',
       headers: {
@@ -2081,7 +2085,7 @@ describe('testing generating signed URLs', () => {
   })
 
   test('signing url of a non existent key', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/sign/bucket2clearAllMocks',
       headers: {
@@ -2110,7 +2114,7 @@ describe('testing retrieving signed URL', () => {
   test('get object with a token', async () => {
     const urlToSign = 'bucket2/public/sadcat-upload.png'
     const jwtToken = await signJWT({ url: urlToSign }, jwtSecret, 100)
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,
     })
@@ -2125,7 +2129,7 @@ describe('testing retrieving signed URL', () => {
 
     const urlToSign = 'bucket2/public/sadcat-upload.png'
     const jwtToken = await signJWT({ url: urlToSign }, signingJwk, 100)
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,
     })
@@ -2143,7 +2147,7 @@ describe('testing retrieving signed URL', () => {
     })
     const urlToSign = 'bucket2/public/sadcat-upload.png'
     const jwtToken = await signJWT({ url: urlToSign }, jwtSecret, 100)
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,
       headers: {
@@ -2161,7 +2165,7 @@ describe('testing retrieving signed URL', () => {
   test('get object with incorrect url in jwt', async () => {
     const urlToSign = 'bucket2/public/sadcat-upload.png'
     const jwtToken = await signJWT({ url: 'some/other/weird-path.png' }, jwtSecret, 100)
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,
     })
@@ -2171,7 +2175,7 @@ describe('testing retrieving signed URL', () => {
   })
 
   test('get object without a token', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/sign/bucket2/public/sadcat-upload.png',
     })
@@ -2179,7 +2183,7 @@ describe('testing retrieving signed URL', () => {
   })
 
   test('get object with a malformed JWT', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/sign/bucket2/public/sadcat-upload.png?token=xxx',
     })
@@ -2189,7 +2193,7 @@ describe('testing retrieving signed URL', () => {
   test('get object with an expired JWT', async () => {
     const urlToSign = 'bucket2/public/sadcat-upload.png'
     const expiredJWT = await signJWT({ url: urlToSign }, jwtSecret, -1)
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${expiredJWT}`,
     })
@@ -2199,7 +2203,7 @@ describe('testing retrieving signed URL', () => {
 
 describe('testing move object', () => {
   test('check if RLS policies are respected: authenticated user is able to move an authenticated object', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
       payload: {
@@ -2217,7 +2221,7 @@ describe('testing move object', () => {
   })
 
   test('can move objects across buckets respecting RLS', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
       payload: {
@@ -2236,7 +2240,7 @@ describe('testing move object', () => {
   })
 
   test('cannot move objects across buckets because RLS checks', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
       payload: {
@@ -2255,7 +2259,7 @@ describe('testing move object', () => {
   })
 
   test('check if RLS policies are respected: anon user is not able to move an authenticated object', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
       payload: {
@@ -2273,7 +2277,7 @@ describe('testing move object', () => {
   })
 
   test('user is not able to move an object without auth header', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
       payload: {
@@ -2288,7 +2292,7 @@ describe('testing move object', () => {
   })
 
   test('user is not able to move an object in a non existent bucket', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
       payload: {
@@ -2306,7 +2310,7 @@ describe('testing move object', () => {
   })
 
   test('user is not able to move an non existent object', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
       payload: {
@@ -2324,7 +2328,7 @@ describe('testing move object', () => {
   })
 
   test('user is not able to move to an existing key', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
       payload: {
@@ -2344,7 +2348,7 @@ describe('testing move object', () => {
 
 describe('testing list objects', () => {
   test('searching the bucket root folder', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/list/bucket2',
       headers: {
@@ -2368,7 +2372,7 @@ describe('testing list objects', () => {
   })
 
   test('searching a subfolder', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/list/bucket2',
       headers: {
@@ -2389,7 +2393,7 @@ describe('testing list objects', () => {
   })
 
   test('searching a non existent prefix', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/list/bucket2',
       headers: {
@@ -2407,7 +2411,7 @@ describe('testing list objects', () => {
   })
 
   test('checking if limit works', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/list/bucket2',
       headers: {
@@ -2425,7 +2429,7 @@ describe('testing list objects', () => {
   })
 
   test('listobjects: checking if RLS policies are respected', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/list/bucket2',
       headers: {
@@ -2443,7 +2447,7 @@ describe('testing list objects', () => {
   })
 
   test('return 400 without Auth Header', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/list/bucket2',
       payload: {
@@ -2456,7 +2460,7 @@ describe('testing list objects', () => {
   })
 
   test('case insensitive search should work', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/list/bucket2',
       payload: {
@@ -2474,7 +2478,7 @@ describe('testing list objects', () => {
   })
 
   test('test ascending search sorting', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/list/bucket2',
       payload: {
@@ -2496,7 +2500,7 @@ describe('testing list objects', () => {
   })
 
   test('test descending search sorting', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: '/object/list/bucket2',
       payload: {

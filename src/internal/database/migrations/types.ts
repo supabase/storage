@@ -1,5 +1,5 @@
 export const DBMigration = {
-  'initialmigration': 1,
+  initialmigration: 1,
   'search-files-search-function': 2,
   'storage-schema': 3,
   'pathtoken-column': 4,
@@ -16,7 +16,7 @@ export const DBMigration = {
   'add-can-insert-object-function': 15,
   'add-version': 16,
   'drop-owner-foreign-key': 17,
-  'add_owner_id_column_deprecate_owner': 18,
+  add_owner_id_column_deprecate_owner: 18,
   'alter-default-value-objects-id': 19,
   'list-objects-with-delimiter': 20,
   's3-multipart-uploads': 21,

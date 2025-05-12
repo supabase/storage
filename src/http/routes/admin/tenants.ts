@@ -89,6 +89,7 @@ interface tenantDBInterface {
   anon_key: string
   database_url: string
   database_pool_url?: string
+  database_pool_mode?: string
   max_connections?: number
   jwt_secret: string
   jwks: { keys?: JwksConfigKey[] } | null
@@ -356,6 +357,7 @@ export default async function routes(fastify: FastifyInstance) {
       serviceKey,
       features,
       databasePoolUrl,
+      databasePoolMode,
       maxConnections,
       tracingMode,
     } = request.body
@@ -399,6 +401,10 @@ export default async function routes(fastify: FastifyInstance) {
 
     if (maxConnections) {
       tenantInfo.max_connections = Number(maxConnections)
+    }
+
+    if (databasePoolMode) {
+      tenantInfo.database_pool_mode = databasePoolMode
     }
 
     if (tracingMode) {

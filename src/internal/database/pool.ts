@@ -5,8 +5,10 @@ import { logger, logSchema } from '@internal/monitoring'
 import { getSslSettings } from '@internal/database/util'
 import { wait } from '@internal/concurrency'
 import { JWTPayload } from 'jose'
+import { DbActivePool } from '@internal/monitoring/metrics'
 
 const {
+  region,
   isMultitenant,
   databaseSSLRootCert,
   databaseMaxConnections,
@@ -75,6 +77,25 @@ const tenantPools = new TTLCache<string, PoolStrategy>({
  * It creates a new pool for each tenant and reuses existing pools.
  */
 export class PoolManager {
+  monitor(signal: AbortSignal) {
+    const monitorInterval = setInterval(() => {
+      DbActivePool.set(
+        {
+          region,
+        },
+        tenantPools.size
+      )
+    }, 2000)
+
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearInterval(monitorInterval)
+      },
+      { once: true }
+    )
+  }
+
   rebalanceAll(data: { clusterSize: number }) {
     for (const pool of tenantPools.values()) {
       pool.rebalance({
@@ -122,7 +143,6 @@ export class PoolManager {
       promises.push(pool.destroy())
       tenantPools.delete(connectionString)
     }
-
     return Promise.allSettled(promises)
   }
 

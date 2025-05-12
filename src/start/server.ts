@@ -78,6 +78,9 @@ async function main() {
     startAsyncMigrations(shutdownSignal.nextGroup.signal)
   }
 
+  // PoolManager Monitoring
+  TenantConnection.poolManager.monitor(shutdownSignal.nextGroup.signal)
+
   // Cluster information
   await Cluster.init(shutdownSignal.nextGroup.signal)
 

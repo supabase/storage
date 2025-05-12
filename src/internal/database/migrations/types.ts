@@ -35,4 +35,5 @@ export const DBMigration = {
   'optimize-search-function-v1': 34,
   'add-insert-trigger-prefixes': 35,
   'optimise-existing-functions': 36,
+  'add-bucket-name-length-trigger': 37,
 }

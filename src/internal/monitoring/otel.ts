@@ -19,7 +19,6 @@ import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
 import { SpanExporter, BatchSpanProcessor, SpanProcessor } from '@opentelemetry/sdk-trace-base'
 import * as grpc from '@grpc/grpc-js'
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http'
-import { IncomingMessage } from 'node:http'
 import { logger, logSchema } from '@internal/monitoring/logger'
 import { traceCollector } from '@internal/monitoring/otel-processor'
 import { ClassInstrumentation } from './otel-instrumentation'
@@ -80,260 +79,260 @@ if (enableLogTraces) {
   spanProcessors.push(traceCollector)
 }
 
-// Configure the OpenTelemetry Node SDK
-const sdk = new NodeSDK({
-  resource: new Resource({
-    [ATTR_SERVICE_NAME]: 'storage',
-    [ATTR_SERVICE_VERSION]: version,
-  }),
-  spanProcessors: spanProcessors,
-  traceExporter,
-  instrumentations: [
-    new HttpInstrumentation({
-      enabled: true,
-      ignoreIncomingRequestHook: (req) => {
-        const ignoreRoutes = ['/metrics', '/status', '/health', '/healthcheck']
-        return ignoreRoutes.some((url) => req.url?.includes(url)) ?? false
-      },
-      startIncomingSpanHook: (req) => {
-        let tenantId = ''
-        if (isMultitenant) {
-          if (requestXForwardedHostRegExp) {
-            const serverRequest = req
-            const xForwardedHost = serverRequest.headers['x-forwarded-host']
-            if (typeof xForwardedHost !== 'string') return {}
-            const result = xForwardedHost.match(requestXForwardedHostRegExp)
-            if (!result) return {}
-            tenantId = result[1]
-          }
-        } else {
-          tenantId = defaultTenantId
-        }
-
-        return {
-          'tenant.ref': tenantId,
-          region,
-        }
-      },
-      headersToSpanAttributes: {
-        client: {
-          requestHeaders: requestTraceHeader ? [requestTraceHeader] : [],
-        },
-        server: {
-          requestHeaders: requestTraceHeader ? [requestTraceHeader] : [],
-        },
-      },
-    }),
-    new ClassInstrumentation({
-      targetClass: Storage,
-      enabled: true,
-      methodsToInstrument: [
-        'findBucket',
-        'listBuckets',
-        'createBucket',
-        'updateBucket',
-        'countObjects',
-        'deleteBucket',
-        'emptyBucket',
-        'healthcheck',
-      ],
-    }),
-    new ClassInstrumentation({
-      targetClass: ObjectStorage,
-      enabled: true,
-      methodsToInstrument: [
-        'uploadNewObject',
-        'uploadOverridingObject',
-        'deleteObject',
-        'deleteObjects',
-        'updateObjectMetadata',
-        'updateObjectOwner',
-        'findObject',
-        'findObjects',
-        'copyObject',
-        'moveObject',
-        'searchObjects',
-        'listObjectsV2',
-        'signObjectUrl',
-        'signObjectUrls',
-        'signUploadObjectUrl',
-        'verifyObjectSignature',
-      ],
-    }),
-    new ClassInstrumentation({
-      targetClass: Uploader,
-      enabled: true,
-      methodsToInstrument: ['canUpload', 'prepareUpload', 'upload', 'completeUpload'],
-    }),
-    new ClassInstrumentation({
-      targetClass: QueueBaseEvent,
-      enabled: true,
-      methodsToInstrument: ['send', 'batchSend'],
-      setName: (name, attrs, eventClass) => {
-        if (attrs.constructor.name) {
-          return name + '.' + eventClass.constructor.name
-        }
-        return name
-      },
-    }),
-    new ClassInstrumentation({
-      targetClass: S3Backend,
-      enabled: true,
-      methodsToInstrument: [
-        'getObject',
-        'putObject',
-        'deleteObject',
-        'listObjects',
-        'copyObject',
-        'headObject',
-        'createMultipartUpload',
-        'uploadPart',
-        'completeMultipartUpload',
-        'abortMultipartUpload',
-        'listMultipartUploads',
-        'listParts',
-        'getSignedUrl',
-        'createBucket',
-        'deleteBucket',
-        'listBuckets',
-        'getBucketLocation',
-        'getBucketVersioning',
-        'putBucketVersioning',
-        'getBucketLifecycleConfiguration',
-        'putBucketLifecycleConfiguration',
-        'deleteBucketLifecycle',
-        'uploadObject',
-        'privateAssetUrl',
-      ],
-    }),
-    new ClassInstrumentation({
-      targetClass: StorageKnexDB,
-      enabled: true,
-      methodsToInstrument: ['runQuery'],
-      setName: (name, attrs) => {
-        if (attrs.queryName) {
-          return name + '.' + attrs.queryName
-        }
-        return name
-      },
-      setAttributes: {
-        runQuery: (queryName) => {
-          return {
-            queryName,
-          }
-        },
-      },
-    }),
-    new ClassInstrumentation({
-      targetClass: TenantConnection,
-      enabled: true,
-      methodsToInstrument: ['transaction', 'setScope'],
-    }),
-    new ClassInstrumentation({
-      targetClass: S3Store,
-      enabled: true,
-      methodsToInstrument: [
-        'write',
-        'create',
-        'remove',
-        'getUpload',
-        'declareUploadLength',
-        'uploadIncompletePart',
-        'uploadPart',
-        'downloadIncompletePart',
-        'uploadParts',
-      ],
-      setName: (name) => 'Tus.' + name,
-    }),
-    new ClassInstrumentation({
-      targetClass: StreamSplitter,
-      enabled: true,
-      methodsToInstrument: ['emitEvent'],
-      setName: (name: string, attrs: any) => {
-        if (attrs.event) {
-          return name + '.' + attrs.event
-        }
-        return name
-      },
-      setAttributes: {
-        emitEvent: function (event) {
-          return {
-            part: this.part as any,
-            event,
-          }
-        },
-      },
-    }),
-    new ClassInstrumentation({
-      targetClass: PgLock,
-      enabled: true,
-      methodsToInstrument: ['lock', 'unlock', 'acquireLock'],
-    }),
-    new ClassInstrumentation({
-      targetClass: Semaphore,
-      enabled: true,
-      methodsToInstrument: ['acquire'],
-    }),
-    new ClassInstrumentation({
-      targetClass: Permit,
-      enabled: true,
-      methodsToInstrument: ['release'],
-    }),
-    new ClassInstrumentation({
-      targetClass: S3Client,
-      enabled: true,
-      methodsToInstrument: ['send'],
-      setAttributes: {
-        send: (command) => {
-          return {
-            operation: command.constructor.name as string,
-          }
-        },
-      },
-      setName: (name, attrs) => 'S3.' + attrs.operation,
-    }),
-    new ClassInstrumentation({
-      targetClass: Upload,
-      enabled: true,
-      methodsToInstrument: [
-        'done',
-        '__uploadUsingPut',
-        '__createMultipartUpload',
-        'markUploadAsAborted',
-      ],
-    }),
-    getNodeAutoInstrumentations({
-      '@opentelemetry/instrumentation-http': {
-        enabled: false,
-      },
-      '@opentelemetry/instrumentation-fs': {
-        enabled: false,
-      },
-      '@opentelemetry/instrumentation-aws-sdk': {
-        enabled: true,
-      },
-      '@opentelemetry/instrumentation-pg': {
-        enabled: true,
-        requireParentSpan: true,
-      },
-      '@opentelemetry/instrumentation-fastify': {
-        enabled: true,
-        requestHook: (span, req) => {
-          span.setAttribute('http.method', req.request.method)
-          span.setAttribute('http.route', req.request.routerPath)
-          span.setAttribute('tenant.ref', req.request.tenantId)
-          span.setAttribute('http.operation', req.request.operation)
-          span.setAttribute('trace.mode', req.request.tracingMode)
-        },
-      },
-      '@opentelemetry/instrumentation-knex': {
-        enabled: true,
-      },
-    }),
-  ],
-})
-
 if (tracingEnabled && spanProcessors.length > 0) {
+  // Configure the OpenTelemetry Node SDK
+  const sdk = new NodeSDK({
+    resource: new Resource({
+      [ATTR_SERVICE_NAME]: 'storage',
+      [ATTR_SERVICE_VERSION]: version,
+    }),
+    spanProcessors: spanProcessors,
+    traceExporter,
+    instrumentations: [
+      new HttpInstrumentation({
+        enabled: true,
+        ignoreIncomingRequestHook: (req) => {
+          const ignoreRoutes = ['/metrics', '/status', '/health', '/healthcheck']
+          return ignoreRoutes.some((url) => req.url?.includes(url)) ?? false
+        },
+        startIncomingSpanHook: (req) => {
+          let tenantId = ''
+          if (isMultitenant) {
+            if (requestXForwardedHostRegExp) {
+              const serverRequest = req
+              const xForwardedHost = serverRequest.headers['x-forwarded-host']
+              if (typeof xForwardedHost !== 'string') return {}
+              const result = xForwardedHost.match(requestXForwardedHostRegExp)
+              if (!result) return {}
+              tenantId = result[1]
+            }
+          } else {
+            tenantId = defaultTenantId
+          }
+
+          return {
+            'tenant.ref': tenantId,
+            region,
+          }
+        },
+        headersToSpanAttributes: {
+          client: {
+            requestHeaders: requestTraceHeader ? [requestTraceHeader] : [],
+          },
+          server: {
+            requestHeaders: requestTraceHeader ? [requestTraceHeader] : [],
+          },
+        },
+      }),
+      new ClassInstrumentation({
+        targetClass: Storage,
+        enabled: true,
+        methodsToInstrument: [
+          'findBucket',
+          'listBuckets',
+          'createBucket',
+          'updateBucket',
+          'countObjects',
+          'deleteBucket',
+          'emptyBucket',
+          'healthcheck',
+        ],
+      }),
+      new ClassInstrumentation({
+        targetClass: ObjectStorage,
+        enabled: true,
+        methodsToInstrument: [
+          'uploadNewObject',
+          'uploadOverridingObject',
+          'deleteObject',
+          'deleteObjects',
+          'updateObjectMetadata',
+          'updateObjectOwner',
+          'findObject',
+          'findObjects',
+          'copyObject',
+          'moveObject',
+          'searchObjects',
+          'listObjectsV2',
+          'signObjectUrl',
+          'signObjectUrls',
+          'signUploadObjectUrl',
+          'verifyObjectSignature',
+        ],
+      }),
+      new ClassInstrumentation({
+        targetClass: Uploader,
+        enabled: true,
+        methodsToInstrument: ['canUpload', 'prepareUpload', 'upload', 'completeUpload'],
+      }),
+      new ClassInstrumentation({
+        targetClass: QueueBaseEvent,
+        enabled: true,
+        methodsToInstrument: ['send', 'batchSend'],
+        setName: (name, attrs, eventClass) => {
+          if (attrs.constructor.name) {
+            return name + '.' + eventClass.constructor.name
+          }
+          return name
+        },
+      }),
+      new ClassInstrumentation({
+        targetClass: S3Backend,
+        enabled: true,
+        methodsToInstrument: [
+          'getObject',
+          'putObject',
+          'deleteObject',
+          'listObjects',
+          'copyObject',
+          'headObject',
+          'createMultipartUpload',
+          'uploadPart',
+          'completeMultipartUpload',
+          'abortMultipartUpload',
+          'listMultipartUploads',
+          'listParts',
+          'getSignedUrl',
+          'createBucket',
+          'deleteBucket',
+          'listBuckets',
+          'getBucketLocation',
+          'getBucketVersioning',
+          'putBucketVersioning',
+          'getBucketLifecycleConfiguration',
+          'putBucketLifecycleConfiguration',
+          'deleteBucketLifecycle',
+          'uploadObject',
+          'privateAssetUrl',
+        ],
+      }),
+      new ClassInstrumentation({
+        targetClass: StorageKnexDB,
+        enabled: true,
+        methodsToInstrument: ['runQuery'],
+        setName: (name, attrs) => {
+          if (attrs.queryName) {
+            return name + '.' + attrs.queryName
+          }
+          return name
+        },
+        setAttributes: {
+          runQuery: (queryName) => {
+            return {
+              queryName,
+            }
+          },
+        },
+      }),
+      new ClassInstrumentation({
+        targetClass: TenantConnection,
+        enabled: true,
+        methodsToInstrument: ['transaction', 'setScope'],
+      }),
+      new ClassInstrumentation({
+        targetClass: S3Store,
+        enabled: true,
+        methodsToInstrument: [
+          'write',
+          'create',
+          'remove',
+          'getUpload',
+          'declareUploadLength',
+          'uploadIncompletePart',
+          'uploadPart',
+          'downloadIncompletePart',
+          'uploadParts',
+        ],
+        setName: (name) => 'Tus.' + name,
+      }),
+      new ClassInstrumentation({
+        targetClass: StreamSplitter,
+        enabled: true,
+        methodsToInstrument: ['emitEvent'],
+        setName: (name: string, attrs: any) => {
+          if (attrs.event) {
+            return name + '.' + attrs.event
+          }
+          return name
+        },
+        setAttributes: {
+          emitEvent: function (event) {
+            return {
+              part: this.part as any,
+              event,
+            }
+          },
+        },
+      }),
+      new ClassInstrumentation({
+        targetClass: PgLock,
+        enabled: true,
+        methodsToInstrument: ['lock', 'unlock', 'acquireLock'],
+      }),
+      new ClassInstrumentation({
+        targetClass: Semaphore,
+        enabled: true,
+        methodsToInstrument: ['acquire'],
+      }),
+      new ClassInstrumentation({
+        targetClass: Permit,
+        enabled: true,
+        methodsToInstrument: ['release'],
+      }),
+      new ClassInstrumentation({
+        targetClass: S3Client,
+        enabled: true,
+        methodsToInstrument: ['send'],
+        setAttributes: {
+          send: (command) => {
+            return {
+              operation: command.constructor.name as string,
+            }
+          },
+        },
+        setName: (name, attrs) => 'S3.' + attrs.operation,
+      }),
+      new ClassInstrumentation({
+        targetClass: Upload,
+        enabled: true,
+        methodsToInstrument: [
+          'done',
+          '__uploadUsingPut',
+          '__createMultipartUpload',
+          'markUploadAsAborted',
+        ],
+      }),
+      getNodeAutoInstrumentations({
+        '@opentelemetry/instrumentation-http': {
+          enabled: false,
+        },
+        '@opentelemetry/instrumentation-fs': {
+          enabled: false,
+        },
+        '@opentelemetry/instrumentation-aws-sdk': {
+          enabled: true,
+        },
+        '@opentelemetry/instrumentation-pg': {
+          enabled: true,
+          requireParentSpan: true,
+        },
+        '@opentelemetry/instrumentation-fastify': {
+          enabled: true,
+          requestHook: (span, req) => {
+            span.setAttribute('http.method', req.request.method)
+            span.setAttribute('http.route', req.request.routerPath)
+            span.setAttribute('tenant.ref', req.request.tenantId)
+            span.setAttribute('http.operation', req.request.operation)
+            span.setAttribute('trace.mode', req.request.tracingMode)
+          },
+        },
+        '@opentelemetry/instrumentation-knex': {
+          enabled: true,
+        },
+      }),
+    ],
+  })
+
   // Initialize the OpenTelemetry Node SDK
   sdk.start()
 

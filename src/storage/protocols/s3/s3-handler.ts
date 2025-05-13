@@ -618,6 +618,7 @@ export class S3ProtocolHandler {
       return {
         headers: {
           etag: uploadPart.ETag || '',
+          'Access-Control-Expose-Headers': 'etag',
         },
       }
     } catch (e) {

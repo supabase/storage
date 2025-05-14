@@ -12,6 +12,8 @@ services:
         condition: service_healthy
       multitenant_db:
         condition: service_healthy
+      supavisor:
+          condition: service_started
       minio_setup:
           condition: service_completed_successfully
     environment:
@@ -59,6 +61,19 @@ services:
   multitenant_db:
     extends:
       service: multitenant_db
+      file: ./.docker/docker-compose-infra.yml
+
+  supavisor:
+    extends:
+      service: supavisor
+      file: ./.docker/docker-compose-infra.yml
+
+  supavisor_setup:
+    depends_on:
+      supavisor:
+        condition: service_healthy
+    extends:
+      service: supavisor_setup
       file: ./.docker/docker-compose-infra.yml
 
   minio:

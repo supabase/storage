@@ -10,10 +10,13 @@ import {
   getTenantConfig,
 } from '@internal/database/tenant'
 import { signJWT } from '@internal/auth'
+import { DBMigration } from '@internal/database/migrations'
 
 dotenv.config({ path: '.env.test' })
 
 const serviceKeyPayload = { abc: 123 }
+
+const migrationVersion = Object.entries(DBMigration).sort(([_, a], [__, b]) => b - a)[0][0]
 
 const payload = {
   anonKey: 'a',
@@ -26,7 +29,7 @@ const payload = {
   serviceKey: 'd',
   jwks: { keys: [] },
   migrationStatus: 'COMPLETED',
-  migrationVersion: 'optimise-existing-functions',
+  migrationVersion,
   tracingMode: 'basic',
   features: {
     imageTransformation: {
@@ -54,7 +57,7 @@ const payload2 = {
   serviceKey: 'h',
   jwks: null,
   migrationStatus: 'COMPLETED',
-  migrationVersion: 'optimise-existing-functions',
+  migrationVersion,
   tracingMode: 'basic',
   features: {
     imageTransformation: {

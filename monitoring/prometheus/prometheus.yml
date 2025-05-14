@@ -28,17 +28,6 @@ scrape_configs:
           - postgres_exporter:9187
     metrics_path: /metrics
 
-  - job_name: supavisor
-    honor_timestamps: true
-    scrape_interval: 5s
-    scrape_timeout: 5s
-    metrics_path: /metrics
-    scheme: http
-    bearer_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiY3VzdG9tcm9sZSIsInN1YiI6IjRkZGZjNzFlLTE0NTgtNDM1NS1hNTMyLTg2MzAyY2ExMjFkNyIsImlhdCI6MTcwNjYzMjc0OSwiZXhwIjoxNzM4MTkwMzQ5fQ.uj5kj-cu84NWWKYkzyhwTxeFLm0vhCFHbwtJ9oalSCY"
-    static_configs:
-      - targets:
-          - supavisor:4000
-
   - job_name: pg_bouncer_exporter
     honor_timestamps: true
     scrape_interval: 5s

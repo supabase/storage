@@ -99,3 +99,8 @@ services:
 #    extends:
 #      service: postgres_exporter
 #      file: ./.docker/docker-compose-monitoring.yml
+
+
+configs:
+  init.sql:
+    content: "CREATE SCHEMA IF NOT EXISTS _supavisor;"

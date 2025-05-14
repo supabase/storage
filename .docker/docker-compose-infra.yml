@@ -105,3 +105,9 @@ services:
 #    extends:
 #      service: jaeger
 #      file: ./.docker/docker-compose-monitoring.yml
+
+
+configs:
+  init.sql:
+    content: |
+      CREATE SCHEMA IF NOT EXISTS _supavisor;

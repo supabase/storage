@@ -1,9 +1,12 @@
 module.exports = {
   preset: 'ts-jest',
-  testSequencer: './jest.sequencer.js',
+  testSequencer: './jest.sequencer.cjs',
   transform: {
+    '^.+/node_modules/jose/.+\\.[jt]s$': 'babel-jest',
+    '^.+\\.mjs$': 'babel-jest',
     '^.+\\.(t|j)sx?$': 'ts-jest',
   },
+  transformIgnorePatterns: ['node_modules/(?!(jose)/)'],
   moduleNameMapper: {
     '^@storage/(.*)$': '<rootDir>/src/storage/$1',
     '^@internal/(.*)$': '<rootDir>/src/internal/$1',

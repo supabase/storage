@@ -5,6 +5,7 @@ import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import {
   areMigrationsUpToDate,
+  DBMigration,
   runMigrationsOnTenant,
   updateTenantMigrationsState,
 } from '@internal/database/migrations'
@@ -12,23 +13,27 @@ import { ErrorCode, StorageBackendError } from '@internal/errors'
 
 interface RunMigrationsPayload extends BasePayload {
   tenantId: string
+  upToMigration?: keyof typeof DBMigration
 }
 
 export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
   static queueName = 'tenants-migrations'
+  static allowSync = false
 
   static getWorkerOptions(): WorkOptions {
     return {
       teamSize: 200,
       teamConcurrency: 10,
       includeMetadata: true,
+      enforceSingletonQueueActiveLimit: true,
     }
   }
 
   static getQueueOptions(payload: RunMigrationsPayload): SendOptions {
     return {
-      expireInHours: 2,
-      singletonKey: payload.tenantId,
+      expireInHours: 48,
+      singletonKey: `migrations_${payload.tenantId}`,
+      singletonHours: 1,
       useSingletonQueue: true,
       retryLimit: 3,
       retryDelay: 5,
@@ -36,7 +41,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
     }
   }
 
-  static async handle(job: JobWithMetadata<BasePayload>) {
+  static async handle(job: JobWithMetadata<RunMigrationsPayload>) {
     const tenantId = job.data.tenant.ref
     const tenant = await getTenantConfig(tenantId)
 
@@ -51,8 +56,16 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
         type: 'migrations',
         project: tenantId,
       })
-      await runMigrationsOnTenant(tenant.databaseUrl, tenantId, false)
-      await updateTenantMigrationsState(tenantId)
+      await runMigrationsOnTenant({
+        databaseUrl: tenant.databaseUrl,
+        tenantId,
+        waitForLock: false,
+        upToMigration: job.data.upToMigration,
+      })
+      await updateTenantMigrationsState(tenantId, {
+        migration: job.data.upToMigration,
+        state: TenantMigrationStatus.COMPLETED,
+      })
 
       logSchema.info(logger, `[Migrations] completed for tenant ${tenantId}`, {
         type: 'migrations',

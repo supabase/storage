@@ -25,7 +25,7 @@ declare module 'fastify' {
   }
 }
 
-const { dbMigrationStrategy, isMultitenant } = getConfig()
+const { dbMigrationStrategy, isMultitenant, dbMigrationFreezeAt } = getConfig()
 
 export const db = fastifyPlugin(
   async function db(fastify) {
@@ -171,7 +171,7 @@ export const migrations = fastifyPlugin(
     })
 
     if (dbMigrationStrategy === MultitenantMigrationStrategy.ON_REQUEST) {
-      const migrationsMutex = createMutexByKey()
+      const migrationsMutex = createMutexByKey<void>()
 
       fastify.addHook('preHandler', async (request) => {
         // migrations are handled via async migrations
@@ -193,7 +193,11 @@ export const migrations = fastifyPlugin(
             return
           }
 
-          await runMigrationsOnTenant(tenant.databaseUrl, request.tenantId)
+          await runMigrationsOnTenant({
+            databaseUrl: tenant.databaseUrl,
+            tenantId: request.tenantId,
+            upToMigration: dbMigrationFreezeAt,
+          })
           await updateTenantMigrationsState(request.tenantId)
           tenant.syncMigrationsDone = true
         })

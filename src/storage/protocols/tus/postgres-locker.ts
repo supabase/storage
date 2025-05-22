@@ -75,9 +75,7 @@ export class PgLock implements Lock {
         .catch(reject)
     })
 
-    this.notifier.onRelease(this.id, () => {
-      cancelReq()
-    })
+    this.notifier.onRelease(this.id, () => cancelReq())
   }
 
   async unlock(): Promise<void> {

@@ -388,11 +388,14 @@ export function isStorageError(errorType: ErrorCode, error: any): error is Stora
 
 export function normalizeRawError(error: any) {
   if (error instanceof Error) {
+    const statusCode =
+      error instanceof StorageBackendError && error.httpStatusCode ? error.httpStatusCode : 0
     return {
       raw: JSON.stringify(error),
       name: error.name,
       message: error.message,
       stack: error.stack,
+      statusCode,
     }
   }
 

@@ -2,9 +2,12 @@
 import dotenv from 'dotenv'
 import app from '../app'
 import { S3Backend } from '../storage/backend'
+import { FastifyInstance } from 'fastify'
 
 dotenv.config({ path: '.env.test' })
 const anonKey = process.env.ANON_KEY || ''
+
+let appInstance: FastifyInstance
 
 beforeAll(() => {
   jest.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {
@@ -30,6 +33,11 @@ beforeAll(() => {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  appInstance = app()
+})
+
+afterEach(async () => {
+  await appInstance.close()
 })
 
 /*
@@ -39,7 +47,7 @@ beforeEach(() => {
 describe('testing GET bucket', () => {
   test('user is able to get bucket details', async () => {
     const bucketId = 'bucket2'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: `/bucket/${bucketId}`,
       headers: {
@@ -59,7 +67,7 @@ describe('testing GET bucket', () => {
 
   test('checking RLS: anon user is not able to get bucket details', async () => {
     const bucketId = 'bucket2'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: `/bucket/${bucketId}`,
       headers: {
@@ -70,7 +78,7 @@ describe('testing GET bucket', () => {
   })
 
   test('user is not able to get bucket details without Auth header', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/bucket/bucket2',
     })
@@ -78,7 +86,7 @@ describe('testing GET bucket', () => {
   })
 
   test('return 404 when reading a non existent bucket', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: '/object/notfound',
       headers: {
@@ -94,7 +102,7 @@ describe('testing GET bucket', () => {
  */
 describe('testing GET all buckets', () => {
   test('user is able to get all buckets', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: `/bucket`,
       headers: {
@@ -114,7 +122,7 @@ describe('testing GET all buckets', () => {
   })
 
   test('checking RLS: anon user is not able to get all buckets', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: `/bucket`,
       headers: {
@@ -127,7 +135,7 @@ describe('testing GET all buckets', () => {
   })
 
   test('user is not able to all buckets details without Auth header', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'GET',
       url: `/bucket`,
     })
@@ -139,7 +147,7 @@ describe('testing GET all buckets', () => {
  */
 describe('testing POST bucket', () => {
   test('user is able to create a bucket', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket`,
       headers: {
@@ -155,7 +163,7 @@ describe('testing POST bucket', () => {
   })
 
   test('user is not able to create a bucket with a /', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket`,
       headers: {
@@ -174,7 +182,7 @@ describe('testing POST bucket', () => {
   })
 
   test('checking RLS: anon user is not able to create a bucket', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket`,
       headers: {
@@ -188,7 +196,7 @@ describe('testing POST bucket', () => {
   })
 
   test('user is not able to create a bucket without Auth header', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket`,
       payload: {
@@ -199,7 +207,7 @@ describe('testing POST bucket', () => {
   })
 
   test('user is not able to create a bucket with the same name', async () => {
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket`,
       headers: {
@@ -207,6 +215,21 @@ describe('testing POST bucket', () => {
       },
       payload: {
         name: 'bucket2',
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('user is not able to create a bucket with a name longer than 100 characters', async () => {
+    const longBucketName = 'a'.repeat(101)
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        name: longBucketName,
       },
     })
     expect(response.statusCode).toBe(400)
@@ -219,7 +242,7 @@ describe('testing POST bucket', () => {
 describe('testing public bucket functionality', () => {
   test('user is able to make a bucket public and private', async () => {
     const bucketId = 'public-bucket'
-    const makePublicResponse = await app().inject({
+    const makePublicResponse = await appInstance.inject({
       method: 'PUT',
       url: `/bucket/${bucketId}`,
       headers: {
@@ -233,7 +256,7 @@ describe('testing public bucket functionality', () => {
     const makePublicJSON = JSON.parse(makePublicResponse.body)
     expect(makePublicJSON.message).toBe('Successfully updated')
 
-    const publicResponse = await app().inject({
+    const publicResponse = await appInstance.inject({
       method: 'GET',
       url: `/object/public/public-bucket/favicon.ico`,
     })
@@ -247,7 +270,7 @@ describe('testing public bucket functionality', () => {
         httpStatusCode: 304,
       },
     })
-    const notModifiedResponse = await app().inject({
+    const notModifiedResponse = await appInstance.inject({
       method: 'GET',
       url: `/object/public/public-bucket/favicon.ico`,
       headers: {
@@ -261,7 +284,7 @@ describe('testing public bucket functionality', () => {
       ifNoneMatch: 'abc',
     })
 
-    const makePrivateResponse = await app().inject({
+    const makePrivateResponse = await appInstance.inject({
       method: 'PUT',
       url: `/bucket/${bucketId}`,
       headers: {
@@ -275,7 +298,7 @@ describe('testing public bucket functionality', () => {
     const makePrivateJSON = JSON.parse(makePrivateResponse.body)
     expect(makePrivateJSON.message).toBe('Successfully updated')
 
-    const privateResponse = await app().inject({
+    const privateResponse = await appInstance.inject({
       method: 'GET',
       url: `/object/public/public-bucket/favicon.ico`,
     })
@@ -284,7 +307,7 @@ describe('testing public bucket functionality', () => {
 
   test('checking RLS: anon user is not able to update a bucket', async () => {
     const bucketId = 'public-bucket'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: `/bucket/${bucketId}`,
       headers: {
@@ -299,7 +322,7 @@ describe('testing public bucket functionality', () => {
 
   test('user is not able to update a bucket without a auth header', async () => {
     const bucketId = 'public-bucket'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: `/bucket/${bucketId}`,
       payload: {
@@ -311,7 +334,7 @@ describe('testing public bucket functionality', () => {
 
   test('user is not able to update a non-existent bucket', async () => {
     const bucketId = 'notfound'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'PUT',
       url: `/bucket/${bucketId}`,
       payload: {
@@ -325,7 +348,7 @@ describe('testing public bucket functionality', () => {
 describe('testing DELETE bucket', () => {
   test('user is able to delete a bucket', async () => {
     const bucketId = 'bucket4'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: `/bucket/${bucketId}`,
       headers: {
@@ -339,7 +362,7 @@ describe('testing DELETE bucket', () => {
 
   test('checking RLS: anon user is not able to delete a bucket', async () => {
     const bucketId = 'bucket5'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: `/bucket/${bucketId}`,
       headers: {
@@ -351,7 +374,7 @@ describe('testing DELETE bucket', () => {
 
   test('user is not able to delete bucket without Auth header', async () => {
     const bucketId = 'bucket5'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: `/bucket/${bucketId}`,
     })
@@ -360,7 +383,7 @@ describe('testing DELETE bucket', () => {
 
   test('user is not able to delete bucket a non empty bucket', async () => {
     const bucketId = 'bucket2'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: `/bucket/${bucketId}`,
       headers: {
@@ -372,7 +395,7 @@ describe('testing DELETE bucket', () => {
 
   test('user is not able to delete a non-existent bucket', async () => {
     const bucketId = 'notfound'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'DELETE',
       url: `/bucket/${bucketId}`,
       headers: {
@@ -386,7 +409,7 @@ describe('testing DELETE bucket', () => {
 describe('testing EMPTY bucket', () => {
   test('user is able to empty a bucket', async () => {
     const bucketId = 'bucket3'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
       headers: {
@@ -400,7 +423,7 @@ describe('testing EMPTY bucket', () => {
 
   test('user is able to empty a bucket with a service key', async () => {
     const bucketId = 'bucket3'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
       headers: {
@@ -414,7 +437,7 @@ describe('testing EMPTY bucket', () => {
 
   test('user is able to delete a bucket', async () => {
     const bucketId = 'bucket3'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
       headers: {
@@ -426,7 +449,7 @@ describe('testing EMPTY bucket', () => {
 
   test('user is not able to empty a bucket without Auth Header', async () => {
     const bucketId = 'bucket3'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
     })
@@ -435,7 +458,7 @@ describe('testing EMPTY bucket', () => {
 
   test('user is not able to empty a non existent bucket', async () => {
     const bucketId = 'notfound'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
       headers: {
@@ -447,7 +470,7 @@ describe('testing EMPTY bucket', () => {
 
   test('user is able to empty an already empty bucket', async () => {
     const bucketId = 'bucket5'
-    const response = await app().inject({
+    const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
       headers: {

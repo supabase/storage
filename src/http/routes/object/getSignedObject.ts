@@ -61,10 +61,10 @@ export default async function routes(fastify: FastifyInstance) {
       const { download } = request.query
 
       let payload: SignedToken
-      const { secret: jwtSecret } = await getJwtSecret(request.tenantId)
+      const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId)
 
       try {
-        payload = (await verifyJWT(token, jwtSecret)) as SignedToken
+        payload = (await verifyJWT(token, jwtSecret, jwks)) as SignedToken
       } catch (e) {
         const err = e as Error
         throw ERRORS.InvalidJWT(err)
@@ -78,7 +78,6 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const s3Key = `${request.tenantId}/${url}`
-      request.log.info(s3Key)
 
       const [bucketName, ...objParts] = url.split('/')
       const obj = await request.storage

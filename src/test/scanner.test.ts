@@ -57,7 +57,7 @@ describe('ObjectScanner', () => {
       signal: new AbortController().signal,
     })
 
-    const deleted = { s3OrphanedKeys: [] as any[], dbOrphanedKeys: [] as any[] }
+    const deleted = { s3OrphanedKeys: [] as object[], dbOrphanedKeys: [] as object[] }
     for await (const result of orphaned) {
       if (result.type === 'dbOrphans') {
         deleted.dbOrphanedKeys = [...deleted.dbOrphanedKeys, ...result.value]
@@ -116,7 +116,7 @@ describe('ObjectScanner', () => {
 
     const orphaned = storage.scanner.deleteOrphans(bucket.id, options)
 
-    const deleted = { dbOrphans: [] as any[], s3Orphans: [] as any[] }
+    const deleted = { dbOrphans: [] as object[], s3Orphans: [] as object[] }
     for await (const result of orphaned) {
       if (result.type === 'dbOrphans') {
         deleted.dbOrphans = [...deleted.dbOrphans, ...result.value]

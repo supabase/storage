@@ -154,13 +154,7 @@ export class S3Backend implements StorageBackendAdapter {
       },
     })
 
-    signal?.addEventListener(
-      'abort',
-      () => {
-        upload.abort()
-      },
-      { once: true }
-    )
+    signal?.addEventListener('abort', () => upload.abort(), { once: true })
 
     if (tracingFeatures?.upload) {
       upload.on('httpUploadProgress', (progress: Progress) => {
@@ -246,7 +240,7 @@ export class S3Backend implements StorageBackendAdapter {
         eTag: data.CopyObjectResult?.ETag || '',
         lastModified: data.CopyObjectResult?.LastModified,
       }
-    } catch (e: any) {
+    } catch (e) {
       throw StorageBackendError.fromError(e)
     }
   }
@@ -294,7 +288,7 @@ export class S3Backend implements StorageBackendAdapter {
         keys,
         nextToken: data.NextContinuationToken,
       }
-    } catch (e: any) {
+    } catch (e) {
       throw StorageBackendError.fromError(e)
     }
   }
@@ -356,7 +350,7 @@ export class S3Backend implements StorageBackendAdapter {
         httpStatusCode: data.$metadata.httpStatusCode || 200,
         size: data.ContentLength || 0,
       }
-    } catch (e: any) {
+    } catch (e) {
       throw StorageBackendError.fromError(e)
     }
   }

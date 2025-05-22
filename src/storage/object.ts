@@ -550,7 +550,7 @@ export class ObjectStorage {
     const delimiter = options?.delimiter
 
     const cursor = options?.cursor ? decodeContinuationToken(options?.cursor) : undefined
-    const searchResult = await this.db.listObjectsV2(this.bucketId, {
+    let searchResult = await this.db.listObjectsV2(this.bucketId, {
       prefix: options?.prefix,
       delimiter: options?.delimiter,
       maxKeys: limit + 1,
@@ -558,7 +558,6 @@ export class ObjectStorage {
       startAfter: cursor || options?.startAfter,
     })
 
-    let results = searchResult
     let prevPrefix = ''
 
     if (delimiter) {
@@ -575,32 +574,36 @@ export class ObjectStorage {
           prevPrefix = currPrefix
           delimitedResults.push({
             id: null,
-            name: options?.encodingType === 'url' ? encodeURIComponent(currPrefix) : currPrefix,
+            name: currPrefix,
             bucket_id: object.bucket_id,
           })
           continue
         }
 
-        delimitedResults.push({
-          ...object,
-          name: options?.encodingType === 'url' ? encodeURIComponent(object.name) : object.name,
-        })
+        delimitedResults.push(object)
       }
-      results = delimitedResults
+      searchResult = delimitedResults
     }
 
     let isTruncated = false
 
-    if (results.length > limit) {
-      results = results.slice(0, limit)
+    if (searchResult.length > limit) {
+      searchResult = searchResult.slice(0, limit)
       isTruncated = true
     }
 
-    const folders = results.filter((obj) => obj.id === null)
-    const objects = results.filter((obj) => obj.id !== null)
+    const folders: Obj[] = []
+    const objects: Obj[] = []
+    searchResult.forEach((obj) => {
+      const target = obj.id === null ? folders : objects
+      target.push({
+        ...obj,
+        name: options?.encodingType === 'url' ? encodeURIComponent(obj.name) : obj.name,
+      })
+    })
 
     const nextContinuationToken = isTruncated
-      ? encodeContinuationToken(results[results.length - 1].name)
+      ? encodeContinuationToken(searchResult[searchResult.length - 1].name)
       : undefined
 
     return {
@@ -639,8 +642,8 @@ export class ObjectStorage {
 
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(3).join('/'))
-    const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
-    const token = await signJWT({ url: urlToSign, ...metadata }, jwtSecret, expiresIn)
+    const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
+    const token = await signJWT({ url: urlToSign, ...metadata }, urlSigningKey, expiresIn)
 
     let urlPath = 'object'
 
@@ -676,7 +679,7 @@ export class ObjectStorage {
 
     const nameSet = new Set(results.map(({ name }) => name))
 
-    const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
+    const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
 
     return Promise.all(
       paths.map(async (path) => {
@@ -684,7 +687,7 @@ export class ObjectStorage {
         let signedURL = null
         if (nameSet.has(path)) {
           const urlToSign = `${this.bucketId}/${path}`
-          const token = await signJWT({ url: urlToSign }, jwtSecret, expiresIn)
+          const token = await signJWT({ url: urlToSign }, urlSigningKey, expiresIn)
           signedURL = `/object/sign/${urlToSign}?token=${token}`
         } else {
           error = 'Either the object does not exist or you do not have access to it'
@@ -721,10 +724,10 @@ export class ObjectStorage {
       isUpsert: options?.upsert ?? false,
     })
 
-    const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
+    const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
     const token = await signJWT(
       { owner, url, upsert: Boolean(options?.upsert) },
-      jwtSecret,
+      urlSigningKey,
       expiresIn
     )
 
@@ -737,11 +740,11 @@ export class ObjectStorage {
    * @param objectName
    */
   async verifyObjectSignature(token: string, objectName: string) {
-    const { secret: jwtSecret } = await getJwtSecret(this.db.tenantId)
+    const { secret: jwtSecret, jwks } = await getJwtSecret(this.db.tenantId)
 
     let payload: SignedUploadToken
     try {
-      payload = (await verifyJWT(token, jwtSecret)) as SignedUploadToken
+      payload = (await verifyJWT(token, jwtSecret, jwks)) as SignedUploadToken
     } catch (e) {
       const err = e as Error
       throw ERRORS.InvalidJWT(err)

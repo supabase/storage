@@ -1,15 +1,16 @@
 import fastifyPlugin from 'fastify-plugin'
-import { JwtPayload } from 'jsonwebtoken'
+import { JWTPayload } from 'jose'
 
-import { verifyJWT } from '@internal/auth'
+import { verifyJWTWithCache, verifyJWT } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
 import { ERRORS } from '@internal/errors'
+import { getConfig } from '../../config'
 
 declare module 'fastify' {
   interface FastifyRequest {
     isAuthenticated: boolean
     jwt: string
-    jwtPayload?: JwtPayload & { role?: string }
+    jwtPayload?: JWTPayload & { role?: string }
     owner?: string
   }
 
@@ -18,6 +19,8 @@ declare module 'fastify' {
   }
 }
 
+const { jwtCachingEnabled } = getConfig()
+
 const BEARER = /^Bearer\s+/i
 
 export const jwt = fastifyPlugin(
@@ -25,7 +28,7 @@ export const jwt = fastifyPlugin(
     fastify.decorateRequest('jwt', '')
     fastify.decorateRequest('jwtPayload', undefined)
 
-    fastify.addHook('preHandler', async (request, reply) => {
+    fastify.addHook('preHandler', async (request) => {
       request.jwt = (request.headers.authorization || '').replace(BEARER, '')
 
       if (!request.jwt && request.routeOptions.config.allowInvalidJwt) {
@@ -37,17 +40,21 @@ export const jwt = fastifyPlugin(
       const { secret, jwks } = await getJwtSecret(request.tenantId)
 
       try {
-        const payload = await verifyJWT(request.jwt, secret, jwks || null)
+        const payload = await (jwtCachingEnabled
+          ? verifyJWTWithCache(request.jwt, secret, jwks || null)
+          : verifyJWT(request.jwt, secret, jwks || null))
+
         request.jwtPayload = payload
         request.owner = payload.sub
         request.isAuthenticated = true
-      } catch (err: any) {
+      } catch (e) {
         request.jwtPayload = { role: 'anon' }
         request.isAuthenticated = false
 
         if (request.routeOptions.config.allowInvalidJwt) {
           return
         }
+        const err = e as Error
         throw ERRORS.AccessDenied(err.message, err)
       }
     })

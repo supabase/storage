@@ -60,7 +60,7 @@ export const S3UploadPart = new client.Histogram({
 export const DbActivePool = new client.Gauge({
   name: 'storage_api_db_pool',
   help: 'Number of database pools created',
-  labelNames: ['region', 'is_external'],
+  labelNames: ['region'],
 })
 
 export const DbActiveConnection = new client.Gauge({

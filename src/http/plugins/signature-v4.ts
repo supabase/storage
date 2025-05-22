@@ -1,18 +1,20 @@
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
-import { getS3CredentialsByAccessKey, getTenantConfig } from '@internal/database'
+import { getJwtSecret, getTenantConfig, s3CredentialsManager } from '@internal/database'
 import { ClientSignature, SignatureV4 } from '@storage/protocols/s3'
 import { signJWT, verifyJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
 
 import { getConfig } from '../../config'
-import { MultipartFile } from '@fastify/multipart'
+import { MultipartFile, MultipartValue } from '@fastify/multipart'
+import {
+  ChunkSignatureV4Parser,
+  V4StreamingAlgorithm,
+} from '@storage/protocols/s3/signature-v4-stream'
 
 const {
-  anonKey,
-  jwtSecret,
-  jwtJWKS,
-  serviceKey,
+  anonKeyAsync,
+  serviceKeyAsync,
   storageS3Region,
   isMultitenant,
   requestAllowXForwardedPrefix,
@@ -29,6 +31,7 @@ type AWSRequest = FastifyRequest<{ Querystring: { 'X-Amz-Credential'?: string } 
 declare module 'fastify' {
   interface FastifyRequest {
     multiPartFileStream?: MultipartFile
+    streamingSignatureV4?: ChunkSignatureV4Parser
   }
 }
 
@@ -75,22 +78,22 @@ export const signatureV4 = fastifyPlugin(
         )
       }
 
-      const jwtSecrets = {
-        jwtSecret: jwtSecret,
-        jwks: jwtJWKS,
-      }
-
-      if (isMultitenant) {
-        const tenant = await getTenantConfig(request.tenantId)
-        jwtSecrets.jwtSecret = tenant.jwtSecret
-        jwtSecrets.jwks = tenant.jwks || undefined
-      }
+      const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId)
 
       if (token) {
-        const payload = await verifyJWT(token, jwtSecrets.jwtSecret, jwtSecrets.jwks)
+        const payload = await verifyJWT(token, jwtSecret, jwks)
         request.jwt = token
         request.jwtPayload = payload
         request.owner = payload.sub
+
+        if (SignatureV4.isChunkedUpload(request.headers)) {
+          request.streamingSignatureV4 = createStreamingSignatureV4Parser({
+            signatureV4,
+            streamAlgorithm: request.headers['x-amz-content-sha256'] as V4StreamingAlgorithm,
+            clientSignature,
+            trailers: request.headers['x-amz-trailer'] as string,
+          })
+        }
         return
       }
 
@@ -98,11 +101,20 @@ export const signatureV4 = fastifyPlugin(
         throw ERRORS.AccessDenied('Missing claims')
       }
 
-      const jwt = await signJWT(claims, jwtSecrets.jwtSecret, '5m')
+      const jwt = await signJWT(claims, jwtSecret, '5m')
 
       request.jwt = jwt
       request.jwtPayload = claims
       request.owner = claims.sub
+
+      if (SignatureV4.isChunkedUpload(request.headers)) {
+        request.streamingSignatureV4 = createStreamingSignatureV4Parser({
+          signatureV4,
+          streamAlgorithm: request.headers['x-amz-content-sha256'] as V4StreamingAlgorithm,
+          clientSignature,
+          trailers: request.headers['x-amz-trailer'] as string,
+        })
+      }
     })
   },
   { name: 'auth-signature-v4' }
@@ -130,8 +142,9 @@ async function extractSignature(req: AWSRequest) {
     const fields = data?.fields
     if (fields) {
       for (const key in fields) {
-        if (fields.hasOwnProperty(key) && (fields[key] as any).fieldname !== 'file') {
-          formData.append(key, (fields[key] as any).value)
+        const field = fields[key] as MultipartValue<string | Blob>
+        if (fields.hasOwnProperty(key) && field.fieldname !== 'file') {
+          formData.append(key, field.value)
         }
       }
     }
@@ -148,7 +161,9 @@ async function createServerSignature(tenantId: string, clientSignature: ClientSi
   const awsService = 's3'
 
   if (clientSignature?.sessionToken) {
-    const tenantAnonKey = isMultitenant ? (await getTenantConfig(tenantId)).anonKey : anonKey
+    const tenantAnonKey = isMultitenant
+      ? (await getTenantConfig(tenantId)).anonKey
+      : await anonKeyAsync
 
     if (!tenantAnonKey) {
       throw ERRORS.AccessDenied('Missing tenant anon key')
@@ -170,7 +185,7 @@ async function createServerSignature(tenantId: string, clientSignature: ClientSi
   }
 
   if (isMultitenant) {
-    const credential = await getS3CredentialsByAccessKey(
+    const credential = await s3CredentialsManager.getS3CredentialsByAccessKey(
       tenantId,
       clientSignature.credentials.accessKey
     )
@@ -208,5 +223,45 @@ async function createServerSignature(tenantId: string, clientSignature: ClientSi
     },
   })
 
-  return { signature, claims: undefined, token: serviceKey }
+  return { signature, claims: undefined, token: await serviceKeyAsync }
+}
+
+interface CreateSignatureV3ParserOpts {
+  signatureV4: SignatureV4
+  streamAlgorithm: string
+  clientSignature: ClientSignature
+  trailers: string
+}
+
+function createStreamingSignatureV4Parser(opts: CreateSignatureV3ParserOpts) {
+  const algorithm = opts.streamAlgorithm as V4StreamingAlgorithm
+  const trailers = opts.trailers
+
+  const chunkedSignatureV4 = new ChunkSignatureV4Parser({
+    maxChunkSize: 8 * 1024 * 1024,
+    maxHeaderLength: 256,
+    streamingAlgorithm: algorithm,
+    trailerHeaderNames: trailers.split(','),
+  })
+
+  chunkedSignatureV4.on(
+    'signatureReadyForVerification',
+    (signature: string, _: number, hash: string, previousSign) => {
+      const isValid = opts.signatureV4.validateChunkSignature(
+        algorithm,
+        opts.clientSignature,
+        hash,
+        signature,
+        previousSign || opts.clientSignature.signature
+      )
+
+      if (!isValid) {
+        throw ERRORS.SignatureDoesNotMatch(
+          'The request signature we calculated does not match the signature you provided. Check your key and signing method.'
+        )
+      }
+    }
+  )
+
+  return chunkedSignatureV4
 }

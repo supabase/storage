@@ -2,6 +2,13 @@ import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { routes, plugins, setErrorHandler } from './http'
 import { Registry } from 'prom-client'
 
+declare module 'fastify-metrics' {
+  interface IFastifyMetrics {
+    getCustomDefaultMetricsRegistries(): Registry[]
+    getCustomRouteMetricsRegistries(): Registry[]
+  }
+}
+
 const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): FastifyInstance => {
   const app = fastify(opts)
   app.register(plugins.signals)
@@ -9,6 +16,7 @@ const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): 
   app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health'] }))
   app.register(routes.tenants, { prefix: 'tenants' })
   app.register(routes.objects, { prefix: 'tenants' })
+  app.register(routes.jwks, { prefix: 'tenants' })
   app.register(routes.migrations, { prefix: 'migrations' })
   app.register(routes.s3Credentials, { prefix: 's3' })
 
@@ -18,8 +26,8 @@ const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): 
     app.get('/metrics', async (req, reply) => {
       if (registriesToMerge.length === 0) {
         const globalRegistry = appInstance.metrics.client.register
-        const defaultRegistries = (appInstance.metrics as any).getCustomDefaultMetricsRegistries()
-        const routeRegistries = (appInstance.metrics as any).getCustomRouteMetricsRegistries()
+        const defaultRegistries = appInstance.metrics.getCustomDefaultMetricsRegistries()
+        const routeRegistries = appInstance.metrics.getCustomRouteMetricsRegistries()
 
         registriesToMerge = Array.from(
           new Set([globalRegistry, ...defaultRegistries, ...routeRegistries])

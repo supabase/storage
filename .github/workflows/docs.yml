@@ -6,27 +6,31 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pages: write
+
 jobs:
   test:
     name: Test / OS ${{ matrix.platform }} / Node ${{ matrix.node }}
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-22.04]
+        platform: [ubuntu-24.04]
         node: ['20']
 
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/cache@v1
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
         with:
           path: ~/.npm
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
       - name: Set up Node
-        uses: actions/setup-node@v1
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
 

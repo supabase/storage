@@ -2,7 +2,7 @@ import { Persistence } from './persistence'
 
 export abstract class Seeder {
   protected persistence: Persistence
-  protected records: Map<string, any[]>
+  protected records: Map<string, object[]>
 
   constructor(persistence: Persistence) {
     this.persistence = persistence
@@ -13,7 +13,7 @@ export abstract class Seeder {
    * Retrieves all collected records.
    * @returns A map of table names to their respective records.
    */
-  getAllRecords(): Map<string, any[]> {
+  getAllRecords(): Map<string, object[]> {
     return this.records
   }
 
@@ -52,7 +52,7 @@ export abstract class Seeder {
    * @param table - The table name.
    * @param records - The records to add.
    */
-  protected addRecords<T>(table: string, records: T[]): void {
+  protected addRecords<T extends object>(table: string, records: T[]): void {
     if (!this.records.has(table)) {
       this.records.set(table, [])
     }
@@ -65,7 +65,7 @@ export abstract class Seeder {
    * @param bindings - Optional bindings for parameterized queries.
    * @returns The result of the query.
    */
-  protected async rawQuery(query: string, bindings?: any[]): Promise<any> {
+  protected async rawQuery(query: string, bindings?: object[]): Promise<object> {
     return this.persistence.rawQuery(query, bindings)
   }
 

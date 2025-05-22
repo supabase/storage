@@ -4,6 +4,9 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 env:
   service_to_update: 'storage-api'
   cli_repo_owner: supabase
@@ -24,7 +27,7 @@ jobs:
           git config --global user.email '${{ env.github_user_email }}'
 
       - name: Checkout remote repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           repository: '${{ env.cli_repo_owner }}/${{ env.cli_repo }}'
           token: ${{ secrets.CLI_PR_USER_ACCESS_TOKEN }}

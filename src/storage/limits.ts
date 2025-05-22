@@ -58,10 +58,14 @@ export function isValidKey(key: string): boolean {
  */
 export function isValidBucketName(bucketName: string): boolean {
   // only allow s3 safe characters and characters which require special handling for now
+  // the slash restriction come from bucket naming rules
+  // and the rest of the validation rules are based on S3 object key validation.
   // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
-  // excluding / for bucketName
+  // https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
   return (
-    bucketName.length > 0 && /^(\w|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(bucketName)
+    bucketName.length > 0 &&
+    bucketName.length < 101 &&
+    /^(\w|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(bucketName)
   )
 }
 

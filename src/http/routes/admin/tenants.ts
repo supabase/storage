@@ -7,6 +7,7 @@ import {
   TenantMigrationStatus,
   multitenantKnex,
   getTenantConfig,
+  jwksManager,
 } from '@internal/database'
 import { dbSuperUser, storage } from '../../plugins'
 import {
@@ -16,6 +17,7 @@ import {
   resetMigration,
   runMigrationsOnTenant,
 } from '@internal/database/migrations'
+import { getConfig, JwksConfigKey } from '../../../config'
 
 const patchSchema = {
   body: {
@@ -24,10 +26,11 @@ const patchSchema = {
       anonKey: { type: 'string' },
       databaseUrl: { type: 'string' },
       databasePoolUrl: { type: 'string', nullable: true },
+      databasePoolMode: { type: 'string', nullable: true },
       maxConnections: { type: 'number' },
+      jwks: { type: 'object', nullable: true },
       fileSizeLimit: { type: 'number' },
       jwtSecret: { type: 'string' },
-      jwks: { type: 'object', nullable: true },
       serviceKey: { type: 'string' },
       tracingMode: { type: 'string' },
       disableEvents: { type: 'array', items: { type: 'string' }, nullable: true },
@@ -39,6 +42,12 @@ const patchSchema = {
             properties: {
               enabled: { type: 'boolean' },
               maxResolution: { type: 'number', nullable: true },
+            },
+          },
+          purgeCache: {
+            type: 'object',
+            properties: {
+              enabled: { type: 'boolean' },
             },
           },
           s3Protocol: {
@@ -80,17 +89,19 @@ interface tenantDBInterface {
   anon_key: string
   database_url: string
   database_pool_url?: string
+  database_pool_mode?: string
   max_connections?: number
   jwt_secret: string
-  jwks: {
-    keys?: any[]
-  } | null
+  jwks: { keys?: JwksConfigKey[] } | null
   service_key: string
   file_size_limit?: number
   feature_s3_protocol?: boolean
+  feature_purge_cache?: boolean
   feature_image_transformation?: boolean
   image_transformation_max_resolution?: number
 }
+
+const { dbMigrationFreezeAt } = getConfig()
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
@@ -103,11 +114,13 @@ export default async function routes(fastify: FastifyInstance) {
         anon_key,
         database_url,
         database_pool_url,
+        database_pool_mode,
         max_connections,
         file_size_limit,
         jwt_secret,
         jwks,
         service_key,
+        feature_purge_cache,
         feature_image_transformation,
         feature_s3_protocol,
         image_transformation_max_resolution,
@@ -120,6 +133,7 @@ export default async function routes(fastify: FastifyInstance) {
         anonKey: decrypt(anon_key),
         databaseUrl: decrypt(database_url),
         databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
+        databasePoolMode: database_pool_mode,
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
         jwtSecret: decrypt(jwt_secret),
@@ -132,6 +146,9 @@ export default async function routes(fastify: FastifyInstance) {
           imageTransformation: {
             enabled: feature_image_transformation,
             maxResolution: image_transformation_max_resolution,
+          },
+          purgeCache: {
+            enabled: feature_purge_cache,
           },
           s3Protocol: {
             enabled: feature_s3_protocol,
@@ -145,54 +162,59 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get<tenantRequestInterface>('/:tenantId', async (request, reply) => {
     const tenant = await multitenantKnex('tenants').first().where('id', request.params.tenantId)
     if (!tenant) {
-      reply.code(404).send()
-    } else {
-      const {
-        anon_key,
-        database_url,
-        database_pool_url,
-        max_connections,
-        file_size_limit,
-        jwt_secret,
-        jwks,
-        service_key,
-        feature_s3_protocol,
-        feature_image_transformation,
-        image_transformation_max_resolution,
-        migrations_version,
-        migrations_status,
-        tracing_mode,
-        disable_events,
-      } = tenant
+      return reply.code(404).send()
+    }
+    const {
+      anon_key,
+      database_url,
+      database_pool_url,
+      database_pool_mode,
+      max_connections,
+      file_size_limit,
+      jwt_secret,
+      jwks,
+      service_key,
+      feature_purge_cache,
+      feature_s3_protocol,
+      feature_image_transformation,
+      image_transformation_max_resolution,
+      migrations_version,
+      migrations_status,
+      tracing_mode,
+      disable_events,
+    } = tenant
 
-      return {
-        anonKey: decrypt(anon_key),
-        databaseUrl: decrypt(database_url),
-        databasePoolUrl:
-          typeof database_pool_url === null
-            ? null
-            : database_pool_url
-            ? decrypt(database_pool_url)
-            : undefined,
-        maxConnections: max_connections ? Number(max_connections) : undefined,
-        fileSizeLimit: Number(file_size_limit),
-        jwtSecret: decrypt(jwt_secret),
-        jwks,
-        serviceKey: decrypt(service_key),
-        features: {
-          imageTransformation: {
-            enabled: feature_image_transformation,
-            maxResolution: image_transformation_max_resolution,
-          },
-          s3Protocol: {
-            enabled: feature_s3_protocol,
-          },
+    return {
+      anonKey: decrypt(anon_key),
+      databaseUrl: decrypt(database_url),
+      databasePoolUrl:
+        typeof database_pool_url === null
+          ? null
+          : database_pool_url
+          ? decrypt(database_pool_url)
+          : undefined,
+      databasePoolMode: database_pool_mode,
+      maxConnections: max_connections ? Number(max_connections) : undefined,
+      fileSizeLimit: Number(file_size_limit),
+      jwtSecret: decrypt(jwt_secret),
+      jwks,
+      serviceKey: decrypt(service_key),
+      features: {
+        imageTransformation: {
+          enabled: feature_image_transformation,
+          maxResolution: image_transformation_max_resolution,
         },
-        migrationVersion: migrations_version,
-        migrationStatus: migrations_status,
-        tracingMode: tracing_mode,
-        disableEvents: disable_events,
-      }
+        purgeCache: {
+          enabled: feature_purge_cache,
+        },
+        s3Protocol: {
+          enabled: feature_s3_protocol,
+        },
+      },
+      migrationVersion: migrations_version,
+      migrationStatus: migrations_status,
+      tracingMode: tracing_mode,
+      disableEvents: disable_events,
     }
   })
 
@@ -201,6 +223,7 @@ export default async function routes(fastify: FastifyInstance) {
     const {
       anonKey,
       databaseUrl,
+      databasePoolMode,
       fileSizeLimit,
       jwtSecret,
       jwks,
@@ -211,32 +234,41 @@ export default async function routes(fastify: FastifyInstance) {
       tracingMode,
     } = request.body
 
-    await multitenantKnex('tenants').insert({
-      id: tenantId,
-      anon_key: encrypt(anonKey),
-      database_url: encrypt(databaseUrl),
-      database_pool_url: databasePoolUrl ? encrypt(databasePoolUrl) : undefined,
-      max_connections: maxConnections ? Number(maxConnections) : undefined,
-      file_size_limit: fileSizeLimit,
-      jwt_secret: encrypt(jwtSecret),
-      jwks,
-      service_key: encrypt(serviceKey),
-      feature_image_transformation: features?.imageTransformation?.enabled ?? false,
-      feature_s3_protocol: features?.s3Protocol?.enabled ?? true,
-      migrations_version: null,
-      migrations_status: null,
-      tracing_mode: tracingMode,
+    await multitenantKnex.transaction(async (trx) => {
+      await multitenantKnex('tenants').insert({
+        id: tenantId,
+        anon_key: encrypt(anonKey),
+        database_url: encrypt(databaseUrl),
+        database_pool_url: databasePoolUrl ? encrypt(databasePoolUrl) : undefined,
+        database_pool_mode: databasePoolMode,
+        max_connections: maxConnections ? Number(maxConnections) : undefined,
+        file_size_limit: fileSizeLimit,
+        jwt_secret: encrypt(jwtSecret),
+        jwks,
+        service_key: encrypt(serviceKey),
+        feature_image_transformation: features?.imageTransformation?.enabled ?? false,
+        feature_purge_cache: features?.purgeCache?.enabled ?? false,
+        feature_s3_protocol: features?.s3Protocol?.enabled ?? true,
+        migrations_version: null,
+        migrations_status: null,
+        tracing_mode: tracingMode,
+      })
+      await jwksManager.generateUrlSigningJwk(tenantId, trx)
     })
 
     try {
-      await runMigrationsOnTenant(databaseUrl, tenantId)
+      await runMigrationsOnTenant({
+        databaseUrl,
+        tenantId,
+        upToMigration: dbMigrationFreezeAt,
+      })
       await multitenantKnex('tenants')
         .where('id', tenantId)
         .update({
           migrations_version: await lastLocalMigrationName(),
           migrations_status: TenantMigrationStatus.COMPLETED,
         })
-    } catch (e) {
+    } catch {
       progressiveMigrations.addTenant(tenantId)
     }
 
@@ -256,6 +288,7 @@ export default async function routes(fastify: FastifyInstance) {
         serviceKey,
         features,
         databasePoolUrl,
+        databasePoolMode,
         maxConnections,
         tracingMode,
         disableEvents,
@@ -271,12 +304,14 @@ export default async function routes(fastify: FastifyInstance) {
             : databasePoolUrl === null
             ? null
             : undefined,
+          database_pool_mode: databasePoolMode,
           max_connections: maxConnections ? Number(maxConnections) : undefined,
           file_size_limit: fileSizeLimit,
           jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,
           jwks,
           service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
           feature_image_transformation: features?.imageTransformation?.enabled,
+          feature_purge_cache: features?.purgeCache?.enabled,
           feature_s3_protocol: features?.s3Protocol?.enabled,
           image_transformation_max_resolution:
             features?.imageTransformation?.maxResolution === null
@@ -289,7 +324,11 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (databaseUrl) {
         try {
-          await runMigrationsOnTenant(databaseUrl, tenantId)
+          await runMigrationsOnTenant({
+            databaseUrl,
+            tenantId,
+            upToMigration: dbMigrationFreezeAt,
+          })
           await multitenantKnex('tenants')
             .where('id', tenantId)
             .update({
@@ -318,6 +357,7 @@ export default async function routes(fastify: FastifyInstance) {
       serviceKey,
       features,
       databasePoolUrl,
+      databasePoolMode,
       maxConnections,
       tracingMode,
     } = request.body
@@ -342,6 +382,10 @@ export default async function routes(fastify: FastifyInstance) {
       tenantInfo.feature_image_transformation = features?.imageTransformation?.enabled
     }
 
+    if (typeof features?.purgeCache?.enabled !== 'undefined') {
+      tenantInfo.feature_purge_cache = features?.purgeCache?.enabled
+    }
+
     if (typeof features?.imageTransformation?.maxResolution !== 'undefined') {
       tenantInfo.image_transformation_max_resolution = features?.imageTransformation
         ?.image_transformation_max_resolution as number | undefined
@@ -359,21 +403,32 @@ export default async function routes(fastify: FastifyInstance) {
       tenantInfo.max_connections = Number(maxConnections)
     }
 
+    if (databasePoolMode) {
+      tenantInfo.database_pool_mode = databasePoolMode
+    }
+
     if (tracingMode) {
       tenantInfo.tracing_mode = tracingMode
     }
 
-    await multitenantKnex('tenants').insert(tenantInfo).onConflict('id').merge()
+    await multitenantKnex.transaction(async (trx) => {
+      await trx('tenants').insert(tenantInfo).onConflict('id').merge()
+      await jwksManager.generateUrlSigningJwk(tenantId, trx)
+    })
 
     try {
-      await runMigrationsOnTenant(databaseUrl, tenantId)
+      await runMigrationsOnTenant({
+        databaseUrl,
+        tenantId,
+        upToMigration: dbMigrationFreezeAt,
+      })
       await multitenantKnex('tenants')
         .where('id', tenantId)
         .update({
           migrations_version: await lastLocalMigrationName(),
           migrations_status: TenantMigrationStatus.COMPLETED,
         })
-    } catch (e) {
+    } catch {
       progressiveMigrations.addTenant(tenantId)
     }
 
@@ -425,7 +480,11 @@ export default async function routes(fastify: FastifyInstance) {
     const databaseUrl = decrypt(migrationsInfo.database_url)
 
     try {
-      await runMigrationsOnTenant(databaseUrl, tenantId)
+      await runMigrationsOnTenant({
+        databaseUrl,
+        tenantId,
+        upToMigration: dbMigrationFreezeAt,
+      })
       reply.send({
         migrated: true,
       })
@@ -439,7 +498,7 @@ export default async function routes(fastify: FastifyInstance) {
   })
 
   fastify.post<tenantRequestInterface>('/:tenantId/migrations/reset', async (req, reply) => {
-    const { untilMigration, markCompletedTillMigration } = req.body as any
+    const { untilMigration, markCompletedTillMigration } = req.body
 
     const { databaseUrl } = await getTenantConfig(req.params.tenantId)
 
@@ -472,6 +531,30 @@ export default async function routes(fastify: FastifyInstance) {
       req.executionError = e as Error
       return reply.status(400).send({ message: 'Failed to reset migration' })
     }
+  })
+
+  fastify.get<tenantRequestInterface>('/:tenantId/migrations/jobs', async (req, reply) => {
+    const data = await multitenantKnex
+      .table('pgboss.job')
+      .select('*')
+      .whereRaw("data->'tenant'->>'ref' = ?", [req.params.tenantId])
+      .where('name', 'tenants-migrations')
+      .orderBy('createdon', 'desc')
+      .limit(100)
+
+    reply.send(data)
+  })
+
+  fastify.delete<tenantRequestInterface>('/:tenantId/migrations/jobs', async (req, reply) => {
+    const data = await multitenantKnex
+      .table('pgboss.job')
+      .whereRaw("data->'tenant'->>'ref' = ?", [req.params.tenantId])
+      .where('name', 'tenants-migrations')
+      .orderBy('createdon', 'desc')
+      .limit(100)
+      .delete()
+
+    reply.send(data)
   })
 
   fastify.register(async (fastify) => {

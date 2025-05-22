@@ -1,7 +1,9 @@
 import { getConfig } from '../../config'
 import { getTenantConfig } from './tenant'
-import { User, TenantConnection } from './connection'
+import { TenantConnection } from './connection'
+import { User } from './pool'
 import { ERRORS } from '@internal/errors'
+import { Cluster } from '@internal/cluster'
 
 interface ConnectionOptions {
   host: string
@@ -21,17 +23,18 @@ interface ConnectionOptions {
  * @param options
  */
 export async function getPostgresConnection(options: ConnectionOptions): Promise<TenantConnection> {
-  const dbCredentials = await getDbCredentials(options.tenantId, options.host, {
+  const dbCredentials = await getDbSettings(options.tenantId, options.host, {
     disableHostCheck: options.disableHostCheck,
   })
 
   return await TenantConnection.create({
     ...dbCredentials,
     ...options,
+    clusterSize: Cluster.size,
   })
 }
 
-async function getDbCredentials(
+async function getDbSettings(
   tenantId: string,
   host: string | undefined,
   options?: { disableHostCheck?: boolean }
@@ -42,11 +45,13 @@ async function getDbCredentials(
     databaseURL,
     databaseMaxConnections,
     requestXForwardedHostRegExp,
+    databasePoolMode,
   } = getConfig()
 
   let dbUrl = databasePoolURL || databaseURL
   let maxConnections = databaseMaxConnections
   let isExternalPool = Boolean(databasePoolURL)
+  let isSingleUse = !databasePoolMode || databasePoolMode === 'single_use'
 
   if (isMultitenant) {
     if (!tenantId) {
@@ -70,11 +75,13 @@ async function getDbCredentials(
     dbUrl = tenant.databasePoolUrl || tenant.databaseUrl
     isExternalPool = Boolean(tenant.databasePoolUrl)
     maxConnections = tenant.maxConnections ?? maxConnections
+    isSingleUse = tenant.databasePoolMode ? tenant.databasePoolMode !== 'recycled' : isSingleUse
   }
 
   return {
     dbUrl,
     isExternalPool,
     maxConnections,
+    isSingleUse,
   }
 }

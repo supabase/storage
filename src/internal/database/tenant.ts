@@ -1,30 +1,32 @@
-import crypto from 'node:crypto'
-import { getConfig } from '../../config'
-import { decrypt, encrypt, verifyJWT } from '../auth'
+import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
+import { decrypt, verifyJWT } from '../auth'
 import { multitenantKnex } from './multitenant-db'
-import { JwtPayload } from 'jsonwebtoken'
+import { JWTPayload } from 'jose'
 import { PubSubAdapter } from '../pubsub'
 import { createMutexByKey } from '../concurrency'
-import { LRUCache } from 'lru-cache'
-import objectSizeOf from 'object-sizeof'
 import { ERRORS } from '@internal/errors'
 import { DBMigration } from '@internal/database/migrations'
+import { JWKSManager } from './jwks-manager'
+import { JWKSManagerStoreKnex } from './jwks-manager/store-knex'
+import {
+  S3CredentialsManagerStoreKnex,
+  S3CredentialsManager,
+} from '@storage/protocols/s3/credentials-manager'
+import { TenantConnection } from '@internal/database/connection'
+import { logger, logSchema } from '@internal/monitoring'
+
+type DBPoolMode = 'single_use' | 'recycled'
 
 interface TenantConfig {
   anonKey?: string
   databaseUrl: string
   databasePoolUrl?: string
+  databasePoolMode?: DBPoolMode
   maxConnections?: number
   fileSizeLimit: number
   features: Features
   jwtSecret: string
-  jwks?: {
-    keys: {
-      kid?: string
-      kty: string
-      // other fields are present too but are dependent on kid, alg and other fields, cast to unknown to access those
-    }[]
-  } | null
+  jwks?: { keys: JwksConfigKey[] } | null
   serviceKey: string
   serviceKeyPayload: {
     role: string
@@ -44,6 +46,9 @@ export interface Features {
   s3Protocol: {
     enabled: boolean
   }
+  purgeCache: {
+    enabled: boolean
+  }
 }
 
 export enum TenantMigrationStatus {
@@ -52,35 +57,26 @@ export enum TenantMigrationStatus {
   FAILED_STALE = 'FAILED_STALE',
 }
 
-interface S3Credentials {
-  accessKey: string
-  secretKey: string
-  claims: { role: string; sub?: string; [key: string]: any }
-}
-
-const { isMultitenant, dbServiceRole, serviceKey, jwtSecret, jwtJWKS } = getConfig()
+const { isMultitenant, dbServiceRole, serviceKeyAsync, jwtSecret } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
 
-const tenantS3CredentialsCache = new LRUCache<string, S3Credentials>({
-  maxSize: 1024 * 1024 * 50, // 50MB
-  ttl: 1000 * 60 * 60, // 1 hour
-  sizeCalculation: (value) => objectSizeOf(value),
-  updateAgeOnGet: true,
-  allowStale: false,
-})
+const tenantMutex = createMutexByKey<TenantConfig>()
 
-const tenantMutex = createMutexByKey()
-const s3CredentialsMutex = createMutexByKey()
+export const jwksManager = new JWKSManager(new JWKSManagerStoreKnex(multitenantKnex))
+
+export const s3CredentialsManager = new S3CredentialsManager(
+  new S3CredentialsManagerStoreKnex(multitenantKnex)
+)
 
 const singleTenantServiceKey:
   | {
-      jwt: string
-      payload: { role: string } & JwtPayload
+      jwt: Promise<string>
+      payload: { role: string } & JWTPayload
     }
   | undefined = !isMultitenant
   ? {
-      jwt: serviceKey,
+      jwt: serviceKeyAsync,
       payload: {
         role: dbServiceRole,
       },
@@ -106,25 +102,27 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   }
 
   if (tenantConfigCache.has(tenantId)) {
-    return tenantConfigCache.get(tenantId) as TenantConfig
+    return tenantConfigCache.get(tenantId)!
   }
 
   return tenantMutex(tenantId, async () => {
     if (tenantConfigCache.has(tenantId)) {
-      return tenantConfigCache.get(tenantId) as TenantConfig
+      return tenantConfigCache.get(tenantId)!
     }
 
-    const tenant = await multitenantKnex('tenants').first().where('id', tenantId)
+    const tenant = await multitenantKnex.table('tenants').first().where('id', tenantId)
     if (!tenant) {
       throw ERRORS.MissingTenantConfig(tenantId)
     }
     const {
       anon_key,
       database_url,
+      database_pool_mode,
       file_size_limit,
       jwt_secret,
       jwks,
       service_key,
+      feature_purge_cache,
       feature_image_transformation,
       feature_s3_protocol,
       image_transformation_max_resolution,
@@ -145,6 +143,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       anonKey: decrypt(anon_key),
       databaseUrl: decrypt(database_url),
       databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
+      databasePoolMode: database_pool_mode,
       fileSizeLimit: Number(file_size_limit),
       jwtSecret: jwtSecret,
       jwks,
@@ -159,6 +158,9 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
         s3Protocol: {
           enabled: feature_s3_protocol,
         },
+        purgeCache: {
+          enabled: feature_purge_cache,
+        },
       },
       migrationVersion: migrations_version,
       migrationStatus: migrations_status,
@@ -168,7 +170,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
     }
     tenantConfigCache.set(tenantId, config)
 
-    return tenantConfigCache.get(tenantId)
+    return tenantConfigCache.get(tenantId)!
   })
 }
 
@@ -184,7 +186,7 @@ export async function getServiceKeyUser(tenantId: string) {
   }
 
   return {
-    jwt: singleTenantServiceKey!.jwt,
+    jwt: await singleTenantServiceKey!.jwt,
     payload: singleTenantServiceKey!.payload,
     jwtSecret: jwtSecret,
   }
@@ -205,13 +207,24 @@ export async function getServiceKey(tenantId: string): Promise<string> {
  */
 export async function getJwtSecret(
   tenantId: string
-): Promise<{ secret: string; jwks: TenantConfig['jwks'] | null }> {
+): Promise<{ secret: string; urlSigningKey: string | JwksConfigKeyOCT; jwks: JwksConfig }> {
+  const { jwtJWKS } = getConfig()
+  let secret = jwtSecret
+  let jwks = jwtJWKS || { keys: [] }
+
   if (isMultitenant) {
-    const { jwtSecret, jwks } = await getTenantConfig(tenantId)
-    return { secret: jwtSecret, jwks: jwks || null }
+    const config = await getTenantConfig(tenantId)
+    const tenantJwks = await jwksManager.getJwksTenantConfig(tenantId)
+    if (config.jwks?.keys) {
+      // merge jwks from legacy jwks column if they exist
+      tenantJwks.keys = [...tenantJwks.keys, ...config.jwks.keys]
+    }
+    secret = config.jwtSecret
+    jwks = tenantJwks
   }
 
-  return { secret: jwtSecret, jwks: jwtJWKS || null }
+  const urlSigningKey = jwks.urlSigningKey || secret
+  return { secret, urlSigningKey, jwks }
 }
 
 /**
@@ -233,138 +246,52 @@ export async function getFeatures(tenantId: string): Promise<Features> {
 }
 
 const TENANTS_UPDATE_CHANNEL = 'tenants_update'
-const TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL = 'tenants_s3_credentials_update'
 
 /**
  * Keeps the in memory config cache up to date
  */
 export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void> {
-  await pubSub.subscribe(TENANTS_UPDATE_CHANNEL, (cacheKey) => {
-    tenantConfigCache.delete(cacheKey)
-  })
-
-  await pubSub.subscribe(TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL, (cacheKey) => {
-    tenantS3CredentialsCache.delete(cacheKey)
-  })
+  await pubSub.subscribe(TENANTS_UPDATE_CHANNEL, onTenantConfigChange)
+  await s3CredentialsManager.listenForTenantUpdate(pubSub)
+  await jwksManager.listenForTenantUpdate(pubSub)
 }
 
 /**
- * Create S3 Credential for a tenant
- * @param tenantId
- * @param data
+ * Handles the tenant config change event
+ * @param cacheKey
  */
-export async function createS3Credentials(
-  tenantId: string,
-  data: { description: string; claims?: S3Credentials['claims'] }
-) {
-  const existingCount = await countS3Credentials(tenantId)
+async function onTenantConfigChange(cacheKey: string) {
+  const oldConfig = tenantConfigCache.get(cacheKey)
+  tenantConfigCache.delete(cacheKey)
 
-  if (existingCount >= 50) {
-    throw ERRORS.MaximumCredentialsLimit()
+  if (!oldConfig) {
+    return
   }
 
-  const secretAccessKeyId = crypto.randomBytes(32).toString('hex').slice(0, 32)
-  const secretAccessKey = crypto.randomBytes(64).toString('hex').slice(0, 64)
+  try {
+    const newConfig = await getTenantConfig(cacheKey)
 
-  if (data.claims) {
-    delete data.claims.iss
-    delete data.claims.issuer
-    delete data.claims.exp
-    delete data.claims.iat
-  }
-
-  data.claims = {
-    ...(data.claims || {}),
-    role: data.claims?.role ?? dbServiceRole,
-    issuer: `supabase.storage.${tenantId}`,
-    sub: data.claims?.sub,
-  }
-
-  const credentials = await multitenantKnex
-    .table('tenants_s3_credentials')
-    .insert({
-      tenant_id: tenantId,
-      description: data.description,
-      access_key: secretAccessKeyId,
-      secret_key: encrypt(secretAccessKey),
-      claims: JSON.stringify(data.claims),
-    })
-    .returning('id')
-
-  return {
-    id: credentials[0].id,
-    access_key: secretAccessKeyId,
-    secret_key: secretAccessKey,
-  }
-}
-
-export async function getS3CredentialsByAccessKey(
-  tenantId: string,
-  accessKey: string
-): Promise<S3Credentials> {
-  const cacheKey = `${tenantId}:${accessKey}`
-  const cachedCredentials = tenantS3CredentialsCache.get(cacheKey)
-
-  if (cachedCredentials) {
-    return cachedCredentials
-  }
-
-  return s3CredentialsMutex(cacheKey, async () => {
-    const cachedCredentials = tenantS3CredentialsCache.get(cacheKey)
-
-    if (cachedCredentials) {
-      return cachedCredentials
+    if (newConfig.databasePoolMode === 'single_use' && oldConfig.databasePoolMode === 'recycled') {
+      // if the pool mode changed to single use, we need destroy the current pool
+      return TenantConnection.poolManager.destroy(cacheKey).catch((e) => {
+        logSchema.error(logger, 'Error destroying the pool', {
+          type: 'pool',
+          error: e as Error,
+          project: cacheKey,
+        })
+      })
     }
 
-    const data = await multitenantKnex
-      .table('tenants_s3_credentials')
-      .select('access_key', 'secret_key', 'claims')
-      .where('tenant_id', tenantId)
-      .where('access_key', accessKey)
-      .first()
-
-    if (!data) {
-      throw ERRORS.MissingS3Credentials()
+    // Rebalance the pool if the max connections changed
+    if (newConfig.maxConnections && newConfig.maxConnections !== oldConfig.maxConnections) {
+      TenantConnection.poolManager.rebalance(cacheKey, {
+        clusterSize: newConfig.maxConnections,
+      })
     }
-
-    const secretKey = decrypt(data.secret_key)
-
-    tenantS3CredentialsCache.set(cacheKey, {
-      accessKey: data.access_key,
-      secretKey: secretKey,
-      claims: data.claims,
-    })
-
-    return {
-      accessKey: data.access_key,
-      secretKey: secretKey,
-      claims: data.claims,
-    }
-  })
-}
-
-export function deleteS3Credential(tenantId: string, credentialId: string) {
-  return multitenantKnex
-    .table('tenants_s3_credentials')
-    .where('tenant_id', tenantId)
-    .where('id', credentialId)
-    .delete()
-    .returning('id')
-}
-
-export function listS3Credentials(tenantId: string) {
-  return multitenantKnex
-    .table('tenants_s3_credentials')
-    .select('id', 'description', 'access_key', 'created_at')
-    .where('tenant_id', tenantId)
-    .orderBy('created_at', 'asc')
-}
-
-export async function countS3Credentials(tenantId: string) {
-  const data = await multitenantKnex
-    .table('tenants_s3_credentials')
-    .count('id')
-    .where('tenant_id', tenantId)
-
-  return Number((data as any)?.count || 0)
+  } catch {
+    // if the tenant config is not found, we can ignore it
+    // this can happen if the tenant was deleted
+    // or if the tenant was updated and the cache was invalidated
+    // before we could get the new config
+  }
 }

@@ -6,13 +6,15 @@ import { logger, logSchema } from '../../monitoring'
 import { BasicPgClient, Migration } from 'postgres-migrations/dist/types'
 import { validateMigrationHashes } from 'postgres-migrations/dist/validation'
 import { runMigration } from 'postgres-migrations/dist/run-migration'
-import { searchPath } from '../connection'
+import { searchPath } from '../pool'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { multitenantKnex } from '../multitenant-db'
 import { ProgressiveMigrations } from './progressive'
-import { RunMigrationsOnTenants, ResetMigrationsOnTenant } from '@storage/events'
+import { ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events'
 import { ERRORS } from '@internal/errors'
 import { DBMigration } from './types'
+import { getSslSettings } from '../util'
+import { MigrationTransformer, DisableConcurrentIndexTransformer } from './transformers'
 
 const {
   multitenantDatabaseUrl,
@@ -25,6 +27,7 @@ const {
   dbServiceRole,
   dbInstallRoles,
   dbRefreshMigrationHashesOnMismatch,
+  dbMigrationFreezeAt,
 } = getConfig()
 
 const loadMigrationFilesCached = memoizePromise(loadMigrationFiles)
@@ -78,7 +81,16 @@ export function startAsyncMigrations(signal: AbortSignal) {
 
 export async function lastLocalMigrationName() {
   const migrations = await loadMigrationFilesCached('./migrations/tenant')
-  return migrations[migrations.length - 1].name as keyof typeof DBMigration
+
+  if (!dbMigrationFreezeAt) {
+    return migrations[migrations.length - 1].name as keyof typeof DBMigration
+  }
+
+  const migrationIndex = migrations.findIndex((m) => m.name === dbMigrationFreezeAt)
+  if (migrationIndex === -1) {
+    throw ERRORS.InternalError(undefined, `Migration ${dbMigrationFreezeAt} not found`)
+  }
+  return migrations[migrationIndex].name as keyof typeof DBMigration
 }
 
 /**
@@ -188,7 +200,8 @@ export async function areMigrationsUpToDate(tenantId: string) {
   const tenant = await getTenantConfig(tenantId)
 
   return (
-    latestMigrationVersion === tenant.migrationVersion &&
+    tenant.migrationVersion &&
+    DBMigration[latestMigrationVersion] <= DBMigration[tenant.migrationVersion] &&
     tenant.migrationStatus === TenantMigrationStatus.COMPLETED
   )
 }
@@ -212,7 +225,7 @@ export async function obtainLockOnMultitenantDB<T>(fn: () => Promise<T>) {
   } finally {
     try {
       await multitenantKnex.raw(`SELECT pg_advisory_unlock(?);`, ['-8575985245963000605'])
-    } catch (e) {}
+    } catch {}
   }
 }
 
@@ -301,30 +314,39 @@ export async function runMultitenantMigrations(): Promise<void> {
   })
 }
 
+interface MigrateOnTenantOptions {
+  databaseUrl: string
+  tenantId?: string
+  waitForLock?: boolean
+  upToMigration?: keyof typeof DBMigration
+}
+
 /**
  * Runs migrations on a specific tenant by providing its database DSN
  * @param databaseUrl
  * @param tenantId
  * @param waitForLock
+ * @param upToMigration
  */
-export async function runMigrationsOnTenant(
-  databaseUrl: string,
-  tenantId?: string,
-  waitForLock = true
-): Promise<void> {
-  let ssl: ClientConfig['ssl'] | undefined = undefined
-
-  if (databaseSSLRootCert) {
-    ssl = { ca: databaseSSLRootCert }
+export async function runMigrationsOnTenant({
+  databaseUrl,
+  tenantId,
+  waitForLock,
+  upToMigration,
+}: MigrateOnTenantOptions): Promise<void> {
+  // default waitForLock to true
+  if (typeof waitForLock === 'undefined') {
+    waitForLock = true
   }
 
   await connectAndMigrate({
     databaseUrl,
     migrationsDirectory: './migrations/tenant',
-    ssl,
+    ssl: getSslSettings({ connectionString: databaseUrl, databaseSSLRootCert }),
     shouldCreateStorageSchema: true,
     tenantId,
     waitForLock,
+    upToMigration,
   })
 }
 
@@ -332,7 +354,7 @@ export async function resetMigration(options: {
   tenantId: string
   untilMigration: keyof typeof DBMigration
   markCompletedTillMigration?: keyof typeof DBMigration
-  databaseUrl: string | undefined
+  databaseUrl: string
 }): Promise<boolean> {
   const dbConfig: ClientConfig = {
     connectionString: options.databaseUrl,
@@ -340,9 +362,7 @@ export async function resetMigration(options: {
     options: `-c search_path=${searchPath}`,
   }
 
-  if (databaseSSLRootCert) {
-    dbConfig.ssl = { ca: databaseSSLRootCert }
-  }
+  dbConfig.ssl = getSslSettings({ connectionString: options.databaseUrl, databaseSSLRootCert })
 
   const client = await connect(dbConfig)
 
@@ -481,6 +501,7 @@ async function connectAndMigrate(options: {
   shouldCreateStorageSchema?: boolean
   tenantId?: string
   waitForLock?: boolean
+  upToMigration?: keyof typeof DBMigration
 }) {
   const { shouldCreateStorageSchema, migrationsDirectory, ssl, databaseUrl, waitForLock } = options
 
@@ -488,18 +509,32 @@ async function connectAndMigrate(options: {
     connectionString: databaseUrl,
     connectionTimeoutMillis: 60_000,
     options: `-c search_path=${searchPath}`,
-    statement_timeout: 1000 * 60 * 60 * 3, // 3 hours
+    statement_timeout: 1000 * 60 * 60 * 12, // 12 hours
     ssl,
   }
 
   const client = await connect(dbConfig)
 
   try {
-    await client.query(`SET statement_timeout TO '3h'`)
-    await migrate({ client }, migrationsDirectory, Boolean(waitForLock), shouldCreateStorageSchema)
+    await client.query(`SET statement_timeout TO '12h'`)
+    await migrate({
+      client,
+      migrationsDirectory,
+      waitForLock: Boolean(waitForLock),
+      shouldCreateStorageSchema,
+      upToMigration: options.upToMigration,
+    })
   } finally {
     await client.end()
   }
+}
+
+interface MigrateOptions {
+  client: BasicPgClient
+  migrationsDirectory: string
+  waitForLock: boolean
+  shouldCreateStorageSchema?: boolean
+  upToMigration?: keyof typeof DBMigration
 }
 
 /**
@@ -509,26 +544,57 @@ async function connectAndMigrate(options: {
  * @param waitForLock
  * @param shouldCreateStorageSchema
  */
-export async function migrate(
-  dbConfig: { client: BasicPgClient },
-  migrationsDirectory: string,
-  waitForLock: boolean,
-  shouldCreateStorageSchema?: boolean
-): Promise<Array<Migration>> {
+export async function migrate({
+  client,
+  migrationsDirectory,
+  waitForLock,
+  shouldCreateStorageSchema,
+  upToMigration,
+}: MigrateOptions): Promise<Array<Migration>> {
+  const accessMethod = await getDefaultAccessMethod(client)
   return withAdvisoryLock(
     waitForLock,
-    runMigrations(migrationsDirectory, shouldCreateStorageSchema)
-  )(dbConfig.client)
+    runMigrations({
+      migrationsDirectory,
+      shouldCreateStorageSchema,
+      upToMigration,
+      // Remove concurrent index creation if we're using oriole db as it does not support it currently
+      transformers: accessMethod === 'orioledb' ? [new DisableConcurrentIndexTransformer()] : [],
+    })
+  )(client)
+}
+
+interface RunMigrationOptions {
+  migrationsDirectory: string
+  shouldCreateStorageSchema?: boolean
+  upToMigration?: keyof typeof DBMigration
+  transformers?: MigrationTransformer[]
 }
 
 /**
  * Run Migration from a specific directory
  * @param migrationsDirectory
  * @param shouldCreateStorageSchema
+ * @param upToMigration
  */
-function runMigrations(migrationsDirectory: string, shouldCreateStorageSchema = true) {
+function runMigrations({
+  migrationsDirectory,
+  shouldCreateStorageSchema,
+  upToMigration,
+  transformers = [],
+}: RunMigrationOptions) {
   return async (client: BasicPgClient) => {
-    const intendedMigrations = await loadMigrationFilesCached(migrationsDirectory)
+    let intendedMigrations = await loadMigrationFilesCached(migrationsDirectory)
+    let lastMigrationId = intendedMigrations[intendedMigrations.length - 1].id
+
+    if (upToMigration) {
+      const migrationIndex = intendedMigrations.findIndex((m) => m.name === upToMigration)
+      if (migrationIndex === -1) {
+        throw ERRORS.InternalError(undefined, `Migration ${dbMigrationFreezeAt} not found`)
+      }
+      intendedMigrations = intendedMigrations.slice(0, migrationIndex + 1)
+      lastMigrationId = intendedMigrations[migrationIndex].id
+    }
 
     try {
       const migrationTableName = 'migrations'
@@ -537,7 +603,11 @@ function runMigrations(migrationsDirectory: string, shouldCreateStorageSchema = 
 
       let appliedMigrations: Migration[] = []
       if (await doesTableExist(client, migrationTableName)) {
-        const { rows } = await client.query(`SELECT * FROM ${migrationTableName} ORDER BY id`)
+        const selectQueryCurrentMigration = SQL`SELECT * FROM `
+          .append(migrationTableName)
+          .append(SQL` WHERE id <= ${lastMigrationId}`)
+
+        const { rows } = await client.query(selectQueryCurrentMigration)
         appliedMigrations = rows
 
         if (rows.length > 0) {
@@ -584,14 +654,17 @@ function runMigrations(migrationsDirectory: string, shouldCreateStorageSchema = 
       }
 
       for (const migration of migrationsToRun) {
-        const result = await runMigration(migrationTableName, client)(migration)
+        const result = await runMigration(
+          migrationTableName,
+          client
+        )(runMigrationTransformers(migration, transformers))
         completedMigrations.push(result)
       }
 
       return completedMigrations
-    } catch (e: any) {
-      const error: MigrationError = new Error(`Migration failed. Reason: ${e.message}`)
-      error.cause = e
+    } catch (e) {
+      const error: MigrationError = new Error(`Migration failed. Reason: ${(e as Error).message}`)
+      error.cause = e + ''
       throw error
     }
   }
@@ -609,6 +682,30 @@ function filterMigrations(
   const notAppliedMigration = (migration: Migration) => !appliedMigrations[migration.id]
 
   return migrations.filter(notAppliedMigration)
+}
+
+/**
+ * Transforms provided migration by running all transformers
+ * @param migration
+ * @param transformers
+ */
+function runMigrationTransformers(
+  migration: Migration,
+  transformers: MigrationTransformer[]
+): Migration {
+  for (const transformer of transformers) {
+    migration = transformer.transform(migration)
+  }
+  return migration
+}
+
+/**
+ * Get the current default access method for this database
+ * @param client
+ */
+async function getDefaultAccessMethod(client: BasicPgClient): Promise<string> {
+  const result = await client.query(`SHOW default_table_access_method`)
+  return result.rows?.[0]?.default_table_access_method || ''
 }
 
 /**
@@ -685,14 +782,13 @@ function withAdvisoryLock<T>(
         throw e
       }
 
-      const result = await f(client)
-      return result
+      return await f(client)
     } catch (e) {
       throw e
     } finally {
       try {
         await client.query('SELECT pg_advisory_unlock(-8525285245963000605);')
-      } catch (e) {}
+      } catch {}
     }
   }
 }
@@ -765,11 +861,11 @@ async function refreshMigrationPosition(
     migrations.push(intendedMigrations[migration.index])
 
     // add the other run migrations by updating their id and hash
-    const afterMigration = newMigrations.slice(migration.index).map((m) => {
-      ;(m as any).id = m.id + 1
-      ;(m as any).hash = intendedMigrations[m.id].hash
-      return m
-    })
+    const afterMigration = newMigrations.slice(migration.index).map((m) => ({
+      ...m,
+      id: m.id + 1,
+      hash: intendedMigrations[m.id].hash,
+    }))
 
     migrations.push(...afterMigration)
     newMigrations = migrations
@@ -805,7 +901,7 @@ async function refreshMigrationPosition(
  * Memoizes a promise
  * @param func
  */
-function memoizePromise<T, Args extends any[]>(
+function memoizePromise<T, Args extends unknown[]>(
   func: (...args: Args) => Promise<T>
 ): (...args: Args) => Promise<T> {
   const cache = new Map<string, Promise<T>>()
@@ -813,10 +909,10 @@ function memoizePromise<T, Args extends any[]>(
   function generateKey(args: Args): string {
     return args
       .map((arg) => {
-        if (typeof arg === 'object') {
+        if (typeof arg === 'object' && arg !== null) {
           return Object.entries(arg).sort().toString()
         }
-        return arg.toString()
+        return String(arg)
       })
       .join('|')
   }

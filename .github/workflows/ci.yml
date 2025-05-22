@@ -7,27 +7,31 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test / OS ${{ matrix.platform }} / Node ${{ matrix.node }}
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-20.04]
+        platform: [ubuntu-24.04]
         node: ['20']
 
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/cache@v1
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
         with:
           path: ~/.npm
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
       - name: Set up Node
-        uses: actions/setup-node@v1
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
 
@@ -79,8 +83,18 @@ jobs:
           S3_PROTOCOL_ACCESS_KEY_ID: ${{ secrets.TENANT_ID }}
           S3_PROTOCOL_ACCESS_KEY_SECRET: ${{ secrets.SERVICE_KEY }}
 
-
       - name: Upload coverage results to Coveralls
         uses: coverallsapp/github-action@master
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure OrioleDB migration compatibility
+        run: |
+          npm run infra:restart:oriole
+        env:
+          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
+          DB_INSTALL_ROLES: true
+          ENABLE_DEFAULT_METRICS: false
+          PG_QUEUE_ENABLE: false
+          MULTI_TENANT: false

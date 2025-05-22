@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import { ERRORS } from '@internal/errors'
+import { V4StreamingAlgorithm } from '@storage/protocols/s3/signature-v4-stream'
 
 interface SignatureV4Options {
   enforceRegion: boolean
@@ -136,6 +137,16 @@ export class SignatureV4 {
     }
   }
 
+  static isChunkedUpload(headers: Record<string, any>): boolean {
+    const sha = headers['x-amz-content-sha256']
+    if (typeof sha !== 'string') return false
+    // If it exactly matches or starts with streaming prefix...
+    return (
+      sha.startsWith('STREAMING-AWS4-HMAC-SHA256-PAYLOAD') ||
+      sha.startsWith('STREAMING-UNSIGNED-PAYLOAD')
+    )
+  }
+
   static parseQuerySignature(query: Record<string, any>) {
     const credentialPart = query['X-Amz-Credential']
     const signedHeaders: string = query['X-Amz-SignedHeaders']
@@ -265,6 +276,42 @@ export class SignatureV4 {
       Buffer.from(clientSignature.signature),
       Buffer.from(serverSignature)
     )
+  }
+
+  public validateChunkSignature(
+    algorithm: V4StreamingAlgorithm,
+    clientSignature: ClientSignature,
+    chunkHash: string,
+    chunkSignature: string,
+    prevSignature: string = clientSignature.signature
+  ): boolean {
+    const { secretKey } = this.serverCredentials
+    const { shortDate, region, service } = clientSignature.credentials
+    const signingKey = this.signingKey(secretKey, shortDate, region, service)
+
+    const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+
+    // Build the “String to Sign” for this chunk exactly per AWS:
+    //    AWS4-HMAC-SHA256-PAYLOAD
+    //    <longDate>
+    //    <shortDate/region/service/aws4_request>
+    //    <prevSignature>
+    //    SHA256("")   ← the hash of the empty string
+    //    SHA256(chunkData)
+    const scope = `${shortDate}/${region}/${service}/aws4_request`
+    const stringToSign = [
+      algorithm,
+      clientSignature.longDate,
+      scope,
+      prevSignature,
+      emptyHash,
+      chunkHash,
+    ].join('\n')
+
+    // 4) HMAC it with the derived key and compare
+    const expected = this.hmac(signingKey, stringToSign)
+
+    return crypto.timingSafeEqual(expected, Buffer.from(chunkSignature))
   }
 
   signPostPolicy(clientSignature: ClientSignature, policy: string) {

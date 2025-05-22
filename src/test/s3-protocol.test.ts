@@ -16,6 +16,7 @@ import {
   ListMultipartUploadsCommand,
   ListObjectsCommand,
   ListObjectsV2Command,
+  ListObjectsV2CommandOutput,
   ListPartsCommand,
   PutObjectCommand,
   S3Client,
@@ -32,6 +33,7 @@ import { randomUUID } from 'crypto'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import axios from 'axios'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
+import { wait } from '@internal/concurrency'
 
 const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
 
@@ -60,7 +62,7 @@ async function uploadFile(client: S3Client, bucketName: string, key: string, mb:
       Bucket: bucketName,
       Key: key,
       ContentType: 'image/jpg',
-      Body: Buffer.alloc(1024 * 1024 * mb),
+      Body: Buffer.alloc(1024 * mb),
     },
   })
 
@@ -86,17 +88,6 @@ describe('S3 Protocol', () => {
           secretAccessKey: s3ProtocolAccessKeySecret!,
         },
       })
-
-      // clientMinio = new S3Client({
-      //   forcePathStyle: true,
-      //   region: storageS3Region,
-      //   logger: console,
-      //   endpoint: 'http://localhost:9000',
-      //   credentials: {
-      //     accessKeyId: 'supa-storage',
-      //     secretAccessKey: 'secret1234',
-      //   },
-      // })
     })
 
     afterEach(() => {
@@ -104,7 +95,8 @@ describe('S3 Protocol', () => {
     })
 
     afterAll(async () => {
-      await Promise.race([testApp.close(), new Promise((resolve) => setTimeout(resolve, 1000))])
+      client.destroy()
+      await testApp.close()
     })
 
     describe('CreateBucketCommand', () => {
@@ -377,6 +369,56 @@ describe('S3 Protocol', () => {
       })
     })
 
+    for (const urlEncode of [true, false]) {
+      const enc = urlEncode ? 'url' : undefined
+      it(`paginate objects in folder with prefix, Encoding=${enc}`, async () => {
+        const bucket = await createBucket(client)
+        const prefixPath = 'this/is/the/path/'
+
+        await Promise.all(
+          new Array(11)
+            .fill(1)
+            .map((_, i) => uploadFile(client, bucket, prefixPath + `a-video-file-${i}.mp4`, 1))
+        )
+
+        const seenTokens = new Set()
+
+        let continuationToken: string | undefined = undefined
+        let isTruncated = true
+        let totalCount = 0
+        let totalPages = 0
+
+        while (isTruncated) {
+          const resp: ListObjectsV2CommandOutput = await client.send(
+            new ListObjectsV2Command({
+              Bucket: bucket,
+              Prefix: prefixPath,
+              MaxKeys: 3,
+              ContinuationToken: continuationToken,
+              EncodingType: enc,
+              Delimiter: '/',
+            })
+          )
+
+          isTruncated = resp.IsTruncated ?? false
+          totalCount += resp.Contents?.length ?? 0
+          totalPages++
+
+          if (isTruncated) {
+            expect(resp.Contents?.length ?? 0).toBeGreaterThan(0)
+            expect(resp.NextContinuationToken).toBeTruthy()
+          }
+
+          expect(seenTokens.has(resp.NextContinuationToken)).toBe(false)
+          seenTokens.add(resp.NextContinuationToken)
+
+          continuationToken = resp.NextContinuationToken
+        }
+        expect(totalCount).toBe(11)
+        expect(totalPages).toBe(4)
+      })
+    }
+
     describe('MultiPart Form Data Upload', () => {
       it('can upload using multipart/form-data', async () => {
         const bucketName = await createBucket(client)
@@ -395,7 +437,7 @@ describe('S3 Protocol', () => {
           formData.set(key, signedURL.fields[key])
         })
 
-        const data = Buffer.alloc(1024 * 1024)
+        const data = Buffer.alloc(1024)
         formData.set('file', new Blob([data]), 'test.jpg')
 
         const resp = await axios.post(signedURL.url, formData, {
@@ -407,7 +449,7 @@ describe('S3 Protocol', () => {
 
       it('prevent uploading files larger than the maxFileSize limit', async () => {
         mergeConfig({
-          uploadFileSizeLimit: 1024 * 1024,
+          uploadFileSizeLimit: 1024,
         })
         const bucketName = await createBucket(client)
         const signedURL = await createPresignedPost(client, {
@@ -424,7 +466,7 @@ describe('S3 Protocol', () => {
           formData.set(key, signedURL.fields[key])
         })
 
-        const data = Buffer.alloc(1024 * 1024 * 2)
+        const data = Buffer.alloc(1024 * 2)
         formData.set('file', new Blob([data]), 'test.jpg')
 
         const resp = await axios.post(signedURL.url, formData, {
@@ -460,7 +502,7 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const data = Buffer.alloc(1024 * 1024 * 5)
+        const data = Buffer.alloc(1024 * 5)
 
         const uploadPart = new UploadPartCommand({
           Bucket: bucketName,
@@ -486,7 +528,7 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const data = Buffer.alloc(1024 * 1024 * 5)
+        const data = Buffer.alloc(1024 * 5)
         const uploadPart = new UploadPartCommand({
           Bucket: bucketName,
           Key: 'test-1.jpg',
@@ -528,7 +570,7 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const data = Buffer.alloc(1024 * 1024 * 5)
+        const data = Buffer.alloc(1024 * 5)
         const uploadPart = new UploadPartCommand({
           Bucket: bucketName,
           Key: 'test-1.jpg',
@@ -556,7 +598,7 @@ describe('S3 Protocol', () => {
         const putObject = new PutObjectCommand({
           Bucket: bucketName,
           Key: 'test-1-put-object.jpg',
-          Body: Buffer.alloc(1024 * 1024 * 12),
+          Body: Buffer.alloc(1024 * 12),
         })
 
         const resp = await client.send(putObject)
@@ -583,7 +625,7 @@ describe('S3 Protocol', () => {
         const putObject = new PutObjectCommand({
           Bucket: bucketName,
           Key: 'test-1-put-object.jpg',
-          Body: Buffer.alloc(1024 * 1024 * 12),
+          Body: Buffer.alloc(1024 * 12),
           Metadata: {
             nice: '1111',
             test2: 'test3',
@@ -607,13 +649,13 @@ describe('S3 Protocol', () => {
         const bucketName = await createBucket(client)
 
         mergeConfig({
-          uploadFileSizeLimit: 1024 * 1024 * 10,
+          uploadFileSizeLimit: 1024 * 10,
         })
 
         const putObject = new PutObjectCommand({
           Bucket: bucketName,
           Key: 'test-1-put-object.jpg',
-          Body: Buffer.alloc(1024 * 1024 * 12),
+          Body: Buffer.alloc(1024 * 12),
         })
 
         try {
@@ -633,7 +675,7 @@ describe('S3 Protocol', () => {
         const bucketName = await createBucket(client)
 
         mergeConfig({
-          uploadFileSizeLimit: 1024 * 1024 * 10,
+          uploadFileSizeLimit: 1024 * 10,
         })
 
         const uploader = new Upload({
@@ -644,7 +686,7 @@ describe('S3 Protocol', () => {
             Bucket: bucketName,
             Key: 'test-1.jpg',
             ContentType: 'image/jpg',
-            Body: Buffer.alloc(1024 * 1024 * 12),
+            Body: Buffer.alloc(1024 * 12),
           },
         })
 
@@ -665,7 +707,7 @@ describe('S3 Protocol', () => {
         const bucketName = await createBucket(client, 'try-test-1')
 
         mergeConfig({
-          uploadFileSizeLimit: 1024 * 1024 * 10,
+          uploadFileSizeLimit: 1024 * 10,
         })
 
         const createMultiPartUpload = new CreateMultipartUploadCommand({
@@ -679,10 +721,10 @@ describe('S3 Protocol', () => {
 
         const readable = new ReadableStreamBuffer({
           frequency: 500,
-          chunkSize: 1024 * 1024 * 3,
+          chunkSize: 1024 * 3,
         })
 
-        readable.put(Buffer.alloc(1024 * 1024 * 12))
+        readable.put(Buffer.alloc(1024 * 12))
         readable.stop()
 
         const uploadPart = new UploadPartCommand({
@@ -691,7 +733,7 @@ describe('S3 Protocol', () => {
           UploadId: resp.UploadId,
           Body: readable,
           PartNumber: 1,
-          ContentLength: 1024 * 1024 * 12,
+          ContentLength: 1024 * 12,
         })
 
         try {
@@ -716,7 +758,7 @@ describe('S3 Protocol', () => {
             Bucket: bucketName,
             Key: 'test-1.jpg',
             ContentType: 'image/jpg',
-            Body: Buffer.alloc(1024 * 1024 * 12),
+            Body: Buffer.alloc(1024 * 12),
           },
         })
 
@@ -1198,7 +1240,7 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const data = Buffer.alloc(1024 * 1024 * 5)
+        const data = Buffer.alloc(1024 * 5)
         const uploadPart = (partNumber: number) =>
           new UploadPartCommand({
             Bucket: bucket,
@@ -1236,7 +1278,7 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const data = Buffer.alloc(1024 * 1024 * 5)
+        const data = Buffer.alloc(1024 * 5)
         const uploadPart = (partNumber: number) =>
           new UploadPartCommand({
             Bucket: bucket,
@@ -1314,7 +1356,7 @@ describe('S3 Protocol', () => {
           UploadId: resp.UploadId,
           PartNumber: 1,
           CopySource: `${bucket}/${sourceKey}`,
-          CopySourceRange: `bytes=0-${1024 * 1024 * 4}`,
+          CopySourceRange: `bytes=0-${1024 * 4}`,
         })
 
         const copyResp = await client.send(copyPart)
@@ -1350,7 +1392,7 @@ describe('S3 Protocol', () => {
           Bucket: bucket,
         })
         const signedUrl = await getSignedUrl(client, bucketVersioningCommand, { expiresIn: 1 })
-        await new Promise((resolve) => setTimeout(resolve, 1500))
+        await wait(1500)
         const resp = await fetch(signedUrl)
 
         expect(resp.ok).toBeFalsy()
@@ -1360,7 +1402,7 @@ describe('S3 Protocol', () => {
       it('can upload with presigned URL', async () => {
         const bucket = await createBucket(client)
         const key = 'test-1.jpg'
-        const body = Buffer.alloc(1024 * 1024 * 2)
+        const body = Buffer.alloc(1024 * 2)
 
         const uploadUrl = await getSignedUrl(
           client,

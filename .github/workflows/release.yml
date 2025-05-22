@@ -6,19 +6,22 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   release:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     outputs:
       published: ${{ steps.semantic.outputs.new_release_published }}
       version: ${{ steps.semantic.outputs.new_release_version }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Node
-        uses: actions/setup-node@v1
+        uses: actions/setup-node@v4
         with:
-          node-version: 14 # https://github.com/cycjimmy/semantic-release-action/issues/159
+          node-version: 20
 
       - name: Install dependencies
         run: |
@@ -26,9 +29,9 @@ jobs:
 
       - name: Semantic Release
         id: semantic
-        uses: cycjimmy/semantic-release-action@v3
+        uses: cycjimmy/semantic-release-action@v4.1.1
         with:
-          semantic_version: 19
+          semantic_version: 24.1.0
           extra_plugins: |
             @semantic-release/commit-analyzer
             @semantic-release/release-notes-generator

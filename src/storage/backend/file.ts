@@ -56,16 +56,6 @@ export class FileBackend implements StorageBackendAdapter {
     this.etagAlgorithm = storageFileEtagAlgorithm
   }
 
-  private async etag(file: string, stats: fs.Stats): Promise<string> {
-    if (this.etagAlgorithm === 'md5') {
-      const checksum = await fileChecksum(file)
-      return `"${checksum}"`
-    } else if (this.etagAlgorithm === 'mtime') {
-      return `"${stats.mtimeMs.toString(16)}-${stats.size.toString(16)}"`
-    }
-    throw new Error('FILE_STORAGE_ETAG_ALGORITHM env variable must be either "mtime" or "md5"')
-  }
-
   async list(
     bucket: string,
     options?: {
@@ -543,12 +533,22 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   protected getMetadataAttr(file: string, attribute: string): Promise<string | undefined> {
-    return xattr.get(file, attribute).then((value: any) => {
+    return xattr.get(file, attribute).then((value) => {
       return value?.toString() ?? undefined
     })
   }
 
   protected setMetadataAttr(file: string, attribute: string, value: string): Promise<void> {
     return xattr.set(file, attribute, value)
+  }
+
+  private async etag(file: string, stats: fs.Stats): Promise<string> {
+    if (this.etagAlgorithm === 'md5') {
+      const checksum = await fileChecksum(file)
+      return `"${checksum}"`
+    } else if (this.etagAlgorithm === 'mtime') {
+      return `"${stats.mtimeMs.toString(16)}-${stats.size.toString(16)}"`
+    }
+    throw new Error('FILE_STORAGE_ETAG_ALGORITHM env variable must be either "mtime" or "md5"')
   }
 }

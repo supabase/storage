@@ -26,7 +26,7 @@ export class ClusterDiscoveryECS {
     const respMetadata = await axios.get(`${process.env.ECS_CONTAINER_METADATA_URI}/task`)
 
     const command = new ListTasksCommand({
-      serviceName: respMetadata.data.ServiceName,
+      family: respMetadata.data.Family,
       cluster: respMetadata.data.Cluster,
       desiredStatus: status,
     })

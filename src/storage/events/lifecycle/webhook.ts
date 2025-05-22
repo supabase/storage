@@ -1,9 +1,9 @@
-import { BaseEvent } from './base-event'
-import { Job, WorkOptions } from 'pg-boss'
+import { BaseEvent } from '../base-event'
+import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { HttpsAgent } from 'agentkeepalive'
 import HttpAgent from 'agentkeepalive'
 import axios from 'axios'
-import { getConfig } from '../../config'
+import { getConfig } from '../../../config'
 import { logger, logSchema } from '@internal/monitoring'
 import { getTenantConfig } from '@internal/database'
 
@@ -12,8 +12,6 @@ const {
   webhookURL,
   webhookApiKey,
   webhookQueuePullInterval,
-  webhookQueueTeamSize,
-  webhookQueueConcurrency,
   webhookMaxConnections,
   webhookQueueMaxFreeSockets,
 } = getConfig()
@@ -59,9 +57,15 @@ export class Webhook extends BaseEvent<WebhookEvent> {
 
   static getWorkerOptions(): WorkOptions {
     return {
-      newJobCheckInterval: webhookQueuePullInterval,
-      teamSize: webhookQueueTeamSize,
-      teamConcurrency: webhookQueueConcurrency,
+      pollingIntervalSeconds: webhookQueuePullInterval
+        ? webhookQueuePullInterval / 1000
+        : undefined,
+    }
+  }
+
+  static getSendOptions(): SendOptions {
+    return {
+      expireInSeconds: 30,
     }
   }
 
@@ -127,7 +131,11 @@ export class Webhook extends BaseEvent<WebhookEvent> {
         },
         `[Lifecycle]: ${job.data.event.type} ${path} - FAILED`
       )
-      throw e
+      throw new Error(
+        `Failed to send webhook for event ${job.data.event.type} to ${webhookURL}: ${
+          (e as Error).message
+        }`
+      )
     }
 
     return job

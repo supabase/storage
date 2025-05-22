@@ -6,7 +6,9 @@ import { ERRORS } from '@internal/errors'
 export class QueueDB extends EventEmitter implements Db {
   opened = false
   isOurs = true
-
+  events = {
+    error: 'error',
+  }
   protected config: pg.PoolConfig
   protected pool?: pg.Pool
 

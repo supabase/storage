@@ -1,8 +1,8 @@
-import { BaseEvent } from './base-event'
-import { JobWithMetadata, SendOptions, WorkOptions } from 'pg-boss'
+import { BaseEvent } from '../base-event'
+import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
 import { BasePayload } from '@internal/queue'
 import { S3Backend } from '@storage/backend'
-import { getConfig } from '../../config'
+import { getConfig } from '../../../config'
 import { logger, logSchema } from '@internal/monitoring'
 
 const { storageS3Bucket } = getConfig()
@@ -20,13 +20,18 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
 
   static getWorkerOptions(): WorkOptions {
     return {
-      teamSize: 10,
-      teamConcurrency: 5,
       includeMetadata: true,
     }
   }
 
-  static getQueueOptions(payload: BackupObjectEventPayload): SendOptions {
+  static getQueueOptions(): Queue {
+    return {
+      name: this.queueName,
+      policy: 'singleton',
+    } as const
+  }
+
+  static getSendOptions(payload: BackupObjectEventPayload): SendOptions {
     return {
       singletonKey: `${payload.tenant.ref}/${payload.bucketId}/${payload.name}/${payload.version}`,
       retryLimit: 5,

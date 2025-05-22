@@ -1,6 +1,6 @@
 import { Client, ClientConfig } from 'pg'
 import SQL from 'sql-template-strings'
-import { loadMigrationFiles, MigrationError } from 'postgres-migrations'
+import { MigrationError } from 'postgres-migrations'
 import { getConfig, MultitenantMigrationStrategy } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
 import { BasicPgClient, Migration } from 'postgres-migrations/dist/types'
@@ -15,6 +15,7 @@ import { ERRORS } from '@internal/errors'
 import { DBMigration } from './types'
 import { getSslSettings } from '../util'
 import { MigrationTransformer, DisableConcurrentIndexTransformer } from './transformers'
+import { lastLocalMigrationName, loadMigrationFilesCached, localMigrationFiles } from './files'
 
 const {
   multitenantDatabaseUrl,
@@ -29,8 +30,6 @@ const {
   dbRefreshMigrationHashesOnMismatch,
   dbMigrationFreezeAt,
 } = getConfig()
-
-const loadMigrationFilesCached = memoizePromise(loadMigrationFiles)
 
 /**
  * Migrations that were added after the initial release
@@ -77,20 +76,6 @@ export function startAsyncMigrations(signal: AbortSignal) {
     default:
       throw new Error(`Unknown migration strategy: ${dbMigrationStrategy}`)
   }
-}
-
-export async function lastLocalMigrationName() {
-  const migrations = await loadMigrationFilesCached('./migrations/tenant')
-
-  if (!dbMigrationFreezeAt) {
-    return migrations[migrations.length - 1].name as keyof typeof DBMigration
-  }
-
-  const migrationIndex = migrations.findIndex((m) => m.name === dbMigrationFreezeAt)
-  if (migrationIndex === -1) {
-    throw ERRORS.InternalError(undefined, `Migration ${dbMigrationFreezeAt} not found`)
-  }
-  return migrations[migrationIndex].name as keyof typeof DBMigration
 }
 
 /**
@@ -413,7 +398,7 @@ export async function resetMigration(options: {
           })
 
           if (aheadMigrations.length) {
-            const localFileMigrations = await loadMigrationFilesCached('./migrations/tenant')
+            const localFileMigrations = await localMigrationFiles()
 
             const query = SQL`INSERT INTO `
               .append('migrations')
@@ -895,36 +880,4 @@ async function refreshMigrationPosition(
   }
 
   return newMigrations
-}
-
-/**
- * Memoizes a promise
- * @param func
- */
-function memoizePromise<T, Args extends unknown[]>(
-  func: (...args: Args) => Promise<T>
-): (...args: Args) => Promise<T> {
-  const cache = new Map<string, Promise<T>>()
-
-  function generateKey(args: Args): string {
-    return args
-      .map((arg) => {
-        if (typeof arg === 'object' && arg !== null) {
-          return Object.entries(arg).sort().toString()
-        }
-        return String(arg)
-      })
-      .join('|')
-  }
-
-  return async function (...args: Args): Promise<T> {
-    const key = generateKey(args)
-    if (cache.has(key)) {
-      return cache.get(key)!
-    }
-
-    const result = func(...args)
-    cache.set(key, result)
-    return result
-  }
 }

@@ -1,5 +1,5 @@
 import { Queue } from './queue'
-import PgBoss, { BatchWorkOptions, Job, SendOptions, WorkOptions } from 'pg-boss'
+import PgBoss, { Job, SendOptions, WorkOptions, Queue as PgBossQueue } from 'pg-boss'
 import { getConfig } from '../../config'
 import { QueueJobScheduled, QueueJobSchedulingTime } from '@internal/monitoring/metrics'
 import { logger, logSchema } from '@internal/monitoring'
@@ -14,11 +14,6 @@ export interface BasePayload {
     ref: string
     host: string
   }
-}
-
-export interface SlowRetryQueueOptions {
-  retryLimit: number
-  retryDelay: number
 }
 
 const { pgQueueEnable, region, isMultitenant } = getConfig()
@@ -36,7 +31,7 @@ interface BaseEventConstructor<Base extends Event<any>> {
   ): Promise<string | void | null>
 
   eventName(): string
-  getWorkerOptions(): WorkOptions | BatchWorkOptions
+  getWorkerOptions(): WorkOptions
 }
 
 /**
@@ -53,6 +48,10 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     return this.name
   }
 
+  static deadLetterQueueName() {
+    return this.queueName + '-dead-letter'
+  }
+
   static getQueueName() {
     if (!this.queueName) {
       throw new Error(`Queue name not set on ${this.constructor.name}`)
@@ -61,24 +60,16 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     return this.queueName
   }
 
-  static getQueueOptions<T extends Event<any>>(payload: T['payload']): SendOptions | undefined {
+  static getQueueOptions(): PgBossQueue | undefined {
     return undefined
   }
 
-  static getWorkerOptions(): WorkOptions | BatchWorkOptions {
+  static getSendOptions<T extends Event<any>>(payload: T['payload']): SendOptions | undefined {
+    return undefined
+  }
+
+  static getWorkerOptions(): WorkOptions & { concurrentTaskCount?: number } {
     return {}
-  }
-
-  static withSlowRetryQueue(): undefined | SlowRetryQueueOptions {
-    return undefined
-  }
-
-  static getSlowRetryQueueName() {
-    if (!this.queueName) {
-      throw new Error(`Queue name not set on ${this.constructor.name}`)
-    }
-
-    return this.queueName + '-slow'
   }
 
   static onClose() {
@@ -104,7 +95,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
 
     return Queue.getInstance().insert(
       messages.map((message) => {
-        const sendOptions = (this.getQueueOptions(message.payload) as PgBoss.JobInsert) || {}
+        const sendOptions = (this.getSendOptions(message.payload) as PgBoss.JobInsert) || {}
         if (!message.payload.$version) {
           ;(message.payload as (typeof message)['payload']).$version = this.version
         }
@@ -117,6 +108,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
           ...sendOptions,
           name: this.getQueueName(),
           data: message.payload,
+          deadLetter: this.deadLetterQueueName(),
         }
       })
     )
@@ -130,23 +122,15 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     return that.send()
   }
 
-  static sendSlowRetryQueue<T extends Event<any>>(
-    this: StaticThis<T>,
-    payload: Omit<T['payload'], '$version'>
+  static handle(
+    job: Job<Event<any>['payload']> | Job<Event<any>['payload']>[],
+    opts?: { signal?: AbortSignal }
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
-    return that.sendSlowRetryQueue()
-  }
-
-  static handle(job: Job<Event<any>['payload']> | Job<Event<any>['payload']>[]) {
     throw new Error('not implemented')
   }
 
   static async shouldSend(payload: any) {
-    if (isMultitenant) {
+    if (isMultitenant && payload?.tenant?.ref) {
       // Do not send an event if disabled for this specific tenant
       const tenant = await getTenantConfig(payload.tenant.ref)
       const disabledEvents = tenant.disableEvents || []
@@ -170,6 +154,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       if (constructor.allowSync) {
         return constructor.handle({
           id: '__sync',
+          expireInSeconds: 0,
           name: constructor.getQueueName(),
           data: {
             region,
@@ -187,14 +172,13 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     }
 
     const timer = QueueJobSchedulingTime.startTimer()
-    let sendOptions = constructor.getQueueOptions(this.payload)
+    const sendOptions = constructor.getSendOptions(this.payload) || {}
 
     if (this.payload.scheduleAt) {
-      if (!sendOptions) {
-        sendOptions = {}
-      }
       sendOptions.startAfter = new Date(this.payload.scheduleAt)
     }
+
+    sendOptions!.deadLetter = constructor.deadLetterQueueName()
 
     try {
       const res = await Queue.getInstance().send({
@@ -227,6 +211,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       )
       return constructor.handle({
         id: '__sync',
+        expireInSeconds: 0,
         name: constructor.getQueueName(),
         data: {
           region,
@@ -239,42 +224,5 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         name: constructor.getQueueName(),
       })
     }
-  }
-
-  async sendSlowRetryQueue() {
-    const constructor = this.constructor as typeof Event
-    const slowRetryQueue = constructor.withSlowRetryQueue()
-
-    if (!pgQueueEnable || !slowRetryQueue) {
-      return
-    }
-
-    const timer = QueueJobSchedulingTime.startTimer()
-    const sendOptions = constructor.getQueueOptions(this.payload) || {}
-
-    const res = await Queue.getInstance().send({
-      name: constructor.getSlowRetryQueueName(),
-      data: {
-        region,
-        ...this.payload,
-        $version: constructor.version,
-      },
-      options: {
-        retryBackoff: true,
-        startAfter: 60 * 60 * 30, // 30 mins
-        ...sendOptions,
-        ...slowRetryQueue,
-      },
-    })
-
-    timer({
-      name: constructor.getSlowRetryQueueName(),
-    })
-
-    QueueJobScheduled.inc({
-      name: constructor.getSlowRetryQueueName(),
-    })
-
-    return res
   }
 }

@@ -1,6 +1,6 @@
-import { BaseEvent } from './base-event'
+import { BaseEvent } from '../base-event'
 import { getTenantConfig } from '@internal/database'
-import { JobWithMetadata, SendOptions, WorkOptions } from 'pg-boss'
+import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
 import { BasePayload } from '@internal/queue'
 import { DBMigration, resetMigration } from '@internal/database/migrations'
 import { RunMigrationsOnTenants } from './run-migrations'
@@ -15,20 +15,23 @@ interface ResetMigrationsPayload extends BasePayload {
 export class ResetMigrationsOnTenant extends BaseEvent<ResetMigrationsPayload> {
   static queueName = 'tenants-migrations-reset'
 
+  static getQueueOptions(): Queue {
+    return {
+      name: this.queueName,
+      policy: 'stately',
+    } as const
+  }
+
   static getWorkerOptions(): WorkOptions {
     return {
-      enforceSingletonQueueActiveLimit: true,
-      teamSize: 200,
-      teamConcurrency: 10,
       includeMetadata: true,
     }
   }
 
-  static getQueueOptions(payload: ResetMigrationsPayload): SendOptions {
+  static getSendOptions(payload: ResetMigrationsPayload): SendOptions {
     return {
       expireInHours: 2,
       singletonKey: payload.tenantId,
-      useSingletonQueue: true,
       retryLimit: 3,
       retryDelay: 5,
       priority: 10,

@@ -5,7 +5,6 @@ import { JWTPayload } from 'jose'
 import { PubSubAdapter } from '../pubsub'
 import { createMutexByKey } from '../concurrency'
 import { ERRORS } from '@internal/errors'
-import { DBMigration, lastLocalMigrationName } from '@internal/database/migrations'
 import { JWKSManager } from './jwks-manager'
 import { JWKSManagerStoreKnex } from './jwks-manager/store-knex'
 import {
@@ -14,6 +13,8 @@ import {
 } from '@storage/protocols/s3/credentials-manager'
 import { TenantConnection } from '@internal/database/connection'
 import { logger, logSchema } from '@internal/monitoring'
+import { DBMigration } from './migrations/types'
+import { lastLocalMigrationName } from '@internal/database/migrations/files'
 
 type DBPoolMode = 'single_use' | 'recycled'
 

@@ -28,15 +28,17 @@ jest.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
   },
 }))
 
-const mockBucketResult = [{ id: 'abc123', name: 'def456' }]
-const storageDbMock = jest.fn().mockImplementation(() => ({
-  listBuckets: jest.fn().mockResolvedValue(mockBucketResult),
+// Mock module with inline implementation that doesn't depend on variables
+jest.mock('@storage/database', () => ({
+  StorageKnexDB: jest.fn().mockImplementation(() => ({
+    listBuckets: jest.fn().mockResolvedValue([{ id: 'abc123', name: 'def456' }]),
+  })),
 }))
-jest.mock('@storage/database', () => {
-  return {
-    StorageKnexDB: storageDbMock,
-  }
-})
+
+// Access the mock after it's been created by the Jest runtime
+const storageDbMock = require('@storage/database').StorageKnexDB
+
+// Use this reference in tests
 
 getConfig()
 mergeConfig({

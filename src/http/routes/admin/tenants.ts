@@ -8,6 +8,7 @@ import {
   multitenantKnex,
   getTenantConfig,
   jwksManager,
+  getTenantCapabilities,
 } from '@internal/database'
 import { dbSuperUser, storage } from '../../plugins'
 import {
@@ -184,6 +185,8 @@ export default async function routes(fastify: FastifyInstance) {
       disable_events,
     } = tenant
 
+    const capabilities = await getTenantCapabilities(request.params.tenantId)
+
     return {
       anonKey: decrypt(anon_key),
       databaseUrl: decrypt(database_url),
@@ -199,6 +202,7 @@ export default async function routes(fastify: FastifyInstance) {
       jwtSecret: decrypt(jwt_secret),
       jwks,
       serviceKey: decrypt(service_key),
+      capabilities,
       features: {
         imageTransformation: {
           enabled: feature_image_transformation,

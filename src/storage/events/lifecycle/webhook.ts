@@ -1,9 +1,9 @@
-import { BaseEvent } from './base-event'
+import { BaseEvent } from '../base-event'
 import { Job, WorkOptions } from 'pg-boss'
 import { HttpsAgent } from 'agentkeepalive'
 import HttpAgent from 'agentkeepalive'
 import axios from 'axios'
-import { getConfig } from '../../config'
+import { getConfig } from '../../../config'
 import { logger, logSchema } from '@internal/monitoring'
 import { getTenantConfig } from '@internal/database'
 
@@ -12,8 +12,6 @@ const {
   webhookURL,
   webhookApiKey,
   webhookQueuePullInterval,
-  webhookQueueTeamSize,
-  webhookQueueConcurrency,
   webhookMaxConnections,
   webhookQueueMaxFreeSockets,
 } = getConfig()
@@ -59,9 +57,9 @@ export class Webhook extends BaseEvent<WebhookEvent> {
 
   static getWorkerOptions(): WorkOptions {
     return {
-      newJobCheckInterval: webhookQueuePullInterval,
-      teamSize: webhookQueueTeamSize,
-      teamConcurrency: webhookQueueConcurrency,
+      pollingIntervalSeconds: webhookQueuePullInterval,
+      // teamSize: webhookQueueTeamSize,
+      // teamConcurrency: webhookQueueConcurrency,
     }
   }
 

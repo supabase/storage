@@ -31,6 +31,9 @@ const payload = {
   migrationStatus: 'COMPLETED',
   migrationVersion,
   tracingMode: 'basic',
+  capabilities: {
+    list_V2: true,
+  },
   features: {
     imageTransformation: {
       enabled: true,
@@ -59,6 +62,9 @@ const payload2 = {
   migrationStatus: 'COMPLETED',
   migrationVersion,
   tracingMode: 'basic',
+  capabilities: {
+    list_V2: true,
+  },
   features: {
     imageTransformation: {
       enabled: false,
@@ -113,10 +119,12 @@ describe('Tenant configs', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
+    const { capabilities, ...finalPayload } = payload
+
     expect(responseJSON).toEqual([
       {
         id: 'abc',
-        ...payload,
+        ...finalPayload,
       },
     ])
   })

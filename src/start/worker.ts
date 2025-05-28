@@ -4,7 +4,7 @@ import { listenForTenantUpdate, PubSub } from '@internal/database'
 import { AsyncAbortController } from '@internal/concurrency'
 import { registerWorkers } from '@storage/events'
 
-import { getConfig } from '../config'
+import { getConfig, mergeConfig } from '../config'
 import adminApp from '../admin-app'
 import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 
@@ -36,6 +36,9 @@ main()
  */
 export async function main() {
   const { requestTraceHeader, adminPort, host } = getConfig()
+  mergeConfig({
+    pgQueueEnableWorkers: true,
+  })
 
   logger.info('[Queue] Starting Queue Worker')
 

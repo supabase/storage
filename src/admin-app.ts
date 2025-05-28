@@ -19,6 +19,7 @@ const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): 
   app.register(routes.jwks, { prefix: 'tenants' })
   app.register(routes.migrations, { prefix: 'migrations' })
   app.register(routes.s3Credentials, { prefix: 's3' })
+  app.register(routes.queue, { prefix: 'queue' })
 
   let registriesToMerge: Registry[] = []
 

@@ -1,5 +1,5 @@
 import { Queue } from './queue'
-import PgBoss, { BatchWorkOptions, Job, SendOptions, WorkOptions } from 'pg-boss'
+import PgBoss, { Job, SendOptions, WorkOptions, Queue as PgBossQueue } from 'pg-boss'
 import { getConfig } from '../../config'
 import { QueueJobScheduled, QueueJobSchedulingTime } from '@internal/monitoring/metrics'
 import { logger, logSchema } from '@internal/monitoring'
@@ -36,7 +36,7 @@ interface BaseEventConstructor<Base extends Event<any>> {
   ): Promise<string | void | null>
 
   eventName(): string
-  getWorkerOptions(): WorkOptions | BatchWorkOptions
+  getWorkerOptions(): WorkOptions
 }
 
 /**
@@ -61,11 +61,15 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     return this.queueName
   }
 
-  static getQueueOptions<T extends Event<any>>(payload: T['payload']): SendOptions | undefined {
+  static getQueueOptions(): PgBossQueue | undefined {
     return undefined
   }
 
-  static getWorkerOptions(): WorkOptions | BatchWorkOptions {
+  static getSendOptions<T extends Event<any>>(payload: T['payload']): SendOptions | undefined {
+    return undefined
+  }
+
+  static getWorkerOptions(): WorkOptions {
     return {}
   }
 
@@ -104,7 +108,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
 
     return Queue.getInstance().insert(
       messages.map((message) => {
-        const sendOptions = (this.getQueueOptions(message.payload) as PgBoss.JobInsert) || {}
+        const sendOptions = (this.getSendOptions(message.payload) as PgBoss.JobInsert) || {}
         if (!message.payload.$version) {
           ;(message.payload as (typeof message)['payload']).$version = this.version
         }
@@ -170,6 +174,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       if (constructor.allowSync) {
         return constructor.handle({
           id: '__sync',
+          expireInSeconds: 0,
           name: constructor.getQueueName(),
           data: {
             region,
@@ -187,7 +192,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     }
 
     const timer = QueueJobSchedulingTime.startTimer()
-    let sendOptions = constructor.getQueueOptions(this.payload)
+    let sendOptions = constructor.getSendOptions(this.payload)
 
     if (this.payload.scheduleAt) {
       if (!sendOptions) {
@@ -227,6 +232,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       )
       return constructor.handle({
         id: '__sync',
+        expireInSeconds: 0,
         name: constructor.getQueueName(),
         data: {
           region,
@@ -250,7 +256,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     }
 
     const timer = QueueJobSchedulingTime.startTimer()
-    const sendOptions = constructor.getQueueOptions(this.payload) || {}
+    const sendOptions = constructor.getSendOptions(this.payload) || {}
 
     const res = await Queue.getInstance().send({
       name: constructor.getSlowRetryQueueName(),

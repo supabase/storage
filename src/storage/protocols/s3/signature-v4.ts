@@ -279,7 +279,6 @@ export class SignatureV4 {
   }
 
   public validateChunkSignature(
-    algorithm: V4StreamingAlgorithm,
     clientSignature: ClientSignature,
     chunkHash: string,
     chunkSignature: string,
@@ -300,7 +299,7 @@ export class SignatureV4 {
     //    SHA256(chunkData)
     const scope = `${shortDate}/${region}/${service}/aws4_request`
     const stringToSign = [
-      algorithm,
+      'AWS4-HMAC-SHA256-PAYLOAD',
       clientSignature.longDate,
       scope,
       prevSignature,
@@ -311,7 +310,7 @@ export class SignatureV4 {
     // 4) HMAC it with the derived key and compare
     const expected = this.hmac(signingKey, stringToSign)
 
-    return crypto.timingSafeEqual(expected, Buffer.from(chunkSignature))
+    return crypto.timingSafeEqual(expected, Buffer.from(chunkSignature, 'hex'))
   }
 
   signPostPolicy(clientSignature: ClientSignature, policy: string) {

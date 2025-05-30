@@ -440,6 +440,23 @@ describe('testing EMPTY bucket', () => {
 
   test('user is able to empty a bucket with a service key', async () => {
     const bucketId = 'bucket3'
+
+    // confirm there are items in the bucket before empty
+    const responseList = await appInstance.inject({
+      method: 'POST',
+      url: '/object/list/' + bucketId,
+      headers: {
+        authorization: `Bearer ${process.env.SERVICE_KEY}`,
+      },
+      payload: {
+        prefix: '',
+        limit: 10,
+        offset: 0,
+      },
+    })
+    expect(responseList.statusCode).toBe(200)
+    expect(responseList.json()).toHaveLength(2)
+
     const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
@@ -450,6 +467,20 @@ describe('testing EMPTY bucket', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON.message).toBe('Successfully emptied')
+
+    // confirm the bucket is actually empty after
+    const responseList2 = await appInstance.inject({
+      method: 'POST',
+      url: '/object/list/' + bucketId,
+      headers: {
+        authorization: `Bearer ${process.env.SERVICE_KEY}`,
+      },
+      payload: {
+        prefix: '',
+      },
+    })
+    expect(responseList2.statusCode).toBe(200)
+    expect(responseList2.json()).toHaveLength(0)
   })
 
   test('user is able to delete a bucket', async () => {

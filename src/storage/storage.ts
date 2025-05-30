@@ -17,6 +17,7 @@ import { StorageObjectLocator } from '@storage/locator'
 import { BucketCreatedEvent, BucketDeleted } from '@storage/events'
 import { tenantHasMigrations } from '@internal/database/migrations'
 import { tenantHasFeature } from '@internal/database'
+import { ObjectAdminDeleteBatch } from './events'
 
 const { requestUrlLengthLimit } = getConfig()
 
@@ -285,7 +286,7 @@ export class Storage {
       )
 
       if (deleted && deleted.length > 0) {
-        const params = deleted.reduce((all, { name, version }) => {
+        const prefixes = deleted.reduce((all, { name, version }) => {
           const fileName = this.location.getKeyLocation({
             tenantId: this.db.tenantId,
             bucketId,
@@ -297,8 +298,11 @@ export class Storage {
           return all
         }, [] as string[])
         // delete files from s3 asynchronously
-        this.backend.deleteObjects(this.location.getRootLocation(), params).catch((e) => {
-          logSchema.error(logger, 'Failed to delete objects from s3', { type: 's3', error: e })
+        await ObjectAdminDeleteBatch.send({
+          prefixes,
+          bucketId,
+          tenant: this.db.tenant(),
+          reqId: this.db.reqId,
         })
       }
 

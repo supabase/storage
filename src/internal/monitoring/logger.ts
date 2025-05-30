@@ -99,7 +99,7 @@ export const logSchema = {
   event: (logger: BaseLogger, message: string, log: EventLog) => logger.info(log, message),
 }
 
-export function buildTransport(): pino.TransportMultiOptions | undefined {
+export function buildTransport(): pino.TransportMultiOptions {
   const stdOutTarget = {
     level: logLevel || 'info',
     target: 'pino/file',

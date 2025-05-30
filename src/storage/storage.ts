@@ -6,9 +6,9 @@ import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from '.
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
 import { InfoRenderer } from '@storage/renderer/info'
-import { logger, logSchema } from '@internal/monitoring'
+import { ObjectAdminDeleteBatch } from './events'
 
-const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
+const { requestUrlLengthLimit } = getConfig()
 
 /**
  * Storage
@@ -205,15 +205,18 @@ export class Storage {
       )
 
       if (deleted && deleted.length > 0) {
-        const params = deleted.reduce((all, { name, version }) => {
+        const prefixes = deleted.reduce((all, { name, version }) => {
           const fileName = withOptionalVersion(`${this.db.tenantId}/${bucketId}/${name}`, version)
           all.push(fileName)
           all.push(fileName + '.info')
           return all
         }, [] as string[])
         // delete files from s3 asynchronously
-        this.backend.deleteObjects(storageS3Bucket, params).catch((e) => {
-          logSchema.error(logger, 'Failed to delete objects from s3', { type: 's3', error: e })
+        await ObjectAdminDeleteBatch.send({
+          prefixes,
+          bucketId,
+          tenant: this.db.tenant(),
+          reqId: this.db.reqId,
         })
       }
 

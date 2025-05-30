@@ -62,9 +62,11 @@ export function isValidBucketName(bucketName: string): boolean {
   // and the rest of the validation rules are based on S3 object key validation.
   // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
   // https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+  // bucket names can't start or end with whitespace
   return (
     bucketName.length > 0 &&
     bucketName.length < 101 &&
+    bucketName.trim().length === bucketName.length && // check there are no leading or trailing whitespaces
     /^(\w|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(bucketName)
   )
 }

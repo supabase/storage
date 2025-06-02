@@ -98,6 +98,7 @@ type StorageConfigType = {
   responseSMaxAge: number
   anonKeyAsync: Promise<string>
   serviceKeyAsync: Promise<string>
+  emptyBucketMax: number
   storageBackendType: StorageBackendType
   tenantId: string
   requestUrlLengthLimit: number
@@ -325,6 +326,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     // Storage
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
+    emptyBucketMax: parseInt(
+      getOptionalConfigFromEnv('STORAGE_EMPTY_BUCKET_MAX') || '200000',
+      10
+    ),
 
     // Storage - File
     storageFilePath: getOptionalConfigFromEnv(

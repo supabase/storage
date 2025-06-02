@@ -19,7 +19,7 @@ import { tenantHasMigrations } from '@internal/database/migrations'
 import { tenantHasFeature } from '@internal/database'
 import { ObjectAdminDeleteBatch } from './events'
 
-const { requestUrlLengthLimit } = getConfig()
+const { requestUrlLengthLimit, emptyBucketMax } = getConfig()
 
 /**
  * Storage
@@ -267,6 +267,11 @@ export class Storage {
    */
   async emptyBucket(bucketId: string) {
     await this.findBucket(bucketId, 'name')
+
+    const count = await this.countObjects(bucketId)
+    if (count > emptyBucketMax) {
+      throw ERRORS.UnableToEmptyBucket(bucketId)
+    }
 
     while (true) {
       const objects = await this.db.listObjects(

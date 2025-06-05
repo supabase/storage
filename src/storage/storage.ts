@@ -86,6 +86,11 @@ export class Storage {
       allowedMimeTypes?: null | string[]
     }
   ) {
+    // prevent creation with leading or trailing whitespace
+    if (data.name.trim().length !== data.name.length) {
+      throw ERRORS.InvalidBucketName(data.name)
+    }
+
     mustBeValidBucketName(data.name)
 
     const bucketData: Parameters<Database['createBucket']>[0] = data

@@ -234,6 +234,23 @@ describe('testing POST bucket', () => {
     })
     expect(response.statusCode).toBe(400)
   })
+
+  test('user is not able to create a bucket with the leading and trailing spaces', async () => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        name: ' startsWithSpace',
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    const { statusCode, error } = await response.json()
+    expect(statusCode).toBe('400')
+    expect(error).toBe('Invalid Input')
+  })
 })
 
 /*

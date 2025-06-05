@@ -1,16 +1,15 @@
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import { decrypt, verifyJWT } from '../auth'
+import { JWKSManager, JWKSManagerStoreKnex } from '../auth/jwks'
 import { multitenantKnex } from './multitenant-db'
 import { JWTPayload } from 'jose'
 import { PubSubAdapter } from '../pubsub'
 import { createMutexByKey } from '../concurrency'
 import { ERRORS } from '@internal/errors'
-import { JWKSManager } from './jwks-manager'
-import { JWKSManagerStoreKnex } from './jwks-manager/store-knex'
 import {
   S3CredentialsManagerStoreKnex,
   S3CredentialsManager,
-} from '@storage/protocols/s3/credentials-manager'
+} from '@storage/protocols/s3/credentials'
 import { TenantConnection } from '@internal/database/connection'
 import { logger, logSchema } from '@internal/monitoring'
 import { DBMigration } from './migrations/types'

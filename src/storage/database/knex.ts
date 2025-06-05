@@ -160,17 +160,21 @@ export class StorageKnexDB implements Database {
     return result
   }
 
-  async countObjectsInBucket(bucketId: string) {
+  async countObjectsInBucket(bucketId: string, limit?: number): Promise<number> {
+    // if we have a limit use select to only scan up to that limit
+    if (limit !== undefined) {
+      const result = await this.runQuery('CountObjectsInBucketWithLimit', (knex) => {
+        return knex.from('objects').where('bucket_id', bucketId).limit(limit).select(knex.raw('1'))
+      })
+      return result.length
+    }
+
+    // do full count if there is no limit
     const result = await this.runQuery('CountObjectsInBucket', (knex) => {
-      return knex
-        .from<{ count: number }>('objects')
-        .where('bucket_id', bucketId)
-        .limit(10)
-        .count()
-        .first()
+      return knex.from('objects').where('bucket_id', bucketId).count().first<{ count: number }>()
     })
 
-    return (result?.count as number) || 0
+    return result?.count || 0
   }
 
   async deleteBucket(bucketId: string | string[]) {
@@ -612,7 +616,10 @@ export class StorageKnexDB implements Database {
   async mustLockObject(bucketId: string, objectName: string, version?: string) {
     return this.runQuery('MustLockObject', async (knex) => {
       const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
-      const result = await knex.raw<any>(`SELECT pg_try_advisory_xact_lock(?);`, [hash])
+      const result = await knex.raw<{ rows: { pg_try_advisory_xact_lock: boolean }[] }>(
+        `SELECT pg_try_advisory_xact_lock(?);`,
+        [hash]
+      )
       const lockAcquired = result.rows.shift()?.pg_try_advisory_xact_lock || false
 
       if (!lockAcquired) {
@@ -631,7 +638,7 @@ export class StorageKnexDB implements Database {
   ) {
     return this.runQuery('WaitObjectLock', async (knex) => {
       const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
-      const query = knex.raw<any>(`SELECT pg_advisory_xact_lock(?)`, [hash])
+      const query = knex.raw(`SELECT pg_advisory_xact_lock(?)`, [hash])
 
       if (opts?.timeout) {
         let timeoutInterval: undefined | NodeJS.Timeout
@@ -661,18 +668,21 @@ export class StorageKnexDB implements Database {
 
   async searchObjects(bucketId: string, prefix: string, options: SearchObjectOption) {
     return this.runQuery('SearchObjects', async (knex) => {
-      const result = await knex.raw('select * from storage.search(?,?,?,?,?,?,?,?)', [
-        prefix,
-        bucketId,
-        options.limit || 100,
-        prefix.split('/').length,
-        options.offset || 0,
-        options.search || '',
-        options.sortBy?.column ?? 'name',
-        options.sortBy?.order ?? 'asc',
-      ])
+      const result = await knex.raw<{ rows: Obj[] }>(
+        'select * from storage.search(?,?,?,?,?,?,?,?)',
+        [
+          prefix,
+          bucketId,
+          options.limit || 100,
+          prefix.split('/').length,
+          options.offset || 0,
+          options.search || '',
+          options.sortBy?.column ?? 'name',
+          options.sortBy?.order ?? 'asc',
+        ]
+      )
 
-      return (result as any).rows
+      return result.rows
     })
   }
 
@@ -807,7 +817,7 @@ export class StorageKnexDB implements Database {
 
         if (typeof columns === 'object') {
           value.forEach((column: string) => {
-            delete (columns as Record<any, any>)[column]
+            delete (columns as Record<string, object>)[column]
           })
         }
       }

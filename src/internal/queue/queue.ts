@@ -167,18 +167,14 @@ export abstract class Queue {
     Queue.pgBoss = undefined
   }
 
-  protected static startWorkers(opts: {
+  protected static async startWorkers(opts: {
     maxConcurrentTasks: number
     signal?: AbortSignal
     onMessage?: (job: Job) => void
   }) {
-    const workers: Promise<any>[] = []
-
-    Queue.events.forEach((event) => {
-      workers.push(Queue.registerTask(event, opts.maxConcurrentTasks, opts.onMessage, opts.signal))
-    })
-
-    return Promise.all(workers)
+    for (const event of Queue.events) {
+      await Queue.registerTask(event, opts.maxConcurrentTasks, opts.onMessage, opts.signal)
+    }
   }
 
   protected static callStart() {
@@ -222,7 +218,7 @@ export abstract class Queue {
         retryBackoff: true,
       })
 
-      // normal queue
+      // // normal queue
       await this.pgBoss?.createQueue(queueName, {
         name: queueName,
         ...queueOptions,

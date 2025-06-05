@@ -147,14 +147,6 @@ export class Storage {
   }
 
   /**
-   * Counts objects in a bucket
-   * @param id
-   */
-  countObjects(id: string) {
-    return this.db.countObjectsInBucket(id)
-  }
-
-  /**
    * Delete a specific bucket if empty
    * @param id
    */
@@ -164,7 +156,7 @@ export class Storage {
         forUpdate: true,
       })
 
-      const countObjects = await db.asSuperUser().countObjectsInBucket(id)
+      const countObjects = await db.asSuperUser().countObjectsInBucket(id, 1)
 
       if (countObjects && countObjects > 0) {
         throw ERRORS.BucketNotEmpty(id)
@@ -187,7 +179,7 @@ export class Storage {
   async emptyBucket(bucketId: string) {
     await this.findBucket(bucketId, 'name')
 
-    const count = await this.countObjects(bucketId)
+    const count = await this.db.countObjectsInBucket(bucketId, emptyBucketMax + 1)
     if (count > emptyBucketMax) {
       throw ERRORS.UnableToEmptyBucket(bucketId)
     }

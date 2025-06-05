@@ -3,6 +3,9 @@ import dotenv from 'dotenv'
 import app from '../app'
 import { S3Backend } from '../storage/backend'
 import { FastifyInstance } from 'fastify'
+import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
+import { StorageKnexDB } from '@storage/database'
+import { getConfig } from '../config'
 
 dotenv.config({ path: '.env.test' })
 const anonKey = process.env.ANON_KEY || ''
@@ -359,6 +362,39 @@ describe('testing public bucket functionality', () => {
       },
     })
     expect(response.statusCode).toBe(400)
+  })
+})
+
+describe('testing count objects in bucket', () => {
+  const { tenantId } = getConfig()
+  let db: StorageKnexDB
+
+  beforeAll(async () => {
+    const superUser = await getServiceKeyUser(tenantId)
+    const pg = await getPostgresConnection({
+      superUser,
+      user: superUser,
+      tenantId: tenantId,
+      host: 'localhost',
+    })
+
+    db = new StorageKnexDB(pg, {
+      host: 'localhost',
+      tenantId,
+    })
+  })
+
+  it('should return correct object count', async () => {
+    await expect(db.countObjectsInBucket('bucket2')).resolves.toBe(27)
+  })
+  it('should return limited object count', async () => {
+    await expect(db.countObjectsInBucket('bucket2', 22)).resolves.toBe(22)
+  })
+  it('should return full object count if limit is greater than total', async () => {
+    await expect(db.countObjectsInBucket('bucket2', 999)).resolves.toBe(27)
+  })
+  it('should return 0 object count if there are no objects with provided bucket id', async () => {
+    await expect(db.countObjectsInBucket('this-is-not-a-bucket-at-all', 999)).resolves.toBe(0)
   })
 })
 

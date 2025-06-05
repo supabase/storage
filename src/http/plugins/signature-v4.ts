@@ -248,7 +248,6 @@ function createStreamingSignatureV4Parser(opts: CreateSignatureV3ParserOpts) {
     'signatureReadyForVerification',
     (signature: string, _: number, hash: string, previousSign) => {
       const isValid = opts.signatureV4.validateChunkSignature(
-        algorithm,
         opts.clientSignature,
         hash,
         signature,

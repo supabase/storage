@@ -1,6 +1,6 @@
-import { BaseEvent } from './base-event'
+import { BaseEvent } from '../base-event'
 import { getTenantConfig, TenantMigrationStatus } from '@internal/database'
-import { JobWithMetadata, SendOptions, WorkOptions } from 'pg-boss'
+import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import {
@@ -20,21 +20,24 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
   static queueName = 'tenants-migrations'
   static allowSync = false
 
+  static getQueueOptions(): Queue {
+    return {
+      name: this.queueName,
+      policy: 'stately',
+    } as const
+  }
+
   static getWorkerOptions(): WorkOptions {
     return {
-      teamSize: 200,
-      teamConcurrency: 10,
       includeMetadata: true,
-      enforceSingletonQueueActiveLimit: true,
     }
   }
 
-  static getQueueOptions(payload: RunMigrationsPayload): SendOptions {
+  static getSendOptions(payload: RunMigrationsPayload): SendOptions {
     return {
-      expireInHours: 48,
+      expireInHours: 24,
       singletonKey: `migrations_${payload.tenantId}`,
       singletonHours: 1,
-      useSingletonQueue: true,
       retryLimit: 3,
       retryDelay: 5,
       priority: 10,
@@ -86,7 +89,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
         project: tenantId,
       })
 
-      if (job.retrycount === job.retrylimit) {
+      if (job.retryCount === job.retryLimit) {
         await updateTenantMigrationsState(tenantId, { state: TenantMigrationStatus.FAILED_STALE })
       } else {
         await updateTenantMigrationsState(tenantId, { state: TenantMigrationStatus.FAILED })

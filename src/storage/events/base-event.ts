@@ -29,7 +29,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     payload: Omit<T['payload'], '$version'>
   ) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { Webhook } = require('./webhook')
+    const { Webhook } = require('./lifecycle/webhook')
     const eventType = this.eventName()
 
     try {

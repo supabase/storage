@@ -66,6 +66,10 @@ async function main() {
       signal: shutdownSignal.nextGroup.signal,
       registerWorkers: registerWorkers,
     })
+
+    logSchema.info(logger, '[Queue] Started', {
+      type: 'queue',
+    })
   }
 
   // Pubsub

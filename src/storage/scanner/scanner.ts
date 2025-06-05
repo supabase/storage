@@ -2,7 +2,7 @@ import { Storage } from '@storage/storage'
 import { getConfig } from '../../config'
 import { ERRORS } from '@internal/errors'
 import { mergeAsyncGenerators } from '@internal/concurrency'
-import { BackupObjectEvent } from '@storage/events/backup-object'
+import { BackupObjectEvent } from '@storage/events/objects/backup-object'
 import { withOptionalVersion } from '@storage/backend'
 
 const { storageS3Bucket } = getConfig()

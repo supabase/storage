@@ -27,10 +27,10 @@ export class Cluster {
         cluster
           .getClusterSize()
           .then((size) => {
-            if (size !== Cluster.size) {
+            if (size && size !== Cluster.size) {
               clusterEvent.emit('change', { size })
+              Cluster.size = size
             }
-            Cluster.size = size
           })
           .catch((e) => {
             console.error('Error getting cluster size', e)

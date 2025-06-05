@@ -4,7 +4,8 @@ import { QueueDB } from '@internal/queue/database'
 import { getConfig } from '../../config'
 import { logger, logSchema } from '../monitoring'
 import { QueueJobRetryFailed, QueueJobCompleted, QueueJobError } from '../monitoring/metrics'
-import { BasePayload, Event } from './event'
+import { Event } from './event'
+import { Semaphore } from '@shopify/semaphore'
 
 //eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SubclassOfBaseClass = (new (payload: any) => Event<any>) & {
@@ -33,12 +34,13 @@ export abstract class Queue {
       databaseURL,
       multitenantDatabaseUrl,
       pgQueueConnectionURL,
+      pgQueueArchiveCompletedAfterSeconds,
       pgQueueDeleteAfterDays,
       pgQueueDeleteAfterHours,
-      pgQueueArchiveCompletedAfterSeconds,
       pgQueueRetentionDays,
       pgQueueEnableWorkers,
       pgQueueReadWriteTimeout,
+      pgQueueConcurrentTasksPerQueue,
       pgQueueMaxConnections,
     } = getConfig()
 
@@ -55,22 +57,26 @@ export abstract class Queue {
 
     Queue.pgBoss = new PgBoss({
       connectionString: url,
+
       db: new QueueDB({
         min: 0,
         max: pgQueueMaxConnections,
         connectionString: url,
         statement_timeout: pgQueueReadWriteTimeout > 0 ? pgQueueReadWriteTimeout : undefined,
       }),
+      schema: 'pgboss_v10',
       application_name: 'storage-pgboss',
-      ...(pgQueueDeleteAfterHours ? {} : { deleteAfterDays: pgQueueDeleteAfterDays }),
-      ...(pgQueueDeleteAfterHours ? { deleteAfterHours: pgQueueDeleteAfterHours } : {}),
+      ...(pgQueueDeleteAfterHours
+        ? { deleteAfterHours: pgQueueDeleteAfterHours }
+        : { deleteAfterDays: pgQueueDeleteAfterDays }),
       archiveCompletedAfterSeconds: pgQueueArchiveCompletedAfterSeconds,
       retentionDays: pgQueueRetentionDays,
       retryBackoff: true,
       retryLimit: 20,
-      expireInHours: 48,
-      noSupervisor: pgQueueEnableWorkers === false,
-      noScheduling: pgQueueEnableWorkers === false,
+      expireInHours: 23,
+      maintenanceIntervalSeconds: 60 * 5,
+      schedule: pgQueueEnableWorkers !== false,
+      supervise: pgQueueEnableWorkers !== false,
     })
 
     Queue.pgBoss.on('error', (error) => {
@@ -87,7 +93,11 @@ export abstract class Queue {
     }
 
     await Queue.callStart()
-    await Queue.startWorkers(opts.onMessage)
+    await Queue.startWorkers({
+      maxConcurrentTasks: pgQueueConcurrentTasksPerQueue,
+      onMessage: opts.onMessage,
+      signal: opts.signal,
+    })
 
     if (opts.signal) {
       opts.signal.addEventListener(
@@ -144,7 +154,7 @@ export abstract class Queue {
     await boss.stop({
       timeout: 20 * 1000,
       graceful: isProduction,
-      destroy: true,
+      wait: true,
     })
 
     await new Promise((resolve) => {
@@ -157,17 +167,15 @@ export abstract class Queue {
     Queue.pgBoss = undefined
   }
 
-  protected static startWorkers(onMessage?: (job: Job) => void) {
-    const workers: Promise<string>[] = []
+  protected static startWorkers(opts: {
+    maxConcurrentTasks: number
+    signal?: AbortSignal
+    onMessage?: (job: Job) => void
+  }) {
+    const workers: Promise<any>[] = []
 
     Queue.events.forEach((event) => {
-      workers.push(Queue.registerTask(event.getQueueName(), event, true, onMessage))
-
-      const slowRetryQueue = event.withSlowRetryQueue()
-
-      if (slowRetryQueue) {
-        workers.push(Queue.registerTask(event.getSlowRetryQueueName(), event, false, onMessage))
-      }
+      workers.push(Queue.registerTask(event, opts.maxConcurrentTasks, opts.onMessage, opts.signal))
     })
 
     return Promise.all(workers)
@@ -189,78 +197,149 @@ export abstract class Queue {
     return Promise.all(events)
   }
 
-  protected static registerTask(
-    queueName: string,
+  protected static async registerTask(
     event: SubclassOfBaseClass,
-    slowRetryQueueOnFail?: boolean,
-    onMessage?: (job: Job) => void
+    maxConcurrentTasks: number,
+    onMessage?: (job: Job) => void,
+    signal?: AbortSignal
   ) {
-    const hasSlowRetryQueue = event.withSlowRetryQueue()
-    return Queue.getInstance().work(
-      queueName,
-      event.getWorkerOptions(),
-      async (job: Job<BasePayload>) => {
-        try {
-          if (onMessage) {
-            onMessage(job)
-          }
-          const res = await event.handle(job)
+    const queueName = event.getQueueName()
+    const deadLetterName = event.deadLetterQueueName()
 
-          QueueJobCompleted.inc({
-            name: event.getQueueName(),
-          })
+    const concurrentTaskCount = event.getWorkerOptions().concurrentTaskCount || maxConcurrentTasks
+    try {
+      // Create dead-letter queue and the normal queue
+      const queueOptions = {
+        policy: 'standard',
+        ...event.getQueueOptions(),
+      } as const
 
-          return res
-        } catch (e) {
-          QueueJobRetryFailed.inc({
-            name: event.getQueueName(),
-          })
+      // dead-letter
+      await this.pgBoss?.createQueue(deadLetterName, {
+        ...queueOptions,
+        name: deadLetterName,
+        retentionDays: 30,
+        retryBackoff: true,
+      })
 
-          try {
-            const dbJob: JobWithMetadata | null =
-              (job as JobWithMetadata).priority !== undefined
-                ? (job as JobWithMetadata)
-                : await Queue.getInstance().getJobById(job.id)
+      // normal queue
+      await this.pgBoss?.createQueue(queueName, {
+        name: queueName,
+        ...queueOptions,
+        deadLetter: deadLetterName,
+      })
+    } catch {
+      // no-op
+    }
 
-            if (!dbJob) {
-              return
-            }
-            if (dbJob.retrycount >= dbJob.retrylimit) {
-              QueueJobError.inc({
+    return this.pollQueue(event, {
+      concurrentTaskCount,
+      onMessage,
+      signal,
+    })
+  }
+
+  protected static pollQueue(
+    event: SubclassOfBaseClass,
+    queueOpts: {
+      concurrentTaskCount: number
+      onMessage?: (job: Job) => void
+      signal?: AbortSignal
+    }
+  ) {
+    const semaphore = new Semaphore(queueOpts.concurrentTaskCount)
+    const pollingInterval = (event.getWorkerOptions().pollingIntervalSeconds || 5) * 1000
+    const batchSize =
+      event.getWorkerOptions().batchSize ||
+      queueOpts.concurrentTaskCount + Math.max(1, Math.floor(queueOpts.concurrentTaskCount * 1.2))
+
+    let started = false
+    const interval = setInterval(async () => {
+      if (started) {
+        return
+      }
+
+      try {
+        started = true
+        const defaultFetch = {
+          includeMetadata: true,
+          batchSize,
+        }
+        const jobs = await this.pgBoss?.fetch(event.getQueueName(), {
+          ...event.getWorkerOptions(),
+          ...defaultFetch,
+        })
+
+        if (queueOpts.signal?.aborted) {
+          started = false
+          return
+        }
+
+        if (!jobs || (jobs && jobs.length === 0)) {
+          started = false
+          return
+        }
+
+        await Promise.allSettled(
+          jobs.map(async (job) => {
+            const lock = await semaphore.acquire()
+            try {
+              queueOpts.onMessage?.(job as Job)
+
+              await event.handle(job, { signal: queueOpts.signal })
+
+              await this.pgBoss?.complete(event.getQueueName(), job.id)
+              QueueJobCompleted.inc({
+                name: event.getQueueName(),
+              })
+            } catch (e) {
+              await this.pgBoss?.fail(event.getQueueName(), job.id)
+
+              QueueJobRetryFailed.inc({
                 name: event.getQueueName(),
               })
 
-              if (hasSlowRetryQueue && slowRetryQueueOnFail) {
-                event.sendSlowRetryQueue(job.data).catch(() => {
-                  logSchema.error(
-                    logger,
-                    `[Queue Handler] Error while sending job to slow retry queue`,
-                    {
-                      type: 'queue-task',
-                      error: e,
-                      metadata: JSON.stringify(job),
-                    }
-                  )
+              try {
+                const dbJob: JobWithMetadata | null =
+                  (job as JobWithMetadata).priority !== undefined
+                    ? (job as JobWithMetadata)
+                    : await Queue.getInstance().getJobById(event.getQueueName(), job.id)
+
+                if (!dbJob) {
+                  return
+                }
+                if (dbJob.retryCount >= dbJob.retryLimit) {
+                  QueueJobError.inc({
+                    name: event.getQueueName(),
+                  })
+                }
+              } catch (e) {
+                logSchema.error(logger, `[Queue Handler] fetching job ${event.name}`, {
+                  type: 'queue-task',
+                  error: e,
+                  metadata: JSON.stringify(job),
                 })
               }
+
+              logSchema.error(logger, `[Queue Handler] Error while processing job ${event.name}`, {
+                type: 'queue-task',
+                error: e,
+                metadata: JSON.stringify(job),
+              })
+
+              throw e
+            } finally {
+              await lock.release()
             }
-          } catch (e) {
-            logSchema.error(logger, `[Queue Handler] fetching job ${event.name}`, {
-              type: 'queue-task',
-              error: e,
-              metadata: JSON.stringify(job),
-            })
-          }
-
-          logSchema.error(logger, `[Queue Handler] Error while processing job ${event.name}`, {
-            type: 'queue-task',
-            error: e,
-            metadata: JSON.stringify(job),
           })
-
-          throw e
-        }
+        )
+      } finally {
+        started = false
       }
-    )
+    }, pollingInterval)
+
+    queueOpts.signal?.addEventListener('abort', () => {
+      clearInterval(interval)
+    })
   }
 }

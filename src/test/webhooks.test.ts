@@ -67,7 +67,10 @@ describe('Webhooks', () => {
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'webhooks',
-        options: undefined,
+        options: expect.objectContaining({
+          deadLetter: 'webhooks-dead-letter',
+          expireInSeconds: expect.any(Number),
+        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -117,7 +120,10 @@ describe('Webhooks', () => {
       1,
       expect.objectContaining({
         name: 'webhooks',
-        options: undefined,
+        options: expect.objectContaining({
+          deadLetter: 'webhooks-dead-letter',
+          expireInSeconds: expect.any(Number),
+        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -167,7 +173,10 @@ describe('Webhooks', () => {
       2,
       expect.objectContaining({
         name: 'webhooks',
-        options: undefined,
+        options: expect.objectContaining({
+          deadLetter: 'webhooks-dead-letter',
+          expireInSeconds: expect.any(Number),
+        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -197,7 +206,10 @@ describe('Webhooks', () => {
       3,
       expect.objectContaining({
         name: 'webhooks',
-        options: undefined,
+        options: expect.objectContaining({
+          deadLetter: 'webhooks-dead-letter',
+          expireInSeconds: expect.any(Number),
+        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -262,7 +274,10 @@ describe('Webhooks', () => {
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'webhooks',
-        options: undefined,
+        options: expect.objectContaining({
+          deadLetter: 'webhooks-dead-letter',
+          expireInSeconds: expect.any(Number),
+        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({

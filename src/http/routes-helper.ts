@@ -1,7 +1,7 @@
 type BucketResponseType = { message: string; statusCode?: string; error?: string }
 
 /**
- * Create generic respose for all buckets
+ * Create generic response for all buckets
  * @param message {string} Main message
  * @param status {string=} StatusCode
  * @param error {string=} Error number (presented as a string)

@@ -1,4 +1,4 @@
-import { getSslSettings, isIpAddress } from '@internal/database/util'
+import { getSslSettings, isIpAddress } from '@internal/database/ssl'
 
 describe('database utils', () => {
   test.each([

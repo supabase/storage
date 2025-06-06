@@ -14,9 +14,9 @@ import { adminApp, mockQueue } from './common'
 import { jwksManager, getJwtSecret } from '@internal/database'
 import { listenForTenantUpdate } from '@internal/database'
 import { PostgresPubSub } from '@internal/pubsub'
-import { UrlSigningJwkGenerator } from '@internal/auth/generators/jwk-generator'
+import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
 import { signJWT } from '@internal/auth'
-import { JWKSManagerStoreKnex } from '@internal/database/jwks-manager/store-knex'
+import { JWKSManagerStoreKnex } from '@internal/auth/jwks/store-knex'
 import { createMockKnexReturning } from './mocks/knex-mock'
 
 dotenv.config({ path: '.env.test' })

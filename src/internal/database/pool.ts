@@ -2,7 +2,7 @@ import { getConfig } from '../../config'
 import TTLCache from '@isaacs/ttlcache'
 import { knex, Knex } from 'knex'
 import { logger, logSchema } from '@internal/monitoring'
-import { getSslSettings } from '@internal/database/util'
+import { getSslSettings } from '@internal/database/ssl'
 import { wait } from '@internal/concurrency'
 import { JWTPayload } from 'jose'
 import { DbActivePool } from '@internal/monitoring/metrics'
@@ -223,6 +223,11 @@ class TenantPool implements PoolStrategy {
     }
 
     while (true) {
+      if (!pool?.client?.pool) {
+        if (pool) return pool.destroy()
+        return
+      }
+
       let waiting = 0
       waiting += pool.client.pool.numPendingAcquires()
       waiting += pool.client.pool.numPendingValidations()

@@ -1,5 +1,5 @@
 import { StorageBackendAdapter, withOptionalVersion } from './backend'
-import { Database, FindBucketFilters } from './database'
+import { Database, FindBucketFilters, ListBucketOptions } from './database'
 import { ERRORS } from '@internal/errors'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from './limits'
@@ -68,9 +68,10 @@ export class Storage {
   /**
    * List buckets
    * @param columns
+   * @param options
    */
-  listBuckets(columns = 'id') {
-    return this.db.listBuckets(columns)
+  listBuckets(columns = 'id', options?: ListBucketOptions) {
+    return this.db.listBuckets(columns, options)
   }
 
   /**

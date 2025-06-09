@@ -44,6 +44,13 @@ export interface DatabaseOptions<TNX> {
   parentConnection?: TenantConnection
 }
 
+export interface ListBucketOptions {
+  limit?: number
+  offset?: number
+  sortColumn?: string
+  sortOrder?: string
+}
+
 export interface Database {
   tenantHost: string
   tenantId: string
@@ -108,7 +115,7 @@ export interface Database {
     }
   ): Promise<S3MultipartUpload[]>
 
-  listBuckets(columns: string): Promise<Bucket[]>
+  listBuckets(columns: string, options?: ListBucketOptions): Promise<Bucket[]>
   mustLockObject(bucketId: string, objectName: string, version?: string): Promise<boolean>
   waitObjectLock(
     bucketId: string,

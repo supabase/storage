@@ -2,7 +2,7 @@ import { PoolManager } from '@internal/database/pool'
 import { getConfig } from '../config'
 import { getServiceKeyUser } from '@internal/database'
 
-const { databasePoolURL, tenantId } = getConfig()
+const { databaseURL, databasePoolURL, tenantId } = getConfig()
 
 describe('TenantPool Database', () => {
   it('can acquire a on a destroyed pool', async () => {
@@ -12,7 +12,7 @@ describe('TenantPool Database', () => {
       tenantId,
       isExternalPool: true,
       maxConnections: 20,
-      dbUrl: databasePoolURL!,
+      dbUrl: databasePoolURL || databaseURL,
       user: superUser,
       superUser,
     })

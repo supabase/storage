@@ -170,10 +170,14 @@ class TenantPool implements PoolStrategy {
   }
 
   destroy(): Promise<void> {
-    if (!this.pool) {
+    const originalPool = this.pool
+
+    if (!originalPool) {
       return Promise.resolve()
     }
-    return this.drainPool(this.pool)
+
+    this.pool = undefined
+    return this.drainPool(originalPool)
   }
 
   getSettings() {

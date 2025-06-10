@@ -154,14 +154,13 @@ describe('testing GET all buckets', () => {
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON.length).toEqual(1)
     expect(responseJSON[0]).toMatchObject({
-      id: "bucket4",
-      name: "bucket4",
-      public: false, 
+      id: 'bucket4',
+      name: 'bucket4',
+      public: false,
       file_size_limit: null,
       allowed_mime_types: null,
     })
   })
-
 })
 
 /*

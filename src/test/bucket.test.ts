@@ -141,7 +141,29 @@ describe('testing GET all buckets', () => {
     })
     expect(response.statusCode).toBe(400)
   })
+
+  test('user is able to get buckets with limit, offset and sorting', async () => {
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/bucket?limit=1&offset=2&sortColumn=name&sortOrder=asc`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const responseJSON = JSON.parse(response.body)
+    expect(responseJSON.length).toEqual(1)
+    expect(responseJSON[0]).toMatchObject({
+      id: "bucket4",
+      name: "bucket4",
+      public: false, 
+      file_size_limit: null,
+      allowed_mime_types: null,
+    })
+  })
+
 })
+
 /*
  * POST /bucket
  */

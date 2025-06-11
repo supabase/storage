@@ -6,9 +6,9 @@ import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from '.
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
 import { InfoRenderer } from '@storage/renderer/info'
-import { logger, logSchema } from '@internal/monitoring'
+import { ObjectAdminDeleteBatch } from './events'
 
-const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
+const { requestUrlLengthLimit, emptyBucketMax } = getConfig()
 
 /**
  * Storage
@@ -147,14 +147,6 @@ export class Storage {
   }
 
   /**
-   * Counts objects in a bucket
-   * @param id
-   */
-  countObjects(id: string) {
-    return this.db.countObjectsInBucket(id)
-  }
-
-  /**
    * Delete a specific bucket if empty
    * @param id
    */
@@ -164,7 +156,7 @@ export class Storage {
         forUpdate: true,
       })
 
-      const countObjects = await db.asSuperUser().countObjectsInBucket(id)
+      const countObjects = await db.asSuperUser().countObjectsInBucket(id, 1)
 
       if (countObjects && countObjects > 0) {
         throw ERRORS.BucketNotEmpty(id)
@@ -187,6 +179,11 @@ export class Storage {
   async emptyBucket(bucketId: string) {
     await this.findBucket(bucketId, 'name')
 
+    const count = await this.db.countObjectsInBucket(bucketId, emptyBucketMax + 1)
+    if (count > emptyBucketMax) {
+      throw ERRORS.UnableToEmptyBucket(bucketId)
+    }
+
     while (true) {
       const objects = await this.db.listObjects(
         bucketId,
@@ -205,15 +202,18 @@ export class Storage {
       )
 
       if (deleted && deleted.length > 0) {
-        const params = deleted.reduce((all, { name, version }) => {
+        const prefixes = deleted.reduce((all, { name, version }) => {
           const fileName = withOptionalVersion(`${this.db.tenantId}/${bucketId}/${name}`, version)
           all.push(fileName)
           all.push(fileName + '.info')
           return all
         }, [] as string[])
         // delete files from s3 asynchronously
-        this.backend.deleteObjects(storageS3Bucket, params).catch((e) => {
-          logSchema.error(logger, 'Failed to delete objects from s3', { type: 's3', error: e })
+        await ObjectAdminDeleteBatch.send({
+          prefixes,
+          bucketId,
+          tenant: this.db.tenant(),
+          reqId: this.db.reqId,
         })
       }
 

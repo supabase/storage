@@ -49,6 +49,7 @@ export interface ListBucketOptions {
   offset?: number
   sortColumn?: string
   sortOrder?: string
+  search?: string
 }
 
 export interface Database {

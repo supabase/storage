@@ -28,9 +28,10 @@ const requestQuerySchema = {
   type: 'object',
   properties: {
     limit: { type: 'integer', minimum: 1, examples: [10] },
-    offset: { type: 'integer', minimum: 0, examples: [0] },
+    offset: { type: 'integer', minimum: 1, examples: [1] },
     sortColumn: { type: 'string', enum: ['id', 'name', 'created_at', 'updated_at'] },
     sortOrder: { type: 'string', enum: ['asc', 'desc'] },
+    search: { type: 'string', examples: ["my-bucket"] }
   },
 } as const
 
@@ -55,10 +56,10 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      const { limit, offset, sortColumn, sortOrder } = request.query
+      const { limit, offset, sortColumn, sortOrder, search } = request.query
       const results = await request.storage.listBuckets(
         'id, name, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types',
-        { limit, offset, sortColumn, sortOrder }
+        { limit, offset, sortColumn, sortOrder, search }
       )
 
       return response.send(results)

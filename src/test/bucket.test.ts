@@ -142,10 +142,10 @@ describe('testing GET all buckets', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  test('user is able to get buckets with limit, offset and sorting', async () => {
+  test('user is able to get buckets with limit, offset, search and sorting', async () => {
     const response = await appInstance.inject({
       method: 'GET',
-      url: `/bucket?limit=1&offset=2&sortColumn=name&sortOrder=asc`,
+      url: `/bucket?limit=1&offset=2&sortColumn=name&sortOrder=asc&search=bucket`,
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
@@ -160,6 +160,28 @@ describe('testing GET all buckets', () => {
       file_size_limit: null,
       allowed_mime_types: null,
     })
+  })
+
+  test('limit=0 returns 400', async () => {
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/bucket?limit=0`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('offset=0 returns 400', async () => {
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/bucket?offset=0`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
   })
 })
 

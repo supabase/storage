@@ -288,15 +288,19 @@ export class StorageKnexDB implements Database {
     const data = await this.runQuery('ListBuckets', (knex) => {
       const query = knex.from<Bucket>('buckets').select(columns.split(','))
 
-      if (options?.sortColumn) {
+      if (options?.search !== undefined) {
+        query.where('name', 'like', `${options.search}%`)
+      } 
+
+      if (options?.sortColumn !== undefined) {
         query.orderBy(options.sortColumn, options.sortOrder || 'asc')
       }
 
-      if (options?.limit) {
+      if (options?.limit !== undefined) {
         query.limit(options.limit)
       }
 
-      if (options?.offset) {
+      if (options?.offset !== undefined) {
         query.offset(options.offset)
       }
 

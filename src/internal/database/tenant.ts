@@ -138,8 +138,6 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
     const serviceKey = decrypt(service_key)
     const jwtSecret = decrypt(jwt_secret)
 
-    const serviceKeyPayload = await verifyJWT<{ role: string }>(serviceKey, jwtSecret)
-
     const config = {
       anonKey: decrypt(anon_key),
       databaseUrl: decrypt(database_url),
@@ -149,7 +147,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       jwtSecret: jwtSecret,
       jwks,
       serviceKey: serviceKey,
-      serviceKeyPayload,
+      serviceKeyPayload: { role: dbServiceRole },
       maxConnections: max_connections ? Number(max_connections) : undefined,
       features: {
         imageTransformation: {
@@ -182,14 +180,12 @@ export async function getServiceKeyUser(tenantId: string) {
     return {
       jwt: tenant.serviceKey,
       payload: tenant.serviceKeyPayload,
-      jwtSecret: tenant.jwtSecret,
     }
   }
 
   return {
     jwt: await singleTenantServiceKey!.jwt,
     payload: singleTenantServiceKey!.payload,
-    jwtSecret: jwtSecret,
   }
 }
 

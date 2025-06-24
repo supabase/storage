@@ -1,4 +1,4 @@
-import { StorageBackendAdapter, withOptionalVersion } from './backend'
+import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters } from './database'
 import { ERRORS } from '@internal/errors'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
@@ -6,9 +6,9 @@ import { getFileSizeLimit, mustBeValidBucketName, parseFileSizeToBytes } from '.
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
 import { InfoRenderer } from '@storage/renderer/info'
-import { ObjectAdminDeleteBatch } from './events'
+import { ObjectAdminDeleteAllBefore } from './events'
 
-const { requestUrlLengthLimit, emptyBucketMax } = getConfig()
+const { emptyBucketMax } = getConfig()
 
 /**
  * Storage
@@ -175,8 +175,9 @@ export class Storage {
   /**
    * Deletes all files in a bucket
    * @param bucketId
+   * @param before limit to files before the specified time (defaults to now)
    */
-  async emptyBucket(bucketId: string) {
+  async emptyBucket(bucketId: string, before: Date = new Date()) {
     await this.findBucket(bucketId, 'name')
 
     const count = await this.db.countObjectsInBucket(bucketId, emptyBucketMax + 1)
@@ -184,52 +185,24 @@ export class Storage {
       throw ERRORS.UnableToEmptyBucket(bucketId)
     }
 
-    while (true) {
-      const objects = await this.db.listObjects(
-        bucketId,
-        'id, name',
-        Math.floor(requestUrlLengthLimit / (36 + 3))
-      )
-
-      if (!(objects && objects.length > 0)) {
-        break
-      }
-
-      const deleted = await this.db.deleteObjects(
-        bucketId,
-        objects.map(({ id }) => id!),
-        'id'
-      )
-
-      if (deleted && deleted.length > 0) {
-        const prefixes = deleted.reduce((all, { name, version }) => {
-          const fileName = withOptionalVersion(`${this.db.tenantId}/${bucketId}/${name}`, version)
-          all.push(fileName)
-          all.push(fileName + '.info')
-          return all
-        }, [] as string[])
-        // delete files from s3 asynchronously
-        await ObjectAdminDeleteBatch.send({
-          prefixes,
-          bucketId,
-          tenant: this.db.tenant(),
-          reqId: this.db.reqId,
-        })
-      }
-
-      if (deleted?.length !== objects.length) {
-        const deletedNames = new Set(deleted?.map(({ name }) => name))
-        const remainingNames = objects
-          .filter(({ name }) => !deletedNames.has(name))
-          .map(({ name }) => name)
-
-        throw ERRORS.AccessDenied(
-          `Cannot delete: ${remainingNames.join(
-            ' ,'
-          )}, you may have SELECT but not DELETE permissions`
-        )
-      }
+    const objects = await this.db.listObjects(bucketId, 'id, name', 1, before)
+    if (!objects || objects.length < 1) {
+      // the bucket is already empty
+      return
     }
+
+    // ensure delete permissions
+    await this.db.testPermission((db) => {
+      return db.deleteObject(bucketId, objects[0].id!)
+    })
+
+    // use queue to recursively delete all objects created before the specified time
+    await ObjectAdminDeleteAllBefore.send({
+      before,
+      bucketId,
+      tenant: this.db.tenant(),
+      reqId: this.db.reqId,
+    })
   }
 
   validateMimeType(mimeType: string[]) {

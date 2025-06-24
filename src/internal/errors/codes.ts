@@ -74,14 +74,14 @@ export const ERRORS = {
       code: ErrorCode.InvalidRequest,
       httpStatusCode: 409,
       message: `The feature ${feature} is not enabled for this resource`,
+      originalError: e,
     }),
-  UnableToEmptyBucket: (bucket: string, e?: Error) =>
+  UnableToEmptyBucket: (bucket: string) =>
     new StorageBackendError({
       code: ErrorCode.InvalidRequest,
       resource: bucket,
       httpStatusCode: 409,
       message: `Unable to empty the bucket because it contains too many objects`,
-      originalError: e,
     }),
   NoSuchBucket: (bucket: string, e?: Error) =>
     new StorageBackendError({

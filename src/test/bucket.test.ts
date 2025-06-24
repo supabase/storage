@@ -148,7 +148,7 @@ describe('testing GET all buckets', () => {
   test('user is able to get buckets with limit, offset, search and sorting', async () => {
     const response = await appInstance.inject({
       method: 'GET',
-      url: `/bucket?limit=1&offset=2&sortColumn=name&sortOrder=asc&search=bucket`,
+      url: `/bucket?limit=1&offset=3&sortColumn=name&sortOrder=asc&search=bucket`,
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
@@ -514,11 +514,13 @@ describe('testing EMPTY bucket', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.message).toBe('Successfully emptied')
+    expect(responseJSON.message).toBe(
+      'Empty bucket has been queued. Completion may take up to an hour.'
+    )
   })
 
   test('user is able to empty a bucket with a service key', async () => {
-    const bucketId = 'bucket3'
+    const bucketId = 'bucket3a'
 
     // confirm there are items in the bucket before empty
     const responseList = await appInstance.inject({
@@ -545,7 +547,9 @@ describe('testing EMPTY bucket', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.message).toBe('Successfully emptied')
+    expect(responseJSON.message).toBe(
+      'Empty bucket has been queued. Completion may take up to an hour.'
+    )
 
     // confirm the bucket is actually empty after
     const responseList2 = await appInstance.inject({

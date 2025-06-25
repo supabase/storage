@@ -6,7 +6,6 @@ import {
   TenantConnection,
   getPostgresConnection,
 } from '@internal/database'
-import { verifyJWT } from '@internal/auth'
 import { logSchema } from '@internal/monitoring'
 import { createMutexByKey } from '@internal/concurrency'
 import {
@@ -17,6 +16,7 @@ import {
   runMigrationsOnTenant,
   updateTenantMigrationsState,
 } from '@internal/database/migrations'
+import { ERRORS } from '@internal/errors'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -35,8 +35,11 @@ export const db = fastifyPlugin(
 
     fastify.addHook('preHandler', async (request) => {
       const adminUser = await getServiceKeyUser(request.tenantId)
-      const userPayload =
-        request.jwtPayload ?? (await verifyJWT<{ role?: string }>(request.jwt, adminUser.jwtSecret))
+      const userPayload = request.jwtPayload
+
+      if (!userPayload) {
+        throw ERRORS.AccessDenied('JWT payload is missing')
+      }
 
       request.db = await getPostgresConnection({
         user: {

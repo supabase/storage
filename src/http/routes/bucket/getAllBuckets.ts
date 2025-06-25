@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify'
+import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { bucketSchema } from '@storage/schemas'
@@ -23,14 +24,30 @@ const successResponseSchema = {
   ],
 }
 
+const requestQuerySchema = {
+  type: 'object',
+  properties: {
+    limit: { type: 'integer', minimum: 1, examples: [10] },
+    offset: { type: 'integer', minimum: 0, examples: [0] },
+    sortColumn: { type: 'string', enum: ['id', 'name', 'created_at', 'updated_at'] },
+    sortOrder: { type: 'string', enum: ['asc', 'desc'] },
+    search: { type: 'string', examples: ['my-bucket'] },
+  },
+} as const
+
+interface GetAllBucketsRequest extends AuthenticatedRequest {
+  Querystring: FromSchema<typeof requestQuerySchema>
+}
+
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Gets all buckets'
   const schema = createDefaultSchema(successResponseSchema, {
+    querystring: requestQuerySchema,
     summary,
     tags: ['bucket'],
   })
 
-  fastify.get<AuthenticatedRequest>(
+  fastify.get<GetAllBucketsRequest>(
     '/',
     {
       schema,
@@ -39,8 +56,10 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
+      const { limit, offset, sortColumn, sortOrder, search } = request.query
       const results = await request.storage.listBuckets(
-        'id, name, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types'
+        'id, name, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types',
+        { limit, offset, sortColumn, sortOrder, search }
       )
 
       return response.send(results)

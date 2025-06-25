@@ -593,8 +593,8 @@ export class StorageKnexDB implements Database {
 
     return object as typeof filters extends FindObjectFilters
       ? FindObjectFilters['dontErrorOnEmpty'] extends true
-      ? Obj | undefined
-      : Obj
+        ? Obj | undefined
+        : Obj
       : Obj
   }
 
@@ -847,7 +847,7 @@ export class StorageKnexDB implements Database {
 
     const differentScopes = Boolean(
       this.options.parentConnection?.role &&
-      this.connection.role !== this.options.parentConnection?.role
+        this.connection.role !== this.options.parentConnection?.role
     )
     const needsNewTransaction = !tnx || differentScopes
 

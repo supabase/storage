@@ -31,7 +31,7 @@ const requestQuerySchema = {
     offset: { type: 'integer', minimum: 0, examples: [0] },
     sortColumn: { type: 'string', enum: ['id', 'name', 'created_at', 'updated_at'] },
     sortOrder: { type: 'string', enum: ['asc', 'desc'] },
-    search: { type: 'string', examples: ["my-bucket"] }
+    search: { type: 'string', examples: ['my-bucket'] },
   },
 } as const
 

@@ -28,7 +28,7 @@ const requestQuerySchema = {
   type: 'object',
   properties: {
     limit: { type: 'integer', minimum: 1, examples: [10] },
-    offset: { type: 'integer', minimum: 1, examples: [1] },
+    offset: { type: 'integer', minimum: 0, examples: [0] },
     sortColumn: { type: 'string', enum: ['id', 'name', 'created_at', 'updated_at'] },
     sortOrder: { type: 'string', enum: ['asc', 'desc'] },
     search: { type: 'string', examples: ["my-bucket"] }

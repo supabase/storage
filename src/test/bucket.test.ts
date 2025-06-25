@@ -173,10 +173,10 @@ describe('testing GET all buckets', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  test('offset=0 returns 400', async () => {
+  test('offset=-1 returns 400', async () => {
     const response = await appInstance.inject({
       method: 'GET',
-      url: `/bucket?offset=0`,
+      url: `/bucket?offset=-1`,
       headers: {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },

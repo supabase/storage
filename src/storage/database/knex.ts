@@ -288,9 +288,9 @@ export class StorageKnexDB implements Database {
     const data = await this.runQuery('ListBuckets', (knex) => {
       const query = knex.from<Bucket>('buckets').select(columns.split(','))
 
-      if (options?.search !== undefined) {
-        query.where('name', 'like', `${options.search}%`)
-      } 
+      if (options?.search !== undefined && options.search.length > 0) {
+        query.where('name', 'ilike', `%${options.search}%`)
+      }
 
       if (options?.sortColumn !== undefined) {
         query.orderBy(options.sortColumn, options.sortOrder || 'asc')
@@ -593,8 +593,8 @@ export class StorageKnexDB implements Database {
 
     return object as typeof filters extends FindObjectFilters
       ? FindObjectFilters['dontErrorOnEmpty'] extends true
-        ? Obj | undefined
-        : Obj
+      ? Obj | undefined
+      : Obj
       : Obj
   }
 
@@ -847,7 +847,7 @@ export class StorageKnexDB implements Database {
 
     const differentScopes = Boolean(
       this.options.parentConnection?.role &&
-        this.connection.role !== this.options.parentConnection?.role
+      this.connection.role !== this.options.parentConnection?.role
     )
     const needsNewTransaction = !tnx || differentScopes
 

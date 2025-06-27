@@ -14,7 +14,10 @@ const emptyBucketParamsSchema = {
 const successResponseSchema = {
   type: 'object',
   properties: {
-    message: { type: 'string', examples: ['Successfully emptied'] },
+    message: {
+      type: 'string',
+      examples: ['Empty bucket has been queued. Completion may take up to an hour.'],
+    },
   },
 }
 interface emptyBucketRequestInterface extends AuthenticatedRequest {
@@ -41,7 +44,9 @@ export default async function routes(fastify: FastifyInstance) {
 
       await request.storage.emptyBucket(bucketId)
 
-      return response.status(200).send(createResponse('Successfully emptied'))
+      return response
+        .status(200)
+        .send(createResponse('Empty bucket has been queued. Completion may take up to an hour.'))
     }
   )
 }

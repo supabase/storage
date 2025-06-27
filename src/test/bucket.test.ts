@@ -3,6 +3,9 @@ import dotenv from 'dotenv'
 import app from '../app'
 import { S3Backend } from '../storage/backend'
 import { FastifyInstance } from 'fastify'
+import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
+import { StorageKnexDB } from '@storage/database'
+import { getConfig } from '../config'
 
 dotenv.config({ path: '.env.test' })
 const anonKey = process.env.ANON_KEY || ''
@@ -362,6 +365,39 @@ describe('testing public bucket functionality', () => {
   })
 })
 
+describe('testing count objects in bucket', () => {
+  const { tenantId } = getConfig()
+  let db: StorageKnexDB
+
+  beforeAll(async () => {
+    const superUser = await getServiceKeyUser(tenantId)
+    const pg = await getPostgresConnection({
+      superUser,
+      user: superUser,
+      tenantId: tenantId,
+      host: 'localhost',
+    })
+
+    db = new StorageKnexDB(pg, {
+      host: 'localhost',
+      tenantId,
+    })
+  })
+
+  it('should return correct object count', async () => {
+    await expect(db.countObjectsInBucket('bucket2')).resolves.toBe(27)
+  })
+  it('should return limited object count', async () => {
+    await expect(db.countObjectsInBucket('bucket2', 22)).resolves.toBe(22)
+  })
+  it('should return full object count if limit is greater than total', async () => {
+    await expect(db.countObjectsInBucket('bucket2', 999)).resolves.toBe(27)
+  })
+  it('should return 0 object count if there are no objects with provided bucket id', async () => {
+    await expect(db.countObjectsInBucket('this-is-not-a-bucket-at-all', 999)).resolves.toBe(0)
+  })
+})
+
 describe('testing DELETE bucket', () => {
   test('user is able to delete a bucket', async () => {
     const bucketId = 'bucket4'
@@ -435,11 +471,30 @@ describe('testing EMPTY bucket', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.message).toBe('Successfully emptied')
+    expect(responseJSON.message).toBe(
+      'Empty bucket has been queued. Completion may take up to an hour.'
+    )
   })
 
   test('user is able to empty a bucket with a service key', async () => {
-    const bucketId = 'bucket3'
+    const bucketId = 'bucket3a'
+
+    // confirm there are items in the bucket before empty
+    const responseList = await appInstance.inject({
+      method: 'POST',
+      url: '/object/list/' + bucketId,
+      headers: {
+        authorization: `Bearer ${process.env.SERVICE_KEY}`,
+      },
+      payload: {
+        prefix: '',
+        limit: 10,
+        offset: 0,
+      },
+    })
+    expect(responseList.statusCode).toBe(200)
+    expect(responseList.json()).toHaveLength(2)
+
     const response = await appInstance.inject({
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
@@ -449,7 +504,23 @@ describe('testing EMPTY bucket', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
-    expect(responseJSON.message).toBe('Successfully emptied')
+    expect(responseJSON.message).toBe(
+      'Empty bucket has been queued. Completion may take up to an hour.'
+    )
+
+    // confirm the bucket is actually empty after
+    const responseList2 = await appInstance.inject({
+      method: 'POST',
+      url: '/object/list/' + bucketId,
+      headers: {
+        authorization: `Bearer ${process.env.SERVICE_KEY}`,
+      },
+      payload: {
+        prefix: '',
+      },
+    })
+    expect(responseList2.statusCode).toBe(200)
+    expect(responseList2.json()).toHaveLength(0)
   })
 
   test('user is able to delete a bucket', async () => {

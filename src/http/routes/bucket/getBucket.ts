@@ -38,7 +38,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       const results = await request.storage.findBucket(
         bucketId,
-        'id, name, owner, public, created_at, updated_at, file_size_limit, allowed_mime_types'
+        'id, name, owner, public, created_at, updated_at, file_size_limit, allowed_mime_types,iceberg_catalog'
       )
 
       return response.send(results)

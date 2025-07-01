@@ -6,8 +6,9 @@ import { Storage } from '../storage'
 import { getConfig } from '../../config'
 import { logger } from '@internal/monitoring'
 import { createAgent } from '@internal/http'
+import { TenantLocation } from '@storage/locator'
 
-const { storageS3MaxSockets, storageBackendType, region } = getConfig()
+const { storageS3Bucket, storageS3MaxSockets, storageBackendType, region } = getConfig()
 
 let storageBackend: StorageBackendAdapter | undefined = undefined
 
@@ -76,7 +77,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
       host: payload.tenant.host,
     })
 
-    return new Storage(this.getOrCreateStorageBackend(), db)
+    return new Storage(this.getOrCreateStorageBackend(), db, new TenantLocation(storageS3Bucket))
   }
 
   protected static getOrCreateStorageBackend(monitor = false) {

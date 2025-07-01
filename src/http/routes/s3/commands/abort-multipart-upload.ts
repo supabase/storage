@@ -1,6 +1,7 @@
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
+import { ERRORS } from '@internal/errors'
 
 const AbortMultiPartUploadInput = {
   summary: 'Abort MultiPart Upload',
@@ -22,6 +23,30 @@ const AbortMultiPartUploadInput = {
 } as const
 
 export default function AbortMultiPartUpload(s3Router: S3Router) {
+  s3Router.delete(
+    '/:Bucket/*?uploadId',
+    {
+      type: 'iceberg',
+      schema: AbortMultiPartUploadInput,
+      operation: ROUTE_OPERATIONS.S3_ABORT_MULTIPART,
+    },
+    async (req, ctx) => {
+      const icebergBucketName = ctx.req.internalIcebergBucketName
+
+      if (!icebergBucketName) {
+        throw ERRORS.InvalidParameter('internalIcebergBucketName')
+      }
+
+      await ctx.storage.backend.abortMultipartUpload(
+        icebergBucketName,
+        req.Params['*'],
+        req.Querystring.uploadId
+      )
+
+      return {}
+    }
+  )
+
   s3Router.delete(
     '/:Bucket/*?uploadId',
     { schema: AbortMultiPartUploadInput, operation: ROUTE_OPERATIONS.S3_ABORT_MULTIPART },

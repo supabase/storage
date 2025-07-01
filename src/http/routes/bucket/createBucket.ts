@@ -10,6 +10,7 @@ const createBucketBodySchema = {
     name: { type: 'string', examples: ['avatars'] },
     id: { type: 'string', examples: ['avatars'] },
     public: { type: 'boolean', examples: [false] },
+    iceberg_catalog: { type: 'boolean', examples: [false] },
     file_size_limit: {
       anyOf: [
         { type: 'integer', examples: [1000], nullable: true, minimum: 0 },
@@ -65,6 +66,7 @@ export default async function routes(fastify: FastifyInstance) {
         id,
         allowed_mime_types,
         file_size_limit,
+        iceberg_catalog,
       } = request.body
 
       await request.storage.createBucket({
@@ -76,6 +78,7 @@ export default async function routes(fastify: FastifyInstance) {
         allowedMimeTypes: allowed_mime_types
           ? allowed_mime_types?.filter((mime) => mime)
           : allowed_mime_types,
+        icebergCatalog: iceberg_catalog,
       })
 
       return response.status(200).send({

@@ -53,6 +53,62 @@ export default function PutObject(s3Router: S3Router) {
   s3Router.put(
     '/:Bucket/*',
     {
+      type: 'iceberg',
+      schema: PutObjectInput,
+      operation: ROUTE_OPERATIONS.S3_UPLOAD,
+      disableContentTypeParser: true,
+    },
+    async (req, ctx) => {
+      const contentLength = req.Headers['content-length']
+      let key = req.Params['*']
+
+      if (key.endsWith('/') && contentLength === 0) {
+        // Consistent with how supabase Storage handles empty folders
+        key += '.emptyFolderPlaceholder'
+      }
+
+      const uploadRequest = await fileUploadFromRequest(ctx.req, {
+        objectName: key,
+        allowedMimeTypes: [],
+      })
+
+      // We don't trust the params.Bucket sent from the client
+      // we utilise the internalIcebergBucketName from the request context
+      // to ensure is validated. see http/plugin: iceberg.ts
+      const icebergBucket = ctx.req.internalIcebergBucketName
+
+      if (!icebergBucket) {
+        throw ERRORS.InvalidParameter('internalIcebergBucketName')
+      }
+
+      return pipeline(
+        uploadRequest.body,
+        new ByteLimitTransformStream(uploadRequest.maxFileSize),
+        ctx.req.streamingSignatureV4 || new PassThrough(),
+        async (fileStream) => {
+          const u = await ctx.req.storage.backend.uploadObject(
+            icebergBucket,
+            key,
+            undefined,
+            fileStream as Readable,
+            uploadRequest.mimeType,
+            uploadRequest.cacheControl,
+            ctx.signals.body
+          )
+
+          return {
+            headers: {
+              etag: u.eTag,
+            },
+          }
+        }
+      )
+    }
+  )
+
+  s3Router.put(
+    '/:Bucket/*',
+    {
       schema: PutObjectInput,
       operation: ROUTE_OPERATIONS.S3_UPLOAD,
       disableContentTypeParser: true,

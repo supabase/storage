@@ -20,7 +20,7 @@ import { DatabaseError } from 'pg'
 import { getTenantConfig, TenantConnection } from '@internal/database'
 import { DbQueryPerformance } from '@internal/monitoring/metrics'
 import { isUuid } from '../limits'
-import { DBMigration } from '@internal/database/migrations'
+import { DBMigration, tenantHasMigrations } from '@internal/database/migrations'
 import { getConfig } from '../../config'
 
 const { isMultitenant } = getConfig()
@@ -103,10 +103,16 @@ export class StorageKnexDB implements Database {
   async createBucket(
     data: Pick<
       Bucket,
-      'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types'
+      | 'id'
+      | 'name'
+      | 'public'
+      | 'owner'
+      | 'file_size_limit'
+      | 'allowed_mime_types'
+      | 'iceberg_catalog'
     >
   ) {
-    const bucketData = {
+    const bucketData: Bucket = {
       id: data.id,
       name: data.name,
       owner: isUuid(data.owner || '') ? data.owner : undefined,
@@ -114,6 +120,10 @@ export class StorageKnexDB implements Database {
       public: data.public,
       allowed_mime_types: data.allowed_mime_types,
       file_size_limit: data.file_size_limit,
+    }
+
+    if (await tenantHasMigrations(this.tenantId, 'iceberg-catalog-flag-on-buckets')) {
+      bucketData.iceberg_catalog = data.iceberg_catalog
     }
 
     try {
@@ -136,7 +146,15 @@ export class StorageKnexDB implements Database {
 
   async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
     const result = await this.runQuery('FindBucketById', async (knex) => {
-      const query = knex.from<Bucket>('buckets').select(columns.split(',')).where('id', bucketId)
+      let columnNames = columns.split(',')
+
+      if (!(await tenantHasMigrations(this.tenantId, 'iceberg-catalog-flag-on-buckets'))) {
+        columnNames = columnNames.filter((name) => {
+          return name.trim() !== 'iceberg_catalog'
+        })
+      }
+
+      const query = knex.from<Bucket>('buckets').select(columnNames).where('id', bucketId)
 
       if (typeof filters?.isPublic !== 'undefined') {
         query.where('public', filters.isPublic)
@@ -248,10 +266,7 @@ export class StorageKnexDB implements Database {
       let useNewSearchVersion2 = true
 
       if (isMultitenant) {
-        const { migrationVersion } = await getTenantConfig(this.tenantId)
-        if (migrationVersion) {
-          useNewSearchVersion2 = DBMigration[migrationVersion] >= DBMigration['search-v2']
-        }
+        useNewSearchVersion2 = await tenantHasMigrations(this.tenantId, 'search-v2')
       }
 
       if (useNewSearchVersion2 && options?.delimiter === '/') {
@@ -347,13 +362,14 @@ export class StorageKnexDB implements Database {
 
   async updateBucket(
     bucketId: string,
-    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
+    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types' | 'iceberg_catalog'>
   ) {
     const bucket = await this.runQuery('UpdateBucket', (knex) => {
       return knex.from('buckets').where('id', bucketId).update({
         public: fields.public,
         file_size_limit: fields.file_size_limit,
         allowed_mime_types: fields.allowed_mime_types,
+        iceberg_catalog: fields.iceberg_catalog,
       })
     })
 

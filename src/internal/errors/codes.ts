@@ -38,6 +38,9 @@ export enum ErrorCode {
   TusError = 'TusError',
   Aborted = 'Aborted',
   AbortedTerminate = 'AbortedTerminate',
+  FeatureNotEnabled = 'FeatureNotEnabled',
+  IcebergError = 'IcebergError',
+  NotSupported = 'NotSupported',
 }
 
 export const ERRORS = {
@@ -47,6 +50,21 @@ export const ERRORS = {
       resource: bucket,
       httpStatusCode: 409,
       message: `The bucket you tried to delete is not empty`,
+      originalError: e,
+    }),
+  FeatureNotEnabled: (resource: string, feature: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidRequest,
+      resource: resource,
+      httpStatusCode: 409,
+      message: `The feature ${feature} is not enabled for this resource`,
+      originalError: e,
+    }),
+  NotSupported: (feature: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidRequest,
+      httpStatusCode: 409,
+      message: `The feature ${feature} is not enabled for this resource`,
       originalError: e,
     }),
   NoSuchBucket: (bucket: string, e?: Error) =>

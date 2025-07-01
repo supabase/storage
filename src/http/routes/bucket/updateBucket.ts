@@ -8,6 +8,7 @@ const updateBucketBodySchema = {
   type: 'object',
   properties: {
     public: { type: 'boolean', examples: [false] },
+    iceberg_catalog: { type: 'boolean' },
     file_size_limit: {
       anyOf: [
         { type: 'integer', examples: [1000], nullable: true, minimum: 0 },
@@ -59,7 +60,12 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketId } = request.params
 
-      const { public: isPublic, file_size_limit, allowed_mime_types } = request.body
+      const {
+        public: isPublic,
+        file_size_limit,
+        allowed_mime_types,
+        iceberg_catalog,
+      } = request.body
 
       await request.storage.updateBucket(bucketId, {
         public: isPublic,
@@ -67,6 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
         allowedMimeTypes: allowed_mime_types
           ? allowed_mime_types?.filter((mime) => mime)
           : allowed_mime_types,
+        icebergCatalog: iceberg_catalog,
       })
 
       return response.status(200).send(createResponse('Successfully updated'))

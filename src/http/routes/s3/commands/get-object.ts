@@ -58,6 +58,30 @@ export default function GetObject(s3Router: S3Router) {
 
   s3Router.get(
     '/:Bucket/*',
+    { type: 'iceberg', schema: GetObjectInput, operation: ROUTE_OPERATIONS.S3_GET_OBJECT },
+    (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+      const ifModifiedSince = req.Headers?.['if-modified-since']
+      const icebergBucket = ctx.req.internalIcebergBucketName
+
+      return s3Protocol.getObject(
+        {
+          Bucket: icebergBucket,
+          Key: req.Params['*'],
+          Range: req.Headers?.['range'],
+          IfNoneMatch: req.Headers?.['if-none-match'],
+          IfModifiedSince: ifModifiedSince ? new Date(ifModifiedSince) : undefined,
+        },
+        {
+          skipDbCheck: true,
+          signal: ctx.signals.response,
+        }
+      )
+    }
+  )
+
+  s3Router.get(
+    '/:Bucket/*',
     { schema: GetObjectInput, operation: ROUTE_OPERATIONS.S3_GET_OBJECT },
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)

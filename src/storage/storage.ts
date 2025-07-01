@@ -1,4 +1,4 @@
-import { StorageBackendAdapter, withOptionalVersion } from './backend'
+import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters } from './database'
 import { ERRORS } from '@internal/errors'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
@@ -7,8 +7,9 @@ import { getConfig } from '../config'
 import { ObjectStorage } from './object'
 import { InfoRenderer } from '@storage/renderer/info'
 import { logger, logSchema } from '@internal/monitoring'
+import { StorageObjectLocator } from '@storage/locator'
 
-const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
+const { requestUrlLengthLimit } = getConfig()
 
 /**
  * Storage
@@ -16,7 +17,11 @@ const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
  * to provide a rich management API for any folders and files operations
  */
 export class Storage {
-  constructor(public readonly backend: StorageBackendAdapter, public readonly db: Database) {}
+  constructor(
+    public readonly backend: StorageBackendAdapter,
+    public readonly db: Database,
+    public readonly location: StorageObjectLocator
+  ) {}
 
   /**
    * Access object related functionality on a specific bucket
@@ -25,7 +30,7 @@ export class Storage {
   from(bucketId: string) {
     mustBeValidBucketName(bucketId)
 
-    return new ObjectStorage(this.backend, this.db, bucketId)
+    return new ObjectStorage(this.backend, this.db, this.location, bucketId)
   }
 
   /**
@@ -33,7 +38,7 @@ export class Storage {
    * as superUser bypassing RLS rules
    */
   asSuperUser() {
-    return new Storage(this.backend, this.db.asSuperUser())
+    return new Storage(this.backend, this.db.asSuperUser(), this.location)
   }
 
   /**
@@ -84,6 +89,7 @@ export class Storage {
     > & {
       fileSizeLimit?: number | string | null
       allowedMimeTypes?: null | string[]
+      icebergCatalog?: boolean
     }
   ) {
     // prevent creation with leading or trailing whitespace
@@ -97,6 +103,10 @@ export class Storage {
 
     if (typeof data.fileSizeLimit === 'number' || typeof data.fileSizeLimit === 'string') {
       bucketData.file_size_limit = await this.parseMaxSizeLimit(data.fileSizeLimit)
+    }
+
+    if (typeof data.icebergCatalog === 'boolean') {
+      bucketData.iceberg_catalog = data.icebergCatalog
     }
 
     if (data.fileSizeLimit === null) {
@@ -124,6 +134,7 @@ export class Storage {
     > & {
       fileSizeLimit?: number | string | null
       allowedMimeTypes?: null | string[]
+      icebergCatalog?: boolean
     }
   ) {
     mustBeValidBucketName(id)
@@ -142,6 +153,10 @@ export class Storage {
       this.validateMimeType(data.allowedMimeTypes)
     }
     bucketData.allowed_mime_types = data.allowedMimeTypes
+
+    if (typeof data.icebergCatalog === 'boolean') {
+      bucketData.iceberg_catalog = data.icebergCatalog
+    }
 
     return this.db.updateBucket(id, bucketData)
   }
@@ -206,13 +221,18 @@ export class Storage {
 
       if (deleted && deleted.length > 0) {
         const params = deleted.reduce((all, { name, version }) => {
-          const fileName = withOptionalVersion(`${this.db.tenantId}/${bucketId}/${name}`, version)
+          const fileName = this.location.getKeyLocation({
+            tenantId: this.db.tenantId,
+            bucketId,
+            objectName: name,
+            version,
+          })
           all.push(fileName)
           all.push(fileName + '.info')
           return all
         }, [] as string[])
         // delete files from s3 asynchronously
-        this.backend.deleteObjects(storageS3Bucket, params).catch((e) => {
+        this.backend.deleteObjects(this.location.getRootLocation(), params).catch((e) => {
           logSchema.error(logger, 'Failed to delete objects from s3', { type: 's3', error: e })
         })
       }

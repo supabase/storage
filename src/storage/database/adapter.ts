@@ -65,7 +65,13 @@ export interface Database {
   createBucket(
     data: Pick<
       Bucket,
-      'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types'
+      | 'id'
+      | 'name'
+      | 'public'
+      | 'owner'
+      | 'file_size_limit'
+      | 'allowed_mime_types'
+      | 'iceberg_catalog'
     >
   ): Promise<Pick<Bucket, 'id'>>
 
@@ -119,7 +125,7 @@ export interface Database {
 
   updateBucket(
     bucketId: string,
-    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
+    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types' | 'iceberg_catalog'>
   ): Promise<void>
 
   upsertObject(

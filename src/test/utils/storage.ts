@@ -5,10 +5,11 @@ import { Database, StorageKnexDB } from '@storage/database'
 import { ObjectScanner } from '@storage/scanner/scanner'
 import { getConfig } from '../../config'
 import { Uploader } from '@storage/uploader'
+import { StorageObjectLocator, TenantLocation } from '@storage/locator'
 // import { CreateBucketCommand, HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
 // import { isS3Error } from '@internal/errors'
 
-const { tenantId, storageBackendType } = getConfig()
+const { tenantId, storageBackendType, storageS3Bucket } = getConfig()
 
 export function useStorage() {
   let connection: TenantConnection
@@ -17,6 +18,7 @@ export function useStorage() {
   let database: Database
   let scanner: ObjectScanner
   let uploader: Uploader
+  let location: StorageObjectLocator
 
   beforeAll(async () => {
     const adminUser = await getServiceKeyUser(tenantId)
@@ -31,10 +33,11 @@ export function useStorage() {
       tenantId,
       host: 'localhost',
     })
+    location = new TenantLocation(storageS3Bucket)
     adapter = createStorageBackend(storageBackendType)
-    storage = new Storage(adapter, database)
+    storage = new Storage(adapter, database, location)
     scanner = new ObjectScanner(storage)
-    uploader = new Uploader(adapter, database)
+    uploader = new Uploader(adapter, database, location)
   })
 
   afterAll(async () => {

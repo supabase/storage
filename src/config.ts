@@ -172,6 +172,9 @@ type StorageConfigType = {
   }
   cdnPurgeEndpointURL?: string
   cdnPurgeEndpointKey?: string
+
+  icebergWarehouse: string
+  icebergCatalogUrl: string
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -489,6 +492,11 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('RATE_LIMITER_REDIS_COMMAND_TIMEOUT') || '2',
       10
     ),
+
+    icebergWarehouse: getOptionalConfigFromEnv('ICEBERG_WAREHOUSE') || 'warehouse',
+    icebergCatalogUrl:
+      getOptionalConfigFromEnv('ICEBERG_CATALOG_URL') ||
+      `https://s3tables.ap-southeast-1.amazonaws.com/iceberg/v1`,
   } as StorageConfigType
 
   const serviceKey = getOptionalConfigFromEnv('SERVICE_KEY') || ''

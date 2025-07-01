@@ -16,6 +16,7 @@ import app from '../app'
 import { checkBucketExists } from './common'
 import { Storage, backends, StorageKnexDB } from '../storage'
 import { wait } from '@internal/concurrency'
+import { TenantLocation } from '@storage/locator'
 
 const { serviceKeyAsync, tenantId, storageS3Bucket, storageBackendType } = getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
@@ -70,7 +71,7 @@ describe('Tus multipart', () => {
     })
 
     bucketName = randomUUID()
-    storage = new Storage(backend, db)
+    storage = new Storage(backend, db, new TenantLocation(storageS3Bucket))
   })
 
   it('Can upload an asset with the TUS protocol', async () => {

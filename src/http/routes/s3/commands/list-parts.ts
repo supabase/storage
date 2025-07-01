@@ -1,6 +1,8 @@
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
+import { S3Backend } from '@storage/backend'
+import { ERRORS } from '@internal/errors'
 
 const ListPartsInput = {
   summary: 'List Parts',
@@ -24,6 +26,45 @@ const ListPartsInput = {
 } as const
 
 export default function ListParts(s3Router: S3Router) {
+  s3Router.get(
+    '/:Bucket/*?uploadId',
+    { type: 'iceberg', schema: ListPartsInput, operation: ROUTE_OPERATIONS.S3_LIST_PARTS },
+    async (req, ctx) => {
+      const backend = ctx.req.storage.backend
+
+      if (!(backend instanceof S3Backend)) {
+        throw ERRORS.NotSupported('only S3 driver is supported for this operation')
+      }
+
+      const icebergBucketName = ctx.req.internalIcebergBucketName
+      const key = req.Params['*']
+      const uploadId = req.Querystring.uploadId
+      const maxParts = req.Querystring['max-parts']
+      const marker = req.Querystring['part-number-marker']
+
+      if (!icebergBucketName) {
+        throw ERRORS.InvalidBucketName('Iceberg bucket name is required')
+      }
+
+      const result = await backend.listParts(icebergBucketName, key, uploadId, maxParts, marker)
+
+      return {
+        responseBody: {
+          ListPartsResult: {
+            Bucket: req.Params.Bucket,
+            Key: key,
+            UploadId: req.Querystring.uploadId,
+            PartNumberMarker: marker,
+            NextPartNumberMarker: result.nextPartNumberMarker,
+            MaxParts: maxParts,
+            IsTruncated: result.isTruncated,
+            Part: result.parts,
+          },
+        },
+      }
+    }
+  )
+
   s3Router.get(
     '/:Bucket/*?uploadId',
     { schema: ListPartsInput, operation: ROUTE_OPERATIONS.S3_LIST_PARTS },

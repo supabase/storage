@@ -70,7 +70,11 @@ export async function onIncomingRequest(
 
   // All other requests need to be authorized if they have permission to upload
   const isUpsert = req.upload.isUpsert
-  const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+  const uploader = new Uploader(
+    req.upload.storage.backend,
+    req.upload.storage.db,
+    req.upload.storage.location
+  )
 
   await uploader.canUpload({
     owner: req.upload.owner,
@@ -222,7 +226,11 @@ export async function onUploadFinish(
       resourceId.version
     )
 
-    const uploader = new Uploader(req.upload.storage.backend, req.upload.storage.db)
+    const uploader = new Uploader(
+      req.upload.storage.backend,
+      req.upload.storage.db,
+      req.upload.storage.location
+    )
     let customMd: undefined | Record<string, string> = undefined
     if (upload.metadata?.metadata) {
       try {

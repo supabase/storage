@@ -3,7 +3,7 @@ import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
 import { getJwtSecret } from '@internal/database'
 
-import { ObjectMetadata, StorageBackendAdapter, withOptionalVersion } from './backend'
+import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
 import { fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
@@ -18,8 +18,9 @@ import {
 } from './events'
 import { FastifyRequest } from 'fastify/types/request'
 import { Obj } from '@storage/schemas'
+import { StorageObjectLocator } from '@storage/locator'
 
-const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
+const { requestUrlLengthLimit } = getConfig()
 
 interface CopyObjectParams {
   sourceKey: string
@@ -51,9 +52,10 @@ export class ObjectStorage {
   constructor(
     private readonly backend: StorageBackendAdapter,
     private readonly db: Database,
+    private readonly location: StorageObjectLocator,
     private readonly bucketId: string
   ) {
-    this.uploader = new Uploader(backend, db)
+    this.uploader = new Uploader(backend, db, location)
   }
 
   /**
@@ -61,7 +63,7 @@ export class ObjectStorage {
    * as superUser bypassing RLS rules
    */
   asSuperUser() {
-    return new ObjectStorage(this.backend, this.db.asSuperUser(), this.bucketId)
+    return new ObjectStorage(this.backend, this.db.asSuperUser(), this.location, this.bucketId)
   }
 
   async uploadFromRequest(
@@ -128,8 +130,12 @@ export class ObjectStorage {
       }
 
       await this.backend.deleteObject(
-        storageS3Bucket,
-        `${this.db.tenantId}/${this.bucketId}/${objectName}`,
+        this.location.getRootLocation(),
+        this.location.getKeyLocation({
+          tenantId: this.db.tenantId,
+          bucketId: this.bucketId,
+          objectName,
+        }),
         obj.version
       )
 
@@ -173,17 +179,29 @@ export class ObjectStorage {
           // if successfully deleted, delete from s3 too
           // todo: consider moving this to a queue
           const prefixesToDelete = data.reduce((all, { name, version }) => {
-            all.push(withOptionalVersion(`${db.tenantId}/${this.bucketId}/${name}`, version))
+            all.push(
+              this.location.getKeyLocation({
+                tenantId: db.tenantId,
+                bucketId: this.bucketId,
+                objectName: name,
+                version,
+              })
+            )
 
             if (version) {
               all.push(
-                withOptionalVersion(`${db.tenantId}/${this.bucketId}/${name}`, version) + '.info'
+                this.location.getKeyLocation({
+                  tenantId: db.tenantId,
+                  bucketId: this.bucketId,
+                  objectName: name,
+                  version,
+                }) + '.info'
               )
             }
             return all
           }, [] as string[])
 
-          await this.backend.deleteObjects(storageS3Bucket, prefixesToDelete)
+          await this.backend.deleteObjects(this.location.getRootLocation(), prefixesToDelete)
 
           await Promise.allSettled(
             data.map((object) =>
@@ -282,8 +300,16 @@ export class ObjectStorage {
     mustBeValidKey(destinationKey)
 
     const newVersion = randomUUID()
-    const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceKey}`
-    const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationKey}`
+    const s3SourceKey = this.location.getKeyLocation({
+      tenantId: this.db.tenantId,
+      bucketId: this.bucketId,
+      objectName: sourceKey,
+    })
+    const s3DestinationKey = this.location.getKeyLocation({
+      tenantId: this.db.tenantId,
+      bucketId: destinationBucket,
+      objectName: destinationKey,
+    })
 
     // We check if the user has permission to copy the object to the destination key
     const originObject = await this.db.findObject(
@@ -310,7 +336,7 @@ export class ObjectStorage {
 
     try {
       const copyResult = await this.backend.copyObject(
-        storageS3Bucket,
+        this.location.getRootLocation(),
         s3SourceKey,
         originObject.version,
         s3DestinationKey,
@@ -319,7 +345,11 @@ export class ObjectStorage {
         conditions
       )
 
-      const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
+      const metadata = await this.backend.headObject(
+        this.location.getRootLocation(),
+        s3DestinationKey,
+        newVersion
+      )
 
       const destinationObject = await this.db.asSuperUser().withTransaction(async (db) => {
         await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
@@ -406,9 +436,17 @@ export class ObjectStorage {
     mustBeValidKey(destinationObjectName)
 
     const newVersion = randomUUID()
-    const s3SourceKey = `${this.db.tenantId}/${this.bucketId}/${sourceObjectName}`
+    const s3SourceKey = this.location.getKeyLocation({
+      tenantId: this.db.tenantId,
+      bucketId: this.bucketId,
+      objectName: sourceObjectName,
+    })
 
-    const s3DestinationKey = `${this.db.tenantId}/${destinationBucket}/${destinationObjectName}`
+    const s3DestinationKey = this.location.getKeyLocation({
+      tenantId: this.db.tenantId,
+      bucketId: destinationBucket,
+      objectName: destinationObjectName,
+    })
 
     await this.db.testPermission((db) => {
       return Promise.all([
@@ -434,14 +472,18 @@ export class ObjectStorage {
 
     try {
       await this.backend.copyObject(
-        storageS3Bucket,
+        this.location.getRootLocation(),
         s3SourceKey,
         sourceObj.version,
         s3DestinationKey,
         newVersion
       )
 
-      const metadata = await this.backend.headObject(storageS3Bucket, s3DestinationKey, newVersion)
+      const metadata = await this.backend.headObject(
+        this.location.getRootLocation(),
+        s3DestinationKey,
+        newVersion
+      )
 
       return this.db.asSuperUser().withTransaction(async (db) => {
         await db.waitObjectLock(this.bucketId, destinationObjectName, undefined, {

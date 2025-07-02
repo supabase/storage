@@ -15,6 +15,7 @@ import {
   FindBucketFilters,
   FindObjectFilters,
   SearchObjectOption,
+  ListBucketOptions,
 } from './adapter'
 import { DatabaseError } from 'pg'
 import { getTenantConfig, TenantConnection } from '@internal/database'
@@ -283,9 +284,27 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async listBuckets(columns = 'id') {
+  async listBuckets(columns = 'id', options?: ListBucketOptions) {
     const data = await this.runQuery('ListBuckets', (knex) => {
-      return knex.from<Bucket>('buckets').select(columns.split(','))
+      const query = knex.from<Bucket>('buckets').select(columns.split(','))
+
+      if (options?.search !== undefined && options.search.length > 0) {
+        query.where('name', 'ilike', `%${options.search}%`)
+      }
+
+      if (options?.sortColumn !== undefined) {
+        query.orderBy(options.sortColumn, options.sortOrder || 'asc')
+      }
+
+      if (options?.limit !== undefined) {
+        query.limit(options.limit)
+      }
+
+      if (options?.offset !== undefined) {
+        query.offset(options.offset)
+      }
+
+      return query
     })
 
     return data as Bucket[]

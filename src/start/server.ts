@@ -119,6 +119,7 @@ async function httpServer(signal: AbortSignal) {
     disableRequestLogging: true,
     exposeDocs,
     requestIdHeader: requestTraceHeader,
+    maxParamLength: 2500,
   })
 
   const closePromise = createServerClosedPromise(app.server, () => {

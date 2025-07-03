@@ -12,6 +12,7 @@ const successResponseSchema = {
     [
       {
         id: 'avatars',
+        type: 'STANDARD',
         name: 'avatars',
         owner: '4d56e902-f0a0-4662-8448-a4d9e643c142',
         public: false,
@@ -58,7 +59,7 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { limit, offset, sortColumn, sortOrder, search } = request.query
       const results = await request.storage.listBuckets(
-        'id, name, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types',
+        'id, name, type, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types',
         { limit, offset, sortColumn, sortOrder, search }
       )
 

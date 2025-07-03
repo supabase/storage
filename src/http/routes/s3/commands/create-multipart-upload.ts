@@ -1,6 +1,8 @@
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
+import { S3Backend } from '@storage/backend'
+import { ERRORS } from '@internal/errors'
 
 const CreateMultiPartUploadInput = {
   summary: 'Create multipart upload',
@@ -34,6 +36,44 @@ const CreateMultiPartUploadInput = {
 } as const
 
 export default function CreateMultipartUpload(s3Router: S3Router) {
+  s3Router.post(
+    '/:Bucket/*?uploads',
+    {
+      type: 'iceberg',
+      schema: CreateMultiPartUploadInput,
+      operation: ROUTE_OPERATIONS.S3_CREATE_MULTIPART,
+    },
+    async (req, ctx) => {
+      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+
+      const metadata = s3Protocol.parseMetadataHeaders(req.Headers)
+      const icebergBucketName = ctx.req.internalIcebergBucketName
+
+      if (!icebergBucketName) {
+        throw ERRORS.InvalidBucketName('Iceberg bucket name is required')
+      }
+
+      const uploadId = await ctx.req.storage.backend.createMultiPartUpload(
+        icebergBucketName,
+        req.Params['*'],
+        undefined,
+        req.Headers?.['content-type'] || 'application/octet-stream',
+        req.Headers?.['cache-control'] || 'no-cache',
+        metadata
+      )
+
+      return {
+        responseBody: {
+          InitiateMultipartUploadResult: {
+            Bucket: `${req.Params.Bucket}`,
+            Key: req.Params['*'],
+            UploadId: uploadId,
+          },
+        },
+      }
+    }
+  )
+
   s3Router.post(
     '/:Bucket/*?uploads',
     { schema: CreateMultiPartUploadInput, operation: ROUTE_OPERATIONS.S3_CREATE_MULTIPART },

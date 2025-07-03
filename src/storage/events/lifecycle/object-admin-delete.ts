@@ -35,7 +35,11 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
       storage = await this.createStorage(job.data)
       const version = job.data.version
 
-      const s3Key = `${job.data.tenant.ref}/${job.data.bucketId}/${job.data.name}`
+      const s3Key = storage.location.getKeyLocation({
+        tenantId: job.data.tenant.ref,
+        bucketId: job.data.bucketId,
+        objectName: job.data.name,
+      })
 
       logSchema.event(logger, `[Admin]: ObjectAdminDelete ${s3Key}`, {
         jodId: job.id,

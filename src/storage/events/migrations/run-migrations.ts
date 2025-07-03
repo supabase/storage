@@ -17,13 +17,13 @@ interface RunMigrationsPayload extends BasePayload {
 }
 
 export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
-  static queueName = 'tenants-migrations'
+  static queueName = 'tenants-migrations-v2'
   static allowSync = false
 
   static getQueueOptions(): Queue {
     return {
       name: this.queueName,
-      policy: 'stately',
+      policy: 'singleton',
     } as const
   }
 
@@ -35,9 +35,8 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
 
   static getSendOptions(payload: RunMigrationsPayload): SendOptions {
     return {
-      expireInHours: 24,
       singletonKey: `migrations_${payload.tenantId}`,
-      singletonHours: 1,
+      singletonMinutes: 5,
       retryLimit: 3,
       retryDelay: 5,
       priority: 10,

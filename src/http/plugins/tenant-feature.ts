@@ -1,5 +1,5 @@
 import fastifyPlugin from 'fastify-plugin'
-import { Features, getFeatures } from '@internal/database'
+import { Features, tenantHasFeature } from '@internal/database'
 
 import { getConfig } from '../../config'
 
@@ -17,9 +17,9 @@ export const requireTenantFeature = (feature: keyof Features) =>
       fastify.addHook('onRequest', async (request, reply) => {
         if (!isMultitenant) return
 
-        const features = await getFeatures(request.tenantId)
+        const hasFeature = await tenantHasFeature(request.tenantId, feature)
 
-        if (!features[feature].enabled) {
+        if (!hasFeature) {
           reply.status(403).send({
             error: 'FeatureNotEnabled',
             statusCode: '403',

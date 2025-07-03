@@ -241,7 +241,7 @@ function createStreamingSignatureV4Parser(opts: CreateSignatureV3ParserOpts) {
     maxChunkSize: 8 * 1024 * 1024,
     maxHeaderLength: 256,
     streamingAlgorithm: algorithm,
-    trailerHeaderNames: trailers.split(','),
+    trailerHeaderNames: trailers?.split(','),
   })
 
   chunkedSignatureV4.on(

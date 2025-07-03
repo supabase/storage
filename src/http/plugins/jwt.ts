@@ -19,12 +19,16 @@ declare module 'fastify' {
   }
 }
 
+interface JWTPluginOptions {
+  enforceJwtRoles?: string[]
+}
+
 const { jwtCachingEnabled } = getConfig()
 
 const BEARER = /^Bearer\s+/i
 
-export const jwt = fastifyPlugin(
-  async (fastify) => {
+export const jwt = fastifyPlugin<JWTPluginOptions>(
+  async (fastify, opts) => {
     fastify.decorateRequest('jwt', '')
     fastify.decorateRequest('jwtPayload', undefined)
 
@@ -58,6 +62,33 @@ export const jwt = fastifyPlugin(
         throw ERRORS.AccessDenied(err.message, err)
       }
     })
+
+    if (opts.enforceJwtRoles && opts.enforceJwtRoles.length > 0) {
+      fastify.register(enforceJwtRole, {
+        roles: opts.enforceJwtRoles,
+      })
+    }
   },
   { name: 'auth-jwt' }
+)
+
+interface EnforceJWTRoleOptions {
+  roles: string[]
+}
+
+export const enforceJwtRole = fastifyPlugin<EnforceJWTRoleOptions>(
+  async (fastify, opts) => {
+    fastify.addHook('preHandler', async (request) => {
+      if (!request.isAuthenticated) {
+        throw ERRORS.AccessDenied('Access denied: JWT is not authenticated').withStatusCode(403)
+      }
+
+      const hasRoles = request.jwtPayload?.role && opts.roles.includes(request.jwtPayload.role)
+
+      if (!hasRoles) {
+        throw ERRORS.AccessDenied(`Access denied: Invalid role`).withStatusCode(403)
+      }
+    })
+  },
+  { name: 'allow-invalid-jwt' }
 )

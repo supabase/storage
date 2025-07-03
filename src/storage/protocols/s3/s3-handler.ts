@@ -388,7 +388,7 @@ export class S3ProtocolHandler {
    * @param command
    */
   async createMultiPartUpload(command: CreateMultipartUploadCommandInput) {
-    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     const { Bucket, Key } = command
 
     mustBeValidBucketName(Bucket)
@@ -410,7 +410,11 @@ export class S3ProtocolHandler {
 
     const uploadId = await this.storage.backend.createMultiPartUpload(
       storageS3Bucket,
-      `${this.tenantId}/${command.Bucket}/${command.Key}`,
+      this.storage.location.getKeyLocation({
+        bucketId: command.Bucket as string,
+        objectName: command.Key as string,
+        tenantId: this.tenantId,
+      }),
       version,
       command.ContentType || '',
       command.CacheControl || ''
@@ -452,7 +456,7 @@ export class S3ProtocolHandler {
    * @param command
    */
   async completeMultiPartUpload(command: CompleteMultipartUploadCommandInput) {
-    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     const { Bucket, Key, UploadId } = command
 
     if (!UploadId) {
@@ -487,15 +491,24 @@ export class S3ProtocolHandler {
 
     const resp = await this.storage.backend.completeMultipartUpload(
       storageS3Bucket,
-      `${this.tenantId}/${Bucket}/${Key}`,
+      this.storage.location.getKeyLocation({
+        bucketId: Bucket as string,
+        objectName: Key as string,
+        tenantId: this.tenantId,
+      }),
       UploadId as string,
       multiPartUpload.version,
-      parts
+      parts,
+      { removePrefix: true }
     )
 
     const metadata = await this.storage.backend.headObject(
       storageS3Bucket,
-      `${this.tenantId}/${Bucket}/${Key}`,
+      this.storage.location.getKeyLocation({
+        bucketId: Bucket as string,
+        objectName: Key as string,
+        tenantId: this.tenantId,
+      }),
       resp.version
     )
 
@@ -557,7 +570,7 @@ export class S3ProtocolHandler {
     const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'file_size_limit')
     const maxFileSize = await getFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
 
-    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     await uploader.canUpload({
       bucketId: Bucket as string,
       objectName: Key as string,
@@ -594,7 +607,11 @@ export class S3ProtocolHandler {
         async (stream) => {
           return this.storage.backend.uploadPart(
             storageS3Bucket,
-            `${this.tenantId}/${Bucket}/${Key}`,
+            this.storage.location.getKeyLocation({
+              bucketId: Bucket as string,
+              objectName: Key as string,
+              tenantId: this.tenantId,
+            }),
             multipart.version,
             UploadId,
             PartNumber || 0,
@@ -659,7 +676,7 @@ export class S3ProtocolHandler {
     command: PutObjectCommandInput,
     options: { signal?: AbortSignal; isTruncated: () => boolean }
   ) {
-    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
 
     mustBeValidBucketName(command.Bucket)
     mustBeValidKey(command.Key)
@@ -713,7 +730,7 @@ export class S3ProtocolHandler {
       .asSuperUser()
       .findMultipartUpload(UploadId, 'id,version')
 
-    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     await uploader.canUpload({
       bucketId: Bucket,
       objectName: Key,
@@ -723,7 +740,11 @@ export class S3ProtocolHandler {
 
     await this.storage.backend.abortMultipartUpload(
       storageS3Bucket,
-      `${this.tenantId}/${Bucket}/${Key}`,
+      this.storage.location.getKeyLocation({
+        bucketId: Bucket,
+        objectName: Key,
+        tenantId: this.tenantId,
+      }),
       UploadId,
       multipart.version
     )
@@ -733,14 +754,39 @@ export class S3ProtocolHandler {
     return {}
   }
 
+  async headObject(command: HeadObjectCommandInput) {
+    const { Bucket, Key } = command
+
+    if (!Bucket) {
+      throw ERRORS.MissingParameter('Bucket')
+    }
+
+    if (!Key) {
+      throw ERRORS.MissingParameter('Bucket')
+    }
+
+    const r = await this.storage.backend.headObject(Bucket, Key, undefined)
+
+    return {
+      headers: {
+        'cache-control': r.cacheControl || '',
+        'content-length': r.contentLength?.toString() || '0',
+        'content-type': r.mimetype || '',
+        etag: r.eTag || '',
+        'last-modified': r.lastModified?.toUTCString() || '',
+      },
+    }
+  }
+
   /**
    * The HEAD operation retrieves metadata from an object without returning the object itself. This operation is useful if you're interested only in an object's metadata.
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html
    *
    * @param command
+   * @param opts
    */
-  async headObject(command: HeadObjectCommandInput) {
+  async dbHeadObject(command: HeadObjectCommandInput) {
     const { Bucket, Key } = command
 
     if (!Bucket) {
@@ -814,15 +860,30 @@ export class S3ProtocolHandler {
    * @param command
    * @param options
    */
-  async getObject(command: GetObjectCommandInput, options?: { signal?: AbortSignal }) {
+  async getObject(
+    command: GetObjectCommandInput,
+    options?: { skipDbCheck?: boolean; signal?: AbortSignal }
+  ) {
     const bucket = command.Bucket as string
     const key = command.Key as string
 
-    const object = await this.storage.from(bucket).findObject(key, 'version,user_metadata')
+    let version: string | undefined
+    let userMetadata: Record<string, any> | undefined | null
+
+    if (!options?.skipDbCheck) {
+      const object = await this.storage.from(bucket).findObject(key, 'version,user_metadata')
+      version = object.version
+      userMetadata = object.user_metadata
+    }
+
     const response = await this.storage.backend.getObject(
-      storageS3Bucket,
-      `${this.tenantId}/${bucket}/${key}`,
-      object.version,
+      this.storage.location.getRootLocation(),
+      this.storage.location.getKeyLocation({
+        bucketId: bucket,
+        objectName: key,
+        tenantId: this.tenantId,
+      }),
+      version,
       {
         ifModifiedSince: command.IfModifiedSince?.toISOString(),
         ifNoneMatch: command.IfNoneMatch,
@@ -833,8 +894,8 @@ export class S3ProtocolHandler {
 
     let metadataHeaders: Record<string, any> = {}
 
-    if (object.user_metadata) {
-      metadataHeaders = toAwsMeatadataHeaders(object.user_metadata)
+    if (userMetadata) {
+      metadataHeaders = toAwsMeatadataHeaders(userMetadata)
     }
 
     return {
@@ -1129,7 +1190,7 @@ export class S3ProtocolHandler {
       copySize = toByte - fromByte
     }
 
-    const uploader = new Uploader(this.storage.backend, this.storage.db)
+    const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
 
     await uploader.canUpload({
       bucketId: Bucket,
@@ -1153,11 +1214,19 @@ export class S3ProtocolHandler {
 
     const uploadPart = await this.storage.backend.uploadPartCopy(
       storageS3Bucket,
-      `${this.tenantId}/${Bucket}/${Key}`,
+      this.storage.location.getKeyLocation({
+        bucketId: Bucket,
+        objectName: Key,
+        tenantId: this.tenantId,
+      }),
       multipart.version,
       UploadId,
       PartNumber,
-      `${this.tenantId}/${sourceBucketName}/${copySource.name}`,
+      this.storage.location.getKeyLocation({
+        bucketId: sourceBucketName,
+        objectName: copySource.name,
+        tenantId: this.tenantId,
+      }),
       copySource.version,
       rangeBytes
     )
@@ -1180,7 +1249,7 @@ export class S3ProtocolHandler {
     }
   }
 
-  parseMetadataHeaders(headers: Record<string, any>) {
+  parseMetadataHeaders(headers: Record<string, any>): Record<string, any> | undefined {
     let metadata: Record<string, any> | undefined = undefined
 
     Object.keys(headers)
@@ -1251,12 +1320,12 @@ const HEADER_NAME_RE = /^[!#$%&'*+\-.\^_`|~0-9A-Za-z]+$/
 const HEADER_VALUE_RE = /^[\t\x20-\x7e\x80-\xff]+$/
 
 export function isValidHeader(name: string, value: string | string[]): boolean {
-  if (Buffer.from(name).byteLength < MAX_HEADER_NAME_LENGTH && !HEADER_NAME_RE.test(name)) {
+  if (Buffer.from(`${name}`).byteLength < MAX_HEADER_NAME_LENGTH && !HEADER_NAME_RE.test(name)) {
     return false
   }
   const values = Array.isArray(value) ? value : [value]
   return values.every(
-    (v) => Buffer.from(v).byteLength <= MAX_HEADER_VALUE_LENGTH && HEADER_VALUE_RE.test(v)
+    (v) => Buffer.from(`${v}`).byteLength <= MAX_HEADER_VALUE_LENGTH && HEADER_VALUE_RE.test(v)
   )
 }
 

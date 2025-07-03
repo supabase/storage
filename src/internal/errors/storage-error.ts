@@ -64,6 +64,11 @@ export class StorageBackendError extends Error implements RenderableError {
     })
   }
 
+  withStatusCode(statusCode: number) {
+    this.userStatusCode = statusCode
+    return this
+  }
+
   withMetadata(metadata: Record<string, any>) {
     this.metadata = metadata
     return this

@@ -7,7 +7,9 @@ export const bucketSchema = {
     id: { type: 'string' },
     name: { type: 'string' },
     owner: { type: 'string' },
+    owner_id: { type: 'string' },
     public: { type: 'boolean' },
+    type: { type: 'string', enum: ['STANDARD', 'ANALYTICS'] },
     file_size_limit: { type: ['integer', 'null'] },
     allowed_mime_types: { type: ['array', 'null'], items: { type: 'string' } },
     created_at: { type: 'string' },
@@ -30,3 +32,4 @@ export const bucketSchema = {
 } as const
 
 export type Bucket = FromSchema<typeof bucketSchema>
+export type IcebergBucket = Pick<Bucket, 'id' | 'created_at' | 'updated_at'>

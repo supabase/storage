@@ -347,6 +347,35 @@ export class S3Backend implements StorageBackendAdapter {
     }
   }
 
+  async listParts(
+    bucket: string,
+    key: string,
+    uploadId?: string,
+    maxParts?: number,
+    marker?: string
+  ) {
+    try {
+      const command = new ListPartsCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: uploadId,
+        PartNumberMarker: marker,
+        MaxParts: maxParts,
+      })
+
+      const result = await this.client.send(command)
+
+      return {
+        parts: result.Parts || [],
+        nextPartNumberMarker: result.NextPartNumberMarker,
+        isTruncated: result.IsTruncated || false,
+        httpStatusCode: result.$metadata.httpStatusCode || 200,
+      }
+    } catch (e) {
+      throw StorageBackendError.fromError(e)
+    }
+  }
+
   /**
    * Returns a private url that can only be accessed internally by the system
    * @param bucket
@@ -368,7 +397,8 @@ export class S3Backend implements StorageBackendAdapter {
     key: string,
     version: string | undefined,
     contentType: string,
-    cacheControl: string
+    cacheControl: string,
+    metadata?: Record<string, string>
   ) {
     const createMultiPart = new CreateMultipartUploadCommand({
       Bucket: bucketName,
@@ -376,6 +406,7 @@ export class S3Backend implements StorageBackendAdapter {
       CacheControl: cacheControl,
       ContentType: contentType,
       Metadata: {
+        ...metadata,
         Version: version || '',
       },
     })
@@ -402,7 +433,7 @@ export class S3Backend implements StorageBackendAdapter {
     try {
       const paralellUploadS3 = new UploadPartCommand({
         Bucket: bucketName,
-        Key: `${key}/${version}`,
+        Key: version ? `${key}/${version}` : key,
         UploadId: uploadId,
         PartNumber: partNumber,
         Body: body,
@@ -431,14 +462,15 @@ export class S3Backend implements StorageBackendAdapter {
     key: string,
     uploadId: string,
     version: string,
-    parts: UploadPart[]
+    parts: UploadPart[],
+    opts?: { removePrefix?: boolean }
   ) {
     const keyParts = key.split('/')
 
     if (parts.length === 0) {
       const listPartsInput = new ListPartsCommand({
         Bucket: bucketName,
-        Key: key + '/' + version,
+        Key: version ? key + '/' + version : key,
         UploadId: uploadId,
       })
 
@@ -448,7 +480,7 @@ export class S3Backend implements StorageBackendAdapter {
 
     const completeUpload = new CompleteMultipartUploadCommand({
       Bucket: bucketName,
-      Key: key + '/' + version,
+      Key: version ? key + '/' + version : key,
       UploadId: uploadId,
       MultipartUpload:
         parts.length === 0
@@ -460,13 +492,20 @@ export class S3Backend implements StorageBackendAdapter {
 
     const response = await this.client.send(completeUpload)
 
-    const locationParts = key.split('/')
-    locationParts.shift() // tenant-id
-    const bucket = keyParts.shift()
+    let location = key
+    let bucket = bucketName
+
+    if (opts?.removePrefix) {
+      const locationParts = key.split('/')
+      locationParts.shift() // tenant-id
+
+      bucket = keyParts.shift() || ''
+      location = keyParts.join('/')
+    }
 
     return {
       version,
-      location: keyParts.join('/'),
+      location: location,
       bucket,
       ...response,
     }

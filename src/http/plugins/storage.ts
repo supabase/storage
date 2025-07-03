@@ -4,6 +4,7 @@ import { Storage } from '@storage/storage'
 import { StorageKnexDB } from '@storage/database'
 import { getConfig } from '../../config'
 import { CdnCacheManager } from '@storage/cdn/cdn-cache-manager'
+import { PassThroughLocation, TenantLocation } from '@storage/locator'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -13,7 +14,7 @@ declare module 'fastify' {
   }
 }
 
-const { storageBackendType } = getConfig()
+const { storageBackendType, storageS3Bucket } = getConfig()
 
 const storageBackend = createStorageBackend(storageBackendType)
 
@@ -27,8 +28,13 @@ export const storage = fastifyPlugin(
         reqId: request.id,
         latestMigration: request.latestMigration,
       })
+
+      const location = request.isIcebergBucket
+        ? new PassThroughLocation(request.internalIcebergBucketName!)
+        : new TenantLocation(storageS3Bucket)
+
       request.backend = storageBackend
-      request.storage = new Storage(storageBackend, database)
+      request.storage = new Storage(storageBackend, database, location)
       request.cdnCache = new CdnCacheManager(request.storage)
     })
 

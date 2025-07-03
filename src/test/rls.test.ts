@@ -19,6 +19,7 @@ import { checkBucketExists } from './common'
 import { Storage } from '../storage'
 import { FastifyInstance } from 'fastify'
 import { wait } from '@internal/concurrency'
+import { TenantLocation } from '@storage/locator'
 
 interface Policy {
   name: string
@@ -130,7 +131,7 @@ describe('RLS policies', () => {
       tenantId,
     })
 
-    storage = new Storage(backend, knexDB)
+    storage = new Storage(backend, knexDB, new TenantLocation(storageS3Bucket))
   })
 
   afterEach(async () => {

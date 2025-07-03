@@ -11,6 +11,7 @@ import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from
 import { getConfig } from '../config'
 import { logger, logSchema } from '@internal/monitoring'
 import { Readable } from 'stream'
+import { StorageObjectLocator } from '@storage/locator'
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
 
@@ -39,7 +40,11 @@ const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
  * Handles the upload of a multi-part request or binary body
  */
 export class Uploader {
-  constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
+  constructor(
+    private readonly backend: StorageBackendAdapter,
+    private readonly db: Database,
+    private readonly location: StorageObjectLocator
+  ) {}
 
   async canUpload(options: Pick<UploadRequest, 'bucketId' | 'objectName' | 'isUpsert' | 'owner'>) {
     const shouldCreateObject = !options.isUpsert
@@ -91,8 +96,11 @@ export class Uploader {
     try {
       const file = request.file
 
-      const path = `${request.bucketId}/${request.objectName}`
-      const s3Key = `${this.db.tenantId}/${path}`
+      const s3Key = this.location.getKeyLocation({
+        tenantId: this.db.tenantId,
+        bucketId: request.bucketId,
+        objectName: request.objectName,
+      })
 
       const objectMetadata = await this.backend.uploadObject(
         storageS3Bucket,

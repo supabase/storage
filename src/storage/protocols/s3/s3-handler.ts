@@ -1251,12 +1251,12 @@ const HEADER_NAME_RE = /^[!#$%&'*+\-.\^_`|~0-9A-Za-z]+$/
 const HEADER_VALUE_RE = /^[\t\x20-\x7e\x80-\xff]+$/
 
 export function isValidHeader(name: string, value: string | string[]): boolean {
-  if (Buffer.from(name).byteLength < MAX_HEADER_NAME_LENGTH && !HEADER_NAME_RE.test(name)) {
+  if (Buffer.from(`${name}`).byteLength < MAX_HEADER_NAME_LENGTH && !HEADER_NAME_RE.test(name)) {
     return false
   }
   const values = Array.isArray(value) ? value : [value]
   return values.every(
-    (v) => Buffer.from(v).byteLength <= MAX_HEADER_VALUE_LENGTH && HEADER_VALUE_RE.test(v)
+    (v) => Buffer.from(`${v}`).byteLength <= MAX_HEADER_VALUE_LENGTH && HEADER_VALUE_RE.test(v)
   )
 }
 

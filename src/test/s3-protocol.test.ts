@@ -55,7 +55,13 @@ async function createBucket(client: S3Client, name?: string, publicRead = true) 
   return bucketName
 }
 
-async function uploadFile(client: S3Client, bucketName: string, key: string, mb: number) {
+async function uploadFile(
+  client: S3Client,
+  bucketName: string,
+  key: string,
+  mb: number,
+  headers?: Record<string, any>
+) {
   const uploader = new Upload({
     client: client,
     params: {
@@ -63,6 +69,7 @@ async function uploadFile(client: S3Client, bucketName: string, key: string, mb:
       Key: key,
       ContentType: 'image/jpg',
       Body: Buffer.alloc(1024 * mb),
+      Metadata: headers,
     },
   })
 
@@ -175,6 +182,7 @@ describe('S3 Protocol', () => {
         expect(resp.$metadata.httpStatusCode).toBe(200)
         expect(resp.BucketRegion).toBe(storageS3Region)
       })
+
       it('will return bucket not found error', async () => {
         const headBucketRequest = new HeadBucketCommand({
           Bucket: 'dont-exist-bucket',
@@ -1397,6 +1405,24 @@ describe('S3 Protocol', () => {
 
         expect(resp.ok).toBeFalsy()
         expect(resp.status).toBe(400)
+      })
+
+      it('doesnt crash when invalid headers returned', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-1.jpg'
+        await uploadFile(client, bucket, key, 2, {
+          'invalid-header-r': Buffer.alloc(1024 * 9, 'a').toString(),
+        })
+
+        const headObj = new HeadObjectCommand({
+          Bucket: bucket,
+          Key: key,
+        })
+
+        const r = await client.send(headObj)
+
+        expect(r.$metadata.httpStatusCode).toBe(200)
+        expect(r.MissingMeta).toBe(1)
       })
 
       it('can upload with presigned URL', async () => {

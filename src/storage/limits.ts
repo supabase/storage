@@ -5,7 +5,12 @@ import {
 } from '../internal/database/tenant'
 import { ERRORS } from '../internal/errors'
 
-const { isMultitenant, imageTransformationEnabled } = getConfig()
+const { isMultitenant, imageTransformationEnabled, icebergBucketDetectionSuffix } = getConfig()
+
+export type BucketType = 'STANDARD' | 'ANALYTICS'
+
+export const ICEBERG_BUCKET_RESERVED_SUFFIX = icebergBucketDetectionSuffix
+export const RESERVED_BUCKET_SUFFIXES = [icebergBucketDetectionSuffix]
 
 /**
  * Get the maximum file size for a specific project
@@ -88,6 +93,16 @@ export function mustBeValidKey(key?: string): asserts key is string {
 export function mustBeValidBucketName(key?: string): asserts key is string {
   if (!key || !isValidBucketName(key)) {
     throw ERRORS.InvalidBucketName(key || '')
+  }
+}
+
+/**
+ * Validates if a given bucket name is not reserved
+ * @param bucketName
+ */
+export function mustBeNotReservedBucketName(bucketName?: string): asserts bucketName is string {
+  if (!bucketName || RESERVED_BUCKET_SUFFIXES.some((suffix) => bucketName.endsWith(suffix))) {
+    throw ERRORS.InvalidBucketName(bucketName || '')
   }
 }
 

@@ -101,6 +101,7 @@ type Handler<Req extends Schema, Context = unknown> = (
 
 type Route<S extends Schema, Context> = {
   method: HTTPMethod
+  type?: string
   path: string
   querystringMatches: { key: string; value: string }[]
   headersMatches: string[]
@@ -117,6 +118,7 @@ interface RouteOptions<S extends JSONSchema> {
   acceptMultiformData?: boolean
   operation: string
   schema: S
+  type?: string
 }
 
 export class Router<Context = unknown, S extends Schema = Schema> {
@@ -178,14 +180,18 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       }
     })
 
-    this.ajv.addSchema(
-      {
-        type: 'object',
-        properties: schemaToCompile,
-        required: required.filter(Boolean),
-      },
-      method + url
-    )
+    const existingSchema = this.ajv.getSchema(method + url)
+
+    if (!existingSchema) {
+      this.ajv.addSchema(
+        {
+          type: 'object',
+          properties: schemaToCompile,
+          required: required.filter(Boolean),
+        },
+        method + url
+      )
+    }
 
     const newRoute: Route<R, Context> = {
       method: method as HTTPMethod,
@@ -198,6 +204,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       disableContentTypeParser,
       acceptMultiformData,
       operation,
+      type: options.type,
     } as const
 
     if (!existingPath) {
@@ -250,16 +257,19 @@ export class Router<Context = unknown, S extends Schema = Schema> {
 
   matchRoute(
     route: Route<S, Context>,
-    match: { query: Record<string, string>; headers: Record<string, string> }
+    match: { query: Record<string, string>; headers: Record<string, string>; type?: string }
   ) {
+    const isOfType = match.type ? match.type === route.type : route.type === undefined
+
     if ((route.headersMatches?.length || 0) > 0) {
       return (
         this.matchHeaders(route.headersMatches, match.headers) &&
-        this.matchQueryString(route.querystringMatches, match.query)
+        this.matchQueryString(route.querystringMatches, match.query) &&
+        isOfType
       )
     }
 
-    return this.matchQueryString(route.querystringMatches, match.query)
+    return this.matchQueryString(route.querystringMatches, match.query) && isOfType
   }
 
   protected matchHeaders(headers: string[], received?: Record<string, string>) {

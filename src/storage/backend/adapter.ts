@@ -176,7 +176,8 @@ export abstract class StorageBackendAdapter {
     key: string,
     version: string | undefined,
     contentType: string,
-    cacheControl: string
+    cacheControl: string,
+    metadata?: Record<string, string>
   ): Promise<string | undefined> {
     throw new Error('not implemented')
   }
@@ -199,7 +200,8 @@ export abstract class StorageBackendAdapter {
     key: string,
     uploadId: string,
     version: string,
-    parts: UploadPart[]
+    parts: UploadPart[],
+    opts?: { removePrefix?: boolean }
   ): Promise<
     Omit<UploadPart, 'PartNumber'> & {
       location?: string

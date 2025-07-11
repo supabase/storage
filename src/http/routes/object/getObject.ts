@@ -45,7 +45,11 @@ async function requestHandler(
   const objectName = request.params['*']
 
   // send the object from s3
-  const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
+  const s3Key = request.storage.location.getKeyLocation({
+    tenantId: request.tenantId,
+    bucketId: bucketName,
+    objectName,
+  })
   const bucket = await request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
     dontErrorOnEmpty: true,
   })

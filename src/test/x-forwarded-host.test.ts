@@ -25,6 +25,12 @@ jest.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
     purgeCache: {
       enabled: true,
     },
+    icebergCatalog: {
+      enabled: true,
+      maxCatalogs: 10,
+      maxNamespaces: 30,
+      maxTables: 20,
+    },
   },
 }))
 

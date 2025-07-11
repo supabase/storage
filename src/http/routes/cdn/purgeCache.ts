@@ -3,9 +3,6 @@ import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema, createResponse } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
-import { getConfig } from '../../../config'
-
-const { dbServiceRole } = getConfig()
 
 const purgeObjectParamsSchema = {
   type: 'object',
@@ -43,11 +40,6 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      // Must be service role to invoke this API
-      if (request.jwtPayload?.role !== dbServiceRole) {
-        return response.status(403).send(createResponse('Forbidden', '403', 'Forbidden'))
-      }
-
       const { bucketName } = request.params
       const objectName = request.params['*']
 

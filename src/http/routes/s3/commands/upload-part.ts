@@ -39,6 +39,65 @@ export default function UploadPart(s3Router: S3Router) {
   s3Router.put(
     '/:Bucket/*?uploadId&partNumber',
     {
+      type: 'iceberg',
+      schema: UploadPartInput,
+      operation: ROUTE_OPERATIONS.S3_UPLOAD_PART,
+      disableContentTypeParser: true,
+    },
+    async (req, ctx) => {
+      const icebergBucketName = ctx.req.internalIcebergBucketName
+
+      if (ctx.req.streamingSignatureV4) {
+        const passThrough = new PassThrough()
+        ctx.req.raw.pipe(passThrough)
+        ctx.req.raw.on('error', (err) => {
+          passThrough.destroy(err)
+        })
+
+        return pipeline(passThrough, ctx.req.streamingSignatureV4, async (body) => {
+          const part = await ctx.req.storage.backend.uploadPart(
+            icebergBucketName!,
+            req.Params['*'],
+            '',
+            req.Querystring.uploadId,
+            req.Querystring.partNumber,
+            body as Readable,
+            req.Headers?.['x-amz-decoded-content-length'] || req.Headers?.['content-length'],
+            ctx.signals.body
+          )
+
+          return {
+            headers: {
+              etag: part.ETag || '',
+              'Access-Control-Expose-Headers': 'etag',
+            },
+          }
+        })
+      }
+
+      const part = await ctx.req.storage.backend.uploadPart(
+        icebergBucketName!,
+        req.Params['*'],
+        '',
+        req.Querystring.uploadId,
+        req.Querystring.partNumber,
+        ctx.req.raw as Readable,
+        req.Headers?.['content-length'],
+        ctx.signals.body
+      )
+
+      return {
+        headers: {
+          etag: part.ETag || '',
+          'Access-Control-Expose-Headers': 'etag',
+        },
+      }
+    }
+  )
+
+  s3Router.put(
+    '/:Bucket/*?uploadId&partNumber',
+    {
       schema: UploadPartInput,
       operation: ROUTE_OPERATIONS.S3_UPLOAD_PART,
       disableContentTypeParser: true,

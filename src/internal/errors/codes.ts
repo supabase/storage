@@ -38,6 +38,11 @@ export enum ErrorCode {
   TusError = 'TusError',
   Aborted = 'Aborted',
   AbortedTerminate = 'AbortedTerminate',
+  FeatureNotEnabled = 'FeatureNotEnabled',
+  NotSupported = 'NotSupported',
+  IcebergError = 'IcebergError',
+  IcebergMaximumResourceLimit = 'IcebergMaximumResourceLimit',
+  NoSuchIcebergBucket = 'NoSuchIcebergBucket',
 }
 
 export const ERRORS = {
@@ -47,6 +52,29 @@ export const ERRORS = {
       resource: bucket,
       httpStatusCode: 409,
       message: `The bucket you tried to delete is not empty`,
+      originalError: e,
+    }),
+  IcebergMaximumResourceLimit: (limit: number, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.IcebergMaximumResourceLimit,
+      httpStatusCode: 409,
+      message: `The maximum number of this resource ${limit} is reached`,
+      originalError: e,
+    }),
+
+  FeatureNotEnabled: (resource: string, feature: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidRequest,
+      resource: resource,
+      httpStatusCode: 409,
+      message: `The feature ${feature} is not enabled for this resource`,
+      originalError: e,
+    }),
+  NotSupported: (feature: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidRequest,
+      httpStatusCode: 409,
+      message: `The feature ${feature} is not enabled for this resource`,
       originalError: e,
     }),
   NoSuchBucket: (bucket: string, e?: Error) =>
@@ -84,12 +112,12 @@ export const ERRORS = {
       originalError: e,
     }),
 
-  InvalidParameter: (parameter: string, e?: Error) =>
+  InvalidParameter: (parameter: string, opts?: { error?: Error; message?: string }) =>
     new StorageBackendError({
       code: ErrorCode.MissingParameter,
       httpStatusCode: 400,
-      message: `Invalid Parameter ${parameter}`,
-      originalError: e,
+      message: opts?.message || `Invalid Parameter ${parameter}`,
+      originalError: opts?.error,
     }),
 
   InvalidJWT: (e?: Error) =>
@@ -380,6 +408,13 @@ export const ERRORS = {
       message: message,
       originalError,
     }),
+  NoSuchIcebergBucket: (name: string) => {
+    return new StorageBackendError({
+      code: ErrorCode.NoSuchIcebergBucket,
+      httpStatusCode: 404,
+      message: `Iceberg bucket name ${name} not found`,
+    })
+  },
 }
 
 export function isStorageError(errorType: ErrorCode, error: any): error is StorageBackendError {

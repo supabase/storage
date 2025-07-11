@@ -59,7 +59,11 @@ export default async function routes(fastify: FastifyInstance) {
       ])
 
       // send the object from s3
-      const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
+      const s3Key = request.storage.location.getKeyLocation({
+        tenantId: request.tenantId,
+        bucketId: bucketName,
+        objectName,
+      })
 
       return request.storage.renderer('asset').render(request, response, {
         bucket: storageS3Bucket,

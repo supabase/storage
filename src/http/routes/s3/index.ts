@@ -2,7 +2,15 @@ import { FastifyInstance, RouteHandlerMethod } from 'fastify'
 import fastifyMultipart from '@fastify/multipart'
 import { JSONSchema } from 'json-schema-to-ts'
 import { trace } from '@opentelemetry/api'
-import { db, xmlParser, requireTenantFeature, signatureV4, storage } from '../../plugins'
+import {
+  db,
+  xmlParser,
+  requireTenantFeature,
+  signatureV4,
+  storage,
+  detectS3IcebergBucket,
+  icebergRestCatalog,
+} from '../../plugins'
 import { findArrayPathsInSchemas, getRouter, RequestInput } from './router'
 import { s3ErrorHandler } from './error-handler'
 import { getConfig } from '../../../config'
@@ -35,6 +43,7 @@ export default async function routes(fastify: FastifyInstance) {
           for (const route of routesByMethod) {
             if (
               s3Router.matchRoute(route, {
+                type: req.isIcebergBucket ? 'iceberg' : undefined,
                 query: (req.query as Record<string, string>) || {},
                 headers: (req.headers as Record<string, string>) || {},
               })
@@ -50,7 +59,11 @@ export default async function routes(fastify: FastifyInstance) {
               }
 
               try {
-                req.operation = { type: route.operation }
+                const operation = route.type
+                  ? route.operation.replaceAll('s3.', `s3.${route.type}.`)
+                  : route.operation
+
+                req.operation = { type: operation }
 
                 if (req.operation.type) {
                   trace.getActiveSpan()?.setAttribute('http.operation', req.operation.type)
@@ -143,6 +156,8 @@ export default async function routes(fastify: FastifyInstance) {
           })
 
           localFastify.register(db)
+          localFastify.register(icebergRestCatalog)
+          localFastify.register(detectS3IcebergBucket)
           localFastify.register(storage)
 
           localFastify[method](

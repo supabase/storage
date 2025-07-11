@@ -33,6 +33,7 @@ const payload = {
   tracingMode: 'basic',
   capabilities: {
     list_V2: true,
+    iceberg_catalog: true,
   },
   features: {
     imageTransformation: {
@@ -44,6 +45,12 @@ const payload = {
     },
     purgeCache: {
       enabled: false,
+    },
+    icebergCatalog: {
+      enabled: false,
+      maxCatalogs: 2,
+      maxNamespaces: 10,
+      maxTables: 10,
     },
   },
   disableEvents: null,
@@ -64,6 +71,7 @@ const payload2 = {
   tracingMode: 'basic',
   capabilities: {
     list_V2: true,
+    iceberg_catalog: true,
   },
   features: {
     imageTransformation: {
@@ -75,6 +83,12 @@ const payload2 = {
     },
     purgeCache: {
       enabled: true,
+    },
+    icebergCatalog: {
+      enabled: false,
+      maxCatalogs: 2,
+      maxNamespaces: 10,
+      maxTables: 10,
     },
   },
   disableEvents: null,

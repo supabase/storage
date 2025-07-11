@@ -36,4 +36,5 @@ export const DBMigration = {
   'add-insert-trigger-prefixes': 35,
   'optimise-existing-functions': 36,
   'add-bucket-name-length-trigger': 37,
+  'iceberg-catalog-flag-on-buckets': 38,
 }

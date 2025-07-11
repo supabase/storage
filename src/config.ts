@@ -3,6 +3,7 @@ import type { DBMigration } from '@internal/database/migrations'
 import { SignJWT } from 'jose'
 
 export type StorageBackendType = 'file' | 's3'
+export type IcebergCatalogAuthType = 'sigv4' | 'token'
 export enum MultitenantMigrationStrategy {
   PROGRESSIVE = 'progressive',
   ON_REQUEST = 'on_request',
@@ -172,6 +173,16 @@ type StorageConfigType = {
   }
   cdnPurgeEndpointURL?: string
   cdnPurgeEndpointKey?: string
+
+  icebergWarehouse: string
+  icebergCatalogUrl: string
+  icebergCatalogAuthType: IcebergCatalogAuthType
+  icebergCatalogToken?: string
+  icebergMaxNamespaceCount: number
+  icebergMaxTableCount: number
+  icebergMaxCatalogsCount: number
+  icebergBucketDetectionSuffix: string
+  icebergBucketDetectionMode: 'BUCKET' | 'FULL_PATH'
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -489,6 +500,24 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('RATE_LIMITER_REDIS_COMMAND_TIMEOUT') || '2',
       10
     ),
+
+    icebergWarehouse: getOptionalConfigFromEnv('ICEBERG_WAREHOUSE') || '',
+    icebergCatalogUrl:
+      getOptionalConfigFromEnv('ICEBERG_CATALOG_URL') ||
+      `https://s3tables.ap-southeast-1.amazonaws.com/iceberg/v1`,
+
+    icebergBucketDetectionSuffix:
+      getOptionalConfigFromEnv('ICEBERG_BUCKET_DETECTION_SUFFIX') || `--table-s3`,
+    icebergBucketDetectionMode:
+      getOptionalConfigFromEnv('ICEBERG_BUCKET_DETECTION_MODE') || `BUCKET`,
+    icebergCatalogAuthType: getOptionalConfigFromEnv('ICEBERG_CATALOG_AUTH_TYPE') || `sigv4`,
+    icebergCatalogToken: getOptionalConfigFromEnv('ICEBERG_CATALOG_AUTH_TOKEN'),
+    icebergMaxCatalogsCount: parseInt(getOptionalConfigFromEnv('ICEBERG_MAX_CATALOGS') || '2', 10),
+    icebergMaxNamespaceCount: parseInt(
+      getOptionalConfigFromEnv('ICEBERG_MAX_NAMESPACES') || '25',
+      10
+    ),
+    icebergMaxTableCount: parseInt(getOptionalConfigFromEnv('ICEBERG_MAX_TABLES') || '10', 10),
   } as StorageConfigType
 
   const serviceKey = getOptionalConfigFromEnv('SERVICE_KEY') || ''

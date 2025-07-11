@@ -53,7 +53,11 @@ export default async function routes(fastify: FastifyInstance) {
 
       const obj = await request.storage.from(bucketName).findObject(objectName, 'id,version')
 
-      const s3Key = `${request.tenantId}/${bucketName}/${objectName}`
+      const s3Key = request.storage.location.getKeyLocation({
+        tenantId: request.tenantId,
+        bucketId: bucketName,
+        objectName,
+      })
 
       const renderer = request.storage.renderer('image') as ImageRenderer
 

@@ -18,6 +18,7 @@ import { MigrationTransformer, DisableConcurrentIndexTransformer } from './trans
 import { lastLocalMigrationName, loadMigrationFilesCached, localMigrationFiles } from './files'
 
 const {
+  isMultitenant,
   multitenantDatabaseUrl,
   pgQueueEnable,
   databaseSSLRootCert,
@@ -76,6 +77,17 @@ export function startAsyncMigrations(signal: AbortSignal) {
     default:
       throw new Error(`Unknown migration strategy: ${dbMigrationStrategy}`)
   }
+}
+
+export async function tenantHasMigrations(tenantId: string, migration: keyof typeof DBMigration) {
+  if (isMultitenant) {
+    const { migrationVersion } = await getTenantConfig(tenantId)
+    if (migrationVersion) {
+      return DBMigration[migrationVersion] >= DBMigration[migration]
+    }
+  }
+
+  return true
 }
 
 /**
@@ -631,6 +643,7 @@ function runMigrations({
       if (migrationsToRun.length > 0) {
         await client.query(SQL`SELECT 
           set_config('storage.install_roles', ${dbInstallRoles}, false),
+          set_config('storage.multitenant', ${isMultitenant ? 'true' : 'false'}, false),
           set_config('storage.anon_role', ${dbAnonRole}, false),
           set_config('storage.authenticated_role', ${dbAuthenticatedRole}, false),
           set_config('storage.service_role', ${dbServiceRole}, false),

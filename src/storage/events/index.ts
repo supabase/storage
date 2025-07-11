@@ -1,5 +1,7 @@
 export * from './lifecycle/webhook'
 export * from './base-event'
+export * from './lifecycle/bucket-created'
+export * from './lifecycle/bucket-deleted'
 export * from './lifecycle/object-created'
 export * from './lifecycle/object-updated'
 export * from './lifecycle/object-removed'

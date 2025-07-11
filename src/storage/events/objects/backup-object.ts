@@ -48,7 +48,11 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
       return
     }
 
-    const s3Key = `${tenantId}/${job.data.bucketId}/${job.data.name}`
+    const s3Key = storage.location.getKeyLocation({
+      tenantId,
+      bucketId: job.data.bucketId,
+      objectName: job.data.name,
+    })
 
     try {
       logSchema.event(logger, `[Admin]: BackupObject ${s3Key}`, {
@@ -86,7 +90,11 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
 
         await storage.backend.deleteObject(
           storageS3Bucket,
-          `${tenantId}/${job.data.bucketId}/${job.data.name}`,
+          storage.location.getKeyLocation({
+            tenantId,
+            bucketId: job.data.bucketId,
+            objectName: job.data.name,
+          }),
           job.data.version
         )
       }

@@ -4,6 +4,7 @@ import { getConfig } from '../../config'
 import { QueueJobScheduled, QueueJobSchedulingTime } from '@internal/monitoring/metrics'
 import { logger, logSchema } from '@internal/monitoring'
 import { getTenantConfig } from '@internal/database'
+import { ERRORS } from '@internal/errors'
 
 export interface BasePayload {
   $version?: string
@@ -122,6 +123,17 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     return that.send()
   }
 
+  static invoke<T extends Event<any>>(
+    this: StaticThis<T>,
+    payload: Omit<T['payload'], '$version'>
+  ) {
+    if (!payload.$version) {
+      ;(payload as T['payload']).$version = this.version
+    }
+    const that = new this(payload)
+    return that.invoke()
+  }
+
   static handle(
     job: Job<Event<any>['payload']> | Job<Event<any>['payload']>[],
     opts?: { signal?: AbortSignal }
@@ -139,6 +151,25 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       }
     }
     return true
+  }
+
+  async invoke(): Promise<string | void | null> {
+    const constructor = this.constructor as typeof Event
+
+    if (!constructor.allowSync) {
+      throw ERRORS.InternalError(undefined, 'Cannot send this event synchronously')
+    }
+
+    await constructor.handle({
+      id: '__sync',
+      expireInSeconds: 0,
+      name: constructor.getQueueName(),
+      data: {
+        region,
+        ...this.payload,
+        $version: constructor.version,
+      },
+    })
   }
 
   async send(): Promise<string | void | null> {

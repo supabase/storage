@@ -480,7 +480,8 @@ export default async function routes(fastify: FastifyInstance) {
           migrations_version: await lastLocalMigrationName(),
           migrations_status: TenantMigrationStatus.COMPLETED,
         })
-    } catch {
+    } catch (e) {
+      request.executionError = e as Error
       progressiveMigrations.addTenant(tenantId)
     }
 

@@ -85,6 +85,7 @@ interface ErrorLog {
 interface InfoLog {
   type: string
   project?: string
+  metadata?: string
 }
 
 export const logSchema = {

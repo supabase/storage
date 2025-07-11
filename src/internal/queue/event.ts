@@ -153,6 +153,32 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     return true
   }
 
+  /**
+   * See issue https://github.com/timgit/pg-boss/issues/535
+   * @param queueName
+   * @param singletonKey
+   * @param jobId
+   */
+  static async deleteIfActiveExists(queueName: string, singletonKey: string, jobId: string) {
+    if (!pgQueueEnable) {
+      return Promise.resolve()
+    }
+
+    await Queue.getDb().executeSql(
+      `DELETE FROM pgboss_v10.job
+       WHERE id = $1
+       AND EXISTS(
+          SELECT 1 FROM pgboss_v10.job
+             WHERE id != $2
+             AND state < 'active'
+             AND name = $3
+             AND singleton_key = $4
+       )
+      `,
+      [jobId, jobId, queueName, singletonKey]
+    )
+  }
+
   async invoke(): Promise<string | void | null> {
     const constructor = this.constructor as typeof Event
 

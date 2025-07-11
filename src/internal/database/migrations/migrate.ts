@@ -85,6 +85,8 @@ export async function tenantHasMigrations(tenantId: string, migration: keyof typ
     if (migrationVersion) {
       return DBMigration[migrationVersion] >= DBMigration[migration]
     }
+
+    return false
   }
 
   return true

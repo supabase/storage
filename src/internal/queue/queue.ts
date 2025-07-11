@@ -15,6 +15,7 @@ type SubclassOfBaseClass = (new (payload: any) => Event<any>) & {
 export abstract class Queue {
   protected static events: SubclassOfBaseClass[] = []
   private static pgBoss?: PgBoss
+  private static pgBossDb?: PgBoss.Db
 
   static async start(opts: {
     signal?: AbortSignal
@@ -55,15 +56,17 @@ export abstract class Queue {
       url = multitenantDatabaseUrl
     }
 
+    Queue.pgBossDb = new QueueDB({
+      min: 0,
+      max: pgQueueMaxConnections,
+      connectionString: url,
+      statement_timeout: pgQueueReadWriteTimeout > 0 ? pgQueueReadWriteTimeout : undefined,
+    })
+
     Queue.pgBoss = new PgBoss({
       connectionString: url,
 
-      db: new QueueDB({
-        min: 0,
-        max: pgQueueMaxConnections,
-        connectionString: url,
-        statement_timeout: pgQueueReadWriteTimeout > 0 ? pgQueueReadWriteTimeout : undefined,
-      }),
+      db: Queue.pgBossDb,
       schema: 'pgboss_v10',
       application_name: 'storage-pgboss',
       ...(pgQueueDeleteAfterHours
@@ -137,6 +140,14 @@ export abstract class Queue {
     }
 
     return this.pgBoss
+  }
+
+  static getDb() {
+    if (!this.pgBossDb) {
+      throw new Error('pg boss not initialised')
+    }
+
+    return this.pgBossDb
   }
 
   static register<T extends SubclassOfBaseClass>(event: T) {
@@ -220,8 +231,8 @@ export abstract class Queue {
 
       // // normal queue
       await this.pgBoss?.createQueue(queueName, {
-        name: queueName,
         ...queueOptions,
+        name: queueName,
         deadLetter: deadLetterName,
       })
     } catch {
@@ -248,6 +259,15 @@ export abstract class Queue {
     const batchSize =
       event.getWorkerOptions().batchSize ||
       queueOpts.concurrentTaskCount + Math.max(1, Math.floor(queueOpts.concurrentTaskCount * 1.2))
+
+    logSchema.info(logger, `[Queue] Polling queue ${event.getQueueName()}`, {
+      type: 'queue',
+      metadata: JSON.stringify({
+        queueName: event.getQueueName(),
+        batchSize: batchSize,
+        pollingInterval: pollingInterval,
+      }),
+    })
 
     let started = false
     const interval = setInterval(async () => {
@@ -289,11 +309,11 @@ export abstract class Queue {
                 name: event.getQueueName(),
               })
             } catch (e) {
-              await this.pgBoss?.fail(event.getQueueName(), job.id)
-
               QueueJobRetryFailed.inc({
                 name: event.getQueueName(),
               })
+
+              await this.pgBoss?.fail(event.getQueueName(), job.id)
 
               try {
                 const dbJob: JobWithMetadata | null =
@@ -329,6 +349,16 @@ export abstract class Queue {
             }
           })
         )
+      } catch (e) {
+        logSchema.error(logger, `[Queue] Error while polling queue ${event.name}`, {
+          type: 'queue',
+          error: e,
+          metadata: JSON.stringify({
+            queueName: event.getQueueName(),
+            batchSize,
+            pollingInterval,
+          }),
+        })
       } finally {
         started = false
       }

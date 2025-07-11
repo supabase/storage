@@ -17,13 +17,13 @@ interface RunMigrationsPayload extends BasePayload {
 }
 
 export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
-  static queueName = 'tenants-migrations-v2'
+  static queueName = 'tenants-migrations'
   static allowSync = false
 
   static getQueueOptions(): Queue {
     return {
       name: this.queueName,
-      policy: 'singleton',
+      policy: 'stately',
     } as const
   }
 
@@ -36,7 +36,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
   static getSendOptions(payload: RunMigrationsPayload): SendOptions {
     return {
       singletonKey: `migrations_${payload.tenantId}`,
-      singletonMinutes: 5,
+      singletonHours: 1,
       retryLimit: 3,
       retryDelay: 5,
       priority: 10,
@@ -93,6 +93,21 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
       } else {
         await updateTenantMigrationsState(tenantId, { state: TenantMigrationStatus.FAILED })
       }
+
+      try {
+        // get around pg-boss not allowing to have a stately queue in a state
+        // where there is a job in created state and retry state
+        const singletonKey = job.singletonKey || ''
+        await this.deleteIfActiveExists(this.getQueueName(), singletonKey, job.id)
+      } catch (e) {
+        logSchema.error(logger, `[Migrations] Error deleting job ${job.id}`, {
+          type: 'migrations',
+          error: e,
+          project: tenantId,
+        })
+        return
+      }
+
       throw e
     }
   }

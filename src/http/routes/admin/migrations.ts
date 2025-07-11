@@ -65,7 +65,7 @@ export default async function routes(fastify: FastifyInstance) {
       .table('pgboss_v10.job')
       .where('state', 'active')
       .where('name', 'tenants-migrations')
-      .orderBy('createdon', 'desc')
+      .orderBy('created_on', 'desc')
       .limit(2000)
 
     return reply.send(data)
@@ -79,7 +79,7 @@ export default async function routes(fastify: FastifyInstance) {
       .table('pgboss_v10.job')
       .where('state', 'active')
       .where('name', 'tenants-migrations')
-      .orderBy('createdon', 'desc')
+      .orderBy('created_on', 'desc')
       .update({ state: 'completed' })
       .limit(2000)
 

@@ -183,6 +183,7 @@ type StorageConfigType = {
   icebergMaxCatalogsCount: number
   icebergBucketDetectionSuffix: string
   icebergBucketDetectionMode: 'BUCKET' | 'FULL_PATH'
+  icebergS3DeleteEnabled: boolean
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -518,6 +519,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       10
     ),
     icebergMaxTableCount: parseInt(getOptionalConfigFromEnv('ICEBERG_MAX_TABLES') || '10', 10),
+    icebergS3DeleteEnabled: getOptionalConfigFromEnv('ICEBERG_S3_DELETE_ENABLED') === 'true',
   } as StorageConfigType
 
   const serviceKey = getOptionalConfigFromEnv('SERVICE_KEY') || ''

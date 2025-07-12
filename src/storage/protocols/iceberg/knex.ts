@@ -192,10 +192,7 @@ export class KnexMetastore implements Metastore {
   async findCatalogById(param: { tenantId: string; id: string }): Promise<IcebergBucket> {
     const table = this.ops.multiTenant ? 'iceberg_catalogs' : 'buckets_analytics'
 
-    const query = this.db
-      .withSchema(this.ops.schema)
-      .table(table)
-      .select<IcebergBucket[]>('id', 'type')
+    const query = this.db.withSchema(this.ops.schema).table(table).select<IcebergBucket[]>('id')
 
     if (this.ops.multiTenant) {
       query.select('tenant_id')

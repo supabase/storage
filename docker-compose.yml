@@ -45,6 +45,12 @@ services:
       # S3 Protocol
       S3_PROTOCOL_ACCESS_KEY_ID: 625729a08b95bf1b7ff351a663f3a23c
       S3_PROTOCOL_ACCESS_KEY_SECRET: 850181e4652dd023b7a98c58ae0d2d34bd487ee0cc3254aed6eda37307425907
+      # Iceberg Protocol
+      ICEBERG_BUCKET_DETECTION_MODE: "FULL_PATH"
+      ICEBERG_CATALOG_URL: http://rest-catalog:8181/v1
+      ICEBERG_CATALOG_AUTH_TYPE: token
+      ICEBERG_CATALOG_AUTH_TOKEN: token
+      ICEBERG_S3_DELETE_ENABLED: true
 
   tenant_db:
     extends:
@@ -72,6 +78,13 @@ services:
   imgproxy:
     extends:
       service: imgproxy
+      file: ./.docker/docker-compose-infra.yml
+
+  rest-catalog:
+    depends_on:
+      - minio_setup
+    extends:
+      service: rest-catalog
       file: ./.docker/docker-compose-infra.yml
 
 #  Optional for rate-limiting

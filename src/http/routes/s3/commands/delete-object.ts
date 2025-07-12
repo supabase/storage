@@ -1,6 +1,7 @@
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
+import { getConfig } from '../../../../config'
 
 const DeleteObjectInput = {
   summary: 'Delete Object',
@@ -55,6 +56,8 @@ const DeleteObjectsInput = {
   },
 } as const
 
+const { icebergS3DeleteEnabled } = getConfig()
+
 export default function DeleteObject(s3Router: S3Router) {
   // Delete multiple objects
   s3Router.post(
@@ -85,4 +88,23 @@ export default function DeleteObject(s3Router: S3Router) {
       })
     }
   )
+
+  // Delete single object
+  if (icebergS3DeleteEnabled) {
+    s3Router.delete(
+      '/:Bucket/*',
+      { type: 'iceberg', schema: DeleteObjectInput, operation: ROUTE_OPERATIONS.S3_DELETE_OBJECT },
+      async (req, ctx) => {
+        const internalBucketName = ctx.req.internalIcebergBucketName
+
+        if (!internalBucketName) {
+          throw new Error('Iceberg bucket name is required')
+        }
+
+        await ctx.req.storage.backend.deleteObject(internalBucketName, req.Params['*'], undefined)
+
+        return {}
+      }
+    )
+  }
 }

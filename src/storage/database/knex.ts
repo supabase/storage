@@ -148,7 +148,10 @@ export class StorageKnexDB implements Database {
       public: data.public,
       allowed_mime_types: data.allowed_mime_types,
       file_size_limit: data.file_size_limit,
-      type: 'STANDARD',
+    }
+
+    if (await tenantHasMigrations(this.tenantId, 'iceberg-catalog-flag-on-buckets')) {
+      bucketData.type = 'STANDARD'
     }
 
     try {

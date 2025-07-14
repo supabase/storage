@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from '../../types'
 import { FromSchema } from 'json-schema-to-ts'
 import { ERRORS } from '@internal/errors'
 import { CreateTableRequest } from '@storage/protocols/iceberg/catalog/rest-catalog-client'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const createTableSchema = {
   body: {
@@ -191,6 +192,14 @@ const dropTableSchema = {
   type: 'object',
   querystring: {
     type: 'object',
+    properties: {
+      purgeRequested: {
+        type: 'string',
+        enum: ['true', 'false', 'True', 'False'],
+        default: 'false',
+        description: 'If true, the table will be permanently deleted',
+      },
+    },
   },
   params: {
     type: 'object',
@@ -300,14 +309,9 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
       }
 
-      const bucket = await request.icebergCatalog.findCatalogById({
-        tenantId: request.tenantId,
-        id: request.params.prefix,
-      })
-
-      const result = await request.icebergCatalog?.createTable({
+      const result = await request.icebergCatalog.createTable({
         ...(request.body as unknown as CreateTableRequest),
-        warehouse: bucket.id,
+        warehouse: request.params.prefix,
         namespace: request.params.namespace,
       })
 
@@ -318,6 +322,9 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get<listTableSchemaRequest>(
     '/:prefix/namespaces/:namespace/tables',
     {
+      config: {
+        operation: { type: ROUTE_OPERATIONS.ICEBERG_LIST_TABLES },
+      },
       schema: { ...listTableSchema, tags: ['iceberg'] },
     },
     async (request, response) => {
@@ -325,12 +332,8 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
       }
 
-      await request.icebergCatalog.findCatalogById({
-        tenantId: request.tenantId,
-        id: request.params.prefix,
-      })
-
-      const result = await request.icebergCatalog?.listTables({
+      const result = await request.icebergCatalog.listTables({
+        warehouse: request.params.prefix,
         namespace: request.params.namespace,
         pageSize: request.query.pageSize,
         pageToken: request.query.pageToken,
@@ -343,6 +346,9 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get<loadTableRequest>(
     '/:prefix/namespaces/:namespace/tables/:table',
     {
+      config: {
+        operation: { type: ROUTE_OPERATIONS.ICEBERG_LOAD_TABLE },
+      },
       schema: { ...loadTableSchema, tags: ['iceberg'] },
       exposeHeadRoute: false,
     },
@@ -351,13 +357,8 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
       }
 
-      const bucket = await request.icebergCatalog.findCatalogById({
-        tenantId: request.tenantId,
-        id: request.params.prefix,
-      })
-
-      const result = await request.icebergCatalog?.loadTable({
-        warehouse: bucket.id,
+      const result = await request.icebergCatalog.loadTable({
+        warehouse: request.params.prefix,
         namespace: request.params.namespace,
         table: request.params.table,
       })
@@ -369,6 +370,9 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.head<loadTableRequest>(
     '/:prefix/namespaces/:namespace/tables/:table',
     {
+      config: {
+        operation: { type: ROUTE_OPERATIONS.ICEBERG_TABLE_EXISTS },
+      },
       schema: { ...loadTableSchema, tags: ['iceberg'] },
     },
     async (request, response) => {
@@ -376,12 +380,8 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
       }
 
-      await request.icebergCatalog.findCatalogById({
-        tenantId: request.tenantId,
-        id: request.params.prefix,
-      })
-
-      const result = await request.icebergCatalog?.tableExists({
+      const result = await request.icebergCatalog.tableExists({
+        warehouse: request.params.prefix,
         namespace: request.params.namespace,
         table: request.params.table,
       })
@@ -402,6 +402,9 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.delete<dropTableSchemaRequest>(
       '/:prefix/namespaces/:namespace/tables/:table',
       {
+        config: {
+          operation: { type: ROUTE_OPERATIONS.ICEBERG_DROP_TABLE },
+        },
         schema: { ...dropTableSchema, tags: ['iceberg'] },
       },
       async (request, response) => {
@@ -409,14 +412,11 @@ export default async function routes(fastify: FastifyInstance) {
           throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
         }
 
-        await request.icebergCatalog.findCatalogById({
-          tenantId: request.tenantId,
-          id: request.params.prefix,
-        })
-
-        const result = await request.icebergCatalog?.dropTable({
+        const result = await request.icebergCatalog.dropTable({
           namespace: request.params.namespace,
           table: request.params.table,
+          warehouse: request.params.prefix,
+          purgeRequested: request.query.purgeRequested?.toLowerCase() === 'true',
         })
 
         return response.status(204).send(result)
@@ -427,6 +427,9 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.post<commitTableRequest>(
     '/:prefix/namespaces/:namespace/tables/:table',
     {
+      config: {
+        operation: { type: ROUTE_OPERATIONS.ICEBERG_COMMIT_TABLE },
+      },
       schema: { ...commitTransactionSchema, tags: ['iceberg'] },
     },
     async (request, response) => {
@@ -434,15 +437,11 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
       }
 
-      await request.icebergCatalog.findCatalogById({
-        tenantId: request.tenantId,
-        id: request.params.prefix,
-      })
-
-      const result = await request.icebergCatalog?.updateTable({
+      const result = await request.icebergCatalog.updateTable({
         ...request.body,
         namespace: request.params.namespace,
         table: request.params.table,
+        warehouse: request.params.prefix,
       })
 
       return response.send(result)

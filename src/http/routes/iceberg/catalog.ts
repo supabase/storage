@@ -1,10 +1,8 @@
 import { FastifyInstance } from 'fastify'
-import { getConfig } from '../../../config'
 import { AuthenticatedRequest } from '../../types'
 import { FromSchema } from 'json-schema-to-ts'
 import { ERRORS } from '@internal/errors'
-
-const { icebergWarehouse } = getConfig()
+import { ROUTE_OPERATIONS } from '../operations'
 
 const getConfigSchema = {
   type: 'object',
@@ -26,6 +24,9 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get<getConfigRequest>(
     '/config',
     {
+      config: {
+        operation: { type: ROUTE_OPERATIONS.ICEBERG_GET_CONFIG },
+      },
       schema: {
         ...getConfigSchema,
         tags: ['iceberg'],
@@ -36,13 +37,8 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
       }
 
-      const bucket = await request.icebergCatalog.findCatalogById({
-        tenantId: request.tenantId,
-        id: request.query.warehouse,
-      })
-
       const result = await request.icebergCatalog.getConfig({
-        warehouse: bucket.id,
+        warehouse: request.query.warehouse,
       })
 
       return response.send(result)

@@ -1,4 +1,4 @@
-import { Bucket, S3MultipartUpload, Obj, S3PartUpload, IcebergBucket } from '../schemas'
+import { Bucket, S3MultipartUpload, Obj, S3PartUpload, IcebergCatalog } from '../schemas'
 import {
   ErrorCode,
   ERRORS,
@@ -103,7 +103,7 @@ export class StorageKnexDB implements Database {
 
   deleteAnalyticsBucket(id: string): Promise<void> {
     return this.runQuery('DeleteAnalyticsBucket', async (knex) => {
-      const deleted = await knex.from<IcebergBucket>('buckets_analytics').where('id', id).delete()
+      const deleted = await knex.from<IcebergCatalog>('buckets_analytics').where('id', id).delete()
 
       if (deleted === 0) {
         throw ERRORS.NoSuchBucket(id)
@@ -111,14 +111,14 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  createIcebergBucket(data: Pick<Bucket, 'id' | 'name'>): Promise<IcebergBucket> {
-    const bucketData: IcebergBucket = {
+  createIcebergBucket(data: Pick<Bucket, 'id' | 'name'>): Promise<IcebergCatalog> {
+    const bucketData: IcebergCatalog = {
       id: data.id,
     }
 
     return this.runQuery('CreateAnalyticsBucket', async (knex) => {
       const icebergBucket = await knex
-        .from<IcebergBucket>('buckets_analytics')
+        .from<IcebergCatalog>('buckets_analytics')
         .insert(bucketData)
         .onConflict('id')
         .merge({

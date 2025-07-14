@@ -1,4 +1,4 @@
-import { Bucket, S3MultipartUpload, Obj, S3PartUpload, IcebergBucket } from '../schemas'
+import { Bucket, S3MultipartUpload, Obj, S3PartUpload, IcebergCatalog } from '../schemas'
 import { ObjectMetadata } from '../backend'
 import { TenantConnection } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
@@ -77,7 +77,7 @@ export interface Database {
     >
   ): Promise<Pick<Bucket, 'id'>>
 
-  createIcebergBucket(data: Pick<Bucket, 'id' | 'name'>): Promise<IcebergBucket>
+  createIcebergBucket(data: Pick<Bucket, 'id' | 'name'>): Promise<IcebergCatalog>
 
   findBucketById<Filters extends FindBucketFilters = FindObjectFilters>(
     bucketId: string,

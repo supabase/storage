@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { AuthenticatedRequest } from '../../types'
 import { FromSchema } from 'json-schema-to-ts'
 import { ERRORS } from '@internal/errors'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const createNamespaceSchema = {
   type: 'object',
@@ -90,6 +91,9 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.post<createNamespaceSchemaRequest>(
     '/:prefix/namespaces',
     {
+      config: {
+        operation: { type: ROUTE_OPERATIONS.ICEBERG_CREATE_NAMESPACE },
+      },
       schema: { ...createNamespaceSchema, tags: ['iceberg'] },
     },
     async (request, response) => {
@@ -97,14 +101,9 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
       }
 
-      const bucket = await request.icebergCatalog.findCatalogById({
-        tenantId: request.tenantId,
-        id: request.params.prefix,
-      })
-
-      const result = await request.icebergCatalog?.createNamespace({
+      const result = await request.icebergCatalog.createNamespace({
         namespace: [request.body.namespace],
-        warehouse: bucket.id,
+        warehouse: request.params.prefix,
       })
 
       return response.send(result)
@@ -114,6 +113,9 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get<listNamespaceSchemaRequest>(
     '/:prefix/namespaces',
     {
+      config: {
+        operation: { type: ROUTE_OPERATIONS.ICEBERG_LIST_NAMESPACES },
+      },
       schema: { ...listNamespaceSchema, tags: ['iceberg'] },
     },
     async (request, response) => {
@@ -121,13 +123,8 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
       }
 
-      const bucket = await request.icebergCatalog.findCatalogById({
-        tenantId: request.tenantId,
-        id: request.params.prefix,
-      })
-
-      const result = await request.icebergCatalog?.listNamespaces({
-        bucketId: bucket.id,
+      const result = await request.icebergCatalog.listNamespaces({
+        warehouse: request.params.prefix,
         pageSize: request.query.pageSize || 100,
         pageToken: request.query.pageToken,
         parent: request.query.parent,
@@ -140,6 +137,9 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.head<loadNamespaceSchemaRequest>(
     '/:prefix/namespaces/:namespace',
     {
+      config: {
+        operation: { type: ROUTE_OPERATIONS.ICEBERG_NAMESPACE_EXISTS },
+      },
       schema: { ...listNamespaceSchema, tags: ['iceberg'] },
     },
     async (request, response) => {
@@ -147,13 +147,9 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
       }
 
-      await request.icebergCatalog.findCatalogById({
-        tenantId: request.tenantId,
-        id: request.params.prefix,
-      })
-
-      const result = await request.icebergCatalog?.namespaceExists({
+      const result = await request.icebergCatalog.namespaceExists({
         namespace: request.params.namespace,
+        warehouse: request.params.prefix,
       })
 
       return response.status(204).send(result)
@@ -163,6 +159,9 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get<loadNamespaceSchemaRequest>(
     '/:prefix/namespaces/:namespace',
     {
+      config: {
+        operation: { type: ROUTE_OPERATIONS.ICEBERG_LOAD_NAMESPACE },
+      },
       schema: { ...loadNamespaceSchema, tags: ['iceberg'] },
     },
     async (request, response) => {
@@ -170,13 +169,9 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
       }
 
-      await request.icebergCatalog.findCatalogById({
-        tenantId: request.tenantId,
-        id: request.params.prefix,
-      })
-
-      const result = await request.icebergCatalog?.loadNamespaceMetadata({
+      const result = await request.icebergCatalog.loadNamespaceMetadata({
         namespace: request.params.namespace,
+        warehouse: request.params.prefix,
       })
 
       return response.send(result)
@@ -191,6 +186,9 @@ export default async function routes(fastify: FastifyInstance) {
     f.delete<dropNamespaceSchemaRequest>(
       '/:prefix/namespaces/:namespace',
       {
+        config: {
+          operation: { type: ROUTE_OPERATIONS.ICEBERG_DROP_NAMESPACE },
+        },
         schema: { ...dropNamespaceSchema, tags: ['iceberg'] },
       },
       async (request, response) => {
@@ -198,14 +196,9 @@ export default async function routes(fastify: FastifyInstance) {
           throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
         }
 
-        const bucket = await request.icebergCatalog.findCatalogById({
-          tenantId: request.tenantId,
-          id: request.params.prefix,
-        })
-
-        await request.icebergCatalog?.dropNamespace({
+        await request.icebergCatalog.dropNamespace({
           namespace: request.params.namespace,
-          warehouse: bucket.id,
+          warehouse: request.params.prefix,
         })
         return response.status(204).send()
       }

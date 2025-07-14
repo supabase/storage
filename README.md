@@ -6,7 +6,7 @@ A scalable, light-weight object storage service.
 
 > Read [this post](https://supabase.io/blog/2021/03/30/supabase-storage) on why we decided to build a new object storage service.
 
-- Multi-protocol support (HTTP, TUS, S3)
+- Multi-protocol support (HTTP, TUS, S3, Iceberg)
 - Uses Postgres as its datastore for storing metadata
 - Authorization rules are written as Postgres Row Level Security policies
 - Integrates with S3 Compatible Storages
@@ -18,6 +18,7 @@ A scalable, light-weight object storage service.
 - [x] HTTP/REST
 - [x] TUS Resumable Upload
 - [x] S3 Compatible API
+- [x] Iceberg REST Catalog
 
 ![Architecture](./static/architecture.png?raw=true 'Architecture')
 

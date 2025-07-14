@@ -5,6 +5,7 @@ import {
   CreateTableRequest,
   DeleteNamespaceRequest,
   DropTableRequest,
+  GetConfigRequest,
   ListNamespacesRequest,
   ListTableRequest,
   LoadNamespaceMetadataRequest,
@@ -66,6 +67,18 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
     this.tenantId = options.tenantId
   }
 
+  async getConfig(params: GetConfigRequest) {
+    const catalog = await this.findCatalogById({
+      tenantId: this.tenantId,
+      id: params.warehouse,
+    })
+
+    return super.getConfig({
+      tenantId: this.tenantId,
+      warehouse: catalog.id,
+    })
+  }
+
   findCatalogById(params: { tenantId: string; id: string }) {
     // Find the catalog by bucket ID and tenant ID in the metastore
     return this.options.metastore.findCatalogById({
@@ -90,7 +103,7 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
         limit: this.options.limits.maxCatalogsCount + 1,
       })
 
-      if (catalogCount > this.options.limits.maxCatalogsCount) {
+      if (catalogCount >= this.options.limits.maxCatalogsCount) {
         throw ERRORS.IcebergMaximumResourceLimit(this.options.limits.maxCatalogsCount)
       }
 
@@ -115,9 +128,15 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
 
     return this.options.metastore.transaction(
       async (store) => {
+        const catalog = await store.findCatalogById({
+          tenantId: this.tenantId,
+          id: rest.warehouse,
+        })
+
         const dbNamespace = await store.findNamespaceByName({
           name: namespace,
           tenantId: this.tenantId,
+          bucketId: catalog.id,
         })
 
         const tableCount = await store.countTables({
@@ -133,10 +152,13 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
         const namespaceName = this.getTenantNamespaceName(dbNamespace.id)
 
         try {
-          const table = await super.createTable({ namespace: namespaceName, ...rest })
+          const table = await super.createTable({
+            ...rest,
+            namespace: namespaceName,
+          })
           await store.createTable({
             name: rest.name,
-            bucketId: rest.warehouse,
+            bucketId: catalog.id,
             namespaceId: dbNamespace.id,
             tenantId: this.options.tenantId,
             location: table['metadata'].location as string,
@@ -163,9 +185,15 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
    * @returns List of table identifiers in the namespace
    */
   async listTables(params: ListTableRequest) {
+    const catalog = await this.findCatalogById({
+      tenantId: this.tenantId,
+      id: params.warehouse,
+    })
+
     const dbNamespace = await this.findNamespaceByName({
       name: params.namespace,
       tenantId: this.tenantId,
+      bucketId: catalog.id,
     })
 
     const tables = await this.options.metastore.listTables({
@@ -197,9 +225,15 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
    * @returns The loaded table with modified location paths
    */
   async loadTable(params: LoadTableRequest) {
+    const catalog = await this.findCatalogById({
+      tenantId: this.tenantId,
+      id: params.warehouse,
+    })
+
     const namespace = await this.options.metastore.findNamespaceByName({
       tenantId: this.tenantId,
       name: params.namespace,
+      bucketId: catalog.id,
     })
 
     const namespaceName = this.getTenantNamespaceName(namespace.id)
@@ -231,9 +265,15 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
   async updateTable(params: CommitTableRequest) {
     return this.options.metastore.transaction(
       async (store) => {
+        const catalog = await store.findCatalogById({
+          tenantId: this.tenantId,
+          id: params.warehouse,
+        })
+
         const namespace = await store.findNamespaceByName({
           tenantId: this.tenantId,
           name: params.namespace,
+          bucketId: catalog.id,
         })
 
         const namespaceName = this.getTenantNamespaceName(namespace.id)
@@ -268,6 +308,7 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
     const namespace = await this.options.metastore.findNamespaceByName({
       tenantId: this.tenantId,
       name: params.namespace,
+      bucketId: params.warehouse,
     })
 
     const namespaceName = this.getTenantNamespaceName(namespace.id)
@@ -287,9 +328,15 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
    * @returns Boolean indicating if the namespace exists
    */
   async namespaceExists(params: NamespaceExistsRequest) {
+    await this.findCatalogById({
+      tenantId: this.tenantId,
+      id: params.warehouse,
+    })
+
     const namespace = await this.options.metastore.findNamespaceByName({
       tenantId: this.tenantId,
       name: params.namespace,
+      bucketId: params.warehouse,
     })
 
     const namespaceName = this.getTenantNamespaceName(namespace.id)
@@ -314,9 +361,14 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
 
     return this.options.metastore.transaction(
       async (store) => {
+        const catalog = await store.findCatalogById({
+          tenantId: this.tenantId,
+          id: params.warehouse,
+        })
+
         const namespace = await store.assignNamespace({
           name: params.namespace[0],
-          bucketId: params.warehouse,
+          bucketId: catalog.id,
           tenantId: this.options.tenantId,
         })
 
@@ -334,7 +386,7 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
         const namespaceResp = await super.createNamespace({
           namespace: [namespaceName],
           properties: params.properties,
-          warehouse: params.warehouse,
+          warehouse: catalog.id,
         })
 
         return { namespace: [namespace.name], properties: namespaceResp.properties || {} }
@@ -354,9 +406,15 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
    * @returns The namespace metadata
    */
   async loadNamespaceMetadata(params: LoadNamespaceMetadataRequest) {
+    await this.findCatalogById({
+      tenantId: this.tenantId,
+      id: params.warehouse,
+    })
+
     const namespace = await this.findNamespaceByName({
       name: params.namespace,
       tenantId: this.tenantId,
+      bucketId: params.warehouse,
     })
 
     const namespaceName = this.getTenantNamespaceName(namespace.id)
@@ -374,8 +432,13 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
    * @returns List of namespace identifiers
    */
   async listNamespaces(params: ListNamespacesRequest) {
+    const catalog = await this.findCatalogById({
+      tenantId: this.tenantId,
+      id: params.warehouse,
+    })
+
     const namespaces = await this.options.metastore.listNamespaces({
-      bucketId: params.bucketId,
+      bucketId: catalog.id,
       tenantId: this.tenantId,
     })
 
@@ -383,9 +446,15 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
   }
 
   async dropTable(params: DropTableRequest) {
+    await this.findCatalogById({
+      tenantId: this.tenantId,
+      id: params.warehouse,
+    })
+
     const namespace = await this.findNamespaceByName({
       name: params.namespace,
       tenantId: this.tenantId,
+      bucketId: params.warehouse,
     })
 
     const namespaceName = this.getTenantNamespaceName(namespace.id)
@@ -396,10 +465,12 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
           table: params.table,
           namespace: namespace.id,
           tenantId: this.tenantId,
+          warehouse: params.warehouse,
         })
 
         return super.dropTable({
           ...params,
+          purgeRequested: params.purgeRequested,
           namespace: namespaceName,
         })
       },
@@ -417,9 +488,15 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
    * @param params Delete namespace request parameters
    */
   async dropNamespace(params: DeleteNamespaceRequest) {
+    const catalog = await this.findCatalogById({
+      tenantId: this.tenantId,
+      id: params.warehouse,
+    })
+
     const namespace = await this.findNamespaceByName({
       name: params.namespace,
       tenantId: this.tenantId,
+      bucketId: catalog.id,
     })
 
     const namespaceName = this.getTenantNamespaceName(namespace.id)
@@ -428,7 +505,7 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
       async (store) => {
         await store.dropNamespace({
           namespace: namespace.name,
-          bucketId: params.warehouse,
+          bucketId: catalog.id,
           tenantId: this.tenantId,
         })
 
@@ -459,7 +536,7 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
    * @param params Find namespace parameters including tenant ID and namespace name
    * @returns The namespace metadata
    */
-  findNamespaceByName(params: { name: string; tenantId: string }) {
+  findNamespaceByName(params: { name: string; bucketId: string; tenantId: string }) {
     return this.options.metastore.findNamespaceByName(params)
   }
 

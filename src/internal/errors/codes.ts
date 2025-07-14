@@ -42,7 +42,7 @@ export enum ErrorCode {
   NotSupported = 'NotSupported',
   IcebergError = 'IcebergError',
   IcebergMaximumResourceLimit = 'IcebergMaximumResourceLimit',
-  NoSuchIcebergBucket = 'NoSuchIcebergBucket',
+  NoSuchCatalog = 'NoSuchCatalog',
 }
 
 export const ERRORS = {
@@ -408,11 +408,11 @@ export const ERRORS = {
       message: message,
       originalError,
     }),
-  NoSuchIcebergBucket: (name: string) => {
+  NoSuchCatalog: (name: string) => {
     return new StorageBackendError({
-      code: ErrorCode.NoSuchIcebergBucket,
+      code: ErrorCode.NoSuchCatalog,
       httpStatusCode: 404,
-      message: `Iceberg bucket name ${name} not found`,
+      message: `Catalog name "${name}" not found`,
     })
   },
 }

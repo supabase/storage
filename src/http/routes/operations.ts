@@ -66,4 +66,18 @@ export const ROUTE_OPERATIONS = {
   TUS_GET_UPLOAD: 'storage.tus.upload.get',
   TUS_DELETE_UPLOAD: 'storage.tus.upload.delete',
   TUS_OPTIONS: 'storage.tus.options',
+
+  // Iceberg
+  ICEBERG_GET_CONFIG: 'storage.iceberg.config.get',
+  ICEBERG_CREATE_NAMESPACE: 'storage.iceberg.namespace.create',
+  ICEBERG_DROP_NAMESPACE: 'storage.iceberg.namespace.drop',
+  ICEBERG_LIST_NAMESPACES: 'storage.iceberg.namespace.list',
+  ICEBERG_LOAD_NAMESPACE: 'storage.iceberg.namespace.load',
+  ICEBERG_NAMESPACE_EXISTS: 'storage.iceberg.namespace.exists',
+  ICEBERG_LIST_TABLES: 'storage.iceberg.table.list',
+  ICEBERG_LOAD_TABLE: 'storage.iceberg.table.load',
+  ICEBERG_TABLE_EXISTS: 'storage.iceberg.table.exists',
+  ICEBERG_CREATE_TABLE: 'storage.iceberg.table.create',
+  ICEBERG_DROP_TABLE: 'storage.iceberg.table.drop',
+  ICEBERG_COMMIT_TABLE: 'storage.iceberg.table.commit',
 }

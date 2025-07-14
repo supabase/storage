@@ -3,6 +3,7 @@ import { ErrorCode, ERRORS, StorageBackendError } from '@internal/errors'
 import { signRequest } from 'aws-sigv4-sign'
 
 export interface GetConfigRequest {
+  tenantId?: string
   warehouse: string
 }
 
@@ -18,7 +19,7 @@ export interface GetConfigResponse {
 }
 
 export interface ListNamespacesRequest {
-  bucketId: string
+  warehouse: string
   pageToken?: string
   pageSize?: number
   parent?: string
@@ -193,6 +194,7 @@ export interface SortField {
 
 export interface ListTableRequest {
   namespace: string
+  warehouse: string
   pageSize?: number
   pageToken?: string
 }
@@ -217,6 +219,7 @@ export interface LoadTableRequest {
 export interface CommitTableRequest extends TableChange {
   /** List of changes to apply, one entry per table */
   namespace: string
+  warehouse: string
   table: string
 }
 
@@ -292,15 +295,18 @@ export interface LoadTableResult {
 
 export interface NamespaceExistsRequest {
   namespace: string
+  warehouse: string
 }
 
 export interface TableExistsRequest {
   namespace: string
+  warehouse: string
   table: string
 }
 
 export interface LoadNamespaceMetadataRequest {
   namespace: string
+  warehouse: string
 }
 
 export interface LoadNamespaceMetadataResponse {
@@ -310,7 +316,9 @@ export interface LoadNamespaceMetadataResponse {
 
 export interface DropTableRequest {
   namespace: string
+  warehouse: string
   table: string
+  purgeRequested?: boolean
   tenantId?: string
 }
 
@@ -595,9 +603,15 @@ export class RestCatalogClient {
    */
   dropTable(params: DropTableRequest) {
     const warehouse = this.getWarehouse()
+    const query: Record<string, string> = {}
+
+    if (params.purgeRequested) {
+      query.purgeRequested = 'true'
+    }
+
     return this.httpClient
-      .delete<void>(`${warehouse}/namespaces/${params.namespace}/${params.table}`, {
-        params: { purgeRequested: 'true', purge: 'true' },
+      .delete<void>(`${warehouse}/namespaces/${params.namespace}/tables/${params.table}`, {
+        params: query,
       })
       .then((response) => response.data)
       .catch((error) => {

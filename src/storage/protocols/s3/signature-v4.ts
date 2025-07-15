@@ -1,6 +1,5 @@
 import crypto from 'crypto'
 import { ERRORS } from '@internal/errors'
-import { V4StreamingAlgorithm } from '@storage/protocols/s3/signature-v4-stream'
 
 interface SignatureV4Options {
   enforceRegion: boolean
@@ -438,6 +437,15 @@ export class SignatureV4 {
           if (header === 'content-length') {
             const headerValue = this.getHeader(request, header) ?? '0'
             return `${header}:${headerValue}`
+          }
+
+          // cloudflare modifies accept-encoding header which causes signing to fail
+          // instead use x-original-accept-encoding if available
+          if (header === 'accept-encoding') {
+            const originalEncoding = this.getHeader(request, 'x-original-accept-encoding')
+            if (originalEncoding) {
+              return `${header}:${originalEncoding}`
+            }
           }
 
           return `${header}:${this.getHeader(request, header)}`

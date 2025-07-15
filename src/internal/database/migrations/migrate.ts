@@ -80,16 +80,14 @@ export function startAsyncMigrations(signal: AbortSignal) {
 }
 
 export async function tenantHasMigrations(tenantId: string, migration: keyof typeof DBMigration) {
-  if (isMultitenant) {
-    const { migrationVersion } = await getTenantConfig(tenantId)
-    if (migrationVersion) {
-      return DBMigration[migrationVersion] >= DBMigration[migration]
-    }
+  const migrationVersion = isMultitenant
+    ? (await getTenantConfig(tenantId)).migrationVersion
+    : await lastLocalMigrationName()
 
-    return false
+  if (migrationVersion) {
+    return DBMigration[migrationVersion] >= DBMigration[migration]
   }
-
-  return true
+  return false
 }
 
 /**

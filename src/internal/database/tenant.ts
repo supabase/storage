@@ -1,5 +1,5 @@
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
-import { decrypt, verifyJWT } from '../auth'
+import { decrypt } from '../auth'
 import { JWKSManager, JWKSManagerStoreKnex } from '../auth/jwks'
 import { multitenantKnex } from './multitenant-db'
 import { JWTPayload } from 'jose'

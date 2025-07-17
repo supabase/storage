@@ -54,15 +54,15 @@ tests:
     asserts:
       - operation: upload
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: upload.upsert
         status: 400
-        message: 'new row violates row-level security policy'
+        message: 'Database error: insufficient privilege'
 
       - operation: bucket.create
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: bucket.delete
         status: 400
@@ -113,15 +113,15 @@ tests:
     asserts:
       - operation: upload
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: upload.upsert
         status: 400
-        message: 'new row violates row-level security policy'
+        message: 'Database error: insufficient privilege'
 
       - operation: bucket.create
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: bucket.delete
         status: 400
@@ -199,11 +199,11 @@ tests:
 
       - operation: upload
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: upload.upsert
         status: 400
-        message: 'new row violates row-level security policy'
+        message: 'Database error: insufficient privilege'
 
       - operation: upload
         policies:
@@ -240,7 +240,7 @@ tests:
     asserts:
       - operation: bucket.create
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: bucket.delete
         status: 400
@@ -248,11 +248,11 @@ tests:
 
       - operation: upload
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: upload.upsert
         status: 400
-        message: 'new row violates row-level security policy'
+        message: 'Database error: insufficient privilege'
 
       - operation: upload
         policies:
@@ -281,7 +281,7 @@ tests:
     asserts:
       - operation: bucket.create
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: bucket.delete
         status: 400
@@ -322,15 +322,15 @@ tests:
 
       - operation: bucket.create
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: upload
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: upload.upsert
         status: 400
-        message: 'new row violates row-level security policy'
+        message: 'Database error: insufficient privilege'
 
       - operation: upload
         policies:
@@ -363,15 +363,15 @@ tests:
 
       - operation: bucket.create
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: upload
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: upload.upsert
         status: 400
-        message: 'new row violates row-level security policy'
+        message: 'Database error: insufficient privilege'
 
       - operation: upload
         bucketName: 'bucket_delete_test_{{runId}}'
@@ -406,15 +406,15 @@ tests:
 
       - operation: bucket.create
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: upload
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: upload.upsert
         status: 400
-        message: 'new row violates row-level security policy'
+        message: 'Database error: insufficient privilege'
 
       - operation: upload
         bucketName: 'bucket_to_move_{{runId}}'
@@ -446,7 +446,7 @@ tests:
 
       - operation: bucket.create
         status: 400
-        error: 'new row violates row-level security policy'
+        error: 'Database error: insufficient privilege'
 
       - operation: upload
         bucketName: 'bucket_{{runId}}'
@@ -457,7 +457,7 @@ tests:
         useExistingBucketName: 'bucket_{{runId}}'
         objectName: 'object_{{runId}}.txt'
         status: 400
-        message: 'new row violates row-level security policy'
+        message: 'Database error: insufficient privilege'
 
       - operation: upload
         bucketName: 'bucket_to_copy_{{runId}}'

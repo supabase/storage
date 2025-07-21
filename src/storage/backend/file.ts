@@ -189,8 +189,8 @@ export class FileBackend implements StorageBackendAdapter {
       await pipeline(body, destFile)
 
       await this.setFileMetadata(file, {
-        contentType,
-        cacheControl,
+        contentType: contentType || 'application/octet-stream',
+        cacheControl: cacheControl || 'no-cache',
       })
 
       const metadata = await this.headObject(bucketName, key, version)

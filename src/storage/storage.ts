@@ -17,8 +17,9 @@ import { StorageObjectLocator } from '@storage/locator'
 import { BucketCreatedEvent, BucketDeleted } from '@storage/events'
 import { tenantHasMigrations } from '@internal/database/migrations'
 import { tenantHasFeature } from '@internal/database'
+import { ObjectAdminDeleteAllBefore } from './events'
 
-const { requestUrlLengthLimit } = getConfig()
+const { emptyBucketMax } = getConfig()
 
 /**
  * Storage
@@ -196,14 +197,6 @@ export class Storage {
   }
 
   /**
-   * Counts objects in a bucket
-   * @param id
-   */
-  countObjects(id: string) {
-    return this.db.countObjectsInBucket(id)
-  }
-
-  /**
    * Delete a specific bucket if empty
    * @param id
    * @param type
@@ -218,7 +211,7 @@ export class Storage {
         forUpdate: true,
       })
 
-      const countObjects = await db.asSuperUser().countObjectsInBucket(id)
+      const countObjects = await db.asSuperUser().countObjectsInBucket(id, 1)
 
       if (countObjects && countObjects > 0) {
         throw ERRORS.BucketNotEmpty(id)
@@ -263,58 +256,34 @@ export class Storage {
   /**
    * Deletes all files in a bucket
    * @param bucketId
+   * @param before limit to files before the specified time (defaults to now)
    */
-  async emptyBucket(bucketId: string) {
+  async emptyBucket(bucketId: string, before: Date = new Date()) {
     await this.findBucket(bucketId, 'name')
 
-    while (true) {
-      const objects = await this.db.listObjects(
-        bucketId,
-        'id, name',
-        Math.floor(requestUrlLengthLimit / (36 + 3))
-      )
-
-      if (!(objects && objects.length > 0)) {
-        break
-      }
-
-      const deleted = await this.db.deleteObjects(
-        bucketId,
-        objects.map(({ id }) => id!),
-        'id'
-      )
-
-      if (deleted && deleted.length > 0) {
-        const params = deleted.reduce((all, { name, version }) => {
-          const fileName = this.location.getKeyLocation({
-            tenantId: this.db.tenantId,
-            bucketId,
-            objectName: name,
-            version,
-          })
-          all.push(fileName)
-          all.push(fileName + '.info')
-          return all
-        }, [] as string[])
-        // delete files from s3 asynchronously
-        this.backend.deleteObjects(this.location.getRootLocation(), params).catch((e) => {
-          logSchema.error(logger, 'Failed to delete objects from s3', { type: 's3', error: e })
-        })
-      }
-
-      if (deleted?.length !== objects.length) {
-        const deletedNames = new Set(deleted?.map(({ name }) => name))
-        const remainingNames = objects
-          .filter(({ name }) => !deletedNames.has(name))
-          .map(({ name }) => name)
-
-        throw ERRORS.AccessDenied(
-          `Cannot delete: ${remainingNames.join(
-            ' ,'
-          )}, you may have SELECT but not DELETE permissions`
-        )
-      }
+    const count = await this.db.countObjectsInBucket(bucketId, emptyBucketMax + 1)
+    if (count > emptyBucketMax) {
+      throw ERRORS.UnableToEmptyBucket(bucketId)
     }
+
+    const objects = await this.db.listObjects(bucketId, 'id, name', 1, before)
+    if (!objects || objects.length < 1) {
+      // the bucket is already empty
+      return
+    }
+
+    // ensure delete permissions
+    await this.db.testPermission((db) => {
+      return db.deleteObject(bucketId, objects[0].id!)
+    })
+
+    // use queue to recursively delete all objects created before the specified time
+    await ObjectAdminDeleteAllBefore.send({
+      before,
+      bucketId,
+      tenant: this.db.tenant(),
+      reqId: this.db.reqId,
+    })
   }
 
   validateMimeType(mimeType: string[]) {

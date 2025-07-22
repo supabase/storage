@@ -85,7 +85,7 @@ export interface Database {
     filters?: Filters
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Bucket | undefined : Bucket>
 
-  countObjectsInBucket(bucketId: string): Promise<number>
+  countObjectsInBucket(bucketId: string, limit?: number): Promise<number>
 
   deleteBucket(bucketId: string | string[]): Promise<Bucket[]>
 

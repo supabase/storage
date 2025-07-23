@@ -569,6 +569,23 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   /**
+   * Efficiently checks if a directory is empty by reading only the first entry
+   * @param dirPath The directory path to check
+   * @returns Promise<boolean> true if directory is empty, false otherwise
+   */
+  protected async isEmptyDirectory(dirPath: string): Promise<boolean> {
+    try {
+      const directory = await fs.opendir(dirPath)
+      const entry = await directory.read()
+      await directory.close()
+      
+      return entry === null
+    } catch (error) {
+      return false
+    }
+  }
+
+  /**
    * Recursively removes empty directories up to the storage root
    * @param dirPath The directory path to start cleanup from
    */
@@ -585,9 +602,9 @@ export class FileBackend implements StorageBackendAdapter {
         return
       }
 
-      // Check if directory is empty
-      const contents = await fs.readdir(dirPath)
-      if (contents.length === 0) {
+      // Check if directory is empty - using opendir for better performance with large directories
+      const isEmpty = await this.isEmptyDirectory(dirPath)
+      if (isEmpty) {
         // Remove empty directory - using fs.remove for better cross-platform compatibility
         await fs.remove(dirPath)
         

@@ -270,6 +270,8 @@ export abstract class Queue {
     })
 
     let started = false
+    let jobFetched = 0
+
     const interval = setInterval(async () => {
       if (started) {
         return
@@ -281,10 +283,24 @@ export abstract class Queue {
           includeMetadata: true,
           batchSize,
         }
+
+        const currentBatch = defaultFetch.batchSize - jobFetched
+
+        if (currentBatch <= 0) {
+          return
+        }
+
         const jobs = await this.pgBoss?.fetch(event.getQueueName(), {
           ...event.getWorkerOptions(),
           ...defaultFetch,
+          batchSize: currentBatch,
         })
+
+        jobFetched += jobs?.length || 0
+
+        if (jobFetched < defaultFetch.batchSize) {
+          started = false
+        }
 
         if (queueOpts.signal?.aborted) {
           started = false
@@ -345,6 +361,7 @@ export abstract class Queue {
 
               throw e
             } finally {
+              jobFetched = Math.max(0, jobFetched - 1)
               await lock.release()
             }
           })

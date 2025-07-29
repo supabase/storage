@@ -40,7 +40,8 @@ export class PgLocker implements Locker {
 }
 
 export class PgLock implements Lock {
-  tnxResolver?: () => void
+  private tnxResolver?: () => void
+  private isLocked = false
 
   constructor(
     private readonly id: string,
@@ -48,13 +49,19 @@ export class PgLock implements Lock {
     private readonly notifier: LockNotifier
   ) {}
 
-  async lock(cancelReq: RequestRelease): Promise<void> {
+  async lock(stopSignal: AbortSignal, cancelReq: RequestRelease): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       this.db
         .withTransaction(async (db) => {
           const abortController = new AbortController()
+          let onAbort: (() => void) | undefined
 
           try {
+            onAbort = () => {
+              abortController.abort()
+            }
+            stopSignal.addEventListener('abort', onAbort)
+
             const acquired = await Promise.race([
               this.waitTimeout(5000, abortController.signal),
               this.acquireLock(db, this.id, abortController.signal),
@@ -63,6 +70,8 @@ export class PgLock implements Lock {
             if (!acquired) {
               throw ERRORS.LockTimeout()
             }
+
+            this.isLocked = true
 
             await new Promise<void>((innerResolve) => {
               this.tnxResolver = innerResolve
@@ -79,9 +88,18 @@ export class PgLock implements Lock {
   }
 
   async unlock(): Promise<void> {
+    if (!this.isLocked) {
+      return
+    }
+
+    this.isLocked = false
     this.notifier.unsubscribe(this.id)
-    this.tnxResolver?.()
-    this.tnxResolver = undefined
+
+    if (this.tnxResolver) {
+      const resolver = this.tnxResolver
+      this.tnxResolver = undefined
+      resolver()
+    }
   }
 
   protected async acquireLock(db: Database, id: string, signal: AbortSignal) {
@@ -95,13 +113,20 @@ export class PgLock implements Lock {
         if (e instanceof StorageBackendError && e.code === ErrorCode.ResourceLocked) {
           await this.notifier.release(id)
           await new Promise((resolve) => {
-            setTimeout(resolve, 500)
+            const timeoutId = setTimeout(resolve, 500)
+            const cleanup = () => {
+              clearTimeout(timeoutId)
+              signal.removeEventListener('abort', cleanup)
+            }
+            signal.addEventListener('abort', cleanup, { once: true })
           })
           continue
         }
         throw e
       }
     }
+
+    return false
   }
 
   protected waitTimeout(timeout: number, signal: AbortSignal) {

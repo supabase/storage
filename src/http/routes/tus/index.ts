@@ -1,19 +1,12 @@
 import { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 import * as http from 'http'
-import { ServerOptions, DataStore } from '@tus/server'
+import { ServerOptions, DataStore, Server } from '@tus/server'
 import { getFileSizeLimit } from '@storage/limits'
 import { Storage } from '@storage/storage'
 import { jwt, storage, db, dbSuperUser } from '../../plugins'
 import { getConfig } from '../../../config'
-import {
-  TusServer,
-  FileStore,
-  LockNotifier,
-  PgLocker,
-  UploadId,
-  AlsMemoryKV,
-} from '@storage/protocols/tus'
+import { FileStore, LockNotifier, PgLocker, UploadId, AlsMemoryKV } from '@storage/protocols/tus'
 import {
   namingFunction,
   onCreate,
@@ -30,6 +23,10 @@ import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { ROUTE_OPERATIONS } from '../operations'
 import * as https from 'node:https'
 import { createAgent } from '@internal/http'
+import type { ServerRequest as Request } from 'srvx'
+import { S3Locker } from '@storage/protocols/tus/s3-locker'
+import { S3Client } from '@aws-sdk/client-s3'
+import { ERRORS } from '@internal/errors'
 
 const {
   storageS3MaxSockets,
@@ -43,6 +40,7 @@ const {
   tusPartSize,
   tusMaxConcurrentUploads,
   tusAllowS3Tags,
+  tusLockType,
   uploadFileSizeLimit,
   storageBackendType,
   storageFilePath,
@@ -98,9 +96,42 @@ function createTusServer(
     path: tusPath,
     datastore: datastore,
     disableTerminationForFinishedUploads: true,
-    locker: (rawReq: http.IncomingMessage) => {
-      const req = rawReq as MultiPartRequest
-      return new PgLocker(req.upload.storage.db, lockNotifier)
+    locker: (rawReq: Request) => {
+      const req = rawReq.node?.req as MultiPartRequest
+
+      if (!req) {
+        throw ERRORS.InternalError(undefined, 'Request object is missing')
+      }
+
+      switch (tusLockType) {
+        case 'postgres':
+          return new PgLocker(req.upload.storage.db, lockNotifier)
+
+        case 's3':
+          return new S3Locker({
+            bucket: storageS3Bucket,
+            keyPrefix: `__tus_locks/${req.upload.tenantId}/`,
+            logger: console,
+            lockTtlMs: 15 * 1000, // 15 seconds
+            maxRetries: 10,
+            retryDelayMs: 250,
+            renewalIntervalMs: 10 * 1000, // 10 seconds
+            s3Client: new S3Client({
+              requestHandler: new NodeHttpHandler({
+                ...agent,
+                connectionTimeout: 5000,
+                requestTimeout: storageS3ClientTimeout,
+              }),
+              region: storageS3Region,
+              endpoint: storageS3Endpoint,
+              forcePathStyle: storageS3ForcePathStyle,
+            }),
+            notifier: lockNotifier,
+          })
+
+        default:
+          throw ERRORS.InternalError(undefined, 'Unsupported TUS locker type')
+      }
     },
     namingFunction: namingFunction,
     onUploadCreate: onCreate,
@@ -112,7 +143,7 @@ function createTusServer(
     respectForwardedHeaders: true,
     allowedHeaders: ['Authorization', 'X-Upsert', 'Upload-Expires', 'ApiKey', 'x-signature'],
     maxSize: async (rawReq, uploadId) => {
-      const req = rawReq as MultiPartRequest
+      const req = rawReq.node?.req as MultiPartRequest
 
       if (!req.upload.tenantId) {
         return uploadFileSizeLimit
@@ -138,7 +169,7 @@ function createTusServer(
       return fileSizeLimit
     },
   }
-  return new TusServer(serverOptions)
+  return new Server(serverOptions)
 }
 
 export default async function routes(fastify: FastifyInstance) {
@@ -204,7 +235,7 @@ export default async function routes(fastify: FastifyInstance) {
 }
 
 const authenticatedRoutes = fastifyPlugin(
-  async (fastify: FastifyInstance, options: { tusServer: TusServer; operation?: string }) => {
+  async (fastify: FastifyInstance, options: { tusServer: Server; operation?: string }) => {
     fastify.register(async function authorizationContext(fastify) {
       fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>
         done(null)
@@ -312,7 +343,7 @@ const authenticatedRoutes = fastifyPlugin(
 )
 
 const publicRoutes = fastifyPlugin(
-  async (fastify: FastifyInstance, options: { tusServer: TusServer; operation?: string }) => {
+  async (fastify: FastifyInstance, options: { tusServer: Server; operation?: string }) => {
     fastify.register(async (fastify) => {
       fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>
         done(null)

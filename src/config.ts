@@ -157,6 +157,7 @@ type StorageConfigType = {
   tusPartSize: number
   tusUseFileVersionSeparator: boolean
   tusAllowS3Tags: boolean
+  tusLockType: 'postgres' | 's3'
   defaultMetricsEnabled: boolean
   s3ProtocolEnabled: boolean
   s3ProtocolPrefix: string
@@ -312,6 +313,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     tusUseFileVersionSeparator:
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
     tusAllowS3Tags: getOptionalConfigFromEnv('TUS_ALLOW_S3_TAGS') !== 'false',
+    tusLockType: getOptionalConfigFromEnv('TUS_LOCK_TYPE') || 'postgres',
 
     // S3 Protocol
     s3ProtocolEnabled: getOptionalConfigFromEnv('S3_PROTOCOL_ENABLED') !== 'false',

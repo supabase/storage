@@ -197,7 +197,7 @@ describe('testing GET object', () => {
     expect(S3Backend.prototype.getObject).toBeCalled()
     expect(response.headers).toEqual(
       expect.objectContaining({
-        'content-disposition': `attachment; filename=testname.png; filename*=UTF-8''testname.png;`,
+        'content-disposition': `attachment; filename=testname.png; filename*=UTF-8''testname.png`,
       })
     )
   })

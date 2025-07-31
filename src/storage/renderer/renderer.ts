@@ -107,7 +107,7 @@ export abstract class Renderer {
 
         response.header(
           'Content-Disposition',
-          `attachment; filename=${encodedFileName}; filename*=UTF-8''${encodedFileName};`
+          `attachment; filename=${encodedFileName}; filename*=UTF-8''${encodedFileName}`
         )
       }
     }

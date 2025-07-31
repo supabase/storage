@@ -7,6 +7,7 @@ import { ERRORS, isRenderableError } from '@internal/errors'
 import { Storage } from '@storage/storage'
 import { Uploader, validateMimeType } from '@storage/uploader'
 import { UploadId } from '@storage/protocols/tus'
+import type { ServerRequest as Request } from 'srvx'
 
 import { getConfig } from '../../../config'
 
@@ -15,6 +16,19 @@ const reExtractFileID = /([^/]+)\/?$/
 
 export const SIGNED_URL_SUFFIX = '/sign'
 
+/**
+ * Validates that the request object exists and returns it
+ * @throws {Error} If the request object is missing
+ */
+function getNodeRequest(rawReq: Request): MultiPartRequest {
+  const req = rawReq.node?.req as MultiPartRequest
+
+  if (!req) {
+    throw ERRORS.InternalError(undefined, 'Request object is missing')
+  }
+
+  return req
+}
 export type MultiPartRequest = http.IncomingMessage & {
   log: BaseLogger
   upload: {
@@ -30,14 +44,20 @@ export type MultiPartRequest = http.IncomingMessage & {
 /**
  * Runs on every TUS incoming request
  */
-export async function onIncomingRequest(
-  rawReq: http.IncomingMessage,
-  res: http.ServerResponse,
-  id: string
-) {
-  const req = rawReq as MultiPartRequest
+export async function onIncomingRequest(rawReq: Request, id: string) {
+  const req = getNodeRequest(rawReq)
+  const res = rawReq.node?.res as http.ServerResponse
+
+  if (!res) {
+    throw ERRORS.InternalError(undefined, 'Response object is missing')
+  }
+
+  if (!res) {
+    throw ERRORS.InternalError(undefined, 'Response object is missing')
+  }
 
   res.on('finish', () => {
+    console.log('Tus request finished')
     req.upload.db.dispose().catch((e) => {
       req.log.error({ error: e }, 'Error disposing db connection')
     })
@@ -88,9 +108,15 @@ export async function onIncomingRequest(
  * Generate URL for TUS upload, it encodes the uploadID to base64url
  */
 export function generateUrl(
-  req: http.IncomingMessage,
+  rawReq: Request,
   { proto, host, path, id }: { proto: string; host: string; path: string; id: string }
 ) {
+  const req = getNodeRequest(rawReq)
+
+  if (!req.url) {
+    throw ERRORS.InvalidParameter('url')
+  }
+
   if (!req.url) {
     throw ERRORS.InvalidParameter('url')
   }
@@ -127,8 +153,9 @@ export function generateUrl(
 /**
  * Extract the uploadId from the request and decodes it from base64url
  */
-export function getFileIdFromRequest(rawRwq: http.IncomingMessage) {
-  const req = rawRwq as MultiPartRequest
+export function getFileIdFromRequest(rawReq: Request) {
+  const req = getNodeRequest(rawReq)
+
   const match = reExtractFileID.exec(req.url as string)
 
   if (!match || tusPath.includes(match[1])) {
@@ -145,11 +172,12 @@ export function getFileIdFromRequest(rawRwq: http.IncomingMessage) {
  *
  * /tenant-id/bucket-name/object-name/version
  */
-export function namingFunction(
-  rawReq: http.IncomingMessage,
-  metadata?: Record<string, string | null>
-) {
-  const req = rawReq as MultiPartRequest
+export function namingFunction(rawReq: Request, metadata?: Record<string, string | null>) {
+  const req = getNodeRequest(rawReq)
+
+  if (!req.url) {
+    throw new Error('no url set')
+  }
 
   if (!req.url) {
     throw new Error('no url set')
@@ -177,13 +205,13 @@ export function namingFunction(
  * Runs before the upload URL is created
  */
 export async function onCreate(
-  rawReq: http.IncomingMessage,
-  res: http.ServerResponse,
+  rawReq: Request,
   upload: Upload
-): Promise<{ res: http.ServerResponse; metadata?: Upload['metadata'] }> {
+): Promise<{ metadata?: Upload['metadata'] }> {
   const uploadID = UploadId.fromString(upload.id)
 
-  const req = rawReq as MultiPartRequest
+  const req = getNodeRequest(rawReq)
+
   const storage = req.upload.storage
 
   const bucket = await storage
@@ -204,18 +232,15 @@ export async function onCreate(
     validateMimeType(metadata.contentType, bucket.allowed_mime_types)
   }
 
-  return { res, metadata }
+  return { metadata }
 }
 
 /**
  * Runs when the upload to the underline store is completed
  */
-export async function onUploadFinish(
-  rawReq: http.IncomingMessage,
-  res: http.ServerResponse,
-  upload: Upload
-) {
-  const req = rawReq as MultiPartRequest
+export async function onUploadFinish(rawReq: Request, upload: Upload) {
+  const req = getNodeRequest(rawReq)
+
   const resourceId = UploadId.fromString(upload.id)
 
   try {
@@ -255,9 +280,11 @@ export async function onUploadFinish(
       userMetadata: customMd,
     })
 
-    res.setHeader('Tus-Complete', '1')
-
-    return res
+    return {
+      headers: {
+        'Tus-Complete': '1',
+      },
+    }
   } catch (e) {
     if (isRenderableError(e)) {
       ;(e as any).status_code = parseInt(e.render().statusCode, 10)
@@ -272,11 +299,9 @@ type TusError = { status_code: number; body: string }
 /**
  * Runs when there is an error on the TUS upload
  */
-export function onResponseError(
-  req: http.IncomingMessage,
-  _: http.ServerResponse,
-  e: TusError | Error
-) {
+export function onResponseError(rawReq: Request, e: TusError | Error) {
+  const req = getNodeRequest(rawReq)
+
   if (e instanceof Error) {
     ;(req as any).executionError = e
   } else {

@@ -52,7 +52,9 @@ export class FileBackend implements StorageBackendAdapter {
     if (!storageFilePath) {
       throw new Error('FILE_STORAGE_BACKEND_PATH env variable not set')
     }
-    this.filePath = storageFilePath
+    this.filePath = path.isAbsolute(storageFilePath)
+      ? storageFilePath
+      : path.resolve(__dirname, '..', '..', '..', storageFilePath)
     this.etagAlgorithm = storageFileEtagAlgorithm
   }
 

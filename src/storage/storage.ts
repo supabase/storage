@@ -16,10 +16,7 @@ const { requestUrlLengthLimit, storageS3Bucket } = getConfig()
  * to provide a rich management API for any folders and files operations
  */
 export class Storage {
-  constructor(
-    public readonly backend: StorageBackendAdapter,
-    public readonly db: Database
-  ) {}
+  constructor(public readonly backend: StorageBackendAdapter, public readonly db: Database) {}
 
   /**
    * Access object related functionality on a specific bucket

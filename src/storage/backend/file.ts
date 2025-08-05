@@ -216,7 +216,7 @@ export class FileBackend implements StorageBackendAdapter {
     try {
       const file = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
       await fs.remove(file)
-
+      
       // Clean up empty parent directories
       await this.cleanupEmptyDirectories(path.dirname(file))
     } catch (e) {
@@ -278,10 +278,10 @@ export class FileBackend implements StorageBackendAdapter {
       return fs.rm(path.resolve(this.filePath, bucket, prefix))
     })
     const results = await Promise.allSettled(promises)
-
+    
     // Collect unique parent directories for cleanup
     const parentDirs = new Set<string>()
-
+    
     results.forEach((result, index) => {
       if (result.status === 'rejected') {
         if (result.reason.code === 'ENOENT') {
@@ -294,7 +294,7 @@ export class FileBackend implements StorageBackendAdapter {
         parentDirs.add(path.dirname(filePath))
       }
     })
-
+    
     // Clean up empty directories
     for (const dir of parentDirs) {
       try {
@@ -468,9 +468,9 @@ export class FileBackend implements StorageBackendAdapter {
     version?: string
   ): Promise<void> {
     const multiPartFolder = path.join(this.filePath, 'multiparts', uploadId)
-
+    
     await fsExtra.remove(multiPartFolder)
-
+    
     // Clean up empty parent directories
     try {
       await this.cleanupEmptyDirectories(path.dirname(multiPartFolder))
@@ -580,7 +580,7 @@ export class FileBackend implements StorageBackendAdapter {
       const directory = await fs.opendir(dirPath)
       const entry = await directory.read()
       await directory.close()
-
+      
       return entry === null
     } catch (error) {
       return false
@@ -609,7 +609,7 @@ export class FileBackend implements StorageBackendAdapter {
       if (isEmpty) {
         // Remove empty directory - using fs.remove for better cross-platform compatibility
         await fs.remove(dirPath)
-
+        
         // Recursively check parent directory
         const parentDir = path.dirname(dirPath)
         await this.cleanupEmptyDirectories(parentDir)
@@ -617,6 +617,7 @@ export class FileBackend implements StorageBackendAdapter {
     } catch (e: any) {
       // Ignore errors during cleanup to not affect main operations
       // Could be permission issues, concurrent access, directory not empty due to race conditions, etc.
+      
       // Optional: Log for debugging purposes (uncomment if needed)
       // console.debug('Directory cleanup failed:', dirPath, e.message)
     }

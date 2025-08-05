@@ -62,7 +62,7 @@ describe('JWT', () => {
             ...(publicKey as unknown as crypto.KeyObject).export({ format: 'jwk' }),
             kid,
             alg,
-          }) as JwksConfigKey
+          } as JwksConfigKey)
       ),
     }
 

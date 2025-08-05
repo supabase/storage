@@ -39,10 +39,7 @@ const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
  * Handles the upload of a multi-part request or binary body
  */
 export class Uploader {
-  constructor(
-    private readonly backend: StorageBackendAdapter,
-    private readonly db: Database
-  ) {}
+  constructor(private readonly backend: StorageBackendAdapter, private readonly db: Database) {}
 
   async canUpload(options: Pick<UploadRequest, 'bucketId' | 'objectName' | 'isUpsert' | 'owner'>) {
     const shouldCreateObject = !options.isUpsert

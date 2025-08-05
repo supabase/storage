@@ -278,13 +278,10 @@ describe('RLS policies', () => {
         throw e
       } finally {
         await wait(2000)
-        const policiesToDelete = allPolicies.reduce(
-          (acc, policy) => {
-            acc.push(...policy)
-            return acc
-          },
-          [] as { name: string; table: string }[]
-        )
+        const policiesToDelete = allPolicies.reduce((acc, policy) => {
+          acc.push(...policy)
+          return acc
+        }, [] as { name: string; table: string }[])
 
         for (const policy of policiesToDelete) {
           await db.raw(`DROP POLICY IF EXISTS "${policy.name}" ON ${policy.table};`)

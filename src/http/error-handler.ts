@@ -40,8 +40,8 @@ export const setErrorHandler = (app: FastifyInstance) => {
       const statusCode = error.userStatusCode
         ? error.userStatusCode
         : renderableError.statusCode === '500'
-          ? 500
-          : 400
+        ? 500
+        : 400
 
       if (renderableError.code === ErrorCode.AbortedTerminate) {
         reply.header('Connection', 'close')

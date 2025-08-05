@@ -32,10 +32,7 @@ export class LockNotifier {
 }
 
 export class PgLocker implements Locker {
-  constructor(
-    private readonly db: Database,
-    private readonly notifier: LockNotifier
-  ) {}
+  constructor(private readonly db: Database, private readonly notifier: LockNotifier) {}
 
   newLock(id: string): Lock {
     return new PgLock(id, this.db, this.notifier)

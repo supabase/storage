@@ -194,8 +194,8 @@ export default async function routes(fastify: FastifyInstance) {
         typeof database_pool_url === null
           ? null
           : database_pool_url
-            ? decrypt(database_pool_url)
-            : undefined,
+          ? decrypt(database_pool_url)
+          : undefined,
       databasePoolMode: database_pool_mode,
       maxConnections: max_connections ? Number(max_connections) : undefined,
       fileSizeLimit: Number(file_size_limit),
@@ -306,8 +306,8 @@ export default async function routes(fastify: FastifyInstance) {
           database_pool_url: databasePoolUrl
             ? encrypt(databasePoolUrl)
             : databasePoolUrl === null
-              ? null
-              : undefined,
+            ? null
+            : undefined,
           database_pool_mode: databasePoolMode,
           max_connections: maxConnections ? Number(maxConnections) : undefined,
           file_size_limit: fileSizeLimit,

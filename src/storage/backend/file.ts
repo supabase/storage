@@ -52,7 +52,9 @@ export class FileBackend implements StorageBackendAdapter {
     if (!storageFilePath) {
       throw new Error('FILE_STORAGE_BACKEND_PATH env variable not set')
     }
-    this.filePath = storageFilePath
+    this.filePath = path.isAbsolute(storageFilePath)
+      ? storageFilePath
+      : path.resolve(__dirname, '..', '..', '..', storageFilePath)
     this.etagAlgorithm = storageFileEtagAlgorithm
   }
 
@@ -214,6 +216,9 @@ export class FileBackend implements StorageBackendAdapter {
     try {
       const file = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
       await fs.remove(file)
+
+      // Clean up empty parent directories
+      await this.cleanupEmptyDirectories(path.dirname(file))
     } catch (e) {
       if (e instanceof Error && 'code' in e) {
         if ((e as any).code === 'ENOENT') {
@@ -274,14 +279,30 @@ export class FileBackend implements StorageBackendAdapter {
     })
     const results = await Promise.allSettled(promises)
 
-    results.forEach((result) => {
+    // Collect unique parent directories for cleanup
+    const parentDirs = new Set<string>()
+
+    results.forEach((result, index) => {
       if (result.status === 'rejected') {
         if (result.reason.code === 'ENOENT') {
           return
         }
         throw result.reason
+      } else {
+        // Add parent directory of successfully deleted file
+        const filePath = path.resolve(this.filePath, bucket, prefixes[index])
+        parentDirs.add(path.dirname(filePath))
       }
     })
+
+    // Clean up empty directories
+    for (const dir of parentDirs) {
+      try {
+        await this.cleanupEmptyDirectories(dir)
+      } catch (e) {
+        // Ignore cleanup errors to not affect the main deletion operation
+      }
+    }
   }
 
   /**
@@ -449,6 +470,13 @@ export class FileBackend implements StorageBackendAdapter {
     const multiPartFolder = path.join(this.filePath, 'multiparts', uploadId)
 
     await fsExtra.remove(multiPartFolder)
+
+    // Clean up empty parent directories
+    try {
+      await this.cleanupEmptyDirectories(path.dirname(multiPartFolder))
+    } catch (e) {
+      // Ignore cleanup errors
+    }
   }
 
   async uploadPartCopy(
@@ -540,6 +568,58 @@ export class FileBackend implements StorageBackendAdapter {
 
   protected setMetadataAttr(file: string, attribute: string, value: string): Promise<void> {
     return xattr.set(file, attribute, value)
+  }
+
+  /**
+   * Efficiently checks if a directory is empty by reading only the first entry
+   * @param dirPath The directory path to check
+   * @returns Promise<boolean> true if directory is empty, false otherwise
+   */
+  protected async isEmptyDirectory(dirPath: string): Promise<boolean> {
+    try {
+      const directory = await fs.opendir(dirPath)
+      const entry = await directory.read()
+      await directory.close()
+
+      return entry === null
+    } catch (error) {
+      return false
+    }
+  }
+
+  /**
+   * Recursively removes empty directories up to the storage root
+   * @param dirPath The directory path to start cleanup from
+   */
+  protected async cleanupEmptyDirectories(dirPath: string): Promise<void> {
+    try {
+      // Don't cleanup beyond the storage root path
+      if (!dirPath.startsWith(this.filePath) || dirPath === this.filePath) {
+        return
+      }
+
+      // Check if directory exists
+      const exists = await fs.pathExists(dirPath)
+      if (!exists) {
+        return
+      }
+
+      // Check if directory is empty - using opendir for better performance with large directories
+      const isEmpty = await this.isEmptyDirectory(dirPath)
+      if (isEmpty) {
+        // Remove empty directory - using fs.remove for better cross-platform compatibility
+        await fs.remove(dirPath)
+
+        // Recursively check parent directory
+        const parentDir = path.dirname(dirPath)
+        await this.cleanupEmptyDirectories(parentDir)
+      }
+    } catch (e: any) {
+      // Ignore errors during cleanup to not affect main operations
+      // Could be permission issues, concurrent access, directory not empty due to race conditions, etc.
+      // Optional: Log for debugging purposes (uncomment if needed)
+      // console.debug('Directory cleanup failed:', dirPath, e.message)
+    }
   }
 
   private async etag(file: string, stats: fs.Stats): Promise<string> {

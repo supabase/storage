@@ -118,11 +118,37 @@ describe('testing GET all buckets', () => {
     expect(responseJSON[0]).toMatchObject({
       id: expect.any(String),
       name: expect.any(String),
+      type: expect.any(String),
       public: expect.any(Boolean),
       file_size_limit: null,
       allowed_mime_types: null,
     })
   })
+
+  for (const [userAgent, shouldIncludeType] of [
+    ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/138.0.0.0 Safari/537.36', true],
+    ['supabase-py/storage3 v0.11.9', false],
+    ['supabase-py/storage3 v0.12.0', false],
+    ['supabase-py/storage3 v0.12.1', true],
+    ['supabase-py/storage3 v0.12.2', true],
+    ['supabase-py/storage3 v0.13.0', true],
+  ]) {
+    test(`Should ${
+      shouldIncludeType ? '' : 'NOT '
+    }include type for ${userAgent} client`, async () => {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: `/bucket`,
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+          'user-agent': userAgent as string,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      const body = response.json()
+      expect(body[0].type).toBe(shouldIncludeType ? 'STANDARD' : undefined)
+    })
+  }
 
   test('checking RLS: anon user is not able to get all buckets', async () => {
     const response = await appInstance.inject({
@@ -159,6 +185,7 @@ describe('testing GET all buckets', () => {
     expect(responseJSON[0]).toMatchObject({
       id: 'bucket4',
       name: 'bucket4',
+      type: expect.any(String),
       public: false,
       file_size_limit: null,
       allowed_mime_types: null,

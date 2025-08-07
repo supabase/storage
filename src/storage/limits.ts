@@ -138,3 +138,25 @@ export function isUuid(value: string) {
 export function isEmptyFolder(object: string) {
   return object.endsWith('.emptyFolderPlaceholder')
 }
+
+/**
+ * Checks if the client is supabase-py and before the specified version
+ *
+ * @param userAgent user agent header string
+ * @param version semver to check against, must be in format '0.0.0'
+ */
+export function isPythonClientBefore(userAgent: string, version: string): boolean {
+  const [minMajor, minMinor, minPatch] = version.split('.').map(Number)
+  const match = userAgent.match(/supabase-py\/storage3 v(\d+)\.(\d+)\.(\d+)/i)
+  if (!match) {
+    return false
+  }
+
+  const [major, minor, patch] = match.slice(1).map(Number)
+
+  if (major < minMajor) return true
+  if (major > minMajor) return false
+  if (minor < minMinor) return true
+  if (minor > minMinor) return false
+  return patch < minPatch
+}

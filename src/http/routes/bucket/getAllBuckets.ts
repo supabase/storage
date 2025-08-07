@@ -4,6 +4,7 @@ import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { bucketSchema } from '@storage/schemas'
 import { ROUTE_OPERATIONS } from '../operations'
+import { isPythonClientBefore } from '@storage/limits'
 
 const successResponseSchema = {
   type: 'array',
@@ -40,25 +41,6 @@ interface GetAllBucketsRequest extends AuthenticatedRequest {
   Querystring: FromSchema<typeof requestQuerySchema>
 }
 
-/**
- * Detects user agents that support the type property in bucket list response
- * assumes all can except: storage-py < v0.12.1 (throws fatal error if type property is present)
- * type property added in v0.12.1 -- https://github.com/supabase/storage-py/releases/tag/v0.12.1
- */
-function canUserAgentSupportBucketType(userAgent: string): boolean {
-  const match = userAgent.match(/supabase-py\/storage3 v(\d+)\.(\d+)\.(\d+)/i)
-  if (!match) {
-    return true
-  }
-
-  const [major, minor, patch] = match.slice(1).map(Number)
-
-  if (major > 0) return true
-  if (minor < 12) return false
-  if (minor > 12) return true
-  return patch >= 1 // version >= v0.12.1
-}
-
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Gets all buckets'
   const schema = createDefaultSchema(successResponseSchema, {
@@ -76,8 +58,13 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      const includeBucketType = canUserAgentSupportBucketType(request.headers['user-agent'] || '')
       const { limit, offset, sortColumn, sortOrder, search } = request.query
+
+      // Detects user agents that support the type property in bucket list response
+      // storage-py < v0.12.1 throws fatal error if type property is present
+      // type property added in v0.12.1 -- https://github.com/supabase/storage-py/releases/tag/v0.12.1
+      const includeBucketType = !isPythonClientBefore(request.headers['user-agent'] || '', '0.12.1')
+
       const results = await request.storage.listBuckets(
         'id, name, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types' +
           (includeBucketType ? ', type' : ''),

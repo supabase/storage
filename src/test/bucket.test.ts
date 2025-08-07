@@ -132,6 +132,7 @@ describe('testing GET all buckets', () => {
     ['supabase-py/storage3 v0.12.1', true],
     ['supabase-py/storage3 v0.12.2', true],
     ['supabase-py/storage3 v0.13.0', true],
+    ['supabase-py/storage3 v1.0.0', true],
   ]) {
     test(`Should ${
       shouldIncludeType ? '' : 'NOT '

@@ -4,6 +4,7 @@ import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { bucketSchema } from '@storage/schemas'
 import { ROUTE_OPERATIONS } from '../operations'
+import { isPythonClientBefore } from '@storage/limits'
 
 const successResponseSchema = {
   type: 'array',
@@ -58,8 +59,15 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       const { limit, offset, sortColumn, sortOrder, search } = request.query
+
+      // Detects user agents that support the type property in bucket list response
+      // storage-py < v0.12.1 throws fatal error if type property is present
+      // type property added in v0.12.1 -- https://github.com/supabase/storage-py/releases/tag/v0.12.1
+      const includeBucketType = !isPythonClientBefore(request.headers['user-agent'] || '', '0.12.1')
+
       const results = await request.storage.listBuckets(
-        'id, name, type, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types',
+        'id, name, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types' +
+          (includeBucketType ? ', type' : ''),
         { limit, offset, sortColumn, sortOrder, search }
       )
 

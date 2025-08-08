@@ -125,24 +125,33 @@ describe('testing GET all buckets', () => {
     })
   })
 
-  for (const [userAgent, shouldIncludeType] of [
-    ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/138.0.0.0 Safari/537.36', true],
-    ['supabase-py/storage3 v0.11.9', false],
-    ['supabase-py/storage3 v0.12.0', false],
-    ['supabase-py/storage3 v0.12.1', true],
-    ['supabase-py/storage3 v0.12.2', true],
-    ['supabase-py/storage3 v0.13.0', true],
-    ['supabase-py/storage3 v1.0.0', true],
+  for (const [headers, shouldIncludeType] of [
+    [
+      { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/138.0.0.0 Safari/537.36' },
+      true,
+    ],
+    // storage-py (storage3) >= 0.12.1
+    [{ 'user-agent': 'supabase-py/storage3 v0.11.9' }, false],
+    [{ 'user-agent': 'supabase-py/storage3 v0.12.0' }, false],
+    [{ 'user-agent': 'supabase-py/storage3 v0.12.1' }, true],
+    [{ 'user-agent': 'supabase-py/storage3 v0.12.2' }, true],
+    [{ 'user-agent': 'supabase-py/storage3 v0.13.0' }, true],
+    [{ 'user-agent': 'supabase-py/storage3 v1.0.0' }, true],
+    // supabase-py >= 2.18.0
+    [{ 'x-client-info': 'supabase-py/2.17.3' }, false],
+    [{ 'x-client-info': 'supabase-py/2.18.0' }, true],
+    [{ 'x-client-info': 'supabase-py/2.18.1' }, true],
+    [{ 'x-client-info': 'supabase-py/2.19.0' }, true],
   ]) {
-    test(`Should ${
-      shouldIncludeType ? '' : 'NOT '
-    }include type for ${userAgent} client`, async () => {
+    test.only(`Should ${shouldIncludeType ? '' : 'NOT '}include type for ${JSON.stringify(
+      headers
+    )} client`, async () => {
       const response = await appInstance.inject({
         method: 'GET',
         url: `/bucket`,
         headers: {
           authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
-          'user-agent': userAgent as string,
+          ...(headers as Record<string, string>),
         },
       })
       expect(response.statusCode).toBe(200)

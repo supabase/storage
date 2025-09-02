@@ -151,12 +151,12 @@ services:
     ports:
       - '50020:8080'
     volumes:
-      - ./data:/images/data
+      - ${PWD}/data:${PWD}/data
     environment:
       - IMGPROXY_WRITE_TIMEOUT=20
       - IMGPROXY_READ_TIMEOUT=20
       - IMGPROXY_REQUESTS_QUEUE_SIZE=24
-      - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/images
+      - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/
       - IMGPROXY_USE_ETAG=true
       - IMGPROXY_ENABLE_WEBP_DETECTION=true
       - IMGPROXY_PRESETS=default=width:3000/height:8192

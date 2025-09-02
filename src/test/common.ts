@@ -3,10 +3,12 @@ import app from '../admin-app'
 import { S3Backend } from '../storage/backend'
 import { Queue } from '@internal/queue'
 import { isS3Error } from '@internal/errors'
+import path from 'path'
 
 export const adminApp = app({})
 
 const ENV = process.env
+const projectRoot = path.join(__dirname, '..', '..')
 
 export function useMockQueue() {
   const queueSpy: jest.SpyInstance | undefined = undefined
@@ -78,7 +80,9 @@ export function useMockObject() {
       contentLength: 3746,
     })
 
-    jest.spyOn(S3Backend.prototype, 'privateAssetUrl').mockResolvedValue('local:///data/sadcat.jpg')
+    jest
+      .spyOn(S3Backend.prototype, 'privateAssetUrl')
+      .mockResolvedValue(`local:///${projectRoot}/data/sadcat.jpg`)
   })
 
   afterEach(() => {

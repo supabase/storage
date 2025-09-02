@@ -673,7 +673,7 @@ describe('S3 Protocol', () => {
           expect((e as Error).message).not.toEqual('Should not reach here')
           expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(413)
           expect((e as S3ServiceException).message).toEqual(
-            'The object exceeded the maximum allowed size'
+            'The object exceeded the maximum allowed size in your global settings (10 KB)'
           )
           expect((e as S3ServiceException).name).toEqual('EntityTooLarge')
         }

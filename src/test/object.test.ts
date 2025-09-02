@@ -571,7 +571,7 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
     expect(await response.json()).toEqual({
       error: 'invalid_mime_type',
-      message: `mime type image/png is not supported`,
+      message: `MIME type image/png is not supported`,
       statusCode: '415',
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
@@ -632,7 +632,7 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
     expect(await response.json()).toEqual({
       error: 'invalid_mime_type',
-      message: `mime type thisisnotarealmimetype is not supported`,
+      message: `MIME type thisisnotarealmimetype is not supported`,
       statusCode: '415',
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()

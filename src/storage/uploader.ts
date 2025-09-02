@@ -117,13 +117,17 @@ export class Uploader {
       )
 
       if (file.isTruncated()) {
-        const context = request.bucketContext ? {
-          bucketName: request.bucketContext.name,
-          bucketLimit: request.bucketContext.fileSizeLimit || undefined,
-          globalLimit: file.globalLimit
-        } : file.globalLimit ? {
-          globalLimit: file.globalLimit
-        } : undefined
+        const context = request.bucketContext
+          ? {
+              bucketName: request.bucketContext.name,
+              bucketLimit: request.bucketContext.fileSizeLimit || undefined,
+              globalLimit: file.globalLimit,
+            }
+          : file.globalLimit
+          ? {
+              globalLimit: file.globalLimit,
+            }
+          : undefined
         throw ERRORS.EntityTooLarge(undefined, 'object', context)
       }
 

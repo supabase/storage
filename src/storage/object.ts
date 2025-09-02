@@ -114,8 +114,8 @@ export class ObjectStorage {
       uploadType: 'standard',
       bucketContext: {
         name: bucket.name,
-        fileSizeLimit: bucket.file_size_limit
-      }
+        fileSizeLimit: bucket.file_size_limit,
+      },
     })
 
     return { objectMetadata: metadata, path, id: obj.id }

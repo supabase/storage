@@ -2,11 +2,11 @@ import { StorageBackendError } from './storage-error'
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B'
-  
+
   const k = 1024
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
-  
+
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
 }
 
@@ -253,15 +253,30 @@ export const ERRORS = {
       message: `invalid range provided`,
     }),
 
-  EntityTooLarge: (e?: Error, entity = 'object', context?: { bucketName?: string; bucketLimit?: number; globalLimit?: number }) =>
+  EntityTooLarge: (
+    e?: Error,
+    entity = 'object',
+    context?: { bucketName?: string; bucketLimit?: number; globalLimit?: number }
+  ) =>
     new StorageBackendError({
       error: 'Payload too large',
       code: ErrorCode.EntityTooLarge,
       httpStatusCode: 413,
-      message: context?.bucketName && context?.bucketLimit 
-        ? `The ${entity} exceeded the maximum allowed size for bucket "${context.bucketName}" (${formatBytes(context.bucketLimit)}). ${context.globalLimit && context.bucketLimit < context.globalLimit ? `This bucket has a lower limit than your global setting (${formatBytes(context.globalLimit)}). You can increase the bucket limit in your Storage settings.` : ''}`
-        : context?.globalLimit 
-          ? `The ${entity} exceeded the maximum allowed size in your global settings (${formatBytes(context.globalLimit)})`
+      message:
+        context?.bucketName && context?.bucketLimit
+          ? `The ${entity} exceeded the maximum allowed size for bucket "${
+              context.bucketName
+            }" (${formatBytes(context.bucketLimit)}). ${
+              context.globalLimit && context.bucketLimit < context.globalLimit
+                ? `This bucket has a lower limit than your global setting (${formatBytes(
+                    context.globalLimit
+                  )}). You can increase the bucket limit in your Storage settings.`
+                : ''
+            }`
+          : context?.globalLimit
+          ? `The ${entity} exceeded the maximum allowed size in your global settings (${formatBytes(
+              context.globalLimit
+            )})`
           : `The ${entity} exceeded the maximum allowed size`,
       originalError: e,
     }),

@@ -315,7 +315,7 @@ export class Storage {
     if (maxFileLimit > globalMaxLimit) {
       throw ERRORS.EntityTooLarge(undefined, 'bucket file size limit', {
         bucketLimit: maxFileLimit,
-        globalLimit: globalMaxLimit
+        globalLimit: globalMaxLimit,
       })
     }
 

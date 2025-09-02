@@ -23,6 +23,7 @@ import {
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
+import { getStandardMaxFileSizeLimit } from '../../uploader'
 import { ERRORS } from '@internal/errors'
 import { S3MultipartUpload, Obj } from '../../schemas'
 import { decrypt, encrypt } from '@internal/auth'
@@ -568,7 +569,7 @@ export class S3ProtocolHandler {
     }
 
     const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'name, file_size_limit')
-    const maxFileSize = await getFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
+    const limits = await getStandardMaxFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     await uploader.canUpload({
@@ -578,9 +579,10 @@ export class S3ProtocolHandler {
       isUpsert: true,
     })
 
-    const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize, {
+    const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, limits.maxFileSize, {
       name: bucket.name,
-      fileSizeLimit: bucket.file_size_limit
+      fileSizeLimit: bucket.file_size_limit,
+      globalLimit: limits.globalLimit
     })
 
     if (signal?.aborted) {
@@ -608,7 +610,8 @@ export class S3ProtocolHandler {
         body,
         new ByteLimitTransformStream(ContentLength, {
           name: bucket.name,
-          fileSizeLimit: bucket.file_size_limit
+          fileSizeLimit: bucket.file_size_limit,
+          globalLimit: limits.globalLimit
         }),
         async (stream) => {
           return this.storage.backend.uploadPart(
@@ -1211,14 +1214,15 @@ export class S3ProtocolHandler {
         db.findBucketById(sourceBucketName, 'id'),
       ])
     })
-    const maxFileSize = await getFileSizeLimit(
+    const limits = await getStandardMaxFileSizeLimit(
       this.storage.db.tenantId,
       destinationBucket?.file_size_limit
     )
 
-    const multipart = await this.shouldAllowPartUpload(UploadId, Number(copySize), maxFileSize, {
+    const multipart = await this.shouldAllowPartUpload(UploadId, Number(copySize), limits.maxFileSize, {
       name: destinationBucket.name,
-      fileSizeLimit: destinationBucket.file_size_limit
+      fileSizeLimit: destinationBucket.file_size_limit,
+      globalLimit: limits.globalLimit
     })
 
     const uploadPart = await this.storage.backend.uploadPartCopy(
@@ -1288,7 +1292,7 @@ export class S3ProtocolHandler {
     uploadId: string,
     contentLength: number,
     maxFileSize: number,
-    bucketContext?: { name: string; fileSizeLimit?: number | null }
+    bucketContext?: { name: string; fileSizeLimit?: number | null; globalLimit?: number }
   ) {
     return this.storage.db.asSuperUser().withTransaction(async (db) => {
       const multipart = await db.findMultipartUpload(
@@ -1310,7 +1314,8 @@ export class S3ProtocolHandler {
       if (currentProgress > maxFileSize) {
         const context = bucketContext ? {
           bucketName: bucketContext.name,
-          bucketLimit: bucketContext.fileSizeLimit || undefined
+          bucketLimit: bucketContext.fileSizeLimit || undefined,
+          globalLimit: bucketContext.globalLimit
         } : undefined
         throw ERRORS.EntityTooLarge(undefined, 'object', context)
       }

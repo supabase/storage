@@ -260,7 +260,9 @@ export const ERRORS = {
       httpStatusCode: 413,
       message: context?.bucketName && context?.bucketLimit 
         ? `The ${entity} exceeded the maximum allowed size for bucket "${context.bucketName}" (${formatBytes(context.bucketLimit)}). ${context.globalLimit && context.bucketLimit < context.globalLimit ? `This bucket has a lower limit than your global setting (${formatBytes(context.globalLimit)}). You can increase the bucket limit in your Storage settings.` : ''}`
-        : `The ${entity} exceeded the maximum allowed size`,
+        : context?.globalLimit 
+          ? `The ${entity} exceeded the maximum allowed size in your global settings (${formatBytes(context.globalLimit)})`
+          : `The ${entity} exceeded the maximum allowed size`,
       originalError: e,
     }),
 

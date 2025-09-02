@@ -6,7 +6,7 @@ export class ByteLimitTransformStream extends Transform {
 
   constructor(
     private readonly limit: number,
-    private readonly bucketContext?: { name: string; fileSizeLimit?: number | null }
+    private readonly bucketContext?: { name: string; fileSizeLimit?: number | null; globalLimit?: number }
   ) {
     super()
   }
@@ -17,7 +17,8 @@ export class ByteLimitTransformStream extends Transform {
     if (this.bytesProcessed > this.limit) {
       const context = this.bucketContext ? {
         bucketName: this.bucketContext.name,
-        bucketLimit: this.bucketContext.fileSizeLimit || undefined
+        bucketLimit: this.bucketContext.fileSizeLimit || undefined,
+        globalLimit: this.bucketContext.globalLimit
       } : undefined
       callback(ERRORS.EntityTooLarge(undefined, 'object', context))
     } else {

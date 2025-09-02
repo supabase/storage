@@ -139,7 +139,8 @@ export default function PutObject(s3Router: S3Router) {
         uploadRequest.body,
         new ByteLimitTransformStream(uploadRequest.maxFileSize, {
           name: bucket.name,
-          fileSizeLimit: bucket.file_size_limit
+          fileSizeLimit: bucket.file_size_limit,
+          globalLimit: uploadRequest.globalLimit
         }),
         ctx.req.streamingSignatureV4 || new PassThrough(),
         async (fileStream) => {
@@ -185,11 +186,12 @@ export default function PutObject(s3Router: S3Router) {
       const metadata = s3Protocol.parseMetadataHeaders(fieldsObject)
       const expiresField = fieldsObject.expires
 
-      const maxFileSize = await getStandardMaxFileSizeLimit(ctx.tenantId, bucket.file_size_limit)
+      const limits = await getStandardMaxFileSizeLimit(ctx.tenantId, bucket.file_size_limit)
 
-      return pipeline(file.file, new ByteLimitTransformStream(maxFileSize, {
+      return pipeline(file.file, new ByteLimitTransformStream(limits.maxFileSize, {
         name: bucket.name,
-        fileSizeLimit: bucket.file_size_limit
+        fileSizeLimit: bucket.file_size_limit,
+        globalLimit: limits.globalLimit
       }), async (fileStream) => {
         return s3Protocol.putObject(
           {

@@ -31,6 +31,10 @@ export interface UploadRequest {
   isUpsert?: boolean
   uploadType?: 'standard' | 's3' | 'resumable'
   signal?: AbortSignal
+  bucketContext?: {
+    name: string
+    fileSizeLimit?: number | null
+  }
 }
 
 const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
@@ -113,7 +117,11 @@ export class Uploader {
       )
 
       if (file.isTruncated()) {
-        throw ERRORS.EntityTooLarge()
+        const context = request.bucketContext ? {
+          bucketName: request.bucketContext.name,
+          bucketLimit: request.bucketContext.fileSizeLimit || undefined
+        } : undefined
+        throw ERRORS.EntityTooLarge(undefined, 'object', context)
       }
 
       return this.completeUpload({

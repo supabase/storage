@@ -313,7 +313,10 @@ export class Storage {
     const globalMaxLimit = await getFileSizeLimit(this.db.tenantId)
 
     if (maxFileLimit > globalMaxLimit) {
-      throw ERRORS.EntityTooLarge()
+      throw ERRORS.EntityTooLarge(undefined, 'bucket file size limit', {
+        bucketLimit: maxFileLimit,
+        globalLimit: globalMaxLimit
+      })
     }
 
     return maxFileLimit

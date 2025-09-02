@@ -127,7 +127,7 @@ export default function PutObject(s3Router: S3Router) {
 
       const bucket = await ctx.storage
         .asSuperUser()
-        .findBucket(req.Params.Bucket, 'id,file_size_limit,allowed_mime_types')
+        .findBucket(req.Params.Bucket, 'id,name,file_size_limit,allowed_mime_types')
 
       const uploadRequest = await fileUploadFromRequest(ctx.req, {
         objectName: key,
@@ -137,7 +137,10 @@ export default function PutObject(s3Router: S3Router) {
 
       return pipeline(
         uploadRequest.body,
-        new ByteLimitTransformStream(uploadRequest.maxFileSize),
+        new ByteLimitTransformStream(uploadRequest.maxFileSize, {
+          name: bucket.name,
+          fileSizeLimit: bucket.file_size_limit
+        }),
         ctx.req.streamingSignatureV4 || new PassThrough(),
         async (fileStream) => {
           return s3Protocol.putObject(
@@ -176,7 +179,7 @@ export default function PutObject(s3Router: S3Router) {
 
       const bucket = await ctx.storage
         .asSuperUser()
-        .findBucket(req.Params.Bucket, 'id,file_size_limit,allowed_mime_types')
+        .findBucket(req.Params.Bucket, 'id,name,file_size_limit,allowed_mime_types')
 
       const fieldsObject = fieldsToObject(file?.fields || {})
       const metadata = s3Protocol.parseMetadataHeaders(fieldsObject)
@@ -184,7 +187,10 @@ export default function PutObject(s3Router: S3Router) {
 
       const maxFileSize = await getStandardMaxFileSizeLimit(ctx.tenantId, bucket.file_size_limit)
 
-      return pipeline(file.file, new ByteLimitTransformStream(maxFileSize), async (fileStream) => {
+      return pipeline(file.file, new ByteLimitTransformStream(maxFileSize, {
+        name: bucket.name,
+        fileSizeLimit: bucket.file_size_limit
+      }), async (fileStream) => {
         return s3Protocol.putObject(
           {
             Body: fileStream as stream.Readable,

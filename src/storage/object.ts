@@ -103,10 +103,19 @@ export class ObjectStorage {
 
     const path = `${this.bucketId}/${request.objectName}`
 
+    // Get bucket information for better error context
+    const bucket = await this.db
+      .asSuperUser()
+      .findBucketById(this.bucketId, 'name, file_size_limit')
+
     const { metadata, obj } = await this.uploader.upload({
       ...request,
       bucketId: this.bucketId,
       uploadType: 'standard',
+      bucketContext: {
+        name: bucket.name,
+        fileSizeLimit: bucket.file_size_limit
+      }
     })
 
     return { objectMetadata: metadata, path, id: obj.id }

@@ -38,6 +38,8 @@ const METADATA_ATTR_KEYS = {
   },
 }
 
+const { imgProxyLocalFilePath } = getConfig()
+
 /**
  * FileBackend
  * Interacts with the file system with this FileBackend adapter
@@ -532,7 +534,10 @@ export class FileBackend implements StorageBackendAdapter {
    * @param version
    */
   async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
-    return 'local:///' + path.join(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
+    return (
+      'local:///' +
+      path.join(imgProxyLocalFilePath, withOptionalVersion(`${bucket}/${key}`, version))
+    )
   }
 
   async setFileMetadata(file: string, { contentType, cacheControl }: FileMetadata) {

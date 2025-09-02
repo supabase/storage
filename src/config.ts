@@ -130,6 +130,7 @@ type StorageConfigType = {
   adminDeleteConcurrency?: number
   imageTransformationEnabled: boolean
   imgProxyURL?: string
+  imgProxyLocalFilePath: string
   imgProxyRequestTimeout: number
   imgProxyHttpMaxSockets: number
   imgProxyHttpKeepAlive: number
@@ -472,6 +473,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       10
     ),
     imgProxyURL: getOptionalConfigFromEnv('IMGPROXY_URL'),
+    imgProxyLocalFilePath:
+      getOptionalConfigFromEnv('IMGPROXY_LOCAL_FILE_PATH') ||
+      getOptionalConfigFromEnv('STORAGE_FILE_BACKEND_PATH') ||
+      './data',
     imgLimits: {
       size: {
         min: parseInt(

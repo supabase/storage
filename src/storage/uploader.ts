@@ -21,6 +21,7 @@ interface FileUpload {
   cacheControl: string
   isTruncated: () => boolean
   userMetadata?: Record<string, any>
+  globalLimit?: number
 }
 
 export interface UploadRequest {
@@ -314,7 +315,7 @@ export async function fileUploadFromRequest(
     allowedMimeTypes?: string[]
     objectName: string
   }
-): Promise<FileUpload & { maxFileSize: number; globalLimit?: number }> {
+): Promise<FileUpload & { maxFileSize: number }> {
   const contentType = request.headers['content-type']
 
   let body: Readable

@@ -406,7 +406,7 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
     expect(await response.json()).toEqual({
       error: 'Payload too large',
-      message: 'The object exceeded the maximum allowed size',
+      message: expect.stringMatching(/The object exceeded the maximum allowed size for bucket "public-limit-max-size"/),
       statusCode: '413',
     })
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
@@ -676,7 +676,7 @@ describe('testing POST object via multipart upload', () => {
       JSON.stringify({
         statusCode: '413',
         error: 'Payload too large',
-        message: 'The object exceeded the maximum allowed size',
+        message: 'The object exceeded the maximum allowed size in your global settings (1 B)',
       })
     )
   })
@@ -913,7 +913,7 @@ describe('testing POST object via binary upload', () => {
       JSON.stringify({
         statusCode: '413',
         error: 'Payload too large',
-        message: 'The object exceeded the maximum allowed size',
+        message: 'The object exceeded the maximum allowed size in your global settings (1 B)',
       })
     )
   })

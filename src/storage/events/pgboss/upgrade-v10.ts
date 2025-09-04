@@ -12,7 +12,7 @@ export class UpgradePgBossV10 extends BaseEvent<UpgradePgBossV10Payload> {
   static getQueueOptions(): PgBossQueue {
     return {
       name: this.queueName,
-      policy: 'stately',
+      policy: 'exactly_once',
     } as const
   }
 

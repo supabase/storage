@@ -14,6 +14,8 @@ dotenv.config({ path: '.env.test' })
 const { imgProxyURL, jwtSecret } = getConfig()
 let appInstance: FastifyInstance
 
+const projectRoot = path.join(__dirname, '..', '..')
+
 describe('image rendering routes', () => {
   beforeAll(async () => {
     await fs.mkdir(path.join(__dirname, '..', '..', 'data'), { recursive: true })
@@ -51,7 +53,7 @@ describe('image rendering routes', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
-      '/public/height:100/width:100/resizing_type:fill/plain/local:///data/sadcat.jpg',
+      `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
   })
@@ -69,7 +71,7 @@ describe('image rendering routes', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
-      '/public/height:100/width:100/resizing_type:fill/plain/local:///data/sadcat.jpg',
+      `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
   })
@@ -112,7 +114,7 @@ describe('image rendering routes', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
-      '/public/height:100/width:100/resizing_type:fit/plain/local:///data/sadcat.jpg',
+      `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
   })
@@ -159,7 +161,7 @@ describe('image rendering routes', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
-      '/public/height:100/width:100/resizing_type:fit/plain/local:///data/sadcat.jpg',
+      `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
   })

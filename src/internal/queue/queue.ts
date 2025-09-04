@@ -65,7 +65,7 @@ export abstract class Queue {
 
     Queue.pgBoss = new PgBoss({
       connectionString: url,
-
+      migrate: true,
       db: Queue.pgBossDb,
       schema: 'pgboss_v10',
       application_name: 'storage-pgboss',

@@ -76,7 +76,7 @@
     "multistream": "^4.1.0",
     "object-sizeof": "^2.6.4",
     "pg": "^8.12.0",
-    "pg-boss": "^10.2.0",
+    "pg-boss": "github:supabase/pg-boss#feat/exactly_once",
     "pg-listen": "^1.7.0",
     "pino": "^9.7.0",
     "pino-logflare": "^0.5.2",

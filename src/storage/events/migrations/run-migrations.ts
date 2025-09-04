@@ -17,13 +17,13 @@ interface RunMigrationsPayload extends BasePayload {
 }
 
 export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
-  static queueName = 'tenants-migrations'
+  static queueName = 'tenants-migrations-v2'
   static allowSync = false
 
   static getQueueOptions(): Queue {
     return {
       name: this.queueName,
-      policy: 'stately',
+      policy: 'exactly_once',
     } as const
   }
 

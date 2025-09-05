@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { ROUTE_OPERATIONS } from '../operations'
 import fastifyMultipart from '@fastify/multipart'
+import { fileUploadFromRequest } from '@storage/uploader'
 
 const uploadSignedObjectParamsSchema = {
   type: 'object',
@@ -87,14 +88,28 @@ export default async function routes(fastify: FastifyInstance) {
         .from(bucketName)
         .verifyObjectSignature(token, objectName)
 
+      // Get bucket information once for better error context
+      const bucket = await request.storage
+        .asSuperUser()
+        .findBucket(bucketName, 'id, name, file_size_limit, allowed_mime_types')
+
       const { objectMetadata, path } = await request.storage
         .asSuperUser()
         .from(bucketName)
-        .uploadFromRequest(request, {
-          owner,
+        .uploadNewObject({
+          file: await fileUploadFromRequest(request, {
+            objectName,
+            fileSizeLimit: bucket.file_size_limit,
+            allowedMimeTypes: bucket.allowed_mime_types || [],
+          }),
           objectName,
+          owner,
           isUpsert: upsert,
           signal: request.signals.body.signal,
+          bucketContext: {
+            name: bucket.name,
+            fileSizeLimit: bucket.file_size_limit,
+          },
         })
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({

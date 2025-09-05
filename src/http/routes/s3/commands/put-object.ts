@@ -155,7 +155,15 @@ export default function PutObject(s3Router: S3Router) {
               ContentEncoding: req.Headers?.['content-encoding'],
               Metadata: metadata,
             },
-            { signal: ctx.signals.body, isTruncated: uploadRequest.isTruncated }
+            {
+              signal: ctx.signals.body,
+              isTruncated: uploadRequest.isTruncated,
+              bucketContext: {
+                name: bucket.name,
+                fileSizeLimit: bucket.file_size_limit,
+                globalLimit: uploadRequest.globalLimit,
+              },
+            }
           )
         }
       )
@@ -207,7 +215,15 @@ export default function PutObject(s3Router: S3Router) {
               ContentEncoding: fieldsObject['content-encoding'] as string,
               Metadata: metadata,
             },
-            { signal: ctx.signals.body, isTruncated: () => file.file.truncated }
+            {
+              signal: ctx.signals.body,
+              isTruncated: () => file.file.truncated,
+              bucketContext: {
+                name: bucket.name,
+                fileSizeLimit: bucket.file_size_limit,
+                globalLimit: limits.globalLimit,
+              },
+            }
           )
         }
       )

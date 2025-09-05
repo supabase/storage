@@ -691,7 +691,15 @@ export class S3ProtocolHandler {
    */
   async putObject(
     command: PutObjectCommandInput,
-    options: { signal?: AbortSignal; isTruncated: () => boolean }
+    options: {
+      signal?: AbortSignal
+      isTruncated: () => boolean
+      bucketContext?: {
+        name: string
+        fileSizeLimit?: number | null
+        globalLimit?: number
+      }
+    }
   ) {
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
 
@@ -712,6 +720,7 @@ export class S3ProtocolHandler {
       isUpsert: true,
       uploadType: 's3',
       signal: options.signal,
+      bucketContext: options.bucketContext,
     })
 
     return {

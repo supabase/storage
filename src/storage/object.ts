@@ -77,7 +77,7 @@ export class ObjectStorage {
   ) {
     const bucket = await this.db
       .asSuperUser()
-      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
+      .findBucketById(this.bucketId, 'id, name, file_size_limit, allowed_mime_types')
 
     const uploadRequest = await fileUploadFromRequest(request, {
       objectName: file.objectName,
@@ -91,6 +91,10 @@ export class ObjectStorage {
       owner: file.owner,
       isUpsert: Boolean(file.isUpsert),
       signal: file.signal,
+      bucketContext: {
+        name: bucket.name,
+        fileSizeLimit: bucket.file_size_limit,
+      },
     })
   }
 
@@ -98,24 +102,23 @@ export class ObjectStorage {
    * Upload a new object to a storage
    * @param request
    */
-  async uploadNewObject(request: Omit<UploadRequest, 'bucketId' | 'uploadType'>) {
+  async uploadNewObject(
+    request: Omit<UploadRequest, 'bucketId' | 'uploadType'> & {
+      bucketContext?: {
+        name: string
+        fileSizeLimit?: number | null
+      }
+    }
+  ) {
     mustBeValidKey(request.objectName)
 
     const path = `${this.bucketId}/${request.objectName}`
-
-    // Get bucket information for better error context
-    const bucket = await this.db
-      .asSuperUser()
-      .findBucketById(this.bucketId, 'name, file_size_limit')
 
     const { metadata, obj } = await this.uploader.upload({
       ...request,
       bucketId: this.bucketId,
       uploadType: 'standard',
-      bucketContext: {
-        name: bucket.name,
-        fileSizeLimit: bucket.file_size_limit,
-      },
+      bucketContext: request.bucketContext,
     })
 
     return { objectMetadata: metadata, path, id: obj.id }

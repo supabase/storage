@@ -586,18 +586,25 @@ export class ObjectStorage {
     startAfter?: string
     maxKeys?: number
     encodingType?: 'url'
+    sortBy?: {
+      column?: 'name' | 'created_at' | 'updated_at' | 'last_accessed_at'
+      order?: string
+    }
   }) {
     const limit = Math.min(options?.maxKeys || 1000, 1000)
     const prefix = options?.prefix || ''
     const delimiter = options?.delimiter
 
-    const cursor = options?.cursor ? decodeContinuationToken(options?.cursor) : undefined
+    const cursor = options?.cursor
+      ? decodeContinuationToken(options?.sortBy?.column || 'name', options?.cursor)
+      : undefined
     let searchResult = await this.db.listObjectsV2(this.bucketId, {
       prefix: options?.prefix,
       delimiter: options?.delimiter,
       maxKeys: limit + 1,
       nextToken: cursor,
       startAfter: cursor || options?.startAfter,
+      sortBy: options?.sortBy,
     })
 
     let prevPrefix = ''
@@ -644,9 +651,15 @@ export class ObjectStorage {
       })
     })
 
-    const nextContinuationToken = isTruncated
-      ? encodeContinuationToken(searchResult[searchResult.length - 1].name)
-      : undefined
+    let nextContinuationToken: string | undefined
+    if (isTruncated) {
+      const sortColumn = options?.sortBy?.column || 'name'
+      const tokenValue =
+        sortColumn === 'name'
+          ? searchResult[searchResult.length - 1].name
+          : new Date(searchResult[searchResult.length - 1][sortColumn] || '').toISOString()
+      nextContinuationToken = encodeContinuationToken(sortColumn, tokenValue)
+    }
 
     return {
       hasNext: isTruncated,
@@ -806,16 +819,21 @@ export class ObjectStorage {
   }
 }
 
-function encodeContinuationToken(name: string) {
-  return Buffer.from(`l:${name}`).toString('base64')
+function encodeContinuationToken(sortKey: string, value: string) {
+  return Buffer.from(`${sortKey}:${value}`).toString('base64')
 }
 
-function decodeContinuationToken(token: string) {
+function decodeContinuationToken(sortKey: string, token: string) {
   const decoded = Buffer.from(token, 'base64').toString().split(':')
 
   if (decoded.length === 0) {
     throw new Error('Invalid continuation token')
   }
 
-  return decoded[1]
+  const tokenSort = decoded.shift()
+  if (tokenSort !== sortKey) {
+    throw new Error('Invalid continuation token. Sort column mismatch')
+  }
+
+  return decoded.join(':')
 }

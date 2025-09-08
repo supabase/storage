@@ -43,7 +43,7 @@ export default async function routes(fastify: FastifyInstance) {
         tags: ['transformation'],
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.RENDER_SIGNED_IMAGE },
+        operation: { type: ROUTE_OPERATIONS.RENDER_AUTH_IMAGE },
       },
     },
     async (request, response) => {

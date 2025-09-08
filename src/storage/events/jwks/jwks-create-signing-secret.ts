@@ -9,12 +9,12 @@ interface JwksCreateSigningSecretPayload extends BasePayload {
 }
 
 export class JwksCreateSigningSecret extends BaseEvent<JwksCreateSigningSecretPayload> {
-  static queueName = 'tenants-jwks-create'
+  static queueName = 'tenants-jwks-create-v2'
 
   static getQueueOptions(): Queue {
     return {
       name: this.queueName,
-      policy: 'stately',
+      policy: 'exactly_once',
     } as const
   }
 

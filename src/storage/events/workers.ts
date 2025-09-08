@@ -6,6 +6,7 @@ import { BackupObjectEvent } from './objects/backup-object'
 import { ResetMigrationsOnTenant } from './migrations/reset-migrations'
 import { JwksCreateSigningSecret } from './jwks/jwks-create-signing-secret'
 import { UpgradePgBossV10 } from './pgboss/upgrade-v10'
+import { MoveJobs } from './pgboss/move-jobs'
 import { ObjectAdminDeleteAllBefore } from './objects/object-admin-delete-all-before'
 
 export function registerWorkers() {
@@ -17,4 +18,5 @@ export function registerWorkers() {
   Queue.register(ResetMigrationsOnTenant)
   Queue.register(JwksCreateSigningSecret)
   Queue.register(UpgradePgBossV10)
+  Queue.register(MoveJobs)
 }

@@ -13,12 +13,12 @@ interface ResetMigrationsPayload extends BasePayload {
 }
 
 export class ResetMigrationsOnTenant extends BaseEvent<ResetMigrationsPayload> {
-  static queueName = 'tenants-migrations-reset'
+  static queueName = 'tenants-migrations-reset-v2'
 
   static getQueueOptions(): Queue {
     return {
       name: this.queueName,
-      policy: 'stately',
+      policy: 'exactly_once',
     } as const
   }
 

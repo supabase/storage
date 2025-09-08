@@ -105,6 +105,11 @@ export interface Database {
       nextToken?: string
       maxKeys?: number
       startAfter?: string
+      sortOrder?: string
+      sortBy?: {
+        column?: string
+        after?: string
+      }
     }
   ): Promise<Obj[]>
 

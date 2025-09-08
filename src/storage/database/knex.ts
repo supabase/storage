@@ -269,31 +269,51 @@ export class StorageKnexDB implements Database {
       nextToken?: string
       maxKeys?: number
       startAfter?: string
+      sortOrder?: string
+      sortBy?: {
+        column: string
+        after?: string
+      }
     }
   ) {
     return this.runQuery('ListObjectsV2', async (knex) => {
+      // console.log('!!!!!!!!! LIST OBJECTS V2')
       if (!options?.delimiter) {
+        // console.log('!!!!!!!!! LIST OBJECTS V2... NO delimiter')
         const query = knex
           .table('objects')
           .where('bucket_id', bucketId)
-          .select(['id', 'name', 'metadata', 'updated_at'])
+          .select(['id', 'name', 'metadata', 'updated_at', 'created_at', 'last_accessed_at'])
           .limit(options?.maxKeys || 100)
+
+        // only allow these values for sort columns, "name" is excluded intentionally so it will use the default value (which includes collate)
+        const allowedSortColumns = new Set(['updated_at', 'created_at'])
+        const allowedSortOrders = new Set(['asc', 'desc'])
+        const sortColumn =
+          options?.sortBy?.column && allowedSortColumns.has(options.sortBy.column)
+            ? options.sortBy.column
+            : 'name COLLATE "C"'
+        const sortOrder =
+          options?.sortOrder && allowedSortOrders.has(options.sortOrder) ? options.sortOrder : 'asc'
 
         // knex typing is wrong, it doesn't accept a knex.raw on orderBy, even though is totally legit
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
-        query.orderBy(knex.raw('name COLLATE "C"'))
+        query.orderBy(knex.raw(`${sortColumn}`), sortOrder)
 
         if (options?.prefix) {
           query.where('name', 'like', `${options.prefix}%`)
         }
 
         if (options?.nextToken) {
-          query.andWhere(knex.raw('name COLLATE "C" > ?', [options?.nextToken]))
+          const pageOperator = sortOrder === 'asc' ? '>' : '<'
+          query.andWhere(knex.raw(`${sortColumn} ${pageOperator} ?`, [options.nextToken]))
         }
 
         return query
       }
+
+      // console.log('!!!!!!!!! LIST OBJECTS V2... YES delimiter')
 
       let useNewSearchVersion2 = true
 
@@ -302,14 +322,30 @@ export class StorageKnexDB implements Database {
       }
 
       if (useNewSearchVersion2 && options?.delimiter === '/') {
+        // console.log('!!!!!!!!! LIST OBJECTS V2... USE NEW SEARCH V2')
+        let paramPlaceholders = '?,?,?,?,?'
+        const sortParams: (string | null)[] = []
+        // this migration adds 3 more parameters to search v2 support sorting
+        if (await tenantHasMigrations(this.tenantId, 'add-search-v2-sort-support')) {
+          // console.log('!!!!!!!!! LIST OBJECTS V2... USE SEARCH WITH SORT!!!!')
+          paramPlaceholders += ',?,?,?'
+          sortParams.push(
+            options?.sortOrder || 'asc',
+            options?.sortBy?.column || 'name',
+            options?.sortBy?.after || null
+          )
+        }
         const levels = !options?.prefix ? 1 : options.prefix.split('/').length
-        const query = await knex.raw('select * from storage.search_v2(?,?,?,?,?)', [
+        const searchParams = [
           options?.prefix || '',
           bucketId,
           options?.maxKeys || 1000,
           levels,
           options?.startAfter || '',
-        ])
+          ...sortParams,
+        ]
+        // console.log('...', paramPlaceholders, searchParams)
+        const query = await knex.raw(`select * from storage.search_v2(${paramPlaceholders})`, searchParams)
 
         return query.rows
       }

@@ -41,6 +41,12 @@ interface CopyObjectParams {
     ifUnmodifiedSince?: Date
   }
 }
+export interface ListObjectsV2Result {
+  folders: Obj[]
+  objects: Obj[]
+  hasNext: boolean
+  nextCursor?: string
+}
 
 /**
  * ObjectStorage
@@ -586,18 +592,27 @@ export class ObjectStorage {
     startAfter?: string
     maxKeys?: number
     encodingType?: 'url'
-  }) {
+    sortBy?: {
+      column: 'name' | 'created_at' | 'updated_at'
+      order?: string
+    }
+  }): Promise<ListObjectsV2Result> {
     const limit = Math.min(options?.maxKeys || 1000, 1000)
     const prefix = options?.prefix || ''
     const delimiter = options?.delimiter
 
-    const cursor = options?.cursor ? decodeContinuationToken(options?.cursor) : undefined
+    const cursor = options?.cursor ? decodeContinuationToken(options.cursor) : undefined
     let searchResult = await this.db.listObjectsV2(this.bucketId, {
       prefix: options?.prefix,
       delimiter: options?.delimiter,
       maxKeys: limit + 1,
-      nextToken: cursor,
-      startAfter: cursor || options?.startAfter,
+      nextToken: cursor?.startAfter,
+      startAfter: cursor?.startAfter || options?.startAfter,
+      sortOrder: cursor?.sortOrder || options?.sortBy?.order,
+      sortBy: {
+        column: cursor?.sortColumn || options?.sortBy?.column,
+        after: cursor?.sortColumnAfter,
+      },
     })
 
     let prevPrefix = ''
@@ -638,15 +653,31 @@ export class ObjectStorage {
     const objects: Obj[] = []
     searchResult.forEach((obj) => {
       const target = obj.id === null ? folders : objects
+      const name = obj.id === null && !obj.name.endsWith('/') ? obj.name + '/' : obj.name
       target.push({
         ...obj,
-        name: options?.encodingType === 'url' ? encodeURIComponent(obj.name) : obj.name,
+        name: options?.encodingType === 'url' ? encodeURIComponent(name) : name,
       })
     })
 
-    const nextContinuationToken = isTruncated
-      ? encodeContinuationToken(searchResult[searchResult.length - 1].name)
-      : undefined
+    let nextContinuationToken: string | undefined
+    if (isTruncated) {
+      const sortColumn = (cursor?.sortColumn || options?.sortBy?.column) as
+        | 'name'
+        | 'created_at'
+        | 'updated_at'
+        | undefined
+
+      nextContinuationToken = encodeContinuationToken({
+        startAfter: searchResult[searchResult.length - 1].name,
+        sortOrder: cursor?.sortOrder || options?.sortBy?.order,
+        sortColumn,
+        sortColumnAfter:
+          sortColumn && sortColumn !== 'name' && searchResult[searchResult.length - 1][sortColumn]
+            ? new Date(searchResult[searchResult.length - 1][sortColumn] || '').toISOString()
+            : undefined,
+      })
+    }
 
     return {
       hasNext: isTruncated,
@@ -806,16 +837,42 @@ export class ObjectStorage {
   }
 }
 
-function encodeContinuationToken(name: string) {
-  return Buffer.from(`l:${name}`).toString('base64')
+interface ContinuationToken {
+  startAfter: string
+  sortOrder?: string // 'asc' | 'desc'
+  sortColumn?: string
+  sortColumnAfter?: string
 }
 
-function decodeContinuationToken(token: string) {
-  const decoded = Buffer.from(token, 'base64').toString().split(':')
+const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
+  l: 'startAfter',
+  o: 'sortOrder',
+  c: 'sortColumn',
+  a: 'sortColumnAfter',
+}
 
-  if (decoded.length === 0) {
-    throw new Error('Invalid continuation token')
+function encodeContinuationToken(tokenInfo: ContinuationToken) {
+  let result = ''
+  for (const [k, v] of Object.entries(CONTINUATION_TOKEN_PART_MAP)) {
+    if (tokenInfo[v]) {
+      result += `${k}:${tokenInfo[v]}\n`
+    }
   }
+  return Buffer.from(result.slice(0, -1)).toString('base64')
+}
 
-  return decoded[1]
+function decodeContinuationToken(token: string): ContinuationToken {
+  const decodedParts = Buffer.from(token, 'base64').toString().split('\n')
+  const result: ContinuationToken = {
+    startAfter: '',
+    sortOrder: 'asc',
+  }
+  for (const part of decodedParts) {
+    const partMatch = part.match(/^(\S):(.*)/)
+    if (!partMatch || partMatch.length !== 3 || !(partMatch[1] in CONTINUATION_TOKEN_PART_MAP)) {
+      throw new Error('Invalid continuation token')
+    }
+    result[CONTINUATION_TOKEN_PART_MAP[partMatch[1]]] = partMatch[2]
+  }
+  return result
 }

@@ -14,8 +14,7 @@ CREATE OR REPLACE FUNCTION storage.search_v2 (
     updated_at timestamptz,
     created_at timestamptz,
     last_accessed_at timestamptz,
-    metadata jsonb,
-    item_type text
+    metadata jsonb
 )
 SECURITY INVOKER
 AS $func$
@@ -24,9 +23,7 @@ DECLARE
     sort_ord text;
     cursor_op text;
     cursor_expr text;
-    cursor_expr_prefixes text;
     sort_expr text;
-    sort_expr_prefixes text;
     collate_clause text := '';
 BEGIN
     -- Validate sort_order
@@ -45,30 +42,16 @@ BEGIN
     sort_col := lower(sort_column);
     -- Validate sort column  
     IF sort_col IN ('updated_at', 'created_at') THEN
-        -- For prefixes: use NULL (which becomes epoch) since we ignore the actual created_at column
-        cursor_expr_prefixes := format(
-            '($5 = '''' OR ROW(''epoch''::timestamptz, name COLLATE "C") %s ROW(COALESCE(NULLIF($6, '''')::timestamptz, ''epoch''::timestamptz), $5))',
-            cursor_op
-        );
-        -- For objects: truncate timestamp precision to match cursor
         cursor_expr := format(
             '($5 = '''' OR ROW(date_trunc(''milliseconds'', %I), name COLLATE "C") %s ROW(COALESCE(NULLIF($6, '''')::timestamptz, ''epoch''::timestamptz), $5))',
             sort_col, cursor_op
         );
-        -- For prefixes: always sort by epoch (NULL) timestamp, then name
-        sort_expr_prefixes := format(
-            '''epoch''::timestamptz %s, name COLLATE "C" %s',
-            sort_ord, sort_ord
-        );
-        -- For objects and outer query: truncate timestamp precision to match cursor
         sort_expr := format(
             'COALESCE(date_trunc(''milliseconds'', %I), ''epoch''::timestamptz) %s, name COLLATE "C" %s',
             sort_col, sort_ord, sort_ord
         );
     ELSE
-        cursor_expr_prefixes := format('($5 = '''' OR name COLLATE "C" %s $5)', cursor_op);
         cursor_expr := format('($5 = '''' OR name COLLATE "C" %s $5)', cursor_op);
-        sort_expr_prefixes := format('name COLLATE "C" %s', sort_ord);
         sort_expr := format('name COLLATE "C" %s', sort_ord);
     END IF;
 
@@ -80,11 +63,10 @@ BEGIN
                     split_part(name, '/', $4) AS key,
                     name,
                     NULL::uuid AS id,
-                    NULL::timestamptz AS updated_at,
-                    NULL::timestamptz AS created_at,
+                    updated_at,
+                    created_at,
                     NULL::timestamptz AS last_accessed_at,
-                    NULL::jsonb AS metadata,
-                    'folder'::text AS item_type
+                    NULL::jsonb AS metadata
                 FROM storage.prefixes
                 WHERE name COLLATE "C" LIKE $1 || '%%'
                     AND bucket_id = $2
@@ -102,8 +84,7 @@ BEGIN
                     updated_at,
                     created_at,
                     last_accessed_at,
-                    metadata,
-                    'object'::text AS item_type
+                    metadata
                 FROM storage.objects
                 WHERE name COLLATE "C" LIKE $1 || '%%'
                     AND bucket_id = $2
@@ -116,11 +97,11 @@ BEGIN
         ORDER BY %s
         LIMIT $3
         $sql$,
-        cursor_expr_prefixes, -- prefixes WHERE
-        sort_expr_prefixes,   -- prefixes ORDER BY
-        cursor_expr,          -- objects WHERE
-        sort_expr,            -- objects ORDER BY
-        sort_expr    -- final ORDER BY
+        cursor_expr,    -- prefixes WHERE
+        sort_expr,      -- prefixes ORDER BY
+        cursor_expr,    -- objects WHERE
+        sort_expr,      -- objects ORDER BY
+        sort_expr       -- final ORDER BY
     )
     USING prefix, bucket_name, limits, levels, start_after, sort_column_after;
 END;

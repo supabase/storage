@@ -608,8 +608,8 @@ export class ObjectStorage {
       maxKeys: limit + 1,
       nextToken: cursor?.startAfter,
       startAfter: cursor?.startAfter || options?.startAfter,
-      sortOrder: cursor?.sortOrder || options?.sortBy?.order,
       sortBy: {
+        order: cursor?.sortOrder || options?.sortBy?.order,
         column: cursor?.sortColumn || options?.sortBy?.column,
         after: cursor?.sortColumnAfter,
       },

@@ -269,9 +269,9 @@ export class StorageKnexDB implements Database {
       nextToken?: string
       maxKeys?: number
       startAfter?: string
-      sortOrder?: string
       sortBy?: {
-        column: string
+        order?: string
+        column?: string
         after?: string
       }
     }
@@ -292,7 +292,9 @@ export class StorageKnexDB implements Database {
             ? options.sortBy.column
             : undefined
         const sortOrder =
-          options?.sortOrder && allowedSortOrders.has(options.sortOrder) ? options.sortOrder : 'asc'
+          options?.sortBy?.order && allowedSortOrders.has(options.sortBy.order)
+            ? options.sortBy.order
+            : 'asc'
 
         if (sortColumn) {
           query.orderBy(sortColumn, sortOrder)
@@ -336,7 +338,7 @@ export class StorageKnexDB implements Database {
         if (await tenantHasMigrations(this.tenantId, 'add-search-v2-sort-support')) {
           paramPlaceholders += ',?,?,?'
           sortParams.push(
-            options?.sortOrder || 'asc',
+            options?.sortBy?.order || 'asc',
             options?.sortBy?.column || 'name',
             options?.sortBy?.after || null
           )

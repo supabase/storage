@@ -105,8 +105,8 @@ export interface Database {
       nextToken?: string
       maxKeys?: number
       startAfter?: string
-      sortOrder?: string
       sortBy?: {
+        order?: string
         column?: string
         after?: string
       }

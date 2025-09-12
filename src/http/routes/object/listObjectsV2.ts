@@ -23,6 +23,14 @@ const searchRequestBodySchema = {
     limit: { type: 'integer', minimum: 1, examples: [10] },
     cursor: { type: 'string' },
     with_delimiter: { type: 'boolean' },
+    sortBy: {
+      type: 'object',
+      properties: {
+        column: { type: 'string', enum: ['name', 'updated_at', 'created_at'] },
+        order: { type: 'string', enum: ['asc', 'desc'] },
+      },
+      required: ['column'],
+    },
   },
 } as const
 interface searchRequestInterface extends AuthenticatedRequest {
@@ -57,13 +65,14 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const { bucketName } = request.params
-      const { limit, with_delimiter, cursor, prefix } = request.body
+      const { limit, with_delimiter, cursor, prefix, sortBy } = request.body
 
       const results = await request.storage.from(bucketName).listObjectsV2({
         prefix,
         delimiter: with_delimiter ? '/' : undefined,
         maxKeys: limit,
         cursor,
+        sortBy,
       })
 
       return response.status(200).send(results)

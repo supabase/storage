@@ -24,7 +24,6 @@ DECLARE
     cursor_op text;
     cursor_expr text;
     sort_expr text;
-    collate_clause text := '';
 BEGIN
     -- Validate sort_order
     sort_ord := lower(sort_order);

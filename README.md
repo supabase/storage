@@ -70,3 +70,14 @@ curl --location --request GET 'http://localhost:5000/bucket' \
 
 To perform your tests you can run the following command: `npm test`
 
+### Running in context
+
+Sometimes it is useful to test changes in the context of the entire stack (e.g. a project running via the Supabase cli). The `replace-existing-container.sh` script builds an image and replace an existing running container with it. All settings of the existing container are preserved (volumes, network, env, etc).
+
+```bash
+# Start supabase project - in root of supabase project "PROJECT-NAME"
+supabase start
+
+# In root of storage api repo
+./scripts/replace-existing-container.sh supabase_storage_PROJECT-NAME
+```

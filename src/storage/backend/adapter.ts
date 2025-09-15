@@ -46,11 +46,10 @@ export type UploadPart = {
 /**
  * A generic storage Adapter to interact with files
  */
-export abstract class StorageBackendAdapter {
-  client: any
-  constructor() {
-    this.client = null
-  }
+export abstract class StorageBackendAdapter<T = unknown> {
+  constructor() {}
+
+  abstract getClient(): T
 
   async list(
     bucket: string,

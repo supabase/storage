@@ -42,35 +42,74 @@ export interface S3ClientOptions {
   accessKey?: string
   secretKey?: string
   role?: string
-  httpAgent?: InstrumentedAgent
   requestTimeout?: number
+  httpAgents?: S3HttpAgents
+}
+
+interface S3HttpAgents {
+  api: InstrumentedAgent
+  upload: InstrumentedAgent
+  download: InstrumentedAgent
 }
 
 /**
  * S3Backend
  * Interacts with a s3-compatible file system with this S3Adapter
  */
-export class S3Backend implements StorageBackendAdapter {
-  client: S3Client
-  agent: InstrumentedAgent
+export class S3Backend implements StorageBackendAdapter<S3Client> {
+  apiClient: S3Client
+  uploadClient: S3Client
+  downloadClient: S3Client
+
+  agents: {
+    api: InstrumentedAgent
+    upload: InstrumentedAgent
+    download: InstrumentedAgent
+  }
 
   constructor(options: S3ClientOptions) {
-    this.agent =
-      options.httpAgent ??
-      createAgent('s3_default', {
+    this.agents = options.httpAgents ?? {
+      api: createAgent('s3_api', {
         maxSockets: storageS3MaxSockets,
-      })
+      }),
+      upload: createAgent('s3_upload', {
+        maxSockets: storageS3MaxSockets,
+      }),
+      download: createAgent('s3_download', {
+        maxSockets: storageS3MaxSockets,
+      }),
+    }
 
-    if (this.agent.httpsAgent && tracingEnabled) {
-      this.agent.monitor()
+    if (this.agents && tracingEnabled) {
+      Object.values(this.agents).forEach((agent) => {
+        agent.monitor()
+      })
     }
 
     // Default client for API operations
-    this.client = this.createS3Client({
+    this.apiClient = this.createS3Client({
       ...options,
-      name: 's3_default',
-      httpAgent: this.agent,
+      name: 's3_api',
+      httpAgent: this.agents.api,
     })
+
+    // Dedicated client for downloads
+    this.downloadClient = this.createS3Client({
+      ...options,
+      name: 's3_download',
+      httpAgent: this.agents.download,
+    })
+
+    // Dedicated client for uploads
+    this.uploadClient = this.createS3Client({
+      ...options,
+      name: 's3_upload',
+      httpAgent: this.agents.upload,
+    })
+  }
+
+  getClient() {
+    return this.apiClient
   }
 
   /**
@@ -98,7 +137,7 @@ export class S3Backend implements StorageBackendAdapter {
       input.IfModifiedSince = new Date(headers.ifModifiedSince)
     }
     const command = new GetObjectCommand(input)
-    const data = await this.client.send(command, {
+    const data = await this.downloadClient.send(command, {
       abortSignal: signal,
     })
 
@@ -144,7 +183,7 @@ export class S3Backend implements StorageBackendAdapter {
     const dataStream = tracingFeatures?.upload ? monitorStream(body) : body
 
     const upload = new Upload({
-      client: this.client,
+      client: this.uploadClient,
       params: {
         Bucket: bucketName,
         Key: withOptionalVersion(key, version),
@@ -212,7 +251,7 @@ export class S3Backend implements StorageBackendAdapter {
       Bucket: bucket,
       Key: withOptionalVersion(key, version),
     })
-    await this.client.send(command)
+    await this.apiClient.send(command)
   }
 
   /**
@@ -251,7 +290,7 @@ export class S3Backend implements StorageBackendAdapter {
         ContentType: metadata?.mimetype,
         CacheControl: metadata?.cacheControl,
       })
-      const data = await this.client.send(command)
+      const data = await this.apiClient.send(command)
       return {
         httpStatusCode: data.$metadata.httpStatusCode || 200,
         eTag: data.CopyObjectResult?.ETag || '',
@@ -280,7 +319,7 @@ export class S3Backend implements StorageBackendAdapter {
         ContinuationToken: options?.nextToken || undefined,
         StartAfter: options?.startAfter,
       })
-      const data = await this.client.send(command)
+      const data = await this.apiClient.send(command)
       const keys =
         data.Contents?.filter((ele) => {
           if (options?.beforeDate) {
@@ -327,7 +366,7 @@ export class S3Backend implements StorageBackendAdapter {
           Objects: s3Prefixes,
         },
       })
-      await this.client.send(command)
+      await this.apiClient.send(command)
     } catch (e) {
       throw StorageBackendError.fromError(e)
     }
@@ -349,7 +388,7 @@ export class S3Backend implements StorageBackendAdapter {
         Bucket: bucket,
         Key: withOptionalVersion(key, version),
       })
-      const data = await this.client.send(command)
+      const data = await this.apiClient.send(command)
       return {
         cacheControl: data.CacheControl || 'no-cache',
         mimetype: data.ContentType || 'application/octet-stream',
@@ -380,7 +419,7 @@ export class S3Backend implements StorageBackendAdapter {
         MaxParts: maxParts,
       })
 
-      const result = await this.client.send(command)
+      const result = await this.apiClient.send(command)
 
       return {
         parts: result.Parts || [],
@@ -406,7 +445,7 @@ export class S3Backend implements StorageBackendAdapter {
     }
 
     const command = new GetObjectCommand(input)
-    return getSignedUrl(this.client, command, { expiresIn: 600 })
+    return getSignedUrl(this.apiClient, command, { expiresIn: 600 })
   }
 
   async createMultiPartUpload(
@@ -428,7 +467,7 @@ export class S3Backend implements StorageBackendAdapter {
       },
     })
 
-    const resp = await this.client.send(createMultiPart)
+    const resp = await this.apiClient.send(createMultiPart)
 
     if (!resp.UploadId) {
       throw ERRORS.InvalidUploadId()
@@ -457,7 +496,7 @@ export class S3Backend implements StorageBackendAdapter {
         ContentLength: length,
       })
 
-      const resp = await this.client.send(paralellUploadS3, {
+      const resp = await this.uploadClient.send(paralellUploadS3, {
         abortSignal: signal,
       })
 
@@ -491,7 +530,7 @@ export class S3Backend implements StorageBackendAdapter {
         UploadId: uploadId,
       })
 
-      const partsResponse = await this.client.send(listPartsInput)
+      const partsResponse = await this.apiClient.send(listPartsInput)
       parts = partsResponse.Parts || []
     }
 
@@ -507,7 +546,7 @@ export class S3Backend implements StorageBackendAdapter {
             },
     })
 
-    const response = await this.client.send(completeUpload)
+    const response = await this.apiClient.send(completeUpload)
 
     let location = key
     let bucket = bucketName
@@ -534,7 +573,7 @@ export class S3Backend implements StorageBackendAdapter {
       Key: key,
       UploadId: uploadId,
     })
-    await this.client.send(abortUpload)
+    await this.apiClient.send(abortUpload)
   }
 
   async uploadPartCopy(
@@ -556,7 +595,7 @@ export class S3Backend implements StorageBackendAdapter {
       CopySourceRange: bytesRange ? `bytes=${bytesRange.fromByte}-${bytesRange.toByte}` : undefined,
     })
 
-    const part = await this.client.send(uploadPartCopy)
+    const part = await this.uploadClient.send(uploadPartCopy)
 
     return {
       eTag: part.CopyPartResult?.ETag,
@@ -565,14 +604,18 @@ export class S3Backend implements StorageBackendAdapter {
   }
 
   async backup(backupInfo: BackupObjectInfo) {
-    return new ObjectBackup(this.client, backupInfo).backup()
+    return new ObjectBackup(this.apiClient, backupInfo).backup()
   }
 
   close() {
-    this.agent.close()
+    Object.values(this.agents).forEach((agent) => {
+      agent.close()
+    })
   }
 
-  protected createS3Client(options: S3ClientOptions & { name: string }) {
+  protected createS3Client(
+    options: S3ClientOptions & { name: string; httpAgent: InstrumentedAgent }
+  ) {
     const params: S3ClientConfig = {
       region: options.region,
       runtime: 'node',

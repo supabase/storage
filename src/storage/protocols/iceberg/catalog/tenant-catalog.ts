@@ -156,6 +156,7 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
             ...rest,
             namespace: namespaceName,
           })
+
           await store.createTable({
             name: rest.name,
             bucketId: catalog.id,

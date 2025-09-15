@@ -43,6 +43,10 @@ export enum ErrorCode {
   IcebergError = 'IcebergError',
   IcebergMaximumResourceLimit = 'IcebergMaximumResourceLimit',
   NoSuchCatalog = 'NoSuchCatalog',
+
+  S3VectorConflictException = 'ConflictException',
+  S3VectorNotFoundException = 'NotFoundException',
+  S3VectorBucketNotEmpty = 'VectorBucketNotEmpty',
 }
 
 export const ERRORS = {
@@ -419,6 +423,27 @@ export const ERRORS = {
       code: ErrorCode.NoSuchCatalog,
       httpStatusCode: 404,
       message: `Catalog name "${name}" not found`,
+    })
+  },
+  S3VectorConflictException(resource: string, name: string) {
+    return new StorageBackendError({
+      code: ErrorCode.S3VectorConflictException,
+      httpStatusCode: 409,
+      message: `${resource} "${name}" already exists`,
+    })
+  },
+  S3VectorNotFoundException(resource: string, name: string) {
+    return new StorageBackendError({
+      code: ErrorCode.S3VectorNotFoundException,
+      httpStatusCode: 404,
+      message: `resource "${name}" not found`,
+    })
+  },
+  S3VectorBucketNotEmpty(name: string) {
+    return new StorageBackendError({
+      code: ErrorCode.S3VectorBucketNotEmpty,
+      httpStatusCode: 400,
+      message: `Vector Bucket "${name}" not empty`,
     })
   },
 }

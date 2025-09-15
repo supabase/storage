@@ -43,6 +43,7 @@ export enum ErrorCode {
   IcebergError = 'IcebergError',
   IcebergMaximumResourceLimit = 'IcebergMaximumResourceLimit',
   NoSuchCatalog = 'NoSuchCatalog',
+  NoSuchVectorIndex = 'NoSuchVectorIndex',
 }
 
 export const ERRORS = {
@@ -419,6 +420,13 @@ export const ERRORS = {
       code: ErrorCode.NoSuchCatalog,
       httpStatusCode: 404,
       message: `Catalog name "${name}" not found`,
+    })
+  },
+  NoSuchVectorIndex(name: string) {
+    return new StorageBackendError({
+      code: ErrorCode.NoSuchVectorIndex,
+      httpStatusCode: 404,
+      message: `Vector Index "${name}" not found`,
     })
   },
 }

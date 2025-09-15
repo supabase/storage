@@ -80,4 +80,7 @@ export const ROUTE_OPERATIONS = {
   ICEBERG_CREATE_TABLE: 'storage.iceberg.table.create',
   ICEBERG_DROP_TABLE: 'storage.iceberg.table.drop',
   ICEBERG_COMMIT_TABLE: 'storage.iceberg.table.commit',
+
+  // Vector
+  CREATE_VECTOR_INDEX: 'storage.vector.index.create',
 }

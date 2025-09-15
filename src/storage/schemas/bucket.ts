@@ -33,3 +33,4 @@ export const bucketSchema = {
 
 export type Bucket = FromSchema<typeof bucketSchema>
 export type IcebergCatalog = Pick<Bucket, 'id' | 'created_at' | 'updated_at'>
+export type VectorBucket = Pick<Bucket, 'id' | 'created_at' | 'updated_at'>

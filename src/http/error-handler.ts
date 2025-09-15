@@ -55,6 +55,10 @@ export const setErrorHandler = (
         ? 500
         : 400
 
+      if (statusCode === 500) {
+        console.log('error')
+      }
+
       if (renderableError.code === ErrorCode.AbortedTerminate) {
         reply.header('Connection', 'close')
 
@@ -86,6 +90,11 @@ export const setErrorHandler = (
           message: err.message,
         })
       )
+    }
+
+    if (error.message !== 'S3VectorsClient error') {
+      // Generic error, we don't know what happened!
+      app.log.error({ err: error }, 'Unhandled error detected')
     }
 
     return reply.status(500).send(

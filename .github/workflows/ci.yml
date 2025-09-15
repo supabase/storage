@@ -82,6 +82,9 @@ jobs:
           MULTI_TENANT: false
           S3_PROTOCOL_ACCESS_KEY_ID: ${{ secrets.TENANT_ID }}
           S3_PROTOCOL_ACCESS_KEY_SECRET: ${{ secrets.SERVICE_KEY }}
+          VECTOR_BUCKET_S3: supa-test-local-dev
+          VECTOR_ENABLED: true
+          ICEBERG_ENABLED: true
 
       - name: Upload coverage results to Coveralls
         uses: coverallsapp/github-action@master

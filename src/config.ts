@@ -176,6 +176,7 @@ type StorageConfigType = {
   cdnPurgeEndpointURL?: string
   cdnPurgeEndpointKey?: string
 
+  icebergEnabled: boolean
   icebergWarehouse: string
   icebergCatalogUrl: string
   icebergCatalogAuthType: IcebergCatalogAuthType
@@ -186,6 +187,12 @@ type StorageConfigType = {
   icebergBucketDetectionSuffix: string
   icebergBucketDetectionMode: 'BUCKET' | 'FULL_PATH'
   icebergS3DeleteEnabled: boolean
+
+  vectorEnabled: boolean
+  vectorBucketS3?: string
+  vectorBucketRegion?: string
+  vectorMaxBucketsCount: number
+  vectorMaxIndexesCount: number
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -506,6 +513,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       10
     ),
 
+    icebergEnabled: getOptionalConfigFromEnv('ICEBERG_ENABLED') === 'true',
     icebergWarehouse: getOptionalConfigFromEnv('ICEBERG_WAREHOUSE') || '',
     icebergCatalogUrl:
       getOptionalConfigFromEnv('ICEBERG_CATALOG_URL') ||
@@ -524,6 +532,12 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     icebergMaxTableCount: parseInt(getOptionalConfigFromEnv('ICEBERG_MAX_TABLES') || '10', 10),
     icebergS3DeleteEnabled: getOptionalConfigFromEnv('ICEBERG_S3_DELETE_ENABLED') === 'true',
+
+    vectorEnabled: getOptionalConfigFromEnv('VECTOR_ENABLED') === 'true',
+    vectorBucketS3: getOptionalConfigFromEnv('VECTOR_BUCKET_S3') || undefined,
+    vectorBucketRegion: getOptionalConfigFromEnv('VECTOR_BUCKET_REGION') || undefined,
+    vectorMaxBucketsCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_BUCKETS') || '10', 10),
+    vectorMaxIndexesCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_INDEXES') || '20', 10),
   } as StorageConfigType
 
   const serviceKey = getOptionalConfigFromEnv('SERVICE_KEY') || ''

@@ -24,6 +24,7 @@ export enum ErrorCode {
   AccessDenied = 'AccessDenied',
   ResourceLocked = 'ResourceLocked',
   DatabaseError = 'DatabaseError',
+  TransactionError = 'TransactionError',
   MissingContentLength = 'MissingContentLength',
   MissingParameter = 'MissingParameter',
   InvalidParameter = 'InvalidParameter',
@@ -43,6 +44,12 @@ export enum ErrorCode {
   IcebergError = 'IcebergError',
   IcebergMaximumResourceLimit = 'IcebergMaximumResourceLimit',
   NoSuchCatalog = 'NoSuchCatalog',
+
+  S3VectorConflictException = 'ConflictException',
+  S3VectorNotFoundException = 'NotFoundException',
+  S3VectorBucketNotEmpty = 'VectorBucketNotEmpty',
+  S3VectorMaxBucketsExceeded = 'S3VectorMaxBucketsExceeded',
+  S3VectorMaxIndexesExceeded = 'S3VectorMaxIndexesExceeded',
 }
 
 export const ERRORS = {
@@ -355,6 +362,14 @@ export const ERRORS = {
       originalError: e,
     }),
 
+  TransactionError: (message: string, err?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.TransactionError,
+      httpStatusCode: 409,
+      message: message,
+      originalError: err,
+    }),
+
   DatabaseError: (message: string, err?: Error) =>
     new StorageBackendError({
       code: ErrorCode.DatabaseError,
@@ -419,6 +434,41 @@ export const ERRORS = {
       code: ErrorCode.NoSuchCatalog,
       httpStatusCode: 404,
       message: `Catalog name "${name}" not found`,
+    })
+  },
+  S3VectorConflictException(resource: string, name: string) {
+    return new StorageBackendError({
+      code: ErrorCode.S3VectorConflictException,
+      httpStatusCode: 409,
+      message: `${resource} "${name}" already exists`,
+    })
+  },
+  S3VectorNotFoundException(resource: string, name: string) {
+    return new StorageBackendError({
+      code: ErrorCode.S3VectorNotFoundException,
+      httpStatusCode: 404,
+      message: `resource "${name}" not found`,
+    })
+  },
+  S3VectorBucketNotEmpty(name: string) {
+    return new StorageBackendError({
+      code: ErrorCode.S3VectorBucketNotEmpty,
+      httpStatusCode: 400,
+      message: `Vector Bucket "${name}" not empty`,
+    })
+  },
+  S3VectorMaxBucketsExceeded(maxBuckets: number) {
+    return new StorageBackendError({
+      code: ErrorCode.S3VectorMaxBucketsExceeded,
+      httpStatusCode: 400,
+      message: `Maximum number of buckets exceeded. Max allowed is ${maxBuckets}. Contact support to increase your limit.`,
+    })
+  },
+  S3VectorMaxIndexesExceeded(maxIndexes: number) {
+    return new StorageBackendError({
+      code: ErrorCode.S3VectorMaxIndexesExceeded,
+      httpStatusCode: 400,
+      message: `Maximum number of indexes exceeded. Max allowed is ${maxIndexes}. Contact support to increase your limit.`,
     })
   },
 }

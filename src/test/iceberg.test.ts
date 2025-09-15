@@ -42,6 +42,64 @@ describe('Iceberg Catalog', () => {
     await t.database.connection.pool.destroy()
   })
 
+  it('can create an analytic bucket', async () => {
+    const bucketName = t.random.name('ice-bucket')
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/iceberg/bucket',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+      payload: {
+        name: bucketName,
+      },
+    })
+
+    const resp = await response.json()
+    expect(response.statusCode).toBe(200)
+    expect(resp.id).toBe(bucketName)
+  })
+
+  it('can list analytic buckets', async () => {
+    const bucketName = t.random.name('ice-bucket')
+    await t.storage.createIcebergBucket({
+      id: bucketName,
+    })
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/iceberg/bucket',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+
+    const resp = await response.json()
+    expect(response.statusCode).toBe(200)
+    expect(resp.length).toBeGreaterThan(0)
+  })
+
+  it('can delete analytic bucket', async () => {
+    const bucketName = t.random.name('ice-bucket')
+    await t.storage.createIcebergBucket({
+      id: bucketName,
+    })
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/iceberg/bucket/${bucketName}`,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+  })
+
   it('can create a table bucket', async () => {
     const bucketName = t.random.name('ice-bucket')
 
@@ -66,7 +124,6 @@ describe('Iceberg Catalog', () => {
   it('can get catalog config', async () => {
     const bucketName = t.random.name('ice-bucket')
     await t.storage.createIcebergBucket({
-      name: bucketName,
       id: bucketName,
     })
 
@@ -104,7 +161,6 @@ describe('Iceberg Catalog', () => {
     it('can create namespaces', async () => {
       const bucketName = t.random.name('ice-bucket')
       await t.storage.createIcebergBucket({
-        name: bucketName,
         id: bucketName,
       })
 
@@ -148,7 +204,6 @@ describe('Iceberg Catalog', () => {
       const bucketName = t.random.name('ice-bucket')
 
       const bucket = await t.storage.createIcebergBucket({
-        name: bucketName,
         id: bucketName,
       })
 
@@ -186,7 +241,6 @@ describe('Iceberg Catalog', () => {
       const bucketName = t.random.name('ice-bucket')
 
       const bucket = await t.storage.createIcebergBucket({
-        name: bucketName,
         id: bucketName,
       })
 
@@ -227,7 +281,6 @@ describe('Iceberg Catalog', () => {
       const bucketName = t.random.name('ice-bucket')
 
       const bucket = await t.storage.createIcebergBucket({
-        name: bucketName,
         id: bucketName,
       })
 
@@ -269,7 +322,6 @@ describe('Iceberg Catalog', () => {
       const bucketName = t.random.name('ice-bucket')
 
       const bucket = await t.storage.createIcebergBucket({
-        name: bucketName,
         id: bucketName,
       })
 
@@ -300,7 +352,6 @@ describe('Iceberg Catalog', () => {
     it('can create a table', async () => {
       const bucketName = t.random.name('ice-bucket')
       await t.storage.createIcebergBucket({
-        name: bucketName,
         id: bucketName,
       })
 
@@ -408,7 +459,6 @@ describe('Iceberg Catalog', () => {
     it('can list tables in a namespace', async () => {
       const bucketName = t.random.name('ice-bucket')
       await t.storage.createIcebergBucket({
-        name: bucketName,
         id: bucketName,
       })
 
@@ -467,7 +517,6 @@ describe('Iceberg Catalog', () => {
     it('check if table exists', async () => {
       const bucketName = t.random.name('ice-bucket')
       await t.storage.createIcebergBucket({
-        name: bucketName,
         id: bucketName,
       })
 
@@ -502,7 +551,6 @@ describe('Iceberg Catalog', () => {
     it('can drop a table', async () => {
       const bucketName = t.random.name('ice-bucket')
       await t.storage.createIcebergBucket({
-        name: bucketName,
         id: bucketName,
       })
 
@@ -538,7 +586,6 @@ describe('Iceberg Catalog', () => {
     it('can load table metadata', async () => {
       const bucketName = t.random.name('ice-bucket')
       await t.storage.createIcebergBucket({
-        name: bucketName,
         id: bucketName,
       })
 
@@ -684,7 +731,6 @@ describe('Iceberg Catalog', () => {
       await createBucketIfNotExists(internalBucketName, minioClient)
 
       await t.storage.createIcebergBucket({
-        name: bucketName,
         id: bucketName,
       })
 

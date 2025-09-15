@@ -89,6 +89,10 @@ export class Storage {
     return this.db.listBuckets(columns, options)
   }
 
+  listIcebergBuckets(columns = 'id', options?: ListBucketOptions) {
+    return this.db.listIcebergBuckets(columns, options)
+  }
+
   /**
    * Creates a bucket
    * @param data

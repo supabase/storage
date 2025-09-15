@@ -62,7 +62,8 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(routes.s3, { prefix: 's3' })
   app.register(routes.cdn, { prefix: 'cdn' })
   app.register(routes.healthcheck, { prefix: 'health' })
-  app.register(routes.iceberg, { prefix: 'iceberg/v1' })
+  app.register(routes.iceberg, { prefix: 'iceberg' })
+  app.register(routes.vector, { prefix: 'vector' })
 
   setErrorHandler(app)
 

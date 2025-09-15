@@ -3,24 +3,34 @@ import { db, icebergRestCatalog, jwt, requireTenantFeature, storage } from '../.
 import catalogue from './catalog'
 import namespace from './namespace'
 import table from './table'
+import bucket from './bucket'
 import { setErrorHandler } from '../../error-handler'
 import { getConfig } from '../../../config'
 
-const { dbServiceRole } = getConfig()
+const { dbServiceRole, icebergEnabled, isMultitenant } = getConfig()
 
 export default async function routes(fastify: FastifyInstance) {
+  // Disable iceberg routes if the feature is not enabled
+  if (!icebergEnabled && !isMultitenant) {
+    return
+  }
+
   fastify.register(async function authenticated(fastify) {
     fastify.register(jwt, {
       enforceJwtRoles: [dbServiceRole],
     })
-    fastify.register(requireTenantFeature('icebergCatalog'))
+
+    if (!icebergEnabled && isMultitenant) {
+      fastify.register(requireTenantFeature('icebergCatalog'))
+    }
 
     fastify.register(db)
     fastify.register(storage)
-    fastify.register(icebergRestCatalog)
-    fastify.register(catalogue)
-    fastify.register(namespace)
-    fastify.register(table)
+    fastify.register(bucket)
+    fastify.register(icebergRestCatalog, { prefix: 'v1' })
+    fastify.register(catalogue, { prefix: 'v1' })
+    fastify.register(namespace, { prefix: 'v1' })
+    fastify.register(table, { prefix: 'v1' })
 
     setErrorHandler(fastify, {
       respectStatusCode: true,

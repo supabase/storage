@@ -80,4 +80,21 @@ export const ROUTE_OPERATIONS = {
   ICEBERG_CREATE_TABLE: 'storage.iceberg.table.create',
   ICEBERG_DROP_TABLE: 'storage.iceberg.table.drop',
   ICEBERG_COMMIT_TABLE: 'storage.iceberg.table.commit',
+
+  // Vector
+  CREATE_VECTOR_BUCKET: 'storage.vector.bucket.create',
+  DELETE_VECTOR_BUCKET: 'storage.vector.bucket.delete',
+  LIST_VECTOR_BUCKETS: 'storage.vector.bucket.list',
+  GET_VECTOR_BUCKET: 'storage.vector.bucket.get',
+
+  CREATE_VECTOR_INDEX: 'storage.vector.index.create',
+  DELETE_VECTOR_INDEX: 'storage.vector.index.delete',
+  LIST_VECTOR_INDEXES: 'storage.vector.index.list',
+  GET_VECTOR_INDEX: 'storage.vector.index.get',
+
+  GET_VECTORS: 'storage.vector.vectors.get',
+  PUT_VECTORS: 'storage.vector.vectors.put',
+  LIST_VECTORS: 'storage.vector.vectors.list',
+  QUERY_VECTORS: 'storage.vector.vectors.query',
+  DELETE_VECTORS: 'storage.vector.vectors.delete',
 }

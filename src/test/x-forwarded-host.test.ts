@@ -31,6 +31,11 @@ jest.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
       maxNamespaces: 30,
       maxTables: 20,
     },
+    vectorBuckets: {
+      enabled: true,
+      maxBuckets: 5,
+      maxIndexes: 10,
+    },
   },
 }))
 

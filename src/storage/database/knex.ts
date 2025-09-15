@@ -111,7 +111,38 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  createIcebergBucket(data: Pick<Bucket, 'id' | 'name'>): Promise<IcebergCatalog> {
+  listIcebergBuckets(
+    columns: string,
+    options: ListBucketOptions | undefined
+  ): Promise<IcebergCatalog[]> {
+    return this.runQuery('ListIcebergBuckets', async (knex) => {
+      const query = knex
+        .from<IcebergCatalog>('buckets_analytics')
+        .select(columns.split(',').map((c) => c.trim()))
+
+      if (options?.search !== undefined && options.search.length > 0) {
+        query.where('id', 'like', `%${options.search}%`)
+      }
+
+      if (options?.sortColumn !== undefined) {
+        query.orderBy(options.sortColumn, options.sortOrder || 'asc')
+      } else {
+        query.orderBy('id', 'asc')
+      }
+
+      if (options?.limit !== undefined) {
+        query.limit(options.limit)
+      }
+
+      if (options?.offset !== undefined) {
+        query.offset(options.offset)
+      }
+
+      return query
+    })
+  }
+
+  createIcebergBucket(data: Pick<Bucket, 'id'>): Promise<IcebergCatalog> {
     const bucketData: IcebergCatalog = {
       id: data.id,
     }

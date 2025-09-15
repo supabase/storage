@@ -308,6 +308,10 @@ export class StorageKnexDB implements Database {
           query.where('name', 'like', `${options.prefix}%`)
         }
 
+        if (options?.startAfter && !options?.nextToken) {
+          query.andWhere(knex.raw(`name COLLATE "C" > ?`, [options.startAfter]))
+        }
+
         if (options?.nextToken) {
           const pageOperator = sortOrder === 'asc' ? '>' : '<'
           if (sortColumn && options.sortBy?.after) {

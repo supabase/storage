@@ -406,7 +406,9 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
     expect(await response.json()).toEqual({
       error: 'Payload too large',
-      message: 'The object exceeded the maximum allowed size',
+      message: expect.stringMatching(
+        /The object exceeded the maximum allowed size for bucket "public-limit-max-size"/
+      ),
       statusCode: '413',
     })
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
@@ -569,7 +571,7 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
     expect(await response.json()).toEqual({
       error: 'invalid_mime_type',
-      message: `mime type image/png is not supported`,
+      message: `MIME type image/png is not supported`,
       statusCode: '415',
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
@@ -630,7 +632,7 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
     expect(await response.json()).toEqual({
       error: 'invalid_mime_type',
-      message: `mime type thisisnotarealmimetype is not supported`,
+      message: `MIME type thisisnotarealmimetype is not supported`,
       statusCode: '415',
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
@@ -676,7 +678,7 @@ describe('testing POST object via multipart upload', () => {
       JSON.stringify({
         statusCode: '413',
         error: 'Payload too large',
-        message: 'The object exceeded the maximum allowed size',
+        message: 'The object exceeded the maximum allowed size in your global settings (1 B)',
       })
     )
   })
@@ -913,7 +915,7 @@ describe('testing POST object via binary upload', () => {
       JSON.stringify({
         statusCode: '413',
         error: 'Payload too large',
-        message: 'The object exceeded the maximum allowed size',
+        message: 'The object exceeded the maximum allowed size in your global settings (1 B)',
       })
     )
   })

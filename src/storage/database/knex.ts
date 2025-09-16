@@ -649,6 +649,11 @@ export class StorageKnexDB implements Database {
         .returning('*')
     })
 
+    // Clean up prefix if object was deleted
+    if (data) {
+      await this.cleanupObjectPrefixes(bucketId, [objectName])
+    }
+
     return data
   }
 
@@ -661,6 +666,14 @@ export class StorageKnexDB implements Database {
         .whereIn(by, objectNames)
         .returning('*')
     })
+
+    // Clean up prefixes for all deleted objects
+    if (objects.length > 0) {
+      await this.cleanupObjectPrefixes(
+        bucketId,
+        objects.map((obj) => obj.name)
+      )
+    }
 
     return objects
   }
@@ -956,6 +969,24 @@ export class StorageKnexDB implements Database {
       }
 
       return query
+    })
+  }
+
+  /**
+   * Clean up prefixes for deleted objects
+   */
+  private async cleanupObjectPrefixes(bucketId: string, objectNames: string[]): Promise<void> {
+    await this.runQuery('CleanupObjectPrefixes', async (knex) => {
+      // Acquire cleanup lock for this bucket
+      const lockKey = hashStringToInt(`prefix_cleanup::${bucketId}`)
+      await knex.raw('SELECT pg_advisory_xact_lock(?)', [lockKey])
+
+      for (const objectName of objectNames) {
+        const prefix = objectName.indexOf('/') > 0 ? objectName.replace(/\/[^\/]+\/?$/, '') : ''
+        if (prefix) {
+          await knex.raw('SELECT storage.delete_prefix(?, ?) as deleted', [bucketId, prefix])
+        }
+      }
     })
   }
 

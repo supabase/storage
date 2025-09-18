@@ -167,13 +167,20 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    -- 2) Take per-(bucket, top) locks: sources first, then destinations (stable order inside helper)
-    IF array_length(v_src_bucket_ids, 1) IS NOT NULL THEN
-        PERFORM storage.lock_top_prefixes(v_src_bucket_ids, v_src_names);
-    END IF;
-    IF array_length(v_add_bucket_ids, 1) IS NOT NULL THEN
-        PERFORM storage.lock_top_prefixes(v_add_bucket_ids, v_add_names);
-    END IF;
+    -- 2) Take per-(bucket, top) locks: ALL prefixes in consistent global order to prevent deadlocks
+    DECLARE
+        v_all_bucket_ids text[];
+        v_all_names text[];
+    BEGIN
+        -- Combine source and destination arrays for consistent lock ordering
+        v_all_bucket_ids := COALESCE(v_src_bucket_ids, '{}') || COALESCE(v_add_bucket_ids, '{}');
+        v_all_names := COALESCE(v_src_names, '{}') || COALESCE(v_add_names, '{}');
+
+        -- Single lock call ensures consistent global ordering across all transactions
+        IF array_length(v_all_bucket_ids, 1) IS NOT NULL THEN
+            PERFORM storage.lock_top_prefixes(v_all_bucket_ids, v_all_names);
+        END IF;
+    END;
 
     -- 3) Create destination prefixes (NEW−OLD) BEFORE pruning sources
     IF array_length(v_add_bucket_ids, 1) IS NOT NULL THEN

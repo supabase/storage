@@ -38,4 +38,5 @@ export const DBMigration = {
   'add-bucket-name-length-trigger': 37,
   'iceberg-catalog-flag-on-buckets': 38,
   'add-search-v2-sort-support': 39,
+  'fix-prefix-race-conditions-optimized': 40,
 }

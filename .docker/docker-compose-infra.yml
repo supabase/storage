@@ -36,7 +36,7 @@ services:
       POSTGRES_PASSWORD: postgres
 
   pg_bouncer:
-    image: bitnami/pgbouncer:latest
+    image: bitnamilegacy/pgbouncer:latest
     ports:
       - 6453:6432
     environment:

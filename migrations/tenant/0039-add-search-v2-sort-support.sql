@@ -1,3 +1,4 @@
+DROP FUNCTION IF EXISTS storage.search_v2;
 CREATE OR REPLACE FUNCTION storage.search_v2 (
     prefix text,
     bucket_name text,

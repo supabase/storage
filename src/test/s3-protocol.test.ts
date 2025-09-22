@@ -233,6 +233,36 @@ describe('S3 Protocol', () => {
         const resp = await client.send(listBuckets)
         expect(resp.Contents?.length).toBe(3)
       })
+
+      it('list all keys with pagination', async () => {
+        const bucket = await createBucket(client)
+        const listObjects = new ListObjectsCommand({
+          Bucket: bucket,
+          Delimiter: '/',
+          MaxKeys: 1,
+        })
+
+        await Promise.all([
+          uploadFile(client, bucket, 'test-1.jpg', 1),
+          uploadFile(client, bucket, 'prefix-1/test-1.jpg', 1),
+          uploadFile(client, bucket, 'prefix-3/test-1.jpg', 1),
+          uploadFile(client, bucket, 'prefix-4/test-1.jpg', 1),
+        ])
+
+        const resp = await client.send(listObjects)
+        expect(resp.CommonPrefixes?.length).toBe(1)
+        expect(resp.IsTruncated).toBe(true)
+
+        const listObjects2 = new ListObjectsCommand({
+          Bucket: bucket,
+          Delimiter: '/',
+          MaxKeys: 3,
+          Marker: resp.Marker,
+        })
+        const resp2 = await client.send(listObjects2)
+        expect(resp2.CommonPrefixes?.length).toBe(2)
+        expect(resp2.Contents?.length).toBe(1)
+      })
     })
 
     describe('ListObjectsV2Command', () => {

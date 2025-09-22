@@ -164,7 +164,8 @@ export class S3ProtocolHandler {
       EncodingType: command.EncodingType,
       MaxKeys: command.MaxKeys,
       Prefix: command.Prefix,
-      ContinuationToken: command.Marker,
+      StartAfter: command.Marker,
+      cursorV1: true,
     })
 
     return {
@@ -172,7 +173,7 @@ export class S3ProtocolHandler {
         ListBucketResult: {
           Name: list.responseBody.ListBucketResult.Name,
           Prefix: list.responseBody.ListBucketResult.Prefix,
-          Marker: list.responseBody.ListBucketResult.ContinuationToken,
+          Marker: list.responseBody.ListBucketResult.NextContinuationToken,
           MaxKeys: list.responseBody.ListBucketResult.MaxKeys,
           IsTruncated: list.responseBody.ListBucketResult.IsTruncated,
           Contents: list.responseBody.ListBucketResult.Contents,
@@ -190,7 +191,7 @@ export class S3ProtocolHandler {
    *
    * @param command
    */
-  async listObjectsV2(command: ListObjectsV2CommandInput) {
+  async listObjectsV2(command: ListObjectsV2CommandInput & { cursorV1?: boolean }) {
     if (!command.Bucket) {
       throw ERRORS.MissingParameter('Bucket')
     }
@@ -249,7 +250,11 @@ export class S3ProtocolHandler {
     }
 
     if (results.nextCursor) {
-      response.ListBucketResult.NextContinuationToken = results.nextCursor
+      if (command.cursorV1) {
+        response.ListBucketResult.NextContinuationToken = results.nextCursorKey
+      } else {
+        response.ListBucketResult.NextContinuationToken = results.nextCursor
+      }
     }
 
     return {

@@ -46,6 +46,7 @@ export interface ListObjectsV2Result {
   objects: Obj[]
   hasNext: boolean
   nextCursor?: string
+  nextCursorKey?: string
 }
 
 /**
@@ -661,6 +662,8 @@ export class ObjectStorage {
     })
 
     let nextContinuationToken: string | undefined
+    let nextCursorKey: string | undefined
+
     if (isTruncated) {
       const sortColumn = (cursor?.sortColumn || options?.sortBy?.column) as
         | 'name'
@@ -677,11 +680,13 @@ export class ObjectStorage {
             ? new Date(searchResult[searchResult.length - 1][sortColumn] || '').toISOString()
             : undefined,
       })
+      nextCursorKey = searchResult[searchResult.length - 1].name
     }
 
     return {
       hasNext: isTruncated,
       nextCursor: nextContinuationToken,
+      nextCursorKey,
       folders: folders,
       objects: objects,
     }

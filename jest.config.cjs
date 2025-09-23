@@ -6,10 +6,14 @@ module.exports = {
     '^.+/node_modules/@tus/.+\\.[jt]s$': 'babel-jest',
     '^.+/node_modules/srvx/.+\\.[jt]s$': 'babel-jest',
     '^.+/node_modules/cookie-es/.+\\.[jt]s$': 'babel-jest',
+    '^.+/node_modules/@kubernetes/client-node/.+\\.[jt]s$': 'babel-jest',
+    '^.+/node_modules/oauth4webapi/.+\\.[jt]s$': 'babel-jest',
     '^.+\\.mjs$': 'babel-jest',
     '^.+\\.(t|j)sx?$': 'ts-jest',
   },
-  transformIgnorePatterns: ['node_modules/(?!(jose|@tus|srvx|cookie-es)/)'],
+  transformIgnorePatterns: [
+    'node_modules/(?!(jose|@tus|srvx|cookie-es|@kubernetes|openid-client|oauth4webapi)/)',
+  ],
   moduleNameMapper: {
     '^@storage/(.*)$': '<rootDir>/src/storage/$1',
     '^@internal/(.*)$': '<rootDir>/src/internal/$1',

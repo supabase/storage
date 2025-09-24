@@ -39,4 +39,6 @@ export const DBMigration = {
   'iceberg-catalog-flag-on-buckets': 38,
   'add-search-v2-sort-support': 39,
   'fix-prefix-race-conditions-optimized': 40,
+  'add-object-level-update-trigger': 41,
+  'fix-object-level': 42,
 }

@@ -80,22 +80,26 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     return new Storage(this.getOrCreateStorageBackend(), db, new TenantLocation(storageS3Bucket))
   }
 
-  protected static getOrCreateStorageBackend(monitor = false) {
+  protected static getOrCreateStorageBackend() {
     if (storageBackend) {
       return storageBackend
     }
 
-    const httpAgent = createAgent('s3_worker', {
-      maxSockets: storageS3MaxSockets,
-    })
+    const httpAgents = {
+      api: createAgent('s3_worker_api', {
+        maxSockets: storageS3MaxSockets,
+      }),
+      download: createAgent('s3_worker_download', {
+        maxSockets: storageS3MaxSockets,
+      }),
+      upload: createAgent('s3_worker_upload', {
+        maxSockets: storageS3MaxSockets,
+      }),
+    }
 
     storageBackend = createStorageBackend(storageBackendType, {
-      httpAgent: httpAgent,
+      httpAgents,
     })
-
-    if (monitor) {
-      httpAgent.monitor()
-    }
 
     return storageBackend
   }

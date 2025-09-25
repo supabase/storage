@@ -23,7 +23,7 @@ const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadc
 const localServerAddress = 'http://127.0.0.1:8999'
 
 const backend = backends.createStorageBackend(storageBackendType)
-const client = backend.client
+const client = backend.getClient()
 
 describe('Tus multipart', () => {
   let db: StorageKnexDB

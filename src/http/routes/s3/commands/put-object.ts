@@ -127,7 +127,7 @@ export default function PutObject(s3Router: S3Router) {
 
       const bucket = await ctx.storage
         .asSuperUser()
-        .findBucket(req.Params.Bucket, 'id,file_size_limit,allowed_mime_types')
+        .findBucket(req.Params.Bucket, 'id,name,file_size_limit,allowed_mime_types')
 
       const uploadRequest = await fileUploadFromRequest(ctx.req, {
         objectName: key,
@@ -137,7 +137,11 @@ export default function PutObject(s3Router: S3Router) {
 
       return pipeline(
         uploadRequest.body,
-        new ByteLimitTransformStream(uploadRequest.maxFileSize),
+        new ByteLimitTransformStream(uploadRequest.maxFileSize, {
+          name: bucket.name,
+          fileSizeLimit: bucket.file_size_limit,
+          globalLimit: uploadRequest.globalLimit,
+        }),
         ctx.req.streamingSignatureV4 || new PassThrough(),
         async (fileStream) => {
           return s3Protocol.putObject(
@@ -151,7 +155,15 @@ export default function PutObject(s3Router: S3Router) {
               ContentEncoding: req.Headers?.['content-encoding'],
               Metadata: metadata,
             },
-            { signal: ctx.signals.body, isTruncated: uploadRequest.isTruncated }
+            {
+              signal: ctx.signals.body,
+              isTruncated: uploadRequest.isTruncated,
+              bucketContext: {
+                name: bucket.name,
+                fileSizeLimit: bucket.file_size_limit,
+                globalLimit: uploadRequest.globalLimit,
+              },
+            }
           )
         }
       )
@@ -176,29 +188,45 @@ export default function PutObject(s3Router: S3Router) {
 
       const bucket = await ctx.storage
         .asSuperUser()
-        .findBucket(req.Params.Bucket, 'id,file_size_limit,allowed_mime_types')
+        .findBucket(req.Params.Bucket, 'id,name,file_size_limit,allowed_mime_types')
 
       const fieldsObject = fieldsToObject(file?.fields || {})
       const metadata = s3Protocol.parseMetadataHeaders(fieldsObject)
       const expiresField = fieldsObject.expires
 
-      const maxFileSize = await getStandardMaxFileSizeLimit(ctx.tenantId, bucket.file_size_limit)
+      const limits = await getStandardMaxFileSizeLimit(ctx.tenantId, bucket.file_size_limit)
 
-      return pipeline(file.file, new ByteLimitTransformStream(maxFileSize), async (fileStream) => {
-        return s3Protocol.putObject(
-          {
-            Body: fileStream as stream.Readable,
-            Bucket: req.Params.Bucket,
-            Key: fieldsObject.key as string,
-            CacheControl: fieldsObject['cache-control'] as string,
-            ContentType: fieldsObject['content-type'] as string,
-            Expires: expiresField ? new Date(expiresField) : undefined,
-            ContentEncoding: fieldsObject['content-encoding'] as string,
-            Metadata: metadata,
-          },
-          { signal: ctx.signals.body, isTruncated: () => file.file.truncated }
-        )
-      })
+      return pipeline(
+        file.file,
+        new ByteLimitTransformStream(limits.maxFileSize, {
+          name: bucket.name,
+          fileSizeLimit: bucket.file_size_limit,
+          globalLimit: limits.globalLimit,
+        }),
+        async (fileStream) => {
+          return s3Protocol.putObject(
+            {
+              Body: fileStream as stream.Readable,
+              Bucket: req.Params.Bucket,
+              Key: fieldsObject.key as string,
+              CacheControl: fieldsObject['cache-control'] as string,
+              ContentType: fieldsObject['content-type'] as string,
+              Expires: expiresField ? new Date(expiresField) : undefined,
+              ContentEncoding: fieldsObject['content-encoding'] as string,
+              Metadata: metadata,
+            },
+            {
+              signal: ctx.signals.body,
+              isTruncated: () => file.file.truncated,
+              bucketContext: {
+                name: bucket.name,
+                fileSizeLimit: bucket.file_size_limit,
+                globalLimit: limits.globalLimit,
+              },
+            }
+          )
+        }
+      )
     }
   )
 }

@@ -318,7 +318,7 @@ describe('testing POST object via multipart upload', () => {
       JSON.stringify({
         statusCode: '403',
         error: 'Unauthorized',
-        message: 'new row violates row-level security policy',
+        message: 'Database error: insufficient privilege',
       })
     )
   })
@@ -804,7 +804,7 @@ describe('testing POST object via binary upload', () => {
       JSON.stringify({
         statusCode: '403',
         error: 'Unauthorized',
-        message: 'new row violates row-level security policy',
+        message: 'Database error: insufficient privilege',
       })
     )
   })
@@ -1774,7 +1774,7 @@ describe('testing generating signed URL for upload', () => {
       JSON.stringify({
         statusCode: '403',
         error: 'Unauthorized',
-        message: 'new row violates row-level security policy',
+        message: 'Database error: insufficient privilege',
       })
     )
     // Ensure that row does not exist in database.

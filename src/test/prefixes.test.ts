@@ -166,7 +166,7 @@ describe('Prefix Hierarchy Race Condition Tests', () => {
   })
 
   describe('Race Condition Scenario 1: Concurrent Deletes of Related Objects', () => {
-    it.skip('should handle concurrent deletion of objects in same folder without leaving dangling prefixes', async () => {
+    it('should handle concurrent deletion of objects in same folder without leaving dangling prefixes', async () => {
       // Create multiple objects in the same folder structure
       await createObject('shared/folder/file1.txt')
       await createObject('shared/folder/file2.txt')
@@ -198,7 +198,7 @@ describe('Prefix Hierarchy Race Condition Tests', () => {
       expect(prefixes).toHaveLength(0)
     })
 
-    it.skip('should handle partial concurrent deletion correctly', async () => {
+    it('should handle partial concurrent deletion correctly', async () => {
       // Create objects in multiple subfolders
       await createObject('race/test/file1.txt')
       await createObject('race/test/file2.txt')
@@ -399,8 +399,43 @@ describe('Prefix Hierarchy Race Condition Tests', () => {
     })
   })
 
+  describe('Critical Race Condition: DELETE UPDATE Gap', () => {
+    it('should reproduce the race condition between UPDATE and DELETE in statement trigger', async () => {
+      await createObject('race/shared/file1.txt')
+      await createObject('race/shared/file2.txt')
+
+      const db = tHelper.database.connection.pool.acquire()
+
+      // Simulate the race condition by using two concurrent transactions:
+      // Execute concurrent operations that target the same prefix
+      await Promise.all([
+        // Operation 1: Delete all objects in the prefix (this will try to delete the prefix)
+        deleteObjects(['race/shared/file1.txt', 'race/shared/file2.txt']),
+
+        // Operation 2: Immediately create a new object in the same prefix
+        // This should increment the counters between the UPDATE and DELETE
+        (async () => {
+          // Small delay to increase chance of hitting the race window
+          await new Promise((resolve) => setTimeout(resolve, 1))
+          await createObject('race/shared/file3.txt')
+        })(),
+      ])
+
+      const objects = await db
+        .select('name')
+        .from('storage.objects')
+        .where('bucket_id', bucketName)
+        .where('name', 'like', 'race/shared/%')
+      expect(objects.length).toBe(1)
+
+      // If the race condition occurred, the prefix will be incorrectly deleted
+      const prefixes = await getPrefixes()
+      expect(prefixes.some((p) => p.name === 'race/shared')).toBe(true)
+    })
+  })
+
   describe('Stress Test: High Concurrency', () => {
-    it.skip('should handle many concurrent operations without corruption', async () => {
+    it('should handle many concurrent operations without corruption', async () => {
       // Create many objects in overlapping folder structures
       const objects: string[] = []
       const folders = ['stress1', 'stress2', 'stress3']
@@ -539,7 +574,7 @@ describe('Prefix Hierarchy Race Condition Tests', () => {
       expect(prefixes).toHaveLength(0)
     })
 
-    it.skip('should handle concurrent moves from the same source folder without dangling prefixes', async () => {
+    it('should handle concurrent moves from the same source folder without dangling prefixes', async () => {
       await createObject('race-move/src/f1.txt')
       await createObject('race-move/src/f2.txt')
       await createObject('race-move/src/f3.txt')
@@ -564,7 +599,7 @@ describe('Prefix Hierarchy Race Condition Tests', () => {
       })
     })
 
-    it.skip('should handle deadlock scenario in concurrent cross-prefix moves without hanging', async () => {
+    it('should handle deadlock scenario in concurrent cross-prefix moves without hanging', async () => {
       // This test reproduces the deadlock scenario where two transactions
       // try to move files between overlapping top-level prefixes in opposite directions:
       // Transaction 1: photos/* -> docs/*  (locks photos -> docs)
@@ -699,7 +734,7 @@ describe('Prefix Hierarchy Race Condition Tests', () => {
   })
 
   describe('Stress Test: Move Operations', () => {
-    it.skip('should handle many concurrent moves and clean old prefixes correctly', async () => {
+    it('should handle many concurrent moves and clean old prefixes correctly', async () => {
       const sources = ['mvstress/src1', 'mvstress/src2', 'mvstress/src3']
       const subs = ['sub1', 'sub2', 'sub3']
       const countPerSub = 5

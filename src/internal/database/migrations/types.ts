@@ -40,5 +40,8 @@ export const DBMigration = {
   'add-search-v2-sort-support': 39,
   'fix-prefix-race-conditions-optimized': 40,
   'add-object-level-update-trigger': 41,
-  'fix-object-level': 42,
+  'rollback-prefix-triggers': 42,
+  'fix-object-level': 43,
+  'prefix-ref-counting': 44,
+  'calculate-ref-counts': 45,
 }

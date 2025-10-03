@@ -9,3 +9,4 @@ data/
 bin/
 coverage/
 .idea/
+.docker/.debug

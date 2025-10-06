@@ -80,6 +80,7 @@ export abstract class Renderer {
       .header('ETag', data.metadata.eTag)
       .header('Content-Length', data.metadata.contentLength)
       .header('Last-Modified', data.metadata.lastModified?.toUTCString())
+      .header('X-Robots-Tag', 'none')
 
     if (options.expires) {
       response.header('Expires', options.expires)

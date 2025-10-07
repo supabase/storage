@@ -61,6 +61,7 @@ describe('testing GET object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(response.headers['etag']).toBe('abc')
+    expect(response.headers['x-robots-tag']).toBe('none')
     expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
     expect(S3Backend.prototype.getObject).toBeCalled()
   })
@@ -2119,6 +2120,7 @@ describe('testing retrieving signed URL', () => {
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,
     })
     expect(response.statusCode).toBe(200)
+    expect(response.headers['x-robots-tag']).toBe('none')
     expect(response.headers['etag']).toBe('abc')
     expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
   })
@@ -2519,5 +2521,130 @@ describe('testing list objects', () => {
     expect(responseJSON).toHaveLength(2)
     expect(responseJSON[0].name).toBe('sadcat-upload.png')
     expect(responseJSON[1].name).toBe('sadcat-upload23.png')
+  })
+})
+
+describe('x-robots-tag header', () => {
+  const X_ROBOTS_TEST_BUCKET = 'X_ROBOTS_TEST_BUCKET'
+  beforeAll(async () => {
+    appInstance = app()
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+      payload: {
+        name: X_ROBOTS_TEST_BUCKET,
+      },
+    })
+    await appInstance.close()
+  })
+
+  afterAll(async () => {
+    appInstance = app()
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket/${X_ROBOTS_TEST_BUCKET}/empty`,
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+    await appInstance.inject({
+      method: 'DELETE',
+      url: `/bucket/${X_ROBOTS_TEST_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+    await appInstance.close()
+  })
+
+  test('defaults x-robots-tag header to none if not specified', async () => {
+    const objPath = `${X_ROBOTS_TEST_BUCKET}/test-file-1.txt`
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/object/${objPath}`,
+      payload: new File(['test'], 'file.txt'),
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/object/authenticated/${objPath}`,
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+    expect(response.headers['x-robots-tag']).toBe('none')
+  })
+
+  test('uses provided x-robots-tag header if set', async () => {
+    const objPath = `${X_ROBOTS_TEST_BUCKET}/test-file-2.txt`
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/object/${objPath}`,
+      payload: new File(['test'], 'file.txt'),
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+        'x-robots-tag': 'all',
+      },
+    })
+
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/object/authenticated/${objPath}`,
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+    expect(response.headers['x-robots-tag']).toBe('all')
+  })
+
+  test('updates x-robots-tag header on upsert', async () => {
+    const objPath = `${X_ROBOTS_TEST_BUCKET}/test-file-3.txt`
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/object/${objPath}`,
+      payload: new File(['test'], 'file.txt'),
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+        'x-robots-tag': 'max-snippet: 10, notranslate',
+      },
+    })
+
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/object/authenticated/${objPath}`,
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+    expect(response.headers['x-robots-tag']).toBe('max-snippet: 10, notranslate')
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/object/${objPath}`,
+      payload: new File(['test'], 'file.txt'),
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+        'x-upsert': 'true',
+        'x-robots-tag': 'nofollow',
+      },
+    })
+
+    const response2 = await appInstance.inject({
+      method: 'GET',
+      url: `/object/authenticated/${objPath}`,
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+    expect(response2.headers['x-robots-tag']).toBe('nofollow')
   })
 })

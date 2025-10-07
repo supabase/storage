@@ -361,6 +361,7 @@ describe('testing public bucket functionality', () => {
       url: `/object/public/public-bucket/favicon.ico`,
     })
     expect(publicResponse.statusCode).toBe(200)
+    expect(publicResponse.headers['x-robots-tag']).toBe('none')
     expect(publicResponse.headers['etag']).toBe('abc')
     expect(publicResponse.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
 

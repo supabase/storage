@@ -29,6 +29,7 @@ interface updateObjectRequestInterface extends RequestGenericInterface {
     'content-type': string
     'cache-control'?: string
     'x-upsert'?: string
+    'x-robots-tag'?: string
   }
 }
 

@@ -31,6 +31,7 @@ export type ObjectMetadata = {
   eTag: string
   contentRange?: string
   httpStatusCode?: number
+  xRobotsTag?: string
 }
 
 export type UploadPart = {

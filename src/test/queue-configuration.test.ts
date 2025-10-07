@@ -347,7 +347,7 @@ describe('Queue Configuration Tests', () => {
         'LOGFLARE_ENABLED',
       ]
 
-      envVarNames.forEach(envVar => {
+      envVarNames.forEach((envVar) => {
         expect(envVar).toBeDefined()
         expect(typeof envVar).toBe('string')
         expect(envVar.length).toBeGreaterThan(0)

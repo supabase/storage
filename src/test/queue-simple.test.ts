@@ -118,7 +118,7 @@ describe('Queue Simple Tests', () => {
         'move-jobs',
       ]
 
-      expectedQueueNames.forEach(name => {
+      expectedQueueNames.forEach((name) => {
         expect(name).toBeDefined()
         expect(typeof name).toBe('string')
         expect(name.length).toBeGreaterThan(0)

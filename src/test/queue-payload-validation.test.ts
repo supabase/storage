@@ -70,7 +70,7 @@ describe('Queue Payload Validation Tests', () => {
         'bucket.deleted',
       ]
 
-      eventTypes.forEach(eventType => {
+      eventTypes.forEach((eventType) => {
         const payload = {
           event: {
             $version: 'v1',
@@ -347,7 +347,7 @@ describe('Queue Payload Validation Tests', () => {
         'move-jobs',
       ]
 
-      eventTypes.forEach(eventType => {
+      eventTypes.forEach((eventType) => {
         expect(eventType).toBeDefined()
         expect(typeof eventType).toBe('string')
         expect(eventType.length).toBeGreaterThan(0)

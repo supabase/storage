@@ -20,7 +20,8 @@ interface FileUpload {
   mimeType: string
   cacheControl: string
   isTruncated: () => boolean
-  userMetadata?: Record<string, any>
+  xRobotsTag?: string
+  userMetadata?: Record<string, unknown>
 }
 
 export interface UploadRequest {
@@ -111,6 +112,10 @@ export class Uploader {
         file.cacheControl,
         request.signal
       )
+
+      if (request.file.xRobotsTag) {
+        objectMetadata.xRobotsTag = request.file.xRobotsTag
+      }
 
       if (file.isTruncated()) {
         throw ERRORS.EntityTooLarge()
@@ -301,9 +306,10 @@ export async function fileUploadFromRequest(
   }
 ): Promise<FileUpload & { maxFileSize: number }> {
   const contentType = request.headers['content-type']
+  const xRobotsTag = request.headers['x-robots-tag'] as string | undefined
 
   let body: Readable
-  let userMetadata: Record<string, any> | undefined
+  let userMetadata: Record<string, unknown> | undefined
   let mimeType: string
   let isTruncated: () => boolean
   let maxFileSize = 0
@@ -395,6 +401,7 @@ export async function fileUploadFromRequest(
     isTruncated,
     userMetadata,
     maxFileSize,
+    xRobotsTag,
   }
 }
 

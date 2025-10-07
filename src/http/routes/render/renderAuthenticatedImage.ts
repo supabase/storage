@@ -51,7 +51,9 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const objectName = request.params['*']
 
-      const obj = await request.storage.from(bucketName).findObject(objectName, 'id,version')
+      const obj = await request.storage
+        .from(bucketName)
+        .findObject(objectName, 'id,version,metadata')
 
       const s3Key = request.storage.location.getKeyLocation({
         tenantId: request.tenantId,
@@ -73,6 +75,7 @@ export default async function routes(fastify: FastifyInstance) {
         key: s3Key,
         version: obj.version,
         download,
+        xRobotsTag: obj.metadata?.['xRobotsTag'] as string | undefined,
         signal: request.signals.disconnect.signal,
       })
     }

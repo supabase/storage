@@ -38,6 +38,7 @@ export default async function routes(fastify: FastifyInstance) {
       exposeHeadRoute: false,
       schema: {
         params: getPublicObjectParamsSchema,
+        querystring: getObjectQuerySchema,
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
@@ -56,7 +57,7 @@ export default async function routes(fastify: FastifyInstance) {
         request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
           isPublic: true,
         }),
-        bucketRef.findObject(objectName, 'id,version'),
+        bucketRef.findObject(objectName, 'id,version,metadata')
       ])
 
       // send the object from s3
@@ -71,6 +72,7 @@ export default async function routes(fastify: FastifyInstance) {
         key: s3Key,
         version: obj.version,
         download,
+        xRobotsTag: obj.metadata?.['xRobotsTag'] as string | undefined,
         signal: request.signals.disconnect.signal,
       })
     }

@@ -3,8 +3,7 @@ dotenv.config()
 
 import { runMigrationsOnTenant } from '@internal/database/migrations'
 import { getConfig } from '../config'
-// eslint-disable-next-line @typescript-eslint/no-floating-promises
-;(async () => {
+void (async () => {
   const { databaseURL, dbMigrationFreezeAt } = getConfig()
   await runMigrationsOnTenant({
     databaseUrl: databaseURL,

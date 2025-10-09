@@ -2563,7 +2563,7 @@ describe('x-robots-tag header', () => {
   test('defaults x-robots-tag header to none if not specified', async () => {
     const objPath = `${X_ROBOTS_TEST_BUCKET}/test-file-1.txt`
 
-    await appInstance.inject({
+    const createResponse = await appInstance.inject({
       method: 'POST',
       url: `/object/${objPath}`,
       payload: new File(['test'], 'file.txt'),
@@ -2571,6 +2571,7 @@ describe('x-robots-tag header', () => {
         authorization: `Bearer ${await serviceKeyAsync}`,
       },
     })
+    expect(createResponse.statusCode).toBe(200)
 
     const response = await appInstance.inject({
       method: 'GET',
@@ -2579,13 +2580,14 @@ describe('x-robots-tag header', () => {
         authorization: `Bearer ${await serviceKeyAsync}`,
       },
     })
+    expect(response.statusCode).toBe(200)
     expect(response.headers['x-robots-tag']).toBe('none')
   })
 
   test('uses provided x-robots-tag header if set', async () => {
     const objPath = `${X_ROBOTS_TEST_BUCKET}/test-file-2.txt`
 
-    await appInstance.inject({
+    const createResponse = await appInstance.inject({
       method: 'POST',
       url: `/object/${objPath}`,
       payload: new File(['test'], 'file.txt'),
@@ -2594,6 +2596,7 @@ describe('x-robots-tag header', () => {
         'x-robots-tag': 'all',
       },
     })
+    expect(createResponse.statusCode).toBe(200)
 
     const response = await appInstance.inject({
       method: 'GET',
@@ -2602,13 +2605,14 @@ describe('x-robots-tag header', () => {
         authorization: `Bearer ${await serviceKeyAsync}`,
       },
     })
+    expect(response.statusCode).toBe(200)
     expect(response.headers['x-robots-tag']).toBe('all')
   })
 
   test('updates x-robots-tag header on upsert', async () => {
     const objPath = `${X_ROBOTS_TEST_BUCKET}/test-file-3.txt`
 
-    await appInstance.inject({
+    const createResponse = await appInstance.inject({
       method: 'POST',
       url: `/object/${objPath}`,
       payload: new File(['test'], 'file.txt'),
@@ -2617,6 +2621,7 @@ describe('x-robots-tag header', () => {
         'x-robots-tag': 'max-snippet: 10, notranslate',
       },
     })
+    expect(createResponse.statusCode).toBe(200)
 
     const response = await appInstance.inject({
       method: 'GET',
@@ -2625,9 +2630,10 @@ describe('x-robots-tag header', () => {
         authorization: `Bearer ${await serviceKeyAsync}`,
       },
     })
+    expect(response.statusCode).toBe(200)
     expect(response.headers['x-robots-tag']).toBe('max-snippet: 10, notranslate')
 
-    await appInstance.inject({
+    const createResponse2 = await appInstance.inject({
       method: 'POST',
       url: `/object/${objPath}`,
       payload: new File(['test'], 'file.txt'),
@@ -2637,6 +2643,7 @@ describe('x-robots-tag header', () => {
         'x-robots-tag': 'nofollow',
       },
     })
+    expect(createResponse2.statusCode).toBe(200)
 
     const response2 = await appInstance.inject({
       method: 'GET',
@@ -2645,6 +2652,28 @@ describe('x-robots-tag header', () => {
         authorization: `Bearer ${await serviceKeyAsync}`,
       },
     })
+    expect(response2.statusCode).toBe(200)
     expect(response2.headers['x-robots-tag']).toBe('nofollow')
+  })
+
+  test('rejects invalid x-robots-tag header with proper error', async () => {
+    const objPath = `${X_ROBOTS_TEST_BUCKET}/test-file-invalid.txt`
+
+    const createResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/${objPath}`,
+      payload: new File(['test'], 'file.txt'),
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+        'x-robots-tag': 'invalidrule',
+      },
+    })
+
+    expect(createResponse.statusCode).toBe(400)
+    expect(createResponse.json()).toMatchObject({
+      statusCode: '400',
+      error: 'invalid_x_robots_tag',
+      message: 'Invalid X-Robots-Tag header: Invalid X-Robots-Tag rule: "invalidrule"',
+    })
   })
 })

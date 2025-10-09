@@ -12,6 +12,7 @@ import { getConfig } from '../config'
 import { logger, logSchema } from '@internal/monitoring'
 import { Readable } from 'stream'
 import { StorageObjectLocator } from '@storage/locator'
+import { validateXRobotsTag } from './validators/x-robots-tag'
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
 
@@ -307,6 +308,10 @@ export async function fileUploadFromRequest(
 ): Promise<FileUpload & { maxFileSize: number }> {
   const contentType = request.headers['content-type']
   const xRobotsTag = request.headers['x-robots-tag'] as string | undefined
+
+  if (xRobotsTag) {
+    validateXRobotsTag(xRobotsTag)
+  }
 
   let body: Readable
   let userMetadata: Record<string, unknown> | undefined

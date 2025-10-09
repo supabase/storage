@@ -57,7 +57,7 @@ export default async function routes(fastify: FastifyInstance) {
         request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
           isPublic: true,
         }),
-        bucketRef.findObject(objectName, 'id,version,metadata')
+        bucketRef.findObject(objectName, 'id,version,metadata'),
       ])
 
       // send the object from s3

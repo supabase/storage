@@ -243,6 +243,14 @@ export const ERRORS = {
       message: `mime type ${mimeType} is not supported`,
     }),
 
+  InvalidXRobotsTag: (message: string) =>
+    new StorageBackendError({
+      error: 'invalid_x_robots_tag',
+      code: ErrorCode.InvalidRequest,
+      httpStatusCode: 400,
+      message: `Invalid X-Robots-Tag header: ${message}`,
+    }),
+
   InvalidRange: () =>
     new StorageBackendError({
       error: 'invalid_range',

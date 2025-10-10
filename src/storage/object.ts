@@ -6,7 +6,7 @@ import { getJwtSecret } from '@internal/database'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
-import { fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
+import { Uploader, UploadRequest } from './uploader'
 import { getConfig } from '../config'
 import {
   ObjectAdminDelete,
@@ -16,7 +16,6 @@ import {
   ObjectRemovedMove,
   ObjectUpdatedMetadata,
 } from './events'
-import { FastifyRequest } from 'fastify/types/request'
 import { Obj } from '@storage/schemas'
 import { StorageObjectLocator } from '@storage/locator'
 
@@ -73,39 +72,18 @@ export class ObjectStorage {
     return new ObjectStorage(this.backend, this.db.asSuperUser(), this.location, this.bucketId)
   }
 
-  async uploadFromRequest(
-    request: FastifyRequest,
-    file: {
-      objectName: string
-      owner?: string
-      isUpsert: boolean
-      signal?: AbortSignal
-    }
-  ) {
-    const bucket = await this.db
-      .asSuperUser()
-      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
-
-    const uploadRequest = await fileUploadFromRequest(request, {
-      objectName: file.objectName,
-      fileSizeLimit: bucket.file_size_limit,
-      allowedMimeTypes: bucket.allowed_mime_types || [],
-    })
-
-    return this.uploadNewObject({
-      file: uploadRequest,
-      objectName: file.objectName,
-      owner: file.owner,
-      isUpsert: Boolean(file.isUpsert),
-      signal: file.signal,
-    })
-  }
-
   /**
    * Upload a new object to a storage
    * @param request
    */
-  async uploadNewObject(request: Omit<UploadRequest, 'bucketId' | 'uploadType'>) {
+  async uploadNewObject(
+    request: Omit<UploadRequest, 'bucketId' | 'uploadType'> & {
+      bucketContext?: {
+        name: string
+        fileSizeLimit?: number | null
+      }
+    }
+  ) {
     mustBeValidKey(request.objectName)
 
     const path = `${this.bucketId}/${request.objectName}`
@@ -114,6 +92,7 @@ export class ObjectStorage {
       ...request,
       bucketId: this.bucketId,
       uploadType: 'standard',
+      bucketContext: request.bucketContext,
     })
 
     return { objectMetadata: metadata, path, id: obj.id }

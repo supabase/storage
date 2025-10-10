@@ -21,6 +21,7 @@ interface FileUpload {
   cacheControl: string
   isTruncated: () => boolean
   userMetadata?: Record<string, any>
+  globalLimit?: number
 }
 
 export interface UploadRequest {
@@ -31,6 +32,10 @@ export interface UploadRequest {
   isUpsert?: boolean
   uploadType?: 'standard' | 's3' | 'resumable'
   signal?: AbortSignal
+  bucketContext?: {
+    name: string
+    fileSizeLimit?: number | null
+  }
 }
 
 const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
@@ -113,7 +118,18 @@ export class Uploader {
       )
 
       if (file.isTruncated()) {
-        throw ERRORS.EntityTooLarge()
+        const context = request.bucketContext
+          ? {
+              bucketName: request.bucketContext.name,
+              bucketLimit: request.bucketContext.fileSizeLimit || undefined,
+              globalLimit: file.globalLimit,
+            }
+          : file.globalLimit
+          ? {
+              globalLimit: file.globalLimit,
+            }
+          : undefined
+        throw ERRORS.EntityTooLarge(undefined, 'object', context)
       }
 
       return this.completeUpload({
@@ -309,8 +325,11 @@ export async function fileUploadFromRequest(
   let maxFileSize = 0
 
   // When is an empty folder we restrict it to 0 bytes
+  let globalLimit: number | undefined
   if (!isEmptyFolder(options.objectName)) {
-    maxFileSize = await getStandardMaxFileSizeLimit(request.tenantId, options?.fileSizeLimit)
+    const limits = await getStandardMaxFileSizeLimit(request.tenantId, options?.fileSizeLimit)
+    maxFileSize = limits.maxFileSize
+    globalLimit = limits.globalLimit
   }
 
   let cacheControl: string
@@ -388,6 +407,7 @@ export async function fileUploadFromRequest(
     isTruncated,
     userMetadata,
     maxFileSize,
+    globalLimit,
   }
 }
 
@@ -404,8 +424,9 @@ export function parseUserMetadata(metadata: string) {
 export async function getStandardMaxFileSizeLimit(
   tenantId: string,
   bucketSizeLimit?: number | null
-) {
+): Promise<{ maxFileSize: number; globalLimit: number }> {
   let globalFileSizeLimit = await getFileSizeLimit(tenantId)
+  const originalGlobalLimit = globalFileSizeLimit
 
   if (typeof bucketSizeLimit === 'number') {
     globalFileSizeLimit = Math.min(bucketSizeLimit, globalFileSizeLimit)
@@ -415,5 +436,5 @@ export async function getStandardMaxFileSizeLimit(
     globalFileSizeLimit = Math.min(uploadFileSizeLimitStandard, globalFileSizeLimit)
   }
 
-  return globalFileSizeLimit
+  return { maxFileSize: globalFileSizeLimit, globalLimit: originalGlobalLimit }
 }

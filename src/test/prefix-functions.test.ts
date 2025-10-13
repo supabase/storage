@@ -505,4 +505,110 @@ describe('Prefix SQL Functions Unit Tests', () => {
       expect(prefix.bucket_id).toBe(bucketName)
     })
   })
+
+  describe('storage.lock_top_prefixes()', () => {
+    it('should acquire advisory locks for top-level prefixes', async () => {
+      const db = tHelper.database.connection.pool.acquire()
+
+      // This function doesn't return a value, but we can test it doesn't throw
+      await expect(
+        db.raw('SELECT storage.lock_top_prefixes(?, ?)', [
+          [bucketName, bucketName],
+          ['folder1/file.txt', 'folder2/subfolder/file.txt'],
+        ])
+      ).resolves.toBeDefined()
+    })
+
+    it('should handle empty arrays', async () => {
+      const db = tHelper.database.connection.pool.acquire()
+
+      await expect(
+        db.raw('SELECT storage.lock_top_prefixes(?, ?)', [[], []])
+      ).resolves.toBeDefined()
+    })
+
+    it('should handle single bucket and name', async () => {
+      const db = tHelper.database.connection.pool.acquire()
+
+      await expect(
+        db.raw('SELECT storage.lock_top_prefixes(?, ?)', [[bucketName], ['folder/file.txt']])
+      ).resolves.toBeDefined()
+    })
+  })
+
+  describe('storage.delete_leaf_prefixes()', () => {
+    it('should delete leaf prefixes when no children exist', async () => {
+      const db = tHelper.database.connection.pool.acquire()
+
+      // First, create some prefixes using add_prefixes function
+      await db.raw('SELECT storage.add_prefixes(?, ?)', [bucketName, 'folder1/file.txt'])
+      await db.raw('SELECT storage.add_prefixes(?, ?)', [bucketName, 'folder2/subfolder/file.txt'])
+
+      // Verify prefixes exist
+      let prefixes = await db
+        .select('name', 'level')
+        .from('storage.prefixes')
+        .where('bucket_id', bucketName)
+        .orderBy('level')
+
+      expect(prefixes.length).toBeGreaterThan(0)
+
+      await db.raw('SELECT storage.delete_leaf_prefixes(?, ?)', [
+        [bucketName],
+        ['folder1/file.txt', 'folder2/subfolder/file.txt'],
+      ])
+
+      // Check that some prefixes were deleted (function works)
+      prefixes = await db
+        .select('name', 'level')
+        .from('storage.prefixes')
+        .where('bucket_id', bucketName)
+        .orderBy('level')
+
+      // The function should have deleted some prefixes (exact count depends on implementation)
+      expect(prefixes.length).toBeLessThan(3) // Some prefixes were deleted
+    })
+
+    it('should not delete prefixes with children', async () => {
+      const db = tHelper.database.connection.pool.acquire()
+
+      // Create a prefix with a child object using add_prefixes
+      await db.raw('SELECT storage.add_prefixes(?, ?)', [bucketName, 'folder/file.txt'])
+
+      // Also create the actual object to ensure the prefix has children
+      await db.raw('INSERT INTO storage.objects (bucket_id, name, level) VALUES (?, ?, ?)', [
+        bucketName,
+        'folder/file.txt',
+        2,
+      ])
+
+      await db.raw('SELECT storage.delete_leaf_prefixes(?, ?)', [[bucketName], ['folder/file.txt']])
+
+      // Check that prefix still exists (has children)
+      const prefixes = await db
+        .select('name', 'level')
+        .from('storage.prefixes')
+        .where('bucket_id', bucketName)
+        .orderBy('level')
+
+      expect(prefixes).toHaveLength(1)
+      expect(prefixes[0].name).toBe('folder')
+    })
+
+    it('should handle empty arrays', async () => {
+      const db = tHelper.database.connection.pool.acquire()
+
+      await expect(
+        db.raw('SELECT storage.delete_leaf_prefixes(?, ?)', [[], []])
+      ).resolves.toBeDefined()
+    })
+
+    it('should handle single bucket and name', async () => {
+      const db = tHelper.database.connection.pool.acquire()
+
+      await expect(
+        db.raw('SELECT storage.delete_leaf_prefixes(?, ?)', [[bucketName], ['folder/file.txt']])
+      ).resolves.toBeDefined()
+    })
+  })
 })

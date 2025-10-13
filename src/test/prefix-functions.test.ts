@@ -41,9 +41,7 @@ describe('Prefix SQL Functions Unit Tests', () => {
 
     it('should return correct level for deep nesting', async () => {
       const db = tHelper.database.connection.pool.acquire()
-      const result = await db.raw('SELECT storage.get_level(?) as level', [
-        'a/b/c/d/file.txt',
-      ])
+      const result = await db.raw('SELECT storage.get_level(?) as level', ['a/b/c/d/file.txt'])
       expect(result.rows[0].level).toBe(5)
     })
 
@@ -85,33 +83,25 @@ describe('Prefix SQL Functions Unit Tests', () => {
 
     it('should return folder for single level', async () => {
       const db = tHelper.database.connection.pool.acquire()
-      const result = await db.raw('SELECT storage.get_prefix(?) as prefix', [
-        'folder/file.txt',
-      ])
+      const result = await db.raw('SELECT storage.get_prefix(?) as prefix', ['folder/file.txt'])
       expect(result.rows[0].prefix).toBe('folder')
     })
 
     it('should return correct prefix for deep nesting', async () => {
       const db = tHelper.database.connection.pool.acquire()
-      const result = await db.raw('SELECT storage.get_prefix(?) as prefix', [
-        'a/b/c/file.txt',
-      ])
+      const result = await db.raw('SELECT storage.get_prefix(?) as prefix', ['a/b/c/file.txt'])
       expect(result.rows[0].prefix).toBe('a/b/c')
     })
 
     it('should handle trailing slash correctly', async () => {
       const db = tHelper.database.connection.pool.acquire()
-      const result = await db.raw('SELECT storage.get_prefix(?) as prefix', [
-        'folder/subfolder/',
-      ])
+      const result = await db.raw('SELECT storage.get_prefix(?) as prefix', ['folder/subfolder/'])
       expect(result.rows[0].prefix).toBe('folder')
     })
 
     it('should handle multiple slashes', async () => {
       const db = tHelper.database.connection.pool.acquire()
-      const result = await db.raw('SELECT storage.get_prefix(?) as prefix', [
-        'folder//file.txt',
-      ])
+      const result = await db.raw('SELECT storage.get_prefix(?) as prefix', ['folder//file.txt'])
       // Double slash creates an empty part, so parent is 'folder/'
       expect(result.rows[0].prefix).toBe('folder/')
     })
@@ -126,9 +116,7 @@ describe('Prefix SQL Functions Unit Tests', () => {
 
     it('should handle unicode characters', async () => {
       const db = tHelper.database.connection.pool.acquire()
-      const result = await db.raw('SELECT storage.get_prefix(?) as prefix', [
-        'папка/файл.txt',
-      ])
+      const result = await db.raw('SELECT storage.get_prefix(?) as prefix', ['папка/файл.txt'])
       expect(result.rows[0].prefix).toBe('папка')
     })
   })
@@ -142,17 +130,13 @@ describe('Prefix SQL Functions Unit Tests', () => {
 
     it('should return single prefix for single level', async () => {
       const db = tHelper.database.connection.pool.acquire()
-      const result = await db.raw('SELECT storage.get_prefixes(?) as prefixes', [
-        'folder/file.txt',
-      ])
+      const result = await db.raw('SELECT storage.get_prefixes(?) as prefixes', ['folder/file.txt'])
       expect(result.rows[0].prefixes).toEqual(['folder'])
     })
 
     it('should return all ancestor prefixes for deep nesting', async () => {
       const db = tHelper.database.connection.pool.acquire()
-      const result = await db.raw('SELECT storage.get_prefixes(?) as prefixes', [
-        'a/b/c/file.txt',
-      ])
+      const result = await db.raw('SELECT storage.get_prefixes(?) as prefixes', ['a/b/c/file.txt'])
       expect(result.rows[0].prefixes).toEqual(['a', 'a/b', 'a/b/c'])
     })
 
@@ -522,4 +506,3 @@ describe('Prefix SQL Functions Unit Tests', () => {
     })
   })
 })
-

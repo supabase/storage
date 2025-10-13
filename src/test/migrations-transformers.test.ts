@@ -30,7 +30,8 @@ describe('DisableConcurrentIndexTransformer', () => {
       name: 'test-migration-2',
       hash: 'def456',
       sql: '-- postgres-migrations disable-transaction\nCREATE INDEX CONCURRENTLY idx_name ON table (column);',
-      contents: '-- postgres-migrations disable-transaction\nCREATE INDEX CONCURRENTLY idx_name ON table (column);',
+      contents:
+        '-- postgres-migrations disable-transaction\nCREATE INDEX CONCURRENTLY idx_name ON table (column);',
       fileName: 'test2.sql',
     }
 
@@ -61,14 +62,19 @@ describe('DisableConcurrentIndexTransformer', () => {
       name: 'test-migration-4',
       hash: 'jkl012',
       sql: 'CREATE INDEX CONCURRENTLY idx1 ON table1 (col1);\nCREATE INDEX CONCURRENTLY idx2 ON table2 (col2);',
-      contents: 'CREATE INDEX CONCURRENTLY idx1 ON table1 (col1);\nCREATE INDEX CONCURRENTLY idx2 ON table2 (col2);',
+      contents:
+        'CREATE INDEX CONCURRENTLY idx1 ON table1 (col1);\nCREATE INDEX CONCURRENTLY idx2 ON table2 (col2);',
       fileName: 'test4.sql',
     }
 
     const result = transformer.transform(migration)
 
-    expect(result.sql).toBe('CREATE INDEX idx1 ON table1 (col1);\nCREATE INDEX idx2 ON table2 (col2);')
-    expect(result.contents).toBe('CREATE INDEX idx1 ON table1 (col1);\nCREATE INDEX idx2 ON table2 (col2);')
+    expect(result.sql).toBe(
+      'CREATE INDEX idx1 ON table1 (col1);\nCREATE INDEX idx2 ON table2 (col2);'
+    )
+    expect(result.contents).toBe(
+      'CREATE INDEX idx1 ON table1 (col1);\nCREATE INDEX idx2 ON table2 (col2);'
+    )
   })
 
   it('should preserve migration structure', () => {

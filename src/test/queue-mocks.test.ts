@@ -18,7 +18,9 @@ import { runMigrationsOnTenant } from '@internal/database/migrations'
 
 const mockAxios = axios as jest.Mocked<typeof axios>
 const mockGetTenantConfig = getTenantConfig as jest.MockedFunction<typeof getTenantConfig>
-const mockRunMigrationsOnTenant = runMigrationsOnTenant as jest.MockedFunction<typeof runMigrationsOnTenant>
+const mockRunMigrationsOnTenant = runMigrationsOnTenant as jest.MockedFunction<
+  typeof runMigrationsOnTenant
+>
 
 describe('Error Handling Patterns', () => {
   it('should handle network errors gracefully', async () => {
@@ -39,9 +41,11 @@ describe('Error Handling Patterns', () => {
     const migrationError = new Error('Migration failed')
     mockRunMigrationsOnTenant.mockRejectedValue(migrationError)
 
-    await expect(mockRunMigrationsOnTenant({
-      databaseUrl: 'postgres://test:test@localhost:5432/test',
-      tenantId: 'test-tenant'
-    })).rejects.toThrow('Migration failed')
+    await expect(
+      mockRunMigrationsOnTenant({
+        databaseUrl: 'postgres://test:test@localhost:5432/test',
+        tenantId: 'test-tenant',
+      })
+    ).rejects.toThrow('Migration failed')
   })
 })

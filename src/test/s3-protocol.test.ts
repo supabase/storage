@@ -60,7 +60,7 @@ async function uploadFile(
   bucketName: string,
   key: string,
   mb: number,
-  headers?: Record<string, any>
+  headers?: Record<string, string>
 ) {
   const uploader = new Upload({
     client: client,
@@ -1499,6 +1499,123 @@ describe('S3 Protocol', () => {
         const resp = await fetch(getUrl)
 
         expect(resp.ok).toBeTruthy()
+      })
+
+      it('supports response-content-disposition override', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-disposition.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseContentDisposition: 'attachment; filename="custom-name.txt"',
+          })
+        )
+
+        expect(response.ContentDisposition).toBe('attachment; filename="custom-name.txt"')
+      })
+
+      it('supports response-content-disposition override via presigned URL', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-presigned-disposition.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const getUrl = await getSignedUrl(
+          client,
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseContentDisposition: 'attachment; filename="presigned.pdf"',
+          }),
+          { expiresIn: 100 }
+        )
+
+        const resp = await fetch(getUrl)
+
+        expect(resp.ok).toBeTruthy()
+        expect(resp.headers.get('content-disposition')).toBe('attachment; filename="presigned.pdf"')
+      })
+
+      it('supports response-content-type override', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-content-type.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseContentType: 'text/plain',
+          })
+        )
+
+        expect(response.ContentType).toBe('text/plain')
+      })
+
+      it('supports response-cache-control override', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-cache-control.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseCacheControl: 'no-cache, no-store',
+          })
+        )
+
+        expect(response.CacheControl).toBe('no-cache, no-store')
+      })
+
+      it('supports multiple response overrides simultaneously', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-multiple-overrides.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseContentDisposition: 'inline; filename="test.txt"',
+            ResponseContentType: 'application/octet-stream',
+            ResponseCacheControl: 'max-age=0',
+            ResponseContentLanguage: 'en-US',
+            ResponseContentEncoding: 'gzip',
+          })
+        )
+
+        expect(response.ContentDisposition).toBe('inline; filename="test.txt"')
+        expect(response.ContentType).toBe('application/octet-stream')
+        expect(response.CacheControl).toBe('max-age=0')
+        expect(response.ContentLanguage).toBe('en-US')
+        expect(response.ContentEncoding).toBe('gzip')
+      })
+
+      it('supports response-expires override', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-expires.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const expiresDate = new Date('2030-01-01T00:00:00Z')
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseExpires: expiresDate,
+          })
+        )
+
+        expect(response.ExpiresString).toEqual(expiresDate.toUTCString())
       })
     })
   })

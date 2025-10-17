@@ -39,6 +39,11 @@ interface TenantConfig {
 }
 
 export interface Features {
+  vectorBuckets: {
+    enabled: boolean
+    maxBuckets: number
+    maxIndexes: number
+  }
   imageTransformation: {
     enabled: boolean
     maxResolution?: number
@@ -63,8 +68,15 @@ export enum TenantMigrationStatus {
   FAILED_STALE = 'FAILED_STALE',
 }
 
-const { isMultitenant, dbServiceRole, serviceKeyAsync, jwtSecret, dbMigrationFreezeAt } =
-  getConfig()
+const {
+  isMultitenant,
+  dbServiceRole,
+  serviceKeyAsync,
+  jwtSecret,
+  dbMigrationFreezeAt,
+  icebergEnabled,
+  vectorEnabled,
+} = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
 
@@ -136,6 +148,9 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       feature_iceberg_catalog_max_catalogs,
       feature_iceberg_catalog_max_namespaces,
       feature_iceberg_catalog_max_tables,
+      feature_vector_buckets,
+      feature_vector_buckets_max_buckets,
+      feature_vector_buckets_max_indexes,
       image_transformation_max_resolution,
       database_pool_url,
       max_connections,
@@ -171,10 +186,15 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
           enabled: feature_purge_cache,
         },
         icebergCatalog: {
-          enabled: feature_iceberg_catalog,
+          enabled: icebergEnabled || feature_iceberg_catalog,
           maxNamespaces: feature_iceberg_catalog_max_namespaces,
           maxTables: feature_iceberg_catalog_max_tables,
           maxCatalogs: feature_iceberg_catalog_max_catalogs,
+        },
+        vectorBuckets: {
+          enabled: vectorEnabled || feature_vector_buckets,
+          maxBuckets: feature_vector_buckets_max_buckets,
+          maxIndexes: feature_vector_buckets_max_indexes,
         },
       },
       migrationVersion: migrations_version,

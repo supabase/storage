@@ -66,6 +66,14 @@ const patchSchema = {
               maxCatalogs: { type: 'number' },
             },
           },
+          vectorBuckets: {
+            type: 'object',
+            properties: {
+              enabled: { type: 'boolean' },
+              maxBuckets: { type: 'number' },
+              maxIndexes: { type: 'number' },
+            },
+          },
         },
       },
     },
@@ -113,9 +121,12 @@ interface tenantDBInterface {
   feature_iceberg_catalog_max_tables?: number | null
   feature_iceberg_catalog_max_catalogs?: number | null
   image_transformation_max_resolution?: number
+  feature_vector_buckets?: boolean
+  feature_vector_buckets_max_buckets?: number
+  feature_vector_buckets_max_indexes?: number
 }
 
-const { dbMigrationFreezeAt } = getConfig()
+const { dbMigrationFreezeAt, icebergEnabled, vectorEnabled } = getConfig()
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
@@ -141,6 +152,9 @@ export default async function routes(fastify: FastifyInstance) {
         feature_iceberg_catalog_max_catalogs,
         feature_iceberg_catalog_max_namespaces,
         feature_iceberg_catalog_max_tables,
+        feature_vector_buckets,
+        feature_vector_buckets_max_buckets,
+        feature_vector_buckets_max_indexes,
         image_transformation_max_resolution,
         migrations_version,
         migrations_status,
@@ -172,10 +186,15 @@ export default async function routes(fastify: FastifyInstance) {
             enabled: feature_s3_protocol,
           },
           icebergCatalog: {
-            enabled: feature_iceberg_catalog,
+            enabled: icebergEnabled || feature_iceberg_catalog,
             maxNamespaces: feature_iceberg_catalog_max_namespaces,
             maxTables: feature_iceberg_catalog_max_tables,
             maxCatalogs: feature_iceberg_catalog_max_catalogs,
+          },
+          vectorBuckets: {
+            enabled: vectorEnabled || feature_vector_buckets,
+            maxBuckets: feature_vector_buckets_max_buckets,
+            maxIndexes: feature_vector_buckets_max_indexes,
           },
         },
         disableEvents: disable_events,
@@ -205,6 +224,9 @@ export default async function routes(fastify: FastifyInstance) {
       feature_iceberg_catalog_max_catalogs,
       feature_iceberg_catalog_max_namespaces,
       feature_iceberg_catalog_max_tables,
+      feature_vector_buckets,
+      feature_vector_buckets_max_buckets,
+      feature_vector_buckets_max_indexes,
       image_transformation_max_resolution,
       migrations_version,
       migrations_status,
@@ -242,10 +264,15 @@ export default async function routes(fastify: FastifyInstance) {
           enabled: feature_s3_protocol,
         },
         icebergCatalog: {
-          enabled: feature_iceberg_catalog,
+          enabled: icebergEnabled || feature_iceberg_catalog,
           maxNamespaces: feature_iceberg_catalog_max_namespaces,
           maxTables: feature_iceberg_catalog_max_tables,
           maxCatalogs: feature_iceberg_catalog_max_catalogs,
+        },
+        vectorBuckets: {
+          enabled: vectorEnabled || feature_vector_buckets,
+          maxBuckets: feature_vector_buckets_max_buckets,
+          maxIndexes: feature_vector_buckets_max_indexes,
         },
       },
       migrationVersion: migrations_version,
@@ -290,6 +317,9 @@ export default async function routes(fastify: FastifyInstance) {
         feature_iceberg_catalog_max_catalogs: features?.icebergCatalog?.maxCatalogs,
         feature_iceberg_catalog_max_namespaces: features?.icebergCatalog?.maxNamespaces,
         feature_iceberg_catalog_max_tables: features?.icebergCatalog?.maxTables,
+        feature_vector_buckets: features?.vectorBuckets?.enabled ?? false,
+        feature_vector_buckets_max_buckets: features?.vectorBuckets?.maxBuckets,
+        feature_vector_buckets_max_indexes: features?.vectorBuckets?.maxIndexes,
         migrations_version: null,
         migrations_status: null,
         tracing_mode: tracingMode,
@@ -358,6 +388,9 @@ export default async function routes(fastify: FastifyInstance) {
           feature_iceberg_catalog_max_catalogs: features?.icebergCatalog?.maxCatalogs,
           feature_iceberg_catalog_max_namespaces: features?.icebergCatalog?.maxNamespaces,
           feature_iceberg_catalog_max_tables: features?.icebergCatalog?.maxTables,
+          feature_vector_buckets: features?.vectorBuckets?.enabled,
+          feature_vector_buckets_max_buckets: features?.vectorBuckets?.maxBuckets,
+          feature_vector_buckets_max_indexes: features?.vectorBuckets?.maxIndexes,
           image_transformation_max_resolution:
             features?.imageTransformation?.maxResolution === null
               ? null
@@ -456,11 +489,17 @@ export default async function routes(fastify: FastifyInstance) {
       tenantInfo.tracing_mode = tracingMode
     }
 
-    if (features?.icebergCatalog?.enabled) {
+    if (typeof features?.icebergCatalog?.enabled) {
       tenantInfo.feature_iceberg_catalog = features?.icebergCatalog?.enabled
       tenantInfo.feature_iceberg_catalog_max_namespaces = features?.icebergCatalog?.maxNamespaces
       tenantInfo.feature_iceberg_catalog_max_tables = features?.icebergCatalog?.maxTables
       tenantInfo.feature_iceberg_catalog_max_catalogs = features?.icebergCatalog?.maxCatalogs
+    }
+
+    if (typeof features?.vectorBuckets?.enabled) {
+      tenantInfo.feature_vector_buckets = features?.vectorBuckets?.enabled
+      tenantInfo.feature_vector_buckets_max_buckets = features?.vectorBuckets?.maxBuckets
+      tenantInfo.feature_vector_buckets_max_indexes = features?.vectorBuckets?.maxIndexes
     }
 
     await multitenantKnex.transaction(async (trx) => {

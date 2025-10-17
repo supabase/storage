@@ -1,7 +1,11 @@
+import { PartialHttpData, parsePartialHttp } from '@internal/http'
 import { logger, logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
+import { FastifyInstance } from 'fastify'
 import { FastifyReply } from 'fastify/types/reply'
 import { FastifyRequest } from 'fastify/types/request'
 import fastifyPlugin from 'fastify-plugin'
+import { Socket } from 'net'
+import { getConfig } from '../../config'
 
 interface RequestLoggerOptions {
   excludeUrls?: string[]
@@ -23,6 +27,8 @@ declare module 'fastify' {
   }
 }
 
+const { version } = getConfig()
+
 /**
  * Request logger plugin
  * @param options
@@ -30,6 +36,86 @@ declare module 'fastify' {
 export const logRequest = (options: RequestLoggerOptions) =>
   fastifyPlugin(
     async (fastify) => {
+      // Used to track cleanup functions per socket
+      const socketCleanupMap = new WeakMap<Socket, () => void>()
+      const cleanupSocketListeners = (socket: Socket) => {
+        const cleanup = socketCleanupMap.get(socket)
+        if (cleanup) {
+          socketCleanupMap.delete(socket)
+          cleanup()
+        }
+      }
+
+      // Watch for connections that timeout or disconnect before complete HTTP headers are received
+      // For keep-alive connections, track each potential request independently
+      const onConnection = (socket: Socket) => {
+        const captureByteLimit = 2048
+        let currentRequestData: Buffer[] = []
+        let currentRequestDataSize = 0
+        let currentRequestStart = Date.now()
+        let waitingForRequest = false
+        let pendingRequestLogged = false
+
+        // Store cleanup function so hooks can access it
+        socketCleanupMap.set(socket, () => {
+          pendingRequestLogged = true
+          waitingForRequest = false
+          currentRequestData = []
+          currentRequestDataSize = 0
+        })
+
+        // Capture partial data sent before connection closes
+        const onData = (chunk: Buffer) => {
+          // Start tracking a new potential request when we receive data after a completed one
+          if (!waitingForRequest) {
+            waitingForRequest = true
+            currentRequestData = []
+            currentRequestDataSize = 0
+            currentRequestStart = Date.now()
+            pendingRequestLogged = false
+          }
+
+          const remaining = captureByteLimit - currentRequestDataSize
+          if (remaining > 0) {
+            const slicedChunk = chunk.subarray(0, Math.min(chunk.length, remaining))
+            currentRequestData.push(slicedChunk)
+            currentRequestDataSize += slicedChunk.length
+          }
+        }
+        socket.on('data', onData)
+
+        // Remove data listener on socket error to prevent listener leak
+        socket.once('error', () => {
+          socket.removeListener('data', onData)
+        })
+
+        socket.once('close', () => {
+          socket.removeListener('data', onData)
+          socketCleanupMap.delete(socket)
+
+          // Only log if we were waiting for a request that was never properly logged
+          if (!waitingForRequest || currentRequestData.length === 0 || pendingRequestLogged) {
+            return
+          }
+
+          const parsedHttp = parsePartialHttp(currentRequestData)
+          const req = createPartialLogRequest(fastify, socket, parsedHttp, currentRequestStart)
+
+          doRequestLog(req, {
+            excludeUrls: options.excludeUrls,
+            statusCode: 'ABORTED CONN',
+            responseTime: (Date.now() - req.startTime) / 1000,
+          })
+        })
+      }
+
+      fastify.server.on('connection', onConnection)
+
+      // Clean up on close
+      fastify.addHook('onClose', async () => {
+        fastify.server.removeListener('connection', onConnection)
+      })
+
       fastify.addHook('onRequest', async (req, res) => {
         req.startTime = Date.now()
 
@@ -40,6 +126,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
               statusCode: 'ABORTED REQ',
               responseTime: (Date.now() - req.startTime) / 1000,
             })
+            cleanupSocketListeners(req.raw.socket)
             return
           }
 
@@ -49,6 +136,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
               statusCode: 'ABORTED RES',
               responseTime: (Date.now() - req.startTime) / 1000,
             })
+            cleanupSocketListeners(req.raw.socket)
           }
         })
       })
@@ -94,6 +182,9 @@ export const logRequest = (options: RequestLoggerOptions) =>
           responseTime: reply.elapsedTime,
           executionTime: req.executionTime,
         })
+
+        // Mark request as logged so socket close handler doesn't log it again
+        cleanupSocketListeners(req.raw.socket)
       })
     },
     { name: 'log-request' }
@@ -102,7 +193,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
 interface LogRequestOptions {
   reply?: FastifyReply
   excludeUrls?: string[]
-  statusCode: number | 'ABORTED REQ' | 'ABORTED RES'
+  statusCode: number | 'ABORTED REQ' | 'ABORTED RES' | 'ABORTED CONN'
   responseTime: number
   executionTime?: number
 }
@@ -178,4 +269,35 @@ function getFirstDefined<T>(...values: any[]): T | undefined {
     }
   }
   return undefined
+}
+
+/**
+ * Creates a minimal FastifyRequest from partial HTTP data.
+ * Used for consistent logging when request parsing fails.
+ */
+export function createPartialLogRequest(
+  fastify: FastifyInstance,
+  socket: Socket,
+  httpData: PartialHttpData,
+  startTime: number
+) {
+  return {
+    method: httpData.method,
+    url: httpData.url,
+    headers: httpData.headers,
+    ip: socket.remoteAddress || 'unknown',
+    id: 'no-request',
+    log: fastify.log.child({
+      tenantId: httpData.tenantId,
+      project: httpData.tenantId,
+      reqId: 'no-request',
+      appVersion: version,
+      dataLength: httpData.length,
+    }),
+    startTime,
+    tenantId: httpData.tenantId,
+    raw: {},
+    routeOptions: { config: {} },
+    resources: [],
+  } as unknown as FastifyRequest
 }

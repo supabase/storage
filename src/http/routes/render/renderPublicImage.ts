@@ -51,11 +51,12 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const objectName = request.params['*']
 
+      const bucketRef = request.storage.asSuperUser().from(bucketName)
       const [, obj] = await Promise.all([
         request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
           isPublic: true,
         }),
-        request.storage.asSuperUser().from(bucketName).findObject(objectName, 'id,version'),
+        bucketRef.findObject(objectName, 'id,version'),
       ])
 
       const s3Key = `${request.tenantId}/${bucketName}/${objectName}`

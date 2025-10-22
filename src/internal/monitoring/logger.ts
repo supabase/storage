@@ -1,6 +1,6 @@
-import pino, { BaseLogger } from 'pino'
+import pino from 'pino'
 import { getConfig } from '../../config'
-import { FastifyReply, FastifyRequest } from 'fastify'
+import { FastifyBaseLogger, FastifyReply, FastifyRequest } from 'fastify'
 import { URL } from 'node:url'
 import { normalizeRawError } from '@internal/errors'
 import { resolve } from 'node:path'
@@ -89,10 +89,10 @@ interface InfoLog {
 }
 
 export const logSchema = {
-  info: (logger: BaseLogger, message: string, log: InfoLog) => logger.info(log, message),
-  warning: (logger: BaseLogger, message: string, log: InfoLog | ErrorLog) =>
+  info: (logger: FastifyBaseLogger, message: string, log: InfoLog) => logger.info(log, message),
+  warning: (logger: FastifyBaseLogger, message: string, log: InfoLog | ErrorLog) =>
     logger.warn(log, message),
-  request: (logger: BaseLogger, message: string, log: RequestLog) => {
+  request: (logger: FastifyBaseLogger, message: string, log: RequestLog) => {
     if (!log.res) {
       logger.warn(log, message)
       return
@@ -104,8 +104,8 @@ export const logSchema = {
     const logLevel = is4xxResponse ? 'warn' : is5xxResponse ? 'error' : 'info'
     logger[logLevel](log, message)
   },
-  error: (logger: BaseLogger, message: string, log: ErrorLog) => logger.error(log, message),
-  event: (logger: BaseLogger, message: string, log: EventLog) => logger.info(log, message),
+  error: (logger: FastifyBaseLogger, message: string, log: ErrorLog) => logger.error(log, message),
+  event: (logger: FastifyBaseLogger, message: string, log: EventLog) => logger.info(log, message),
 }
 
 export function buildTransport(): pino.TransportMultiOptions {

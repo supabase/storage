@@ -26,11 +26,14 @@ export class Cluster {
     if (cluster) {
       Cluster.size = await cluster.getClusterSize()
 
-      logger.info(`[Cluster] Initial cluster size ${Cluster.size}`, {
-        type: 'cluster',
-        clusterSize: Cluster.size,
-        discoveryType: process.env.CLUSTER_DISCOVERY,
-      })
+      logger.info(
+        {
+          type: 'cluster',
+          clusterSize: Cluster.size,
+          discoveryType: process.env.CLUSTER_DISCOVERY,
+        },
+        `[Cluster] Initial cluster size ${Cluster.size}`
+      )
 
       Cluster.watcher = setInterval(() => {
         cluster!

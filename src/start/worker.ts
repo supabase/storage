@@ -46,10 +46,13 @@ export async function main() {
       signal: shutdownSignal.signal,
       registerWorkers,
       onMessage: (job) =>
-        logger.info(`[Worker] Job Received ${job.name} ${job.id}`, {
-          type: 'worker',
-          job: JSON.stringify(job),
-        }),
+        logger.info(
+          {
+            type: 'worker',
+            job: JSON.stringify(job),
+          },
+          `[Worker] Job Received ${job.name} ${job.id}`
+        ),
     }),
     PubSub.start({
       signal: shutdownSignal.nextGroup.nextGroup.signal,
@@ -57,7 +60,7 @@ export async function main() {
   ])
 
   const server = adminApp({
-    logger,
+    loggerInstance: logger,
     disableRequestLogging: true,
     requestIdHeader: requestTraceHeader,
   })

@@ -89,10 +89,13 @@ async function main() {
   await Cluster.init(shutdownSignal.nextGroup.signal)
 
   Cluster.on('change', (data) => {
-    logger.info(`[Cluster] Cluster size changed to ${data.size}`, {
-      type: 'cluster',
-      clusterSize: data.size,
-    })
+    logger.info(
+      {
+        type: 'cluster',
+        clusterSize: data.size,
+      },
+      `[Cluster] Cluster size changed to ${data.size}`
+    )
     TenantConnection.poolManager.rebalanceAll({
       clusterSize: data.size,
     })
@@ -115,11 +118,11 @@ async function httpServer(signal: AbortSignal) {
   const { exposeDocs, requestTraceHeader, port, host } = getConfig()
 
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
-    logger,
+    loggerInstance: logger,
     disableRequestLogging: true,
     exposeDocs,
     requestIdHeader: requestTraceHeader,
-    maxParamLength: 2500,
+    routerOptions: { maxParamLength: 2500 }
   })
 
   const closePromise = createServerClosedPromise(app.server, () => {
@@ -165,7 +168,7 @@ async function httpAdminServer(
 
   const adminApp = buildAdmin(
     {
-      logger,
+      loggerInstance: logger,
       disableRequestLogging: true,
       requestIdHeader: adminRequestIdHeader,
     },

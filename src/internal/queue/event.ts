@@ -86,10 +86,13 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       if (this.allowSync) {
         return Promise.all(messages.map((message) => message.send()))
       } else {
-        logger.warn('[Queue] skipped sending batch messages', {
-          type: 'queue',
-          eventType: this.eventName(),
-        })
+        logger.warn(
+          {
+            type: 'queue',
+            eventType: this.eventName(),
+          },
+          '[Queue] skipped sending batch messages'
+        )
         return
       }
     }
@@ -220,10 +223,13 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
           },
         })
       } else {
-        logger.warn('[Queue] skipped sending message', {
-          type: 'queue',
-          eventType: constructor.eventName(),
-        })
+        logger.warn(
+          {
+            type: 'queue',
+            eventType: constructor.eventName(),
+          },
+          '[Queue] skipped sending message'
+        )
         return
       }
     }

@@ -316,7 +316,9 @@ export async function fileUploadFromRequest(
   let cacheControl: string
   if (contentType?.startsWith('multipart/form-data')) {
     try {
+      console.log('...... BEFORE FORM DATA')
       const formData = await request.file({ limits: { fileSize: maxFileSize } })
+      console.log('...... AFTER FORM DATA')
 
       if (!formData) {
         throw ERRORS.NoContentProvided()
@@ -327,6 +329,9 @@ export async function fileUploadFromRequest(
       const cacheTime = formData.fields.cacheControl?.value
 
       body = formData.file
+      body.on('error', e => {
+        console.log('YAY WE HIT THE ERROR!!!!', e)
+      })
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
       const customMd = formData.fields.metadata?.value ?? formData.fields.userMetadata?.value
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */

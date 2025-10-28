@@ -72,6 +72,7 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(deleteVectors)
     fastify.register(listVectors)
     fastify.register(getVectors)
+
     setErrorHandler(fastify, {
       respectStatusCode: true,
     })

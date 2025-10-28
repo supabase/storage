@@ -134,6 +134,18 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     return that.invoke()
   }
 
+  static invokeOrSend<T extends Event<any>>(
+    this: StaticThis<T>,
+    payload: Omit<T['payload'], '$version'>,
+    options?: SendOptions
+  ) {
+    if (!payload.$version) {
+      ;(payload as T['payload']).$version = this.version
+    }
+    const that = new this(payload)
+    return that.invokeOrSend(options)
+  }
+
   static handle(
     job: Job<Event<any>['payload']> | Job<Event<any>['payload']>[],
     opts?: { signal?: AbortSignal }
@@ -179,6 +191,27 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     )
   }
 
+  async invokeOrSend(sendOptions?: SendOptions): Promise<string | void | null> {
+    const constructor = this.constructor as typeof Event
+
+    if (!constructor.allowSync) {
+      throw ERRORS.InternalError(undefined, 'Cannot send this event synchronously')
+    }
+
+    try {
+      await this.invoke()
+    } catch (e) {
+      logSchema.error(logger, '[Queue] Error invoking event synchronously, sending to queue', {
+        type: 'queue',
+        project: this.payload.tenant?.ref,
+        error: e,
+        metadata: JSON.stringify(this.payload),
+      })
+
+      return this.send(sendOptions)
+    }
+  }
+
   async invoke(): Promise<string | void | null> {
     const constructor = this.constructor as typeof Event
 
@@ -198,7 +231,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     })
   }
 
-  async send(): Promise<string | void | null> {
+  async send(customSendOptions?: SendOptions): Promise<string | void | null> {
     const constructor = this.constructor as typeof Event
 
     const shouldSend = await constructor.shouldSend(this.payload)
@@ -245,7 +278,10 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
           ...this.payload,
           $version: constructor.version,
         },
-        options: sendOptions,
+        options: {
+          ...sendOptions,
+          ...customSendOptions,
+        },
       })
 
       QueueJobScheduled.inc({

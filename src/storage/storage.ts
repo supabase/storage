@@ -12,7 +12,6 @@ import {
 import { getConfig } from '../config'
 import { ObjectStorage } from './object'
 import { InfoRenderer } from '@storage/renderer/info'
-import { logger, logSchema } from '@internal/monitoring'
 import { StorageObjectLocator } from '@storage/locator'
 import { BucketCreatedEvent, BucketDeleted } from '@storage/events'
 import { tenantHasMigrations } from '@internal/database/migrations'
@@ -245,7 +244,7 @@ export class Storage {
     return this.db.withTransaction(async (db) => {
       const deleted = await db.deleteAnalyticsBucket(id)
 
-      await BucketDeleted.invoke({
+      await BucketDeleted.invokeOrSend({
         bucketId: id,
         type: 'ANALYTICS',
         tenant: {

@@ -15,8 +15,11 @@ import {
 import { KnexVectorMetadataDB, VectorStore, VectorStoreManager } from '@storage/protocols/vector'
 import { useStorage } from './utils/storage'
 import { signJWT } from '@internal/auth'
+import { SingleShard } from '@internal/sharding'
 
-const { serviceKeyAsync, vectorBucketS3, tenantId, jwtSecret } = getConfig()
+const { serviceKeyAsync, vectorS3Buckets, tenantId, jwtSecret } = getConfig()
+
+const vectorBucketS3 = vectorS3Buckets[0]
 
 let appInstance: FastifyInstance
 let serviceToken: string
@@ -60,10 +63,13 @@ describe('Vectors API', () => {
     serviceToken = await serviceKeyAsync
 
     // Create real S3Vector instance with mocked client and mock DB
+    const shard = new SingleShard({
+      shardKey: 'test-bucket',
+      capacity: 1000,
+    })
     const mockVectorDB = new KnexVectorMetadataDB(storageTest.database.connection.pool.acquire())
-    s3Vector = new VectorStoreManager(mockVectorStore, mockVectorDB, {
+    s3Vector = new VectorStoreManager(mockVectorStore, mockVectorDB, shard, {
       tenantId: 'test-tenant',
-      vectorBucketName: 'test-bucket',
       maxBucketCount: Infinity,
       maxIndexCount: Infinity,
     })
@@ -88,7 +94,7 @@ describe('Vectors API', () => {
     await s3Vector.createBucket(vectorBucketName)
   })
 
-  describe('POST /vectors/CreateIndex', () => {
+  describe('POST /vector/CreateIndex', () => {
     let validCreateIndexRequest: {
       dataType: 'float32'
       dimension: number
@@ -115,7 +121,7 @@ describe('Vectors API', () => {
     it('should create vector index successfully with valid request', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -153,7 +159,7 @@ describe('Vectors API', () => {
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         payload: validCreateIndexRequest,
       })
 
@@ -166,7 +172,7 @@ describe('Vectors API', () => {
 
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${invalidToken}`,
         },
@@ -186,7 +192,7 @@ describe('Vectors API', () => {
 
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -205,7 +211,7 @@ describe('Vectors API', () => {
 
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -224,7 +230,7 @@ describe('Vectors API', () => {
 
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -243,7 +249,7 @@ describe('Vectors API', () => {
 
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -265,7 +271,7 @@ describe('Vectors API', () => {
 
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -283,7 +289,7 @@ describe('Vectors API', () => {
 
       const response = await appWithoutVector.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -304,7 +310,7 @@ describe('Vectors API', () => {
 
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -326,7 +332,7 @@ describe('Vectors API', () => {
 
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -343,14 +349,14 @@ describe('Vectors API', () => {
     })
   })
 
-  describe('POST /vectors/CreateVectorBucket', () => {
+  describe('POST /vector/CreateVectorBucket', () => {
     beforeEach(async () => {})
 
     it('should create vector bucket successfully with valid request', async () => {
       const newBucketName = `test-bucket-${Date.now()}-new`
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateVectorBucket',
+        url: '/vector/CreateVectorBucket',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -376,7 +382,7 @@ describe('Vectors API', () => {
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateVectorBucket',
+        url: '/vector/CreateVectorBucket',
         payload: {
           vectorBucketName: 'test-bucket',
         },
@@ -390,7 +396,7 @@ describe('Vectors API', () => {
 
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateVectorBucket',
+        url: '/vector/CreateVectorBucket',
         headers: {
           authorization: `Bearer ${token}`,
         },
@@ -405,7 +411,7 @@ describe('Vectors API', () => {
     it('should validate required fields', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateVectorBucket',
+        url: '/vector/CreateVectorBucket',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -420,7 +426,7 @@ describe('Vectors API', () => {
       const newVectorBucketName = `test-bucket-${Date.now()}-dup`
       const response1 = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateVectorBucket',
+        url: '/vector/CreateVectorBucket',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -434,7 +440,7 @@ describe('Vectors API', () => {
       // Second creation should return conflict
       const response2 = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateVectorBucket',
+        url: '/vector/CreateVectorBucket',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -447,12 +453,12 @@ describe('Vectors API', () => {
     })
   })
 
-  describe('POST /vectors/DeleteVectorBucket', () => {
+  describe('POST /vector/DeleteVectorBucket', () => {
     beforeEach(async () => {})
     it('should delete empty vector bucket successfully', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteVectorBucket',
+        url: '/vector/DeleteVectorBucket',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -477,7 +483,7 @@ describe('Vectors API', () => {
       // First create an index in the bucket
       await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -493,7 +499,7 @@ describe('Vectors API', () => {
       // Try to delete the bucket
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteVectorBucket',
+        url: '/vector/DeleteVectorBucket',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -510,7 +516,7 @@ describe('Vectors API', () => {
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteVectorBucket',
+        url: '/vector/DeleteVectorBucket',
         payload: {
           vectorBucketName: vectorBucketName,
         },
@@ -522,7 +528,7 @@ describe('Vectors API', () => {
     it('should validate required fields', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteVectorBucket',
+        url: '/vector/DeleteVectorBucket',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -535,7 +541,7 @@ describe('Vectors API', () => {
     it('should handle non-existent bucket', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteVectorBucket',
+        url: '/vector/DeleteVectorBucket',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -548,7 +554,7 @@ describe('Vectors API', () => {
     })
   })
 
-  describe('POST /vectors/ListVectorBuckets', () => {
+  describe('POST /vector/ListVectorBuckets', () => {
     beforeEach(async () => {
       // Create multiple buckets for listing
       await s3Vector.createBucket(`test-bucket-a-${Date.now()}`)
@@ -559,7 +565,7 @@ describe('Vectors API', () => {
     it('should list all vector buckets', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectorBuckets',
+        url: '/vector/ListVectorBuckets',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -583,7 +589,7 @@ describe('Vectors API', () => {
     it('should support maxResults parameter', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectorBuckets',
+        url: '/vector/ListVectorBuckets',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -603,7 +609,7 @@ describe('Vectors API', () => {
     it('should support pagination with nextToken', async () => {
       const response1 = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectorBuckets',
+        url: '/vector/ListVectorBuckets',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -617,7 +623,7 @@ describe('Vectors API', () => {
       if (body1.nextToken) {
         const response2 = await appInstance.inject({
           method: 'POST',
-          url: '/vectors/ListVectorBuckets',
+          url: '/vector/ListVectorBuckets',
           headers: {
             authorization: `Bearer ${serviceToken}`,
           },
@@ -644,7 +650,7 @@ describe('Vectors API', () => {
       const prefix = 'test-bucket-a'
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectorBuckets',
+        url: '/vector/ListVectorBuckets',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -663,7 +669,7 @@ describe('Vectors API', () => {
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectorBuckets',
+        url: '/vector/ListVectorBuckets',
         payload: {},
       })
 
@@ -671,11 +677,11 @@ describe('Vectors API', () => {
     })
   })
 
-  describe('POST /vectors/GetVectorBucket', () => {
+  describe('POST /vector/GetVectorBucket', () => {
     it('should get vector bucket details successfully', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetVectorBucket',
+        url: '/vector/GetVectorBucket',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -695,7 +701,7 @@ describe('Vectors API', () => {
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetVectorBucket',
+        url: '/vector/GetVectorBucket',
         payload: {
           vectorBucketName: vectorBucketName,
         },
@@ -707,7 +713,7 @@ describe('Vectors API', () => {
     it('should validate required fields', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetVectorBucket',
+        url: '/vector/GetVectorBucket',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -720,7 +726,7 @@ describe('Vectors API', () => {
     it('should handle non-existent bucket', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetVectorBucket',
+        url: '/vector/GetVectorBucket',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -733,7 +739,7 @@ describe('Vectors API', () => {
     })
   })
 
-  describe('POST /vectors/DeleteIndex', () => {
+  describe('POST /vector/DeleteIndex', () => {
     let indexName: string
 
     beforeEach(async () => {
@@ -755,7 +761,7 @@ describe('Vectors API', () => {
     it('should delete vector index successfully', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteIndex',
+        url: '/vector/DeleteIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -789,7 +795,7 @@ describe('Vectors API', () => {
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteIndex',
+        url: '/vector/DeleteIndex',
         payload: {
           indexName: indexName,
           vectorBucketName: vectorBucketName,
@@ -802,7 +808,7 @@ describe('Vectors API', () => {
     it('should validate required fields', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteIndex',
+        url: '/vector/DeleteIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -817,7 +823,7 @@ describe('Vectors API', () => {
     it('should validate indexName pattern', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteIndex',
+        url: '/vector/DeleteIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -833,7 +839,7 @@ describe('Vectors API', () => {
     it('should handle non-existent index', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteIndex',
+        url: '/vector/DeleteIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -847,12 +853,12 @@ describe('Vectors API', () => {
     })
   })
 
-  describe('POST /vectors/ListIndexes', () => {
+  describe('POST /vector/ListIndexes', () => {
     beforeEach(async () => {
       // Create multiple indexes for listing
       await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -867,7 +873,7 @@ describe('Vectors API', () => {
 
       await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -884,7 +890,7 @@ describe('Vectors API', () => {
     it('should list all indexes in a bucket', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListIndexes',
+        url: '/vector/ListIndexes',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -911,7 +917,7 @@ describe('Vectors API', () => {
     it('should support maxResults parameter', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListIndexes',
+        url: '/vector/ListIndexes',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -930,7 +936,7 @@ describe('Vectors API', () => {
       const prefix = 'index-a'
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListIndexes',
+        url: '/vector/ListIndexes',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -950,7 +956,7 @@ describe('Vectors API', () => {
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListIndexes',
+        url: '/vector/ListIndexes',
         payload: {
           vectorBucketName: vectorBucketName,
         },
@@ -962,7 +968,7 @@ describe('Vectors API', () => {
     it('should validate required fields', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListIndexes',
+        url: '/vector/ListIndexes',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -973,14 +979,14 @@ describe('Vectors API', () => {
     })
   })
 
-  describe('POST /vectors/GetIndex', () => {
+  describe('POST /vector/GetIndex', () => {
     let indexName: string
 
     beforeEach(async () => {
       indexName = `test-index-${Date.now()}`
       await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1000,7 +1006,7 @@ describe('Vectors API', () => {
     it('should get index details successfully', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetIndex',
+        url: '/vector/GetIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1028,7 +1034,7 @@ describe('Vectors API', () => {
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetIndex',
+        url: '/vector/GetIndex',
         payload: {
           indexName: indexName,
           vectorBucketName: vectorBucketName,
@@ -1041,7 +1047,7 @@ describe('Vectors API', () => {
     it('should validate required fields', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetIndex',
+        url: '/vector/GetIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1056,7 +1062,7 @@ describe('Vectors API', () => {
     it('should validate indexName pattern', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetIndex',
+        url: '/vector/GetIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1072,7 +1078,7 @@ describe('Vectors API', () => {
     it('should handle non-existent index', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetIndex',
+        url: '/vector/GetIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1086,14 +1092,14 @@ describe('Vectors API', () => {
     })
   })
 
-  describe('POST /vectors/PutVectors', () => {
+  describe('POST /vector/PutVectors', () => {
     let indexName: string
 
     beforeEach(async () => {
       indexName = `test-index-${Date.now()}`
       await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1111,10 +1117,10 @@ describe('Vectors API', () => {
       } as PutVectorsOutput)
     })
 
-    it('should put vectors successfully', async () => {
+    it('should put vector successfully', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/PutVectors',
+        url: '/vector/PutVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1144,7 +1150,6 @@ describe('Vectors API', () => {
 
       // Verify putVectors was called with correct parameters
       expect(mockVectorStore.putVectors).toHaveBeenCalledWith({
-        vectorBucketName: vectorBucketS3,
         indexName: `${tenantId}-${indexName}`,
         vectors: [
           {
@@ -1163,17 +1168,18 @@ describe('Vectors API', () => {
             key: undefined,
           },
         ],
+        vectorBucketName: vectorBucketS3,
       })
     })
 
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/PutVectors',
+        url: '/vector/PutVectors',
         payload: {
           vectorBucketName: vectorBucketName,
           indexName: indexName,
-          vectors: [
+          vector: [
             {
               data: {
                 float32: [1.0, 2.0, 3.0],
@@ -1189,7 +1195,7 @@ describe('Vectors API', () => {
     it('should validate required fields', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/PutVectors',
+        url: '/vector/PutVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1205,14 +1211,14 @@ describe('Vectors API', () => {
     it('should validate vector data structure', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/PutVectors',
+        url: '/vector/PutVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
           vectorBucketName: vectorBucketName,
           indexName: indexName,
-          vectors: [
+          vector: [
             {
               data: {
                 // missing float32
@@ -1234,14 +1240,14 @@ describe('Vectors API', () => {
 
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/PutVectors',
+        url: '/vector/PutVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
           vectorBucketName: vectorBucketName,
           indexName: indexName,
-          vectors: tooManyVectors,
+          vector: tooManyVectors,
         },
       })
 
@@ -1251,7 +1257,7 @@ describe('Vectors API', () => {
     it('should handle non-existent index', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/PutVectors',
+        url: '/vector/PutVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1272,14 +1278,14 @@ describe('Vectors API', () => {
     })
   })
 
-  describe('POST /vectors/QueryVectors', () => {
+  describe('POST /vector/QueryVectors', () => {
     let indexName: string
 
     beforeEach(async () => {
       indexName = `test-index-${Date.now()}`
       await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1302,10 +1308,10 @@ describe('Vectors API', () => {
       } as QueryVectorsOutput)
     })
 
-    it('should query vectors successfully', async () => {
+    it('should query vector successfully', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/QueryVectors',
+        url: '/vector/QueryVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1343,7 +1349,7 @@ describe('Vectors API', () => {
     it('should support metadata filtering', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/QueryVectors',
+        url: '/vector/QueryVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1373,7 +1379,7 @@ describe('Vectors API', () => {
     it('should support complex logical filters', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/QueryVectors',
+        url: '/vector/QueryVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1403,7 +1409,7 @@ describe('Vectors API', () => {
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/QueryVectors',
+        url: '/vector/QueryVectors',
         payload: {
           vectorBucketName: vectorBucketName,
           indexName: indexName,
@@ -1420,7 +1426,7 @@ describe('Vectors API', () => {
     it('should validate required fields', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/QueryVectors',
+        url: '/vector/QueryVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1439,7 +1445,7 @@ describe('Vectors API', () => {
     it('should validate queryVector structure', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/QueryVectors',
+        url: '/vector/QueryVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1459,7 +1465,7 @@ describe('Vectors API', () => {
     it('should handle non-existent index', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/QueryVectors',
+        url: '/vector/QueryVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1477,14 +1483,14 @@ describe('Vectors API', () => {
     })
   })
 
-  describe('POST /vectors/DeleteVectors', () => {
+  describe('POST /vector/DeleteVectors', () => {
     let indexName: string
 
     beforeEach(async () => {
       indexName = `test-index-${Date.now()}`
       await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1500,10 +1506,10 @@ describe('Vectors API', () => {
       mockVectorStore.deleteVectors.mockResolvedValue({} as DeleteVectorsOutput)
     })
 
-    it('should delete vectors successfully', async () => {
+    it('should delete vector successfully', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteVectors',
+        url: '/vector/DeleteVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1527,7 +1533,7 @@ describe('Vectors API', () => {
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteVectors',
+        url: '/vector/DeleteVectors',
         payload: {
           vectorBucketName: vectorBucketName,
           indexName: indexName,
@@ -1541,7 +1547,7 @@ describe('Vectors API', () => {
     it('should validate required fields', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteVectors',
+        url: '/vector/DeleteVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1557,7 +1563,7 @@ describe('Vectors API', () => {
     it('should handle non-existent index', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/DeleteVectors',
+        url: '/vector/DeleteVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1572,14 +1578,14 @@ describe('Vectors API', () => {
     })
   })
 
-  describe('POST /vectors/ListVectors', () => {
+  describe('POST /vector/ListVectors', () => {
     let indexName: string
 
     beforeEach(async () => {
       indexName = `test-index-${Date.now()}`
       await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1598,10 +1604,10 @@ describe('Vectors API', () => {
       } as ListVectorsOutput)
     })
 
-    it('should list vectors successfully', async () => {
+    it('should list vector successfully', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectors',
+        url: '/vector/ListVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1628,7 +1634,7 @@ describe('Vectors API', () => {
     it('should support maxResults parameter', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectors',
+        url: '/vector/ListVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1650,7 +1656,7 @@ describe('Vectors API', () => {
     it('should support returnData and returnMetadata flags', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectors',
+        url: '/vector/ListVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1674,7 +1680,7 @@ describe('Vectors API', () => {
     it('should support pagination with nextToken', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectors',
+        url: '/vector/ListVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1696,7 +1702,7 @@ describe('Vectors API', () => {
     it('should support segmentation parameters', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectors',
+        url: '/vector/ListVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1720,7 +1726,7 @@ describe('Vectors API', () => {
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectors',
+        url: '/vector/ListVectors',
         payload: {
           vectorBucketName: vectorBucketName,
           indexName: indexName,
@@ -1733,7 +1739,7 @@ describe('Vectors API', () => {
     it('should validate required fields', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectors',
+        url: '/vector/ListVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1748,7 +1754,7 @@ describe('Vectors API', () => {
     it('should validate maxResults range', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectors',
+        url: '/vector/ListVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1765,7 +1771,7 @@ describe('Vectors API', () => {
     it('should validate segmentIndex range', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectors',
+        url: '/vector/ListVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1783,7 +1789,7 @@ describe('Vectors API', () => {
     it('should handle non-existent index', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/ListVectors',
+        url: '/vector/ListVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1797,14 +1803,14 @@ describe('Vectors API', () => {
     })
   })
 
-  describe('POST /vectors/GetVectors', () => {
+  describe('POST /vector/GetVectors', () => {
     let indexName: string
 
     beforeEach(async () => {
       indexName = `test-index-${Date.now()}`
       await appInstance.inject({
         method: 'POST',
-        url: '/vectors/CreateIndex',
+        url: '/vector/CreateIndex',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1836,10 +1842,10 @@ describe('Vectors API', () => {
       } as GetVectorsCommandOutput)
     })
 
-    it('should get vectors successfully', async () => {
+    it('should get vector successfully', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetVectors',
+        url: '/vector/GetVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1870,7 +1876,7 @@ describe('Vectors API', () => {
     it('should work with default returnData and returnMetadata', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetVectors',
+        url: '/vector/GetVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1893,7 +1899,7 @@ describe('Vectors API', () => {
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetVectors',
+        url: '/vector/GetVectors',
         payload: {
           vectorBucketName: vectorBucketName,
           indexName: indexName,
@@ -1907,7 +1913,7 @@ describe('Vectors API', () => {
     it('should validate required fields', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetVectors',
+        url: '/vector/GetVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },
@@ -1923,7 +1929,7 @@ describe('Vectors API', () => {
     it('should handle non-existent index', async () => {
       const response = await appInstance.inject({
         method: 'POST',
-        url: '/vectors/GetVectors',
+        url: '/vector/GetVectors',
         headers: {
           authorization: `Bearer ${serviceToken}`,
         },

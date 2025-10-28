@@ -50,6 +50,7 @@ export enum ErrorCode {
   S3VectorBucketNotEmpty = 'VectorBucketNotEmpty',
   S3VectorMaxBucketsExceeded = 'S3VectorMaxBucketsExceeded',
   S3VectorMaxIndexesExceeded = 'S3VectorMaxIndexesExceeded',
+  S3VectorNoAvailableShard = 'S3VectorNoAvailableShard',
 }
 
 export const ERRORS = {
@@ -469,6 +470,13 @@ export const ERRORS = {
       code: ErrorCode.S3VectorMaxIndexesExceeded,
       httpStatusCode: 400,
       message: `Maximum number of indexes exceeded. Max allowed is ${maxIndexes}. Contact support to increase your limit.`,
+    })
+  },
+  S3VectorNoAvailableShard() {
+    return new StorageBackendError({
+      code: ErrorCode.S3VectorNoAvailableShard,
+      httpStatusCode: 500,
+      message: `No available shards are available to host the vector index. Please try again later.`,
     })
   },
 }

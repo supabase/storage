@@ -20,7 +20,6 @@ DO $$
             dimension              integer          NOT NULL,
             distance_metric        text             NOT NULL,
             metadata_configuration jsonb            NULL,
-            status                 text             NOT NULL default 'PENDING',
             created_at             timestamptz      NOT NULL default now(),
             updated_at             timestamptz      NOT NULL default now()
         );

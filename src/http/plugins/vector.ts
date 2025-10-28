@@ -1,6 +1,6 @@
 import fastifyPlugin from 'fastify-plugin'
 import { FastifyInstance } from 'fastify'
-import { getTenantConfig } from '@internal/database'
+import { getTenantConfig, multitenantKnex } from '@internal/database'
 import {
   createS3VectorClient,
   KnexVectorMetadataDB,
@@ -9,6 +9,7 @@ import {
 } from '@storage/protocols/vector'
 import { getConfig } from '../../config'
 import { ERRORS } from '@internal/errors'
+import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -21,10 +22,10 @@ const s3VectorAdapter = new S3Vector(s3VectorClient)
 
 export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) {
   fastify.addHook('preHandler', async (req) => {
-    const { isMultitenant, vectorBucketS3, vectorMaxBucketsCount, vectorMaxIndexesCount } =
+    const { isMultitenant, vectorS3Buckets, vectorMaxBucketsCount, vectorMaxIndexesCount } =
       getConfig()
 
-    if (!vectorBucketS3) {
+    if (!vectorS3Buckets || vectorS3Buckets.length === 0) {
       throw ERRORS.FeatureNotEnabled('vector', 'Vector service not configured')
     }
 
@@ -39,9 +40,15 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
 
     const db = req.db.pool.acquire()
     const store = new KnexVectorMetadataDB(db)
-    req.s3Vector = new VectorStoreManager(s3VectorAdapter, store, {
+    const shard = isMultitenant
+      ? new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
+      : new SingleShard({
+          shardKey: vectorS3Buckets[0],
+          capacity: 10000,
+        })
+
+    req.s3Vector = new VectorStoreManager(s3VectorAdapter, store, shard, {
       tenantId: req.tenantId,
-      vectorBucketName: vectorBucketS3,
       maxBucketCount: maxBucketCount,
       maxIndexCount: maxIndexCount,
     })

@@ -9,3 +9,4 @@ data/
 bin/
 coverage/
 .idea/
+src/scripts/*.py

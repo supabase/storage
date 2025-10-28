@@ -189,7 +189,7 @@ type StorageConfigType = {
   icebergS3DeleteEnabled: boolean
 
   vectorEnabled: boolean
-  vectorBucketS3?: string
+  vectorS3Buckets: string[]
   vectorBucketRegion?: string
   vectorMaxBucketsCount: number
   vectorMaxIndexesCount: number
@@ -534,7 +534,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     icebergS3DeleteEnabled: getOptionalConfigFromEnv('ICEBERG_S3_DELETE_ENABLED') === 'true',
 
     vectorEnabled: getOptionalConfigFromEnv('VECTOR_ENABLED') === 'true',
-    vectorBucketS3: getOptionalConfigFromEnv('VECTOR_BUCKET_S3') || undefined,
+    vectorS3Buckets: getOptionalConfigFromEnv('VECTOR_S3_BUCKETS')?.trim()?.split(',') || [],
     vectorBucketRegion: getOptionalConfigFromEnv('VECTOR_BUCKET_REGION') || undefined,
     vectorMaxBucketsCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_BUCKETS') || '10', 10),
     vectorMaxIndexesCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_INDEXES') || '20', 10),

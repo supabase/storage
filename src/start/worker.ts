@@ -1,5 +1,5 @@
 import { Queue } from '@internal/queue'
-import { logger, logSchema } from '@internal/monitoring'
+import { logger, logSchema, setLogger } from '@internal/monitoring'
 import { listenForTenantUpdate, PubSub } from '@internal/database'
 import { AsyncAbortController } from '@internal/concurrency'
 import { registerWorkers } from '@storage/events'
@@ -7,6 +7,9 @@ import { registerWorkers } from '@storage/events'
 import { getConfig } from '../config'
 import adminApp from '../admin-app'
 import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
+
+const workerLogger = logger.child({ service: 'worker' })
+setLogger(workerLogger)
 
 const shutdownSignal = new AsyncAbortController()
 

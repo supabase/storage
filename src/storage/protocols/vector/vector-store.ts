@@ -18,10 +18,11 @@ import {
 import { VectorMetadataDB } from './knex'
 import { VectorStore } from './adapter/s3-vector'
 import { ERRORS } from '@internal/errors'
+import { Sharder } from '@internal/sharding/sharder'
+import { logger, logSchema } from '@internal/monitoring'
 
 interface VectorStoreConfig {
   tenantId: string
-  vectorBucketName: string
   maxBucketCount: number
   maxIndexCount: number
 }
@@ -30,6 +31,7 @@ export class VectorStoreManager {
   constructor(
     protected readonly vectorStore: VectorStore,
     protected readonly db: VectorMetadataDB,
+    protected readonly sharding: Sharder,
     protected readonly config: VectorStoreConfig
   ) {}
 
@@ -127,8 +129,12 @@ export class VectorStoreManager {
       indexName: this.getIndexName(command.indexName),
     }
 
-    await this.db.withTransaction(
-      async (tx) => {
+    let shardReservation: { reservationId: string; shardKey: string; shardId: string } | undefined
+
+    try {
+      await this.db.withTransaction(async (tx) => {
+        await tx.lockResource('bucket', command.vectorBucketName!)
+
         const indexCount = await tx.countIndexes(command.vectorBucketName!)
 
         if (indexCount >= this.config.maxIndexCount) {
@@ -144,21 +150,67 @@ export class VectorStoreManager {
           vectorBucketName: command.vectorBucketName!,
         })
 
+        shardReservation = await this.sharding.reserve({
+          kind: 'vector',
+          bucketName: command.vectorBucketName!,
+          tenantId: this.config.tenantId,
+          logicalName: command.indexName!,
+        })
+
+        if (!shardReservation) {
+          throw ERRORS.S3VectorNoAvailableShard()
+        }
+
         try {
+          if (
+            createIndexInput.metadataConfiguration &&
+            createIndexInput.metadataConfiguration.nonFilterableMetadataKeys &&
+            createIndexInput.metadataConfiguration.nonFilterableMetadataKeys.length === 0
+          ) {
+            delete createIndexInput.metadataConfiguration
+          }
+
           await this.vectorStore.createVectorIndex({
             ...createIndexInput,
-            vectorBucketName: this.config.vectorBucketName,
+            vectorBucketName: shardReservation.shardKey,
+          })
+
+          await this.sharding.confirm(shardReservation.reservationId, {
+            kind: 'vector',
+            bucketName: command.vectorBucketName!,
+            tenantId: this.config.tenantId,
+            logicalName: command.indexName!,
           })
         } catch (e) {
+          logSchema.error(logger, 'Vector index creation failed', {
+            type: 'vector',
+            error: e,
+            project: this.config.tenantId,
+          })
           if (e instanceof ConflictException) {
+            await this.sharding.confirm(shardReservation.reservationId, {
+              kind: 'vector',
+              bucketName: command.vectorBucketName!,
+              tenantId: this.config.tenantId,
+              logicalName: command.indexName!,
+            })
             return
           }
 
           throw e
         }
-      },
-      { isolationLevel: 'serializable' }
-    )
+      })
+    } catch (error) {
+      logSchema.error(logger, 'Create vector index transaction failed', {
+        type: 'vector',
+        error: error,
+        project: this.config.tenantId,
+      })
+      if (shardReservation) {
+        await this.sharding.cancel(shardReservation.reservationId)
+      }
+      throw error
+    }
   }
 
   async deleteIndex(command: DeleteIndexInput): Promise<void> {
@@ -175,10 +227,28 @@ export class VectorStoreManager {
     const vectorIndexName = this.getIndexName(command.indexName)
 
     await this.db.withTransaction(async (tx) => {
+      const shard = await this.sharding.findShardByResourceId({
+        kind: 'vector',
+        tenantId: this.config.tenantId,
+        logicalName: command.indexName!,
+        bucketName: command.vectorBucketName!,
+      })
+
+      if (!shard) {
+        throw ERRORS.S3VectorNoAvailableShard()
+      }
+
       await tx.deleteVectorIndex(command.vectorBucketName!, command.indexName!)
 
+      await this.sharding.freeByResource(shard.id, {
+        kind: 'vector',
+        tenantId: this.config.tenantId,
+        bucketName: command.vectorBucketName!,
+        logicalName: command.indexName!,
+      })
+
       await this.vectorStore.deleteVectorIndex({
-        vectorBucketName: this.config.vectorBucketName,
+        vectorBucketName: shard.shard_key,
         indexName: vectorIndexName,
       })
     })
@@ -239,11 +309,23 @@ export class VectorStoreManager {
       throw ERRORS.MissingParameter('vectorBucketName')
     }
 
-    await this.db.findVectorIndexForBucket(command.vectorBucketName, command.indexName)
+    const [shard] = await Promise.all([
+      this.sharding.findShardByResourceId({
+        kind: 'vector',
+        tenantId: this.config.tenantId,
+        logicalName: command.indexName!,
+        bucketName: command.vectorBucketName!,
+      }),
+      this.db.findVectorIndexForBucket(command.vectorBucketName, command.indexName),
+    ])
+
+    if (!shard) {
+      throw ERRORS.S3VectorNoAvailableShard()
+    }
 
     const putVectorsInput = {
       ...command,
-      vectorBucketName: this.config.vectorBucketName,
+      vectorBucketName: shard.shard_key,
       indexName: this.getIndexName(command.indexName),
     }
     await this.vectorStore.putVectors(putVectorsInput)
@@ -258,11 +340,23 @@ export class VectorStoreManager {
       throw ERRORS.MissingParameter('vectorBucketName')
     }
 
-    await this.db.findVectorIndexForBucket(command.vectorBucketName, command.indexName)
+    const [shard] = await Promise.all([
+      this.sharding.findShardByResourceId({
+        kind: 'vector',
+        tenantId: this.config.tenantId,
+        logicalName: command.indexName!,
+        bucketName: command.vectorBucketName!,
+      }),
+      this.db.findVectorIndexForBucket(command.vectorBucketName, command.indexName),
+    ])
+
+    if (!shard) {
+      throw ERRORS.S3VectorNoAvailableShard()
+    }
 
     const deleteVectorsInput = {
       ...command,
-      vectorBucketName: this.config.vectorBucketName,
+      vectorBucketName: shard.shard_key,
       indexName: this.getIndexName(command.indexName),
     }
 
@@ -278,11 +372,23 @@ export class VectorStoreManager {
       throw ERRORS.MissingParameter('vectorBucketName')
     }
 
-    await this.db.findVectorIndexForBucket(command.vectorBucketName, command.indexName)
+    const [shard] = await Promise.all([
+      this.sharding.findShardByResourceId({
+        kind: 'vector',
+        tenantId: this.config.tenantId,
+        logicalName: command.indexName!,
+        bucketName: command.vectorBucketName!,
+      }),
+      this.db.findVectorIndexForBucket(command.vectorBucketName, command.indexName),
+    ])
+
+    if (!shard) {
+      throw ERRORS.S3VectorNoAvailableShard()
+    }
 
     const listVectorsInput = {
       ...command,
-      vectorBucketName: this.config.vectorBucketName,
+      vectorBucketName: shard.shard_key,
       indexName: this.getIndexName(command.indexName),
     }
 
@@ -303,11 +409,23 @@ export class VectorStoreManager {
       throw ERRORS.MissingParameter('vectorBucketName')
     }
 
-    await this.db.findVectorIndexForBucket(command.vectorBucketName, command.indexName)
+    const [shard] = await Promise.all([
+      this.sharding.findShardByResourceId({
+        kind: 'vector',
+        tenantId: this.config.tenantId,
+        logicalName: command.indexName!,
+        bucketName: command.vectorBucketName!,
+      }),
+      this.db.findVectorIndexForBucket(command.vectorBucketName, command.indexName),
+    ])
+
+    if (!shard) {
+      throw ERRORS.S3VectorNoAvailableShard()
+    }
 
     const queryInput = {
       ...command,
-      vectorBucketName: this.config.vectorBucketName,
+      vectorBucketName: shard.shard_key,
       indexName: this.getIndexName(command.indexName),
     }
     return this.vectorStore.queryVectors(queryInput)
@@ -322,11 +440,23 @@ export class VectorStoreManager {
       throw ERRORS.MissingParameter('vectorBucketName')
     }
 
-    await this.db.findVectorIndexForBucket(command.vectorBucketName, command.indexName)
+    const [shard] = await Promise.all([
+      this.sharding.findShardByResourceId({
+        kind: 'vector',
+        tenantId: this.config.tenantId,
+        logicalName: command.indexName!,
+        bucketName: command.vectorBucketName!,
+      }),
+      this.db.findVectorIndexForBucket(command.vectorBucketName, command.indexName),
+    ])
+
+    if (!shard) {
+      throw ERRORS.S3VectorNoAvailableShard()
+    }
 
     const getVectorsInput = {
       ...command,
-      vectorBucketName: this.config.vectorBucketName,
+      vectorBucketName: shard.shard_key,
       indexName: this.getIndexName(command.indexName),
     }
 

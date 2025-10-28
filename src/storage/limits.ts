@@ -3,7 +3,7 @@ import {
   getFileSizeLimit as getFileSizeLimitForTenant,
   getFeatures,
 } from '../internal/database/tenant'
-import { ERRORS } from '../internal/errors'
+import { ERRORS } from '@internal/errors'
 
 const { isMultitenant, imageTransformationEnabled, icebergBucketDetectionSuffix } = getConfig()
 

@@ -20,9 +20,10 @@ import {
 import { DatabaseError } from 'pg'
 import { TenantConnection } from '@internal/database'
 import { DbQueryPerformance } from '@internal/monitoring/metrics'
-import { isUuid } from '../limits'
+import { hashStringToInt } from '@internal/hashing'
 import { DBMigration, tenantHasMigrations } from '@internal/database/migrations'
 import { getConfig } from '../../config'
+import { isUuid } from '../limits'
 
 const { isMultitenant } = getConfig()
 
@@ -1132,14 +1133,4 @@ export class DBError extends StorageBackendError implements RenderableError {
         })
     }
   }
-}
-
-export default function hashStringToInt(str: string): number {
-  let hash = 5381
-  let i = -1
-  while (i < str.length - 1) {
-    i += 1
-    hash = (hash * 33) ^ str.charCodeAt(i)
-  }
-  return hash >>> 0
 }

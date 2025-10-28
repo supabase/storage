@@ -5,6 +5,7 @@ import { VectorBucket } from '@storage/schemas'
 import { ListVectorBucketsInput } from '@aws-sdk/client-s3vectors'
 import { DatabaseError } from 'pg'
 import { wait } from '@internal/concurrency'
+import { hashStringToInt } from '@internal/hashing'
 
 type DBVectorIndex = VectorIndex & { id: string; created_at: Date; updated_at: Date }
 
@@ -42,6 +43,8 @@ export interface VectorMetadataDB {
     config?: Knex.TransactionConfig
   ): Promise<T>
 
+  lockResource(resourceType: 'bucket' | 'index', resourceId: string): Promise<void>
+
   findVectorBucket(vectorBucketName: string): Promise<VectorBucket>
   createVectorBucket(bucketName: string): Promise<void>
   deleteVectorBucket(bucketName: string, vectorIndexName: string): Promise<void>
@@ -58,6 +61,11 @@ export interface VectorMetadataDB {
 
 export class KnexVectorMetadataDB implements VectorMetadataDB {
   constructor(protected readonly knex: Knex) {}
+
+  lockResource(resourceType: 'bucket' | 'index', resourceId: string): Promise<void> {
+    const lockId = hashStringToInt(`vector:${resourceType}:${resourceId}`)
+    return this.knex.raw('SELECT pg_advisory_xact_lock(?::bigint)', [lockId])
+  }
 
   async countIndexes(bucketId: string): Promise<number> {
     const row = await this.knex
@@ -193,21 +201,33 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
     return index
   }
 
-  createVectorIndex(data: CreateVectorIndexParams) {
-    return this.knex
-      .withSchema('storage')
-      .table<DBVectorIndex>('vector_indexes')
-      .insert<DBVectorIndex>({
-        bucket_id: data.vectorBucketName,
-        data_type: data.dataType,
-        name: data.indexName,
-        dimension: data.dimension,
-        distance_metric: data.distanceMetric,
-        metadata_configuration: data.metadataConfiguration,
-      })
+  async createVectorIndex(data: CreateVectorIndexParams) {
+    try {
+      return await this.knex
+        .withSchema('storage')
+        .table<DBVectorIndex>('vector_indexes')
+        .insert<DBVectorIndex>({
+          bucket_id: data.vectorBucketName,
+          data_type: data.dataType,
+          name: data.indexName,
+          dimension: data.dimension,
+          distance_metric: data.distanceMetric,
+          metadata_configuration: data.metadataConfiguration,
+        })
+    } catch (e) {
+      if (e instanceof Error && e instanceof DatabaseError) {
+        if (e.code === '23505') {
+          throw ERRORS.S3VectorConflictException('vector index', data.indexName)
+        }
+      }
+      throw e
+    }
   }
 
-  async withTransaction<T>(fn: (db: KnexVectorMetadataDB) => T): Promise<T> {
+  async withTransaction<T>(
+    fn: (db: KnexVectorMetadataDB) => T,
+    config?: Knex.TransactionConfig
+  ): Promise<T> {
     const maxRetries = 3
     let attempt = 0
     let lastError: Error | undefined = undefined
@@ -216,8 +236,9 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
       try {
         return await this.knex.transaction(async (trx) => {
           const trxDb = new KnexVectorMetadataDB(trx)
-          return fn(trxDb)
-        })
+          const result = await fn(trxDb)
+          return result
+        }, config)
       } catch (error) {
         attempt++
 
@@ -233,7 +254,7 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
       }
     }
 
-    throw ERRORS.TransactionError('Transaction failed after maximum retries', lastError)
+    throw ERRORS.TransactionError(`Transaction failed after maximum ${attempt} retries`, lastError)
   }
 
   deleteVectorIndex(bucketName: string, vectorIndexName: string): Promise<void> {

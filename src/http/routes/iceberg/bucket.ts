@@ -31,13 +31,6 @@ const listBucketsQuerySchema = {
   },
 } as const
 
-const successResponseSchema = {
-  type: 'object',
-  properties: {
-    message: { type: 'string', examples: ['Successfully deleted'] },
-  },
-}
-
 interface deleteBucketRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof deleteBucketParamsSchema>
 }
@@ -54,11 +47,11 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.delete<deleteBucketRequestInterface>(
     '/bucket/:bucketId',
     {
-      schema: createDefaultSchema(successResponseSchema, {
+      schema: {
         params: deleteBucketParamsSchema,
         summary: 'Delete an analytics bucket',
         tags: ['bucket'],
-      }),
+      },
       config: {
         operation: { type: ROUTE_OPERATIONS.DELETE_BUCKET },
       },

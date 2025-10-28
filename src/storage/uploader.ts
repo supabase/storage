@@ -349,7 +349,7 @@ export async function fileUploadFromRequest(
 
         try {
           userMetadata = JSON.parse(customMd)
-        } catch (e) {
+        } catch {
           // no-op
         }
       }
@@ -381,6 +381,13 @@ export async function fileUploadFromRequest(
     }
   }
 
+  // Detect if the request stream closed before we could pass it to the storage backend
+  // Without this check, the storage backend (S3) would throw a 500 "Premature close" error
+  // when attempting to read from the closed stream. We catch this early and return 400.
+  if (!body || body.closed || body.destroyed || body.readableEnded) {
+    throw ERRORS.NoContentProvided(new Error('Request stream closed before upload could begin'))
+  }
+
   return {
     body,
     mimeType,
@@ -395,7 +402,7 @@ export function parseUserMetadata(metadata: string) {
   try {
     const json = Buffer.from(metadata, 'base64').toString('utf8')
     return JSON.parse(json) as Record<string, string>
-  } catch (e) {
+  } catch {
     // no-op
     return undefined
   }

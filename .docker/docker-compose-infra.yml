@@ -48,7 +48,7 @@ services:
       PGBOUNCER_STATS_USERS: postgres
 
   supavisor:
-    image: supabase/supavisor:1.1.23
+    image: supabase/supavisor:2.7.4
     depends_on:
       multitenant_db:
         condition: service_healthy

@@ -412,11 +412,27 @@ export class SignatureV4 {
     return `${method}\n${canonicalUri}\n${canonicalQueryString}\n${canonicalHeaders}\n${signedHeadersString}\n${payloadHash}`
   }
 
+  /**
+   * Encodes a URI component according to RFC 3986, as required by AWS Signature V4.
+   * This differs from encodeURIComponent which doesn't encode certain characters
+   * like parentheses that AWS requires to be percent-encoded.
+   */
+  protected encodeRFC3986URIComponent(str: string): string {
+    return encodeURIComponent(str).replace(/[!'()*]/g, (c) => {
+      return '%' + c.charCodeAt(0).toString(16).toUpperCase()
+    })
+  }
+
   protected constructCanonicalQueryString(query: Record<string, string>) {
     return Object.keys(query)
       .filter((key) => !(key in ALWAYS_UNSIGNABLE_QUERY_PARAMS))
       .sort()
-      .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(query[key] as string)}`)
+      .map(
+        (key) =>
+          `${this.encodeRFC3986URIComponent(key)}=${this.encodeRFC3986URIComponent(
+            query[key] as string
+          )}`
+      )
       .join('&')
   }
 

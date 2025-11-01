@@ -292,6 +292,47 @@ describe('S3 Protocol', () => {
         expect(resp.Contents?.length).toBe(3)
       })
 
+      it('list objects with aws specific uri encoding', async () => {
+        const bucket = await createBucket(client)
+        const testObject1 = 'test (1).jpg'
+        const testObject2 = `prefix-1/test-1!'(123)*.jpg`
+
+        await Promise.all([testObject1, testObject2].map((v) => uploadFile(client, bucket, v, 1)))
+
+        const resp = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+          })
+        )
+        expect(resp.Contents?.length).toBe(2)
+
+        const resp2 = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+            Prefix: 'test (',
+          })
+        )
+        expect(resp2.Contents?.length).toBe(1)
+        expect(resp2.Contents).toEqual([
+          expect.objectContaining({
+            Key: testObject1,
+          }),
+        ])
+
+        const resp3 = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+            Prefix: `prefix-1/test-1!'(123)*`,
+          })
+        )
+        expect(resp3.Contents?.length).toBe(1)
+        expect(resp3.Contents).toEqual([
+          expect.objectContaining({
+            Key: testObject2,
+          }),
+        ])
+      })
+
       it('list keys and common prefixes', async () => {
         const bucket = await createBucket(client)
         const listBuckets = new ListObjectsV2Command({

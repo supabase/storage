@@ -2,7 +2,7 @@
 
 [![Coverage Status](https://coveralls.io/repos/github/supabase/storage-api/badge.svg?branch=master)](https://coveralls.io/github/supabase/storage-api?branch=master)
 
-A scalable, light-weight object storage service.
+A scalable, lightweight object storage service.
 
 > Read [this post](https://supabase.io/blog/2021/03/30/supabase-storage) on why we decided to build a new object storage service.
 

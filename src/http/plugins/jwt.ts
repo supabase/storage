@@ -21,6 +21,7 @@ declare module 'fastify' {
 
 interface JWTPluginOptions {
   enforceJwtRoles?: string[]
+  skipIfAlreadyAuthenticated?: boolean
 }
 
 const { jwtCachingEnabled } = getConfig()
@@ -33,6 +34,10 @@ export const jwt = fastifyPlugin<JWTPluginOptions>(
     fastify.decorateRequest('jwtPayload', undefined)
 
     fastify.addHook('preHandler', async (request) => {
+      if (opts.skipIfAlreadyAuthenticated && request.isAuthenticated && request.jwtPayload) {
+        return
+      }
+
       request.jwt = (request.headers.authorization || '').replace(BEARER, '')
 
       if (!request.jwt && request.routeOptions.config.allowInvalidJwt) {

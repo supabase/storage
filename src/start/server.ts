@@ -5,7 +5,12 @@ import { IncomingMessage, Server, ServerResponse } from 'node:http'
 import build from '../app'
 import buildAdmin from '../admin-app'
 import { getConfig } from '../config'
-import { listenForTenantUpdate, PubSub, TenantConnection } from '@internal/database'
+import {
+  listenForTenantUpdate,
+  multitenantKnex,
+  PubSub,
+  TenantConnection,
+} from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import { Queue } from '@internal/queue'
 import { registerWorkers } from '@storage/events'
@@ -18,6 +23,7 @@ import {
   startAsyncMigrations,
 } from '@internal/database/migrations'
 import { Cluster } from '@internal/cluster/cluster'
+import { KnexShardStoreFactory, ShardCatalog } from '@internal/sharding'
 
 const shutdownSignal = new AsyncAbortController()
 
@@ -47,12 +53,26 @@ main()
  * Start Storage API server
  */
 async function main() {
-  const { databaseURL, isMultitenant, pgQueueEnable, dbMigrationFreezeAt } = getConfig()
+  const { databaseURL, isMultitenant, pgQueueEnable, dbMigrationFreezeAt, vectorS3Buckets } =
+    getConfig()
+
+  // Sharding for special buckets (vectors, analytics)
+  const sharding = new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
 
   // Migrations
   if (isMultitenant) {
     await runMultitenantMigrations()
     await listenForTenantUpdate(PubSub)
+
+    // Create shards for vector S3 buckets
+    await sharding.createShards(
+      vectorS3Buckets?.map((s) => ({
+        shardKey: s,
+        kind: 'vector',
+        capacity: 10000,
+        status: 'active',
+      }))
+    )
   } else {
     await runMigrationsOnTenant({
       databaseUrl: databaseURL,

@@ -20,9 +20,10 @@ import {
 import { DatabaseError } from 'pg'
 import { TenantConnection } from '@internal/database'
 import { DbQueryPerformance } from '@internal/monitoring/metrics'
-import { isUuid } from '../limits'
+import { hashStringToInt } from '@internal/hashing'
 import { DBMigration, tenantHasMigrations } from '@internal/database/migrations'
 import { getConfig } from '../../config'
+import { isUuid } from '../limits'
 
 const { isMultitenant } = getConfig()
 
@@ -111,7 +112,38 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  createIcebergBucket(data: Pick<Bucket, 'id' | 'name'>): Promise<IcebergCatalog> {
+  listIcebergBuckets(
+    columns: string,
+    options: ListBucketOptions | undefined
+  ): Promise<IcebergCatalog[]> {
+    return this.runQuery('ListIcebergBuckets', async (knex) => {
+      const query = knex
+        .from<IcebergCatalog>('buckets_analytics')
+        .select(columns.split(',').map((c) => c.trim()))
+
+      if (options?.search !== undefined && options.search.length > 0) {
+        query.where('id', 'like', `%${options.search}%`)
+      }
+
+      if (options?.sortColumn !== undefined) {
+        query.orderBy(options.sortColumn, options.sortOrder || 'asc')
+      } else {
+        query.orderBy('id', 'asc')
+      }
+
+      if (options?.limit !== undefined) {
+        query.limit(options.limit)
+      }
+
+      if (options?.offset !== undefined) {
+        query.offset(options.offset)
+      }
+
+      return query
+    })
+  }
+
+  createIcebergBucket(data: Pick<Bucket, 'id'>): Promise<IcebergCatalog> {
     const bucketData: IcebergCatalog = {
       id: data.id,
     }
@@ -1101,14 +1133,4 @@ export class DBError extends StorageBackendError implements RenderableError {
         })
     }
   }
-}
-
-export default function hashStringToInt(str: string): number {
-  let hash = 5381
-  let i = -1
-  while (i < str.length - 1) {
-    i += 1
-    hash = (hash * 33) ^ str.charCodeAt(i)
-  }
-  return hash >>> 0
 }

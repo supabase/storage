@@ -218,3 +218,10 @@ export async function generateHS512JWK(): Promise<JwksConfigKeyOCT> {
   const secret = await generateSecret('HS512', { extractable: true })
   return (await exportJWK(secret)) as JwksConfigKeyOCT
 }
+
+const JWT_SHAPE =
+  /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)?$/
+
+export function isJwtToken(token: string) {
+  return token.replace('Bearer ', '').match(JWT_SHAPE)
+}

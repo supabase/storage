@@ -1,4 +1,4 @@
-import pino, { BaseLogger } from 'pino'
+import pino, { BaseLogger, Logger } from 'pino'
 import { getConfig } from '../../config'
 import { FastifyReply, FastifyRequest } from 'fastify'
 import { URL } from 'node:url'
@@ -48,7 +48,11 @@ export const baseLogger = pino({
   timestamp: pino.stdTimeFunctions.isoTime,
 })
 
-export const logger = baseLogger.child({ region })
+export let logger = baseLogger.child({ region })
+
+export function setLogger(newLogger: Logger) {
+  logger = newLogger
+}
 
 export interface RequestLog {
   type: 'request'

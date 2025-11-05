@@ -17,3 +17,13 @@ export const createByteCounterStream = () => {
     },
   }
 }
+
+export class RequestByteCounterStream extends Transform {
+  public receivedEncodedLength = 0
+
+  _transform(chunk: Buffer, _enc: BufferEncoding, cb: TransformCallback): void {
+    this.receivedEncodedLength += chunk.length
+
+    cb(null, chunk)
+  }
+}

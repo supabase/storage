@@ -4,6 +4,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import { ERRORS } from '@internal/errors'
 import { CreateTableRequest } from '@storage/protocols/iceberg/catalog/rest-catalog-client'
 import { ROUTE_OPERATIONS } from '../operations'
+import JSONBigint from 'json-bigint'
 
 const createTableSchema = {
   body: {
@@ -234,18 +235,24 @@ const commitTransactionSchema = {
         items: {
           type: 'object',
           description: 'A requirement assertion',
+          required: ['type'],
           properties: {
-            name: {
+            type: {
               type: 'string',
-              description: 'Name of the requirement (e.g. assert-ref-snapshot-id)',
-              examples: ['assert-ref-snapshot-id'],
+              description:
+                'Type of the requirement (e.g. assert-ref-snapshot-id, assert-table-uuid)',
+              examples: ['assert-ref-snapshot-id', 'assert-table-uuid'],
             },
+            // allow arbitrary additional args specific to the requirement
+            ref: { type: 'string' },
+            // 'snapshot-id': { type: 'number', format: 'int64', bigint: true },
+            uuid: { type: 'string' },
             args: {
               type: 'object',
-              description: 'Arguments for the requirement',
               additionalProperties: true,
             },
           },
+          additionalProperties: true,
         },
       },
       updates: {
@@ -254,18 +261,54 @@ const commitTransactionSchema = {
         items: {
           type: 'object',
           description: 'A single update operation',
+          required: ['action'],
           properties: {
-            name: {
+            action: {
               type: 'string',
-              description: 'Name of the update operation (e.g. add-column)',
-              examples: ['add-column'],
+              description: 'Action to perform (e.g. add-snapshot, set-snapshot-ref)',
+              examples: ['add-snapshot', 'set-snapshot-ref'],
             },
+            snapshot: {
+              type: 'object',
+              properties: {
+                // 'snapshot-id': { type: 'string', format: 'int64', bigint: true },
+                // 'parent-snapshot-id': {
+                //   type: 'integer',
+                //   format: 'int64',
+                //   bigint: true,
+                //   nullable: true,
+                // },
+                'sequence-number': { type: 'integer' },
+                'timestamp-ms': { type: 'integer' },
+                'manifest-list': { type: 'string' },
+                summary: {
+                  type: 'object',
+                  additionalProperties: true,
+                  properties: {
+                    operation: { type: 'string' },
+                    'added-files-size': { type: 'string' },
+                    'added-data-files': { type: 'string' },
+                    'added-records': { type: 'string' },
+                    'total-delete-files': { type: 'string' },
+                    'total-records': { type: 'string' },
+                    'total-position-deletes': { type: 'string' },
+                    'total-equality-deletes': { type: 'string' },
+                  },
+                },
+                'schema-id': { type: 'integer' },
+              },
+              additionalProperties: true,
+            },
+            // Fields for set-snapshot-ref or similar actions
+            'ref-name': { type: 'string' },
+            type: { type: 'string' },
+            // 'snapshot-id': { type: 'integer', format: 'int64', bigint: true },
             args: {
               type: 'object',
-              description: 'Arguments for the update operation',
               additionalProperties: true,
             },
           },
+          additionalProperties: true,
         },
       },
     },
@@ -298,11 +341,30 @@ interface commitTableRequest extends AuthenticatedRequest {
   Body: FromSchema<(typeof commitTransactionSchema)['body']>
 }
 
+const BigIntSerializer = JSONBigint({
+  strict: true,
+  useNativeBigInt: true,
+})
+
 export default async function routes(fastify: FastifyInstance) {
+  // Make sure big ints responses are serialized correctly as integers and not strings
+  fastify.setSerializerCompiler(() => {
+    return BigIntSerializer.stringify
+  })
+
   fastify.post<createTableSchemaRequest>(
     '/:prefix/namespaces/:namespace/tables',
     {
-      schema: { ...createTableSchema, tags: ['iceberg'] },
+      schema: {
+        ...createTableSchema,
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: true,
+          },
+        },
+        tags: ['iceberg'],
+      },
     },
     async (request, response) => {
       if (!request.icebergCatalog) {
@@ -325,7 +387,16 @@ export default async function routes(fastify: FastifyInstance) {
       config: {
         operation: { type: ROUTE_OPERATIONS.ICEBERG_LIST_TABLES },
       },
-      schema: { ...listTableSchema, tags: ['iceberg'] },
+      schema: {
+        ...listTableSchema,
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: true,
+          },
+        },
+        tags: ['iceberg'],
+      },
     },
     async (request, response) => {
       if (!request.icebergCatalog) {
@@ -349,7 +420,16 @@ export default async function routes(fastify: FastifyInstance) {
       config: {
         operation: { type: ROUTE_OPERATIONS.ICEBERG_LOAD_TABLE },
       },
-      schema: { ...loadTableSchema, tags: ['iceberg'] },
+      schema: {
+        ...loadTableSchema,
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: true,
+          },
+        },
+        tags: ['iceberg'],
+      },
       exposeHeadRoute: false,
     },
     async (request, response) => {
@@ -373,7 +453,16 @@ export default async function routes(fastify: FastifyInstance) {
       config: {
         operation: { type: ROUTE_OPERATIONS.ICEBERG_TABLE_EXISTS },
       },
-      schema: { ...loadTableSchema, tags: ['iceberg'] },
+      schema: {
+        ...loadTableSchema,
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: true,
+          },
+        },
+        tags: ['iceberg'],
+      },
     },
     async (request, response) => {
       if (!request.icebergCatalog) {
@@ -424,27 +513,64 @@ export default async function routes(fastify: FastifyInstance) {
     )
   })
 
-  fastify.post<commitTableRequest>(
-    '/:prefix/namespaces/:namespace/tables/:table',
-    {
-      config: {
-        operation: { type: ROUTE_OPERATIONS.ICEBERG_COMMIT_TABLE },
-      },
-      schema: { ...commitTransactionSchema, tags: ['iceberg'] },
-    },
-    async (request, response) => {
-      if (!request.icebergCatalog) {
-        throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
+  fastify.register(async (fastify) => {
+    fastify.addContentTypeParser('application/json', {}, (_request, payload: unknown, done) => {
+      try {
+        if (typeof payload === 'string') return done(null, JSONBigint.parse(payload))
+        if (Buffer.isBuffer(payload)) return done(null, JSONBigint.parse(payload.toString('utf8')))
+        if (payload && typeof (payload as any).on === 'function') {
+          const chunks: Buffer[] = []
+          ;(payload as NodeJS.ReadableStream).on('data', (c) =>
+            chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c)))
+          )
+          ;(payload as NodeJS.ReadableStream).on('end', () => {
+            try {
+              done(null, JSONBigint.parse(Buffer.concat(chunks).toString('utf8')))
+            } catch (err) {
+              done(err as Error)
+            }
+          })
+          ;(payload as NodeJS.ReadableStream).on('error', (err) => done(err as Error))
+          return
+        }
+        done(null, payload)
+      } catch (err) {
+        done(err as Error)
       }
+    })
 
-      const result = await request.icebergCatalog.updateTable({
-        ...request.body,
-        namespace: request.params.namespace,
-        table: request.params.table,
-        warehouse: request.params.prefix,
-      })
+    fastify.post<commitTableRequest>(
+      '/:prefix/namespaces/:namespace/tables/:table',
+      {
+        config: {
+          operation: { type: ROUTE_OPERATIONS.ICEBERG_COMMIT_TABLE },
+        },
+        schema: {
+          ...commitTransactionSchema,
+          response: {
+            200: {
+              type: 'object',
+              additionalProperties: true,
+            },
+          },
+          tags: ['iceberg'],
+        },
+      },
+      async (request, response) => {
+        if (!request.icebergCatalog) {
+          throw ERRORS.FeatureNotEnabled('icebergCatalog', 'iceberg_catalog')
+        }
 
-      return response.send(result)
-    }
-  )
+        const result = await request.icebergCatalog.updateTable({
+          namespace: request.params.namespace,
+          table: request.params.table,
+          warehouse: request.params.prefix,
+          requirements: request.body.requirements,
+          updates: request.body.updates,
+        })
+
+        return response.send(result)
+      }
+    )
+  })
 }

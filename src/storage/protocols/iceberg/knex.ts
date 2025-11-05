@@ -54,6 +54,7 @@ export interface Metastore {
   assignNamespace(params: AssignInterfaceParams): Promise<NamespaceIndex>
   listNamespaces(params: ListNamespaceParams): Promise<NamespaceIndex[]>
   dropNamespace(params: DropNamespaceParams): Promise<void>
+  dropCatalog(params: { tenantId?: string; bucketId: string }): Promise<boolean>
   createTable(params: CreateTableParams): Promise<TableIndex>
   dropTable(params: DropTableRequest): Promise<void>
   findTableByLocation(params: { tenantId?: string; location: string }): Promise<TableIndex>
@@ -92,6 +93,21 @@ export class KnexMetastore implements Metastore {
     private readonly ops: { schema: string; multiTenant?: boolean }
   ) {}
 
+  async dropCatalog(params: { tenantId?: string | undefined; bucketId: string }): Promise<boolean> {
+    if (!this.ops.multiTenant) {
+      return Promise.resolve(false)
+    }
+
+    await this.db
+      .withSchema(this.ops.schema)
+      .table('iceberg_catalogs')
+      .where('tenant_id', params.tenantId)
+      .andWhere('id', params.bucketId)
+      .del()
+
+    return true
+  }
+
   listTables(param: {
     tenantId: string
     pageSize: number | undefined
@@ -129,7 +145,6 @@ export class KnexMetastore implements Metastore {
 
     if (this.ops.multiTenant) {
       countNamespaces.andWhere('tenant_id', params.tenantId)
-      countNamespaces.select('tenant_id')
     }
 
     const countTables = this.db
@@ -141,7 +156,6 @@ export class KnexMetastore implements Metastore {
 
     if (this.ops.multiTenant) {
       countTables.andWhere('tenant_id', params.tenantId)
-      countTables.select('tenant_id')
     }
 
     const resultQuery = this.db

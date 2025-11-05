@@ -1,9 +1,19 @@
 import crypto from 'crypto'
 import { ERRORS } from '@internal/errors'
+import { Readable } from 'stream'
+import { createHash } from 'node:crypto'
+import { pipeline } from 'stream/promises'
+import { Writable } from 'node:stream'
+
+export enum SignatureV4Service {
+  S3 = 's3',
+  S3VECTORS = 's3vectors',
+}
 
 interface SignatureV4Options {
   enforceRegion: boolean
   allowForwardedHeader?: boolean
+  allowBodyHashing?: boolean
   nonCanonicalForwardedHost?: string
   credentials: Omit<Credentials, 'shortDate'> & { secretKey: string }
 }
@@ -23,11 +33,12 @@ export interface ClientSignature {
 
 interface SignatureRequest {
   url: string
-  body?: string | ReadableStream | Buffer
+  body?: string | ReadableStream | Buffer | Readable
   headers: Record<string, string | string[]>
   method: string
   query?: Record<string, string>
   prefix?: string
+  payloadHasher?: Writable & { digestHex: () => string }
 }
 
 interface Credentials {
@@ -86,12 +97,14 @@ export class SignatureV4 {
   public readonly serverCredentials: SignatureV4Options['credentials']
   enforceRegion: boolean
   allowForwardedHeader?: boolean
+  allowBodyHashing?: boolean
   nonCanonicalForwardedHost?: string
 
   constructor(options: SignatureV4Options) {
     this.serverCredentials = options.credentials
     this.enforceRegion = options.enforceRegion
     this.allowForwardedHeader = options.allowForwardedHeader
+    this.allowBodyHashing = options.allowBodyHashing
     this.nonCanonicalForwardedHost = options.nonCanonicalForwardedHost
   }
 
@@ -252,12 +265,12 @@ export class SignatureV4 {
    * @param clientSignature
    * @param request
    */
-  verify(clientSignature: ClientSignature, request: SignatureRequest) {
+  async verify(clientSignature: ClientSignature, request: SignatureRequest) {
     if (typeof clientSignature.policy?.raw === 'string') {
       return this.verifyPostPolicySignature(clientSignature, clientSignature.policy.raw)
     }
 
-    const serverSignature = this.sign(clientSignature, request)
+    const serverSignature = await this.sign(clientSignature, request)
     return crypto.timingSafeEqual(
       Buffer.from(clientSignature.signature),
       Buffer.from(serverSignature.signature)
@@ -333,7 +346,7 @@ export class SignatureV4 {
    * @param clientSignature
    * @param request
    */
-  sign(clientSignature: ClientSignature, request: SignatureRequest) {
+  async sign(clientSignature: ClientSignature, request: SignatureRequest) {
     const serverCredentials = this.serverCredentials
 
     this.validateCredentials(clientSignature.credentials)
@@ -344,11 +357,12 @@ export class SignatureV4 {
     }
 
     const selectedRegion = this.getSelectedRegion(clientSignature.credentials.region)
-    const canonicalRequest = this.constructCanonicalRequest(
+    const canonicalRequest = await this.constructCanonicalRequest(
       clientSignature,
       request,
       clientSignature.signedHeaders
     )
+
     const stringToSign = this.constructStringToSign(
       longDate,
       clientSignature.credentials.shortDate,
@@ -356,6 +370,7 @@ export class SignatureV4 {
       serverCredentials.service,
       canonicalRequest
     )
+
     const signingKey = this.signingKey(
       serverCredentials.secretKey,
       clientSignature.credentials.shortDate,
@@ -366,7 +381,7 @@ export class SignatureV4 {
     return { signature: this.hmac(signingKey, stringToSign).toString('hex'), canonicalRequest }
   }
 
-  protected getPayloadHash(clientSignature: ClientSignature, request: SignatureRequest) {
+  protected async getPayloadHash(clientSignature: ClientSignature, request: SignatureRequest) {
     const body = request.body
 
     // For presigned URLs and GET requests, use UNSIGNED-PAYLOAD
@@ -392,11 +407,18 @@ export class SignatureV4 {
         .digest('hex')
     }
 
+    // If body is a ReadableStream, calculate the SHA256 hash of the stream
+    if (body instanceof Readable && this.allowBodyHashing && request.payloadHasher) {
+      return await pipeline(body, request.payloadHasher).then(() => {
+        return request.payloadHasher?.digestHex()
+      })
+    }
+
     // Default to UNSIGNED-PAYLOAD if body is not a string or ArrayBuffer
     return 'UNSIGNED-PAYLOAD'
   }
 
-  protected constructCanonicalRequest(
+  protected async constructCanonicalRequest(
     clientSignature: ClientSignature,
     request: SignatureRequest,
     signedHeaders: string[]
@@ -407,7 +429,7 @@ export class SignatureV4 {
     const canonicalQueryString = this.constructCanonicalQueryString(request.query || {})
     const canonicalHeaders = this.constructCanonicalHeaders(request, signedHeaders)
     const signedHeadersString = signedHeaders.sort().join(';')
-    const payloadHash = this.getPayloadHash(clientSignature, request)
+    const payloadHash = await this.getPayloadHash(clientSignature, request)
 
     return `${method}\n${canonicalUri}\n${canonicalQueryString}\n${canonicalHeaders}\n${signedHeadersString}\n${payloadHash}`
   }
@@ -557,6 +579,14 @@ export class SignatureV4 {
     const kRegion = this.hmac(kDate, regionName)
     const kService = this.hmac(kRegion, serviceName)
     return this.hmac(kService, 'aws4_request')
+  }
+
+  protected async sha256OfRequest(req: Readable) {
+    const hash = createHash('sha256')
+    for await (const chunk of req) {
+      hash.update(chunk)
+    }
+    return hash.digest('hex')
   }
 
   protected hmac(key: string | Buffer, data: string): Buffer {

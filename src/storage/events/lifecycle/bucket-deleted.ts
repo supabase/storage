@@ -44,5 +44,10 @@ export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
     if (resources.namespaces > 0 || resources.tables > 0) {
       throw ERRORS.BucketNotEmpty(job.data.bucketId)
     }
+
+    await metastore.dropCatalog({
+      tenantId: job.data.tenant.ref,
+      bucketId: job.data.bucketId,
+    })
   }
 }

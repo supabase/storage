@@ -47,10 +47,15 @@ const payload = {
       enabled: false,
     },
     icebergCatalog: {
-      enabled: false,
+      enabled: true,
       maxCatalogs: 2,
       maxNamespaces: 10,
       maxTables: 10,
+    },
+    vectorBuckets: {
+      enabled: true,
+      maxBuckets: 2,
+      maxIndexes: 10,
     },
   },
   disableEvents: null,
@@ -85,10 +90,15 @@ const payload2 = {
       enabled: true,
     },
     icebergCatalog: {
-      enabled: false,
+      enabled: true,
       maxCatalogs: 2,
       maxNamespaces: 10,
       maxTables: 10,
+    },
+    vectorBuckets: {
+      enabled: true,
+      maxBuckets: 2,
+      maxIndexes: 10,
     },
   },
   disableEvents: null,

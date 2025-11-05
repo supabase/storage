@@ -1,6 +1,7 @@
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 import { ErrorCode, ERRORS, StorageBackendError } from '@internal/errors'
 import { signRequest } from 'aws-sigv4-sign'
+import JSONBigint from 'json-bigint'
 
 export interface GetConfigRequest {
   tenantId?: string
@@ -268,6 +269,9 @@ export interface TableMetadata {
   schemas?: Schema[]
   /** The ID of the current schema in the `schemas` array. */
   'current-schema-id'?: number
+
+  'current-snapshot-id'?: number
+
   /** The last column ID assigned (for tracking new columns). */
   'last-column-id'?: number
   /** All known partition specs for the table. */
@@ -342,6 +346,25 @@ export class RestCatalogClient {
 
     this.httpClient.interceptors.request.use((req) => {
       return this.auth.authorize(req)
+    })
+
+    // request interceptor, preventing the response the default behaviour of parsing the response with JSON.parse
+    this.httpClient.interceptors.request.use((request) => {
+      request.transformRequest = [
+        (data) => {
+          return data ? JSONBigint.stringify(data) : data
+        },
+      ]
+      request.transformResponse = [(data) => data]
+      return request
+    })
+
+    // response interceptor parsing the response data with JSONbigint, and returning the response
+    this.httpClient.interceptors.response.use((response) => {
+      if (response.data) {
+        response.data = JSONBigint.parse(response.data)
+      }
+      return response
     })
 
     this.httpClient.interceptors.response.use(
@@ -562,7 +585,13 @@ export class RestCatalogClient {
           snapshots: params.snapshots,
         },
       })
-      .then((response) => response.data)
+      .then((response) => {
+        // console.log({
+        //   url: response.request.,
+        //   headers: response.request.headers,
+        // })
+        return response.data
+      })
       .catch((error) => {
         if (error instanceof AxiosError) {
           console.error('Error fetching configuration:', error.response?.data)
@@ -696,7 +725,7 @@ export class SignV4Auth {
       {
         method: req.method?.toUpperCase(),
         headers: req.headers,
-        body: req.data ? JSON.stringify(req.data) : undefined,
+        body: req.data ? JSONBigint.stringify(req.data) : undefined,
       },
       {
         service: 's3tables',
@@ -704,6 +733,20 @@ export class SignV4Auth {
       }
     )
 
+    // Replace the original console.log with this curl command generator
+    //     console.log(
+    //       `
+    // curl -X ${req.method?.toUpperCase() || 'GET'} \\
+    // ${Array.from(signedReq.headers.entries())
+    //   .map(([name, value]) => `  -H '${name}: ${value}' \\`)
+    //   .join('\n')}
+    //   "${(req.baseURL || '') + req.url + (queryString ? `?${queryString}` : '')}"${
+    //         req.data ? ` \\\n  -d '${JSON.stringify(req.data)}'` : ''
+    //       }
+    // `.trim()
+    //     )
+
+    // Keep the original code for setting headers
     signedReq.headers.forEach((headerValue, headerName) => {
       req.headers.set(headerName, headerValue as string, true)
     })

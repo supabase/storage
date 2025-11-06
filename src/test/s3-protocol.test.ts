@@ -1006,7 +1006,7 @@ describe('S3 Protocol', () => {
         expect(resp.Contents).toBe(undefined)
       })
 
-      it('try to delete multiple objects that dont exists', async () => {
+      it('try to delete multiple objects that dont exist', async () => {
         const bucketName = await createBucket(client)
 
         await uploadFile(client, bucketName, 'test-1.jpg', 1)
@@ -1038,14 +1038,12 @@ describe('S3 Protocol', () => {
           {
             Key: 'test-2.jpg',
             Code: 'AccessDenied',
-            Message:
-              "You do not have permission to delete this object or the object doesn't exists",
+            Message: "You do not have permission to delete this object or the object doesn't exist",
           },
           {
             Key: 'test-3.jpg',
             Code: 'AccessDenied',
-            Message:
-              "You do not have permission to delete this object or the object doesn't exists",
+            Message: "You do not have permission to delete this object or the object doesn't exist",
           },
         ])
 
@@ -1142,14 +1140,14 @@ describe('S3 Protocol', () => {
         expect(headObj.CacheControl).toBe('max-age=2009')
       })
 
-      it('will not be able to copy an object that doesnt exists', async () => {
+      it('will not be able to copy an object that doesnt exist', async () => {
         const bucketName1 = await createBucket(client)
         await uploadFile(client, bucketName1, 'test-copy-1.jpg', 1)
 
         const copyObjectCommand = new CopyObjectCommand({
           Bucket: bucketName1,
           Key: 'test-copied-2.jpg',
-          CopySource: `${bucketName1}/test-dont-exists.jpg`,
+          CopySource: `${bucketName1}/test-doesnt-exist.jpg`,
         })
 
         try {

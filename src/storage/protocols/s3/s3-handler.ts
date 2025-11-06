@@ -1015,7 +1015,7 @@ export class S3ProtocolHandler {
       (o) => ({
         Key: o.Key,
         Code: 'AccessDenied',
-        Message: "You do not have permission to delete this object or the object doesn't exists",
+        Message: "You do not have permission to delete this object or the object doesn't exist",
       })
     )
 

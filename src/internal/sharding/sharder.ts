@@ -38,4 +38,7 @@ export interface Sharder {
   freeByResource(shardId: string | number, resource: ShardResource): Promise<void>
   shardStats(kind?: ResourceKind): Promise<any>
   findShardByResourceId(param: ShardResource): Promise<ShardRow | null>
+  listShardByKind(icebergTables: ResourceKind): Promise<ShardRow[]>
+
+  withTnx(tnx: unknown): Sharder
 }

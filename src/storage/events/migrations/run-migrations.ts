@@ -37,6 +37,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
     return {
       singletonKey: `migrations_${payload.tenantId}`,
       singletonHours: 1,
+      expireInMinutes: 10,
       retryLimit: 3,
       retryDelay: 5,
       priority: 10,

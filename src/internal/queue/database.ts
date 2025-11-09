@@ -1,7 +1,8 @@
 import { Db } from 'pg-boss'
-import EventEmitter from 'events'
 import pg from 'pg'
 import { ERRORS } from '@internal/errors'
+import { Knex } from 'knex'
+import EventEmitter from 'node:events'
 
 export class QueueDB extends EventEmitter implements Db {
   opened = false
@@ -38,5 +39,27 @@ export class QueueDB extends EventEmitter implements Db {
     }
 
     throw ERRORS.InternalError(undefined, `QueueDB not opened ${this.opened} ${text}`)
+  }
+}
+
+export class KnexQueueDB extends EventEmitter implements Db {
+  events = {
+    error: 'error',
+  }
+
+  constructor(protected readonly knex: Knex) {
+    super()
+  }
+
+  async executeSql(text: string, values: any[]): Promise<{ rows: any[] }> {
+    const knexQuery = text.replaceAll('$', ':')
+    const params: Record<string, any> = {}
+
+    values.forEach((value, index) => {
+      const key = (index + 1).toString()
+      params[key] = value === undefined ? null : value
+    })
+    const result = await this.knex.raw(knexQuery, params)
+    return { rows: result.rows }
   }
 }

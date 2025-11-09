@@ -283,7 +283,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       const headerValue = headerParts[1]
 
       const matchHeaderName = received[headerName] !== undefined
-      const matchHeaderValue = headerValue ? received[headerName].startsWith(headerValue) : true
+      const matchHeaderValue = headerValue ? received[headerName]?.startsWith(headerValue) : true
 
       return matchHeaderName && matchHeaderValue
     })

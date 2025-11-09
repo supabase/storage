@@ -158,7 +158,7 @@ export class VectorStoreManager {
         })
 
         if (!shardReservation) {
-          throw ERRORS.S3VectorNoAvailableShard()
+          throw ERRORS.NoAvailableShard()
         }
 
         try {
@@ -235,7 +235,7 @@ export class VectorStoreManager {
       })
 
       if (!shard) {
-        throw ERRORS.S3VectorNoAvailableShard()
+        throw ERRORS.NoAvailableShard()
       }
 
       await tx.deleteVectorIndex(command.vectorBucketName!, command.indexName!)
@@ -320,7 +320,7 @@ export class VectorStoreManager {
     ])
 
     if (!shard) {
-      throw ERRORS.S3VectorNoAvailableShard()
+      throw ERRORS.NoAvailableShard()
     }
 
     const putVectorsInput = {
@@ -351,7 +351,7 @@ export class VectorStoreManager {
     ])
 
     if (!shard) {
-      throw ERRORS.S3VectorNoAvailableShard()
+      throw ERRORS.NoAvailableShard()
     }
 
     const deleteVectorsInput = {
@@ -383,7 +383,7 @@ export class VectorStoreManager {
     ])
 
     if (!shard) {
-      throw ERRORS.S3VectorNoAvailableShard()
+      throw ERRORS.NoAvailableShard()
     }
 
     const listVectorsInput = {
@@ -420,7 +420,7 @@ export class VectorStoreManager {
     ])
 
     if (!shard) {
-      throw ERRORS.S3VectorNoAvailableShard()
+      throw ERRORS.NoAvailableShard()
     }
 
     const queryInput = {
@@ -451,7 +451,7 @@ export class VectorStoreManager {
     ])
 
     if (!shard) {
-      throw ERRORS.S3VectorNoAvailableShard()
+      throw ERRORS.NoAvailableShard()
     }
 
     const getVectorsInput = {

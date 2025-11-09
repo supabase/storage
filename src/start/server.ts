@@ -24,6 +24,7 @@ import {
 } from '@internal/database/migrations'
 import { Cluster } from '@internal/cluster/cluster'
 import { KnexShardStoreFactory, ShardCatalog } from '@internal/sharding'
+import { SyncCatalogIds } from '@storage/events/upgrades/sync-catalog-ids'
 
 const shutdownSignal = new AsyncAbortController()
 
@@ -53,8 +54,26 @@ main()
  * Start Storage API server
  */
 async function main() {
-  const { databaseURL, isMultitenant, pgQueueEnable, dbMigrationFreezeAt, vectorS3Buckets } =
-    getConfig()
+  const {
+    databaseURL,
+    isMultitenant,
+    pgQueueEnable,
+    dbMigrationFreezeAt,
+    vectorS3Buckets,
+    icebergShards,
+  } = getConfig()
+
+  // Queue
+  if (pgQueueEnable) {
+    await Queue.start({
+      signal: shutdownSignal.nextGroup.signal,
+      registerWorkers: registerWorkers,
+    })
+
+    logSchema.info(logger, '[Queue] Started', {
+      type: 'queue',
+    })
+  }
 
   // Sharding for special buckets (vectors, analytics)
   const sharding = new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
@@ -62,6 +81,7 @@ async function main() {
   // Migrations
   if (isMultitenant) {
     await runMultitenantMigrations()
+    await upgrades()
     await listenForTenantUpdate(PubSub)
 
     // Create shards for vector S3 buckets
@@ -73,22 +93,20 @@ async function main() {
         status: 'active',
       }))
     )
+
+    // Create shards for analytics buckets
+    await sharding.createShards(
+      icebergShards.map((shard) => ({
+        shardKey: shard,
+        kind: 'iceberg-table',
+        capacity: 10000,
+        status: 'active',
+      }))
+    )
   } else {
     await runMigrationsOnTenant({
       databaseUrl: databaseURL,
       upToMigration: dbMigrationFreezeAt,
-    })
-  }
-
-  // Queue
-  if (pgQueueEnable) {
-    await Queue.start({
-      signal: shutdownSignal.nextGroup.signal,
-      registerWorkers: registerWorkers,
-    })
-
-    logSchema.info(logger, '[Queue] Started', {
-      type: 'queue',
     })
   }
 
@@ -220,4 +238,8 @@ async function httpAdminServer(
     throw err
   }
   return adminApp
+}
+
+async function upgrades() {
+  return Promise.all([SyncCatalogIds.invoke({})])
 }

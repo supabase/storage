@@ -1,9 +1,9 @@
-export type ResourceKind = 'vector' | 'iceberg'
+export type ResourceKind = 'vector' | 'iceberg-table'
 export type ShardStatus = 'active' | 'draining' | 'disabled'
 export type ReservationStatus = 'pending' | 'confirmed' | 'expired' | 'cancelled'
 
 export type ShardRow = {
-  id: string
+  id: number
   kind: ResourceKind
   shard_key: string
   capacity: number
@@ -26,8 +26,9 @@ export type ReservationRow = {
 }
 
 /** Factory that opens a transaction and passes a store bound to that tx */
-export interface ShardStoreFactory {
+export interface ShardStoreFactory<Tnx = unknown> {
   withTransaction<T>(fn: (store: ShardStore) => Promise<T>): Promise<T>
+  withExistingTransaction(tnx: Tnx): ShardStoreFactory<Tnx>
   /** Optional: an autocommit store for read-only helpers */
   autocommit(): ShardStore
 }
@@ -61,7 +62,11 @@ export interface ShardStore {
   findShardWithLeastFreeCapacity(kind: ResourceKind): Promise<ShardRow | null>
 
   // Reservations
-  findReservationByKindKey(kind: ResourceKind, resourceId: string): Promise<ReservationRow | null>
+  findReservationByKindKey(
+    tenantId: string,
+    kind: ResourceKind,
+    resourceId: string
+  ): Promise<ReservationRow | null>
   fetchReservationById(id: string): Promise<ReservationRow | null>
 
   // Sparse allocation (single-table, no freelist)
@@ -101,4 +106,6 @@ export interface ShardStore {
   ): Promise<
     Array<{ shardId: string; shardKey: string; capacity: number; used: number; free: number }>
   >
+
+  findShardById(shardId: number): Promise<ShardRow | null>
 }

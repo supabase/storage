@@ -10,9 +10,18 @@ import {
 } from './store'
 import { hashStringToInt } from '@internal/hashing'
 
-export class KnexShardStoreFactory implements ShardStoreFactory {
+export class KnexShardStoreFactory implements ShardStoreFactory<Knex.Transaction> {
   constructor(private knex: Knex) {}
+
+  withExistingTransaction(tnx: Knex.Transaction): ShardStoreFactory {
+    return new KnexShardStoreFactory(tnx)
+  }
   async withTransaction<T>(fn: (store: ShardStore) => Promise<T>): Promise<T> {
+    if (this.knex.isTransaction) {
+      // Already in a transaction, use current connection
+      return fn(new KnexShardStore(this.knex))
+    }
+
     try {
       return await this.knex.transaction(async (trx) => {
         return fn(new KnexShardStore(trx))
@@ -31,6 +40,11 @@ class KnexShardStore implements ShardStore {
 
   private q<T = any>(sql: string, params?: any[]) {
     return this.db.raw<T>(sql, params as any)
+  }
+
+  async findShardById(shardId: number): Promise<ShardRow | null> {
+    const shard = await this.db<ShardRow>('shard').select('*').where({ id: shardId }).first()
+    return shard ?? null
   }
 
   async advisoryLockByString(key: string): Promise<void> {
@@ -114,6 +128,7 @@ class KnexShardStore implements ShardStore {
   }
 
   async findReservationByKindKey(
+    tenantId: string,
     kind: ResourceKind,
     resourceId: string
   ): Promise<ReservationRow | null> {
@@ -122,6 +137,7 @@ class KnexShardStore implements ShardStore {
         .select('shard_reservation.*', 'shard.shard_key as shard_key')
         // @ts-expect-error join column added dynamically
         .where({ 'shard_reservation.kind': kind, resource_id: resourceId })
+        .andWhere('shard_reservation.tenant_id', tenantId)
         .join('shard', 'shard.id', 'shard_reservation.shard_id')
         .first()) ?? null
     )
@@ -297,7 +313,15 @@ class KnexShardStore implements ShardStore {
     // This allows the slot to be reused with a new reservation
     await this.db('shard_reservation')
       .where({ shard_id: shardId, slot_no: slotNo })
-      .whereIn('status', ['cancelled', 'expired', 'confirmed'])
+      .where((q) => {
+        q.whereIn('status', ['cancelled', 'expired']).orWhere((q2) => {
+          q2.whereIn('status', ['pending', 'cancelled', 'expired']).andWhere(
+            'lease_expires_at',
+            '<',
+            this.db.fn.now()
+          )
+        })
+      })
       .del()
   }
 

@@ -1,15 +1,15 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { createDefaultSchema, createResponse } from '../../routes-helper'
+import { createResponse } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const deleteBucketParamsSchema = {
   type: 'object',
   properties: {
-    bucketId: { type: 'string', examples: ['avatars'] },
+    bucketName: { type: 'string', examples: ['avatars'] },
   },
-  required: ['bucketId'],
+  required: ['bucketName'],
 } as const
 
 const createBucketBodySchema = {
@@ -45,7 +45,7 @@ interface listBucketRequestInterface extends AuthenticatedRequest {
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.delete<deleteBucketRequestInterface>(
-    '/bucket/:bucketId',
+    '/bucket/:bucketName',
     {
       schema: {
         params: deleteBucketParamsSchema,
@@ -57,8 +57,8 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      const { bucketId } = request.params
-      await request.storage.deleteIcebergBucket(bucketId)
+      const { bucketName } = request.params
+      await request.storage.deleteIcebergBucket(bucketName)
 
       return response.status(200).send(createResponse('Successfully deleted'))
     }
@@ -79,10 +79,14 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { name } = request.body
       const bucket = await request.storage.createIcebergBucket({
-        id: name,
+        name,
       })
 
-      return response.status(200).send(bucket)
+      return response.status(200).send({
+        name: bucket.name,
+        created_at: bucket.created_at,
+        updated_at: bucket.updated_at,
+      })
     }
   )
 
@@ -101,7 +105,7 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const query = request.query
 
-      const bucket = await request.storage.listIcebergBuckets('id,created_at,updated_at', {
+      const bucket = await request.storage.listAnalyticsBuckets('name,created_at,updated_at', {
         limit: query.limit,
         offset: query.offset,
         sortColumn: query.sortColumn,
@@ -109,7 +113,12 @@ export default async function routes(fastify: FastifyInstance) {
         search: query.search,
       })
 
-      return response.status(200).send(bucket)
+      return response.status(200).send(
+        bucket.map((b) => ({
+          ...b,
+          id: b.name,
+        }))
+      )
     }
   )
 }

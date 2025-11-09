@@ -10,6 +10,7 @@ const createNamespaceSchema = {
     type: 'object',
     properties: {
       namespace: { type: 'string', examples: ['namespace'] },
+      properties: { type: 'object', additionalProperties: { type: 'string' } },
     },
     required: ['namespace'],
   },
@@ -104,6 +105,7 @@ export default async function routes(fastify: FastifyInstance) {
       const result = await request.icebergCatalog.createNamespace({
         namespace: [request.body.namespace],
         warehouse: request.params.prefix,
+        properties: request.body.properties,
       })
 
       return response.send(result)
@@ -140,7 +142,7 @@ export default async function routes(fastify: FastifyInstance) {
       config: {
         operation: { type: ROUTE_OPERATIONS.ICEBERG_NAMESPACE_EXISTS },
       },
-      schema: { ...listNamespaceSchema, tags: ['iceberg'] },
+      schema: { ...loadNamespaceSchema, tags: ['iceberg'] },
     },
     async (request, response) => {
       if (!request.icebergCatalog) {

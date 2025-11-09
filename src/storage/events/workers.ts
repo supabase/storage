@@ -8,6 +8,9 @@ import { JwksCreateSigningSecret } from './jwks/jwks-create-signing-secret'
 import { UpgradePgBossV10 } from './pgboss/upgrade-v10'
 import { MoveJobs } from './pgboss/move-jobs'
 import { ObjectAdminDeleteAllBefore } from './objects/object-admin-delete-all-before'
+import { ReconcileIcebergCatalog } from './iceberg/reconcile-catalog'
+import { DeleteIcebergResources } from './iceberg/delete-iceberg-resources'
+import { SyncCatalogIds } from './upgrades/sync-catalog-ids'
 
 export function registerWorkers() {
   Queue.register(Webhook)
@@ -19,4 +22,7 @@ export function registerWorkers() {
   Queue.register(JwksCreateSigningSecret)
   Queue.register(UpgradePgBossV10)
   Queue.register(MoveJobs)
+  Queue.register(ReconcileIcebergCatalog)
+  Queue.register(DeleteIcebergResources)
+  Queue.register(SyncCatalogIds)
 }

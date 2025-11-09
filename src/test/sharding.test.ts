@@ -463,6 +463,28 @@ describe('Sharding System', () => {
 
       expect(res2.slotNo).toBe(res1.slotNo)
     })
+
+    it('should allow reserving a slot after one slot is already expired', async () => {
+      const res1 = await catalog.reserve({
+        kind: 'vector',
+        tenantId: 'tenant-1',
+        bucketName: 'bucket-1',
+        logicalName: 'index-1',
+        leaseMs: 1,
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      // Reserve with different logical key should reuse the slot
+      const res2 = await catalog.reserve({
+        kind: 'vector',
+        tenantId: 'tenant-1',
+        bucketName: 'bucket-1',
+        logicalName: 'index-2',
+      })
+
+      expect(res2.slotNo).toBe(res1.slotNo)
+    })
   })
 
   describe('Shard Selectors', () => {
@@ -723,7 +745,7 @@ describe('Sharding System', () => {
     it('should isolate different resource kinds', async () => {
       await catalog.createShards([
         { kind: 'vector', shardKey: 'vector-shard', capacity: 10 },
-        { kind: 'iceberg', shardKey: 'iceberg-shard', capacity: 10 },
+        { kind: 'iceberg-table', shardKey: 'iceberg-shard', capacity: 10 },
       ])
 
       const vectorRes = await catalog.reserve({
@@ -734,7 +756,7 @@ describe('Sharding System', () => {
       })
 
       const icebergRes = await catalog.reserve({
-        kind: 'iceberg',
+        kind: 'iceberg-table',
         tenantId: 'tenant-1',
         bucketName: 'bucket-1',
         logicalName: 'table-1',

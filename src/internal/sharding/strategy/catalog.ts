@@ -14,6 +14,7 @@ import {
   UniqueViolationError,
 } from '../store'
 import { Sharder, ShardResource } from '../sharder'
+import { ERRORS } from '@internal/errors'
 
 /**
  * Represents the configuration options for a shard in a distributed system or database.
@@ -38,6 +39,10 @@ interface ShardOptions {
  */
 export class ShardCatalog implements Sharder {
   constructor(private factory: ShardStoreFactory) {}
+
+  withTnx(tnx: unknown) {
+    return new ShardCatalog(this.factory.withExistingTransaction(tnx))
+  }
 
   /**
   /**
@@ -107,6 +112,7 @@ export class ShardCatalog implements Sharder {
     bucketName: string
     logicalName: string
     leaseMs?: number
+    shardId?: number
   }): Promise<{
     reservationId: string
     shardId: string
@@ -120,7 +126,7 @@ export class ShardCatalog implements Sharder {
     return this.factory.withTransaction(async (store) => {
       await store.advisoryLockByString(resourceId)
 
-      const existing = await store.findReservationByKindKey(opts.kind, resourceId)
+      const existing = await store.findReservationByKindKey(opts.tenantId, opts.kind, resourceId)
 
       if (existing) {
         if (existing.status === 'pending' || existing.status === 'confirmed') {
@@ -134,7 +140,11 @@ export class ShardCatalog implements Sharder {
         }
 
         // If cancelled or expired, delete it so we can create a new reservation
-        if (existing.status === 'cancelled' || existing.status === 'expired') {
+        if (
+          existing.status === 'cancelled' ||
+          existing.status === 'expired' ||
+          new Date(existing.lease_expires_at) < new Date()
+        ) {
           await store.deleteReservation(existing.id)
         }
       }
@@ -143,7 +153,9 @@ export class ShardCatalog implements Sharder {
 
       // Select shard using FOR UPDATE to serialize selection and ensure
       // we read the committed next_slot value
-      const shard = await store.findShardWithLeastFreeCapacity(opts.kind)
+      const shard = opts.shardId
+        ? await store.findShardById(opts.shardId)
+        : await store.findShardWithLeastFreeCapacity(opts.kind)
       if (!shard) {
         throw new NoActiveShardError(opts.kind)
       }
@@ -180,16 +192,7 @@ export class ShardCatalog implements Sharder {
         }
       } catch (e) {
         if (e instanceof UniqueViolationError) {
-          const row = await store.findReservationByKindKey(opts.kind, resourceId)
-          if (row && (row.status === 'pending' || row.status === 'confirmed')) {
-            return {
-              reservationId: row.id,
-              shardId: String(row.shard_id),
-              shardKey: row.shard_key,
-              slotNo: Number(row.slot_no),
-              leaseExpiresAt: row.lease_expires_at,
-            }
-          }
+          throw ERRORS.ResourceAlreadyExists(e)
         }
         throw e
       }
@@ -331,5 +334,9 @@ export class ShardCatalog implements Sharder {
   }) {
     const resourceId = `${param.kind}::${param.bucketName}::${param.logicalName}`
     return this.factory.autocommit().findShardByResourceId(param.tenantId, resourceId)
+  }
+
+  async listShardByKind(icebergTables: ResourceKind) {
+    return this.factory.autocommit().listActiveShards(icebergTables)
   }
 }

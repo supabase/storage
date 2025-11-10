@@ -98,6 +98,12 @@ export class TenantConnection {
         throw ERRORS.DatabaseTimeout(e)
       }
 
+      // Handle pg client connectionTimeoutMillis timeout
+      // This fires when the connection timeout happens before pool acquisition timeout
+      if (e instanceof Error && e.message === 'timeout expired') {
+        throw ERRORS.DatabaseTimeout(e)
+      }
+
       throw e
     }
   }

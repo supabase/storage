@@ -44,4 +44,5 @@ export const DBMigration = {
   'fix-object-level': 43,
   'vector-bucket-type': 44,
   'vector-buckets': 45,
+  tmp: 46,
 }

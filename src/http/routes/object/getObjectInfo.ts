@@ -25,10 +25,10 @@ interface getObjectRequestInterface extends AuthenticatedRangeRequest {
 async function requestHandler(
   request: FastifyRequest<getObjectRequestInterface, Server, IncomingMessage>,
   response: FastifyReply<
+    getObjectRequestInterface,
     Server,
     IncomingMessage,
     ServerResponse,
-    getObjectRequestInterface,
     unknown
   >,
   publicRoute = false,

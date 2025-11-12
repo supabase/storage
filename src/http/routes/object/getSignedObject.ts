@@ -83,7 +83,7 @@ export default async function routes(fastify: FastifyInstance) {
       const obj = await request.storage
         .asSuperUser()
         .from(bucketName)
-        .findObject(objParts.join('/'), 'id,version')
+        .findObject(objParts.join('/'), 'id,version,metadata')
 
       return request.storage.renderer('asset').render(request, response, {
         bucket: storageS3Bucket,
@@ -91,6 +91,7 @@ export default async function routes(fastify: FastifyInstance) {
         version: obj.version,
         download,
         expires: new Date(exp * 1000).toUTCString(),
+        xRobotsTag: obj.metadata?.['xRobotsTag'] as string | undefined,
         signal: request.signals.disconnect.signal,
       })
     }

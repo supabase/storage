@@ -32,5 +32,7 @@ export const bucketSchema = {
 } as const
 
 export type Bucket = FromSchema<typeof bucketSchema>
-export type IcebergCatalog = Pick<Bucket, 'id' | 'created_at' | 'updated_at'>
+export type IcebergCatalog = Pick<Bucket, 'id' | 'name' | 'created_at' | 'updated_at'> & {
+  deleted_at: Date | null
+}
 export type VectorBucket = Pick<Bucket, 'id' | 'created_at' | 'updated_at'> & { created_at: Date }

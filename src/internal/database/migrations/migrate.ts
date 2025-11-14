@@ -16,6 +16,7 @@ import { DBMigration } from './types'
 import { getSslSettings } from '../ssl'
 import { MigrationTransformer, DisableConcurrentIndexTransformer } from './transformers'
 import { lastLocalMigrationName, loadMigrationFilesCached, localMigrationFiles } from './files'
+import { Knex } from 'knex'
 
 const {
   isMultitenant,
@@ -30,6 +31,7 @@ const {
   dbInstallRoles,
   dbRefreshMigrationHashesOnMismatch,
   dbMigrationFreezeAt,
+  icebergShards,
 } = getConfig()
 
 /**
@@ -170,11 +172,17 @@ export async function* listTenantsToResetMigrations(
  */
 export async function updateTenantMigrationsState(
   tenantId: string,
-  options?: { migration?: keyof typeof DBMigration; state: TenantMigrationStatus }
+  options?: {
+    migration?: keyof typeof DBMigration
+    state: TenantMigrationStatus
+    tnx?: Knex.Transaction
+  }
 ) {
   const migrationVersion = options?.migration || (await lastLocalMigrationName())
   const state = options?.state || TenantMigrationStatus.COMPLETED
-  return multitenantKnex
+  const db = options?.tnx ? options.tnx : multitenantKnex
+
+  return db
     .table('tenants')
     .where('id', tenantId)
     .update({
@@ -640,6 +648,9 @@ function runMigrations({
       const migrationsToRun = filterMigrations(intendedMigrations, appliedMigrations)
       const completedMigrations = []
 
+      const icebergShardVar = `{${icebergShards.map((s) => `"${s}"`).join(',')}}`
+      const icebergDefaultShard = icebergShards.length > 0 ? icebergShards[0] : ''
+
       if (migrationsToRun.length > 0) {
         await client.query(SQL`SELECT 
           set_config('storage.install_roles', ${dbInstallRoles}, false),
@@ -647,7 +658,9 @@ function runMigrations({
           set_config('storage.anon_role', ${dbAnonRole}, false),
           set_config('storage.authenticated_role', ${dbAuthenticatedRole}, false),
           set_config('storage.service_role', ${dbServiceRole}, false),
-          set_config('storage.super_user', ${dbSuperUser}, false)
+          set_config('storage.super_user', ${dbSuperUser}, false),
+          set_config('storage.iceberg_default_shard', ${icebergDefaultShard}, false),
+          set_config('storage.iceberg_shards', ${icebergShardVar}, false);
         `)
       }
 

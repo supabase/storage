@@ -1,7 +1,7 @@
 import {
   CatalogAuthType,
   SignV4Auth,
-  TokenAuth,
+  BearerTokenAuth,
 } from '@storage/protocols/iceberg/catalog/rest-catalog-client'
 import { getConfig } from '../../../../config'
 
@@ -15,7 +15,7 @@ export function getCatalogAuthStrategy(authType: string): CatalogAuthType {
       if (!icebergCatalogToken) {
         throw new Error('Iceberg catalog token is not configured')
       }
-      return new TokenAuth({ token: icebergCatalogToken })
+      return new BearerTokenAuth({ token: icebergCatalogToken })
     default:
       throw new Error(`Unknown auth type: ${authType}`)
   }
@@ -23,3 +23,4 @@ export function getCatalogAuthStrategy(authType: string): CatalogAuthType {
 
 export * from './tenant-catalog'
 export * from './rest-catalog-client'
+export * from './reconciler'

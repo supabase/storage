@@ -102,17 +102,40 @@ export class StorageKnexDB implements Database {
     }
   }
 
-  deleteAnalyticsBucket(id: string): Promise<void> {
+  deleteAnalyticsBucket(id: string, opts?: { soft: boolean }): Promise<IcebergCatalog> {
     return this.runQuery('DeleteAnalyticsBucket', async (knex) => {
-      const deleted = await knex.from<IcebergCatalog>('buckets_analytics').where('id', id).delete()
+      if (opts?.soft) {
+        const softDeleted = await knex
+          .from<IcebergCatalog>('buckets_analytics')
+          .where('id', id)
+          .whereNull('deleted_at')
+          .update({
+            deleted_at: new Date(),
+          })
+          .returning('*')
 
-      if (deleted === 0) {
+        if (softDeleted.length === 0) {
+          throw ERRORS.NoSuchBucket(id)
+        }
+
+        return softDeleted[0]
+      }
+
+      const deleted = await knex
+        .from<IcebergCatalog>('buckets_analytics')
+        .where('id', id)
+        .delete()
+        .returning('*')
+
+      if (deleted.length === 0) {
         throw ERRORS.NoSuchBucket(id)
       }
+
+      return deleted[0]
     })
   }
 
-  listIcebergBuckets(
+  listAnalyticsBuckets(
     columns: string,
     options: ListBucketOptions | undefined
   ): Promise<IcebergCatalog[]> {
@@ -120,15 +143,16 @@ export class StorageKnexDB implements Database {
       const query = knex
         .from<IcebergCatalog>('buckets_analytics')
         .select(columns.split(',').map((c) => c.trim()))
+        .whereNull('deleted_at')
 
       if (options?.search !== undefined && options.search.length > 0) {
-        query.where('id', 'like', `%${options.search}%`)
+        query.where('name', 'like', `%${options.search}%`)
       }
 
       if (options?.sortColumn !== undefined) {
         query.orderBy(options.sortColumn, options.sortOrder || 'asc')
       } else {
-        query.orderBy('id', 'asc')
+        query.orderBy('name', 'asc')
       }
 
       if (options?.limit !== undefined) {
@@ -143,23 +167,38 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  createIcebergBucket(data: Pick<Bucket, 'id'>): Promise<IcebergCatalog> {
-    const bucketData: IcebergCatalog = {
-      id: data.id,
+  findAnalyticsBucketByName(name: string) {
+    return this.runQuery('FindAnalyticsBucketByName', async (knex) => {
+      const icebergBucket = await knex
+        .from<IcebergCatalog>('buckets_analytics')
+        .select('*')
+        .where('name', name)
+        .whereNull('deleted_at')
+        .first()
+
+      if (!icebergBucket) {
+        throw ERRORS.NoSuchBucket(name)
+      }
+
+      return icebergBucket
+    })
+  }
+
+  createAnalyticsBucket(data: Pick<Bucket, 'name'>): Promise<IcebergCatalog> {
+    const bucketData: Pick<IcebergCatalog, 'name'> = {
+      name: data.name,
     }
 
     return this.runQuery('CreateAnalyticsBucket', async (knex) => {
       const icebergBucket = await knex
         .from<IcebergCatalog>('buckets_analytics')
         .insert(bucketData)
-        .onConflict('id')
-        .merge({
-          updated_at: new Date().toISOString(),
-        })
+        .onConflict(knex.raw('(name) WHERE deleted_at IS NULL'))
+        .ignore()
         .returning('*')
 
       if (icebergBucket.length === 0) {
-        throw ERRORS.NoSuchBucket(data.id)
+        throw ERRORS.ResourceAlreadyExists()
       }
 
       return icebergBucket[0]
@@ -412,81 +451,19 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async listAllBucketTypes(columns = 'id', options?: ListBucketOptions) {
-    const data = await this.runQuery('ListAllBucketTypes', async (knex) => {
-      // 1) figure out which columns we’re selecting
+  async listBuckets(columns = 'id', options?: ListBucketOptions) {
+    const data = await this.runQuery('ListBuckets', async (knex) => {
       const columnNames = columns.split(',').map((c) => c.trim())
 
-      // 2) build the two “source” queries
-      const bucketQ = knex
-        .select(columnNames)
-        .from<Bucket>('buckets')
-        .modify((qb) => {
-          if (options?.search) {
-            qb.where('name', 'ilike', `%${options.search}%`)
-          }
-        })
-
-      const icebergBucketsAllowedColumnNames = ['id', 'type', 'created_at', 'updated_at']
-
-      const icebergBucketsColumns = columnNames.map((name) => {
-        if (name === 'name') {
-          return 'id as name'
-        }
-        if (!icebergBucketsAllowedColumnNames.includes(name)) {
-          return knex.raw('null as ??', [name])
-        }
-        return name
+      const selectColumns = columnNames.filter((name) => {
+        return name !== 'type'
       })
 
-      const icebergQ = knex
-        .select(icebergBucketsColumns)
-        .from('buckets_analytics')
-        .modify((qb) => {
-          // if you want to search iceberg buckets by their id:
-          if (options?.search) {
-            qb.where('id', 'ilike', `%${options.search}%`)
-          }
-        })
+      if (columnNames.includes('type')) {
+        selectColumns.push(knex.raw("'STANDARD' as type") as unknown as string)
+      }
 
-      // 3) union them together, wrap as a sub‐query
-      const combined = knex.unionAll([bucketQ, icebergQ], /* wrapParens=*/ true).as('all_buckets')
-
-      // 4) now select * from that union, then sort / page
-      const finalQ = knex
-        .select('*')
-        .from(combined)
-        .modify((qb) => {
-          if (options?.sortColumn) {
-            qb.orderBy(options.sortColumn, options.sortOrder || 'asc')
-          }
-          if (options?.limit !== undefined) {
-            qb.limit(options.limit)
-          }
-          if (options?.offset !== undefined) {
-            qb.offset(options.offset)
-          }
-        })
-
-      return finalQ
-    })
-
-    return data as Bucket[]
-  }
-
-  async listBuckets(columns = 'id', options?: ListBucketOptions) {
-    if (await tenantHasMigrations(this.tenantId, 'iceberg-catalog-flag-on-buckets')) {
-      return this.listAllBucketTypes(columns, options)
-    }
-
-    const data = await this.runQuery('ListBuckets', async (knex) => {
-      let columnNames = columns.split(',')
-
-      columnNames = columnNames.filter((name) => {
-        return name.trim() !== 'type'
-      })
-
-      const query = knex.from<Bucket>('buckets').select(columnNames)
+      const query = knex.from<Bucket>('buckets').select(selectColumns)
 
       if (options?.search !== undefined && options.search.length > 0) {
         query.where('name', 'ilike', `%${options.search}%`)

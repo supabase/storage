@@ -10,6 +10,7 @@ export enum ErrorCode {
   EntityTooLarge = 'EntityTooLarge',
   InternalError = 'InternalError',
   ResourceAlreadyExists = 'ResourceAlreadyExists',
+  ResourceNotEmpty = 'ResourceNotEmpty',
   InvalidBucketName = 'InvalidBucketName',
   InvalidKey = 'InvalidKey',
   InvalidRange = 'InvalidRange',
@@ -41,8 +42,8 @@ export enum ErrorCode {
   AbortedTerminate = 'AbortedTerminate',
   FeatureNotEnabled = 'FeatureNotEnabled',
   NotSupported = 'NotSupported',
-  IcebergError = 'IcebergError',
   IcebergMaximumResourceLimit = 'IcebergMaximumResourceLimit',
+  IcebergResourceNotEmpty = 'IcebergResourceNotEmpty',
   NoSuchCatalog = 'NoSuchCatalog',
 
   S3VectorConflictException = 'ConflictException',
@@ -50,13 +51,14 @@ export enum ErrorCode {
   S3VectorBucketNotEmpty = 'VectorBucketNotEmpty',
   S3VectorMaxBucketsExceeded = 'S3VectorMaxBucketsExceeded',
   S3VectorMaxIndexesExceeded = 'S3VectorMaxIndexesExceeded',
-  S3VectorNoAvailableShard = 'S3VectorNoAvailableShard',
+  NoAvailableShard = 'NoAvailableShard',
+  ShardNotFound = 'ShardNotFound',
 }
 
 export const ERRORS = {
   BucketNotEmpty: (bucket: string, e?: Error) =>
     new StorageBackendError({
-      code: ErrorCode.InvalidRequest,
+      code: ErrorCode.ResourceNotEmpty,
       resource: bucket,
       httpStatusCode: 409,
       message: `The bucket you tried to delete is not empty`,
@@ -67,6 +69,13 @@ export const ERRORS = {
       code: ErrorCode.IcebergMaximumResourceLimit,
       httpStatusCode: 409,
       message: `The maximum number of this resource ${limit} is reached`,
+      originalError: e,
+    }),
+  IcebergResourceNotEmpty: (resource: string, name: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.IcebergResourceNotEmpty,
+      httpStatusCode: 400,
+      message: `The resource ${resource}: ${name} is not empty`,
       originalError: e,
     }),
   FeatureNotEnabled: (resource: string, feature: string, e?: Error) =>
@@ -84,12 +93,12 @@ export const ERRORS = {
       message: `The feature ${feature} is not enabled for this resource`,
       originalError: e,
     }),
-  UnableToEmptyBucket: (bucket: string) =>
+  UnableToEmptyBucket: (bucket: string, msg: string) =>
     new StorageBackendError({
       code: ErrorCode.InvalidRequest,
       resource: bucket,
       httpStatusCode: 409,
-      message: `Unable to empty the bucket because it contains too many objects`,
+      message: msg,
     }),
   NoSuchBucket: (bucket: string, e?: Error) =>
     new StorageBackendError({
@@ -480,11 +489,18 @@ export const ERRORS = {
       message: `Maximum number of indexes exceeded. Max allowed is ${maxIndexes}. Contact support to increase your limit.`,
     })
   },
-  S3VectorNoAvailableShard() {
+  NoAvailableShard() {
     return new StorageBackendError({
-      code: ErrorCode.S3VectorNoAvailableShard,
+      code: ErrorCode.NoAvailableShard,
       httpStatusCode: 500,
-      message: `No available shards are available to host the vector index. Please try again later.`,
+      message: `No available shards are available to host the resource. Please try again later.`,
+    })
+  },
+  ShardNotFound(shardId: string) {
+    return new StorageBackendError({
+      code: ErrorCode.ShardNotFound,
+      httpStatusCode: 404,
+      message: `Shard not found: ${shardId}`,
     })
   },
 }

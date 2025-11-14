@@ -1,4 +1,4 @@
-import PgBoss, { Job, JobWithMetadata } from 'pg-boss'
+import PgBoss, { Db, Job, JobWithMetadata } from 'pg-boss'
 import { ERRORS } from '@internal/errors'
 import { QueueDB } from '@internal/queue/database'
 import { getConfig } from '../../config'
@@ -16,6 +16,49 @@ export abstract class Queue {
   protected static events: SubclassOfBaseClass[] = []
   private static pgBoss?: PgBoss
   private static pgBossDb?: PgBoss.Db
+
+  static createPgBoss(opts: { db: Db; enableWorkers: boolean }) {
+    const {
+      isMultitenant,
+      databaseURL,
+      multitenantDatabaseUrl,
+      pgQueueConnectionURL,
+      pgQueueArchiveCompletedAfterSeconds,
+      pgQueueDeleteAfterDays,
+      pgQueueDeleteAfterHours,
+      pgQueueRetentionDays,
+    } = getConfig()
+
+    let url = pgQueueConnectionURL ?? databaseURL
+
+    if (isMultitenant && !pgQueueConnectionURL) {
+      if (!multitenantDatabaseUrl) {
+        throw new Error(
+          'running storage in multi-tenant but DB_MULTITENANT_DATABASE_URL is not set'
+        )
+      }
+      url = multitenantDatabaseUrl
+    }
+
+    return new PgBoss({
+      connectionString: url,
+      migrate: true,
+      db: opts.db,
+      schema: 'pgboss_v10',
+      application_name: 'storage-pgboss',
+      ...(pgQueueDeleteAfterHours
+        ? { deleteAfterHours: pgQueueDeleteAfterHours }
+        : { deleteAfterDays: pgQueueDeleteAfterDays }),
+      archiveCompletedAfterSeconds: pgQueueArchiveCompletedAfterSeconds,
+      retentionDays: pgQueueRetentionDays,
+      retryBackoff: true,
+      retryLimit: 20,
+      expireInHours: 23,
+      maintenanceIntervalSeconds: 60 * 5,
+      schedule: opts.enableWorkers,
+      supervise: opts.enableWorkers,
+    })
+  }
 
   static async start(opts: {
     signal?: AbortSignal
@@ -35,17 +78,13 @@ export abstract class Queue {
       databaseURL,
       multitenantDatabaseUrl,
       pgQueueConnectionURL,
-      pgQueueArchiveCompletedAfterSeconds,
-      pgQueueDeleteAfterDays,
-      pgQueueDeleteAfterHours,
-      pgQueueRetentionDays,
       pgQueueEnableWorkers,
       pgQueueReadWriteTimeout,
       pgQueueConcurrentTasksPerQueue,
       pgQueueMaxConnections,
     } = getConfig()
 
-    let url = pgQueueConnectionURL ?? databaseURL
+    let url = pgQueueConnectionURL || databaseURL
 
     if (isMultitenant && !pgQueueConnectionURL) {
       if (!multitenantDatabaseUrl) {
@@ -63,23 +102,9 @@ export abstract class Queue {
       statement_timeout: pgQueueReadWriteTimeout > 0 ? pgQueueReadWriteTimeout : undefined,
     })
 
-    Queue.pgBoss = new PgBoss({
-      connectionString: url,
-      migrate: true,
+    Queue.pgBoss = this.createPgBoss({
       db: Queue.pgBossDb,
-      schema: 'pgboss_v10',
-      application_name: 'storage-pgboss',
-      ...(pgQueueDeleteAfterHours
-        ? { deleteAfterHours: pgQueueDeleteAfterHours }
-        : { deleteAfterDays: pgQueueDeleteAfterDays }),
-      archiveCompletedAfterSeconds: pgQueueArchiveCompletedAfterSeconds,
-      retentionDays: pgQueueRetentionDays,
-      retryBackoff: true,
-      retryLimit: 20,
-      expireInHours: 23,
-      maintenanceIntervalSeconds: 60 * 5,
-      schedule: pgQueueEnableWorkers !== false,
-      supervise: pgQueueEnableWorkers !== false,
+      enableWorkers: pgQueueEnableWorkers !== false,
     })
 
     Queue.pgBoss.on('error', (error) => {
@@ -315,6 +340,7 @@ export abstract class Queue {
         await Promise.allSettled(
           jobs.map(async (job) => {
             const lock = await semaphore.acquire()
+            const opts = event.getQueueOptions()
             try {
               queueOpts.onMessage?.(job as Job)
 

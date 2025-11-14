@@ -5,6 +5,8 @@ import { QueueJobScheduled, QueueJobSchedulingTime } from '@internal/monitoring/
 import { logger, logSchema } from '@internal/monitoring'
 import { getTenantConfig } from '@internal/database'
 import { ERRORS } from '@internal/errors'
+import { KnexQueueDB } from '@internal/queue/database'
+import { Knex } from 'knex'
 
 export interface BasePayload {
   $version?: string
@@ -115,12 +117,16 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     )
   }
 
-  static send<T extends Event<any>>(this: StaticThis<T>, payload: Omit<T['payload'], '$version'>) {
+  static send<T extends Event<any>>(
+    this: StaticThis<T>,
+    payload: Omit<T['payload'], '$version'>,
+    opts?: SendOptions & { tnx?: Knex }
+  ) {
     if (!payload.$version) {
       ;(payload as T['payload']).$version = this.version
     }
     const that = new this(payload)
-    return that.send()
+    return that.send(opts)
   }
 
   static invoke<T extends Event<any>>(
@@ -137,7 +143,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
   static invokeOrSend<T extends Event<any>>(
     this: StaticThis<T>,
     payload: Omit<T['payload'], '$version'>,
-    options?: SendOptions
+    options?: SendOptions & { sendWhenError?: (error: unknown) => boolean }
   ) {
     if (!payload.$version) {
       ;(payload as T['payload']).$version = this.version
@@ -191,7 +197,9 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     )
   }
 
-  async invokeOrSend(sendOptions?: SendOptions): Promise<string | void | null> {
+  async invokeOrSend(
+    sendOptions?: SendOptions & { sendWhenError?: (error: unknown) => boolean }
+  ): Promise<string | void | null> {
     const constructor = this.constructor as typeof Event
 
     if (!constructor.allowSync) {
@@ -201,6 +209,9 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     try {
       await this.invoke()
     } catch (e) {
+      if (sendOptions?.sendWhenError && !sendOptions.sendWhenError(e)) {
+        throw e
+      }
       logSchema.error(logger, '[Queue] Error invoking event synchronously, sending to queue', {
         type: 'queue',
         project: this.payload.tenant?.ref,
@@ -231,7 +242,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     })
   }
 
-  async send(customSendOptions?: SendOptions): Promise<string | void | null> {
+  async send(customSendOptions?: SendOptions & { tnx?: Knex }): Promise<string | void | null> {
     const constructor = this.constructor as typeof Event
 
     const shouldSend = await constructor.shouldSend(this.payload)
@@ -271,7 +282,14 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     sendOptions!.deadLetter = constructor.deadLetterQueueName()
 
     try {
-      const res = await Queue.getInstance().send({
+      const queue = customSendOptions?.tnx
+        ? Queue.createPgBoss({
+            enableWorkers: false,
+            db: new KnexQueueDB(customSendOptions.tnx),
+          })
+        : Queue.getInstance()
+
+      const res = await queue.send({
         name: constructor.getQueueName(),
         data: {
           region,
@@ -302,6 +320,11 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
           metadata: JSON.stringify(this.payload),
         }
       )
+
+      if (!constructor.allowSync) {
+        throw e
+      }
+
       return constructor.handle({
         id: '__sync',
         expireInSeconds: 0,

@@ -9,6 +9,37 @@ export class SingleShard implements Sharder {
     }
   ) {}
 
+  listShardByKind(): Promise<ShardRow[]> {
+    return Promise.resolve([
+      {
+        id: 1,
+        kind: 'iceberg-table',
+        shard_key: this.singleShard.shardKey,
+        capacity: this.singleShard.capacity,
+        next_slot: -1,
+        status: 'active',
+        created_at: new Date().toISOString(),
+      },
+    ])
+  }
+
+  shardStats(): Promise<any> {
+    return Promise.resolve({
+      shardId: 1,
+      shardKey: this.singleShard.shardKey,
+      capacity: this.singleShard.capacity,
+      used: -1,
+      free: -1,
+    })
+  }
+
+  withTnx(): Sharder {
+    return new SingleShard({
+      shardKey: this.singleShard.shardKey,
+      capacity: this.singleShard.capacity,
+    })
+  }
+
   freeByResource(): Promise<void> {
     return Promise.resolve()
   }
@@ -31,7 +62,7 @@ export class SingleShard implements Sharder {
       shard_key: opts.shardKey,
       capacity: opts.capacity || this.singleShard.capacity,
       kind: opts.kind,
-      id: this.singleShard.shardKey,
+      id: 1,
       status: 'active',
       next_slot: 1,
       created_at: new Date().toISOString(),
@@ -44,7 +75,7 @@ export class SingleShard implements Sharder {
 
   findShardByResourceId(param: ShardResource): Promise<ShardRow> {
     return Promise.resolve({
-      id: this.singleShard.shardKey,
+      id: 1,
       kind: param.kind,
       shard_key: this.singleShard.shardKey,
       capacity: this.singleShard.capacity,
@@ -78,7 +109,7 @@ export class SingleShard implements Sharder {
     return Promise.resolve(undefined)
   }
 
-  shardStats(): Promise<any> {
+  shardStatsByKind(): Promise<any> {
     return Promise.resolve(undefined)
   }
 }

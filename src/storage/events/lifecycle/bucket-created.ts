@@ -6,9 +6,11 @@ import { getCatalogAuthStrategy, TenantAwareRestCatalog } from '@storage/protoco
 import { KnexMetastore } from '@storage/protocols/iceberg/knex'
 import { getTenantConfig, multitenantKnex } from '@internal/database'
 import { getConfig } from '../../../config'
+import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 
 interface ObjectCreatedEvent extends BasePayload {
   bucketId: string
+  bucketName: string
   type: BucketType
 }
 
@@ -38,7 +40,12 @@ export class BucketCreatedEvent extends BaseEvent<ObjectCreatedEvent> {
         maxCatalogsCount: features.icebergCatalog.maxCatalogs,
       },
       restCatalogUrl: icebergCatalogUrl,
-      warehouse: icebergWarehouse,
+      sharding: isMultitenant
+        ? new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
+        : new SingleShard({
+            shardKey: icebergWarehouse,
+            capacity: 10000,
+          }),
       auth: catalogAuthType,
       metastore: new KnexMetastore(multitenantKnex, {
         multiTenant: true,
@@ -48,6 +55,7 @@ export class BucketCreatedEvent extends BaseEvent<ObjectCreatedEvent> {
 
     await restCatalog.registerCatalog({
       bucketId: job.data.bucketId,
+      bucketName: job.data.bucketName,
       tenantId: job.data.tenant.ref,
     })
   }

@@ -178,6 +178,7 @@ type StorageConfigType = {
 
   icebergEnabled: boolean
   icebergWarehouse: string
+  icebergShards: string[]
   icebergCatalogUrl: string
   icebergCatalogAuthType: IcebergCatalogAuthType
   icebergCatalogToken?: string
@@ -515,6 +516,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
     icebergEnabled: getOptionalConfigFromEnv('ICEBERG_ENABLED') === 'true',
     icebergWarehouse: getOptionalConfigFromEnv('ICEBERG_WAREHOUSE') || '',
+    icebergShards: getOptionalConfigFromEnv('ICEBERG_SHARDS')?.trim().split(',') || [],
     icebergCatalogUrl:
       getOptionalConfigFromEnv('ICEBERG_CATALOG_URL') ||
       `https://s3tables.ap-southeast-1.amazonaws.com/iceberg/v1`,

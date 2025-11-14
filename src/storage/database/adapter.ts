@@ -77,7 +77,7 @@ export interface Database {
     >
   ): Promise<Pick<Bucket, 'id'>>
 
-  createIcebergBucket(data: Pick<Bucket, 'id'>): Promise<IcebergCatalog>
+  createAnalyticsBucket(data: Pick<Bucket, 'name'>): Promise<IcebergCatalog>
 
   findBucketById<Filters extends FindBucketFilters = FindObjectFilters>(
     bucketId: string,
@@ -218,10 +218,10 @@ export interface Database {
     options: { afterPart?: string; maxParts: number }
   ): Promise<S3PartUpload[]>
 
-  deleteAnalyticsBucket(id: string): Promise<void>
-
-  listIcebergBuckets(
+  deleteAnalyticsBucket(id: string, opts?: { soft: boolean }): Promise<IcebergCatalog>
+  listAnalyticsBuckets(
     columns: string,
     options: ListBucketOptions | undefined
   ): Promise<IcebergCatalog[]>
+  findAnalyticsBucketByName(name: string): Promise<IcebergCatalog>
 }

@@ -5,7 +5,8 @@ import { Job } from 'pg-boss'
 import { KnexMetastore } from '@storage/protocols/iceberg/knex'
 import { multitenantKnex } from '@internal/database'
 import { getConfig } from '../../../config'
-import { ERRORS } from '@internal/errors'
+import { DeleteIcebergResources } from '@storage/events/iceberg/delete-iceberg-resources'
+import { ErrorCode, StorageBackendError } from '@internal/errors'
 
 interface BucketDeletedEvent extends BasePayload {
   bucketId: string
@@ -15,7 +16,7 @@ interface BucketDeletedEvent extends BasePayload {
 const { isMultitenant } = getConfig()
 
 export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
-  protected static queueName = 'bucket:created'
+  protected static queueName = 'bucket:deleted'
 
   static eventName() {
     return `Bucket:Deleted`
@@ -26,28 +27,52 @@ export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
       return
     }
 
-    const db = isMultitenant
-      ? multitenantKnex
-      : (await this.createStorage(job.data)).db.connection.pool.acquire()
+    const bucketId = job.data.bucketId
+
+    const storage = await this.createStorage(job.data)
+    const db = isMultitenant ? multitenantKnex : storage.db.connection.pool.acquire()
 
     const metastore = new KnexMetastore(db, {
       multiTenant: isMultitenant,
       schema: isMultitenant ? 'public' : 'storage',
     })
 
-    const resources = await metastore.countResources({
-      tenantId: job.data.tenant.ref,
-      bucketId: job.data.bucketId,
-      limit: 1000,
-    })
+    await metastore.transaction(async (metastoreTx) => {
+      if (isMultitenant) {
+        try {
+          await metastoreTx.findCatalogById({
+            id: bucketId,
+            tenantId: job.data.tenant.ref,
+            deleted: true,
+          })
+        } catch (e) {
+          if (e instanceof StorageBackendError && e.code === ErrorCode.NoSuchCatalog) {
+            await storage.db.deleteAnalyticsBucket(bucketId)
+            return
+          }
+          throw e
+        }
+      }
 
-    if (resources.namespaces > 0 || resources.tables > 0) {
-      throw ERRORS.BucketNotEmpty(job.data.bucketId)
-    }
+      await metastoreTx.dropCatalog({
+        bucketId: bucketId,
+        tenantId: job.data.tenant.ref,
+        soft: true,
+      })
 
-    await metastore.dropCatalog({
-      tenantId: job.data.tenant.ref,
-      bucketId: job.data.bucketId,
+      await DeleteIcebergResources.send(
+        {
+          tenant: job.data.tenant,
+          catalogId: job.data.bucketId,
+        },
+        {
+          tnx: isMultitenant ? metastoreTx.getTnx() : undefined,
+        }
+      )
+
+      if (isMultitenant) {
+        await storage.db.deleteAnalyticsBucket(bucketId, { soft: true })
+      }
     })
   }
 }

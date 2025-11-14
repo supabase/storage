@@ -44,6 +44,7 @@ export const DBMigration = {
   'fix-object-level': 43,
   'vector-bucket-type': 44,
   'vector-buckets': 45,
-  'iceberg-table-metadata': 46,
-  'iceberg-catalog-ids': 47,
+  'buckets-objects-grants': 46,
+  'iceberg-table-metadata': 47,
+  'iceberg-catalog-ids': 48,
 }

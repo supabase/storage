@@ -442,7 +442,7 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
         limit: this.options.limits.maxNamespaceCount + 1,
       })
 
-      if (namespaceCount > this.options.limits.maxNamespaceCount) {
+      if (namespaceCount >= this.options.limits.maxNamespaceCount) {
         throw ERRORS.IcebergMaximumResourceLimit(this.options.limits.maxNamespaceCount)
       }
 

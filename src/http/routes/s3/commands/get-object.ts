@@ -1,6 +1,7 @@
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
+import { ERRORS } from '@internal/errors'
 
 const GetObjectInput = {
   summary: 'Get Object',
@@ -20,7 +21,17 @@ const GetObjectInput = {
       'if-modified-since': { type: 'string' },
     },
   },
-  Querystring: {},
+  Querystring: {
+    type: 'object',
+    properties: {
+      'response-content-disposition': { type: 'string' },
+      'response-content-type': { type: 'string' },
+      'response-cache-control': { type: 'string' },
+      'response-content-encoding': { type: 'string' },
+      'response-content-language': { type: 'string' },
+      'response-expires': { type: 'string' },
+    },
+  },
 } as const
 
 const GetObjectTagging = {
@@ -41,6 +52,16 @@ const GetObjectTagging = {
     required: ['tagging'],
   },
 } as const
+
+function parseDateHeader(input?: string) {
+  if (input) {
+    const parsedDate = new Date(input)
+    if (isNaN(parsedDate.getTime())) {
+      throw ERRORS.InvalidParameter('response-expires')
+    }
+    return parsedDate
+  }
+}
 
 export default function GetObject(s3Router: S3Router) {
   s3Router.get(
@@ -63,6 +84,7 @@ export default function GetObject(s3Router: S3Router) {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
       const ifModifiedSince = req.Headers?.['if-modified-since']
       const icebergBucket = ctx.req.internalIcebergBucketName
+      const responseExpires = parseDateHeader(req.Querystring?.['response-expires'])
 
       return s3Protocol.getObject(
         {
@@ -71,6 +93,12 @@ export default function GetObject(s3Router: S3Router) {
           Range: req.Headers?.['range'],
           IfNoneMatch: req.Headers?.['if-none-match'],
           IfModifiedSince: ifModifiedSince ? new Date(ifModifiedSince) : undefined,
+          ResponseContentDisposition: req.Querystring?.['response-content-disposition'],
+          ResponseContentType: req.Querystring?.['response-content-type'],
+          ResponseCacheControl: req.Querystring?.['response-cache-control'],
+          ResponseContentEncoding: req.Querystring?.['response-content-encoding'],
+          ResponseContentLanguage: req.Querystring?.['response-content-language'],
+          ResponseExpires: responseExpires,
         },
         {
           skipDbCheck: true,
@@ -86,6 +114,7 @@ export default function GetObject(s3Router: S3Router) {
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
       const ifModifiedSince = req.Headers?.['if-modified-since']
+      const responseExpires = parseDateHeader(req.Querystring?.['response-expires'])
 
       return s3Protocol.getObject(
         {
@@ -94,6 +123,12 @@ export default function GetObject(s3Router: S3Router) {
           Range: req.Headers?.['range'],
           IfNoneMatch: req.Headers?.['if-none-match'],
           IfModifiedSince: ifModifiedSince ? new Date(ifModifiedSince) : undefined,
+          ResponseContentDisposition: req.Querystring?.['response-content-disposition'],
+          ResponseContentType: req.Querystring?.['response-content-type'],
+          ResponseCacheControl: req.Querystring?.['response-cache-control'],
+          ResponseContentEncoding: req.Querystring?.['response-content-encoding'],
+          ResponseContentLanguage: req.Querystring?.['response-content-language'],
+          ResponseExpires: responseExpires,
         },
         {
           signal: ctx.signals.response,

@@ -24,7 +24,7 @@ import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
 import { ERRORS } from '@internal/errors'
-import { S3MultipartUpload, Obj } from '../../schemas'
+import { S3MultipartUpload } from '../../schemas'
 import { decrypt, encrypt } from '@internal/auth'
 import { ByteLimitTransformStream } from './byte-limit-stream'
 import { logger, logSchema } from '@internal/monitoring'
@@ -810,7 +810,7 @@ export class S3ProtocolHandler {
       throw ERRORS.NoSuchKey(Key)
     }
 
-    let metadataHeaders: Record<string, any> = {}
+    let metadataHeaders: Record<string, unknown> = {}
 
     if (object.user_metadata) {
       metadataHeaders = toAwsMeatadataHeaders(object.user_metadata)
@@ -873,7 +873,7 @@ export class S3ProtocolHandler {
     const key = command.Key as string
 
     let version: string | undefined
-    let userMetadata: Record<string, any> | undefined | null
+    let userMetadata: Record<string, unknown> | undefined | null
 
     if (!options?.skipDbCheck) {
       const object = await this.storage.from(bucket).findObject(key, 'version,user_metadata')
@@ -897,22 +897,44 @@ export class S3ProtocolHandler {
       options?.signal
     )
 
-    let metadataHeaders: Record<string, any> = {}
+    let metadataHeaders: Record<string, unknown> = {}
 
     if (userMetadata) {
       metadataHeaders = toAwsMeatadataHeaders(userMetadata)
     }
 
+    const headers: Record<string, string> = {
+      'cache-control': response.metadata.cacheControl,
+      'content-length': response.metadata.contentLength?.toString() || '0',
+      'content-range': response.metadata.contentRange?.toString() || '',
+      'content-type': response.metadata.mimetype,
+      etag: response.metadata.eTag,
+      'last-modified': response.metadata.lastModified?.toUTCString() || '',
+      ...metadataHeaders,
+    }
+
+    // Handle response header overrides
+    if (command.ResponseContentDisposition) {
+      headers['content-disposition'] = command.ResponseContentDisposition
+    }
+    if (command.ResponseContentType) {
+      headers['content-type'] = command.ResponseContentType
+    }
+    if (command.ResponseCacheControl) {
+      headers['cache-control'] = command.ResponseCacheControl
+    }
+    if (command.ResponseContentEncoding) {
+      headers['content-encoding'] = command.ResponseContentEncoding
+    }
+    if (command.ResponseContentLanguage) {
+      headers['content-language'] = command.ResponseContentLanguage
+    }
+    if (command.ResponseExpires) {
+      headers['expires'] = command.ResponseExpires.toUTCString()
+    }
+
     return {
-      headers: {
-        'cache-control': response.metadata.cacheControl,
-        'content-length': response.metadata.contentLength?.toString() || '0',
-        'content-range': response.metadata.contentRange?.toString() || '',
-        'content-type': response.metadata.mimetype,
-        etag: response.metadata.eTag,
-        'last-modified': response.metadata.lastModified?.toUTCString() || '',
-        ...metadataHeaders,
-      },
+      headers,
       responseBody: response.body,
       statusCode: command.Range ? 206 : 200,
     }
@@ -1254,8 +1276,8 @@ export class S3ProtocolHandler {
     }
   }
 
-  parseMetadataHeaders(headers: Record<string, any>): Record<string, any> | undefined {
-    let metadata: Record<string, any> | undefined = undefined
+  parseMetadataHeaders(headers: Record<string, unknown>): Record<string, string> | undefined {
+    let metadata: Record<string, unknown> | undefined = undefined
 
     Object.keys(headers)
       .filter((key) => key.startsWith('x-amz-meta-'))
@@ -1334,14 +1356,14 @@ export function isValidHeader(name: string, value: string | string[]): boolean {
   )
 }
 
-function toAwsMeatadataHeaders(records: Record<string, any>) {
-  const metadataHeaders: Record<string, any> = {}
+function toAwsMeatadataHeaders(records: Record<string, unknown>) {
+  const metadataHeaders: Record<string, unknown> = {}
   let missingCount = 0
 
   if (records) {
     Object.keys(records).forEach((key) => {
       const value = records[key]
-      if (value && isUSASCII(value) && isValidHeader(key, value)) {
+      if (value && typeof value === 'string' && isUSASCII(value) && isValidHeader(key, value)) {
         metadataHeaders['x-amz-meta-' + key.toLowerCase()] = value
       } else {
         missingCount++

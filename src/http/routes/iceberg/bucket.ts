@@ -83,6 +83,7 @@ export default async function routes(fastify: FastifyInstance) {
       })
 
       return response.status(200).send({
+        id: bucket.name,
         name: bucket.name,
         created_at: bucket.created_at,
         updated_at: bucket.updated_at,

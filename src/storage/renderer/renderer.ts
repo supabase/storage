@@ -3,6 +3,7 @@ import { ObjectMetadata } from '../backend'
 import { Readable } from 'stream'
 import { getConfig } from '../../config'
 import { Obj } from '../schemas'
+import { validateXRobotsTag } from '@storage/validators/x-robots-tag'
 
 export interface RenderOptions {
   bucket: string
@@ -10,6 +11,7 @@ export interface RenderOptions {
   version: string | undefined
   download?: string
   expires?: string
+  xRobotsTag?: string
   object?: Obj
   signal?: AbortSignal
 }
@@ -73,6 +75,15 @@ export abstract class Renderer {
     data: AssetResponse,
     options: RenderOptions
   ) {
+    let xRobotsTag = 'none'
+    if (options.xRobotsTag) {
+      try {
+        // allow overriding x-robots-tag header only with valid values
+        validateXRobotsTag(options.xRobotsTag)
+        xRobotsTag = options.xRobotsTag
+      } catch {}
+    }
+
     response
       .status(data.metadata.httpStatusCode ?? 200)
       .header('Accept-Ranges', 'bytes')
@@ -80,6 +91,7 @@ export abstract class Renderer {
       .header('ETag', data.metadata.eTag)
       .header('Content-Length', data.metadata.contentLength)
       .header('Last-Modified', data.metadata.lastModified?.toUTCString())
+      .header('X-Robots-Tag', xRobotsTag)
 
     if (options.expires) {
       response.header('Expires', options.expires)

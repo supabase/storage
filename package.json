@@ -115,7 +115,7 @@
     "eslint-plugin-prettier": "^4.2.1",
     "form-data": "^4.0.0",
     "jest": "^29.7.0",
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^4.1.1",
     "json-schema-to-ts": "^3.0.0",
     "mustache": "^4.2.0",
     "pino-pretty": "^8.1.0",

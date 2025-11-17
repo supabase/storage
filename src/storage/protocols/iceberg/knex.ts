@@ -323,6 +323,7 @@ export class KnexMetastore implements Metastore<Knex.Transaction> {
     const query = this.db
       .withSchema(this.ops.schema)
       .table('iceberg_catalogs')
+      .where('deleted_at', null)
       .limit(params.limit)
       .count<{ count: string }>('id as count')
 

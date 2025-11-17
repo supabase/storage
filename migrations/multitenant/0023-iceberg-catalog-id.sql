@@ -13,7 +13,8 @@ DO $$
             ALTER TABLE iceberg_catalogs RENAME COLUMN id TO name;
         END IF;
 
-        ALTER TABLE iceberg_catalogs ADD COLUMN IF NOT EXISTS id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY;
+        ALTER TABLE iceberg_catalogs ADD COLUMN IF NOT EXISTS id uuid NOT NULL DEFAULT gen_random_uuid();
+        ALTER TABLE iceberg_catalogs ADD PRIMARY KEY (id);
         ALTER TABLE iceberg_catalogs ADD COLUMN IF NOT EXISTS deleted_at timestamptz NULL;
 
         CREATE INDEX IF NOT EXISTS iceberg_catalogs_unique_name_idx

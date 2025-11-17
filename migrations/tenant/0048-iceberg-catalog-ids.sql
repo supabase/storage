@@ -5,6 +5,8 @@ DO $$
     BEGIN
 
         IF is_multitenant = false THEN
+            ALTER TABLE storage.iceberg_namespaces DROP CONSTRAINT IF EXISTS iceberg_namespaces_catalog_id_fkey;
+            ALTER TABLE storage.iceberg_tables DROP CONSTRAINT IF EXISTS iceberg_tables_catalog_id_fkey;
             ALTER TABLE storage.iceberg_namespaces DROP CONSTRAINT IF EXISTS iceberg_namespaces_bucket_id_fkey;
             ALTER TABLE storage.iceberg_tables DROP CONSTRAINT IF EXISTS iceberg_tables_bucket_id_fkey;
         END IF;
@@ -17,13 +19,16 @@ DO $$
           AND table_name = 'buckets_analytics'
           AND constraint_type = 'PRIMARY KEY';
 
-        EXECUTE drop_constraint_sql;
+        IF drop_constraint_sql IS NOT NULL THEN
+            EXECUTE drop_constraint_sql;
+        END IF;
 
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'buckets_analytics' AND column_name = 'name') THEN
             ALTER TABLE storage.buckets_analytics RENAME COLUMN id TO name;
         END IF;
 
-        ALTER TABLE storage.buckets_analytics ADD COLUMN IF NOT EXISTS id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY;
+        ALTER TABLE storage.buckets_analytics ADD COLUMN IF NOT EXISTS id uuid NOT NULL DEFAULT gen_random_uuid();
+        ALTER TABLE storage.buckets_analytics ADD PRIMARY KEY (id);
         ALTER TABLE storage.buckets_analytics ADD COLUMN IF NOT EXISTS deleted_at timestamptz NULL;
 
         CREATE UNIQUE INDEX IF NOT EXISTS buckets_analytics_unique_name_idx

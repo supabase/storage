@@ -97,8 +97,23 @@ jobs:
 
       - name: Verify migration idempotency
         run: |
-          psql "${{ env.DATABASE_URL }}" -c "DROP TABLE IF EXISTS storage.migrations;"
+          pg_dump "$DATABASE_URL" \
+            --exclude-table-data=storage.migrations \
+            | grep -v '^\\restrict' \
+            | grep -v '^\\unrestrict' \
+            > before.sql
+          
+          psql "$DATABASE_URL" -c "DROP TABLE IF EXISTS storage.migrations;"
           npm run migration:run
+          
+          pg_dump "$DATABASE_URL" \
+            --exclude-table-data=storage.migrations \
+            | grep -v '^\\restrict' \
+            | grep -v '^\\unrestrict' \
+            > after.sql
+          
+          diff before.sql after.sql || (echo 'Schema mismatch!'; exit 1)
+
         env:
           PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres

@@ -99,8 +99,7 @@ jobs:
         run: |
           pg_dump "$DATABASE_URL" \
             --exclude-table-data=storage.migrations \
-            | grep -v '^\\restrict' \
-            | grep -v '^\\unrestrict' \
+            --restrict-key=test \
             > before.sql
           
           psql "$DATABASE_URL" -c "DROP TABLE IF EXISTS storage.migrations;"
@@ -108,8 +107,7 @@ jobs:
           
           pg_dump "$DATABASE_URL" \
             --exclude-table-data=storage.migrations \
-            | grep -v '^\\restrict' \
-            | grep -v '^\\unrestrict' \
+            --restrict-key=test \
             > after.sql
           
           diff before.sql after.sql || (echo 'Schema mismatch!'; exit 1)

@@ -57,7 +57,6 @@ DO $$
         ALTER TABLE storage.iceberg_namespaces ADD COLUMN IF NOT EXISTS catalog_id uuid NULL;
         ALTER TABLE storage.iceberg_tables ADD COLUMN IF NOT EXISTS catalog_id uuid NULL;
 
-        -- Add FK constraints if they don't exist (handles idempotency when column already exists)
         IF NOT EXISTS (
             SELECT 1 FROM information_schema.table_constraints
             WHERE table_schema = 'storage'

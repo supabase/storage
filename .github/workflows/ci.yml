@@ -95,6 +95,17 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Verify migration idempotency
+        run: |
+          psql "${{ env.DATABASE_URL }}" -c "DROP TABLE IF EXISTS storage.migrations;"
+          npm run migration:run
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
+          DB_INSTALL_ROLES: true
+          ENABLE_DEFAULT_METRICS: false
+          PG_QUEUE_ENABLE: false
+          MULTI_TENANT: false
+
       - name: Ensure OrioleDB migration compatibility
         run: |
           npm run infra:restart:oriole

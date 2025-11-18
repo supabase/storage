@@ -1,4 +1,3 @@
-drop function storage.search;
 
 create or replace function storage.search (
   prefix text,

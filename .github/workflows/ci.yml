@@ -100,6 +100,7 @@ jobs:
           psql "${{ env.DATABASE_URL }}" -c "DROP TABLE IF EXISTS storage.migrations;"
           npm run migration:run
         env:
+          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
           DB_INSTALL_ROLES: true
           ENABLE_DEFAULT_METRICS: false

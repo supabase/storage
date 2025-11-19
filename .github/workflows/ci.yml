@@ -102,7 +102,7 @@ jobs:
             --restrict-key=test \
             > before.sql
           
-          psql "$DATABASE_URL" -c "DROP TABLE IF EXISTS storage.migrations;"
+          psql "$DATABASE_URL" -c "TRUNCATE TABLE storage.migrations;"
           npm run migration:run
           
           pg_dump "$DATABASE_URL" \

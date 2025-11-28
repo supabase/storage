@@ -728,7 +728,9 @@ async function doesTableExist(client: BasicPgClient, tableName: string) {
   const result = await client.query(SQL`SELECT EXISTS (
   SELECT 1
   FROM   pg_catalog.pg_class c
-  WHERE  c.relname = ${tableName}
+  JOIN   pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE  n.nspname = 'storage'
+  AND    c.relname = ${tableName}
   AND    c.relkind = 'r'
 );`)
 

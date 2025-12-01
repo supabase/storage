@@ -311,6 +311,7 @@ export async function runMultitenantMigrations(): Promise<void> {
   await connectAndMigrate({
     databaseUrl: multitenantDatabaseUrl,
     migrationsDirectory: './migrations/multitenant',
+    migrationsTableSchema: 'public',
     shouldCreateStorageSchema: false,
     waitForLock: true,
   })
@@ -347,6 +348,7 @@ export async function runMigrationsOnTenant({
   await connectAndMigrate({
     databaseUrl,
     migrationsDirectory: './migrations/tenant',
+    migrationsTableSchema: 'storage',
     ssl: getSslSettings({ connectionString: databaseUrl, databaseSSLRootCert }),
     shouldCreateStorageSchema: true,
     tenantId,
@@ -502,6 +504,7 @@ async function connect(options: {
 async function connectAndMigrate(options: {
   databaseUrl: string | undefined
   migrationsDirectory: string
+  migrationsTableSchema?: string
   ssl?: ClientConfig['ssl']
   shouldCreateStorageSchema?: boolean
   tenantId?: string
@@ -525,6 +528,7 @@ async function connectAndMigrate(options: {
     await migrate({
       client,
       migrationsDirectory,
+      migrationsTableSchema: options.migrationsTableSchema,
       waitForLock: Boolean(waitForLock),
       shouldCreateStorageSchema,
       upToMigration: options.upToMigration,
@@ -537,6 +541,7 @@ async function connectAndMigrate(options: {
 interface MigrateOptions {
   client: BasicPgClient
   migrationsDirectory: string
+  migrationsTableSchema?: string
   waitForLock: boolean
   shouldCreateStorageSchema?: boolean
   upToMigration?: keyof typeof DBMigration
@@ -552,6 +557,7 @@ interface MigrateOptions {
 export async function migrate({
   client,
   migrationsDirectory,
+  migrationsTableSchema,
   waitForLock,
   shouldCreateStorageSchema,
   upToMigration,
@@ -561,6 +567,7 @@ export async function migrate({
     waitForLock,
     runMigrations({
       migrationsDirectory,
+      migrationsTableSchema,
       shouldCreateStorageSchema,
       upToMigration,
       // Remove concurrent index creation if we're using oriole db as it does not support it currently
@@ -571,6 +578,7 @@ export async function migrate({
 
 interface RunMigrationOptions {
   migrationsDirectory: string
+  migrationsTableSchema?: string
   shouldCreateStorageSchema?: boolean
   upToMigration?: keyof typeof DBMigration
   transformers?: MigrationTransformer[]
@@ -584,6 +592,7 @@ interface RunMigrationOptions {
  */
 function runMigrations({
   migrationsDirectory,
+  migrationsTableSchema,
   shouldCreateStorageSchema,
   upToMigration,
   transformers = [],
@@ -607,7 +616,13 @@ function runMigrations({
       await client.query(`SET search_path TO ${searchPath.join(',')}`)
 
       let appliedMigrations: Migration[] = []
-      if (await doesTableExist(client, migrationTableName)) {
+      if (
+        await doesTableExist({
+          client,
+          schemaName: migrationsTableSchema,
+          tableName: migrationTableName,
+        })
+      ) {
         const selectQueryCurrentMigration = SQL`SELECT * FROM `
           .append(migrationTableName)
           .append(SQL` WHERE id <= ${lastMigrationId}`)
@@ -724,15 +739,26 @@ async function getDefaultAccessMethod(client: BasicPgClient): Promise<string> {
  * @param client
  * @param tableName
  */
-async function doesTableExist(client: BasicPgClient, tableName: string) {
-  const result = await client.query(SQL`SELECT EXISTS (
+async function doesTableExist({
+  client,
+  schemaName,
+  tableName,
+}: {
+  client: BasicPgClient
+  schemaName?: string
+  tableName: string
+}) {
+  const result = await client.query(
+    SQL`SELECT EXISTS (
   SELECT 1
   FROM   pg_catalog.pg_class c
   JOIN   pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-  WHERE  n.nspname = 'storage'
-  AND    c.relname = ${tableName}
+  WHERE  c.relname = ${tableName}
   AND    c.relkind = 'r'
-);`)
+`
+      .append(schemaName ? SQL`AND n.nspname = ${schemaName}` : '')
+      .append(`);`)
+  )
 
   return result.rows.length > 0 && result.rows[0].exists
 }

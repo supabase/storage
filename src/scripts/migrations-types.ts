@@ -6,17 +6,24 @@ function main() {
   const migrationsPath = path.join(__dirname, '..', '..', 'migrations', 'tenant', '*.sql')
   const files = glob.sync(migrationsPath).sort()
 
-  const migrations = files.map((file, index) => {
+  const migrations = [
+    // this migration is hardcoded by the postgres migrations library
+    {
+      file: 'create-migrations-table',
+      index: 0,
+    },
+  ]
+
+  files.forEach((file, index) => {
     const fileName = file
       .split(path.sep)
       .pop()
       ?.replace(/[0-9]+-/, '')
       .replace('.sql', '')
-
-    return {
-      file: fileName,
+    migrations.push({
+      file: fileName || '',
       index: index + 1,
-    }
+    })
   })
 
   const migrationsEnum = migrations.map((migration) => {

@@ -358,7 +358,7 @@ export async function runMigrationsOnTenant({
 }
 
 export async function resetMigration(options: {
-  tenantId: string
+  tenantId?: string
   untilMigration: keyof typeof DBMigration
   markCompletedTillMigration?: keyof typeof DBMigration
   databaseUrl: string
@@ -447,10 +447,12 @@ export async function resetMigration(options: {
           }
         }
 
-        await updateTenantMigrationsState(options.tenantId, {
-          migration: latestRunMigration,
-          state: TenantMigrationStatus.COMPLETED,
-        })
+        if (options.tenantId) {
+          await updateTenantMigrationsState(options.tenantId, {
+            migration: latestRunMigration,
+            state: TenantMigrationStatus.COMPLETED,
+          })
+        }
 
         await pgClient.query(`COMMIT`)
 

@@ -102,8 +102,7 @@ jobs:
             --restrict-key=test \
             > before.sql
           
-          psql "$DATABASE_URL" -c "TRUNCATE TABLE storage.migrations;"
-          npm run migration:run
+          npm run migration:test-idempotency
           
           pg_dump "$DATABASE_URL" \
             --exclude-table-data=storage.migrations \

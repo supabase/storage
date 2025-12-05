@@ -1,6 +1,7 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { routes, plugins, setErrorHandler } from './http'
 import { Registry } from 'prom-client'
+import { getConfig } from './config'
 
 declare module 'fastify-metrics' {
   interface IFastifyMetrics {
@@ -9,11 +10,13 @@ declare module 'fastify-metrics' {
   }
 }
 
+const { version } = getConfig()
+
 const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): FastifyInstance => {
   const app = fastify(opts)
   app.register(plugins.signals)
   app.register(plugins.adminTenantId)
-  app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health'] }))
+  app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health', '/version'] }))
   app.register(routes.tenants, { prefix: 'tenants' })
   app.register(routes.objects, { prefix: 'tenants' })
   app.register(routes.jwks, { prefix: 'tenants' })
@@ -49,6 +52,9 @@ const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): 
     app.register(plugins.metrics({ enabledEndpoint: true }))
   }
 
+  app.get('/version', (_, reply) => {
+    reply.send(version)
+  })
   app.get('/status', async (_, response) => response.status(200).send())
 
   setErrorHandler(app)

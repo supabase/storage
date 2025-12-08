@@ -424,8 +424,8 @@ export class SignatureV4 {
     signedHeaders: string[]
   ) {
     const method = request.method
-    const canonicalUri = new URL(`http://localhost:8080${request.prefix || ''}${request.url}`)
-      .pathname
+    const prefix = request.prefix ? request.prefix.replace(/\/+$/, '') : ''
+    const canonicalUri = new URL(`http://localhost:8080${prefix}${request.url}`).pathname
     const canonicalQueryString = this.constructCanonicalQueryString(request.query || {})
     const canonicalHeaders = this.constructCanonicalHeaders(request, signedHeaders)
     const signedHeadersString = signedHeaders.sort().join(';')

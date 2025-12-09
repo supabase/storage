@@ -54,7 +54,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(plugins.tenantId)
   app.register(plugins.metrics({ enabledEndpoint: !isMultitenant }))
   app.register(plugins.tracing)
-  app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health'] }))
+  app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health', '/version'] }))
   app.register(routes.tus, { prefix: 'upload/resumable' })
   app.register(routes.bucket, { prefix: 'bucket' })
   app.register(routes.object, { prefix: 'object' })

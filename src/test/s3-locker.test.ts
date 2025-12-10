@@ -78,7 +78,7 @@ describe('S3Locker', () => {
     for (const { lock } of allLocks) {
       try {
         await lock.unlock()
-      } catch (error) {
+      } catch {
         // Ignore cleanup errors
       }
     }
@@ -92,7 +92,7 @@ describe('S3Locker', () => {
     for (const { lock } of allLocks) {
       try {
         await lock.unlock()
-      } catch (error) {
+      } catch {
         // Ignore cleanup errors
       }
     }
@@ -106,7 +106,7 @@ describe('S3Locker', () => {
       if (s3Client && typeof s3Client.destroy === 'function') {
         s3Client.destroy()
       }
-    } catch (error) {
+    } catch {
       // Ignore cleanup errors
     }
   })
@@ -135,7 +135,7 @@ describe('S3Locker', () => {
           })
         )
       }
-    } catch (error) {
+    } catch {
       // Ignore cleanup errors
     }
   }
@@ -404,6 +404,67 @@ describe('S3Locker', () => {
       await lock1.unlock()
     })
 
+    test('should not create zombie locks with rapid lock cycling and contention', async () => {
+      // This test reproduces the zombie lock race condition:
+      // 1. Lock1 acquired, starts renewal timer (fires at T=1000)
+      // 2. Lock2 tries to acquire same ID (retries/waits)
+      // 3. Lock2 aborted, Lock1 unlocked at T=150
+      // 4. Renewal timer fires at T=1000 with in-flight renewLock()
+      // 5. renewLock() GET happens, then unlock() DELETE happens
+      // 6. WITHOUT fix: renewLock() PUT happens AFTER DELETE, creating zombie
+      // 7. Next iteration tries to acquire but finds zombie, times out
+
+      const lockId = 'contention-race-test'
+      const cancelReq = jest.fn()
+
+      for (let i = 0; i < 5; i++) {
+        const lock1 = locker.newLock(lockId)
+        const lock2 = locker.newLock(lockId)
+
+        const abortController1 = new AbortController()
+        const abortController2 = new AbortController()
+
+        // Acquire first lock
+        // This can throw LockTimeout if a zombie lock exists from previous iteration
+        const start = Date.now()
+        try {
+          await lock1.lock(abortController1.signal, cancelReq)
+        } catch (error: any) {
+          const lockDuration = Date.now() - start
+          throw new Error(
+            `Lock acquisition failed on iteration ${i} after ${lockDuration}ms with error: ${error.message}. `
+          )
+        }
+        const lockDuration = Date.now() - start
+
+        // Lock should be acquired quickly (< 500ms)
+        // Longer times indicate retries due to contention or zombie locks
+        if (lockDuration > 500) {
+          await lock1.unlock()
+          throw new Error(
+            `Lock acquisition took ${lockDuration}ms on iteration ${i}, indicating potential zombie lock or excessive retries`
+          )
+        }
+
+        // Start second lock attempt (creates contention)
+        const lock2Promise = lock2.lock(abortController2.signal, cancelReq)
+
+        // Abort the second lock after a short delay
+        setTimeout(() => abortController2.abort(), 100)
+
+        // Handle lock2
+        try {
+          await lock2Promise
+          await lock2.unlock()
+        } catch {
+          // Expected - lock was aborted
+        }
+
+        // Unlock first lock
+        await lock1.unlock()
+      }
+    }, 10000)
+
     test('should handle unlock without lock', async () => {
       const lock = locker.newLock('test-lock-1')
 
@@ -594,7 +655,7 @@ describe('S3Locker', () => {
         await lock2.lock(abortController2.signal, cancelReq)
         // If it succeeds unexpectedly, unlock it
         await lock2.unlock()
-      } catch (error) {
+      } catch {
         // Expected behavior - lock contention
         secondLockFailed = true
       }

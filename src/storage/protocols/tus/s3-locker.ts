@@ -120,7 +120,7 @@ export class S3Locker implements Locker {
     return false
   }
 
-  async renewLock(id: string): Promise<boolean> {
+  async renewLock(id: string, checkLocked: () => boolean): Promise<boolean> {
     const lockKey = this.getLockKey(id)
 
     try {
@@ -138,6 +138,12 @@ export class S3Locker implements Locker {
 
       const body = await response.Body.transformToString()
       const currentLock: LockMetadata = JSON.parse(body)
+
+      // Check if lock is still held before updating
+      // This prevents writing the lock back to S3 if unlock() was called during GetObject
+      if (!checkLocked()) {
+        return false
+      }
 
       // Update expiration time
       const updatedLock: LockMetadata = {
@@ -402,7 +408,7 @@ export class S3Lock implements Lock {
       }
 
       try {
-        const renewed = await this.locker.renewLock(this.id)
+        const renewed = await this.locker.renewLock(this.id, () => this.isLocked)
         if (!renewed) {
           this.locker
             .getLogger()

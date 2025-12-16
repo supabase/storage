@@ -120,7 +120,7 @@ export class S3Locker implements Locker {
     return false
   }
 
-  async renewLock(id: string, checkLocked: () => boolean): Promise<boolean> {
+  async renewLock(id: string): Promise<boolean> {
     const lockKey = this.getLockKey(id)
 
     try {
@@ -141,7 +141,7 @@ export class S3Locker implements Locker {
 
       // Check if lock is still held before updating
       // This prevents writing the lock back to S3 if unlock() was called during GetObject
-      if (id !== currentLock.lockId || !checkLocked()) {
+      if (id !== currentLock.lockId) {
         return false
       }
 
@@ -152,12 +152,13 @@ export class S3Locker implements Locker {
         renewedAt: Date.now(),
       }
 
-      // Update the lock with new expiration
+      // Update the lock with new expiration (if it exists)
       await this.s3Client.send(
         new PutObjectCommand({
           Bucket: this.bucket,
           Key: lockKey,
           Body: JSON.stringify(updatedLock),
+          IfMatch: response.ETag,
           ContentType: 'application/json',
           Metadata: {
             lockId: id,
@@ -167,7 +168,7 @@ export class S3Locker implements Locker {
       )
       return true
     } catch (error: any) {
-      if (error.name === 'NoSuchKey') {
+      if (error.name === 'NoSuchKey' || error.name === 'PreconditionFailed') {
         return false
       }
       throw error
@@ -408,7 +409,7 @@ export class S3Lock implements Lock {
       }
 
       try {
-        const renewed = await this.locker.renewLock(this.id, () => this.isLocked)
+        const renewed = await this.locker.renewLock(this.id)
         if (!renewed) {
           this.locker
             .getLogger()

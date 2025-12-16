@@ -141,7 +141,7 @@ export class S3Locker implements Locker {
 
       // Check if lock is still held before updating
       // This prevents writing the lock back to S3 if unlock() was called during GetObject
-      if (!checkLocked()) {
+      if (id !== currentLock.lockId || !checkLocked()) {
         return false
       }
 

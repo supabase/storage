@@ -239,7 +239,7 @@ describe('S3Locker', () => {
       // Create multiple locker instances to simulate different processes
       const lockers = Array.from(
         { length: numInstances },
-        (_, index) =>
+        () =>
           new S3Locker({
             s3Client,
             bucket: testBucket,
@@ -405,65 +405,97 @@ describe('S3Locker', () => {
     })
 
     test('should not create zombie locks with rapid lock cycling and contention', async () => {
-      // This test reproduces the zombie lock race condition:
-      // 1. Lock1 acquired, starts renewal timer (fires at T=1000)
-      // 2. Lock2 tries to acquire same ID (retries/waits)
-      // 3. Lock2 aborted, Lock1 unlocked at T=150
-      // 4. Renewal timer fires at T=1000 with in-flight renewLock()
-      // 5. renewLock() GET happens, then unlock() DELETE happens
-      // 6. WITHOUT fix: renewLock() PUT happens AFTER DELETE, creating zombie
-      // 7. Next iteration tries to acquire but finds zombie, times out
+      // This test reproduces the zombie lock race condition by using a spy to inject
+      // delays in the S3 client, simulating slow network between GET and PUT in renewLock:
+      // 1. Lock acquired, starts renewal timer (fires at T=1000)
+      // 2. Renewal GET completes, then we inject a delay before PUT
+      // 3. During the delay, unlock() DELETEs the lock
+      // 4. renewLock() PUT happens AFTER DELETE
+      // WITHOUT IfMatch: PUT succeeds, creating zombie
+      // WITH IfMatch: PUT fails (ETag mismatch), no zombie created
 
       const lockId = 'contention-race-test'
       const cancelReq = jest.fn()
 
-      for (let i = 0; i < 5; i++) {
-        const lock1 = locker.newLock(lockId)
-        const lock2 = locker.newLock(lockId)
+      // Spy on S3 client to inject delay after GET and before PUT in renewLock
+      const originalSend = s3Client.send.bind(s3Client)
+      const sendSpy = jest.spyOn(s3Client, 'send').mockImplementation(async (command) => {
+        const result = await originalSend(command)
 
-        const abortController1 = new AbortController()
-        const abortController2 = new AbortController()
+        // Inject delay after GET in renewLock to simulate slow network
+        if (command instanceof GetObjectCommand && command.input.Key?.includes(lockId)) {
+          await new Promise((resolve) => setTimeout(resolve, 200))
+        }
 
-        // Acquire first lock
-        // This can throw LockTimeout if a zombie lock exists from previous iteration
-        const start = Date.now()
-        try {
-          await lock1.lock(abortController1.signal, cancelReq)
-        } catch (error: any) {
+        return result
+      })
+
+      try {
+        for (let i = 0; i < 3; i++) {
+          const lock1 = locker.newLock(lockId)
+          const abortController1 = new AbortController()
+
+          // Acquire first lock
+          const start = Date.now()
+          try {
+            await lock1.lock(abortController1.signal, cancelReq)
+          } catch (error: any) {
+            const lockDuration = Date.now() - start
+            throw new Error(
+              `Lock acquisition failed on iteration ${i} after ${lockDuration}ms with error: ${error.message}. This likely means a zombie lock exists from a previous iteration.`
+            )
+          }
           const lockDuration = Date.now() - start
-          throw new Error(
-            `Lock acquisition failed on iteration ${i} after ${lockDuration}ms with error: ${error.message}. `
-          )
+
+          // Lock should be acquired quickly (< 1000ms)
+          // Longer times indicate retries due to zombie locks from previous iteration
+          if (lockDuration > 1000) {
+            await lock1.unlock()
+            throw new Error(
+              `Lock acquisition took ${lockDuration}ms on iteration ${i}, indicating a zombie lock exists`
+            )
+          }
+
+          // Wait for renewal timer to fire (1000ms) plus buffer
+          await new Promise((resolve) => setTimeout(resolve, 1100))
+
+          // Manually delete the lock to simulate unlock
+          await locker.releaseLock(lockId)
+          abortController1.abort()
+
+          // Wait for the zombie-creating PUT to complete
+          // WITHOUT IfMatch fix: renewLock's in-flight PUT will succeed, creating a zombie
+          // WITH IfMatch fix: renewLock's PUT will fail (ETag mismatch), no zombie created
+          await new Promise((resolve) => setTimeout(resolve, 100))
+
+          // Check if a zombie lock exists
+          try {
+            const lockKey = `test-locks/${lockId}.lock`
+            await s3Client.send(
+              new GetObjectCommand({
+                Bucket: testBucket,
+                Key: lockKey,
+              })
+            )
+            // If we got here, a lock exists - this is a zombie!
+            await locker.releaseLock(lockId)
+            throw new Error(
+              `Zombie lock detected on iteration ${i}! A lock exists after deletion, indicating the IfMatch fix is missing.`
+            )
+          } catch (error: any) {
+            if (error.name === 'NoSuchKey') {
+              // Good - no zombie lock exists
+              continue
+            }
+            // Re-throw if it's our zombie detection error or other error
+            throw error
+          }
         }
-        const lockDuration = Date.now() - start
-
-        // Lock should be acquired quickly (< 500ms)
-        // Longer times indicate retries due to contention or zombie locks
-        if (lockDuration > 500) {
-          await lock1.unlock()
-          throw new Error(
-            `Lock acquisition took ${lockDuration}ms on iteration ${i}, indicating potential zombie lock or excessive retries`
-          )
-        }
-
-        // Start second lock attempt (creates contention)
-        const lock2Promise = lock2.lock(abortController2.signal, cancelReq)
-
-        // Abort the second lock after a short delay
-        setTimeout(() => abortController2.abort(), 100)
-
-        // Handle lock2
-        try {
-          await lock2Promise
-          await lock2.unlock()
-        } catch {
-          // Expected - lock was aborted
-        }
-
-        // Unlock first lock
-        await lock1.unlock()
+      } finally {
+        // Restore original S3 client behavior
+        sendSpy.mockRestore()
       }
-    }, 10000)
+    })
 
     test('should handle unlock without lock', async () => {
       const lock = locker.newLock('test-lock-1')

@@ -139,8 +139,6 @@ export class S3Locker implements Locker {
       const body = await response.Body.transformToString()
       const currentLock: LockMetadata = JSON.parse(body)
 
-      // Check if lock is still held before updating
-      // This prevents writing the lock back to S3 if unlock() was called during GetObject
       if (id !== currentLock.lockId) {
         return false
       }

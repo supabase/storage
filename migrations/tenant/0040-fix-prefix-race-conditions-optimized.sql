@@ -240,6 +240,10 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS objects_delete_cleanup ON storage.objects;
+DROP TRIGGER IF EXISTS prefixes_delete_cleanup ON storage.prefixes;
+DROP TRIGGER IF EXISTS objects_update_cleanup ON storage.objects;
+
 -- Trigger bindings
 CREATE TRIGGER objects_delete_cleanup
     AFTER DELETE ON storage.objects

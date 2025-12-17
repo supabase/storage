@@ -10,6 +10,7 @@
     "format": "prettier -c --write src/**",
     "lint": "prettier -v && prettier -c src/**",
     "migration:run": "tsx src/scripts/migrate-call.ts",
+    "migration:test-idempotency": "tsx src/scripts/test-migration-idempotency.ts",
     "migrations:types": "tsx src/scripts/migrations-types.ts",
     "docs:export": "tsx ./src/scripts/export-docs.ts",
     "test:dummy-data": "tsx -r dotenv/config ./src/test/db/import-dummy-data.ts",

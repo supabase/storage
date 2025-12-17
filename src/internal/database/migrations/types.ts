@@ -1,4 +1,5 @@
 export const DBMigration = {
+  'create-migrations-table': 0,
   initialmigration: 1,
   'search-files-search-function': 2,
   'storage-schema': 3,

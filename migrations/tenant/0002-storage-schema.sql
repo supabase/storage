@@ -18,11 +18,23 @@ BEGIN
     END IF;
 
   -- Install ROLES
-  EXECUTE 'CREATE ROLE ' || anon_role || ' NOLOGIN NOINHERIT';
-  EXECUTE 'CREATE ROLE ' || authenticated_role || ' NOLOGIN NOINHERIT';
-  EXECUTE 'CREATE ROLE ' || service_role || ' NOLOGIN NOINHERIT bypassrls';
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = anon_role) THEN
+        EXECUTE 'CREATE ROLE ' || anon_role || ' NOLOGIN NOINHERIT';
+    END IF;
 
-  create user authenticator noinherit;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = authenticated_role  ) THEN
+        EXECUTE 'CREATE ROLE ' || authenticated_role || ' NOLOGIN NOINHERIT';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = service_role) THEN
+        EXECUTE 'CREATE ROLE ' || service_role || ' NOLOGIN NOINHERIT bypassrls';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticator') THEN
+        EXECUTE 'CREATE USER authenticator NOINHERIT';
+    END IF;
+
+
   EXECUTE 'grant ' || anon_role || ' to authenticator';
   EXECUTE 'grant ' || authenticated_role || ' to authenticator';
   EXECUTE 'grant ' || service_role || ' to authenticator';
@@ -70,7 +82,6 @@ CREATE INDEX IF NOT EXISTS name_prefix_search ON storage.objects(name text_patte
 
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 
-drop function if exists storage.foldername;
 CREATE OR REPLACE FUNCTION storage.foldername(name text)
  RETURNS text[]
  LANGUAGE plpgsql
@@ -83,7 +94,6 @@ BEGIN
 END
 $function$;
 
-drop function if exists storage.filename;
 CREATE OR REPLACE FUNCTION storage.filename(name text)
  RETURNS text
  LANGUAGE plpgsql
@@ -96,7 +106,6 @@ BEGIN
 END
 $function$;
 
-drop function if exists storage.extension;
 CREATE OR REPLACE FUNCTION storage.extension(name text)
  RETURNS text
  LANGUAGE plpgsql
@@ -113,7 +122,6 @@ END
 $function$;
 
 -- @todo can this query be optimised further?
-drop function if exists storage.search;
 CREATE OR REPLACE FUNCTION storage.search(prefix text, bucketname text, limits int DEFAULT 100, levels int DEFAULT 1, offsets int DEFAULT 0)
  RETURNS TABLE (
     name text,

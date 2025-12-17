@@ -40,7 +40,9 @@ DO $$
             updated_at timestamptz NOT NULL default now()
         );
 
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_iceberg_namespaces_bucket_id ON storage.iceberg_namespaces (bucket_id, name);
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'iceberg_namespaces' AND column_name = 'bucket_id') THEN
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_iceberg_namespaces_bucket_id ON storage.iceberg_namespaces (bucket_id, name);
+        END IF;
 
         CREATE TABLE IF NOT EXISTS storage.iceberg_tables (
           id uuid primary key default gen_random_uuid(),
@@ -52,6 +54,7 @@ DO $$
           updated_at timestamptz NOT NULL default now()
         );
 
+        DROP INDEX IF EXISTS idx_iceberg_tables_namespace_id;
         CREATE UNIQUE INDEX idx_iceberg_tables_namespace_id ON storage.iceberg_tables (namespace_id, name);
 
         ALTER TABLE storage.iceberg_namespaces ENABLE ROW LEVEL SECURITY;

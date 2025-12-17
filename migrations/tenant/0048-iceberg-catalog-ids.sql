@@ -54,8 +54,28 @@ DO $$
             ALTER TABLE storage.iceberg_tables RENAME COLUMN bucket_id to bucket_name;
         END IF;
 
-        ALTER TABLE storage.iceberg_namespaces ADD COLUMN IF NOT EXISTS catalog_id uuid NULL REFERENCES storage.buckets_analytics(id) ON DELETE CASCADE;
-        ALTER TABLE storage.iceberg_tables ADD COLUMN IF NOT EXISTS catalog_id uuid NULL REFERENCES storage.buckets_analytics(id) ON DELETE CASCADE;
+        ALTER TABLE storage.iceberg_namespaces ADD COLUMN IF NOT EXISTS catalog_id uuid NULL;
+        ALTER TABLE storage.iceberg_tables ADD COLUMN IF NOT EXISTS catalog_id uuid NULL;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.table_constraints
+            WHERE table_schema = 'storage'
+              AND table_name = 'iceberg_namespaces'
+              AND constraint_name = 'iceberg_namespaces_catalog_id_fkey'
+        ) THEN
+            ALTER TABLE storage.iceberg_namespaces ADD CONSTRAINT iceberg_namespaces_catalog_id_fkey
+                FOREIGN KEY (catalog_id) REFERENCES storage.buckets_analytics(id) ON DELETE CASCADE;
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.table_constraints
+            WHERE table_schema = 'storage'
+              AND table_name = 'iceberg_tables'
+              AND constraint_name = 'iceberg_tables_catalog_id_fkey'
+        ) THEN
+            ALTER TABLE storage.iceberg_tables ADD CONSTRAINT iceberg_tables_catalog_id_fkey
+                FOREIGN KEY (catalog_id) REFERENCES storage.buckets_analytics(id) ON DELETE CASCADE;
+        END IF;
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_iceberg_namespaces_bucket_id ON storage.iceberg_namespaces (catalog_id, name);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_iceberg_tables_namespace_id ON storage.iceberg_tables (catalog_id, namespace_id, name);

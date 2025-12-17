@@ -95,6 +95,30 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Verify migration idempotency
+        run: |
+          pg_dump "$DATABASE_URL" \
+            --exclude-table-data=storage.migrations \
+            --restrict-key=test \
+            > before.sql
+          
+          npm run migration:test-idempotency
+          
+          pg_dump "$DATABASE_URL" \
+            --exclude-table-data=storage.migrations \
+            --restrict-key=test \
+            > after.sql
+          
+          diff before.sql after.sql || (echo 'Schema mismatch!'; exit 1)
+
+        env:
+          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
+          DB_INSTALL_ROLES: true
+          ENABLE_DEFAULT_METRICS: false
+          PG_QUEUE_ENABLE: false
+          MULTI_TENANT: false
+
       - name: Ensure OrioleDB migration compatibility
         run: |
           npm run infra:restart:oriole

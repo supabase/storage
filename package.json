@@ -29,11 +29,11 @@
     "node": ">= 14.0.0"
   },
   "dependencies": {
-    "@aws-sdk/client-ecs": "^3.795.0",
-    "@aws-sdk/client-s3": "3.654.0",
-    "@aws-sdk/client-s3vectors": "^3.919.0",
-    "@aws-sdk/lib-storage": "3.654.0",
-    "@aws-sdk/s3-request-presigner": "3.654.0",
+    "@aws-sdk/client-ecs": "^3.948.0",
+    "@aws-sdk/client-s3": "^3.948.0",
+    "@aws-sdk/client-s3vectors": "^3.948.0",
+    "@aws-sdk/lib-storage": "^3.948.0",
+    "@aws-sdk/s3-request-presigner": "^3.948.0",
     "@fastify/accepts": "^4.3.0",
     "@fastify/multipart": "github:supabase/fastify-multipart#v8.3.1-patched",
     "@fastify/rate-limit": "^7.6.0",
@@ -89,7 +89,7 @@
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
-    "@aws-sdk/s3-presigned-post": "3.654.0",
+    "@aws-sdk/s3-presigned-post": "^3.948.0",
     "@babel/preset-env": "^7.26.9",
     "@babel/preset-typescript": "^7.27.0",
     "@types/async-retry": "^1.4.5",

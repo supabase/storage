@@ -139,6 +139,10 @@ export class S3Locker implements Locker {
       const body = await response.Body.transformToString()
       const currentLock: LockMetadata = JSON.parse(body)
 
+      if (id !== currentLock.lockId) {
+        return false
+      }
+
       // Update expiration time
       const updatedLock: LockMetadata = {
         ...currentLock,
@@ -146,12 +150,13 @@ export class S3Locker implements Locker {
         renewedAt: Date.now(),
       }
 
-      // Update the lock with new expiration
+      // Update the lock with new expiration (if it exists)
       await this.s3Client.send(
         new PutObjectCommand({
           Bucket: this.bucket,
           Key: lockKey,
           Body: JSON.stringify(updatedLock),
+          IfMatch: response.ETag,
           ContentType: 'application/json',
           Metadata: {
             lockId: id,
@@ -161,7 +166,7 @@ export class S3Locker implements Locker {
       )
       return true
     } catch (error: any) {
-      if (error.name === 'NoSuchKey') {
+      if (error.name === 'NoSuchKey' || error.name === 'PreconditionFailed') {
         return false
       }
       throw error

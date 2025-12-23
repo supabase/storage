@@ -4,7 +4,7 @@ import app from '../app'
 import { getConfig } from '../config'
 import { useMockObject, useMockQueue } from './common'
 import { FastifyInstance } from 'fastify'
-import { useStorage } from './utils/storage'
+import { useStorage, withDeleteEnabled } from './utils/storage'
 
 const { serviceKeyAsync } = getConfig()
 
@@ -49,8 +49,10 @@ describe('Prefix Hierarchy Race Condition Tests', () => {
     // Clean up any existing prefixes before each test
     try {
       const db = tHelper.database.connection.pool.acquire()
-      await db.raw('DELETE FROM storage.objects WHERE bucket_id = ?', [bucketName])
-      await db.raw('DELETE FROM storage.prefixes WHERE bucket_id = ?', [bucketName])
+      await withDeleteEnabled(db, async (db) => {
+        await db.raw('DELETE FROM storage.objects WHERE bucket_id = ?', [bucketName])
+        await db.raw('DELETE FROM storage.prefixes WHERE bucket_id = ?', [bucketName])
+      })
     } catch (error) {
       console.log('Cleanup error in beforeEach:', error)
     }

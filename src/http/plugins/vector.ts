@@ -39,6 +39,9 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
     }
 
     const db = req.db.pool.acquire()
+    // Set storage.can_delete to allow delete operations
+    // Required for the delete protection trigger added in migration 0050
+    await db.raw(`SELECT set_config('storage.can_delete', 'true', false)`)
     const store = new KnexVectorMetadataDB(db)
     const shard = isMultitenant
       ? new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))

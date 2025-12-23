@@ -1,6 +1,6 @@
 'use strict'
 
-import { useStorage } from './utils/storage'
+import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('Prefix SQL Functions Unit Tests', () => {
   const tHelper = useStorage()
@@ -17,8 +17,10 @@ describe('Prefix SQL Functions Unit Tests', () => {
   afterEach(async () => {
     // Clean up test data (prefixes and objects)
     const db = tHelper.database.connection.pool.acquire()
-    await db.raw('DELETE FROM storage.objects WHERE bucket_id = ?', [bucketName])
-    await db.raw('DELETE FROM storage.prefixes WHERE bucket_id = ?', [bucketName])
+    await withDeleteEnabled(db, async (db) => {
+      await db.raw('DELETE FROM storage.objects WHERE bucket_id = ?', [bucketName])
+      await db.raw('DELETE FROM storage.prefixes WHERE bucket_id = ?', [bucketName])
+    })
   })
 
   afterAll(async () => {
@@ -428,8 +430,10 @@ describe('Prefix SQL Functions Unit Tests', () => {
       expect(remainingInBucket2[0].name).toBe('folder')
 
       // Cleanup
-      await db.raw('DELETE FROM storage.prefixes WHERE bucket_id = ?', [otherBucket])
-      await db.raw('DELETE FROM storage.buckets WHERE id = ?', [otherBucket])
+      await withDeleteEnabled(db, async (db) => {
+        await db.raw('DELETE FROM storage.prefixes WHERE bucket_id = ?', [otherBucket])
+        await db.raw('DELETE FROM storage.buckets WHERE id = ?', [otherBucket])
+      })
     })
 
     it('should verify prefix is actually deleted when returns true', async () => {

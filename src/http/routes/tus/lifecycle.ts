@@ -126,7 +126,8 @@ export function generateUrl(
 
   const forwardedPath = req.headers['x-forwarded-prefix']
   if (requestAllowXForwardedPrefix && typeof forwardedPath === 'string') {
-    basePath = forwardedPath + path
+    // Remove trailing slash from forwardedPath to avoid double slashes
+    basePath = forwardedPath.replace(/\/+$/, '') + path
   }
 
   const isSigned = req.url?.endsWith(SIGNED_URL_SUFFIX)
@@ -264,7 +265,7 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
     if (upload.metadata?.metadata) {
       try {
         customMd = JSON.parse(upload.metadata.metadata)
-      } catch (e) {
+      } catch {
         // no-op
       }
     }

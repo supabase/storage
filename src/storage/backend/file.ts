@@ -84,7 +84,7 @@ export class FileBackend implements StorageBackendAdapter {
     headers?: BrowserCacheHeaders
   ): Promise<ObjectResponse> {
     // 'Range: bytes=#######-######
-    const file = path.resolve(this.filePath, withOptionalVersion(`${bucketName}/${key}`, version))
+    const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
     const data = await fs.stat(file)
     const eTag = await this.etag(file, data)
     const fileSize = data.size
@@ -185,7 +185,7 @@ export class FileBackend implements StorageBackendAdapter {
     cacheControl: string
   ): Promise<ObjectMetadata> {
     try {
-      const file = path.resolve(this.filePath, withOptionalVersion(`${bucketName}/${key}`, version))
+      const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
       await fs.ensureFile(file)
       const destFile = fs.createWriteStream(file)
       await pipeline(body, destFile)
@@ -214,7 +214,7 @@ export class FileBackend implements StorageBackendAdapter {
    */
   async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
     try {
-      const file = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
+      const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
       await fs.remove(file)
 
       // Clean up empty parent directories
@@ -246,9 +246,8 @@ export class FileBackend implements StorageBackendAdapter {
     destinationVersion: string,
     metadata: { cacheControl?: string; contentType?: string }
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
-    const srcFile = path.resolve(this.filePath, withOptionalVersion(`${bucket}/${source}`, version))
-    const destFile = path.resolve(
-      this.filePath,
+    const srcFile = this.resolveSecurePath(withOptionalVersion(`${bucket}/${source}`, version))
+    const destFile = this.resolveSecurePath(
       withOptionalVersion(`${bucket}/${destination}`, destinationVersion)
     )
 
@@ -275,7 +274,7 @@ export class FileBackend implements StorageBackendAdapter {
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
     const promises = prefixes.map((prefix) => {
-      return fs.rm(path.resolve(this.filePath, bucket, prefix))
+      return fs.rm(this.resolveSecurePath(`${bucket}/${prefix}`))
     })
     const results = await Promise.allSettled(promises)
 
@@ -290,7 +289,7 @@ export class FileBackend implements StorageBackendAdapter {
         throw result.reason
       } else {
         // Add parent directory of successfully deleted file
-        const filePath = path.resolve(this.filePath, bucket, prefixes[index])
+        const filePath = this.resolveSecurePath(`${bucket}/${prefixes[index]}`)
         parentDirs.add(path.dirname(filePath))
       }
     })
@@ -299,7 +298,7 @@ export class FileBackend implements StorageBackendAdapter {
     for (const dir of parentDirs) {
       try {
         await this.cleanupEmptyDirectories(dir)
-      } catch (e) {
+      } catch {
         // Ignore cleanup errors to not affect the main deletion operation
       }
     }
@@ -316,7 +315,7 @@ export class FileBackend implements StorageBackendAdapter {
     key: string,
     version: string | undefined
   ): Promise<ObjectMetadata> {
-    const file = path.join(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
+    const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
 
     const data = await fs.stat(file)
     const { cacheControl, contentType } = await this.getFileMetadata(file)
@@ -474,7 +473,7 @@ export class FileBackend implements StorageBackendAdapter {
     // Clean up empty parent directories
     try {
       await this.cleanupEmptyDirectories(path.dirname(multiPartFolder))
-    } catch (e) {
+    } catch {
       // Ignore cleanup errors
     }
   }
@@ -498,10 +497,8 @@ export class FileBackend implements StorageBackendAdapter {
     )
 
     const partFilePath = path.join(multiPartFolder, `part-${PartNumber}`)
-    const sourceFilePath = path.join(
-      this.filePath,
-      storageS3Bucket,
-      withOptionalVersion(sourceKey, sourceVersion)
+    const sourceFilePath = this.resolveSecurePath(
+      `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceVersion)}`
     )
 
     const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
@@ -532,7 +529,7 @@ export class FileBackend implements StorageBackendAdapter {
    * @param version
    */
   async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
-    return 'local:///' + path.join(this.filePath, withOptionalVersion(`${bucket}/${key}`, version))
+    return 'local:///' + this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
   }
 
   async setFileMetadata(file: string, { contentType, cacheControl }: FileMetadata) {
@@ -582,7 +579,7 @@ export class FileBackend implements StorageBackendAdapter {
       await directory.close()
 
       return entry === null
-    } catch (error) {
+    } catch {
       return false
     }
   }
@@ -614,12 +611,31 @@ export class FileBackend implements StorageBackendAdapter {
         const parentDir = path.dirname(dirPath)
         await this.cleanupEmptyDirectories(parentDir)
       }
-    } catch (e: any) {
+    } catch {
       // Ignore errors during cleanup to not affect main operations
       // Could be permission issues, concurrent access, directory not empty due to race conditions, etc.
       // Optional: Log for debugging purposes (uncomment if needed)
       // console.debug('Directory cleanup failed:', dirPath, e.message)
     }
+  }
+
+  /**
+   * Securely resolves a path within the storage directory, preventing path traversal attacks
+   * @param relativePath The relative path to resolve
+   * @throws {StorageBackendError} If the resolved path escapes the storage directory
+   */
+  private resolveSecurePath(relativePath: string): string {
+    const resolvedPath = path.resolve(this.filePath, relativePath)
+    const normalizedPath = path.normalize(resolvedPath)
+
+    // Ensure the resolved path is within the storage directory
+    if (!normalizedPath.startsWith(this.filePath + path.sep) && normalizedPath !== this.filePath) {
+      throw ERRORS.InvalidKey(
+        `Path traversal detected: ${relativePath} resolves outside storage directory`
+      )
+    }
+
+    return normalizedPath
   }
 
   private async etag(file: string, stats: fs.Stats): Promise<string> {

@@ -10,3 +10,4 @@ bin/
 coverage/
 .idea/
 src/scripts/*.py
+.claude/

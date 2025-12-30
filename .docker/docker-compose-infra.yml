@@ -194,6 +194,16 @@ services:
 #    extends:
 #      service: jaeger
 #      file: ./.docker/docker-compose-monitoring.yml
+#
+#  grafana:
+#    extends:
+#      service: grafana
+#      file: ./.docker/docker-compose-monitoring.yml
+#
+#  prometheus:
+#    extends:
+#      service: prometheus
+#      file: ./.docker/docker-compose-monitoring.yml
 
 configs:
   init.sql:

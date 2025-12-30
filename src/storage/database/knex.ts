@@ -19,13 +19,13 @@ import {
 } from './adapter'
 import { DatabaseError } from 'pg'
 import { TenantConnection } from '@internal/database'
-import { DbQueryPerformance } from '@internal/monitoring/metrics'
+import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { hashStringToInt } from '@internal/hashing'
 import { DBMigration, tenantHasMigrations } from '@internal/database/migrations'
 import { getConfig } from '../../config'
 import { isUuid } from '../limits'
 
-const { isMultitenant } = getConfig()
+const { isMultitenant, region } = getConfig()
 
 /**
  * Database
@@ -1022,9 +1022,15 @@ export class StorageKnexDB implements Database {
     queryName: string,
     fn: T
   ): Promise<Awaited<ReturnType<T>>> {
-    const timer = DbQueryPerformance.startTimer({
-      name: queryName,
-    })
+    const startTime = process.hrtime.bigint()
+    const recordDuration = () => {
+      const duration = Number(process.hrtime.bigint() - startTime) / 1e9
+      dbQueryPerformance.record(duration, {
+        name: queryName,
+        tenantId: this.tenantId,
+        region,
+      })
+    }
 
     let tnx = this.options.tnx
 
@@ -1058,14 +1064,14 @@ export class StorageKnexDB implements Database {
         }
       }
 
-      timer()
+      recordDuration()
 
       return result
     } catch (e) {
       if (needsNewTransaction) {
         await tnx.rollback()
       }
-      timer()
+      recordDuration()
       throw e
     }
   }

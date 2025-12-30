@@ -158,7 +158,6 @@ type StorageConfigType = {
   tusUseFileVersionSeparator: boolean
   tusAllowS3Tags: boolean
   tusLockType: 'postgres' | 's3'
-  defaultMetricsEnabled: boolean
   s3ProtocolEnabled: boolean
   s3ProtocolPrefix: string
   s3ProtocolAllowForwardedHeader: boolean
@@ -173,6 +172,9 @@ type StorageConfigType = {
   tracingFeatures?: {
     upload: boolean
   }
+  prometheusMetricsEnabled: boolean
+  otelMetricsEnabled: boolean
+  otelMetricsExportIntervalMs: number
   cdnPurgeEndpointURL?: string
   cdnPurgeEndpointKey?: string
 
@@ -406,9 +408,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
     logflareBatchSize: parseInt(getOptionalConfigFromEnv('LOGFLARE_BATCH_SIZE') || '200', 10),
-    defaultMetricsEnabled: !(
-      getOptionalConfigFromEnv('DEFAULT_METRICS_ENABLED', 'ENABLE_DEFAULT_METRICS') === 'false'
-    ),
     tracingEnabled: getOptionalConfigFromEnv('TRACING_ENABLED') === 'true',
     tracingMode: getOptionalConfigFromEnv('TRACING_MODE') ?? 'basic',
     tracingTimeMinDuration: parseFloat(
@@ -419,6 +418,14 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     tracingFeatures: {
       upload: getOptionalConfigFromEnv('TRACING_FEATURE_UPLOAD') === 'true',
     },
+
+    // OpenTelemetry Metrics
+    prometheusMetricsEnabled: getOptionalConfigFromEnv('PROMETHEUS_METRICS_ENABLED') === 'true',
+    otelMetricsEnabled: getOptionalConfigFromEnv('OTEL_METRICS_ENABLED') === 'true',
+    otelMetricsExportIntervalMs: parseInt(
+      getOptionalConfigFromEnv('OTEL_METRICS_EXPORT_INTERVAL_MS') || '60000',
+      10
+    ),
 
     // Queue
     pgQueueEnable: getOptionalConfigFromEnv('PG_QUEUE_ENABLE', 'ENABLE_QUEUE_EVENTS') === 'true',

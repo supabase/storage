@@ -12,6 +12,38 @@ processors:
   batch:
     send_batch_size: 10000
     timeout: 10s
+  # Copy region and instance from Resource attributes to metric data point attributes
+  # This ensures all metrics have the region and instance labels
+  transform/add_resource_attributes:
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(attributes["region"], resource.attributes["region"]) where resource.attributes["region"] != nil
+          - set(attributes["instance"], resource.attributes["instance"]) where resource.attributes["instance"] != nil
+  # Add storage_api_otel_ prefix to all metrics
+  # Note: storage_api_ transform must be FIRST to avoid double prefix
+  metricstransform/host:
+    transforms:
+      - include: ^storage_api_(.*)$$
+        match_type: regexp
+        action: update
+        new_name: storage_api_otel_$${1}
+      - include: ^process\.(.*)$$
+        match_type: regexp
+        action: update
+        new_name: storage_api_otel_process_$${1}
+      - include: ^system\.(.*)$$
+        match_type: regexp
+        action: update
+        new_name: storage_api_otel_system_$${1}
+      - include: ^v8js\.(.*)$$
+        match_type: regexp
+        action: update
+        new_name: storage_api_otel_v8js_$${1}
+      - include: ^nodejs\.(.*)$$
+        match_type: regexp
+        action: update
+        new_name: storage_api_otel_nodejs_$${1}
   tail_sampling/storage:
     decision_wait: 10s
     expected_new_traces_per_sec: 10000
@@ -155,7 +187,7 @@ processors:
                 {
                   name: success-status-codes,
                   type: numeric_attribute,
-                  numeric_attribute: { key: http.status_code, min_value: 200, max_value: 399 }
+                  numeric_attribute: { key: http.status_code, min_value: 200, max_value: 400 }
                 },
                 {
                   name: full-sampling,
@@ -174,6 +206,8 @@ exporters:
     endpoint: "jaeger:4317"
     tls:
       insecure: true
+  prometheusremotewrite:
+    endpoint: "http://prometheus:9090/api/v1/write"
 
 service:
   pipelines:
@@ -181,3 +215,7 @@ service:
       receivers: [otlp]
       processors: [memory_limiter, tail_sampling/storage, batch]
       exporters: [otlp/jaeger]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/add_resource_attributes, metricstransform/host, batch]
+      exporters: [prometheusremotewrite]

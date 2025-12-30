@@ -3,9 +3,11 @@ import { ERRORS } from '@internal/errors'
 import { QueueDB } from '@internal/queue/database'
 import { getConfig } from '../../config'
 import { logger, logSchema } from '../monitoring'
-import { QueueJobRetryFailed, QueueJobCompleted, QueueJobError } from '../monitoring/metrics'
+import { queueJobRetryFailed, queueJobCompleted, queueJobError } from '../monitoring/metrics'
 import { Event } from './event'
 import { Semaphore } from '@shopify/semaphore'
+
+const { region } = getConfig()
 
 //eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SubclassOfBaseClass = (new (payload: any) => Event<any>) & {
@@ -347,12 +349,14 @@ export abstract class Queue {
               await event.handle(job, { signal: queueOpts.signal })
 
               await this.pgBoss?.complete(event.getQueueName(), job.id)
-              QueueJobCompleted.inc({
+              queueJobCompleted.add(1, {
                 name: event.getQueueName(),
+                region,
               })
             } catch (e) {
-              QueueJobRetryFailed.inc({
+              queueJobRetryFailed.add(1, {
                 name: event.getQueueName(),
+                region,
               })
 
               await this.pgBoss?.fail(event.getQueueName(), job.id)
@@ -367,8 +371,9 @@ export abstract class Queue {
                   return
                 }
                 if (dbJob.retryCount >= dbJob.retryLimit) {
-                  QueueJobError.inc({
+                  queueJobError.add(1, {
                     name: event.getQueueName(),
+                    region,
                   })
                 }
               } catch (e) {

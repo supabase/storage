@@ -5,7 +5,7 @@ import { logger, logSchema } from '@internal/monitoring'
 import { getSslSettings } from '@internal/database/ssl'
 import { wait } from '@internal/concurrency'
 import { JWTPayload } from 'jose'
-import { DbActivePool } from '@internal/monitoring/metrics'
+import { dbActivePool } from '@internal/monitoring/metrics'
 
 const {
   region,
@@ -79,12 +79,7 @@ const tenantPools = new TTLCache<string, PoolStrategy>({
 export class PoolManager {
   monitor(signal: AbortSignal) {
     const monitorInterval = setInterval(() => {
-      DbActivePool.set(
-        {
-          region,
-        },
-        tenantPools.size
-      )
+      dbActivePool.record(tenantPools.size, { region })
     }, 2000)
 
     signal.addEventListener(

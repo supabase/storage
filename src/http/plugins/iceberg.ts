@@ -45,6 +45,14 @@ export const icebergRestCatalog = fastifyPlugin(async function (fastify: Fastify
       limits.maxCatalogsCount = features.icebergCatalog.maxCatalogs
     }
 
+    const knexInstance = isMultitenant ? multitenantKnex : req.db.pool.acquire()
+
+    // Set storage.can_delete to allow delete operations
+    // Required for the delete protection trigger added in migration 0050
+    if (!isMultitenant) {
+      await knexInstance.raw(`SELECT set_config('storage.can_delete', 'true', false)`)
+    }
+
     req.icebergCatalog = new TenantAwareRestCatalog({
       tenantId: req.tenantId,
       limits: limits,
@@ -56,7 +64,7 @@ export const icebergRestCatalog = fastifyPlugin(async function (fastify: Fastify
             shardKey: icebergWarehouse,
             capacity: 10000,
           }),
-      metastore: new KnexMetastore(isMultitenant ? multitenantKnex : req.db.pool.acquire(), {
+      metastore: new KnexMetastore(knexInstance, {
         multiTenant: isMultitenant,
         schema: isMultitenant ? 'public' : 'storage',
       }),

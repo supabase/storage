@@ -49,4 +49,5 @@ export const DBMigration = {
   'iceberg-table-metadata': 47,
   'iceberg-catalog-ids': 48,
   'buckets-objects-grants-postgres': 49,
+  'prevent-direct-deletes': 50,
 }

@@ -1,6 +1,6 @@
 import { ErrorCode } from './codes'
 import { RenderableError, StorageErrorOptions } from './renderable'
-import { S3ServiceException } from '@aws-sdk/client-s3'
+import type { S3ServiceException } from '@aws-sdk/client-s3'
 
 /**
  * A generic error that should be always thrown for generic exceptions

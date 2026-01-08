@@ -1,18 +1,11 @@
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { routes, plugins, setErrorHandler } from './http'
-import { Registry } from 'prom-client'
 import { getConfig } from './config'
+import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'
 
-declare module 'fastify-metrics' {
-  interface IFastifyMetrics {
-    getCustomDefaultMetricsRegistries(): Registry[]
-    getCustomRouteMetricsRegistries(): Registry[]
-  }
-}
+const { version, prometheusMetricsEnabled } = getConfig()
 
-const { version } = getConfig()
-
-const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): FastifyInstance => {
+const build = (opts: FastifyServerOptions = {}): FastifyInstance => {
   const app = fastify(opts)
   app.register(plugins.signals)
   app.register(plugins.adminTenantId)
@@ -24,32 +17,9 @@ const build = (opts: FastifyServerOptions = {}, appInstance?: FastifyInstance): 
   app.register(routes.s3Credentials, { prefix: 's3' })
   app.register(routes.queue, { prefix: 'queue' })
 
-  let registriesToMerge: Registry[] = []
-
-  if (appInstance) {
-    app.get('/metrics', async (req, reply) => {
-      if (registriesToMerge.length === 0) {
-        const globalRegistry = appInstance.metrics.client.register
-        const defaultRegistries = appInstance.metrics.getCustomDefaultMetricsRegistries()
-        const routeRegistries = appInstance.metrics.getCustomRouteMetricsRegistries()
-
-        registriesToMerge = Array.from(
-          new Set([globalRegistry, ...defaultRegistries, ...routeRegistries])
-        )
-      }
-
-      if (registriesToMerge.length === 1) {
-        const data = await registriesToMerge[0].metrics()
-        return reply.type(registriesToMerge[0].contentType).send(data)
-      }
-      const merged = appInstance.metrics.client.Registry.merge(registriesToMerge)
-
-      const data = await merged.metrics()
-
-      return reply.type(merged.contentType).send(data)
-    })
-  } else {
-    app.register(plugins.metrics({ enabledEndpoint: true }))
+  // Register /metrics endpoint - uses OTel Prometheus exporter
+  if (prometheusMetricsEnabled) {
+    app.get('/metrics', handleMetricsRequest)
   }
 
   app.get('/version', (_, reply) => {

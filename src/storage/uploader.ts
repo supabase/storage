@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto'
 import { FastifyRequest } from 'fastify'
 
 import { ERRORS } from '@internal/errors'
-import { FileUploadedSuccess, FileUploadStarted } from '@internal/monitoring/metrics'
+import { fileUploadedSuccess, fileUploadStarted } from '@internal/monitoring/metrics'
 
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
@@ -14,7 +14,7 @@ import { Readable } from 'stream'
 import { StorageObjectLocator } from '@storage/locator'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
-const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
+const { storageS3Bucket, uploadFileSizeLimitStandard, region } = getConfig()
 
 interface FileUpload {
   body: Readable
@@ -79,8 +79,10 @@ export class Uploader {
    */
   async prepareUpload(options: Omit<UploadRequest, 'file'>) {
     await this.canUpload(options)
-    FileUploadStarted.inc({
+    fileUploadStarted.add(1, {
       is_multipart: Boolean(options.uploadType).toString(),
+      tenantId: this.db.tenantId,
+      region,
     })
 
     return randomUUID()
@@ -236,11 +238,13 @@ export class Uploader {
 
         await Promise.all(events)
 
-        FileUploadedSuccess.inc({
-          is_multipart: uploadType === 'resumable' ? 1 : 0,
-          is_resumable: uploadType === 'resumable' ? 1 : 0,
-          is_standard: uploadType === 'standard' ? 1 : 0,
-          is_s3: uploadType === 's3' ? 1 : 0,
+        fileUploadedSuccess.add(1, {
+          is_multipart: String(uploadType === 'resumable' ? 1 : 0),
+          is_resumable: String(uploadType === 'resumable' ? 1 : 0),
+          is_standard: String(uploadType === 'standard' ? 1 : 0),
+          is_s3: String(uploadType === 's3' ? 1 : 0),
+          tenantId: this.db.tenantId,
+          region,
         })
 
         return { obj: newObject, isNew, metadata: objectMetadata }

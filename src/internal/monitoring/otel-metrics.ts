@@ -1,0 +1,202 @@
+import { getConfig } from '../../config'
+import { metrics } from '@opentelemetry/api'
+import { resourceFromAttributes } from '@opentelemetry/resources'
+import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
+import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc'
+import { PrometheusExporter } from '@opentelemetry/exporter-prometheus'
+import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
+import {
+  MeterProvider,
+  PeriodicExportingMetricReader,
+  AggregationType,
+} from '@opentelemetry/sdk-metrics'
+import { HostMetrics } from '@opentelemetry/host-metrics'
+import { registerInstrumentations } from '@opentelemetry/instrumentation'
+import { RuntimeNodeInstrumentation } from '@opentelemetry/instrumentation-runtime-node'
+import { StorageNodeInstrumentation } from '@internal/monitoring/system'
+import * as grpc from '@grpc/grpc-js'
+import * as os from 'os'
+import { logger, logSchema } from '@internal/monitoring/logger'
+import { FastifyReply, FastifyRequest } from 'fastify'
+
+const { version, otelMetricsExportIntervalMs, otelMetricsEnabled, region } = getConfig()
+
+let prometheusExporter: PrometheusExporter | undefined
+
+/**
+ * Handles the /metrics endpoint request using OTel Prometheus exporter
+ */
+export async function handleMetricsRequest(
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> {
+  if (!prometheusExporter) {
+    reply.status(404).send('Metrics not enabled')
+    return
+  }
+
+  const req = request.raw
+  const res = reply.raw
+
+  reply.hijack()
+  prometheusExporter.getMetricsRequestHandler(req, res)
+
+  return Promise.resolve()
+}
+
+if (otelMetricsEnabled) {
+  const headersEnv = process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS || ''
+  const otlpEndpoint =
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT || process.env.OTEL_EXPORTER_OTLP_ENDPOINT
+
+  const exporterHeaders = headersEnv
+    .split(',')
+    .filter(Boolean)
+    .reduce((all, header) => {
+      const [name, value] = header.split('=')
+      all[name] = value
+      return all
+    }, {} as Record<string, string>)
+
+  const grpcMetadata = new grpc.Metadata()
+  Object.keys(exporterHeaders).forEach((key) => {
+    grpcMetadata.set(key, exporterHeaders[key])
+  })
+
+  // =============================================================================
+  // Initialize MeterProvider at import time (before other modules use metrics)
+  // =============================================================================
+  const instance = os.hostname()
+
+  const resource = resourceFromAttributes({
+    [ATTR_SERVICE_NAME]: 'storage_api',
+    [ATTR_SERVICE_VERSION]: version,
+    region,
+    instance,
+  })
+
+  const readers = []
+
+  // Add OTLP exporter if endpoint is configured (for pushing to collector)
+  if (otlpEndpoint) {
+    const otlpExporter = new OTLPMetricExporter({
+      url: otlpEndpoint,
+      compression: process.env.OTEL_EXPORTER_OTLP_COMPRESSION as CompressionAlgorithm,
+      headers: exporterHeaders,
+      metadata: grpcMetadata,
+    })
+
+    readers.push(
+      new PeriodicExportingMetricReader({
+        exporter: otlpExporter,
+        exportIntervalMillis: otelMetricsExportIntervalMs,
+      })
+    )
+  }
+
+  // Always add Prometheus exporter for /metrics endpoint
+  prometheusExporter = new PrometheusExporter({
+    preventServerStart: true, // We'll handle the endpoint in Fastify
+    withResourceConstantLabels: /^(region|instance)$/,
+  })
+  readers.push(prometheusExporter)
+
+  // Bucket boundaries for duration histograms (in seconds)
+  // Provides good resolution from 1ms to 10s
+  const durationBuckets = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
+
+  const meterProvider = new MeterProvider({
+    resource,
+    readers,
+    views: [
+      {
+        instrumentName: 'storage_api_http_request_duration_seconds',
+        aggregation: {
+          type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+          options: { boundaries: durationBuckets },
+        },
+      },
+      {
+        instrumentName: 'storage_api_database_query_performance_seconds',
+        aggregation: {
+          type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+          options: { boundaries: durationBuckets },
+        },
+      },
+      {
+        instrumentName: 'storage_api_queue_job_scheduled_time_seconds',
+        aggregation: {
+          type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+          options: { boundaries: durationBuckets },
+        },
+      },
+      {
+        instrumentName: 'storage_api_s3_upload_part_seconds',
+        aggregation: {
+          type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+          options: { boundaries: durationBuckets },
+        },
+      },
+    ],
+  })
+
+  // Register as global provider IMMEDIATELY so metrics.ts instruments work
+  metrics.setGlobalMeterProvider(meterProvider)
+
+  logger.info(
+    { type: 'otel-metrics', otlpEndpoint, exportIntervalMs: otelMetricsExportIntervalMs },
+    '[OTel Metrics] Initializing'
+  )
+
+  if (otlpEndpoint) {
+    logSchema.info(logger, '[OTel Metrics] OTLP exporter configured', {
+      type: 'otel-metrics',
+    })
+  }
+
+  // Initialize host metrics for Node.js runtime metrics
+  const hostMetrics = new HostMetrics({
+    meterProvider,
+    name: 'storage-api-host-metrics',
+  })
+  hostMetrics.start()
+
+  // Register Node.js runtime instrumentations
+  registerInstrumentations({
+    meterProvider,
+    instrumentations: [
+      // Official OTel: event loop delay/time/utilization, GC, heap spaces
+      new RuntimeNodeInstrumentation(),
+      // Custom: event loop lag, CPU, handles, process start time, external memory, file descriptors
+      new StorageNodeInstrumentation({
+        labels: { region, instance },
+      }),
+    ],
+  })
+
+  logSchema.info(logger, '[OTel Metrics] Initialized successfully', {
+    type: 'otel-metrics',
+  })
+
+  // Graceful shutdown
+  const shutdown = async () => {
+    logSchema.info(logger, '[OTel Metrics] Stopping', {
+      type: 'otel-metrics',
+    })
+
+    try {
+      await meterProvider.shutdown()
+      logSchema.info(logger, '[OTel Metrics] Shutdown complete', {
+        type: 'otel-metrics',
+      })
+    } catch (error) {
+      logSchema.error(logger, '[OTel Metrics] Shutdown error', {
+        type: 'otel-metrics',
+        error: error,
+      })
+    }
+  }
+
+  process.once('SIGTERM', shutdown)
+  process.once('SIGINT', shutdown)
+}

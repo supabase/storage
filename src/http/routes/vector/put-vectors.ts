@@ -56,6 +56,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.post<putVectorRequest>(
     '/PutVectors',
     {
+      bodyLimit: 20 * 1024 * 1024, // 20 MB
       config: {
         operation: { type: ROUTE_OPERATIONS.PUT_VECTORS },
       },

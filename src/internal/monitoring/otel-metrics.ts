@@ -71,6 +71,7 @@ if (otelMetricsEnabled) {
   const resource = resourceFromAttributes({
     [ATTR_SERVICE_NAME]: 'storage_api',
     [ATTR_SERVICE_VERSION]: version,
+    'metric.version': '1',
     region,
     instance,
   })
@@ -96,8 +97,9 @@ if (otelMetricsEnabled) {
 
   // Always add Prometheus exporter for /metrics endpoint
   prometheusExporter = new PrometheusExporter({
+    prefix: 'storage_api',
     preventServerStart: true, // We'll handle the endpoint in Fastify
-    withResourceConstantLabels: /^(region|instance)$/,
+    withResourceConstantLabels: /^(region|instance|metric\.version)$/,
   })
   readers.push(prometheusExporter)
 

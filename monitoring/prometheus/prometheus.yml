@@ -20,7 +20,7 @@ scrape_configs:
       - targets:
 #          - storage:5000
 #          - storage:5001
-          - host.docker.internal:5001
+          - otel:9200
 
   - job_name: 'postgres'
     static_configs:

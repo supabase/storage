@@ -62,6 +62,7 @@ services:
       - "4317:4317"  # OTLP gRPC receiver
       - "4318:4318"  # OTLP Http receiver
       - "55680:55680"  # OTLP HTTP receiver
+      - "9200:9200"  # Prometheus metrics receiver
     command: [ "--config=/etc/otel/otel-collector-config.yml" ]
     depends_on:
       - jaeger

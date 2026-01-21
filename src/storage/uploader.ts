@@ -14,7 +14,7 @@ import { Readable } from 'stream'
 import { StorageObjectLocator } from '@storage/locator'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
-const { storageS3Bucket, uploadFileSizeLimitStandard, region } = getConfig()
+const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
 
 interface FileUpload {
   body: Readable
@@ -82,7 +82,6 @@ export class Uploader {
     fileUploadStarted.add(1, {
       is_multipart: Boolean(options.uploadType).toString(),
       tenantId: this.db.tenantId,
-      region,
     })
 
     return randomUUID()
@@ -244,7 +243,6 @@ export class Uploader {
           is_standard: String(uploadType === 'standard' ? 1 : 0),
           is_s3: String(uploadType === 's3' ? 1 : 0),
           tenantId: this.db.tenantId,
-          region,
         })
 
         return { obj: newObject, isNew, metadata: objectMetadata }

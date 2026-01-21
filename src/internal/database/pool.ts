@@ -79,7 +79,7 @@ const tenantPools = new TTLCache<string, PoolStrategy>({
 export class PoolManager {
   monitor(signal: AbortSignal) {
     const monitorInterval = setInterval(() => {
-      dbActivePool.record(tenantPools.size, { region })
+      dbActivePool.record(tenantPools.size)
     }, 2000)
 
     signal.addEventListener(

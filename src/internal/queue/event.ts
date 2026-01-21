@@ -304,7 +304,6 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
 
       queueJobScheduled.add(1, {
         name: constructor.getQueueName(),
-        region,
       })
 
       return res
@@ -340,7 +339,6 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       const duration = Number(process.hrtime.bigint() - startTime) / 1e9
       queueJobSchedulingTime.record(duration, {
         name: constructor.getQueueName(),
-        region,
       })
     }
   }

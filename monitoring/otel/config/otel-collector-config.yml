@@ -9,7 +9,10 @@ processors:
     check_interval: 1s
     limit_percentage: 70
     spike_limit_percentage: 20
-  batch:
+  batch/traces:
+    send_batch_size: 10000
+    timeout: 10s
+  batch/metrics:
     send_batch_size: 10000
     timeout: 10s
   # Copy region and instance from Resource attributes to metric data point attributes
@@ -27,23 +30,20 @@ processors:
       - include: ^storage_api_(.*)$$
         match_type: regexp
         action: update
+        new_name: $${1}
+        # Catch-all: prefix any metric not already prefixed with storage_api_otel_
+      - include: ^(.*)$$
+        match_type: regexp
+        action: update
         new_name: storage_api_otel_$${1}
-      - include: ^process\.(.*)$$
+
+  metricstransform/prom_prefix:
+    transforms:
+      - include: ^(.*)$$
         match_type: regexp
         action: update
-        new_name: storage_api_otel_process_$${1}
-      - include: ^system\.(.*)$$
-        match_type: regexp
-        action: update
-        new_name: storage_api_otel_system_$${1}
-      - include: ^v8js\.(.*)$$
-        match_type: regexp
-        action: update
-        new_name: storage_api_otel_v8js_$${1}
-      - include: ^nodejs\.(.*)$$
-        match_type: regexp
-        action: update
-        new_name: storage_api_otel_nodejs_$${1}
+        new_name: storage_api_$${1}
+
   tail_sampling/storage:
     decision_wait: 10s
     expected_new_traces_per_sec: 10000
@@ -206,6 +206,8 @@ exporters:
     endpoint: "jaeger:4317"
     tls:
       insecure: true
+  prometheus:
+    endpoint: "0.0.0.0:9200"
   prometheusremotewrite:
     endpoint: "http://prometheus:9090/api/v1/write"
 
@@ -213,9 +215,13 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, tail_sampling/storage, batch]
+      processors: [memory_limiter, tail_sampling/storage, batch/traces]
       exporters: [otlp/jaeger]
-    metrics:
+    metrics/otel:
       receivers: [otlp]
-      processors: [memory_limiter, transform/add_resource_attributes, metricstransform/host, batch]
+      processors: [memory_limiter, transform/add_resource_attributes, metricstransform/host, batch/metrics]
       exporters: [prometheusremotewrite]
+    metrics/prometheus:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/add_resource_attributes,  metricstransform/prom_prefix, batch/metrics]
+      exporters: [prometheus]

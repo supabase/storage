@@ -351,12 +351,10 @@ export abstract class Queue {
               await this.pgBoss?.complete(event.getQueueName(), job.id)
               queueJobCompleted.add(1, {
                 name: event.getQueueName(),
-                region,
               })
             } catch (e) {
               queueJobRetryFailed.add(1, {
                 name: event.getQueueName(),
-                region,
               })
 
               await this.pgBoss?.fail(event.getQueueName(), job.id)
@@ -373,7 +371,6 @@ export abstract class Queue {
                 if (dbJob.retryCount >= dbJob.retryLimit) {
                   queueJobError.add(1, {
                     name: event.getQueueName(),
-                    region,
                   })
                 }
               } catch (e) {

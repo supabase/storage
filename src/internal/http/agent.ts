@@ -61,7 +61,7 @@ export function createAgent(name: string, options: { maxSockets: number }): Inst
  * Updates HTTP agent metrics
  */
 function updateHttpAgentMetrics(name: string, protocol: string, stats: AgentStats) {
-  const baseAttrs = { name, region, protocol }
+  const baseAttrs = { name, protocol }
 
   httpPoolBusySockets.record(stats.busySocketCount, baseAttrs)
   httpPoolFreeSockets.record(stats.freeSocketCount, baseAttrs)

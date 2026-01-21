@@ -1027,8 +1027,6 @@ export class StorageKnexDB implements Database {
       const duration = Number(process.hrtime.bigint() - startTime) / 1e9
       dbQueryPerformance.record(duration, {
         name: queryName,
-        tenantId: this.tenantId,
-        region,
       })
     }
 

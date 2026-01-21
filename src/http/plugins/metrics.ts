@@ -8,7 +8,7 @@ import {
 } from '@internal/monitoring/metrics'
 import { getConfig } from '../../config'
 
-const { region, prometheusMetricsEnabled } = getConfig()
+const { prometheusMetricsEnabled } = getConfig()
 
 interface MetricsOptions {
   enabledEndpoint?: boolean
@@ -69,7 +69,7 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
       })
 
       fastify.addHook('onResponse', async (request, reply) => {
-        const route = request.routeOptions?.url || request.url || 'unknown'
+        const route = request.routeOptions?.url || 'unknown'
 
         // Skip excluded routes (match start of path)
         if (excludeRoutes.some((r) => route === r || route.startsWith(r + '/'))) {
@@ -93,9 +93,9 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
         const attributes = {
           method,
           route,
+          operation: request.operation?.type || 'unknown',
           status_code: statusCode,
           tenantId,
-          region,
         }
 
         // Record metrics

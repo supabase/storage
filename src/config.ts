@@ -173,6 +173,7 @@ type StorageConfigType = {
     upload: boolean
   }
   prometheusMetricsEnabled: boolean
+  prometheusMetricsIncludeTenantId: boolean
   otelMetricsEnabled: boolean
   otelMetricsExportIntervalMs: number
   cdnPurgeEndpointURL?: string
@@ -421,6 +422,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
     // OpenTelemetry Metrics
     prometheusMetricsEnabled: getOptionalConfigFromEnv('PROMETHEUS_METRICS_ENABLED') === 'true',
+    prometheusMetricsIncludeTenantId:
+      getOptionalConfigFromEnv('PROMETHEUS_METRICS_INCLUDE_TENANT') === 'true',
     otelMetricsEnabled: getOptionalConfigFromEnv('OTEL_METRICS_ENABLED') === 'true',
     otelMetricsExportIntervalMs: parseInt(
       getOptionalConfigFromEnv('OTEL_METRICS_EXPORT_INTERVAL_MS') || '60000',

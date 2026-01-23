@@ -20,13 +20,13 @@ interface FileUpload {
   cacheControl: string
   isTruncated: () => boolean
   xRobotsTag?: string
-  userMetadata?: Record<string, unknown>
 }
 
 export interface UploadRequest {
   bucketId: string
   objectName: string
   file: FileUpload
+  userMetadata: Record<string, unknown> | undefined
   owner?: string
   isUpsert?: boolean
   uploadType?: 'standard' | 's3' | 'resumable'
@@ -46,7 +46,9 @@ export class Uploader {
     private readonly location: StorageObjectLocator
   ) {}
 
-  async canUpload(options: Pick<UploadRequest, 'bucketId' | 'objectName' | 'isUpsert' | 'owner'>) {
+  async canUpload(
+    options: Pick<UploadRequest, 'bucketId' | 'objectName' | 'isUpsert' | 'owner' | 'userMetadata'>
+  ) {
     const shouldCreateObject = !options.isUpsert
 
     if (shouldCreateObject) {
@@ -56,6 +58,7 @@ export class Uploader {
           name: options.objectName,
           version: '1',
           owner: options.owner,
+          user_metadata: options.userMetadata,
         })
       })
     } else {
@@ -65,6 +68,7 @@ export class Uploader {
           name: options.objectName,
           version: '1',
           owner: options.owner,
+          user_metadata: options.userMetadata,
         })
       })
     }
@@ -125,7 +129,7 @@ export class Uploader {
         ...request,
         version,
         objectMetadata,
-        userMetadata: { ...file.userMetadata },
+        userMetadata: { ...request.userMetadata },
       })
     } catch (e) {
       await ObjectAdminDelete.send({
@@ -308,7 +312,9 @@ export async function fileUploadFromRequest(
     allowedMimeTypes?: string[]
     objectName: string
   }
-): Promise<FileUpload & { maxFileSize: number }> {
+): Promise<
+  FileUpload & { maxFileSize: number; userMetadata: Record<string, unknown> | undefined }
+> {
   const contentType = request.headers['content-type']
   const xRobotsTag = request.headers['x-robots-tag'] as string | undefined
 

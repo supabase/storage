@@ -4,6 +4,7 @@ import { getConfig } from '../../../config'
 import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { parseUserMetadata } from '../../../storage/uploader'
 
 const { uploadSignedUrlExpirationTime } = getConfig()
 
@@ -69,10 +70,19 @@ export default async function routes(fastify: FastifyInstance) {
 
       const urlPath = `${bucketName}/${objectName}`
 
+      let userMetadata: Record<string, unknown> | undefined
+
+      const customMd = request.headers['x-metadata']
+
+      if (typeof customMd === 'string') {
+        userMetadata = parseUserMetadata(customMd)
+      }
+
       const signedUpload = await request.storage
         .from(bucketName)
         .signUploadObjectUrl(objectName, urlPath as string, uploadSignedUrlExpirationTime, owner, {
           upsert: request.headers['x-upsert'] === 'true',
+          userMetadata: userMetadata,
         })
 
       return response.status(200).send({ url: signedUpload.url, token: signedUpload.token })

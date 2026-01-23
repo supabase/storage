@@ -47,6 +47,12 @@ policies:
     permissions: ["delete"]
     content: "USING(owner = '{{uid}}')"
 
+  - name: insert_with_metadata_check
+    tables: ['storage.objects']
+    roles: ['authenticated']
+    permissions: ['insert']
+    content: "WITH CHECK(user_metadata->>'department' = 'engineering')"
+
 tests:
   - description: "Will only able to read objects"
     policies:
@@ -474,4 +480,4 @@ tests:
 
       - operation: bucket.delete
         status: 400
-        error: "Bucket not found"
+        error: 'Bucket not found'

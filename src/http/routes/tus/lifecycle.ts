@@ -1,6 +1,6 @@
 import http from 'http'
 import { BaseLogger } from 'pino'
-import { Upload } from '@tus/server'
+import { Metadata, Upload } from '@tus/server'
 import { randomUUID } from 'crypto'
 import { TenantConnection } from '@internal/database'
 import { ERRORS, isRenderableError } from '@internal/errors'
@@ -67,6 +67,20 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
 
   req.upload.resources = [`${uploadID.bucket}/${uploadID.objectName}`]
 
+  // following same metadata parsing logic as @tus/server PostHandler so it
+  // it matches the value on Upload.metadata when inserted in storage.objects
+  // link: https://github.com/tus/tus-node-server/blob/1a6482a7a55e1587bda8c6887250f36cf9d606bd/packages/server/src/handlers/PostHandler.ts#L46
+  let customMd: Record<string, string | null> | undefined = undefined
+  const uploadMetadataHeader = req.headers['upload-metadata']
+
+  if (uploadMetadataHeader && typeof uploadMetadataHeader === 'string') {
+    try {
+      customMd = Metadata.parse(uploadMetadataHeader)
+    } catch (e) {
+      req.log.warn({ error: e }, 'Failed to parse user metadata')
+    }
+  }
+
   // Handle signed url requests
   if (req.url?.startsWith(`/upload/resumable/sign`)) {
     const signature = req.headers['x-signature']
@@ -101,6 +115,7 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
     bucketId: uploadID.bucket,
     objectName: uploadID.objectName,
     isUpsert: isUpsert,
+    userMetadata: customMd,
   })
 }
 

@@ -98,6 +98,7 @@ export class ObjectStorage {
       owner: file.owner,
       isUpsert: Boolean(file.isUpsert),
       signal: file.signal,
+      userMetadata: uploadRequest.userMetadata,
     })
   }
 
@@ -339,6 +340,7 @@ export class ObjectStorage {
       objectName: destinationKey,
       owner,
       isUpsert: upsert,
+      userMetadata: userMetadata,
     })
 
     try {
@@ -792,7 +794,7 @@ export class ObjectStorage {
     url: string,
     expiresIn: number,
     owner?: string,
-    options?: { upsert?: boolean }
+    options?: { upsert?: boolean; userMetadata?: Record<string, unknown> }
   ) {
     // check if user has INSERT permissions
     await this.uploader.canUpload({
@@ -800,6 +802,7 @@ export class ObjectStorage {
       objectName,
       owner,
       isUpsert: options?.upsert ?? false,
+      userMetadata: options?.userMetadata,
     })
 
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)

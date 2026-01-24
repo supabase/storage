@@ -410,7 +410,11 @@ export class StorageKnexDB implements Database {
         let paramPlaceholders = '?,?,?,?,?'
         const sortParams: (string | null)[] = []
         // this migration adds 3 more parameters to search v2 support sorting
-        if (await tenantHasMigrations(this.tenantId, 'add-search-v2-sort-support')) {
+        // 'search-v2-optimised' also implies sort support (it's a newer migration)
+        const hasSortSupport =
+          (await tenantHasMigrations(this.tenantId, 'add-search-v2-sort-support')) ||
+          (await tenantHasMigrations(this.tenantId, 'search-v2-optimised'))
+        if (hasSortSupport) {
           paramPlaceholders += ',?,?,?'
           sortParams.push(
             options?.sortBy?.order || 'asc',
@@ -1104,7 +1108,7 @@ export class DBError extends StorageBackendError implements RenderableError {
           code: pgError.code,
         })
       default:
-        return ERRORS.DatabaseError(pgError.message, pgError).withMetadata({
+        return ERRORS.DatabaseError(`database error, code: ${pgError.code}`, pgError).withMetadata({
           query,
           code: pgError.code,
         })

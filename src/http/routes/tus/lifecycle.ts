@@ -63,15 +63,15 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
 
   req.upload.resources = [`${uploadID.bucket}/${uploadID.objectName}`]
 
-  // following same metadata parsing logic as @tus/server PostHandler so it
-  // it matches the value on Upload.metadata when inserted in storage.objects
-  // link: https://github.com/tus/tus-node-server/blob/1a6482a7a55e1587bda8c6887250f36cf9d606bd/packages/server/src/handlers/PostHandler.ts#L46
-  let customMd: Record<string, string | null> | undefined = undefined
+  let customMd: Record<string, string> | undefined = undefined
   const uploadMetadataHeader = req.headers['upload-metadata']
 
   if (uploadMetadataHeader && typeof uploadMetadataHeader === 'string') {
     try {
-      customMd = Metadata.parse(uploadMetadataHeader)
+      const parsedMetadata = Metadata.parse(uploadMetadataHeader)
+      if (parsedMetadata?.metadata) {
+        customMd = JSON.parse(parsedMetadata.metadata)
+      }
     } catch (e) {
       req.log.warn({ error: e }, 'Failed to parse user metadata')
     }

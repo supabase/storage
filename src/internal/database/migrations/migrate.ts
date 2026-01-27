@@ -11,7 +11,7 @@ import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { multitenantKnex } from '../multitenant-db'
 import { ProgressiveMigrations } from './progressive'
 import { ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events'
-import { ERRORS } from '@internal/errors'
+import { ERRORS, StorageBackendError } from '@internal/errors'
 import { DBMigration } from './types'
 import { getSslSettings } from '../ssl'
 import { MigrationTransformer, DisableConcurrentIndexTransformer } from './transformers'
@@ -627,7 +627,7 @@ function runMigrations({
       ) {
         const selectQueryCurrentMigration = SQL`SELECT * FROM `
           .append(migrationTableName)
-          .append(SQL` WHERE id <= ${lastMigrationId}`)
+          .append(SQL` WHERE id <= ${lastMigrationId} ORDER BY id`)
 
         const { rows } = await client.query(selectQueryCurrentMigration)
         appliedMigrations = rows
@@ -682,18 +682,41 @@ function runMigrations({
       }
 
       for (const migration of migrationsToRun) {
-        const result = await runMigration(
-          migrationTableName,
-          client
-        )(runMigrationTransformers(migration, transformers))
-        completedMigrations.push(result)
+        try {
+          const ignore = migration.sql.includes('-- postgres-migrations ignore')
+
+          if (ignore) {
+            ;(migration as any).sql = 'SELECT 1;'
+            ;(migration as any).contents = 'SELECT 1;'
+          }
+          const result = await runMigration(
+            migrationTableName,
+            client
+          )(runMigrationTransformers(migration, transformers))
+          completedMigrations.push(result)
+        } catch (e) {
+          throw ERRORS.DatabaseError(
+            `Migration failed. Reason: ${(e as Error).message}`,
+            e as MigrationError
+          ).withMetadata({
+            migrationsToRun: migrationsToRun,
+            migrationId: migration.id,
+            migrationName: migration.name,
+            migrationHash: migration.hash,
+            migrationSql: migration.sql,
+          })
+        }
       }
 
       return completedMigrations
     } catch (e) {
-      const error: MigrationError = new Error(`Migration failed. Reason: ${(e as Error).message}`)
-      error.cause = e + ''
-      throw error
+      if (e instanceof MigrationError) {
+        const error: MigrationError = new Error(`Migration failed. Reason: ${(e as Error).message}`)
+        error.cause = e + ''
+        throw error
+      }
+
+      throw e
     }
   }
 }
@@ -917,9 +940,14 @@ async function refreshMigrationPosition(
     await client.query(`BEGIN`)
     try {
       await client.query(`DELETE FROM ${migrationTableName} WHERE id is not NULL`)
+
       const query = SQL`INSERT INTO `
         .append(migrationTableName)
         .append('(id, name, hash, executed_at) VALUES ')
+
+      newMigrations.forEach((migration) => {
+        console.log(`Migration applied: ${migration.id} - ${migration.name}`)
+      })
 
       newMigrations.forEach((migration, index) => {
         query.append(SQL`(${migration.id}, ${migration.name}, ${migration.hash}, NOW())`)
@@ -927,6 +955,7 @@ async function refreshMigrationPosition(
           query.append(',')
         }
       })
+
       await client.query(query)
       await client.query(`COMMIT`)
     } catch (e) {

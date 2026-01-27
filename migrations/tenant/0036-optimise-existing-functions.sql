@@ -1,3 +1,4 @@
+-- postgres-migrations ignore
 create or replace function storage.search (
     prefix text,
     bucketname text,

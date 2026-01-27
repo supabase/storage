@@ -2497,8 +2497,9 @@ describe('testing list objects', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON).toHaveLength(2)
-    expect(responseJSON[0].name).toBe('sadcat-upload23.png')
-    expect(responseJSON[1].name).toBe('sadcat-upload.png')
+    // Byte order (COLLATE "C"): '.' (46) < '2' (50), so sadcat-upload.png < sadcat-upload23.png
+    expect(responseJSON[0].name).toBe('sadcat-upload.png')
+    expect(responseJSON[1].name).toBe('sadcat-upload23.png')
   })
 
   test('test descending search sorting', async () => {
@@ -2519,8 +2520,9 @@ describe('testing list objects', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON).toHaveLength(2)
-    expect(responseJSON[0].name).toBe('sadcat-upload.png')
-    expect(responseJSON[1].name).toBe('sadcat-upload23.png')
+    // Byte order (COLLATE "C"): sadcat-upload23.png > sadcat-upload.png
+    expect(responseJSON[0].name).toBe('sadcat-upload23.png')
+    expect(responseJSON[1].name).toBe('sadcat-upload.png')
   })
 })
 

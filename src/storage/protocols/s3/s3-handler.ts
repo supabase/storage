@@ -230,7 +230,7 @@ export class S3ProtocolHandler {
           | Date
           | undefined,
         ETag: o.metadata?.eTag as string,
-        Size: o.metadata?.size as number,
+        Size: (o.metadata?.size as number) || 0,
         StorageClass: 'STANDARD' as const,
       })) || []
 

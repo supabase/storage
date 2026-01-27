@@ -49,4 +49,9 @@ export const DBMigration = {
   'iceberg-table-metadata': 47,
   'iceberg-catalog-ids': 48,
   'buckets-objects-grants-postgres': 49,
+  'search-v2-optimised': 50,
+  'index-backward-compatible-search': 51,
+  'drop-not-used-indexes-and-functions': 52,
+  'drop-index-lower-name': 53,
+  'drop-index-object-level': 54,
 }

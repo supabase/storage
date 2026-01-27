@@ -1,3 +1,4 @@
+-- postgres-migrations ignore
 DO $$
 BEGIN
     IF EXISTS(

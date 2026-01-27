@@ -124,7 +124,6 @@ describe('Tus multipart', () => {
       created_at: expect.any(Date),
       id: expect.any(String),
       last_accessed_at: expect.any(Date),
-      level: 1,
       metadata: {
         cacheControl: 'max-age=3600',
         contentLength: 29526,
@@ -298,7 +297,6 @@ describe('Tus multipart', () => {
         bucket_id: bucket.id,
         created_at: expect.any(Date),
         id: expect.any(String),
-        level: 1,
         last_accessed_at: expect.any(Date),
         metadata: {
           cacheControl: 'max-age=3600',
@@ -369,7 +367,6 @@ describe('Tus multipart', () => {
         created_at: expect.any(Date),
         id: expect.any(String),
         last_accessed_at: expect.any(Date),
-        level: 1,
         metadata: {
           cacheControl: 'max-age=3600',
           contentLength: 29526,

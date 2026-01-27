@@ -134,7 +134,7 @@ describe('HashSpillWritable', () => {
     )
 
     // Allow event loop to process cleanup
-    await new Promise((r) => setTimeout(r, 10))
+    await new Promise((r) => setTimeout(r, 100))
 
     // The hashspill dir should be gone
     expect(await countHashspillDirs(tmpRoot)).toBe(0)

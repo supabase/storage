@@ -1,3 +1,4 @@
+-- postgres-migrations ignore
 create or replace function storage.search_v1_optimised (
     prefix text,
     bucketname text,

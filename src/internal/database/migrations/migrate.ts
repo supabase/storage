@@ -11,7 +11,7 @@ import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { multitenantKnex } from '../multitenant-db'
 import { ProgressiveMigrations } from './progressive'
 import { ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events'
-import { ERRORS, StorageBackendError } from '@internal/errors'
+import { ERRORS } from '@internal/errors'
 import { DBMigration } from './types'
 import { getSslSettings } from '../ssl'
 import { MigrationTransformer, DisableConcurrentIndexTransformer } from './transformers'
@@ -699,11 +699,19 @@ function runMigrations({
             `Migration failed. Reason: ${(e as Error).message}`,
             e as MigrationError
           ).withMetadata({
-            migrationsToRun: migrationsToRun,
+            currentMigrations: appliedMigrations.map((migration) => ({
+              id: migration.id,
+              name: migration.name,
+              hash: migration.hash,
+            })),
+            migrationsToRun: migrationsToRun.map((migration) => ({
+              id: migration.id,
+              name: migration.name,
+              hash: migration.hash,
+            })),
             migrationId: migration.id,
             migrationName: migration.name,
             migrationHash: migration.hash,
-            migrationSql: migration.sql,
           })
         }
       }

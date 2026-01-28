@@ -578,7 +578,7 @@ export default async function routes(fastify: FastifyInstance) {
         tenantId,
         upToMigration: dbMigrationFreezeAt,
       })
-      reply.send({
+      return reply.send({
         migrated: true,
       })
     } catch (e) {
@@ -668,12 +668,12 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.get<tenantRequestInterface>('/:tenantId/health', async (req, res) => {
       try {
         await req.storage.healthcheck()
-        res.send({ healthy: true })
+        return res.send({ healthy: true })
       } catch (e) {
         if (e instanceof Error) {
           req.executionError = e
         }
-        res.send({ healthy: false })
+        return res.send({ healthy: false })
       }
     })
   })

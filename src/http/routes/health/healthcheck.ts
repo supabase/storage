@@ -13,12 +13,12 @@ export default async function routes(fastify: FastifyInstance) {
     async (req, res) => {
       try {
         await req.storage.healthcheck()
-        res.send({ healthy: true })
+        return res.send({ healthy: true })
       } catch (e) {
         if (e instanceof Error) {
           req.executionError = e
         }
-        res.send({ healthy: false })
+        return res.send({ healthy: false })
       }
     }
   )

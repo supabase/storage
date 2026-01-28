@@ -2,16 +2,21 @@ import axios from 'axios'
 import { NdJsonTransform } from '@internal/streams/ndjson'
 import fs from 'fs'
 import path from 'path'
+import { Transform, TransformCallback } from 'stream'
 
 const ADMIN_URL = process.env.ADMIN_URL
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY
 const TENANT_ID = process.env.TENANT_ID
+// bucket id to search, can handle multiple comma delimited buckets (aaa,bbb,ccc)
 const BUCKET_ID = process.env.BUCKET_ID
+
+// limits the number of delete operations to avoid overwhelming our queue
+const DELETE_LIMIT = parseInt(process.env.DELETE_LIMIT || '1000000', 10)
 
 const BEFORE = undefined // new Date().toISOString()
 
-const FILE_PATH = (operation: string) =>
-  `../../dist/${operation}-${TENANT_ID}-${Date.now()}-orphan-objects.json`
+const FILE_PATH = (operation: string, bucketId: string) =>
+  `../../dist/${operation}-${TENANT_ID}-${bucketId}-${Date.now()}-orphan-objects.json`
 
 const client = axios.create({
   baseURL: ADMIN_URL,
@@ -52,12 +57,17 @@ async function main() {
     return
   }
 
-  if (action === 'list') {
-    await listOrphans(TENANT_ID, BUCKET_ID)
-    return
-  }
+  const buckets = BUCKET_ID.split(',')
 
-  await deleteS3Orphans(TENANT_ID, BUCKET_ID)
+  for (const bucket of buckets) {
+    console.log(' ')
+    console.log(`${action} items in bucket ${bucket}...`)
+    if (action === 'list') {
+      await listOrphans(TENANT_ID, bucket)
+    } else {
+      await deleteS3Orphans(TENANT_ID, bucket)
+    }
+  }
 }
 
 /**
@@ -80,7 +90,7 @@ async function listOrphans(tenantId: string, bucketId: string) {
 
   const jsonStream = request.data.pipe(transformStream)
 
-  await writeStreamToJsonArray(jsonStream, FILE_PATH('list'))
+  await writeStreamToJsonArray(jsonStream, FILE_PATH('list', bucketId))
 }
 
 /**
@@ -104,7 +114,34 @@ async function deleteS3Orphans(tenantId: string, bucketId: string) {
 
   const jsonStream = request.data.pipe(transformStream)
 
-  await writeStreamToJsonArray(jsonStream, FILE_PATH('delete'))
+  // Apply DELETE_LIMIT for delete operations
+  let itemCount = 0
+  const limitedStream = new Transform({
+    objectMode: true,
+    transform(chunk: OrphanObject | PingObject, _encoding: string, callback: TransformCallback) {
+      if (chunk.event === 'data' && chunk.value && Array.isArray(chunk.value)) {
+        itemCount += chunk.value.length
+
+        if (itemCount >= DELETE_LIMIT) {
+          console.log(
+            `Delete limit of ${DELETE_LIMIT} reached. Stopping after this batch. Ensure these operations complete before queuing additional jobs.`
+          )
+          this.push(chunk)
+          callback()
+          process.nextTick(() => {
+            // Destroy the underlying HTTP request to stop further processing
+            request.data.destroy()
+            this.emit('error', new Error('DELETE_LIMIT_REACHED'))
+          })
+          return
+        }
+      }
+      this.push(chunk)
+      callback()
+    },
+  })
+
+  await writeStreamToJsonArray(jsonStream.pipe(limitedStream), FILE_PATH('delete', bucketId))
 }
 
 /**
@@ -143,7 +180,7 @@ async function writeStreamToJsonArray(
             isFirstItem = false
           }
 
-          localFile.write(JSON.stringify(item, null, 2))
+          localFile.write(JSON.stringify({ ...item, orphanType: data.type }, null, 2))
         }
       } else {
         console.warn(
@@ -154,6 +191,18 @@ async function writeStreamToJsonArray(
     })
 
     stream.on('error', (err) => {
+      // Handle DELETE_LIMIT_REACHED as a graceful stop, not an error
+      if (err.message === 'DELETE_LIMIT_REACHED') {
+        localFile.write('\n]')
+        localFile.end(() => {
+          if (receivedAnyData) {
+            console.log(`Finished writing data to ${filePath}. Delete limit reached, data saved.`)
+          }
+          resolve()
+        })
+        return
+      }
+
       console.error('Stream error:', err)
       localFile.end('\n]', () => {
         reject(err)

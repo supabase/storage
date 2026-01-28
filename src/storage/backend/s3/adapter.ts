@@ -293,7 +293,8 @@ export class S3Backend implements StorageBackendAdapter {
         }).map((ele) => {
           if (options?.prefix) {
             return {
-              name: (ele.Key as string).replace(options.prefix, '').replace('/', ''),
+              // remove prefix and leading slash if present
+              name: (ele.Key as string).replace(options.prefix, '').replace(/^\//, ''),
               size: ele.Size as number,
             }
           }

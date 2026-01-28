@@ -37,7 +37,6 @@ export class ObjectScanner {
     const localDBKeys = this.syncS3KeysToDB(tmpTable, prefix, options)
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of localDBKeys) {
         // await all of the operation finished
         if (options.signal.aborted) {
@@ -47,7 +46,7 @@ export class ObjectScanner {
 
       const s3Keys = this.listS3Orphans(tmpTable, {
         bucket: bucket,
-        prefix: `${this.storage.db.tenantId}/${bucket}`,
+        prefix,
         signal: options.signal,
       })
 
@@ -307,7 +306,7 @@ export class ObjectScanner {
       }
 
       const result = await this.storage.backend.list(storageS3Bucket, {
-        prefix,
+        prefix: prefix + '/',
         nextToken,
         beforeDate: options.before,
       })

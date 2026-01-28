@@ -11,6 +11,7 @@ import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
 import { Knex } from 'knex'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
+import { withDeleteEnabled } from './utils/storage'
 
 const { jwtSecret, serviceKeyAsync, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
@@ -1873,13 +1874,15 @@ describe('testing uploading with generated signed upload URL', () => {
     expect(objectResponse?.owner).toBe(owner)
 
     // remove row to not to break other tests
-    await db
-      .from<Obj>('objects')
-      .where({
-        name: OBJECT_NAME,
-        bucket_id: BUCKET_ID,
-      })
-      .delete()
+    await withDeleteEnabled(db, async (db) => {
+      await db
+        .from<Obj>('objects')
+        .where({
+          name: OBJECT_NAME,
+          bucket_id: BUCKET_ID,
+        })
+        .delete()
+    })
   })
 
   test('upload object without a token', async () => {

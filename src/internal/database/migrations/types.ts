@@ -54,4 +54,5 @@ export const DBMigration = {
   'drop-not-used-indexes-and-functions': 52,
   'drop-index-lower-name': 53,
   'drop-index-object-level': 54,
+  'prevent-direct-deletes': 55,
 }

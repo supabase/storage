@@ -134,7 +134,8 @@ export class TenantConnection {
           set_config('request.headers', ?, true),
           set_config('request.method', ?, true),
           set_config('request.path', ?, true),
-          set_config('storage.operation', ?, true);
+          set_config('storage.operation', ?, true),
+          set_config('storage.allow_delete_query', 'true', true);
     `,
       [
         this.role,

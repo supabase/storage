@@ -81,8 +81,9 @@ export const logRequest = (options: RequestLoggerOptions) =>
         }
       })
 
-      fastify.addHook('onSend', async (req) => {
+      fastify.addHook('onSend', async (req, reply, payload) => {
         req.executionTime = Date.now() - req.startTime
+        return payload
       })
 
       fastify.addHook('onResponse', async (req, reply) => {

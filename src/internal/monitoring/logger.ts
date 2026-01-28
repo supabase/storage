@@ -59,6 +59,7 @@ export interface RequestLog {
   req: FastifyRequest
   res?: FastifyReply
   responseTime: number
+  executionTime?: number
   error?: Error | unknown
   role?: string
   owner?: string

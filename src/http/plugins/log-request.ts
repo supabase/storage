@@ -14,6 +14,7 @@ declare module 'fastify' {
     operation?: { type: string }
     resources?: string[]
     startTime: number
+    executionTime?: number
   }
 
   interface FastifyContextConfig {
@@ -80,12 +81,17 @@ export const logRequest = (options: RequestLoggerOptions) =>
         }
       })
 
+      fastify.addHook('onSend', async (req) => {
+        req.executionTime = Date.now() - req.startTime
+      })
+
       fastify.addHook('onResponse', async (req, reply) => {
         doRequestLog(req, {
           reply,
           excludeUrls: options.excludeUrls,
           statusCode: reply.statusCode,
           responseTime: reply.elapsedTime,
+          executionTime: req.executionTime,
         })
       })
     },
@@ -97,6 +103,7 @@ interface LogRequestOptions {
   excludeUrls?: string[]
   statusCode: number | 'ABORTED REQ' | 'ABORTED RES'
   responseTime: number
+  executionTime?: number
 }
 
 function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
@@ -125,6 +132,7 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     req,
     res: options.reply,
     responseTime: options.responseTime,
+    executionTime: options.executionTime,
     error: error,
     owner: req.owner,
     role: req.jwtPayload?.role,

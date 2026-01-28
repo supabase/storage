@@ -8,10 +8,29 @@ import { Uploader } from '@storage/uploader'
 import { StorageObjectLocator, TenantLocation } from '@storage/locator'
 import { CreateBucketCommand, HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import { isS3Error } from '@internal/errors'
+import { Knex } from 'knex'
 // import { CreateBucketCommand, HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
 // import { isS3Error } from '@internal/errors'
 
 const { tenantId, storageBackendType, storageS3Bucket } = getConfig()
+
+/**
+ * Helper function to execute raw database operations in tests with storage.allow_delete_query set
+ * This is needed because raw queries bypass the normal connection scope setting
+ */
+export async function withDeleteEnabled<T>(db: Knex, fn: (db: Knex) => Promise<T>): Promise<T> {
+  // Wrap in a transaction to ensure set_config applies to all operations
+  const tnx = await db.transaction()
+  try {
+    await tnx.raw(`SELECT set_config('storage.allow_delete_query', 'true', true)`)
+    const result = await fn(tnx)
+    await tnx.commit()
+    return result
+  } catch (e) {
+    await tnx.rollback()
+    throw e
+  }
+}
 
 export function useStorage() {
   let connection: TenantConnection

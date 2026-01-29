@@ -11,6 +11,7 @@ import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
 import { Knex } from 'knex'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
+import { withDeleteEnabled } from './utils/storage'
 
 const { jwtSecret, serviceKeyAsync, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
@@ -1873,13 +1874,15 @@ describe('testing uploading with generated signed upload URL', () => {
     expect(objectResponse?.owner).toBe(owner)
 
     // remove row to not to break other tests
-    await db
-      .from<Obj>('objects')
-      .where({
-        name: OBJECT_NAME,
-        bucket_id: BUCKET_ID,
-      })
-      .delete()
+    await withDeleteEnabled(db, async (db) => {
+      await db
+        .from<Obj>('objects')
+        .where({
+          name: OBJECT_NAME,
+          bucket_id: BUCKET_ID,
+        })
+        .delete()
+    })
   })
 
   test('upload object without a token', async () => {
@@ -2497,8 +2500,9 @@ describe('testing list objects', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON).toHaveLength(2)
-    expect(responseJSON[0].name).toBe('sadcat-upload23.png')
-    expect(responseJSON[1].name).toBe('sadcat-upload.png')
+    // Byte order (COLLATE "C"): '.' (46) < '2' (50), so sadcat-upload.png < sadcat-upload23.png
+    expect(responseJSON[0].name).toBe('sadcat-upload.png')
+    expect(responseJSON[1].name).toBe('sadcat-upload23.png')
   })
 
   test('test descending search sorting', async () => {
@@ -2519,8 +2523,9 @@ describe('testing list objects', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON).toHaveLength(2)
-    expect(responseJSON[0].name).toBe('sadcat-upload.png')
-    expect(responseJSON[1].name).toBe('sadcat-upload23.png')
+    // Byte order (COLLATE "C"): sadcat-upload23.png > sadcat-upload.png
+    expect(responseJSON[0].name).toBe('sadcat-upload23.png')
+    expect(responseJSON[1].name).toBe('sadcat-upload.png')
   })
 })
 

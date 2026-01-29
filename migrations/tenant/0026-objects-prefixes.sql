@@ -1,3 +1,4 @@
+-- postgres-migrations ignore
 -- Add level column to objects
 ALTER TABLE storage.objects ADD COLUMN IF NOT EXISTS level INT NULL;
 

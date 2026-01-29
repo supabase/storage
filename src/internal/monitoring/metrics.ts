@@ -68,14 +68,27 @@ export const dbQueryPerformance = withTenantMetricLabels(
 )
 
 export const dbActivePool = withTenantMetricLabels(
-  meter.createGauge('db_pool', {
+  meter.createGauge('db_active_local_pools', {
     description: 'Number of database pools created',
   })
 )
 
 export const dbActiveConnection = withTenantMetricLabels(
   meter.createUpDownCounter('db_connections', {
-    description: 'Number of database connections',
+    description: 'Number of database connections in the pool',
+  })
+)
+
+export const dbInUseConnection = withTenantMetricLabels(
+  meter.createUpDownCounter('db_connections_in_use', {
+    description: 'Number of database connections currently in use',
+  })
+)
+
+export const dbConnectionAcquireTime = withTenantMetricLabels(
+  meter.createHistogram('db_connection_acquire_seconds', {
+    description: 'Time taken to acquire a database connection from the pool in seconds',
+    unit: 's',
   })
 )
 
@@ -157,6 +170,7 @@ function withTenantMetricLabels<T extends Counter | UpDownCounter | Gauge | Hist
     const originalRecord = metricType.record.bind(metricType)
     metricType.record = (value: number, labels?: Record<string, string>) => {
       if (!prometheusMetricsIncludeTenantId) {
+        delete labels?.tenant_id
         delete labels?.tenantId
       }
 
@@ -169,6 +183,7 @@ function withTenantMetricLabels<T extends Counter | UpDownCounter | Gauge | Hist
     const originalAdd = metricType.add.bind(metricType)
     metricType.add = (value: number, labels?: Record<string, string>) => {
       if (!prometheusMetricsIncludeTenantId) {
+        delete labels?.tenant_id
         delete labels?.tenantId
       }
 

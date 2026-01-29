@@ -80,7 +80,7 @@ export class Uploader {
   async prepareUpload(options: Omit<UploadRequest, 'file'>) {
     await this.canUpload(options)
     fileUploadStarted.add(1, {
-      is_multipart: Boolean(options.uploadType).toString(),
+      uploadType: options.uploadType,
       tenantId: this.db.tenantId,
     })
 
@@ -238,10 +238,7 @@ export class Uploader {
         await Promise.all(events)
 
         fileUploadedSuccess.add(1, {
-          is_multipart: String(uploadType === 'resumable' ? 1 : 0),
-          is_resumable: String(uploadType === 'resumable' ? 1 : 0),
-          is_standard: String(uploadType === 'standard' ? 1 : 0),
-          is_s3: String(uploadType === 's3' ? 1 : 0),
+          uploadType,
           tenantId: this.db.tenantId,
         })
 

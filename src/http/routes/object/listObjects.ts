@@ -4,6 +4,7 @@ import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { objectSchema } from '@storage/schemas'
 import { ROUTE_OPERATIONS } from '../operations'
+import { FastifyRequest } from 'fastify/types/request'
 
 const searchRequestParamsSchema = {
   type: 'object',
@@ -57,6 +58,12 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
       config: {
         operation: { type: ROUTE_OPERATIONS.LIST_OBJECTS },
+        logMetadata: (req: FastifyRequest<searchRequestInterface>) => ({
+          prefix: req.body.prefix,
+          limit: req.body.limit,
+          offset: req.body.offset,
+          sortBy: req.body.sortBy,
+        }),
       },
     },
     async (request, response) => {

@@ -1,8 +1,13 @@
-import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { S3ProtocolHandler, MAX_PART_SIZE } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
+import { MinChunkTransform } from '@internal/streams'
 import { pipeline } from 'stream/promises'
 import { PassThrough, Readable } from 'stream'
+import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
+
+// S3 Tables requires chunks to be at least 8KB (except for the last chunk)
+const S3_TABLES_MIN_CHUNK_SIZE = 8192
 
 const UploadPartInput = {
   summary: 'Upload Part',
@@ -46,6 +51,7 @@ export default function UploadPart(s3Router: S3Router) {
     },
     async (req, ctx) => {
       const icebergBucketName = ctx.req.internalIcebergBucketName
+      const minChunkTransform = new MinChunkTransform(S3_TABLES_MIN_CHUNK_SIZE)
 
       if (ctx.req.streamingSignatureV4) {
         const passThrough = new PassThrough()
@@ -54,44 +60,52 @@ export default function UploadPart(s3Router: S3Router) {
           passThrough.destroy(err)
         })
 
-        return pipeline(passThrough, ctx.req.streamingSignatureV4, async (body) => {
-          const part = await ctx.req.storage.backend.uploadPart(
-            icebergBucketName!,
-            req.Params['*'],
-            '',
-            req.Querystring.uploadId,
-            req.Querystring.partNumber,
-            body as Readable,
-            req.Headers?.['x-amz-decoded-content-length'] || req.Headers?.['content-length'],
-            ctx.signals.body
-          )
+        return pipeline(
+          passThrough,
+          new ByteLimitTransformStream(MAX_PART_SIZE), // 5GB max part size
+          ctx.req.streamingSignatureV4,
+          minChunkTransform,
+          async (body) => {
+            const part = await ctx.req.storage.backend.uploadPart(
+              icebergBucketName!,
+              req.Params['*'],
+              '',
+              req.Querystring.uploadId,
+              req.Querystring.partNumber,
+              body as Readable,
+              req.Headers?.['x-amz-decoded-content-length'] || req.Headers?.['content-length'],
+              ctx.signals.body
+            )
 
-          return {
-            headers: {
-              etag: part.ETag || '',
-              'Access-Control-Expose-Headers': 'etag',
-            },
+            return {
+              headers: {
+                etag: part.ETag || '',
+                'Access-Control-Expose-Headers': 'etag',
+              },
+            }
           }
-        })
+        )
       }
 
-      const part = await ctx.req.storage.backend.uploadPart(
-        icebergBucketName!,
-        req.Params['*'],
-        '',
-        req.Querystring.uploadId,
-        req.Querystring.partNumber,
-        ctx.req.raw as Readable,
-        req.Headers?.['content-length'],
-        ctx.signals.body
-      )
+      return pipeline(ctx.req.raw as Readable, minChunkTransform, async (body) => {
+        const part = await ctx.req.storage.backend.uploadPart(
+          icebergBucketName!,
+          req.Params['*'],
+          '',
+          req.Querystring.uploadId,
+          req.Querystring.partNumber,
+          body as Readable,
+          req.Headers?.['content-length'],
+          ctx.signals.body
+        )
 
-      return {
-        headers: {
-          etag: part.ETag || '',
-          'Access-Control-Expose-Headers': 'etag',
-        },
-      }
+        return {
+          headers: {
+            etag: part.ETag || '',
+            'Access-Control-Expose-Headers': 'etag',
+          },
+        }
+      })
     }
   )
 
@@ -112,19 +126,24 @@ export default function UploadPart(s3Router: S3Router) {
           passThrough.destroy(err)
         })
 
-        return pipeline(passThrough, ctx.req.streamingSignatureV4, async (body) => {
-          return s3Protocol.uploadPart(
-            {
-              Body: body as Readable,
-              UploadId: req.Querystring?.uploadId,
-              Bucket: req.Params.Bucket,
-              Key: req.Params['*'],
-              ContentLength: req.Headers?.['x-amz-decoded-content-length'],
-              PartNumber: req.Querystring?.partNumber,
-            },
-            { signal: ctx.req.signals.body.signal }
-          )
-        })
+        return pipeline(
+          passThrough,
+          new ByteLimitTransformStream(MAX_PART_SIZE),
+          ctx.req.streamingSignatureV4,
+          async (body) => {
+            return s3Protocol.uploadPart(
+              {
+                Body: body as Readable,
+                UploadId: req.Querystring?.uploadId,
+                Bucket: req.Params.Bucket,
+                Key: req.Params['*'],
+                ContentLength: req.Headers?.['x-amz-decoded-content-length'],
+                PartNumber: req.Querystring?.partNumber,
+              },
+              { signal: ctx.req.signals.body.signal }
+            )
+          }
+        )
       }
 
       return s3Protocol.uploadPart(

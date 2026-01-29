@@ -63,6 +63,7 @@ type StorageConfigType = {
   uploadFileSizeLimitStandard?: number
   storageFilePath?: string
   storageFileEtagAlgorithm: 'mtime' | 'md5'
+  storageS3InternalTracesEnabled?: boolean
   storageS3MaxSockets: number
   storageS3Bucket: string
   storageS3Endpoint?: string
@@ -353,6 +354,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('STORAGE_S3_MAX_SOCKETS', 'GLOBAL_S3_MAX_SOCKETS') || '200',
       10
     ),
+    storageS3InternalTracesEnabled:
+      getOptionalConfigFromEnv('STORAGE_S3_ENABLED_METRICS') === 'true',
     storageS3Bucket: getOptionalConfigFromEnv('STORAGE_S3_BUCKET', 'GLOBAL_S3_BUCKET'),
     storageS3Endpoint: getOptionalConfigFromEnv('STORAGE_S3_ENDPOINT', 'GLOBAL_S3_ENDPOINT'),
     storageS3ForcePathStyle:

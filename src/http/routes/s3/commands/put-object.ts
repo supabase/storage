@@ -1,4 +1,4 @@
-import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { MAX_PART_SIZE, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { MultipartFields } from '@fastify/multipart'
@@ -83,7 +83,7 @@ export default function PutObject(s3Router: S3Router) {
 
       return pipeline(
         uploadRequest.body,
-        new ByteLimitTransformStream(uploadRequest.maxFileSize),
+        new ByteLimitTransformStream(MAX_PART_SIZE), // 5GB limit for iceberg objects
         ctx.req.streamingSignatureV4 || new PassThrough(),
         async (fileStream) => {
           const u = await ctx.req.storage.backend.uploadObject(

@@ -139,6 +139,13 @@ if (otelMetricsEnabled) {
           options: { boundaries: durationBuckets },
         },
       },
+      {
+        instrumentName: 'storage_api_db_connection_acquire_seconds',
+        aggregation: {
+          type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+          options: { boundaries: durationBuckets },
+        },
+      },
     ],
   })
 

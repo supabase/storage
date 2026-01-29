@@ -19,6 +19,7 @@ import {
   runMigrationsOnTenant,
 } from '@internal/database/migrations'
 import { getConfig, JwksConfigKey } from '../../../config'
+import { StorageBackendError } from '@internal/errors'
 
 const patchSchema = {
   body: {
@@ -577,12 +578,21 @@ export default async function routes(fastify: FastifyInstance) {
         tenantId,
         upToMigration: dbMigrationFreezeAt,
       })
-      reply.send({
+      return reply.send({
         migrated: true,
       })
     } catch (e) {
       req.executionError = e as Error
-      reply.status(400).send({
+
+      if (e instanceof StorageBackendError) {
+        return reply.status(e.httpStatusCode || 400).send({
+          migrated: false,
+          metadata: e.metadata,
+          ...e.render(),
+        })
+      }
+
+      return reply.status(400).send({
         migrated: false,
         error: JSON.stringify(e),
       })
@@ -658,12 +668,12 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.get<tenantRequestInterface>('/:tenantId/health', async (req, res) => {
       try {
         await req.storage.healthcheck()
-        res.send({ healthy: true })
+        return res.send({ healthy: true })
       } catch (e) {
         if (e instanceof Error) {
           req.executionError = e
         }
-        res.send({ healthy: false })
+        return res.send({ healthy: false })
       }
     })
   })

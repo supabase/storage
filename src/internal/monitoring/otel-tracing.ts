@@ -7,6 +7,7 @@ const {
   requestXForwardedHostRegExp,
   tenantId: defaultTenantId,
   region,
+  storageS3InternalTracesEnabled,
 } = getConfig()
 
 import { NodeSDK } from '@opentelemetry/sdk-node'
@@ -82,6 +83,12 @@ if (tracingEnabled && spanProcessors.length > 0) {
             const ignoreRoutes = ['/metrics', '/status', '/health', '/healthcheck']
             return ignoreRoutes.some((url) => req.url?.includes(url)) ?? false
           },
+          ignoreOutgoingRequestHook: (req) => {
+            // Skip OTEL instrumentation for S3 Tables requests to avoid injecting
+            // unsupported headers (baggage, traceparent, tracestate)
+            const host = req.hostname || req.host || ''
+            return host.includes('.s3tables.') || host.includes('--table-s3')
+          },
           startIncomingSpanHook: (req) => {
             let tenantId = ''
             if (isMultitenant) {
@@ -115,7 +122,7 @@ if (tracingEnabled && spanProcessors.length > 0) {
           enabled: false,
         },
         '@opentelemetry/instrumentation-aws-sdk': {
-          enabled: true,
+          enabled: storageS3InternalTracesEnabled,
         },
         '@opentelemetry/instrumentation-pg': {
           enabled: true,

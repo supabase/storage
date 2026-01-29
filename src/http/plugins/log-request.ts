@@ -1,5 +1,5 @@
 import fastifyPlugin from 'fastify-plugin'
-import { logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
+import { logger, logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
 import { trace } from '@opentelemetry/api'
 import { FastifyRequest } from 'fastify/types/request'
 import { FastifyReply } from 'fastify/types/reply'
@@ -14,11 +14,13 @@ declare module 'fastify' {
     operation?: { type: string }
     resources?: string[]
     startTime: number
+    executionTime?: number
   }
 
   interface FastifyContextConfig {
     operation?: { type: string }
     resources?: (req: FastifyRequest<any>) => string[]
+    logMetadata?: (req: FastifyRequest<any>) => Record<string, unknown>
   }
 }
 
@@ -80,12 +82,18 @@ export const logRequest = (options: RequestLoggerOptions) =>
         }
       })
 
+      fastify.addHook('onSend', async (req, _, payload) => {
+        req.executionTime = Date.now() - req.startTime
+        return payload
+      })
+
       fastify.addHook('onResponse', async (req, reply) => {
         doRequestLog(req, {
           reply,
           excludeUrls: options.excludeUrls,
           statusCode: reply.statusCode,
           responseTime: reply.elapsedTime,
+          executionTime: req.executionTime,
         })
       })
     },
@@ -97,6 +105,7 @@ interface LogRequestOptions {
   excludeUrls?: string[]
   statusCode: number | 'ABORTED REQ' | 'ABORTED RES'
   responseTime: number
+  executionTime?: number
 }
 
 function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
@@ -118,13 +127,40 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
   const error = (req.raw as any).executionError || req.executionError
   const tenantId = req.tenantId
 
+  let reqMetadata: Record<string, unknown> = {}
+
+  if (req.routeOptions.config.logMetadata) {
+    try {
+      reqMetadata = req.routeOptions.config.logMetadata(req)
+
+      if (reqMetadata) {
+        try {
+          trace.getActiveSpan()?.setAttribute('http.metadata', JSON.stringify(reqMetadata))
+        } catch (e) {
+          // do nothing
+          logSchema.warning(logger, 'Failed to serialize log metadata', {
+            type: 'otel',
+            error: e,
+          })
+        }
+      }
+    } catch (e) {
+      logSchema.error(logger, 'Failed to get log metadata', {
+        type: 'request',
+        error: e,
+      })
+    }
+  }
+
   const buildLogMessage = `${tenantId} | ${rMeth} | ${statusCode} | ${cIP} | ${rId} | ${rUrl} | ${uAgent}`
 
   logSchema.request(req.log, buildLogMessage, {
     type: 'request',
     req,
+    reqMetadata,
     res: options.reply,
     responseTime: options.responseTime,
+    executionTime: options.executionTime,
     error: error,
     owner: req.owner,
     role: req.jwtPayload?.role,

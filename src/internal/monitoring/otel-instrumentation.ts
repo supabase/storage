@@ -8,7 +8,7 @@ import {
   Context,
 } from '@opentelemetry/api'
 import { ReadableSpan, SpanProcessor } from '@opentelemetry/sdk-trace-base'
-import { Span as SdkSpan } from '@opentelemetry/sdk-trace-base/build/src/Span'
+import { Span as SdkSpan } from '@opentelemetry/sdk-trace-base'
 
 export class TenantSpanProcessor implements SpanProcessor {
   private readonly attributesToPropagate: string[]

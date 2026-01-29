@@ -26,6 +26,17 @@ export const baseLogger = pino({
         headers: whitelistHeaders(reply.getHeaders()),
       }
     },
+    reqMetadata(metadata?: Record<string, unknown>) {
+      if (!metadata) {
+        return undefined
+      }
+
+      try {
+        return JSON.stringify(metadata)
+      } catch {
+        // no-op
+      }
+    },
     req(request) {
       return {
         region,
@@ -58,7 +69,9 @@ export interface RequestLog {
   type: 'request'
   req: FastifyRequest
   res?: FastifyReply
+  reqMetadata?: Record<string, unknown>
   responseTime: number
+  executionTime?: number
   error?: Error | unknown
   role?: string
   owner?: string

@@ -31,6 +31,8 @@ import { logger, logSchema } from '@internal/monitoring'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
 
+export const MAX_PART_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
+
 export class S3ProtocolHandler {
   constructor(
     protected readonly storage: Storage,
@@ -230,7 +232,7 @@ export class S3ProtocolHandler {
           | Date
           | undefined,
         ETag: o.metadata?.eTag as string,
-        Size: o.metadata?.size as number,
+        Size: (o.metadata?.size as number) || 0,
         StorageClass: 'STANDARD' as const,
       })) || []
 

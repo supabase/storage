@@ -1,4 +1,6 @@
-import '@internal/monitoring/otel'
+import '@internal/monitoring/otel-tracing'
+import '@internal/monitoring/otel-metrics'
+
 import { FastifyInstance } from 'fastify'
 import { IncomingMessage, Server, ServerResponse } from 'node:http'
 
@@ -201,14 +203,11 @@ async function httpAdminServer(
 ) {
   const { adminRequestIdHeader, adminPort, host } = getConfig()
 
-  const adminApp = buildAdmin(
-    {
-      logger,
-      disableRequestLogging: true,
-      requestIdHeader: adminRequestIdHeader,
-    },
-    app
-  )
+  const adminApp = buildAdmin({
+    logger,
+    disableRequestLogging: true,
+    requestIdHeader: adminRequestIdHeader,
+  })
 
   const closePromise = createServerClosedPromise(adminApp.server, () => {
     logSchema.info(logger, '[Admin Server] Exited', {

@@ -5,6 +5,7 @@ import { ROUTE_OPERATIONS } from '../operations'
 import { getConfig } from '../../../config'
 import { getTenantConfig } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
+import { FastifyRequest } from 'fastify/types/request'
 
 const { isMultitenant } = getConfig()
 
@@ -52,6 +53,13 @@ export default async function routes(fastify: FastifyInstance) {
       },
       config: {
         operation: { type: ROUTE_OPERATIONS.LIST_OBJECTS_V2 },
+        logMetadata: (req: FastifyRequest<searchRequestInterface>) => ({
+          prefix: req.body.prefix,
+          limit: req.body.limit,
+          cursor: req.body.cursor,
+          sortBy: req.body.sortBy,
+          with_delimiter: req.body.with_delimiter,
+        }),
       },
     },
     async (request, response) => {

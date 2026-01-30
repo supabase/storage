@@ -1,5 +1,53 @@
 import { Instrumentation, InstrumentationConfig } from '@opentelemetry/instrumentation'
-import { trace, Span, SpanStatusCode, TracerProvider, MeterProvider } from '@opentelemetry/api'
+import {
+  trace,
+  Span,
+  SpanStatusCode,
+  TracerProvider,
+  MeterProvider,
+  Context,
+} from '@opentelemetry/api'
+import { ReadableSpan, SpanProcessor } from '@opentelemetry/sdk-trace-base'
+import { Span as SdkSpan } from '@opentelemetry/sdk-trace-base'
+
+export class TenantSpanProcessor implements SpanProcessor {
+  private readonly attributesToPropagate: string[]
+
+  constructor(attributesToPropagate: string[] = ['tenant.ref', 'region']) {
+    this.attributesToPropagate = attributesToPropagate
+  }
+
+  onStart(span: SdkSpan, parentContext: Context): void {
+    const parentSpan = trace.getSpan(parentContext)
+    if (!parentSpan) return
+
+    // Cast to ReadableSpan to access attributes
+    const parentReadable = parentSpan as unknown as ReadableSpan
+    const parentAttributes = parentReadable.attributes
+
+    if (!parentAttributes) return
+
+    // Copy specified attributes from parent to child span
+    for (const attr of this.attributesToPropagate) {
+      const value = parentAttributes[attr]
+      if (value !== undefined) {
+        span.setAttribute(attr, value)
+      }
+    }
+  }
+
+  onEnd(_span: ReadableSpan): void {
+    // No-op
+  }
+
+  shutdown(): Promise<void> {
+    return Promise.resolve()
+  }
+
+  forceFlush(): Promise<void> {
+    return Promise.resolve()
+  }
+}
 
 interface GenericInstrumentationConfig extends InstrumentationConfig {
   targetClass: new (...args: any[]) => any

@@ -1,5 +1,5 @@
 import fastifyPlugin from 'fastify-plugin'
-import { logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
+import { logger, logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
 import { trace } from '@opentelemetry/api'
 import { FastifyRequest } from 'fastify/types/request'
 import { FastifyReply } from 'fastify/types/reply'
@@ -20,6 +20,7 @@ declare module 'fastify' {
   interface FastifyContextConfig {
     operation?: { type: string }
     resources?: (req: FastifyRequest<any>) => string[]
+    logMetadata?: (req: FastifyRequest<any>) => Record<string, unknown>
   }
 }
 
@@ -126,11 +127,37 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
   const error = (req.raw as any).executionError || req.executionError
   const tenantId = req.tenantId
 
+  let reqMetadata: Record<string, unknown> = {}
+
+  if (req.routeOptions.config.logMetadata) {
+    try {
+      reqMetadata = req.routeOptions.config.logMetadata(req)
+
+      if (reqMetadata) {
+        try {
+          trace.getActiveSpan()?.setAttribute('http.metadata', JSON.stringify(reqMetadata))
+        } catch (e) {
+          // do nothing
+          logSchema.warning(logger, 'Failed to serialize log metadata', {
+            type: 'otel',
+            error: e,
+          })
+        }
+      }
+    } catch (e) {
+      logSchema.error(logger, 'Failed to get log metadata', {
+        type: 'request',
+        error: e,
+      })
+    }
+  }
+
   const buildLogMessage = `${tenantId} | ${rMeth} | ${statusCode} | ${cIP} | ${rId} | ${rUrl} | ${uAgent}`
 
   logSchema.request(req.log, buildLogMessage, {
     type: 'request',
     req,
+    reqMetadata,
     res: options.reply,
     responseTime: options.responseTime,
     executionTime: options.executionTime,

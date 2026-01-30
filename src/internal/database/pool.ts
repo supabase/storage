@@ -5,10 +5,14 @@ import { logger, logSchema } from '@internal/monitoring'
 import { getSslSettings } from '@internal/database/ssl'
 import { wait } from '@internal/concurrency'
 import { JWTPayload } from 'jose'
-import { DbActivePool } from '@internal/monitoring/metrics'
+import {
+  dbActivePool,
+  dbActiveConnection,
+  dbInUseConnection,
+  dbConnectionAcquireTime,
+} from '@internal/monitoring/metrics'
 
 const {
-  region,
   isMultitenant,
   databaseSSLRootCert,
   databaseMaxConnections,
@@ -79,12 +83,7 @@ const tenantPools = new TTLCache<string, PoolStrategy>({
 export class PoolManager {
   monitor(signal: AbortSignal) {
     const monitorInterval = setInterval(() => {
-      DbActivePool.set(
-        {
-          region,
-        },
-        tenantPools.size
-      )
+      dbActivePool.record(tenantPools.size)
     }, 2000)
 
     signal.addEventListener(
@@ -187,7 +186,7 @@ class TenantPool implements PoolStrategy {
     let maxConnection = this.options.maxConnections || databaseMaxConnections
 
     if (clusterSize > 0) {
-      maxConnection = Math.ceil(maxConnection / clusterSize)
+      maxConnection = Math.ceil(maxConnection / clusterSize) || 2
     }
 
     if (isSingleUseExternalPool) {
@@ -255,8 +254,9 @@ class TenantPool implements PoolStrategy {
     })
 
     const maxConnections = settings.maxConnections
+    const tenantId = this.options.tenantId
 
-    return knex({
+    const pool = knex({
       client: 'pg',
       version: dbPostgresVersion,
       searchPath: settings.searchPath,
@@ -274,5 +274,50 @@ class TenantPool implements PoolStrategy {
       },
       acquireConnectionTimeout: databaseConnectionTimeout,
     })
+
+    // Track total connections in pool per tenant
+    pool.client.pool.on('createSuccess', () => {
+      dbActiveConnection.add(1, { tenant_id: tenantId })
+    })
+
+    pool.client.pool.on('destroySuccess', () => {
+      dbActiveConnection.add(-1, { tenant_id: tenantId })
+    })
+
+    // Track in-use connections per tenant
+    pool.client.pool.on('acquireSuccess', () => {
+      dbInUseConnection.add(1, { tenant_id: tenantId })
+    })
+
+    pool.client.pool.on('release', () => {
+      dbInUseConnection.add(-1, { tenant_id: tenantId })
+    })
+
+    // Track connection acquisition time using eventId to correlate requests with completions
+    const pendingAcquires = new Map<number, number>()
+
+    pool.client.pool.on('acquireRequest', (eventId: number) => {
+      pendingAcquires.set(eventId, performance.now())
+    })
+
+    pool.client.pool.on('acquireSuccess', (eventId: number) => {
+      const startTime = pendingAcquires.get(eventId)
+      if (startTime !== undefined) {
+        pendingAcquires.delete(eventId)
+        const durationSeconds = (performance.now() - startTime) / 1000
+        dbConnectionAcquireTime.record(durationSeconds, { tenant_id: tenantId })
+      }
+    })
+
+    pool.client.pool.on('acquireFail', (eventId: number) => {
+      const startTime = pendingAcquires.get(eventId)
+      if (startTime !== undefined) {
+        pendingAcquires.delete(eventId)
+        const durationSeconds = (performance.now() - startTime) / 1000
+        dbConnectionAcquireTime.record(durationSeconds, { tenant_id: tenantId, failed: 'true' })
+      }
+    })
+
+    return pool
   }
 }

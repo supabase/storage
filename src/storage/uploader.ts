@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto'
 import { FastifyRequest } from 'fastify'
 
 import { ERRORS } from '@internal/errors'
-import { FileUploadedSuccess, FileUploadStarted } from '@internal/monitoring/metrics'
+import { fileUploadedSuccess, fileUploadStarted } from '@internal/monitoring/metrics'
 
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
@@ -79,8 +79,9 @@ export class Uploader {
    */
   async prepareUpload(options: Omit<UploadRequest, 'file'>) {
     await this.canUpload(options)
-    FileUploadStarted.inc({
-      is_multipart: Boolean(options.uploadType).toString(),
+    fileUploadStarted.add(1, {
+      uploadType: options.uploadType,
+      tenantId: this.db.tenantId,
     })
 
     return randomUUID()
@@ -236,11 +237,9 @@ export class Uploader {
 
         await Promise.all(events)
 
-        FileUploadedSuccess.inc({
-          is_multipart: uploadType === 'resumable' ? 1 : 0,
-          is_resumable: uploadType === 'resumable' ? 1 : 0,
-          is_standard: uploadType === 'standard' ? 1 : 0,
-          is_s3: uploadType === 's3' ? 1 : 0,
+        fileUploadedSuccess.add(1, {
+          uploadType,
+          tenantId: this.db.tenantId,
         })
 
         return { obj: newObject, isNew, metadata: objectMetadata }

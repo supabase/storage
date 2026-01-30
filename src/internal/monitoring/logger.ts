@@ -1,6 +1,6 @@
 import pino, { BaseLogger, Logger } from 'pino'
 import { getConfig } from '../../config'
-import { FastifyReply, FastifyRequest } from 'fastify'
+import type { FastifyReply, FastifyRequest } from 'fastify'
 import { URL } from 'node:url'
 import { normalizeRawError } from '@internal/errors'
 import { resolve } from 'node:path'
@@ -24,6 +24,17 @@ export const baseLogger = pino({
       return {
         statusCode: reply.statusCode,
         headers: whitelistHeaders(reply.getHeaders()),
+      }
+    },
+    reqMetadata(metadata?: Record<string, unknown>) {
+      if (!metadata) {
+        return undefined
+      }
+
+      try {
+        return JSON.stringify(metadata)
+      } catch {
+        // no-op
       }
     },
     req(request) {
@@ -58,6 +69,7 @@ export interface RequestLog {
   type: 'request'
   req: FastifyRequest
   res?: FastifyReply
+  reqMetadata?: Record<string, unknown>
   responseTime: number
   executionTime?: number
   error?: Error | unknown

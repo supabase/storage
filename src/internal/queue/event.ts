@@ -1,7 +1,7 @@
 import { Queue } from './queue'
 import PgBoss, { Job, SendOptions, WorkOptions, Queue as PgBossQueue } from 'pg-boss'
 import { getConfig } from '../../config'
-import { QueueJobScheduled, QueueJobSchedulingTime } from '@internal/monitoring/metrics'
+import { queueJobScheduled, queueJobSchedulingTime } from '@internal/monitoring/metrics'
 import { logger, logSchema } from '@internal/monitoring'
 import { getTenantConfig } from '@internal/database'
 import { ERRORS } from '@internal/errors'
@@ -272,7 +272,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       }
     }
 
-    const timer = QueueJobSchedulingTime.startTimer()
+    const startTime = process.hrtime.bigint()
     const sendOptions = constructor.getSendOptions(this.payload) || {}
 
     if (this.payload.scheduleAt) {
@@ -302,7 +302,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         },
       })
 
-      QueueJobScheduled.inc({
+      queueJobScheduled.add(1, {
         name: constructor.getQueueName(),
       })
 
@@ -336,7 +336,8 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         },
       })
     } finally {
-      timer({
+      const duration = Number(process.hrtime.bigint() - startTime) / 1e9
+      queueJobSchedulingTime.record(duration, {
         name: constructor.getQueueName(),
       })
     }

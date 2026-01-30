@@ -423,10 +423,12 @@ export class S3Backend implements StorageBackendAdapter {
       Key: withOptionalVersion(key, version),
       CacheControl: cacheControl,
       ContentType: contentType,
-      Metadata: {
-        ...metadata,
-        Version: version || '',
-      },
+      Metadata: metadata
+        ? {
+            ...metadata,
+            Version: version || '',
+          }
+        : undefined,
     })
 
     const resp = await this.client.send(createMultiPart)

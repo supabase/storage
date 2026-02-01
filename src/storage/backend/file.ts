@@ -58,6 +58,10 @@ export class FileBackend implements StorageBackendAdapter {
     this.etagAlgorithm = storageFileEtagAlgorithm
   }
 
+  getClient(): unknown {
+    return null
+  }
+
   async list(
     bucket: string,
     options?: {

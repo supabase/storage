@@ -11,45 +11,39 @@ declare module 'fastify' {
   }
 }
 
+const abortOnce = (ac: AbortController) => {
+  if (!ac.signal.aborted) ac.abort()
+}
+
 export const signals = fastifyPlugin(
   async function (fastify: FastifyInstance) {
-    fastify.addHook('onRequest', async (req, res) => {
+    fastify.addHook('onRequest', async (req, reply) => {
       req.signals = {
         body: new AbortController(),
         response: new AbortController(),
         disconnect: new AbortController(),
       }
 
-      // Client terminated the request before the body was fully sent
+      // Body upload interrupted (fires early)
       req.raw.once('close', () => {
         if (req.raw.aborted) {
-          req.signals.body.abort()
-
-          if (!req.signals.disconnect.signal.aborted) {
-            req.signals.disconnect.abort()
-          }
+          abortOnce(req.signals.body)
+          abortOnce(req.signals.disconnect)
         }
       })
 
-      // Client terminated the request before server finished sending the response
-      res.raw.once('close', () => {
-        const aborted = !res.raw.writableFinished
-        if (aborted) {
-          req.signals.response.abort()
-
-          if (!req.signals.disconnect.signal.aborted) {
-            req.signals.disconnect.abort()
-          }
+      // Response interrupted (connection closed before finish)
+      reply.raw.once('close', () => {
+        if (!reply.raw.writableFinished) {
+          abortOnce(req.signals.response)
+          abortOnce(req.signals.disconnect)
         }
       })
     })
 
     fastify.addHook('onRequestAbort', async (req) => {
-      req.signals.body.abort()
-
-      if (!req.signals.disconnect.signal.aborted) {
-        req.signals.disconnect.abort()
-      }
+      abortOnce(req.signals.body)
+      abortOnce(req.signals.disconnect)
     })
   },
   { name: 'request-signals' }

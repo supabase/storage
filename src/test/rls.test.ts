@@ -74,7 +74,7 @@ const testSpec = yaml.load(
 const { serviceKeyAsync, tenantId, jwtSecret, databaseURL, storageS3Bucket, storageBackendType } =
   getConfig()
 const backend = createStorageBackend(storageBackendType)
-const client = backend.client
+const client = backend.getClient()
 let appInstance: FastifyInstance
 
 jest.setTimeout(10000)

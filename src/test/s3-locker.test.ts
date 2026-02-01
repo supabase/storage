@@ -18,7 +18,7 @@ import { backends } from '../storage'
 
 const { storageS3Bucket, storageBackendType } = getConfig()
 const backend = backends.createStorageBackend(storageBackendType)
-const s3ClientFromBackend = backend.client
+const s3ClientFromBackend = backend.getClient()
 
 describe('S3Locker', () => {
   let s3Client: S3Client

@@ -104,47 +104,44 @@ if (otelMetricsEnabled) {
   readers.push(prometheusExporter)
 
   // Bucket boundaries for duration histograms (in seconds)
-  // Provides good resolution from 1ms to 10s
-  const durationBuckets = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
+  // Provides good resolution from 0.5ms to 10s
+  const durationBuckets = [
+    0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
+  ]
+
+  const histogramAggregation = {
+    type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+    options: { boundaries: durationBuckets },
+  } as const
 
   const meterProvider = new MeterProvider({
     resource,
     readers,
     views: [
       {
-        instrumentName: 'storage_api_http_request_duration_seconds',
-        aggregation: {
-          type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
-          options: { boundaries: durationBuckets },
-        },
+        meterName: 'storage-api',
+        instrumentName: 'http_request_duration_seconds',
+        aggregation: histogramAggregation,
       },
       {
-        instrumentName: 'storage_api_database_query_performance_seconds',
-        aggregation: {
-          type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
-          options: { boundaries: durationBuckets },
-        },
+        meterName: 'storage-api',
+        instrumentName: 'database_query_performance_seconds',
+        aggregation: histogramAggregation,
       },
       {
-        instrumentName: 'storage_api_queue_job_scheduled_time_seconds',
-        aggregation: {
-          type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
-          options: { boundaries: durationBuckets },
-        },
+        meterName: 'storage-api',
+        instrumentName: 'queue_job_scheduled_time_seconds',
+        aggregation: histogramAggregation,
       },
       {
-        instrumentName: 'storage_api_s3_upload_part_seconds',
-        aggregation: {
-          type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
-          options: { boundaries: durationBuckets },
-        },
+        meterName: 'storage-api',
+        instrumentName: 's3_upload_part_seconds',
+        aggregation: histogramAggregation,
       },
       {
-        instrumentName: 'storage_api_db_connection_acquire_seconds',
-        aggregation: {
-          type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
-          options: { boundaries: durationBuckets },
-        },
+        meterName: 'storage-api',
+        instrumentName: 'db_connection_acquire_seconds',
+        aggregation: histogramAggregation,
       },
     ],
   })

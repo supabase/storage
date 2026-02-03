@@ -93,6 +93,7 @@ type StorageConfigType = {
   databaseMaxConnections: number
   databaseFreePoolAfterInactivity: number
   databaseConnectionTimeout: number
+  databaseStatementTimeout: number
   region: string
   requestTraceHeader?: string
   requestEtagHeaders: string[]
@@ -401,6 +402,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '3000',
       10
     ),
+    databaseStatementTimeout: parseInt(
+      getOptionalConfigFromEnv('DATABASE_STATEMENT_TIMEOUT') || '20000',
+      10
+    ),
 
     // CDN
     cdnPurgeEndpointURL: getOptionalConfigFromEnv('CDN_PURGE_ENDPOINT_URL'),
@@ -436,7 +441,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     // Queue
     pgQueueEnable: getOptionalConfigFromEnv('PG_QUEUE_ENABLE', 'ENABLE_QUEUE_EVENTS') === 'true',
     pgQueueEnableWorkers: getOptionalConfigFromEnv('PG_QUEUE_WORKERS_ENABLE') !== 'false',
-    pgQueueReadWriteTimeout: Number(getOptionalConfigFromEnv('PG_QUEUE_READ_WRITE_TIMEOUT')) || 0,
+    pgQueueReadWriteTimeout:
+      Number(getOptionalConfigFromEnv('PG_QUEUE_READ_WRITE_TIMEOUT')) || 5000,
     pgQueueMaxConnections: Number(getOptionalConfigFromEnv('PG_QUEUE_MAX_CONNECTIONS')) || 4,
     pgQueueConnectionURL: getOptionalConfigFromEnv('PG_QUEUE_CONNECTION_URL'),
     pgQueueDeleteAfterDays: parseInt(

@@ -54,6 +54,11 @@ export const db = fastifyPlugin(
         method: request.method,
         operation: () => request.operation?.type,
       })
+
+      // Connect abort signal to DB connection for query cancellation
+      if (request.signals?.disconnect?.signal) {
+        request.db.setAbortSignal(request.signals.disconnect.signal)
+      }
     })
 
     fastify.addHook('onSend', async (request, reply, payload) => {
@@ -118,6 +123,11 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
         maxConnections: opts.maxConnections,
         operation: () => request.operation?.type,
       })
+
+      // Connect abort signal to DB connection for query cancellation
+      if (request.signals?.disconnect?.signal) {
+        request.db.setAbortSignal(request.signals.disconnect.signal)
+      }
     })
 
     fastify.addHook('onSend', async (request, reply, payload) => {

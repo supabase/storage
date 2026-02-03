@@ -87,7 +87,7 @@ export interface Database {
 
   countObjectsInBucket(bucketId: string, limit?: number): Promise<number>
 
-  deleteBucket(bucketId: string | string[]): Promise<Bucket[]>
+  deleteBucket(bucketId: string | string[]): Promise<number>
 
   listObjects(
     bucketId: string,

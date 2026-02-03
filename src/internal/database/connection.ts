@@ -9,6 +9,9 @@ import {
   searchPath,
   TenantConnectionOptions,
 } from '@internal/database/pool'
+import { getConfig } from '../../config'
+
+const { databaseStatementTimeout } = getConfig()
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)
@@ -16,12 +19,21 @@ pg.types.setTypeParser(20, 'text', parseInt)
 export class TenantConnection {
   static poolManager = new PoolManager()
   public readonly role: string
+  private abortSignal?: AbortSignal
 
   constructor(
     public readonly pool: PoolStrategy,
     protected readonly options: TenantConnectionOptions
   ) {
     this.role = options.user.payload.role || 'anon'
+  }
+
+  setAbortSignal(signal: AbortSignal) {
+    this.abortSignal = signal
+  }
+
+  getAbortSignal(): AbortSignal | undefined {
+    return this.abortSignal
   }
 
   static stop() {
@@ -86,6 +98,17 @@ export class TenantConnection {
 
         try {
           await tnx.raw(`SELECT set_config('search_path', ?, true)`, [searchPath.join(', ')])
+        } catch (e) {
+          await tnx.rollback()
+          throw e
+        }
+      }
+
+      // Apply statement timeout at start of transaction (PgBouncer-compatible)
+      // SET LOCAL scopes the timeout to the current transaction only
+      if (databaseStatementTimeout > 0) {
+        try {
+          await tnx.raw(`SET LOCAL statement_timeout TO '${databaseStatementTimeout}ms'`)
         } catch (e) {
           await tnx.rollback()
           throw e

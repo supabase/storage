@@ -106,12 +106,20 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
     req.upload.storage.location
   )
 
+  const uploadLength = req.headers['upload-length']
+  const contentLength = uploadLength ? Number(uploadLength) : undefined
+  const contentType = req.headers['content-type']
+
   await uploader.canUpload({
     owner: req.upload.owner,
     bucketId: uploadID.bucket,
     objectName: uploadID.objectName,
     isUpsert,
     userMetadata: customMd,
+    metadata: {
+      mimetype: contentType,
+      contentLength: contentLength,
+    },
   })
 }
 

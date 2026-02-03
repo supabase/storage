@@ -902,7 +902,8 @@ export class StorageKnexDB implements Database {
     version: string,
     signature: string,
     owner?: string,
-    metadata?: Record<string, string | null>
+    userMetadata?: Record<string, string | null>,
+    metadata?: Partial<ObjectMetadata>
   ) {
     return this.runQuery('CreateMultipartUpload', async (knex, signal) => {
       const multipart = await knex
@@ -915,7 +916,8 @@ export class StorageKnexDB implements Database {
             version,
             upload_signature: signature,
             owner_id: owner,
-            user_metadata: metadata,
+            user_metadata: userMetadata,
+            metadata: metadata,
           })
         )
         .returning('*')

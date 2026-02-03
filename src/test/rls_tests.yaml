@@ -53,6 +53,18 @@ policies:
     permissions: ['insert']
     content: "WITH CHECK(user_metadata->>'department' = 'engineering')"
 
+  - name: insert_only_images
+    tables: ['storage.objects']
+    roles: ['authenticated']
+    permissions: ['insert']
+    content: "WITH CHECK(metadata->>'mimetype' LIKE 'image/%')"
+
+  - name: insert_max_size_limit
+    tables: ['storage.objects']
+    roles: ['authenticated']
+    permissions: ['insert']
+    content: "WITH CHECK((metadata->>'contentLength')::int <= 100000)"
+
 tests:
   - description: "Will only able to read objects"
     policies:
@@ -481,3 +493,46 @@ tests:
       - operation: bucket.delete
         status: 400
         error: 'Bucket not found'
+
+  - description: 'Will only upload files with correct user metadata'
+    policies:
+      - insert_with_metadata_check
+    asserts:
+      - operation: upload
+        objectName: 'test_file.jpg'
+        userMetadata:
+          department: 'engineering'
+        status: 200
+
+      - operation: upload
+        status: 400
+        error: 'new row violates row-level security policy'
+
+  - description: 'Will only upload image files based on mimetype'
+    policies:
+      - insert_only_images
+    asserts:
+      - operation: upload
+        objectName: 'test_image.jpg'
+        mimeType: 'image/jpeg'
+        status: 200
+
+      - operation: upload
+        objectName: 'test_file.txt'
+        mimeType: 'text/plain'
+        status: 400
+        error: 'new row violates row-level security policy'
+
+  - description: 'Will only upload files under size limit based on contentLength'
+    policies:
+      - insert_max_size_limit
+    asserts:
+      - operation: upload
+        objectName: 'small_file.jpg'
+        status: 200
+
+      - operation: upload
+        objectName: 'large_file.jpg'
+        contentLength: 200000
+        status: 400
+        error: 'new row violates row-level security policy'

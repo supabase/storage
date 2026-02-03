@@ -21,6 +21,7 @@ interface FileUpload {
   contentLength?: number
   isTruncated: () => boolean
   xRobotsTag?: string
+  contentLength?: number
 }
 
 export interface UploadRequest {
@@ -32,6 +33,18 @@ export interface UploadRequest {
   isUpsert?: boolean
   uploadType?: 'standard' | 's3' | 'resumable'
   signal?: AbortSignal
+}
+
+export type CanUploadMetadata = Partial<Pick<ObjectMetadata, 'mimetype' | 'contentLength'>> &
+  Record<string, unknown>
+
+export interface CanUploadOptions {
+  bucketId: string
+  objectName: string
+  owner: string | undefined
+  isUpsert: boolean | undefined
+  userMetadata: Record<string, unknown> | undefined
+  metadata: CanUploadMetadata | undefined
 }
 
 const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
@@ -47,9 +60,7 @@ export class Uploader {
     private readonly location: StorageObjectLocator
   ) {}
 
-  async canUpload(
-    options: Pick<UploadRequest, 'bucketId' | 'objectName' | 'isUpsert' | 'owner' | 'userMetadata'>
-  ) {
+  async canUpload(options: CanUploadOptions) {
     const shouldCreateObject = !options.isUpsert
 
     if (shouldCreateObject) {
@@ -59,6 +70,7 @@ export class Uploader {
           name: options.objectName,
           version: '1',
           owner: options.owner,
+          metadata: options.metadata,
           user_metadata: options.userMetadata,
         })
       })
@@ -69,6 +81,7 @@ export class Uploader {
           name: options.objectName,
           version: '1',
           owner: options.owner,
+          metadata: options.metadata,
           user_metadata: options.userMetadata,
         })
       })
@@ -80,7 +93,7 @@ export class Uploader {
    * We check RLS policies before proceeding
    * @param options
    */
-  async prepareUpload(options: Omit<UploadRequest, 'file'>) {
+  async prepareUpload(options: CanUploadOptions & { uploadType?: string }) {
     await this.canUpload(options)
     fileUploadStarted.add(1, {
       uploadType: options.uploadType,
@@ -97,7 +110,15 @@ export class Uploader {
    * @param options
    */
   async upload(request: UploadRequest) {
-    const version = await this.prepareUpload(request)
+    const version = await this.prepareUpload({
+      bucketId: request.bucketId,
+      objectName: request.objectName,
+      owner: request.owner,
+      isUpsert: request.isUpsert,
+      userMetadata: request.userMetadata,
+      metadata: { mimetype: request.file.mimeType, contentLength: request.file.contentLength },
+      uploadType: request.uploadType,
+    })
 
     try {
       const file = request.file
@@ -330,7 +351,12 @@ export async function fileUploadFromRequest(
     objectName: string
   }
 ): Promise<
-  FileUpload & { maxFileSize: number; userMetadata: Record<string, unknown> | undefined }
+  FileUpload & {
+    mimeType: string
+    maxFileSize: number
+    userMetadata: Record<string, unknown> | undefined
+    contentLength: number | undefined
+  }
 > {
   const contentType = request.headers['content-type']
   const xRobotsTag = request.headers['x-robots-tag'] as string | undefined
@@ -436,6 +462,10 @@ export async function fileUploadFromRequest(
     throw ERRORS.NoContentProvided(new Error('Request stream closed before upload could begin'))
   }
 
+  const contentLength = request.headers['content-length']
+    ? Number(request.headers['content-length'])
+    : undefined
+
   return {
     body,
     mimeType,
@@ -445,6 +475,7 @@ export async function fileUploadFromRequest(
     userMetadata,
     maxFileSize,
     xRobotsTag,
+    contentLength,
   }
 }
 

@@ -55,6 +55,8 @@ interface TestCaseAssert {
   role?: string
   policies?: string[]
   userMetadata?: Record<string, unknown>
+  mimeType?: string
+  contentLength?: number
   status: number
   error?: string
 }
@@ -250,6 +252,8 @@ describe('RLS policies', () => {
               objectName,
               jwt: assert.role === 'service' ? await serviceKeyAsync : jwt,
               userMetadata: assert.userMetadata,
+              mimeType: assert.mimeType,
+              contentLength: assert.contentLength,
             })
 
             console.log(
@@ -316,15 +320,17 @@ async function runOperation(
     jwt: string
     objectName: string
     userMetadata?: Record<string, unknown>
+    mimeType?: string
+    contentLength?: number
   }
 ) {
-  const { jwt, bucket, objectName, userMetadata } = options
+  const { jwt, bucket, objectName, userMetadata, mimeType, contentLength } = options
 
   switch (operation) {
     case 'upload':
-      return uploadFile(bucket, objectName, jwt, false, userMetadata)
+      return uploadFile(bucket, objectName, jwt, false, userMetadata, mimeType, contentLength)
     case 'upload.upsert':
-      return uploadFile(bucket, objectName, jwt, true, userMetadata)
+      return uploadFile(bucket, objectName, jwt, true, userMetadata, mimeType, contentLength)
     case 'bucket.list':
       return appInstance.inject({
         method: 'GET',
@@ -481,7 +487,9 @@ async function uploadFile(
   fileName: string,
   jwt: string,
   upsert?: boolean,
-  userMetadata?: Record<string, unknown>
+  userMetadata?: Record<string, unknown>,
+  mimeType?: string,
+  contentLength?: number
 ) {
   const testFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
   const form = new FormData()
@@ -491,9 +499,14 @@ async function uploadFile(
     form.append('metadata', JSON.stringify(userMetadata))
   }
 
+  if (mimeType) {
+    form.append('contentType', mimeType)
+  }
+
   const headers = Object.assign({}, form.getHeaders(), {
     authorization: `Bearer ${jwt}`,
     ...(upsert ? { 'x-upsert': 'true' } : {}),
+    ...(contentLength ? { 'content-length': contentLength.toString() } : {}),
   })
 
   return appInstance.inject({

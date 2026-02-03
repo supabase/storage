@@ -194,7 +194,8 @@ export interface Database {
     version: string,
     signature: string,
     owner?: string,
-    metadata?: Record<string, string | null>
+    userMetadata?: Record<string, string | null>,
+    metadata?: Partial<ObjectMetadata>
   ): Promise<S3MultipartUpload>
 
   findMultipartUpload(

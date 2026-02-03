@@ -6,7 +6,7 @@ import { getJwtSecret } from '@internal/database'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import { mustBeValidKey } from './limits'
-import { fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
+import { fileUploadFromRequest, Uploader, UploadRequest, CanUploadMetadata } from './uploader'
 import { getConfig } from '../config'
 import {
   ObjectAdminDelete,
@@ -341,6 +341,7 @@ export class ObjectStorage {
       owner,
       isUpsert: upsert,
       userMetadata: userMetadata,
+      metadata: destinationMetadata,
     })
 
     try {
@@ -794,7 +795,11 @@ export class ObjectStorage {
     url: string,
     expiresIn: number,
     owner?: string,
-    options?: { upsert?: boolean; userMetadata?: Record<string, unknown> }
+    options?: {
+      upsert?: boolean
+      userMetadata?: Record<string, unknown>
+      metadata?: CanUploadMetadata
+    }
   ) {
     // check if user has INSERT permissions
     await this.uploader.canUpload({
@@ -803,6 +808,7 @@ export class ObjectStorage {
       owner,
       isUpsert: options?.upsert ?? false,
       userMetadata: options?.userMetadata,
+      metadata: options?.metadata,
     })
 
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)

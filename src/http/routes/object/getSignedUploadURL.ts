@@ -21,6 +21,8 @@ const getSignedUploadURLHeadersSchema = {
   type: 'object',
   properties: {
     'x-upsert': { type: 'string' },
+    'content-type': { type: 'string' },
+    'content-length': { type: 'string' },
     authorization: { type: 'string' },
   },
   required: ['authorization'],
@@ -78,11 +80,19 @@ export default async function routes(fastify: FastifyInstance) {
         userMetadata = parseUserMetadata(customMd)
       }
 
+      const contentType = request.headers['content-type']
+      const contentLengthHeader = request.headers['content-length']
+      const contentLength = contentLengthHeader ? Number(contentLengthHeader) : undefined
+
       const signedUpload = await request.storage
         .from(bucketName)
         .signUploadObjectUrl(objectName, urlPath as string, uploadSignedUrlExpirationTime, owner, {
           upsert: request.headers['x-upsert'] === 'true',
           userMetadata: userMetadata,
+          metadata: {
+            mimetype: contentType,
+            contentLength: contentLength,
+          },
         })
 
       return response.status(200).send({ url: signedUpload.url, token: signedUpload.token })

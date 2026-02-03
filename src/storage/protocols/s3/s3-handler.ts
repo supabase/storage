@@ -414,6 +414,9 @@ export class S3ProtocolHandler {
       isUpsert: true,
       owner: this.owner,
       userMetadata: command.Metadata,
+      metadata: {
+        mimetype: command.ContentType,
+      },
     })
 
     const uploadId = await this.storage.backend.createMultiPartUpload(
@@ -442,7 +445,8 @@ export class S3ProtocolHandler {
         version,
         signature,
         this.owner,
-        command.Metadata
+        command.Metadata,
+        { mimetype: command.ContentType }
       )
 
     return {
@@ -473,7 +477,7 @@ export class S3ProtocolHandler {
 
     const multiPartUpload = await this.storage.db
       .asSuperUser()
-      .findMultipartUpload(UploadId, 'id,version,user_metadata')
+      .findMultipartUpload(UploadId, 'id,version,user_metadata,metadata')
 
     await uploader.canUpload({
       bucketId: Bucket as string,
@@ -481,6 +485,7 @@ export class S3ProtocolHandler {
       isUpsert: true,
       owner: this.owner,
       userMetadata: multiPartUpload.user_metadata || undefined,
+      metadata: multiPartUpload.metadata || undefined,
     })
 
     const parts = command.MultipartUpload?.Parts || []
@@ -589,6 +594,7 @@ export class S3ProtocolHandler {
       owner: this.owner,
       isUpsert: true,
       userMetadata: multipart.user_metadata || undefined,
+      metadata: multipart.metadata || undefined,
     })
 
     if (signal?.aborted) {
@@ -739,7 +745,7 @@ export class S3ProtocolHandler {
 
     const multipart = await this.storage.db
       .asSuperUser()
-      .findMultipartUpload(UploadId, 'id,version,user_metadata')
+      .findMultipartUpload(UploadId, 'id,version,user_metadata,metadata')
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     await uploader.canUpload({
@@ -748,6 +754,7 @@ export class S3ProtocolHandler {
       owner: this.owner,
       isUpsert: true,
       userMetadata: multipart.user_metadata || undefined,
+      metadata: multipart.metadata || undefined,
     })
 
     await this.storage.backend.abortMultipartUpload(
@@ -1257,6 +1264,7 @@ export class S3ProtocolHandler {
       owner: this.owner,
       isUpsert: true,
       userMetadata: multipart.user_metadata || undefined,
+      metadata: multipart.metadata || undefined,
     })
 
     const uploadPart = await this.storage.backend.uploadPartCopy(
@@ -1330,7 +1338,7 @@ export class S3ProtocolHandler {
     return this.storage.db.asSuperUser().withTransaction(async (db) => {
       const multipart = await db.findMultipartUpload(
         uploadId,
-        'in_progress_size,version,upload_signature,user_metadata',
+        'in_progress_size,version,upload_signature,user_metadata,metadata',
         {
           forUpdate: true,
         }

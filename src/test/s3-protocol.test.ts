@@ -1658,6 +1658,91 @@ describe('S3 Protocol', () => {
 
         expect(response.ExpiresString).toEqual(expiresDate.toUTCString())
       })
+
+      it('rejects response-content-disposition with invalid characters', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-disposition-reject.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseContentDisposition: 'attachment; filename="test\n\r\0.txt"',
+          })
+        )
+        // invalid content-disposition header removed
+        expect(response.ContentDisposition).toBeUndefined()
+      })
+
+      it('rejects response-content-type with invalid characters', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-content-type-reject.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseContentType: 'text/html\nX-Evil: injection\r\0',
+          })
+        )
+        // invalid content-type header rejected, default used
+        expect(response.ContentType).toBe('image/jpg')
+      })
+
+      it('rejects response-cache-control with invalid characters', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-cache-control-reject.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseCacheControl: 'no-cache\nX-Evil: header\r\0',
+          })
+        )
+        // invalid cache-control header rejected, default used
+        expect(response.CacheControl).toBe('no-cache')
+      })
+
+      it('rejects response-content-encoding with invalid characters', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-content-encoding-reject.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseContentEncoding: 'gzip\nX-Evil: header\r\0',
+          })
+        )
+        // invalid content-encoding header removed
+        expect(response.ContentEncoding).toBeUndefined()
+      })
+
+      it('rejects response-content-language with invalid characters', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-content-language-reject.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseContentLanguage: 'en-US\nX-Evil: header\r\0',
+          })
+        )
+        // invalid content-language header removed
+        expect(response.ContentLanguage).toBeUndefined()
+      })
     })
   })
 })

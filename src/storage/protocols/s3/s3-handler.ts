@@ -916,19 +916,31 @@ export class S3ProtocolHandler {
     }
 
     // Handle response header overrides
-    if (command.ResponseContentDisposition) {
+    if (
+      command.ResponseContentDisposition &&
+      isValidHeader('content-disposition', command.ResponseContentDisposition)
+    ) {
       headers['content-disposition'] = command.ResponseContentDisposition
     }
-    if (command.ResponseContentType) {
+    if (command.ResponseContentType && isValidHeader('content-type', command.ResponseContentType)) {
       headers['content-type'] = command.ResponseContentType
     }
-    if (command.ResponseCacheControl) {
+    if (
+      command.ResponseCacheControl &&
+      isValidHeader('cache-control', command.ResponseCacheControl)
+    ) {
       headers['cache-control'] = command.ResponseCacheControl
     }
-    if (command.ResponseContentEncoding) {
+    if (
+      command.ResponseContentEncoding &&
+      isValidHeader('content-encoding', command.ResponseContentEncoding)
+    ) {
       headers['content-encoding'] = command.ResponseContentEncoding
     }
-    if (command.ResponseContentLanguage) {
+    if (
+      command.ResponseContentLanguage &&
+      isValidHeader('content-language', command.ResponseContentLanguage)
+    ) {
       headers['content-language'] = command.ResponseContentLanguage
     }
     if (command.ResponseExpires) {

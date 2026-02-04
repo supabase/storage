@@ -34,7 +34,7 @@ const METADATA_ATTR_KEYS = {
   linux: {
     'cache-control': 'user.supabase.cache-control',
     'content-type': 'user.supabase.content-type',
-    etag: 'user.supabase.content-type',
+    etag: 'user.supabase.etag',
   },
 }
 

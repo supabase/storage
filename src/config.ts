@@ -403,7 +403,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       10
     ),
     databaseStatementTimeout: parseInt(
-      getOptionalConfigFromEnv('DATABASE_STATEMENT_TIMEOUT') || '20000',
+      getOptionalConfigFromEnv('DATABASE_STATEMENT_TIMEOUT') || '30000',
       10
     ),
 
@@ -442,7 +442,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     pgQueueEnable: getOptionalConfigFromEnv('PG_QUEUE_ENABLE', 'ENABLE_QUEUE_EVENTS') === 'true',
     pgQueueEnableWorkers: getOptionalConfigFromEnv('PG_QUEUE_WORKERS_ENABLE') !== 'false',
     pgQueueReadWriteTimeout:
-      Number(getOptionalConfigFromEnv('PG_QUEUE_READ_WRITE_TIMEOUT')) || 5000,
+      Number(getOptionalConfigFromEnv('PG_QUEUE_READ_WRITE_TIMEOUT')) ?? 5000,
     pgQueueMaxConnections: Number(getOptionalConfigFromEnv('PG_QUEUE_MAX_CONNECTIONS')) || 4,
     pgQueueConnectionURL: getOptionalConfigFromEnv('PG_QUEUE_CONNECTION_URL'),
     pgQueueDeleteAfterDays: parseInt(

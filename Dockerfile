@@ -6,6 +6,8 @@ COPY package.json package-lock.json ./
 
 # Dependencies stage - install and cache all dependencies
 FROM base AS dependencies
+# Copy patches before npm ci so postinstall can apply them
+COPY patches ./patches
 RUN npm ci
 # Cache the installed node_modules for later stages
 RUN cp -R node_modules /node_modules_cache
@@ -16,10 +18,11 @@ COPY --from=dependencies /node_modules_cache ./node_modules
 COPY . .
 RUN npm run build
 
-# Production dependencies stage - use npm cache to install only production dependencies
+# Production dependencies stage - prune dev dependencies from cached node_modules
 FROM base AS production-deps
 COPY --from=dependencies /node_modules_cache ./node_modules
-RUN npm ci --production
+# Use npm prune to remove dev dependencies while keeping compiled native modules and patches
+RUN npm prune --omit=dev
 
 # Final stage - for the production build
 FROM base AS final

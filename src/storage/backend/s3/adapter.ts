@@ -157,17 +157,21 @@ export class S3Backend implements StorageBackendAdapter {
     signal?.addEventListener('abort', () => upload.abort(), { once: true })
 
     let hasUploadedBytes = false
-    upload.on('httpUploadProgress', (progress: Progress) => {
+    const progressHandler = (progress: Progress) => {
       if (!hasUploadedBytes && progress.loaded && progress.loaded > 0) {
         hasUploadedBytes = true
       }
       if (tracingFeatures?.upload) {
         dataStream.emit('s3_progress', JSON.stringify(progress))
       }
-    })
+    }
+    upload.on('httpUploadProgress', progressHandler)
 
     try {
       const data = await upload.done()
+
+      // Remove event listener to allow GC of upload and dataStream references
+      upload.off('httpUploadProgress', progressHandler)
 
       // Only call head for objects that are > 0 bytes
       // for some reason headObject can take a really long time to resolve on zero byte uploads, this was causing requests to timeout
@@ -194,6 +198,8 @@ export class S3Backend implements StorageBackendAdapter {
         contentRange: metadata.contentRange,
       }
     } catch (err) {
+      upload.off('httpUploadProgress', progressHandler)
+
       if (err instanceof Error && err.name === 'AbortError') {
         throw ERRORS.AbortedTerminate('Upload was aborted', err)
       }

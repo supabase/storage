@@ -12,6 +12,8 @@ export function monitorStream(dataStream: Readable) {
   const byteCounter = createByteCounterStream()
   const span = trace.getActiveSpan()
 
+  // Limit measures array to prevent unbounded growth during long uploads
+  const MAX_MEASURES = 60
   let measures: object[] = []
 
   // Handle the 'speed' event to collect speed measurements
@@ -24,6 +26,11 @@ export function monitorStream(dataStream: Readable) {
         closed: dataStream.closed,
       },
     })
+
+    // Keep only the last MAX_MEASURES entries to bound memory usage
+    if (measures.length > MAX_MEASURES) {
+      measures = measures.slice(-MAX_MEASURES)
+    }
 
     span?.setAttributes({
       stream: JSON.stringify(measures),

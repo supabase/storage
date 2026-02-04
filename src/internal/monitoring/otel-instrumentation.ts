@@ -157,9 +157,11 @@ class ClassInstrumentation implements Instrumentation {
             return result
           } catch (error) {
             if (error instanceof Error) {
+              // Avoid JSON.stringify of full error/stack - just capture message
+              // Stack traces can be 50KB+ and cause significant GC pressure
               span.setAttributes({
-                error: JSON.stringify({ message: error.message, stack: error.stack }),
-                stack: error.stack,
+                'error.message': error.message,
+                'error.name': error.name,
               })
             }
 

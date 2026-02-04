@@ -1,0 +1,287 @@
+diff --git a/node_modules/knex/lib/dialects/postgres/index.js b/node_modules/knex/lib/dialects/postgres/index.js
+index 8b73cbb..7433a62 100644
+--- a/node_modules/knex/lib/dialects/postgres/index.js
++++ b/node_modules/knex/lib/dialects/postgres/index.js
+@@ -260,21 +260,57 @@ class Client_PG extends Client {
+   }
+ 
+   async cancelQuery(connectionToKill) {
+-    const conn = await this.acquireRawConnection();
++    const processID = connectionToKill?.processID;
++    const secretKey = connectionToKill?.secretKey;
+ 
+-    try {
+-      return await this._wrappedCancelQueryCall(conn, connectionToKill);
+-    } finally {
+-      await this.destroyRawConnection(conn).catch((err) => {
+-        this.logger.warn(`Connection Error: ${err}`);
+-      });
++    if (!processID || !secretKey) {
++      this.logger.warn('[PG cancelQuery] Missing processID or secretKey');
++      return;
+     }
+-  }
+-  _wrappedCancelQueryCall(conn, connectionToKill) {
+-    return this._query(conn, {
+-      sql: 'SELECT pg_cancel_backend($1);',
+-      bindings: [connectionToKill.processID],
+-      options: {},
++
++    // Use native PostgreSQL cancel protocol (works with PgBouncer)
++    const Connection = require('pg/lib/connection');
++    const cancelConnection = new Connection();
++
++    const host = connectionToKill.host || this.config.connection?.host || 'localhost';
++    const port = connectionToKill.port || this.config.connection?.port || 5432;
++
++    return new Promise((resolve) => {
++      let resolved = false;
++      const done = () => {
++        if (resolved) return;
++        resolved = true;
++        cancelConnection.end();
++        resolve();
++      };
++
++      // Timeout in case something goes wrong
++      const timeout = setTimeout(() => {
++        this.logger.warn('[PG cancelQuery] Cancel request timed out');
++        done();
++      }, 5000);
++
++      cancelConnection.on('error', (err) => {
++        clearTimeout(timeout);
++        this.logger.warn(`[PG cancelQuery] Cancel error: ${err.message}`);
++        done();
++      });
++
++      cancelConnection.on('connect', () => {
++        cancelConnection.cancel(processID, secretKey);
++      });
++
++      cancelConnection.on('end', () => {
++        clearTimeout(timeout);
++        done();
++      });
++
++      // Connect and send cancel request
++      if (host.indexOf('/') === 0) {
++        cancelConnection.connect(host + '/.s.PGSQL.' + port);
++      } else {
++        cancelConnection.connect(port, host);
++      }
+     });
+   }
+ 
+diff --git a/node_modules/knex/lib/execution/runner.js b/node_modules/knex/lib/execution/runner.js
+index ed01652..ea5e589 100644
+--- a/node_modules/knex/lib/execution/runner.js
++++ b/node_modules/knex/lib/execution/runner.js
+@@ -144,6 +144,11 @@ class Runner {
+       queryPromise = timeout(queryPromise, obj.timeout);
+     }
+ 
++    // Handle abort signal if provided
++    if (obj.abortSignal) {
++      queryPromise = this._wrapWithAbortSignal(queryPromise, obj.abortSignal, obj);
++    }
++
+     // Await the return value of client.processResponse; in the case of sqlite3's
+     // dropColumn()/renameColumn(), it will be a Promise for the transaction
+     // containing the complete rename procedure.
+@@ -225,6 +230,66 @@ class Runner {
+       });
+   }
+ 
++  // Wraps a query promise with abort signal handling
++  _wrapWithAbortSignal(queryPromise, abortSignal, obj) {
++    // If signal is already aborted, reject immediately
++    if (abortSignal.aborted) {
++      return Promise.reject(this._createAbortError());
++    }
++
++    return new Promise((resolve, reject) => {
++      let isResolved = false;
++
++      // Create abort listener
++      const onAbort = async () => {
++        if (isResolved) return;
++        isResolved = true;
++
++        // Clean up the listener
++        abortSignal.removeEventListener('abort', onAbort);
++
++        try {
++          // Cancel the query using the existing infrastructure
++          await this.client.cancelQuery(this.connection);
++
++          // Mark connection as disposed to prevent reuse
++          this.connection.__knex__disposed = true;
++        } catch (cancelError) {
++          // Mark connection as disposed if cancellation fails
++          this.connection.__knex__disposed = cancelError;
++        }
++
++        // Reject with AbortError
++        reject(this._createAbortError());
++      };
++
++      abortSignal.addEventListener('abort', onAbort);
++
++      // Handle the original promise
++      queryPromise
++        .then((result) => {
++          if (isResolved) return;
++          isResolved = true;
++          abortSignal.removeEventListener('abort', onAbort);
++          resolve(result);
++        })
++        .catch((error) => {
++          if (isResolved) return;
++          isResolved = true;
++          abortSignal.removeEventListener('abort', onAbort);
++          reject(error);
++        });
++    });
++  }
++
++  // Creates a standard AbortError
++  _createAbortError() {
++    const error = new Error('Query was aborted');
++    error.name = 'AbortError';
++    error.code = 'ABORT_ERR';
++    return error;
++  }
++
+   // In the case of the "schema builder" we call `queryArray`, which runs each
+   // of the queries in sequence.
+   async queryArray(queries) {
+diff --git a/node_modules/knex/lib/query/querybuilder.js b/node_modules/knex/lib/query/querybuilder.js
+index 0d3cff5..af25082 100644
+--- a/node_modules/knex/lib/query/querybuilder.js
++++ b/node_modules/knex/lib/query/querybuilder.js
+@@ -118,6 +118,34 @@ class Builder extends EventEmitter {
+     return this;
+   }
+ 
++  abortOnSignal(signal) {
++    // If no signal provided, just return this (no-op)
++    if (!signal) {
++      return this;
++    }
++
++    // Check if AbortSignal is available (Node 15+)
++    if (typeof AbortSignal === 'undefined') {
++      throw new Error(
++        'AbortSignal is not available. Node.js 15 or higher is required.'
++      );
++    }
++
++    if (!(signal instanceof AbortSignal)) {
++      throw new Error('Expected signal to be an instance of AbortSignal');
++    }
++
++    if (signal.aborted) {
++      throw new Error('Signal is already aborted');
++    }
++
++    // Assert that the client can cancel queries
++    this.client.assertCanCancelQuery();
++
++    this._abortSignal = signal;
++    return this;
++  }
++
+   // With
+   // ------
+   isValidStatementArg(statement) {
+diff --git a/node_modules/knex/lib/query/querycompiler.js b/node_modules/knex/lib/query/querycompiler.js
+index ca79dac..f4fd327 100644
+--- a/node_modules/knex/lib/query/querycompiler.js
++++ b/node_modules/knex/lib/query/querycompiler.js
+@@ -54,6 +54,7 @@ class QueryCompiler {
+     this.queryComments = builder._comments;
+     this.timeout = builder._timeout || false;
+     this.cancelOnTimeout = builder._cancelOnTimeout || false;
++    this.abortSignal = builder._abortSignal || null;
+     this.grouped = groupBy(builder._statements, 'grouping');
+     this.formatter = client.formatter(builder);
+     // Used when the insert call is empty.
+@@ -79,6 +80,7 @@ class QueryCompiler {
+       options: reduce(this.options, assign, {}),
+       timeout: this.timeout,
+       cancelOnTimeout: this.cancelOnTimeout,
++      abortSignal: this.abortSignal,
+       bindings: this.bindingsHolder.bindings || [],
+       __knexQueryUid: nanoid(),
+     };
+diff --git a/node_modules/knex/lib/raw.js b/node_modules/knex/lib/raw.js
+index e4c2feb..edd2f3d 100644
+--- a/node_modules/knex/lib/raw.js
++++ b/node_modules/knex/lib/raw.js
+@@ -58,6 +58,34 @@ class Raw extends EventEmitter {
+     return this;
+   }
+ 
++  abortOnSignal(signal) {
++    // If no signal provided, just return this (no-op)
++    if (!signal) {
++      return this;
++    }
++
++    // Check if AbortSignal is available (Node 15+)
++    if (typeof AbortSignal === 'undefined') {
++      throw new Error(
++        'AbortSignal is not available. Node.js 15 or higher is required.'
++      );
++    }
++
++    if (!(signal instanceof AbortSignal)) {
++      throw new Error('Expected signal to be an instance of AbortSignal');
++    }
++
++    if (signal.aborted) {
++      throw new Error('Signal is already aborted');
++    }
++
++    // Assert that the client can cancel queries
++    this.client.assertCanCancelQuery();
++
++    this._abortSignal = signal;
++    return this;
++  }
++
+   // Wraps the current sql with `before` and `after`.
+   wrap(before, after) {
+     this._wrappedBefore = before;
+@@ -101,6 +129,10 @@ class Raw extends EventEmitter {
+       }
+     }
+ 
++    if (this._abortSignal) {
++      obj.abortSignal = this._abortSignal;
++    }
++
+     obj.bindings = obj.bindings || [];
+     if (helpers.containsUndefined(obj.bindings)) {
+       const undefinedBindingIndices = helpers.getUndefinedIndices(
+diff --git a/node_modules/knex/types/index.d.ts b/node_modules/knex/types/index.d.ts
+index d191bd4..2c0acc1 100644
+--- a/node_modules/knex/types/index.d.ts
++++ b/node_modules/knex/types/index.d.ts
+@@ -2111,6 +2111,7 @@ declare namespace Knex {
+     extends events.EventEmitter,
+       ChainableInterface<ResolveResult<TResult>> {
+     timeout(ms: number, options?: { cancel?: boolean }): Raw<TResult>;
++    abortOnSignal(signal?: AbortSignal): Raw<TResult>;
+     wrap<TResult2 = TResult>(before: string, after: string): Raw<TResult>;
+     toSQL(): Sql;
+     queryContext(context: any): Raw<TResult>;
+@@ -2252,6 +2253,7 @@ declare namespace Knex {
+       ms: number,
+       options?: { cancel?: boolean }
+     ): QueryBuilder<TRecord, TResult>;
++    abortOnSignal(signal?: AbortSignal): QueryBuilder<TRecord, TResult>;
+   }
+ 
+   interface Sql {

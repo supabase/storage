@@ -32,6 +32,7 @@ export interface TransactionOptions {
   isolation?: string
   retry?: number
   readOnly?: boolean
+  timeout?: number
 }
 
 export interface DatabaseOptions<TNX> {
@@ -87,7 +88,7 @@ export interface Database {
 
   countObjectsInBucket(bucketId: string, limit?: number): Promise<number>
 
-  deleteBucket(bucketId: string | string[]): Promise<Bucket[]>
+  deleteBucket(bucketId: string | string[]): Promise<number>
 
   listObjects(
     bucketId: string,

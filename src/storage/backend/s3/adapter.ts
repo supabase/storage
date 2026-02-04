@@ -105,7 +105,7 @@ export class S3Backend implements StorageBackendAdapter {
     return {
       metadata: {
         cacheControl: data.CacheControl || 'no-cache',
-        mimetype: data.ContentType || 'application/octa-stream',
+        mimetype: data.ContentType || 'application/octet-stream',
         eTag: data.ETag || '',
         lastModified: data.LastModified,
         contentRange: data.ContentRange,

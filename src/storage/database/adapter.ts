@@ -32,6 +32,7 @@ export interface TransactionOptions {
   isolation?: string
   retry?: number
   readOnly?: boolean
+  timeout?: number
 }
 
 export interface DatabaseOptions<TNX> {

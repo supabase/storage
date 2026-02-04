@@ -10,6 +10,7 @@ import {
   TenantConnectionOptions,
 } from '@internal/database/pool'
 import { getConfig } from '../../config'
+import { TransactionOptions } from '@storage/database'
 
 const { databaseStatementTimeout } = getConfig()
 
@@ -53,7 +54,7 @@ export class TenantConnection {
     return Promise.resolve()
   }
 
-  async transaction(instance?: Knex) {
+  async transaction(instance?: Knex, opts?: TransactionOptions): Promise<Knex.Transaction> {
     try {
       const tnx = await retry(
         async (bail) => {
@@ -106,12 +107,17 @@ export class TenantConnection {
 
       // Apply statement timeout at start of transaction (PgBouncer-compatible)
       // SET LOCAL scopes the timeout to the current transaction only
-      if (databaseStatementTimeout > 0) {
-        try {
-          await tnx.raw(`SET LOCAL statement_timeout TO '${databaseStatementTimeout}ms'`)
-        } catch (e) {
-          await tnx.rollback()
-          throw e
+      if (typeof opts?.timeout !== 'undefined' || databaseStatementTimeout > 0) {
+        const statementTimeout = opts?.timeout ?? databaseStatementTimeout
+
+        // Apply statement timeout if set
+        if (statementTimeout > 0) {
+          try {
+            await tnx.raw(`SET LOCAL statement_timeout TO '${statementTimeout}ms'`)
+          } catch (e) {
+            await tnx.rollback()
+            throw e
+          }
         }
       }
 
@@ -131,17 +137,23 @@ export class TenantConnection {
     }
   }
 
-  transactionProvider(instance?: Knex): Knex.TransactionProvider {
+  transactionProvider(instance?: Knex, opts?: TransactionOptions): Knex.TransactionProvider {
     return async () => {
-      return this.transaction(instance)
+      return this.transaction(instance, opts)
     }
   }
 
   asSuperUser() {
-    return new TenantConnection(this.pool, {
+    const tenantConnection = new TenantConnection(this.pool, {
       ...this.options,
       user: this.options.superUser,
     })
+
+    if (this.abortSignal) {
+      tenantConnection.setAbortSignal(this.abortSignal)
+    }
+
+    return tenantConnection
   }
 
   async setScope(tnx: Knex) {

@@ -27,7 +27,7 @@
   "author": "Supabase",
   "license": "ISC",
   "engines": {
-    "node": ">= 14.0.0"
+    "node": ">= 22.0.0"
   },
   "dependencies": {
     "@aws-sdk/client-ecs": "^3.948.0",

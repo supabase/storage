@@ -27,6 +27,7 @@ import type { ServerRequest as Request } from 'srvx'
 import { S3Locker } from '@storage/protocols/tus/s3-locker'
 import { S3Client } from '@aws-sdk/client-s3'
 import { ERRORS } from '@internal/errors'
+import { logSchema } from '@internal/monitoring'
 
 const {
   storageS3MaxSockets,
@@ -174,15 +175,22 @@ function createTusServer(
 
 export default async function routes(fastify: FastifyInstance) {
   const lockNotifier = new LockNotifier(PubSub)
-  await lockNotifier.subscribe()
+  await lockNotifier.start()
 
   const agent = createAgent('s3_tus', {
     maxSockets: storageS3MaxSockets,
   })
   agent.monitor()
 
-  fastify.addHook('onClose', () => {
+  fastify.addHook('onClose', async () => {
     agent.close()
+
+    lockNotifier.stop().catch((e) => {
+      logSchema.error(fastify.log, 'Failed to stop TUS lock notifier', {
+        type: 'tus',
+        error: e,
+      })
+    })
   })
 
   const tusServer = createTusServer(lockNotifier, agent)

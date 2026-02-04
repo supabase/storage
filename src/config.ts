@@ -65,6 +65,7 @@ type StorageConfigType = {
   storageFileEtagAlgorithm: 'mtime' | 'md5'
   storageS3InternalTracesEnabled?: boolean
   storageS3MaxSockets: number
+  storageS3UploadQueueSize: number
   storageS3Bucket: string
   storageS3Endpoint?: string
   storageS3ForcePathStyle?: boolean
@@ -355,6 +356,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('STORAGE_S3_MAX_SOCKETS', 'GLOBAL_S3_MAX_SOCKETS') || '200',
       10
     ),
+    storageS3UploadQueueSize:
+      envNumber(getOptionalConfigFromEnv('STORAGE_S3_UPLOAD_QUEUE_SIZE')) ?? 2,
     storageS3InternalTracesEnabled:
       getOptionalConfigFromEnv('STORAGE_S3_ENABLED_METRICS') === 'true',
     storageS3Bucket: getOptionalConfigFromEnv('STORAGE_S3_BUCKET', 'GLOBAL_S3_BUCKET'),
@@ -403,7 +406,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       10
     ),
     databaseStatementTimeout: parseInt(
-      getOptionalConfigFromEnv('DATABASE_STATEMENT_TIMEOUT') || '20000',
+      getOptionalConfigFromEnv('DATABASE_STATEMENT_TIMEOUT') || '30000',
       10
     ),
 
@@ -442,7 +445,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     pgQueueEnable: getOptionalConfigFromEnv('PG_QUEUE_ENABLE', 'ENABLE_QUEUE_EVENTS') === 'true',
     pgQueueEnableWorkers: getOptionalConfigFromEnv('PG_QUEUE_WORKERS_ENABLE') !== 'false',
     pgQueueReadWriteTimeout:
-      Number(getOptionalConfigFromEnv('PG_QUEUE_READ_WRITE_TIMEOUT')) || 5000,
+      envNumber(getOptionalConfigFromEnv('PG_QUEUE_READ_WRITE_TIMEOUT')) ?? 5000,
     pgQueueMaxConnections: Number(getOptionalConfigFromEnv('PG_QUEUE_MAX_CONNECTIONS')) || 4,
     pgQueueConnectionURL: getOptionalConfigFromEnv('PG_QUEUE_CONNECTION_URL'),
     pgQueueDeleteAfterDays: parseInt(
@@ -594,4 +597,15 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   }
 
   return config
+}
+
+function envNumber(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined
+  }
+  const parsed = parseInt(value, 10)
+  if (isNaN(parsed)) {
+    return undefined
+  }
+  return parsed
 }

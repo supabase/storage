@@ -16,6 +16,7 @@ import {
   FindObjectFilters,
   SearchObjectOption,
   ListBucketOptions,
+  TransactionOptions,
 } from './adapter'
 import { DatabaseError } from 'pg'
 import { TenantConnection } from '@internal/database'
@@ -50,8 +51,11 @@ export class StorageKnexDB implements Database {
   }
 
   //eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async withTransaction<T extends (db: Database) => Promise<any>>(fn: T) {
-    const tnx = await this.connection.transactionProvider(this.options.tnx)()
+  async withTransaction<T extends (db: Database) => Promise<any>>(
+    fn: T,
+    opts?: TransactionOptions
+  ) {
+    const tnx = await this.connection.transactionProvider(this.options.tnx, opts)()
 
     try {
       await this.connection.setScope(tnx)

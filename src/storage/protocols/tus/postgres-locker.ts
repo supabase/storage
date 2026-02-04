@@ -10,6 +10,11 @@ const REQUEST_LOCK_RELEASE_MESSAGE = 'REQUEST_LOCK_RELEASE'
 
 export class LockNotifier {
   protected events = new EventEmitter()
+
+  handler = ({ id }: { id: string }) => {
+    this.events.emit(`release:${id}`)
+  }
+
   constructor(private readonly pubSub: PubSubAdapter) {}
 
   release(id: string) {
@@ -24,10 +29,12 @@ export class LockNotifier {
     this.events.removeAllListeners(`release:${id}`)
   }
 
-  async subscribe() {
-    await this.pubSub.subscribe(REQUEST_LOCK_RELEASE_MESSAGE, ({ id }) => {
-      this.events.emit(`release:${id}`)
-    })
+  async start() {
+    await this.pubSub.subscribe(REQUEST_LOCK_RELEASE_MESSAGE, this.handler)
+  }
+
+  stop() {
+    return this.pubSub.unsubscribe(REQUEST_LOCK_RELEASE_MESSAGE, this.handler)
   }
 }
 
@@ -52,35 +59,40 @@ export class PgLock implements Lock {
   async lock(stopSignal: AbortSignal, cancelReq: RequestRelease): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       this.db
-        .withTransaction(async (db) => {
-          const abortController = new AbortController()
-          let onAbort: (() => void) | undefined
+        .withTransaction(
+          async (db) => {
+            const abortController = new AbortController()
+            let onAbort: (() => void) | undefined
 
-          try {
-            onAbort = () => {
+            try {
+              onAbort = () => {
+                abortController.abort()
+              }
+              stopSignal.addEventListener('abort', onAbort)
+
+              const acquired = await Promise.race([
+                this.waitTimeout(5000, abortController.signal),
+                this.acquireLock(db, this.id, abortController.signal),
+              ])
+
+              if (!acquired) {
+                throw ERRORS.LockTimeout()
+              }
+
+              this.isLocked = true
+
+              await new Promise<void>((innerResolve) => {
+                this.tnxResolver = innerResolve
+                resolve()
+              })
+            } finally {
               abortController.abort()
             }
-            stopSignal.addEventListener('abort', onAbort)
-
-            const acquired = await Promise.race([
-              this.waitTimeout(5000, abortController.signal),
-              this.acquireLock(db, this.id, abortController.signal),
-            ])
-
-            if (!acquired) {
-              throw ERRORS.LockTimeout()
-            }
-
-            this.isLocked = true
-
-            await new Promise<void>((innerResolve) => {
-              this.tnxResolver = innerResolve
-              resolve()
-            })
-          } finally {
-            abortController.abort()
+          },
+          {
+            timeout: 5 * 60 * 1000, // 5 minutes
           }
-        })
+        )
         .catch(reject)
     })
 

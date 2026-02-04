@@ -169,7 +169,13 @@ export class Uploader {
     userMetadata?: Record<string, unknown>
   }) {
     try {
-      return await this.db.asSuperUser().withTransaction(async (db) => {
+      const db = this.db.asSuperUser()
+      // Since we have finished uploading the file,
+      // even if the request is aborted now, we want to complete the DB transaction
+      const abController = new AbortController()
+      db.connection.setAbortSignal(abController.signal)
+
+      return await db.withTransaction(async (db) => {
         await db.waitObjectLock(bucketId, objectName, undefined, {
           timeout: 5000,
         })
@@ -336,13 +342,15 @@ export async function fileUploadFromRequest(
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
       const cacheTime = formData.fields.cacheControl?.value
 
-      body = formData.file
+      const file = formData.file
+      body = file
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
       const customMd = formData.fields.metadata?.value ?? formData.fields.userMetadata?.value
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
       mimeType = formData.fields.contentType?.value || formData.mimetype
       cacheControl = cacheTime ? `max-age=${cacheTime}` : 'no-cache'
-      isTruncated = () => formData.file.truncated
+      // Store file reference to avoid capturing entire formData object in closure
+      isTruncated = () => file.truncated
 
       if (
         options.allowedMimeTypes &&
@@ -385,9 +393,12 @@ export async function fileUploadFromRequest(
     if (typeof customMd === 'string') {
       userMetadata = parseUserMetadata(customMd)
     }
+
+    // Extract content-length value to avoid capturing entire request object in closure
+    const contentLength = Number(request.headers['content-length'])
     isTruncated = () => {
       // @todo more secure to get this from the stream or from s3 in the next step
-      return Number(request.headers['content-length']) > maxFileSize
+      return contentLength > maxFileSize
     }
   }
 

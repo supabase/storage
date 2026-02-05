@@ -94,6 +94,7 @@ type StorageConfigType = {
   databaseMaxConnections: number
   databaseFreePoolAfterInactivity: number
   databaseConnectionTimeout: number
+  databaseEnableQueryCancellation: boolean
   databaseStatementTimeout: number
   region: string
   requestTraceHeader?: string
@@ -405,6 +406,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '3000',
       10
     ),
+    databaseEnableQueryCancellation:
+      getOptionalConfigFromEnv('DATABASE_ENABLE_QUERY_CANCELLATION') === 'true',
     databaseStatementTimeout: parseInt(
       getOptionalConfigFromEnv('DATABASE_STATEMENT_TIMEOUT') || '30000',
       10

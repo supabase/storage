@@ -4,7 +4,11 @@ import path from 'path'
 
 function main() {
   const migrationsPath = path.join(__dirname, '..', '..', 'migrations', 'tenant', '*.sql')
-  const files = glob.sync(migrationsPath).sort()
+  const files = glob.sync(migrationsPath).sort((a, b) => {
+    const numA = parseInt(path.basename(a).match(/^(\d+)/)?.[1] || '0', 10)
+    const numB = parseInt(path.basename(b).match(/^(\d+)/)?.[1] || '0', 10)
+    return numA - numB
+  })
 
   const migrations = [
     // this migration is hardcoded by the postgres migrations library
@@ -20,6 +24,7 @@ function main() {
       .pop()
       ?.replace(/[0-9]+-/, '')
       .replace('.sql', '')
+
     migrations.push({
       file: fileName || '',
       index: index + 1,

@@ -58,6 +58,9 @@ interface TestCaseAssert {
   useExistingBucketName?: string
   role?: string
   policies?: string[]
+  userMetadata?: Record<string, unknown>
+  mimeType?: string
+  contentLength?: number
   status: number
   error?: string
 }
@@ -236,6 +239,9 @@ describe('RLS policies', () => {
               bucket: bucketName,
               objectName: objectName,
               jwt: assert.role === 'service' ? await serviceKeyAsync : jwt,
+              userMetadata: assert.userMetadata,
+              mimeType: assert.mimeType,
+              contentLength: assert.contentLength,
             })
 
             console.log(
@@ -294,15 +300,22 @@ describe('RLS policies', () => {
 
 async function runOperation(
   operation: TestCaseAssert['operation'],
-  options: { bucket: string; jwt: string; objectName: string }
+  options: {
+    bucket: string
+    jwt: string
+    objectName: string
+    userMetadata?: Record<string, unknown>
+    mimeType?: string
+    contentLength?: number
+  }
 ) {
-  const { jwt, bucket, objectName } = options
+  const { jwt, bucket, objectName, userMetadata, mimeType, contentLength } = options
 
   switch (operation) {
     case 'upload':
-      return uploadFile(bucket, objectName, jwt)
+      return uploadFile(bucket, objectName, jwt, false, userMetadata, mimeType, contentLength)
     case 'upload.upsert':
-      return uploadFile(bucket, objectName, jwt, true)
+      return uploadFile(bucket, objectName, jwt, true, userMetadata, mimeType, contentLength)
     case 'bucket.list':
       return appInstance.inject({
         method: 'GET',
@@ -454,13 +467,31 @@ async function createPolicy(db: Knex, policy: Policy) {
   return Promise.all(created)
 }
 
-async function uploadFile(bucket: string, fileName: string, jwt: string, upsert?: boolean) {
+async function uploadFile(
+  bucket: string,
+  fileName: string,
+  jwt: string,
+  upsert?: boolean,
+  userMetadata?: Record<string, unknown>,
+  mimeType?: string,
+  contentLength?: number
+) {
   const testFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
   const form = new FormData()
   form.append('file', testFile)
+
+  if (userMetadata) {
+    form.append('metadata', JSON.stringify(userMetadata))
+  }
+
+  if (mimeType) {
+    form.append('contentType', mimeType)
+  }
+
   const headers = Object.assign({}, form.getHeaders(), {
     authorization: `Bearer ${jwt}`,
     ...(upsert ? { 'x-upsert': 'true' } : {}),
+    ...(contentLength ? { 'content-length': contentLength.toString() } : {}),
   })
 
   return appInstance.inject({

@@ -1,6 +1,6 @@
 import http from 'http'
 import { BaseLogger } from 'pino'
-import { Upload } from '@tus/server'
+import { Metadata, Upload } from '@tus/server'
 import { randomUUID } from 'crypto'
 import { TenantConnection } from '@internal/database'
 import { ERRORS, isRenderableError } from '@internal/errors'
@@ -67,6 +67,20 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
 
   req.upload.resources = [`${uploadID.bucket}/${uploadID.objectName}`]
 
+  let customMd: Record<string, string> | undefined = undefined
+  const uploadMetadataHeader = req.headers['upload-metadata']
+
+  if (uploadMetadataHeader && typeof uploadMetadataHeader === 'string') {
+    try {
+      const parsedMetadata = Metadata.parse(uploadMetadataHeader)
+      if (parsedMetadata?.metadata) {
+        customMd = JSON.parse(parsedMetadata.metadata)
+      }
+    } catch (e) {
+      req.log.warn({ error: e }, 'Failed to parse user metadata')
+    }
+  }
+
   // Handle signed url requests
   if (req.url?.startsWith(`/upload/resumable/sign`)) {
     const signature = req.headers['x-signature']
@@ -96,11 +110,20 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
     req.upload.storage.location
   )
 
+  const uploadLength = req.headers['upload-length']
+  const contentLength = uploadLength ? Number(uploadLength) : undefined
+  const contentType = req.headers['content-type']
+
   await uploader.canUpload({
     owner: req.upload.owner,
     bucketId: uploadID.bucket,
     objectName: uploadID.objectName,
     isUpsert: isUpsert,
+    userMetadata: customMd,
+    metadata: {
+      mimetype: contentType,
+      contentLength: contentLength,
+    },
   })
 }
 

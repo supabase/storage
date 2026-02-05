@@ -10,7 +10,13 @@ EXCEPTION WHEN OTHERS THEN
 END;
 $$;
 
-ALTER TABLE storage.objects DROP COLUMN IF EXISTS level;
+DO $$
+    BEGIN
+    ALTER TABLE storage.objects DROP COLUMN IF EXISTS level;
+    EXCEPTION WHEN OTHERS THEN
+        NULL;
+    END;
+$$;
 
 DROP TABLE IF EXISTS storage.prefixes cascade;
 

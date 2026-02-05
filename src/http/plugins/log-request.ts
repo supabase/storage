@@ -1,8 +1,13 @@
+import { Socket } from 'net'
 import fastifyPlugin from 'fastify-plugin'
 import { logger, logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
 import { trace } from '@opentelemetry/api'
 import { FastifyRequest } from 'fastify/types/request'
 import { FastifyReply } from 'fastify/types/reply'
+import { IncomingMessage } from 'http'
+import { getConfig } from '../../config'
+import { parsePartialHttp, PartialHttpData } from '@internal/http'
+import { FastifyInstance } from 'fastify'
 
 interface RequestLoggerOptions {
   excludeUrls?: string[]
@@ -24,6 +29,8 @@ declare module 'fastify' {
   }
 }
 
+const { version } = getConfig()
+
 /**
  * Request logger plugin
  * @param options
@@ -31,6 +38,56 @@ declare module 'fastify' {
 export const logRequest = (options: RequestLoggerOptions) =>
   fastifyPlugin(
     async (fastify) => {
+      // Watch for connections that timeout or disconnect before complete HTTP headers are received
+      // Log if socket closes before request is triggered
+      fastify.server.on('connection', (socket) => {
+        let hasRequest = false
+        const startTime = Date.now()
+        const partialData: Buffer[] = []
+        // Only store 2kb per request
+        const captureByteLimit = 2048
+
+        // Capture partial data sent before connection closes
+        const onData = (chunk: Buffer) => {
+          const remaining = captureByteLimit - partialData.length
+          if (remaining > 0) {
+            partialData.push(chunk.subarray(0, Math.min(chunk.length, remaining)))
+          }
+
+          if (partialData.length >= captureByteLimit) {
+            socket.removeListener('data', onData)
+          }
+        }
+        socket.on('data', onData)
+
+        // Track if this socket ever receives an HTTP request
+        const onRequest = (req: IncomingMessage) => {
+          if (req.socket === socket) {
+            hasRequest = true
+            socket.removeListener('data', onData)
+            fastify.server.removeListener('request', onRequest)
+          }
+        }
+        fastify.server.on('request', onRequest)
+
+        socket.once('close', () => {
+          socket.removeListener('data', onData)
+          fastify.server.removeListener('request', onRequest)
+          if (hasRequest) {
+            return
+          }
+
+          const parsedHttp = parsePartialHttp(partialData)
+          const req = createPartialLogRequest(fastify, socket, parsedHttp, startTime)
+
+          doRequestLog(req, {
+            excludeUrls: options.excludeUrls,
+            statusCode: 'ABORTED CONN',
+            responseTime: (Date.now() - req.startTime) / 1000,
+          })
+        })
+      })
+
       fastify.addHook('onRequest', async (req, res) => {
         req.startTime = Date.now()
 
@@ -103,7 +160,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
 interface LogRequestOptions {
   reply?: FastifyReply
   excludeUrls?: string[]
-  statusCode: number | 'ABORTED REQ' | 'ABORTED RES'
+  statusCode: number | 'ABORTED REQ' | 'ABORTED RES' | 'ABORTED CONN'
   responseTime: number
   executionTime?: number
 }
@@ -177,4 +234,35 @@ function getFirstDefined<T>(...values: any[]): T | undefined {
     }
   }
   return undefined
+}
+
+/**
+ * Creates a minimal FastifyRequest from partial HTTP data.
+ * Used for consistent logging when request parsing fails.
+ */
+export function createPartialLogRequest(
+  fastify: FastifyInstance,
+  socket: Socket,
+  httpData: PartialHttpData,
+  startTime: number
+) {
+  return {
+    method: httpData.method,
+    url: httpData.url,
+    headers: httpData.headers,
+    ip: socket.remoteAddress || 'unknown',
+    id: 'no-request',
+    log: fastify.log.child({
+      tenantId: httpData.tenantId,
+      project: httpData.tenantId,
+      reqId: 'no-request',
+      appVersion: version,
+      dataLength: httpData.length,
+    }),
+    startTime,
+    tenantId: httpData.tenantId,
+    raw: {},
+    routeOptions: { config: {} },
+    resources: [],
+  } as unknown as FastifyRequest
 }

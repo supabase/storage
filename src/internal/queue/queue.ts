@@ -6,6 +6,7 @@ import { logger, logSchema } from '../monitoring'
 import { QueueJobRetryFailed, QueueJobCompleted, QueueJobError } from '../monitoring/metrics'
 import { Event } from './event'
 import { Semaphore } from '@shopify/semaphore'
+import { QueueHealthMonitor } from './health-monitor'
 
 //eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SubclassOfBaseClass = (new (payload: any) => Event<any>) & {
@@ -16,6 +17,7 @@ export abstract class Queue {
   protected static events: SubclassOfBaseClass[] = []
   private static pgBoss?: PgBoss
   private static pgBossDb?: PgBoss.Db
+  private static healthMonitor?: QueueHealthMonitor
 
   static createPgBoss(opts: { db: Db; enableWorkers: boolean }) {
     const {
@@ -82,7 +84,26 @@ export abstract class Queue {
       pgQueueReadWriteTimeout,
       pgQueueConcurrentTasksPerQueue,
       pgQueueMaxConnections,
+      pgQueueHealthCheckEnabled,
+      pgQueueHealthCheckMaxConsecutiveErrors,
+      pgQueueHealthCheckUnhealthyTimeoutMs,
     } = getConfig()
+
+    // Initialize health monitor if enabled (only once)
+    if (pgQueueHealthCheckEnabled && !Queue.healthMonitor) {
+      Queue.healthMonitor = new QueueHealthMonitor({
+        maxConsecutiveErrors: pgQueueHealthCheckMaxConsecutiveErrors,
+        unhealthyTimeoutMs: pgQueueHealthCheckUnhealthyTimeoutMs,
+      })
+
+      logSchema.info(logger, '[Queue Health] Health monitoring enabled', {
+        type: 'queue',
+        metadata: JSON.stringify({
+          maxConsecutiveErrors: pgQueueHealthCheckMaxConsecutiveErrors,
+          unhealthyTimeoutMs: pgQueueHealthCheckUnhealthyTimeoutMs,
+        }),
+      })
+    }
 
     let url = pgQueueConnectionURL || databaseURL
 
@@ -112,7 +133,16 @@ export abstract class Queue {
         type: 'queue',
         error,
       })
+      Queue.healthMonitor?.trackConnectionError(error)
     })
+
+    // Listen for successful database queries to track connection health
+    // Only QueueDB instances support the 'success' event
+    if (Queue.pgBossDb instanceof QueueDB && Queue.healthMonitor) {
+      Queue.pgBossDb.on('success', () => {
+        Queue.healthMonitor?.trackSuccessfulOperation()
+      })
+    }
 
     await Queue.pgBoss.start()
 
@@ -340,7 +370,6 @@ export abstract class Queue {
         await Promise.allSettled(
           jobs.map(async (job) => {
             const lock = await semaphore.acquire()
-            const opts = event.getQueueOptions()
             try {
               queueOpts.onMessage?.(job as Job)
 

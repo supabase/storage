@@ -119,6 +119,9 @@ type StorageConfigType = {
   pgQueueArchiveCompletedAfterSeconds?: number
   pgQueueRetentionDays?: number
   pgQueueConcurrentTasksPerQueue: number
+  pgQueueHealthCheckMaxConsecutiveErrors: number
+  pgQueueHealthCheckUnhealthyTimeoutMs: number
+  pgQueueHealthCheckEnabled: boolean
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
@@ -441,6 +444,15 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('PG_QUEUE_CONCURRENT_TASKS_PER_QUEUE') || '50',
       10
     ),
+    pgQueueHealthCheckMaxConsecutiveErrors: parseInt(
+      getOptionalConfigFromEnv('PG_QUEUE_HEALTH_CHECK_MAX_CONSECUTIVE_ERRORS') || '10',
+      10
+    ),
+    pgQueueHealthCheckUnhealthyTimeoutMs: parseInt(
+      getOptionalConfigFromEnv('PG_QUEUE_HEALTH_CHECK_UNHEALTHY_TIMEOUT_MS') || '300000',
+      10
+    ),
+    pgQueueHealthCheckEnabled: getOptionalConfigFromEnv('PG_QUEUE_HEALTH_CHECK_ENABLED') === 'true',
 
     // Webhooks
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),

@@ -33,9 +33,11 @@ export class QueueDB extends EventEmitter implements Db {
     await this.pool?.end()
   }
 
-  async executeSql(text: string, values: any[]) {
+  async executeSql(text: string, values: unknown[]) {
     if (this.opened && this.pool) {
-      return await this.pool.query(text, values)
+      const result = await this.pool.query(text, values)
+      this.emit('success')
+      return result
     }
 
     throw ERRORS.InternalError(undefined, `QueueDB not opened ${this.opened} ${text}`)
@@ -51,9 +53,9 @@ export class KnexQueueDB extends EventEmitter implements Db {
     super()
   }
 
-  async executeSql(text: string, values: any[]): Promise<{ rows: any[] }> {
+  async executeSql(text: string, values: unknown[]): Promise<{ rows: unknown[] }> {
     const knexQuery = text.replaceAll('$', ':')
-    const params: Record<string, any> = {}
+    const params: Record<string, unknown> = {}
 
     values.forEach((value, index) => {
       const key = (index + 1).toString()

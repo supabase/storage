@@ -130,6 +130,10 @@ export class Storage {
       return this.createIcebergBucket(icebergBucketData)
     }
 
+    if (data.name.toLowerCase() === 'public') {
+      throw ERRORS.InvalidBucketName(data.name)
+    }
+
     const bucketData: Parameters<Database['createBucket']>[0] = data
 
     if (typeof data.fileSizeLimit === 'number' || typeof data.fileSizeLimit === 'string') {

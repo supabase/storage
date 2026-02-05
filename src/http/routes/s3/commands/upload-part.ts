@@ -1,13 +1,9 @@
 import { S3ProtocolHandler, MAX_PART_SIZE } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
-import { MinChunkTransform } from '@internal/streams'
 import { pipeline } from 'stream/promises'
 import { PassThrough, Readable } from 'stream'
 import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
-
-// S3 Tables requires chunks to be at least 8KB (except for the last chunk)
-const S3_TABLES_MIN_CHUNK_SIZE = 8192
 
 const UploadPartInput = {
   summary: 'Upload Part',
@@ -51,10 +47,11 @@ export default function UploadPart(s3Router: S3Router) {
     },
     async (req, ctx) => {
       const icebergBucketName = ctx.req.internalIcebergBucketName
-      const minChunkTransform = new MinChunkTransform(S3_TABLES_MIN_CHUNK_SIZE)
 
       if (ctx.req.streamingSignatureV4) {
         const passThrough = new PassThrough()
+        passThrough.on('error', () => {})
+
         ctx.req.raw.pipe(passThrough)
         ctx.req.raw.on('error', (err) => {
           passThrough.destroy(err)
@@ -64,7 +61,6 @@ export default function UploadPart(s3Router: S3Router) {
           passThrough,
           new ByteLimitTransformStream(MAX_PART_SIZE), // 5GB max part size
           ctx.req.streamingSignatureV4,
-          minChunkTransform,
           async (body) => {
             const part = await ctx.req.storage.backend.uploadPart(
               icebergBucketName!,
@@ -88,6 +84,8 @@ export default function UploadPart(s3Router: S3Router) {
       }
 
       const passThrough = new PassThrough()
+      passThrough.on('error', () => {})
+
       ctx.req.raw.pipe(passThrough)
       ctx.req.raw.on('error', (err) => {
         passThrough.destroy(err)
@@ -125,6 +123,7 @@ export default function UploadPart(s3Router: S3Router) {
 
       if (ctx.req.streamingSignatureV4) {
         const passThrough = new PassThrough()
+        passThrough.on('error', () => {})
         ctx.req.raw.pipe(passThrough)
         ctx.req.raw.on('error', (err) => {
           passThrough.destroy(err)

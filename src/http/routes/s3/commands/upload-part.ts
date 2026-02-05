@@ -87,7 +87,13 @@ export default function UploadPart(s3Router: S3Router) {
         )
       }
 
-      return pipeline(ctx.req.raw as Readable, minChunkTransform, async (body) => {
+      const passThrough = new PassThrough()
+      ctx.req.raw.pipe(passThrough)
+      ctx.req.raw.on('error', (err) => {
+        passThrough.destroy(err)
+      })
+
+      return pipeline(passThrough, minChunkTransform, async (body) => {
         const part = await ctx.req.storage.backend.uploadPart(
           icebergBucketName!,
           req.Params['*'],

@@ -2391,10 +2391,11 @@ describe('testing list objects', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body) as { name: string }[]
-    expect(responseJSON).toHaveLength(2)
+    expect(responseJSON).toHaveLength(3)
     const names = responseJSON.map((ele) => ele.name)
     expect(names).toContain('only_uid.jpg')
     expect(names).toContain('subfolder')
+    expect(names).toContain('UPPER-folder')
   })
 
   test('searching a non existent prefix', async () => {

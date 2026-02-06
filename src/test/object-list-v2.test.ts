@@ -30,13 +30,17 @@ afterEach(async () => {
 
 const LIST_V2_BUCKET = 'list-v2-sorting-test-bucket'
 
-// Helper to convert a number into a 3-letter string (aaa ... zzz)
+// Helper to convert a number into a 3-letter string (aaa ... zzz with some uppercase)
 function toName(n: number): string {
   const a = 97 // 'a'
   const first = String.fromCharCode(a + (Math.floor(n / (26 * 26)) % 26))
   const second = String.fromCharCode(a + (Math.floor(n / 26) % 26))
   const third = String.fromCharCode(a + (n % 26))
-  return first + second + third
+  const name = first + second + third
+  if (n >= 1 && n <= 3) {
+    return name.toUpperCase()
+  }
+  return name
 }
 
 function createUpload(name: string, content: string) {
@@ -77,6 +81,13 @@ for (let i = 0; i < 30; i++) {
       PREFIX_OBJECTS[folder].sorted.push(objectPath)
     }
   }
+}
+
+// Sort the arrays since uppercase letters may have changed the order
+SORTED_OBJECTS.sort()
+SORTED_FOLDERS.sort()
+for (const folder of Object.keys(PREFIX_OBJECTS)) {
+  PREFIX_OBJECTS[folder].sorted.sort()
 }
 
 // Combine all paths for creation

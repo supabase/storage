@@ -20,7 +20,7 @@ export const requireTenantFeature = (feature: keyof Features) =>
         const hasFeature = await tenantHasFeature(request.tenantId, feature)
 
         if (!hasFeature) {
-          reply.status(403).send({
+          return reply.status(403).send({
             error: 'FeatureNotEnabled',
             statusCode: '403',
             message: 'feature not enabled for this tenant',

@@ -13,11 +13,11 @@ const anonKey = process.env.ANON_KEY || ''
 let appInstance: FastifyInstance
 
 beforeAll(() => {
-  jest.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {
+  jest.spyOn(S3Backend.prototype, 'removeMany').mockImplementation(() => {
     return Promise.resolve()
   })
 
-  jest.spyOn(S3Backend.prototype, 'getObject').mockImplementation(() => {
+  jest.spyOn(S3Backend.prototype, 'read').mockImplementation(() => {
     return Promise.resolve({
       metadata: {
         httpStatusCode: 200,
@@ -365,7 +365,7 @@ describe('testing public bucket functionality', () => {
     expect(publicResponse.headers['etag']).toBe('abc')
     expect(publicResponse.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
 
-    const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
+    const mockGetObject = jest.spyOn(S3Backend.prototype, 'read')
     mockGetObject.mockRejectedValue({
       $metadata: {
         httpStatusCode: 304,
@@ -380,7 +380,7 @@ describe('testing public bucket functionality', () => {
       },
     })
     expect(notModifiedResponse.statusCode).toBe(304)
-    expect(mockGetObject.mock.calls[1][3]).toMatchObject({
+    expect(mockGetObject.mock.calls[1][0].headers).toMatchObject({
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })

@@ -250,11 +250,11 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       bucketId: resourceId.bucket,
       objectName: resourceId.objectName,
     })
-    const metadata = await req.upload.storage.backend.headObject(
-      storageS3Bucket,
-      s3Key,
-      resourceId.version
-    )
+    const metadata = await req.upload.storage.backend.stats({
+      bucket: storageS3Bucket,
+      key: s3Key,
+      version: resourceId.version,
+    })
 
     const uploader = new Uploader(
       req.upload.storage.backend,

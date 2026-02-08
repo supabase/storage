@@ -305,10 +305,13 @@ export class ObjectScanner {
         break
       }
 
-      const result = await this.storage.backend.list(storageS3Bucket, {
-        prefix: prefix + '/',
-        nextToken,
-        beforeDate: options.before,
+      const result = await this.storage.backend.list({
+        bucket: storageS3Bucket,
+        options: {
+          prefix: prefix + '/',
+          nextToken,
+          beforeDate: options.before,
+        },
       })
 
       if (result.keys.length === 0) {

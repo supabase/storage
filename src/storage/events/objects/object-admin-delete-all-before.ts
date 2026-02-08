@@ -86,7 +86,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
                 prefixes.push(fileName + '.info')
               }
 
-              await backend.deleteObjects(storageS3Bucket, prefixes)
+              await backend.removeMany({ bucket: storageS3Bucket, prefixes })
             }
           })
         }

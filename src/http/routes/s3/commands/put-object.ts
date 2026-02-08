@@ -86,15 +86,15 @@ export default function PutObject(s3Router: S3Router) {
         new ByteLimitTransformStream(MAX_PART_SIZE), // 5GB limit for iceberg objects
         ctx.req.streamingSignatureV4 || new PassThrough(),
         async (fileStream) => {
-          const u = await ctx.req.storage.backend.uploadObject(
-            icebergBucket,
+          const u = await ctx.req.storage.backend.write({
+            bucket: icebergBucket,
             key,
-            undefined,
-            fileStream as Readable,
-            uploadRequest.mimeType,
-            uploadRequest.cacheControl,
-            ctx.signals.body
-          )
+            version: undefined,
+            body: fileStream as Readable,
+            contentType: uploadRequest.mimeType,
+            cacheControl: uploadRequest.cacheControl,
+            signal: ctx.signals.body,
+          })
 
           return {
             headers: {

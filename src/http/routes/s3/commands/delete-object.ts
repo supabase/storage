@@ -101,7 +101,11 @@ export default function DeleteObject(s3Router: S3Router) {
           throw new Error('Iceberg bucket name is required')
         }
 
-        await ctx.req.storage.backend.deleteObject(internalBucketName, req.Params['*'], undefined)
+        await ctx.req.storage.backend.remove({
+          bucket: internalBucketName,
+          key: req.Params['*'],
+          version: undefined,
+        })
 
         return {}
       }

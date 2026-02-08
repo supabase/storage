@@ -49,13 +49,13 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
         throw ERRORS.InvalidBucketName('Iceberg bucket name is required')
       }
 
-      const uploadId = await ctx.req.storage.backend.createMultiPartUpload(
-        icebergBucketName,
-        req.Params['*'],
-        undefined,
-        req.Headers?.['content-type'] || 'application/octet-stream',
-        req.Headers?.['cache-control'] || 'no-cache'
-      )
+      const uploadId = await ctx.req.storage.backend.createMultiPartUpload({
+        bucket: icebergBucketName,
+        key: req.Params['*'],
+        version: undefined,
+        contentType: req.Headers?.['content-type'] || 'application/octet-stream',
+        cacheControl: req.Headers?.['cache-control'] || 'no-cache',
+      })
 
       return {
         responseBody: {

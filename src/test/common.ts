@@ -36,7 +36,7 @@ export function useMockObject() {
     process.env = { ...ENV }
 
     jest.clearAllMocks()
-    jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
+    jest.spyOn(S3Backend.prototype, 'read').mockResolvedValue({
       metadata: {
         httpStatusCode: 200,
         size: 3746,
@@ -50,7 +50,7 @@ export function useMockObject() {
       body: Buffer.from(''),
     })
 
-    jest.spyOn(S3Backend.prototype, 'uploadObject').mockResolvedValue({
+    jest.spyOn(S3Backend.prototype, 'write').mockResolvedValue({
       httpStatusCode: 200,
       size: 3746,
       mimetype: 'image/png',
@@ -60,17 +60,17 @@ export function useMockObject() {
       contentLength: 3746,
     })
 
-    jest.spyOn(S3Backend.prototype, 'copyObject').mockResolvedValue({
+    jest.spyOn(S3Backend.prototype, 'copy').mockResolvedValue({
       httpStatusCode: 200,
       lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
       eTag: 'abc',
     })
 
-    jest.spyOn(S3Backend.prototype, 'deleteObject').mockResolvedValue()
+    jest.spyOn(S3Backend.prototype, 'remove').mockResolvedValue()
 
-    jest.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue()
+    jest.spyOn(S3Backend.prototype, 'removeMany').mockResolvedValue()
 
-    jest.spyOn(S3Backend.prototype, 'headObject').mockResolvedValue({
+    jest.spyOn(S3Backend.prototype, 'stats').mockResolvedValue({
       httpStatusCode: 200,
       size: 3746,
       mimetype: 'image/png',
@@ -81,7 +81,7 @@ export function useMockObject() {
     })
 
     jest
-      .spyOn(S3Backend.prototype, 'privateAssetUrl')
+      .spyOn(S3Backend.prototype, 'tempPrivateAccessUrl')
       .mockResolvedValue(`local:///${projectRoot}/data/sadcat.jpg`)
   })
 

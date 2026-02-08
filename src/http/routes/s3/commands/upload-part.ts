@@ -62,16 +62,16 @@ export default function UploadPart(s3Router: S3Router) {
           new ByteLimitTransformStream(MAX_PART_SIZE), // 5GB max part size
           ctx.req.streamingSignatureV4,
           async (body) => {
-            const part = await ctx.req.storage.backend.uploadPart(
-              icebergBucketName!,
-              req.Params['*'],
-              '',
-              req.Querystring.uploadId,
-              req.Querystring.partNumber,
-              body as Readable,
-              req.Headers?.['x-amz-decoded-content-length'] || req.Headers?.['content-length'],
-              ctx.signals.body
-            )
+            const part = await ctx.req.storage.backend.uploadPart({
+              bucket: icebergBucketName!,
+              key: req.Params['*'],
+              version: '',
+              uploadId: req.Querystring.uploadId,
+              partNumber: req.Querystring.partNumber,
+              body: body as Readable,
+              length: req.Headers?.['x-amz-decoded-content-length'] || req.Headers?.['content-length'],
+              signal: ctx.signals.body,
+            })
 
             return {
               headers: {
@@ -91,16 +91,16 @@ export default function UploadPart(s3Router: S3Router) {
         passThrough.destroy(err)
       })
 
-      const part = await ctx.req.storage.backend.uploadPart(
-        icebergBucketName!,
-        req.Params['*'],
-        '',
-        req.Querystring.uploadId,
-        req.Querystring.partNumber,
-        ctx.req.raw as Readable,
-        req.Headers?.['content-length'],
-        ctx.signals.body
-      )
+      const part = await ctx.req.storage.backend.uploadPart({
+        bucket: icebergBucketName!,
+        key: req.Params['*'],
+        version: '',
+        uploadId: req.Querystring.uploadId,
+        partNumber: req.Querystring.partNumber,
+        body: ctx.req.raw as Readable,
+        length: req.Headers?.['content-length'],
+        signal: ctx.signals.body,
+      })
 
       return {
         headers: {

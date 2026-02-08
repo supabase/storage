@@ -4,7 +4,7 @@ import path from 'path'
 import { Readable } from 'stream'
 import * as xattr from 'fs-xattr'
 import { withOptionalVersion } from '../storage/backend/adapter'
-import { FileBackend } from '../storage/backend/file'
+import { FileBackend } from '@storage/backend/file/file'
 import { getConfig } from '../config'
 
 jest.mock('fs-xattr', () => ({
@@ -33,15 +33,22 @@ describe('FileBackend xattr metadata', () => {
       getConfig({ reload: true })
 
       const backend = new FileBackend()
-      const uploadId = await backend.createMultiPartUpload(
-        'bucket',
-        'key',
-        'v1',
-        'text/plain',
-        'no-cache'
-      )
+      const uploadId = await backend.createMultiPartUpload({
+        bucket: 'bucket',
+        key: 'key',
+        version: 'v1',
+        contentType: 'text/plain',
+        cacheControl: 'no-cache',
+      })
 
-      await backend.uploadPart('bucket', 'key', 'v1', uploadId as string, 1, Readable.from('hello'))
+      await backend.uploadPart({
+        bucket: 'bucket',
+        key: 'key',
+        version: 'v1',
+        uploadId: uploadId as string,
+        partNumber: 1,
+        body: Readable.from('hello'),
+      })
 
       expect(xattr.set).toHaveBeenCalledWith(
         expect.any(String),
@@ -83,13 +90,13 @@ describe('FileBackend xattr metadata', () => {
       getConfig({ reload: true })
 
       const backend = new FileBackend()
-      const uploadId = await backend.createMultiPartUpload(
-        'bucket',
-        'key',
-        'v1',
-        'text/plain',
-        'no-cache'
-      )
+      const uploadId = await backend.createMultiPartUpload({
+        bucket: 'bucket',
+        key: 'key',
+        version: 'v1',
+        contentType: 'text/plain',
+        cacheControl: 'no-cache',
+      })
 
       const partDir = path.join(
         tmpDir,
@@ -111,12 +118,12 @@ describe('FileBackend xattr metadata', () => {
       })
 
       uploadSpy = jest
-        .spyOn(backend, 'uploadObject')
-        .mockImplementation(async (_bucket, _key, _version, body) => {
+        .spyOn(backend, 'write')
+        .mockImplementation(async (input) => {
           await new Promise<void>((resolve, reject) => {
-            body.on('error', reject)
-            body.on('end', resolve)
-            body.resume()
+            ;(input.body as NodeJS.ReadableStream).on('error', reject)
+            ;(input.body as NodeJS.ReadableStream).on('end', resolve)
+            ;(input.body as NodeJS.ReadableStream).resume()
           })
           return {
             httpStatusCode: 200,
@@ -130,9 +137,13 @@ describe('FileBackend xattr metadata', () => {
         })
 
       await expect(
-        backend.completeMultipartUpload('bucket', 'key', uploadId as string, 'v1', [
-          { PartNumber: 1, ETag: 'part-etag' },
-        ])
+        backend.completeMultipartUpload({
+          bucket: 'bucket',
+          key: 'key',
+          uploadId: uploadId as string,
+          version: 'v1',
+          parts: [{ PartNumber: 1, ETag: 'part-etag' }],
+        })
       ).resolves.toMatchObject({
         ETag: '"final"',
       })

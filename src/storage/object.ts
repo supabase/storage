@@ -136,15 +136,15 @@ export class ObjectStorage {
         throw ERRORS.NoSuchKey(objectName)
       }
 
-      await this.backend.deleteObject(
-        this.location.getRootLocation(),
-        this.location.getKeyLocation({
+      await this.backend.remove({
+        bucket: this.location.getRootLocation(),
+        key: this.location.getKeyLocation({
           tenantId: this.db.tenantId,
           bucketId: this.bucketId,
           objectName,
         }),
-        obj.version
-      )
+        version: obj.version,
+      })
 
       return obj
     })
@@ -208,7 +208,10 @@ export class ObjectStorage {
             return all
           }, [] as string[])
 
-          await this.backend.deleteObjects(this.location.getRootLocation(), prefixesToDelete)
+          await this.backend.removeMany({
+            bucket: this.location.getRootLocation(),
+            prefixes: prefixesToDelete,
+          })
 
           await Promise.allSettled(
             data.map((object) =>
@@ -342,21 +345,21 @@ export class ObjectStorage {
     })
 
     try {
-      const copyResult = await this.backend.copyObject(
-        this.location.getRootLocation(),
-        s3SourceKey,
-        originObject.version,
-        s3DestinationKey,
-        newVersion,
-        destinationMetadata,
-        conditions
-      )
+      const copyResult = await this.backend.copy({
+        bucket: this.location.getRootLocation(),
+        source: s3SourceKey,
+        version: originObject.version,
+        destination: s3DestinationKey,
+        destinationVersion: newVersion,
+        metadata: destinationMetadata,
+        conditions,
+      })
 
-      const metadata = await this.backend.headObject(
-        this.location.getRootLocation(),
-        s3DestinationKey,
-        newVersion
-      )
+      const metadata = await this.backend.stats({
+        bucket: this.location.getRootLocation(),
+        key: s3DestinationKey,
+        version: newVersion,
+      })
 
       const destinationObject = await this.db.asSuperUser().withTransaction(async (db) => {
         await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
@@ -478,19 +481,19 @@ export class ObjectStorage {
     }
 
     try {
-      await this.backend.copyObject(
-        this.location.getRootLocation(),
-        s3SourceKey,
-        sourceObj.version,
-        s3DestinationKey,
-        newVersion
-      )
+      await this.backend.copy({
+        bucket: this.location.getRootLocation(),
+        source: s3SourceKey,
+        version: sourceObj.version,
+        destination: s3DestinationKey,
+        destinationVersion: newVersion,
+      })
 
-      const metadata = await this.backend.headObject(
-        this.location.getRootLocation(),
-        s3DestinationKey,
-        newVersion
-      )
+      const metadata = await this.backend.stats({
+        bucket: this.location.getRootLocation(),
+        key: s3DestinationKey,
+        version: newVersion,
+      })
 
       return this.db.asSuperUser().withTransaction(async (db) => {
         await db.waitObjectLock(this.bucketId, destinationObjectName, undefined, {

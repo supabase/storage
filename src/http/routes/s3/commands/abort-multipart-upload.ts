@@ -37,11 +37,11 @@ export default function AbortMultiPartUpload(s3Router: S3Router) {
         throw ERRORS.InvalidParameter('internalIcebergBucketName')
       }
 
-      await ctx.storage.backend.abortMultipartUpload(
-        icebergBucketName,
-        req.Params['*'],
-        req.Querystring.uploadId
-      )
+      await ctx.storage.backend.abortMultipartUpload({
+        bucket: icebergBucketName,
+        key: req.Params['*'],
+        uploadId: req.Querystring.uploadId,
+      })
 
       return {}
     }

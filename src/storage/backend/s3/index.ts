@@ -1,1 +1,1 @@
-export * from './adapter'
+export * from './s3-adapter'

@@ -415,17 +415,17 @@ export class S3ProtocolHandler {
       owner: this.owner,
     })
 
-    const uploadId = await this.storage.backend.createMultiPartUpload(
-      storageS3Bucket,
-      this.storage.location.getKeyLocation({
+    const uploadId = await this.storage.backend.createMultiPartUpload({
+      bucket: storageS3Bucket,
+      key: this.storage.location.getKeyLocation({
         bucketId: command.Bucket as string,
         objectName: command.Key as string,
         tenantId: this.tenantId,
       }),
       version,
-      command.ContentType || '',
-      command.CacheControl || ''
-    )
+      contentType: command.ContentType || '',
+      cacheControl: command.CacheControl || '',
+    })
 
     if (!uploadId) {
       throw ERRORS.InvalidUploadId(uploadId)
@@ -496,28 +496,28 @@ export class S3ProtocolHandler {
       )
     }
 
-    const resp = await this.storage.backend.completeMultipartUpload(
-      storageS3Bucket,
-      this.storage.location.getKeyLocation({
+    const resp = await this.storage.backend.completeMultipartUpload({
+      bucket: storageS3Bucket,
+      key: this.storage.location.getKeyLocation({
         bucketId: Bucket as string,
         objectName: Key as string,
         tenantId: this.tenantId,
       }),
-      UploadId as string,
-      multiPartUpload.version,
+      uploadId: UploadId as string,
+      version: multiPartUpload.version,
       parts,
-      { removePrefix: true }
-    )
+      opts: { removePrefix: true },
+    })
 
-    const metadata = await this.storage.backend.headObject(
-      storageS3Bucket,
-      this.storage.location.getKeyLocation({
+    const metadata = await this.storage.backend.stats({
+      bucket: storageS3Bucket,
+      key: this.storage.location.getKeyLocation({
         bucketId: Bucket as string,
         objectName: Key as string,
         tenantId: this.tenantId,
       }),
-      resp.version
-    )
+      version: resp.version,
+    })
 
     await uploader.completeUpload({
       bucketId: Bucket as string,
@@ -612,20 +612,20 @@ export class S3ProtocolHandler {
         body,
         new ByteLimitTransformStream(ContentLength),
         async (stream) => {
-          return this.storage.backend.uploadPart(
-            storageS3Bucket,
-            this.storage.location.getKeyLocation({
+          return this.storage.backend.uploadPart({
+            bucket: storageS3Bucket,
+            key: this.storage.location.getKeyLocation({
               bucketId: Bucket as string,
               objectName: Key as string,
               tenantId: this.tenantId,
             }),
-            multipart.version,
-            UploadId,
-            PartNumber || 0,
-            stream as Readable,
-            ContentLength,
-            signal
-          )
+            version: multipart.version,
+            uploadId: UploadId,
+            partNumber: PartNumber || 0,
+            body: stream as Readable,
+            length: ContentLength,
+            signal,
+          })
         }
       )
 
@@ -745,16 +745,16 @@ export class S3ProtocolHandler {
       isUpsert: true,
     })
 
-    await this.storage.backend.abortMultipartUpload(
-      storageS3Bucket,
-      this.storage.location.getKeyLocation({
+    await this.storage.backend.abortMultipartUpload({
+      bucket: storageS3Bucket,
+      key: this.storage.location.getKeyLocation({
         bucketId: Bucket,
         objectName: Key,
         tenantId: this.tenantId,
       }),
-      UploadId,
-      multipart.version
-    )
+      uploadId: UploadId,
+      version: multipart.version,
+    })
 
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
 
@@ -772,7 +772,7 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Bucket')
     }
 
-    const r = await this.storage.backend.headObject(Bucket, Key, undefined)
+    const r = await this.storage.backend.stats({ bucket: Bucket, key: Key, version: undefined })
 
     return {
       headers: {
@@ -883,21 +883,21 @@ export class S3ProtocolHandler {
       userMetadata = object.user_metadata
     }
 
-    const response = await this.storage.backend.getObject(
-      this.storage.location.getRootLocation(),
-      this.storage.location.getKeyLocation({
+    const response = await this.storage.backend.read({
+      bucket: this.storage.location.getRootLocation(),
+      key: this.storage.location.getKeyLocation({
         bucketId: bucket,
         objectName: key,
         tenantId: this.tenantId,
       }),
       version,
-      {
+      headers: {
         ifModifiedSince: command.IfModifiedSince?.toISOString(),
         ifNoneMatch: command.IfNoneMatch,
         range: command.Range,
       },
-      options?.signal
-    )
+      signal: options?.signal,
+    })
 
     let metadataHeaders: Record<string, unknown> = {}
 
@@ -1253,24 +1253,24 @@ export class S3ProtocolHandler {
 
     const multipart = await this.shouldAllowPartUpload(UploadId, Number(copySize), maxFileSize)
 
-    const uploadPart = await this.storage.backend.uploadPartCopy(
-      storageS3Bucket,
-      this.storage.location.getKeyLocation({
+    const uploadPart = await this.storage.backend.uploadPartCopy({
+      bucket: storageS3Bucket,
+      key: this.storage.location.getKeyLocation({
         bucketId: Bucket,
         objectName: Key,
         tenantId: this.tenantId,
       }),
-      multipart.version,
-      UploadId,
-      PartNumber,
-      this.storage.location.getKeyLocation({
+      version: multipart.version,
+      uploadId: UploadId,
+      partNumber: PartNumber,
+      sourceKey: this.storage.location.getKeyLocation({
         bucketId: sourceBucketName,
         objectName: copySource.name,
         tenantId: this.tenantId,
       }),
-      copySource.version,
-      rangeBytes
-    )
+      sourceKeyVersion: copySource.version,
+      bytesRange: rangeBytes,
+    })
 
     await this.storage.db.asSuperUser().insertUploadPart({
       upload_id: UploadId,

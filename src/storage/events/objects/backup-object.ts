@@ -88,15 +88,15 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
           reqId: job.data.reqId,
         })
 
-        await storage.backend.deleteObject(
-          storageS3Bucket,
-          storage.location.getKeyLocation({
+        await storage.backend.remove({
+          bucket: storageS3Bucket,
+          key: storage.location.getKeyLocation({
             tenantId,
             bucketId: job.data.bucketId,
             objectName: job.data.name,
           }),
-          job.data.version
-        )
+          version: job.data.version,
+        })
       }
     } catch (e) {
       logger.error(

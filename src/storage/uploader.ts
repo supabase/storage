@@ -105,15 +105,15 @@ export class Uploader {
         objectName: request.objectName,
       })
 
-      const objectMetadata = await this.backend.uploadObject(
-        storageS3Bucket,
-        s3Key,
+      const objectMetadata = await this.backend.write({
+        bucket: storageS3Bucket,
+        key: s3Key,
         version,
-        file.body,
-        file.mimeType,
-        file.cacheControl,
-        request.signal
-      )
+        body: file.body,
+        contentType: file.mimeType,
+        cacheControl: file.cacheControl,
+        signal: request.signal,
+      })
 
       if (request.file.xRobotsTag) {
         objectMetadata.xRobotsTag = request.file.xRobotsTag

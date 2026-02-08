@@ -45,10 +45,10 @@ describe('ObjectScanner', () => {
     )
 
     const s3ToDelete = result.slice(5, 5 + numToDelete)
-    await storage.adapter.deleteObjects(
-      storageS3Bucket,
-      s3ToDelete.map((o) => `${tenantId}/${bucket.id}/${o.name}/${o.version}`)
-    )
+    await storage.adapter.removeMany({
+      bucket: storageS3Bucket,
+      prefixes: s3ToDelete.map((o) => `${tenantId}/${bucket.id}/${o.name}/${o.version}`),
+    })
 
     const objectsAfterDel = await storage.database.listObjects(bucket.id, 'name', 10000)
     expect(objectsAfterDel).toHaveLength(maxUploads - numToDelete)
@@ -134,9 +134,12 @@ describe('ObjectScanner', () => {
     let nextToken = ''
 
     while (true) {
-      const s3Objects = await storage.adapter.list(storageS3Bucket, {
-        prefix: `${tenantId}/${bucket.id}`,
-        nextToken: nextToken,
+      const s3Objects = await storage.adapter.list({
+        bucket: storageS3Bucket,
+        options: {
+          prefix: `${tenantId}/${bucket.id}`,
+          nextToken: nextToken,
+        },
       })
       s3ObjectAll.push(...s3Objects.keys)
       if (!s3Objects.nextToken) {
@@ -151,8 +154,11 @@ describe('ObjectScanner', () => {
     expect(s3ObjectAll.length).not.toContain(objectsToDelete.map((o) => `${bucket.id}/${o.name}`))
 
     // Check files are backed-up
-    const backupFiles = await storage.adapter.list(storageS3Bucket, {
-      prefix: `__internal/${tenantId}/${bucket.id}`,
+    const backupFiles = await storage.adapter.list({
+      bucket: storageS3Bucket,
+      options: {
+        prefix: `__internal/${tenantId}/${bucket.id}`,
+      },
     })
 
     expect(backupFiles.keys).toHaveLength(numToDelete)

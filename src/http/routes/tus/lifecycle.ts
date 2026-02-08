@@ -76,7 +76,7 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
 
     const payload = await req.upload.storage
       .from(uploadID.bucket)
-      .verifyObjectSignature(signature, uploadID.objectName)
+      .verifyObjectSignature({ token: signature, objectName: uploadID.objectName })
 
     req.upload.owner = payload.owner
     req.upload.isUpsert = payload.upsert
@@ -217,7 +217,7 @@ export async function onCreate(
 
   const bucket = await storage
     .asSuperUser()
-    .findBucket(uploadID.bucket, 'id, file_size_limit, allowed_mime_types')
+    .findBucket({ bucketId: uploadID.bucket, columns: 'id, file_size_limit, allowed_mime_types' })
 
   const metadata = {
     ...(upload.metadata ? upload.metadata : {}),

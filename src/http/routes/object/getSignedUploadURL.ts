@@ -69,11 +69,15 @@ export default async function routes(fastify: FastifyInstance) {
 
       const urlPath = `${bucketName}/${objectName}`
 
-      const signedUpload = await request.storage
-        .from(bucketName)
-        .signUploadObjectUrl(objectName, urlPath as string, uploadSignedUrlExpirationTime, owner, {
+      const signedUpload = await request.storage.from(bucketName).signUploadObjectUrl({
+        objectName,
+        url: urlPath as string,
+        expiresIn: uploadSignedUrlExpirationTime,
+        owner,
+        options: {
           upsert: request.headers['x-upsert'] === 'true',
-        })
+        },
+      })
 
       return response.status(200).send({ url: signedUpload.url, token: signedUpload.token })
     }

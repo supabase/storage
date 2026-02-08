@@ -17,6 +17,34 @@ import {
   SearchObjectOption,
   ListBucketOptions,
   TransactionOptions,
+  FindBucketByIdInput,
+  CountObjectsInBucketInput,
+  DbDeleteBucketInput,
+  ListObjectsInput,
+  ListObjectsV2Input,
+  ListMultipartUploadsInput,
+  DbListBucketsInput,
+  MustLockObjectInput,
+  WaitObjectLockInput,
+  DbUpdateBucketInput,
+  UpdateObjectInput,
+  DeleteObjectInput,
+  DeleteObjectsInput,
+  DeleteObjectVersionsInput,
+  UpdateObjectMetadataInput,
+  UpdateObjectOwnerInput,
+  FindObjectsInput,
+  FindObjectVersionsInput,
+  FindObjectInput,
+  SearchObjectsInput,
+  CreateMultipartUploadInput,
+  FindMultipartUploadInput,
+  UpdateMultipartUploadProgressInput,
+  DeleteMultipartUploadInput,
+  ListPartsInput,
+  DeleteAnalyticsBucketInput,
+  ListAnalyticsBucketsInput,
+  FindAnalyticsBucketByNameInput,
 } from './adapter'
 import { DatabaseError } from 'pg'
 import { TenantConnection } from '@internal/database'
@@ -58,14 +86,14 @@ export class StorageKnexDB implements Database {
     const tnx = await this.connection.transactionProvider(this.options.tnx, opts)()
 
     try {
-      await this.connection.setScope(tnx)
+      await this.connection.setScope(tnx, { signal: opts?.signal })
 
       tnx.once('query-error', (error, q) => {
         throw DBError.fromDBError(error, q.sql)
       })
 
-      const opts = { ...this.options, tnx }
-      const storageWithTnx = new StorageKnexDB(this.connection, opts)
+      const newOts = { ...this.options, tnx }
+      const storageWithTnx = new StorageKnexDB(this.connection, newOts)
 
       const result: Awaited<ReturnType<T>> = await fn(storageWithTnx)
       await tnx.commit()
@@ -91,13 +119,13 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async testPermission<T extends (db: Database) => any>(fn: T) {
+  async testPermission<T extends (db: Database) => any>(fn: T, opts?: { signal?: AbortSignal }) {
     let result: any
     try {
       await this.withTransaction(async (db) => {
         result = await fn(db)
         throw true
-      })
+      }, opts)
     } catch (e) {
       if (e === true) {
         return result
@@ -106,7 +134,8 @@ export class StorageKnexDB implements Database {
     }
   }
 
-  deleteAnalyticsBucket(id: string, opts?: { soft: boolean }): Promise<IcebergCatalog> {
+  deleteAnalyticsBucket(input: DeleteAnalyticsBucketInput): Promise<IcebergCatalog> {
+    const { id, opts } = input
     return this.runQuery('DeleteAnalyticsBucket', async (knex, signal) => {
       if (opts?.soft) {
         const softDeleted = await knex
@@ -139,10 +168,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  listAnalyticsBuckets(
-    columns: string,
-    options: ListBucketOptions | undefined
-  ): Promise<IcebergCatalog[]> {
+  listAnalyticsBuckets(input: ListAnalyticsBucketsInput): Promise<IcebergCatalog[]> {
+    const { columns = 'id', options } = input
     return this.runQuery('ListIcebergBuckets', async (knex, signal) => {
       const query = knex
         .from<IcebergCatalog>('buckets_analytics')
@@ -171,7 +198,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  findAnalyticsBucketByName(name: string) {
+  findAnalyticsBucketByName(input: FindAnalyticsBucketByNameInput) {
+    const { name } = input
     return this.runQuery('FindAnalyticsBucketByName', async (knex, signal) => {
       const icebergBucket = await knex
         .from<IcebergCatalog>('buckets_analytics')
@@ -249,7 +277,8 @@ export class StorageKnexDB implements Database {
     }
   }
 
-  async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
+  async findBucketById(input: FindBucketByIdInput) {
+    const { bucketId, columns = 'id', filters } = input
     const result = await this.runQuery('FindBucketById', async (knex, signal) => {
       let columnNames = columns.split(',')
 
@@ -283,7 +312,8 @@ export class StorageKnexDB implements Database {
     return result
   }
 
-  async countObjectsInBucket(bucketId: string, limit?: number): Promise<number> {
+  async countObjectsInBucket(input: CountObjectsInBucketInput): Promise<number> {
+    const { bucketId, limit } = input
     // if we have a limit use select to only scan up to that limit
     if (limit !== undefined) {
       const result = await this.runQuery('CountObjectsInBucketWithLimit', (knex, signal) => {
@@ -310,7 +340,8 @@ export class StorageKnexDB implements Database {
     return result?.count || 0
   }
 
-  async deleteBucket(bucketId: string | string[]) {
+  async deleteBucket(input: DbDeleteBucketInput) {
+    const { bucketId } = input
     return await this.runQuery('DeleteBucket', (knex, signal) => {
       return knex<Bucket>('buckets')
         .whereIn('id', Array.isArray(bucketId) ? bucketId : [bucketId])
@@ -319,13 +350,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async listObjects(
-    bucketId: string,
-    columns = 'id',
-    limit = 10,
-    before?: Date,
-    nextToken?: string
-  ) {
+  async listObjects(input: ListObjectsInput) {
+    const { bucketId, columns = 'id', limit = 10, before, nextToken } = input
     const data = await this.runQuery('ListObjects', (knex, signal) => {
       const query = knex
         .from<Obj>('objects')
@@ -349,21 +375,8 @@ export class StorageKnexDB implements Database {
     return data
   }
 
-  async listObjectsV2(
-    bucketId: string,
-    options?: {
-      prefix?: string
-      delimiter?: string
-      nextToken?: string
-      maxKeys?: number
-      startAfter?: string
-      sortBy?: {
-        order?: string
-        column?: string
-        after?: string
-      }
-    }
-  ) {
+  async listObjectsV2(input: ListObjectsV2Input) {
+    const { bucketId, options } = input
     return this.runQuery('ListObjectsV2', async (knex, signal) => {
       if (!options?.delimiter) {
         const query = knex
@@ -468,7 +481,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async listBuckets(columns = 'id', options?: ListBucketOptions) {
+  async listBuckets(input: DbListBucketsInput) {
+    const { columns = 'id', options } = input
     const data = await this.runQuery('ListBuckets', async (knex, signal) => {
       const columnNames = columns.split(',').map((c) => c.trim())
 
@@ -504,16 +518,8 @@ export class StorageKnexDB implements Database {
     return data as Bucket[]
   }
 
-  listMultipartUploads(
-    bucketId: string,
-    options?: {
-      prefix?: string
-      deltimeter?: string
-      nextUploadToken?: string
-      nextUploadKeyToken?: string
-      maxKeys?: number
-    }
-  ) {
+  listMultipartUploads(input: ListMultipartUploadsInput) {
+    const { bucketId, options } = input
     return this.runQuery('ListMultipartsUploads', async (knex, signal) => {
       if (!options?.deltimeter) {
         const query = knex
@@ -556,10 +562,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async updateBucket(
-    bucketId: string,
-    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
-  ) {
+  async updateBucket(input: DbUpdateBucketInput) {
+    const { bucketId, fields } = input
     const bucket = await this.runQuery('UpdateBucket', (knex, signal) => {
       return knex
         .from('buckets')
@@ -612,11 +616,8 @@ export class StorageKnexDB implements Database {
     return object
   }
 
-  async updateObject(
-    bucketId: string,
-    name: string,
-    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>
-  ) {
+  async updateObject(input: UpdateObjectInput) {
+    const { bucketId, name, data } = input
     const [object] = await this.runQuery('UpdateObject', (knex, signal) => {
       return knex
         .from<Obj>('objects')
@@ -670,7 +671,8 @@ export class StorageKnexDB implements Database {
     }
   }
 
-  async deleteObject(bucketId: string, objectName: string, version?: string) {
+  async deleteObject(input: DeleteObjectInput) {
+    const { bucketId, objectName, version } = input
     const [data] = await this.runQuery('Delete Object', (knex, signal) => {
       return knex
         .from<Obj>('objects')
@@ -687,7 +689,8 @@ export class StorageKnexDB implements Database {
     return data
   }
 
-  async deleteObjects(bucketId: string, objectNames: string[], by: keyof Obj = 'name') {
+  async deleteObjects(input: DeleteObjectsInput) {
+    const { bucketId, objectNames, by = 'name' } = input
     return this.runQuery('DeleteObjects', (knex, signal) => {
       return knex
         .from<Obj>('objects')
@@ -699,7 +702,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async deleteObjectVersions(bucketId: string, objectNames: { name: string; version: string }[]) {
+  async deleteObjectVersions(input: DeleteObjectVersionsInput) {
+    const { bucketId, objectNames } = input
     return this.runQuery('DeleteObjects', (knex, signal) => {
       const placeholders = objectNames.map(() => '(?, ?)').join(', ')
 
@@ -716,7 +720,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata) {
+  async updateObjectMetadata(input: UpdateObjectMetadataInput) {
+    const { bucketId, objectName, metadata } = input
     const [object] = await this.runQuery('UpdateObjectMetadata', (knex, signal) => {
       return knex
         .from<Obj>('objects')
@@ -729,7 +734,8 @@ export class StorageKnexDB implements Database {
     return object
   }
 
-  async updateObjectOwner(bucketId: string, objectName: string, owner?: string) {
+  async updateObjectOwner(input: UpdateObjectOwnerInput) {
+    const { bucketId, objectName, owner } = input
     const [object] = await this.runQuery('UpdateObjectOwner', (knex, signal) => {
       return knex
         .from<Obj>('objects')
@@ -750,12 +756,8 @@ export class StorageKnexDB implements Database {
     return object
   }
 
-  async findObject(
-    bucketId: string,
-    objectName: string,
-    columns = 'id',
-    filters?: FindObjectFilters
-  ) {
+  async findObject(input: FindObjectInput) {
+    const { bucketId, objectName, columns = 'id', filters } = input
     const object = await this.runQuery('FindObject', (knex, signal) => {
       const query = knex
         .from<Obj>('objects')
@@ -795,7 +797,8 @@ export class StorageKnexDB implements Database {
       : Obj
   }
 
-  async findObjects(bucketId: string, objectNames: string[], columns = 'id') {
+  async findObjects(input: FindObjectsInput) {
+    const { bucketId, objectNames, columns = 'id' } = input
     return this.runQuery('FindObjects', (knex, signal) => {
       return knex
         .from<Obj>('objects')
@@ -806,13 +809,14 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async findObjectVersions(bucketId: string, obj: { name: string; version: string }[]) {
+  async findObjectVersions(input: FindObjectVersionsInput) {
+    const { bucketId, objectNames } = input
     return this.runQuery('FindObjectVersions', (knex, signal) => {
       // Step 1: Generate placeholders for each tuple
-      const placeholders = obj.map(() => '(?, ?)').join(', ')
+      const placeholders = objectNames.map(() => '(?, ?)').join(', ')
 
       // Step 2: Flatten the array of tuples into a single array of values
-      const flatParams = obj.flatMap(({ name, version }) => [name, version])
+      const flatParams = objectNames.flatMap(({ name, version }) => [name, version])
 
       return knex
         .from<Obj>('objects')
@@ -823,7 +827,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async mustLockObject(bucketId: string, objectName: string, version?: string) {
+  async mustLockObject(input: MustLockObjectInput) {
+    const { bucketId, objectName, version } = input
     return this.runQuery('MustLockObject', async (knex, signal) => {
       const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
       const result = await knex
@@ -842,17 +847,13 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async waitObjectLock(
-    bucketId: string,
-    objectName: string,
-    version?: string,
-    opts?: { timeout: number }
-  ) {
+  async waitObjectLock(input: WaitObjectLockInput) {
+    const { bucketId, objectName, version, timeout } = input
     return this.runQuery('WaitObjectLock', async (knex, signal) => {
       const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
       const query = knex.raw(`SELECT pg_advisory_xact_lock(?)`, [hash]).abortOnSignal(signal)
 
-      if (opts?.timeout) {
+      if (timeout) {
         let timeoutInterval: undefined | NodeJS.Timeout
 
         try {
@@ -860,7 +861,7 @@ export class StorageKnexDB implements Database {
             query,
             new Promise(
               (_, reject) =>
-                (timeoutInterval = setTimeout(() => reject(ERRORS.LockTimeout()), opts.timeout))
+                (timeoutInterval = setTimeout(() => reject(ERRORS.LockTimeout()), timeout))
             ),
           ])
         } catch (e) {
@@ -878,7 +879,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async searchObjects(bucketId: string, prefix: string, options: SearchObjectOption) {
+  async searchObjects(input: SearchObjectsInput) {
+    const { bucketId, prefix, options } = input
     return this.runQuery('SearchObjects', async (knex, signal) => {
       const result = await knex
         .raw<{ rows: Obj[] }>('select * from storage.search(?,?,?,?,?,?,?,?)', [
@@ -897,15 +899,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async createMultipartUpload(
-    uploadId: string,
-    bucketId: string,
-    objectName: string,
-    version: string,
-    signature: string,
-    owner?: string,
-    metadata?: Record<string, string | null>
-  ) {
+  async createMultipartUpload(input: CreateMultipartUploadInput) {
+    const { uploadId, bucketId, objectName, version, signature, owner, metadata } = input
     return this.runQuery('CreateMultipartUpload', async (knex, signal) => {
       const multipart = await knex
         .table<S3MultipartUpload>('s3_multipart_uploads')
@@ -927,7 +922,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async findMultipartUpload(uploadId: string, columns = 'id', options?: { forUpdate?: boolean }) {
+  async findMultipartUpload(input: FindMultipartUploadInput) {
+    const { uploadId, columns = 'id', options } = input
     const multiPart = await this.runQuery('FindMultipartUpload', async (knex, signal) => {
       const query = knex
         .from('s3_multipart_uploads')
@@ -946,7 +942,8 @@ export class StorageKnexDB implements Database {
     return multiPart
   }
 
-  async updateMultipartUploadProgress(uploadId: string, progress: number, signature: string) {
+  async updateMultipartUploadProgress(input: UpdateMultipartUploadProgressInput) {
+    const { uploadId, progress, signature } = input
     return this.runQuery('UpdateMultipartUploadProgress', async (knex, signal) => {
       await knex
         .from('s3_multipart_uploads')
@@ -956,7 +953,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async deleteMultipartUpload(uploadId: string) {
+  async deleteMultipartUpload(input: DeleteMultipartUploadInput) {
+    const { uploadId } = input
     return this.runQuery('DeleteMultipartUpload', async (knex, signal) => {
       await knex.from('s3_multipart_uploads').delete().where('id', uploadId).abortOnSignal(signal)
     })
@@ -974,10 +972,8 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async listParts(
-    uploadId: string,
-    options: { afterPart?: string; maxParts: number }
-  ): Promise<S3PartUpload[]> {
+  async listParts(input: ListPartsInput): Promise<S3PartUpload[]> {
+    const { uploadId, options } = input
     return this.runQuery('ListParts', async (knex, signal) => {
       const query = knex
         .from<S3PartUpload>('s3_multipart_uploads_parts')

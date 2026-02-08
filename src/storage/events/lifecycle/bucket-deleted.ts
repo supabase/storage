@@ -47,7 +47,7 @@ export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
           })
         } catch (e) {
           if (e instanceof StorageBackendError && e.code === ErrorCode.NoSuchCatalog) {
-            await storage.db.deleteAnalyticsBucket(bucketId)
+            await storage.db.deleteAnalyticsBucket({ id: bucketId })
             return
           }
           throw e
@@ -71,7 +71,7 @@ export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
       )
 
       if (isMultitenant) {
-        await storage.db.deleteAnalyticsBucket(bucketId, { soft: true })
+        await storage.db.deleteAnalyticsBucket({ id: bucketId, opts: { soft: true } })
       }
     })
   }

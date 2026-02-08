@@ -343,9 +343,7 @@ export class FileBackend implements StorageBackendAdapter {
     return { ETag: etag }
   }
 
-  async completeMultipartUpload(
-    input: CompleteMultipartUploadInput
-  ): Promise<
+  async completeMultipartUpload(input: CompleteMultipartUploadInput): Promise<
     Omit<UploadPart, 'PartNumber'> & {
       location?: string
       bucket?: string
@@ -427,8 +425,11 @@ export class FileBackend implements StorageBackendAdapter {
     }
   }
 
-  async uploadPartCopy(input: UploadPartCopyInput): Promise<{ eTag?: string; lastModified?: Date }> {
-    const { bucket, key, version, uploadId, partNumber, sourceKey, sourceKeyVersion, bytesRange } = input
+  async uploadPartCopy(
+    input: UploadPartCopyInput
+  ): Promise<{ eTag?: string; lastModified?: Date }> {
+    const { bucket, key, version, uploadId, partNumber, sourceKey, sourceKeyVersion, bytesRange } =
+      input
     const multiPartFolder = path.join(
       this.filePath,
       'multiparts',

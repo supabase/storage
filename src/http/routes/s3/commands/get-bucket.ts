@@ -42,7 +42,7 @@ export default function GetBucket(s3Router: S3Router) {
     { schema: GetBucketLocationInput, operation: ROUTE_OPERATIONS.S3_GET_BUCKET_LOCATION },
     async (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
-      await ctx.storage.findBucket(req.Params.Bucket)
+      await ctx.storage.findBucket({ bucketId: req.Params.Bucket })
 
       return s3Protocol.getBucketLocation()
     }
@@ -53,7 +53,7 @@ export default function GetBucket(s3Router: S3Router) {
     { schema: GetBucketVersioningInput, operation: ROUTE_OPERATIONS.S3_GET_BUCKET_VERSIONING },
     async (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
-      await ctx.storage.findBucket(req.Params.Bucket)
+      await ctx.storage.findBucket({ bucketId: req.Params.Bucket })
 
       return s3Protocol.getBucketVersioning()
     }

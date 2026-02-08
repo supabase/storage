@@ -58,7 +58,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const prefixes = request.body['prefixes']
 
-      const results = await request.storage.from(bucketName).deleteObjects(prefixes)
+      const results = await request.storage.from(bucketName).deleteObjects({ prefixes })
 
       return response.status(200).send(results)
     }

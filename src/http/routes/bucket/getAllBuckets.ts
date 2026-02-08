@@ -70,11 +70,12 @@ export default async function routes(fastify: FastifyInstance) {
         isClientVersionBefore('supabase-py', clientInfo, '2.18.0') ||
         isClientVersionBefore('storage3', userAgent, '0.12.1')
 
-      const results = await request.storage.listBuckets(
-        'id, name, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types' +
+      const results = await request.storage.listBuckets({
+        columns:
+          'id, name, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types' +
           (omitBucketType ? '' : ', type'),
-        { limit, offset, sortColumn, sortOrder, search }
-      )
+        options: { limit, offset, sortColumn, sortOrder, search },
+      })
 
       return response.send(results)
     }

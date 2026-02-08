@@ -50,8 +50,12 @@ async function requestHandler(
     bucketId: bucketName,
     objectName,
   })
-  const bucket = await request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
-    dontErrorOnEmpty: true,
+  const bucket = await request.storage.asSuperUser().findBucket({
+    bucketId: bucketName,
+    columns: 'id,public',
+    filters: {
+      dontErrorOnEmpty: true,
+    },
   })
 
   // The request is not authenticated
@@ -74,10 +78,12 @@ async function requestHandler(
     obj = await request.storage
       .asSuperUser()
       .from(bucketName)
-      .findObject(objectName, 'id, version, metadata')
+      .findObject({ objectName, columns: 'id, version, metadata' })
   } else {
     // request is authenticated use RLS
-    obj = await request.storage.from(bucketName).findObject(objectName, 'id, version, metadata')
+    obj = await request.storage
+      .from(bucketName)
+      .findObject({ objectName, columns: 'id, version, metadata' })
   }
 
   return request.storage.renderer('asset').render(request, response, {

@@ -214,7 +214,9 @@ export class S3Backend implements StorageBackendAdapter {
   /**
    * Copies an existing object to the given location
    */
-  async copy(input: CopyObjectInput): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
+  async copy(
+    input: CopyObjectInput
+  ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     const { bucket, source, version, destination, destinationVersion, metadata, conditions } = input
     try {
       const command = new CopyObjectCommand({
@@ -485,7 +487,8 @@ export class S3Backend implements StorageBackendAdapter {
   }
 
   async uploadPartCopy(input: UploadPartCopyInput) {
-    const { bucket, key, version, uploadId, partNumber, sourceKey, sourceKeyVersion, bytesRange } = input
+    const { bucket, key, version, uploadId, partNumber, sourceKey, sourceKeyVersion, bytesRange } =
+      input
     const uploadPartCopyCmd = new UploadPartCopyCommand({
       Bucket: bucket,
       Key: withOptionalVersion(key, version),

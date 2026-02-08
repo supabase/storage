@@ -161,7 +161,7 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
 
       if (isMultitenant) {
         // Delete the underlying bucket
-        await storage.db.deleteAnalyticsBucket(job.data.catalogId)
+        await storage.db.deleteAnalyticsBucket({ id: job.data.catalogId })
       }
     })
   }

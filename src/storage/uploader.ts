@@ -176,13 +176,20 @@ export class Uploader {
       db.connection.setAbortSignal(abController.signal)
 
       return await db.withTransaction(async (db) => {
-        await db.waitObjectLock(bucketId, objectName, undefined, {
+        await db.waitObjectLock({
+          bucketId,
+          objectName,
           timeout: 5000,
         })
 
-        const currentObj = await db.findObject(bucketId, objectName, 'id, version, metadata', {
-          forUpdate: true,
-          dontErrorOnEmpty: true,
+        const currentObj = await db.findObject({
+          bucketId,
+          objectName,
+          columns: 'id, version, metadata',
+          filters: {
+            forUpdate: true,
+            dontErrorOnEmpty: true,
+          },
         })
 
         const isNew = !Boolean(currentObj)

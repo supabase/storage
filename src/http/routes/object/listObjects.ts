@@ -70,13 +70,16 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const { limit, offset, sortBy, search, prefix } = request.body
 
-      const results = await request.storage.from(bucketName).searchObjects(prefix, {
-        limit,
-        offset,
-        search,
-        sortBy: {
-          column: sortBy?.column,
-          order: sortBy?.order,
+      const results = await request.storage.from(bucketName).searchObjects({
+        prefix,
+        options: {
+          limit,
+          offset,
+          search,
+          sortBy: {
+            column: sortBy?.column,
+            order: sortBy?.order,
+          },
         },
       })
 

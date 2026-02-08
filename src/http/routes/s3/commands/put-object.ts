@@ -127,7 +127,10 @@ export default function PutObject(s3Router: S3Router) {
 
       const bucket = await ctx.storage
         .asSuperUser()
-        .findBucket(req.Params.Bucket, 'id,file_size_limit,allowed_mime_types')
+        .findBucket({
+          bucketId: req.Params.Bucket,
+          columns: 'id,file_size_limit,allowed_mime_types',
+        })
 
       const uploadRequest = await fileUploadFromRequest(ctx.req, {
         objectName: key,
@@ -176,7 +179,10 @@ export default function PutObject(s3Router: S3Router) {
 
       const bucket = await ctx.storage
         .asSuperUser()
-        .findBucket(req.Params.Bucket, 'id,file_size_limit,allowed_mime_types')
+        .findBucket({
+          bucketId: req.Params.Bucket,
+          columns: 'id,file_size_limit,allowed_mime_types',
+        })
 
       const fieldsObject = fieldsToObject(file?.fields || {})
       const metadata = s3Protocol.parseMetadataHeaders(fieldsObject)

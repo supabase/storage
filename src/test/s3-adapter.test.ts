@@ -43,7 +43,11 @@ describe('S3Backend', () => {
         endpoint: 'http://localhost:9000',
       })
 
-      const result = await backend.read({ bucket: 'test-bucket', key: 'test-key', version: undefined })
+      const result = await backend.read({
+        bucket: 'test-bucket',
+        key: 'test-key',
+        version: undefined,
+      })
 
       expect(result.metadata.mimetype).toBe('application/octet-stream')
       expect(result.metadata.cacheControl).toBe('max-age=3600')
@@ -69,7 +73,11 @@ describe('S3Backend', () => {
         endpoint: 'http://localhost:9000',
       })
 
-      const result = await backend.read({ bucket: 'test-bucket', key: 'test-key', version: undefined })
+      const result = await backend.read({
+        bucket: 'test-bucket',
+        key: 'test-key',
+        version: undefined,
+      })
 
       expect(result.metadata.mimetype).toBe('image/png')
     })

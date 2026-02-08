@@ -158,7 +158,7 @@ function createTusServer(
 
       const bucket = await req.upload.storage
         .asSuperUser()
-        .findBucket(resourceId.bucket, 'id,file_size_limit')
+        .findBucket({ bucketId: resourceId.bucket, columns: 'id,file_size_limit' })
 
       const globalFileLimit = await getFileSizeLimit(req.upload.tenantId)
 

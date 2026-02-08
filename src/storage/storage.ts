@@ -21,6 +21,47 @@ import { logger, logSchema } from '@internal/monitoring'
 
 const { emptyBucketMax } = getConfig()
 
+export interface FindBucketInput {
+  bucketId: string
+  columns?: string
+  filters?: FindBucketFilters
+  signal?: AbortSignal
+}
+
+export interface ListBucketsInput {
+  columns?: string
+  options?: ListBucketOptions
+  signal?: AbortSignal
+}
+
+export interface UpdateBucketInput {
+  bucketId: string
+  data: Omit<
+    Parameters<Database['updateBucket']>[0]['fields'],
+    'file_size_limit' | 'allowed_mime_types'
+  > & {
+    fileSizeLimit?: number | string | null
+    allowedMimeTypes?: null | string[]
+  }
+  signal?: AbortSignal
+}
+
+export interface DeleteBucketInput {
+  bucketId: string
+  signal?: AbortSignal
+}
+
+export interface DeleteIcebergBucketInput {
+  name: string
+  signal?: AbortSignal
+}
+
+export interface EmptyBucketInput {
+  bucketId: string
+  before?: Date
+  signal?: AbortSignal
+}
+
 /**
  * Storage
  * interacts with the storage backend of choice and the database
@@ -76,8 +117,9 @@ export class Storage {
    * @param columns
    * @param filters
    */
-  findBucket(id: string, columns = 'id', filters?: FindBucketFilters) {
-    return this.db.findBucketById(id, columns, filters)
+  findBucket(input: FindBucketInput) {
+    const { bucketId, columns = 'id', filters } = input
+    return this.db.findBucketById({ bucketId, columns, filters })
   }
 
   /**
@@ -85,12 +127,14 @@ export class Storage {
    * @param columns
    * @param options
    */
-  listBuckets(columns = 'id', options?: ListBucketOptions) {
-    return this.db.listBuckets(columns, options)
+  listBuckets(input: ListBucketsInput = {}) {
+    const { columns = 'id', options } = input
+    return this.db.listBuckets({ columns, options })
   }
 
-  listAnalyticsBuckets(columns = 'name', options?: ListBucketOptions) {
-    return this.db.listAnalyticsBuckets(columns, options)
+  listAnalyticsBuckets(input: ListBucketsInput = {}) {
+    const { columns = 'name', options } = input
+    return this.db.listAnalyticsBuckets({ columns, options })
   }
 
   /**
@@ -187,19 +231,11 @@ export class Storage {
    * @param id
    * @param data
    */
-  async updateBucket(
-    id: string,
-    data: Omit<
-      Parameters<Database['updateBucket']>[1],
-      'file_size_limit' | 'allowed_mime_types'
-    > & {
-      fileSizeLimit?: number | string | null
-      allowedMimeTypes?: null | string[]
-    }
-  ) {
-    mustBeValidBucketName(id)
+  async updateBucket(input: UpdateBucketInput) {
+    const { bucketId, data } = input
+    mustBeValidBucketName(bucketId)
 
-    const bucketData: Parameters<Database['updateBucket']>[1] = data
+    const bucketData: Parameters<Database['updateBucket']>[0]['fields'] = data
 
     if (typeof data.fileSizeLimit === 'number' || typeof data.fileSizeLimit === 'string') {
       bucketData.file_size_limit = await this.parseMaxSizeLimit(data.fileSizeLimit)
@@ -214,36 +250,38 @@ export class Storage {
     }
     bucketData.allowed_mime_types = data.allowedMimeTypes
 
-    return this.db.updateBucket(id, bucketData)
+    return this.db.updateBucket({ bucketId, fields: bucketData })
   }
 
   /**
    * Delete a specific bucket if empty
    * @param id
    */
-  async deleteBucket(id: string) {
+  async deleteBucket(input: DeleteBucketInput) {
+    const { bucketId } = input
     return this.db.withTransaction(async (db) => {
-      await db.asSuperUser().findBucketById(id, 'id', {
-        forUpdate: true,
-      })
+      await db
+        .asSuperUser()
+        .findBucketById({ bucketId, columns: 'id', filters: { forUpdate: true } })
 
-      const countObjects = await db.asSuperUser().countObjectsInBucket(id, 1)
+      const countObjects = await db.asSuperUser().countObjectsInBucket({ bucketId, limit: 1 })
 
       if (countObjects && countObjects > 0) {
-        throw ERRORS.BucketNotEmpty(id)
+        throw ERRORS.BucketNotEmpty(bucketId)
       }
 
-      const deleted = await db.deleteBucket(id)
+      const deleted = await db.deleteBucket({ bucketId })
 
       if (!deleted) {
-        throw ERRORS.NoSuchBucket(id)
+        throw ERRORS.NoSuchBucket(bucketId)
       }
 
       return deleted
     })
   }
 
-  async deleteIcebergBucket(name: string) {
+  async deleteIcebergBucket(input: DeleteIcebergBucketInput) {
+    const { name } = input
     if (
       !(await tenantHasMigrations(this.db.tenantId, 'iceberg-catalog-flag-on-buckets')) ||
       !(await tenantHasFeature(this.db.tenantId, 'icebergCatalog'))
@@ -254,7 +292,7 @@ export class Storage {
       )
     }
 
-    const catalog = await this.db.findAnalyticsBucketByName(name)
+    const catalog = await this.db.findAnalyticsBucketByName({ name })
 
     await BucketDeleted.invoke({
       bucketId: catalog.id,
@@ -271,10 +309,11 @@ export class Storage {
    * @param bucketId
    * @param before limit to files before the specified time (defaults to now)
    */
-  async emptyBucket(bucketId: string, before: Date = new Date()) {
-    await this.findBucket(bucketId, 'name')
+  async emptyBucket(input: EmptyBucketInput) {
+    const { bucketId, before = new Date() } = input
+    await this.findBucket({ bucketId, columns: 'name' })
 
-    const count = await this.db.countObjectsInBucket(bucketId, emptyBucketMax + 1)
+    const count = await this.db.countObjectsInBucket({ bucketId, limit: emptyBucketMax + 1 })
     if (count > emptyBucketMax) {
       throw ERRORS.UnableToEmptyBucket(
         bucketId,
@@ -282,7 +321,7 @@ export class Storage {
       )
     }
 
-    const objects = await this.db.listObjects(bucketId, 'id, name', 1, before)
+    const objects = await this.db.listObjects({ bucketId, columns: 'id, name', limit: 1, before })
     if (!objects || objects.length < 1) {
       // the bucket is already empty
       return
@@ -290,7 +329,7 @@ export class Storage {
 
     // ensure delete permissions
     await this.db.testPermission((db) => {
-      return db.deleteObject(bucketId, objects[0].id!)
+      return db.deleteObject({ bucketId, objectName: objects[0].id! })
     })
 
     // use queue to recursively delete all objects created before the specified time

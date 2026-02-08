@@ -117,24 +117,22 @@ describe('FileBackend xattr metadata', () => {
         return Promise.resolve(undefined)
       })
 
-      uploadSpy = jest
-        .spyOn(backend, 'write')
-        .mockImplementation(async (input) => {
-          await new Promise<void>((resolve, reject) => {
-            ;(input.body as NodeJS.ReadableStream).on('error', reject)
-            ;(input.body as NodeJS.ReadableStream).on('end', resolve)
-            ;(input.body as NodeJS.ReadableStream).resume()
-          })
-          return {
-            httpStatusCode: 200,
-            size: 5,
-            cacheControl: 'no-cache',
-            mimetype: 'text/plain',
-            eTag: '"final"',
-            lastModified: new Date(),
-            contentLength: 5,
-          }
+      uploadSpy = jest.spyOn(backend, 'write').mockImplementation(async (input) => {
+        await new Promise<void>((resolve, reject) => {
+          ;(input.body as NodeJS.ReadableStream).on('error', reject)
+          ;(input.body as NodeJS.ReadableStream).on('end', resolve)
+          ;(input.body as NodeJS.ReadableStream).resume()
         })
+        return {
+          httpStatusCode: 200,
+          size: 5,
+          cacheControl: 'no-cache',
+          mimetype: 'text/plain',
+          eTag: '"final"',
+          lastModified: new Date(),
+          contentLength: 5,
+        }
+      })
 
       await expect(
         backend.completeMultipartUpload({

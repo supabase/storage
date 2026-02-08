@@ -43,8 +43,12 @@ async function requestHandler(
     objectName,
   })
 
-  const bucket = await request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
-    dontErrorOnEmpty: true,
+  const bucket = await request.storage.asSuperUser().findBucket({
+    bucketId: bucketName,
+    columns: 'id,public',
+    filters: {
+      dontErrorOnEmpty: true,
+    },
   })
 
   // Not Authenticated flow
@@ -62,20 +66,15 @@ async function requestHandler(
   let obj: Obj
 
   if (bucket.public || publicRoute) {
-    obj = await request.storage
-      .asSuperUser()
-      .from(bucketName)
-      .findObject(
-        objectName,
-        'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
-      )
+    obj = await request.storage.asSuperUser().from(bucketName).findObject({
+      objectName,
+      columns: 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at',
+    })
   } else {
-    obj = await request.storage
-      .from(bucketName)
-      .findObject(
-        objectName,
-        'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
-      )
+    obj = await request.storage.from(bucketName).findObject({
+      objectName,
+      columns: 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at',
+    })
   }
 
   return request.storage.renderer(method).render(request, response, {

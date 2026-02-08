@@ -466,16 +466,18 @@ describe('testing count objects in bucket', () => {
   })
 
   it('should return correct object count', async () => {
-    await expect(db.countObjectsInBucket('bucket2')).resolves.toBe(27)
+    await expect(db.countObjectsInBucket({ bucketId: 'bucket2' })).resolves.toBe(27)
   })
   it('should return limited object count', async () => {
-    await expect(db.countObjectsInBucket('bucket2', 22)).resolves.toBe(22)
+    await expect(db.countObjectsInBucket({ bucketId: 'bucket2', limit: 22 })).resolves.toBe(22)
   })
   it('should return full object count if limit is greater than total', async () => {
-    await expect(db.countObjectsInBucket('bucket2', 999)).resolves.toBe(27)
+    await expect(db.countObjectsInBucket({ bucketId: 'bucket2', limit: 999 })).resolves.toBe(27)
   })
   it('should return 0 object count if there are no objects with provided bucket id', async () => {
-    await expect(db.countObjectsInBucket('this-is-not-a-bucket-at-all', 999)).resolves.toBe(0)
+    await expect(
+      db.countObjectsInBucket({ bucketId: 'this-is-not-a-bucket-at-all', limit: 999 })
+    ).resolves.toBe(0)
   })
 })
 

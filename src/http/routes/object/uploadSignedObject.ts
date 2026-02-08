@@ -85,7 +85,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       const { owner, upsert } = await request.storage
         .from(bucketName)
-        .verifyObjectSignature(token, objectName)
+        .verifyObjectSignature({ token, objectName })
 
       const { objectMetadata, path } = await request.storage
         .asSuperUser()

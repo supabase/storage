@@ -38,7 +38,7 @@ export class CdnCacheManager {
     }
 
     // Check if object exists
-    await this.storage.from(opts.bucket).asSuperUser().findObject(opts.objectName)
+    await this.storage.from(opts.bucket).asSuperUser().findObject({ objectName: opts.objectName })
 
     // Purge cache
     try {

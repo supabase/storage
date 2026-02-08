@@ -38,11 +38,11 @@ describe('ObjectScanner', () => {
 
     const numToDelete = 5
     const objectsToDelete = result.slice(0, numToDelete)
-    await storage.database.deleteObjects(
-      bucket.id,
-      objectsToDelete.map((o) => o.name),
-      'name'
-    )
+    await storage.database.deleteObjects({
+      bucketId: bucket.id,
+      objectNames: objectsToDelete.map((o) => o.name),
+      by: 'name',
+    })
 
     const s3ToDelete = result.slice(5, 5 + numToDelete)
     await storage.adapter.removeMany({
@@ -50,7 +50,11 @@ describe('ObjectScanner', () => {
       prefixes: s3ToDelete.map((o) => `${tenantId}/${bucket.id}/${o.name}/${o.version}`),
     })
 
-    const objectsAfterDel = await storage.database.listObjects(bucket.id, 'name', 10000)
+    const objectsAfterDel = await storage.database.listObjects({
+      bucketId: bucket.id,
+      columns: 'name',
+      limit: 10000,
+    })
     expect(objectsAfterDel).toHaveLength(maxUploads - numToDelete)
 
     const orphaned = storage.scanner.listOrphaned(bucket.id, {
@@ -105,13 +109,17 @@ describe('ObjectScanner', () => {
 
     const numToDelete = 10
     const objectsToDelete = result.slice(0, numToDelete)
-    await storage.database.deleteObjects(
-      bucket.id,
-      objectsToDelete.map((o) => o.name),
-      'name'
-    )
+    await storage.database.deleteObjects({
+      bucketId: bucket.id,
+      objectNames: objectsToDelete.map((o) => o.name),
+      by: 'name',
+    })
 
-    const objectsAfterDel = await storage.database.listObjects(bucket.id, 'name', 10000)
+    const objectsAfterDel = await storage.database.listObjects({
+      bucketId: bucket.id,
+      columns: 'name',
+      limit: 10000,
+    })
     expect(objectsAfterDel).toHaveLength(maxUploads - numToDelete)
 
     const orphaned = storage.scanner.deleteOrphans(bucket.id, options)

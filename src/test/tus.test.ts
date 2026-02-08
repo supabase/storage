@@ -118,7 +118,7 @@ describe('Tus multipart', () => {
 
     expect(result).toEqual(true)
 
-    const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+    const dbAsset = await storage.from(bucket.id).findObject({ objectName, columns: '*' })
     expect(dbAsset).toEqual({
       bucket_id: bucket.id,
       created_at: expect.any(Date),
@@ -258,7 +258,7 @@ describe('Tus multipart', () => {
 
       const signedUpload = await storage
         .from(bucketName)
-        .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 3600)
+        .signUploadObjectUrl({ objectName, url: `${bucketName}/${objectName}`, expiresIn: 3600 })
 
       const result = await new Promise((resolve, reject) => {
         const upload = new tus.Upload(oneChunkFile, {
@@ -292,7 +292,7 @@ describe('Tus multipart', () => {
 
       expect(result).toEqual(true)
 
-      const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+      const dbAsset = await storage.from(bucket.id).findObject({ objectName, columns: '*' })
       expect(dbAsset).toEqual({
         bucket_id: bucket.id,
         created_at: expect.any(Date),
@@ -331,7 +331,12 @@ describe('Tus multipart', () => {
 
       const signedUpload = await storage
         .from(bucketName)
-        .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 3600, 'some-owner-id')
+        .signUploadObjectUrl({
+          objectName,
+          url: `${bucketName}/${objectName}`,
+          expiresIn: 3600,
+          owner: 'some-owner-id',
+        })
 
       const result = await new Promise((resolve, reject) => {
         const upload = new tus.Upload(oneChunkFile, {
@@ -361,7 +366,7 @@ describe('Tus multipart', () => {
 
       expect(result).toEqual(true)
 
-      const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+      const dbAsset = await storage.from(bucket.id).findObject({ objectName, columns: '*' })
       expect(dbAsset).toEqual({
         bucket_id: bucket.id,
         created_at: expect.any(Date),
@@ -397,7 +402,7 @@ describe('Tus multipart', () => {
 
       const signedUpload = await storage
         .from(bucketName)
-        .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 1)
+        .signUploadObjectUrl({ objectName, url: `${bucketName}/${objectName}`, expiresIn: 1 })
 
       await wait(2000)
 

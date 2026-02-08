@@ -83,7 +83,7 @@ export default async function routes(fastify: FastifyInstance) {
       const obj = await request.storage
         .asSuperUser()
         .from(bucketName)
-        .findObject(objParts.join('/'), 'id,version,metadata')
+        .findObject({ objectName: objParts.join('/'), columns: 'id,version,metadata' })
 
       return request.storage.renderer('asset').render(request, response, {
         bucket: storageS3Bucket,

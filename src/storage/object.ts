@@ -22,7 +22,7 @@ import { StorageObjectLocator } from '@storage/locator'
 
 const { requestUrlLengthLimit } = getConfig()
 
-interface CopyObjectParams {
+export interface CopyObjectParams {
   sourceKey: string
   destinationBucket: string
   destinationKey: string
@@ -40,7 +40,101 @@ interface CopyObjectParams {
     ifModifiedSince?: Date
     ifUnmodifiedSince?: Date
   }
+  signal?: AbortSignal
 }
+
+export interface DeleteObjectInput {
+  objectName: string
+  signal?: AbortSignal
+}
+
+export interface DeleteObjectsInput {
+  prefixes: string[]
+  signal?: AbortSignal
+}
+
+export interface UpdateObjectMetadataInput {
+  objectName: string
+  metadata: ObjectMetadata
+  signal?: AbortSignal
+}
+
+export interface UpdateObjectOwnerInput {
+  objectName: string
+  owner?: string
+  signal?: AbortSignal
+}
+
+export interface FindObjectInput {
+  objectName: string
+  columns?: string
+  filters?: FindObjectFilters
+  signal?: AbortSignal
+}
+
+export interface FindObjectsInput {
+  objectNames: string[]
+  columns?: string
+  signal?: AbortSignal
+}
+
+export interface MoveObjectInput {
+  sourceObjectName: string
+  destinationBucket: string
+  destinationObjectName: string
+  owner?: string
+  signal?: AbortSignal
+}
+
+export interface SearchObjectsInput {
+  prefix: string
+  options: SearchObjectOption
+  signal?: AbortSignal
+}
+
+export interface ListObjectsV2Input {
+  prefix?: string
+  delimiter?: string
+  cursor?: string
+  startAfter?: string
+  maxKeys?: number
+  encodingType?: 'url'
+  sortBy?: {
+    column: 'name' | 'created_at' | 'updated_at'
+    order?: string
+  }
+  signal?: AbortSignal
+}
+
+export interface SignObjectUrlInput {
+  objectName: string
+  url: string
+  expiresIn: number
+  metadata?: Record<string, string | object | undefined>
+  signal?: AbortSignal
+}
+
+export interface SignObjectUrlsInput {
+  paths: string[]
+  expiresIn: number
+  signal?: AbortSignal
+}
+
+export interface SignUploadObjectUrlInput {
+  objectName: string
+  url: string
+  expiresIn: number
+  owner?: string
+  options?: { upsert?: boolean }
+  signal?: AbortSignal
+}
+
+export interface VerifyObjectSignatureInput {
+  token: string
+  objectName: string
+  signal?: AbortSignal
+}
+
 export interface ListObjectsV2Result {
   folders: Obj[]
   objects: Obj[]
@@ -82,9 +176,10 @@ export class ObjectStorage {
       signal?: AbortSignal
     }
   ) {
-    const bucket = await this.db
-      .asSuperUser()
-      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
+    const bucket = await this.db.asSuperUser().findBucketById({
+      bucketId: this.bucketId,
+      columns: 'id, file_size_limit, allowed_mime_types',
+    })
 
     const uploadRequest = await fileUploadFromRequest(request, {
       objectName: file.objectName,
@@ -122,15 +217,19 @@ export class ObjectStorage {
   /**
    * Deletes an object from the remote storage
    * and the database
-   * @param objectName
+   * @param input
    */
-  async deleteObject(objectName: string) {
+  async deleteObject(input: DeleteObjectInput) {
+    const { objectName, signal } = input
     const obj = await this.db.withTransaction(async (db) => {
-      const obj = await db.asSuperUser().findObject(this.bucketId, objectName, 'id,version', {
-        forUpdate: true,
+      const obj = await db.asSuperUser().findObject({
+        bucketId: this.bucketId,
+        objectName,
+        columns: 'id,version',
+        filters: { forUpdate: true },
       })
 
-      const deleted = await db.deleteObject(this.bucketId, objectName)
+      const deleted = await db.deleteObject({ bucketId: this.bucketId, objectName })
 
       if (!deleted) {
         throw ERRORS.NoSuchKey(objectName)
@@ -144,6 +243,7 @@ export class ObjectStorage {
           objectName,
         }),
         version: obj.version,
+        signal,
       })
 
       return obj
@@ -162,9 +262,10 @@ export class ObjectStorage {
   /**
    * Deletes multiple objects from the remote storage
    * and the database
-   * @param prefixes
+   * @param input
    */
-  async deleteObjects(prefixes: string[]) {
+  async deleteObjects(input: DeleteObjectsInput) {
+    const { prefixes, signal } = input
     let results: { name: string }[] = []
 
     for (let i = 0; i < prefixes.length; ) {
@@ -178,7 +279,11 @@ export class ObjectStorage {
       }
 
       await this.db.withTransaction(async (db) => {
-        const data = await db.deleteObjects(this.bucketId, prefixesSubset, 'name')
+        const data = await db.deleteObjects({
+          bucketId: this.bucketId,
+          objectNames: prefixesSubset,
+          by: 'name',
+        })
 
         if (data.length > 0) {
           results = results.concat(data)
@@ -211,6 +316,7 @@ export class ObjectStorage {
           await this.backend.removeMany({
             bucket: this.location.getRootLocation(),
             prefixes: prefixesToDelete,
+            signal,
           })
 
           await Promise.allSettled(
@@ -234,13 +340,17 @@ export class ObjectStorage {
 
   /**
    * Updates object metadata in the database
-   * @param objectName
-   * @param metadata
+   * @param input
    */
-  async updateObjectMetadata(objectName: string, metadata: ObjectMetadata) {
+  async updateObjectMetadata(input: UpdateObjectMetadataInput) {
+    const { objectName, metadata } = input
     mustBeValidKey(objectName)
 
-    const result = await this.db.updateObjectMetadata(this.bucketId, objectName, metadata)
+    const result = await this.db.updateObjectMetadata({
+      bucketId: this.bucketId,
+      objectName,
+      metadata,
+    })
 
     await ObjectUpdatedMetadata.sendWebhook({
       tenant: this.db.tenant(),
@@ -256,32 +366,31 @@ export class ObjectStorage {
 
   /**
    * Updates the owner of an object in the database
-   * @param objectName
-   * @param owner
+   * @param input
    */
-  updateObjectOwner(objectName: string, owner?: string) {
-    return this.db.updateObjectOwner(this.bucketId, objectName, owner)
+  updateObjectOwner(input: UpdateObjectOwnerInput) {
+    const { objectName, owner } = input
+    return this.db.updateObjectOwner({ bucketId: this.bucketId, objectName, owner })
   }
 
   /**
    * Finds an object by name
-   * @param objectName
-   * @param columns
-   * @param filters
+   * @param input
    */
-  async findObject(objectName: string, columns = 'id', filters?: FindObjectFilters) {
+  async findObject(input: FindObjectInput) {
+    const { objectName, columns = 'id', filters } = input
     mustBeValidKey(objectName)
 
-    return this.db.findObject(this.bucketId, objectName, columns, filters)
+    return this.db.findObject({ bucketId: this.bucketId, objectName, columns, filters })
   }
 
   /**
    * Find multiple objects by name
-   * @param objectNames
-   * @param columns
+   * @param input
    */
-  async findObjects(objectNames: string[], columns = 'id') {
-    return this.db.findObjects(this.bucketId, objectNames, columns)
+  async findObjects(input: FindObjectsInput) {
+    const { objectNames, columns = 'id' } = input
+    return this.db.findObjects({ bucketId: this.bucketId, objectNames, columns })
   }
 
   /**
@@ -295,6 +404,7 @@ export class ObjectStorage {
    * @param upsert
    * @param fileMetadata
    * @param userMetadata
+   * @param signal
    */
   async copyObject({
     sourceKey,
@@ -306,6 +416,7 @@ export class ObjectStorage {
     upsert,
     metadata: fileMetadata,
     userMetadata,
+    signal,
   }: CopyObjectParams) {
     mustBeValidKey(destinationKey)
 
@@ -322,11 +433,11 @@ export class ObjectStorage {
     })
 
     // We check if the user has permission to copy the object to the destination key
-    const originObject = await this.db.findObject(
-      this.bucketId,
-      sourceKey,
-      'bucket_id,metadata,user_metadata,version'
-    )
+    const originObject = await this.db.findObject({
+      bucketId: this.bucketId,
+      objectName: sourceKey,
+      columns: 'bucket_id,metadata,user_metadata,version',
+    })
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const baseMetadata = originObject.metadata || {}
@@ -353,28 +464,32 @@ export class ObjectStorage {
         destinationVersion: newVersion,
         metadata: destinationMetadata,
         conditions,
+        signal,
       })
 
       const metadata = await this.backend.stats({
         bucket: this.location.getRootLocation(),
         key: s3DestinationKey,
         version: newVersion,
+        signal,
       })
 
       const destinationObject = await this.db.asSuperUser().withTransaction(async (db) => {
-        await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
+        await db.waitObjectLock({
+          bucketId: destinationBucket,
+          objectName: destinationKey,
           timeout: 3000,
         })
 
-        const existingDestObject = await db.findObject(
-          destinationBucket,
-          destinationKey,
-          'id,name,metadata,version,bucket_id',
-          {
+        const existingDestObject = await db.findObject({
+          bucketId: destinationBucket,
+          objectName: destinationKey,
+          columns: 'id,name,metadata,version,bucket_id',
+          filters: {
             dontErrorOnEmpty: true,
             forUpdate: true,
-          }
-        )
+          },
+        })
 
         const destinationObject = await db.upsertObject({
           ...originObject,
@@ -432,17 +547,10 @@ export class ObjectStorage {
 
   /**
    * Moves an existing remote object to a given location
-   * @param sourceObjectName
-   * @param destinationBucket
-   * @param destinationObjectName
-   * @param owner
+   * @param input
    */
-  async moveObject(
-    sourceObjectName: string,
-    destinationBucket: string,
-    destinationObjectName: string,
-    owner?: string
-  ) {
+  async moveObject(input: MoveObjectInput) {
+    const { sourceObjectName, destinationBucket, destinationObjectName, owner, signal } = input
     mustBeValidKey(destinationObjectName)
 
     const newVersion = randomUUID()
@@ -458,21 +566,32 @@ export class ObjectStorage {
       objectName: destinationObjectName,
     })
 
-    await this.db.testPermission((db) => {
-      return Promise.all([
-        db.findObject(this.bucketId, sourceObjectName, 'id'),
-        db.updateObject(this.bucketId, sourceObjectName, {
-          name: destinationObjectName,
-          version: newVersion,
-          bucket_id: destinationBucket,
-          owner,
-        }),
-      ])
-    })
+    await this.db.testPermission(
+      (db) => {
+        return Promise.all([
+          db.findObject({ bucketId: this.bucketId, objectName: sourceObjectName, columns: 'id' }),
+          db.updateObject({
+            bucketId: this.bucketId,
+            name: sourceObjectName,
+            data: {
+              name: destinationObjectName,
+              version: newVersion,
+              bucket_id: destinationBucket,
+              owner,
+            },
+          }),
+        ])
+      },
+      {
+        signal,
+      }
+    )
 
-    const sourceObj = await this.db
-      .asSuperUser()
-      .findObject(this.bucketId, sourceObjectName, 'id, version,user_metadata')
+    const sourceObj = await this.db.asSuperUser().findObject({
+      bucketId: this.bucketId,
+      objectName: sourceObjectName,
+      columns: 'id, version,user_metadata',
+    })
 
     if (s3SourceKey === s3DestinationKey) {
       return {
@@ -487,36 +606,44 @@ export class ObjectStorage {
         version: sourceObj.version,
         destination: s3DestinationKey,
         destinationVersion: newVersion,
+        signal,
       })
 
       const metadata = await this.backend.stats({
         bucket: this.location.getRootLocation(),
         key: s3DestinationKey,
         version: newVersion,
+        signal,
       })
 
       return this.db.asSuperUser().withTransaction(async (db) => {
-        await db.waitObjectLock(this.bucketId, destinationObjectName, undefined, {
+        await db.waitObjectLock({
+          bucketId: this.bucketId,
+          objectName: destinationObjectName,
           timeout: 5000,
         })
 
-        const sourceObject = await db.findObject(
-          this.bucketId,
-          sourceObjectName,
-          'id,version,metadata,user_metadata',
-          {
+        const sourceObject = await db.findObject({
+          bucketId: this.bucketId,
+          objectName: sourceObjectName,
+          columns: 'id,version,metadata,user_metadata',
+          filters: {
             forUpdate: true,
             dontErrorOnEmpty: false,
-          }
-        )
+          },
+        })
 
-        await db.updateObject(this.bucketId, sourceObjectName, {
-          name: destinationObjectName,
-          bucket_id: destinationBucket,
-          version: newVersion,
-          owner: owner,
-          metadata,
-          user_metadata: sourceObj.user_metadata,
+        await db.updateObject({
+          bucketId: this.bucketId,
+          name: sourceObjectName,
+          data: {
+            name: destinationObjectName,
+            bucket_id: destinationBucket,
+            version: newVersion,
+            owner: owner,
+            metadata,
+            user_metadata: sourceObj.user_metadata,
+          },
         })
 
         await ObjectAdminDelete.send({
@@ -580,42 +707,36 @@ export class ObjectStorage {
    * @param prefix
    * @param options
    */
-  async searchObjects(prefix: string, options: SearchObjectOption) {
+  async searchObjects(input: SearchObjectsInput) {
+    let { prefix } = input
+    const { options } = input
     if (prefix.length > 0 && !prefix.endsWith('/')) {
       // assuming prefix is always a folder
       prefix = `${prefix}/`
     }
 
-    return this.db.searchObjects(this.bucketId, prefix, options)
+    return this.db.searchObjects({ bucketId: this.bucketId, prefix, options })
   }
 
-  async listObjectsV2(options?: {
-    prefix?: string
-    delimiter?: string
-    cursor?: string
-    startAfter?: string
-    maxKeys?: number
-    encodingType?: 'url'
-    sortBy?: {
-      column: 'name' | 'created_at' | 'updated_at'
-      order?: string
-    }
-  }): Promise<ListObjectsV2Result> {
-    const limit = Math.min(options?.maxKeys || 1000, 1000)
-    const prefix = options?.prefix || ''
-    const delimiter = options?.delimiter
+  async listObjectsV2(input: ListObjectsV2Input = {}): Promise<ListObjectsV2Result> {
+    const limit = Math.min(input.maxKeys || 1000, 1000)
+    const prefix = input.prefix || ''
+    const delimiter = input.delimiter
 
-    const cursor = options?.cursor ? decodeContinuationToken(options.cursor) : undefined
-    let searchResult = await this.db.listObjectsV2(this.bucketId, {
-      prefix: options?.prefix,
-      delimiter: options?.delimiter,
-      maxKeys: limit + 1,
-      nextToken: cursor?.startAfter,
-      startAfter: cursor?.startAfter || options?.startAfter,
-      sortBy: {
-        order: cursor?.sortOrder || options?.sortBy?.order,
-        column: cursor?.sortColumn || options?.sortBy?.column,
-        after: cursor?.sortColumnAfter,
+    const cursor = input.cursor ? decodeContinuationToken(input.cursor) : undefined
+    let searchResult = await this.db.listObjectsV2({
+      bucketId: this.bucketId,
+      options: {
+        prefix: input.prefix,
+        delimiter: input.delimiter,
+        maxKeys: limit + 1,
+        nextToken: cursor?.startAfter,
+        startAfter: cursor?.startAfter || input.startAfter,
+        sortBy: {
+          order: cursor?.sortOrder || input.sortBy?.order,
+          column: cursor?.sortColumn || input.sortBy?.column,
+          after: cursor?.sortColumnAfter,
+        },
       },
     })
 
@@ -660,7 +781,7 @@ export class ObjectStorage {
       const name = obj.id === null && !obj.name.endsWith('/') ? obj.name + '/' : obj.name
       target.push({
         ...obj,
-        name: options?.encodingType === 'url' ? encodeURIComponent(name) : name,
+        name: input.encodingType === 'url' ? encodeURIComponent(name) : name,
       })
     })
 
@@ -668,7 +789,7 @@ export class ObjectStorage {
     let nextCursorKey: string | undefined
 
     if (isTruncated) {
-      const sortColumn = (cursor?.sortColumn || options?.sortBy?.column) as
+      const sortColumn = (cursor?.sortColumn || input.sortBy?.column) as
         | 'name'
         | 'created_at'
         | 'updated_at'
@@ -676,7 +797,7 @@ export class ObjectStorage {
 
       nextContinuationToken = encodeContinuationToken({
         startAfter: searchResult[searchResult.length - 1].name,
-        sortOrder: cursor?.sortOrder || options?.sortBy?.order,
+        sortOrder: cursor?.sortOrder || input.sortBy?.order,
         sortColumn,
         sortColumnAfter:
           sortColumn && sortColumn !== 'name' && searchResult[searchResult.length - 1][sortColumn]
@@ -702,13 +823,10 @@ export class ObjectStorage {
    * @param expiresIn seconds
    * @param metadata
    */
-  async signObjectUrl(
-    objectName: string,
-    url: string,
-    expiresIn: number,
-    metadata?: Record<string, string | object | undefined>
-  ) {
-    await this.findObject(objectName)
+  async signObjectUrl(input: SignObjectUrlInput) {
+    const { objectName, url, expiresIn } = input
+    let { metadata } = input
+    await this.findObject({ objectName })
 
     metadata = Object.keys(metadata || {}).reduce((all, key) => {
       if (!all[key]) {
@@ -741,7 +859,8 @@ export class ObjectStorage {
    * @param paths
    * @param expiresIn
    */
-  async signObjectUrls(paths: string[], expiresIn: number) {
+  async signObjectUrls(input: SignObjectUrlsInput) {
+    const { paths, expiresIn } = input
     let results: { name: string }[] = []
 
     for (let i = 0; i < paths.length; ) {
@@ -754,7 +873,7 @@ export class ObjectStorage {
         urlParamLength += encodeURIComponent(path).length + 9 // length of '%22%2C%22'
       }
 
-      const objects = await this.findObjects(pathsSubset, 'name')
+      const objects = await this.findObjects({ objectNames: pathsSubset, columns: 'name' })
       results = results.concat(objects)
     }
 
@@ -790,13 +909,8 @@ export class ObjectStorage {
    * @param owner
    * @param options
    */
-  async signUploadObjectUrl(
-    objectName: string,
-    url: string,
-    expiresIn: number,
-    owner?: string,
-    options?: { upsert?: boolean }
-  ) {
+  async signUploadObjectUrl(input: SignUploadObjectUrlInput) {
+    const { objectName, url, expiresIn, owner, options } = input
     // check if user has INSERT permissions
     await this.uploader.canUpload({
       bucketId: this.bucketId,
@@ -820,7 +934,8 @@ export class ObjectStorage {
    * @param token
    * @param objectName
    */
-  async verifyObjectSignature(token: string, objectName: string) {
+  async verifyObjectSignature(input: VerifyObjectSignatureInput) {
+    const { token, objectName } = input
     const { secret: jwtSecret, jwks } = await getJwtSecret(this.db.tenantId)
 
     let payload: SignedUploadToken

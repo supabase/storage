@@ -69,7 +69,8 @@ export default function UploadPart(s3Router: S3Router) {
               uploadId: req.Querystring.uploadId,
               partNumber: req.Querystring.partNumber,
               body: body as Readable,
-              length: req.Headers?.['x-amz-decoded-content-length'] || req.Headers?.['content-length'],
+              length:
+                req.Headers?.['x-amz-decoded-content-length'] || req.Headers?.['content-length'],
               signal: ctx.signals.body,
             })
 

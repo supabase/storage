@@ -82,7 +82,12 @@ export default async function routes(fastify: FastifyInstance) {
 
       const signedURL = await request.storage
         .from(bucketName)
-        .signObjectUrl(objectName, urlPath as string, expiresIn, transformationOptions)
+        .signObjectUrl({
+          objectName,
+          url: urlPath as string,
+          expiresIn,
+          metadata: transformationOptions,
+        })
 
       return response.status(200).send({ signedURL })
     }

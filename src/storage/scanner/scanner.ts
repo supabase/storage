@@ -160,13 +160,13 @@ export class ObjectScanner {
         break
       }
 
-      const storageObjects = await this.storage.db.listObjects(
-        bucket,
-        'id,name,version,metadata',
-        1000,
-        options.before,
-        nextToken
-      )
+      const storageObjects = await this.storage.db.listObjects({
+        bucketId: bucket,
+        columns: 'id,name,version,metadata',
+        limit: 1000,
+        before: options.before,
+        nextToken,
+      })
 
       const dbKeys = storageObjects.map(({ name, version, metadata }) => {
         if (version) {
@@ -387,11 +387,11 @@ export class ObjectScanner {
         continue
       }
 
-      const dbObjects = await this.storage.db.findObjectVersions(
-        options.bucket,
-        localObjs,
-        'name,version'
-      )
+      const dbObjects = await this.storage.db.findObjectVersions({
+        bucketId: options.bucket,
+        objectNames: localObjs,
+        columns: 'name,version',
+      })
 
       const s3OrphanedKeys = tmpS3Objects.filter(
         (key) =>
@@ -462,10 +462,10 @@ export class ObjectScanner {
     for await (const dbObjects of orphans) {
       if (dbObjects.length > 0) {
         promises.push(
-          this.storage.db.deleteObjectVersions(
-            options.bucket,
-            dbObjects.filter((o) => o.version) as { name: string; version: string }[]
-          )
+          this.storage.db.deleteObjectVersions({
+            bucketId: options.bucket,
+            objectNames: dbObjects.filter((o) => o.version) as { name: string; version: string }[],
+          })
         )
 
         yield dbObjects

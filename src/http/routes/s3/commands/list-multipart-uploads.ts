@@ -33,15 +33,18 @@ export default function ListMultipartUploads(s3Router: S3Router) {
     async (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-      return s3Protocol.listMultipartUploads({
-        Bucket: req.Params.Bucket,
-        Prefix: req.Querystring?.prefix || '',
-        KeyMarker: req.Querystring?.['key-marker'],
-        UploadIdMarker: req.Querystring?.['upload-id-marker'],
-        EncodingType: req.Querystring?.['encoding-type'],
-        MaxUploads: req.Querystring?.['max-uploads'],
-        Delimiter: req.Querystring?.delimiter,
-      })
+      return s3Protocol.listMultipartUploads(
+        {
+          Bucket: req.Params.Bucket,
+          Prefix: req.Querystring?.prefix || '',
+          KeyMarker: req.Querystring?.['key-marker'],
+          UploadIdMarker: req.Querystring?.['upload-id-marker'],
+          EncodingType: req.Querystring?.['encoding-type'],
+          MaxUploads: req.Querystring?.['max-uploads'],
+          Delimiter: req.Querystring?.delimiter,
+        },
+        ctx.signals.response
+      )
     }
   )
 }

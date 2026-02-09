@@ -1,6 +1,6 @@
 'use strict'
 
-import { S3Backend } from '../storage/backend/s3/adapter'
+import { S3Adapter } from '@storage/backend/s3/s3-adapter'
 import { S3Client } from '@aws-sdk/client-s3'
 import { Readable } from 'stream'
 
@@ -38,12 +38,16 @@ describe('S3Backend', () => {
         },
       })
 
-      const backend = new S3Backend({
+      const backend = new S3Adapter({
         region: 'us-east-1',
         endpoint: 'http://localhost:9000',
       })
 
-      const result = await backend.getObject('test-bucket', 'test-key', undefined)
+      const result = await backend.read({
+        bucket: 'test-bucket',
+        key: 'test-key',
+        version: undefined,
+      })
 
       expect(result.metadata.mimetype).toBe('application/octet-stream')
       expect(result.metadata.cacheControl).toBe('max-age=3600')
@@ -64,12 +68,16 @@ describe('S3Backend', () => {
         },
       })
 
-      const backend = new S3Backend({
+      const backend = new S3Adapter({
         region: 'us-east-1',
         endpoint: 'http://localhost:9000',
       })
 
-      const result = await backend.getObject('test-bucket', 'test-key', undefined)
+      const result = await backend.read({
+        bucket: 'test-bucket',
+        key: 'test-key',
+        version: undefined,
+      })
 
       expect(result.metadata.mimetype).toBe('image/png')
     })

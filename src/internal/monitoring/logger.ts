@@ -12,6 +12,7 @@ const {
   logflareEnabled,
   logflareBatchSize,
   region,
+  version,
 } = getConfig()
 
 export const baseLogger = pino({
@@ -59,7 +60,7 @@ export const baseLogger = pino({
   timestamp: pino.stdTimeFunctions.isoTime,
 })
 
-export let logger = baseLogger.child({ region })
+export let logger = baseLogger.child({ region, appVersion: version })
 
 export function setLogger(newLogger: Logger) {
   logger = newLogger

@@ -1,7 +1,7 @@
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { S3Router } from '../router'
 import { ROUTE_OPERATIONS } from '../../operations'
-import { S3Backend } from '@storage/backend'
+import { S3Adapter } from '@storage/backend'
 import { ERRORS } from '@internal/errors'
 
 const ListPartsInput = {
@@ -32,7 +32,7 @@ export default function ListParts(s3Router: S3Router) {
     async (req, ctx) => {
       const backend = ctx.req.storage.backend
 
-      if (!(backend instanceof S3Backend)) {
+      if (!(backend instanceof S3Adapter)) {
         throw ERRORS.NotSupported('only S3 driver is supported for this operation')
       }
 
@@ -71,13 +71,16 @@ export default function ListParts(s3Router: S3Router) {
     async (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-      return s3Protocol.listParts({
-        Bucket: req.Params.Bucket,
-        Key: req.Params['*'],
-        UploadId: req.Querystring.uploadId,
-        MaxParts: req.Querystring['max-parts'],
-        PartNumberMarker: req.Querystring['part-number-marker'],
-      })
+      return s3Protocol.listParts(
+        {
+          Bucket: req.Params.Bucket,
+          Key: req.Params['*'],
+          UploadId: req.Querystring.uploadId,
+          MaxParts: req.Querystring['max-parts'],
+          PartNumberMarker: req.Querystring['part-number-marker'],
+        },
+        ctx.signals.response
+      )
     }
   )
 }

@@ -42,22 +42,25 @@ export default function UploadPartCopy(s3Router: S3Router) {
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-      return s3Protocol.uploadPartCopy({
-        Bucket: req.Params.Bucket,
-        Key: req.Params['*'],
-        CopySource: req.Headers['x-amz-copy-source'],
-        PartNumber: req.Querystring.partNumber,
-        UploadId: req.Querystring.uploadId,
-        CopySourceRange: req.Headers['x-amz-copy-source-range'],
-        CopySourceIfMatch: req.Headers['x-amz-copy-source-if-match'],
-        CopySourceIfModifiedSince: req.Headers['x-amz-copy-source-if-modified-since']
-          ? new Date(req.Headers['x-amz-copy-source-if-modified-since'])
-          : undefined,
-        CopySourceIfNoneMatch: req.Headers['x-amz-copy-source-if-none-match'],
-        CopySourceIfUnmodifiedSince: req.Headers['x-amz-copy-source-if-unmodified-since']
-          ? new Date(req.Headers['x-amz-copy-source-if-unmodified-since'])
-          : undefined,
-      })
+      return s3Protocol.uploadPartCopy(
+        {
+          Bucket: req.Params.Bucket,
+          Key: req.Params['*'],
+          CopySource: req.Headers['x-amz-copy-source'],
+          PartNumber: req.Querystring.partNumber,
+          UploadId: req.Querystring.uploadId,
+          CopySourceRange: req.Headers['x-amz-copy-source-range'],
+          CopySourceIfMatch: req.Headers['x-amz-copy-source-if-match'],
+          CopySourceIfModifiedSince: req.Headers['x-amz-copy-source-if-modified-since']
+            ? new Date(req.Headers['x-amz-copy-source-if-modified-since'])
+            : undefined,
+          CopySourceIfNoneMatch: req.Headers['x-amz-copy-source-if-none-match'],
+          CopySourceIfUnmodifiedSince: req.Headers['x-amz-copy-source-if-unmodified-since']
+            ? new Date(req.Headers['x-amz-copy-source-if-unmodified-since'])
+            : undefined,
+        },
+        ctx.signals.response
+      )
     }
   )
 }

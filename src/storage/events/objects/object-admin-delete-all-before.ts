@@ -61,7 +61,12 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
       const start = Date.now()
       while (Date.now() - start < DELETE_JOB_TIME_LIMIT_MS) {
         moreObjectsToDelete = false
-        const objects = await storage.db.listObjects(bucketId, 'id, name', batchLimit + 1, before)
+        const objects = await storage.db.listObjects({
+          bucketId,
+          columns: 'id, name',
+          limit: batchLimit + 1,
+          before,
+        })
 
         const backend = storage.backend
         if (objects && objects.length > 0) {
@@ -71,11 +76,11 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
           }
 
           await storage.db.withTransaction(async (trx) => {
-            const deleted = await trx.deleteObjects(
+            const deleted = await trx.deleteObjects({
               bucketId,
-              objects.map(({ id }) => id!),
-              'id'
-            )
+              objectNames: objects.map(({ id }) => id!),
+              by: 'id',
+            })
 
             if (deleted && deleted.length > 0) {
               const prefixes: string[] = []
@@ -86,7 +91,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
                 prefixes.push(fileName + '.info')
               }
 
-              await backend.deleteObjects(storageS3Bucket, prefixes)
+              await backend.removeMany({ bucket: storageS3Bucket, prefixes })
             }
           })
         }

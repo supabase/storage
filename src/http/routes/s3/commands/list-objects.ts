@@ -54,15 +54,18 @@ export default function ListObjects(s3Router: S3Router) {
     async (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-      return s3Protocol.listObjectsV2({
-        Bucket: req.Params.Bucket,
-        Prefix: req.Querystring?.prefix || '',
-        ContinuationToken: req.Querystring?.['continuation-token'],
-        StartAfter: req.Querystring?.['start-after'],
-        EncodingType: req.Querystring?.['encoding-type'],
-        MaxKeys: req.Querystring?.['max-keys'],
-        Delimiter: req.Querystring?.delimiter,
-      })
+      return s3Protocol.listObjectsV2(
+        {
+          Bucket: req.Params.Bucket,
+          Prefix: req.Querystring?.prefix || '',
+          ContinuationToken: req.Querystring?.['continuation-token'],
+          StartAfter: req.Querystring?.['start-after'],
+          EncodingType: req.Querystring?.['encoding-type'],
+          MaxKeys: req.Querystring?.['max-keys'],
+          Delimiter: req.Querystring?.delimiter,
+        },
+        ctx.signals.response
+      )
     }
   )
 
@@ -72,14 +75,17 @@ export default function ListObjects(s3Router: S3Router) {
     async (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-      return s3Protocol.listObjects({
-        Bucket: req.Params.Bucket,
-        Prefix: req.Querystring?.prefix || '',
-        Marker: req.Querystring?.['marker'],
-        EncodingType: req.Querystring?.['encoding-type'],
-        MaxKeys: req.Querystring?.['max-keys'],
-        Delimiter: req.Querystring?.delimiter,
-      })
+      return s3Protocol.listObjects(
+        {
+          Bucket: req.Params.Bucket,
+          Prefix: req.Querystring?.prefix || '',
+          Marker: req.Querystring?.['marker'],
+          EncodingType: req.Querystring?.['encoding-type'],
+          MaxKeys: req.Querystring?.['max-keys'],
+          Delimiter: req.Querystring?.delimiter,
+        },
+        ctx.signals.response
+      )
     }
   )
 }

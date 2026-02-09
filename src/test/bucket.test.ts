@@ -1,7 +1,7 @@
 'use strict'
 import dotenv from 'dotenv'
 import app from '../app'
-import { S3Backend } from '../storage/backend'
+import { S3Adapter } from '../storage/backend'
 import { FastifyInstance } from 'fastify'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { StorageKnexDB } from '@storage/database'
@@ -13,11 +13,11 @@ const anonKey = process.env.ANON_KEY || ''
 let appInstance: FastifyInstance
 
 beforeAll(() => {
-  jest.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {
+  jest.spyOn(S3Adapter.prototype, 'removeMany').mockImplementation(() => {
     return Promise.resolve()
   })
 
-  jest.spyOn(S3Backend.prototype, 'getObject').mockImplementation(() => {
+  jest.spyOn(S3Adapter.prototype, 'read').mockImplementation(() => {
     return Promise.resolve({
       metadata: {
         httpStatusCode: 200,
@@ -365,7 +365,7 @@ describe('testing public bucket functionality', () => {
     expect(publicResponse.headers['etag']).toBe('abc')
     expect(publicResponse.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
 
-    const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
+    const mockGetObject = jest.spyOn(S3Adapter.prototype, 'read')
     mockGetObject.mockRejectedValue({
       $metadata: {
         httpStatusCode: 304,
@@ -380,7 +380,7 @@ describe('testing public bucket functionality', () => {
       },
     })
     expect(notModifiedResponse.statusCode).toBe(304)
-    expect(mockGetObject.mock.calls[1][3]).toMatchObject({
+    expect(mockGetObject.mock.calls[1][0].headers).toMatchObject({
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })
@@ -466,16 +466,18 @@ describe('testing count objects in bucket', () => {
   })
 
   it('should return correct object count', async () => {
-    await expect(db.countObjectsInBucket('bucket2')).resolves.toBe(27)
+    await expect(db.countObjectsInBucket({ bucketId: 'bucket2' })).resolves.toBe(27)
   })
   it('should return limited object count', async () => {
-    await expect(db.countObjectsInBucket('bucket2', 22)).resolves.toBe(22)
+    await expect(db.countObjectsInBucket({ bucketId: 'bucket2', limit: 22 })).resolves.toBe(22)
   })
   it('should return full object count if limit is greater than total', async () => {
-    await expect(db.countObjectsInBucket('bucket2', 999)).resolves.toBe(27)
+    await expect(db.countObjectsInBucket({ bucketId: 'bucket2', limit: 999 })).resolves.toBe(27)
   })
   it('should return 0 object count if there are no objects with provided bucket id', async () => {
-    await expect(db.countObjectsInBucket('this-is-not-a-bucket-at-all', 999)).resolves.toBe(0)
+    await expect(
+      db.countObjectsInBucket({ bucketId: 'this-is-not-a-bucket-at-all', limit: 999 })
+    ).resolves.toBe(0)
   })
 })
 

@@ -61,12 +61,16 @@ export default async function routes(fastify: FastifyInstance) {
 
       const { public: isPublic, file_size_limit, allowed_mime_types } = request.body
 
-      await request.storage.updateBucket(bucketId, {
-        public: isPublic,
-        fileSizeLimit: file_size_limit,
-        allowedMimeTypes: allowed_mime_types
-          ? allowed_mime_types?.filter((mime) => mime)
-          : allowed_mime_types,
+      await request.storage.updateBucket({
+        bucketId,
+        data: {
+          public: isPublic,
+          fileSizeLimit: file_size_limit,
+          allowedMimeTypes: allowed_mime_types
+            ? allowed_mime_types?.filter((mime) => mime)
+            : allowed_mime_types,
+        },
+        signal: request.signals.disconnect.signal,
       })
 
       return response.status(200).send(createResponse('Successfully updated'))

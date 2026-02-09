@@ -66,12 +66,15 @@ export default function DeleteObject(s3Router: S3Router) {
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-      return s3Protocol.deleteObjects({
-        Bucket: req.Params.Bucket,
-        Delete: {
-          Objects: req.Body.Delete.Object,
+      return s3Protocol.deleteObjects(
+        {
+          Bucket: req.Params.Bucket,
+          Delete: {
+            Objects: req.Body.Delete.Object,
+          },
         },
-      })
+        ctx.signals.response
+      )
     }
   )
 
@@ -82,10 +85,13 @@ export default function DeleteObject(s3Router: S3Router) {
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-      return s3Protocol.deleteObject({
-        Bucket: req.Params.Bucket,
-        Key: req.Params['*'],
-      })
+      return s3Protocol.deleteObject(
+        {
+          Bucket: req.Params.Bucket,
+          Key: req.Params['*'],
+        },
+        ctx.signals.response
+      )
     }
   )
 
@@ -101,7 +107,11 @@ export default function DeleteObject(s3Router: S3Router) {
           throw new Error('Iceberg bucket name is required')
         }
 
-        await ctx.req.storage.backend.deleteObject(internalBucketName, req.Params['*'], undefined)
+        await ctx.req.storage.backend.remove({
+          bucket: internalBucketName,
+          key: req.Params['*'],
+          version: undefined,
+        })
 
         return {}
       }

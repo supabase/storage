@@ -67,13 +67,13 @@ export default function CompleteMultipartUpload(s3Router: S3Router) {
         throw ERRORS.InvalidParameter('internalIcebergBucketName')
       }
 
-      const resp = await ctx.req.storage.backend.completeMultipartUpload(
-        icebergBucketName,
-        req.Params['*'],
-        req.Querystring.uploadId,
-        '',
-        req.Body?.CompleteMultipartUpload?.Part || []
-      )
+      const resp = await ctx.req.storage.backend.completeMultipartUpload({
+        bucket: icebergBucketName,
+        key: req.Params['*'],
+        uploadId: req.Querystring.uploadId,
+        version: '',
+        parts: req.Body?.CompleteMultipartUpload?.Part || [],
+      })
 
       return {
         responseBody: {

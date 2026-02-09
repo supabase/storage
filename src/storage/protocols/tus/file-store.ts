@@ -3,7 +3,7 @@ import { Upload } from '@tus/server'
 import fsExtra from 'fs-extra'
 import path from 'path'
 import { Configstore } from '@tus/file-store'
-import { FileBackend } from '../../backend'
+import { FileAdapter } from '../../backend'
 
 type FileStoreOptions = {
   directory: string
@@ -12,11 +12,11 @@ type FileStoreOptions = {
 }
 
 export class FileStore extends TusFileStore {
-  protected fileAdapter: FileBackend
+  protected fileAdapter: FileAdapter
 
   constructor(protected readonly options: FileStoreOptions) {
     super(options)
-    this.fileAdapter = new FileBackend()
+    this.fileAdapter = new FileAdapter()
   }
 
   async create(file: Upload): Promise<Upload> {

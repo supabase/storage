@@ -53,10 +53,13 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
         reqId: job.data.reqId,
       })
 
-      await storage.backend.deleteObjects(storageS3Bucket, [
-        withOptionalVersion(s3Key, version),
-        withOptionalVersion(s3Key, version) + '.info',
-      ])
+      await storage.backend.removeMany({
+        bucket: storageS3Bucket,
+        prefixes: [
+          withOptionalVersion(s3Key, version),
+          withOptionalVersion(s3Key, version) + '.info',
+        ],
+      })
     } catch (e) {
       const s3Key = `${job.data.tenant.ref}/${job.data.bucketId}/${job.data.name}`
 

@@ -88,10 +88,10 @@ export default async function routes(fastify: FastifyInstance) {
         .from(bucketName)
         .signUploadObjectUrl(objectName, urlPath as string, uploadSignedUrlExpirationTime, owner, {
           upsert: request.headers['x-upsert'] === 'true',
-          userMetadata: userMetadata,
+          userMetadata,
           metadata: {
             mimetype: contentType,
-            contentLength: contentLength,
+            contentLength,
           },
         })
 

@@ -906,20 +906,26 @@ export class StorageKnexDB implements Database {
     metadata?: Partial<ObjectMetadata>
   ) {
     return this.runQuery('CreateMultipartUpload', async (knex, signal) => {
+      const data: Record<string, unknown> = {
+        id: uploadId,
+        bucket_id: bucketId,
+        key: objectName,
+        version,
+        upload_signature: signature,
+        owner_id: owner,
+        user_metadata: userMetadata,
+      }
+
+      if (
+        !this.latestMigration ||
+        DBMigration[this.latestMigration] >= DBMigration['s3-multipart-uploads-metadata']
+      ) {
+        data.metadata = metadata
+      }
+
       const multipart = await knex
         .table<S3MultipartUpload>('s3_multipart_uploads')
-        .insert(
-          this.normalizeColumns({
-            id: uploadId,
-            bucket_id: bucketId,
-            key: objectName,
-            version,
-            upload_signature: signature,
-            owner_id: owner,
-            user_metadata: userMetadata,
-            metadata: metadata,
-          })
-        )
+        .insert(this.normalizeColumns(data))
         .returning('*')
         .abortOnSignal(signal)
 

@@ -1,21 +1,53 @@
-import AES from 'crypto-js/aes'
-import Utf8 from 'crypto-js/enc-utf8'
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto'
 import { getConfig } from '../../config'
-
 const { encryptionKey } = getConfig()
 
 /**
- * Decrypts a text with the configured encryption key via ENCRYPTION_KEY env
- * @param ciphertext
- */
-export function decrypt(ciphertext: string): string {
-  return AES.decrypt(ciphertext, encryptionKey).toString(Utf8)
+ * Generate CryptoJs.AES key from passphrase
+ * https://github.com/brix/crypto-js/issues/468
+ * */
+function convertPassphraseToAesKeyBuffer(key: string, salt: Buffer): Buffer {
+  const password = Buffer.concat([Buffer.from(key, 'binary'), salt])
+  const hash: Buffer[] = []
+  let digest = password
+  for (let i = 0; i < 3; i++) {
+    hash[i] = createHash('md5').update(digest).digest()
+    digest = Buffer.concat([hash[i]!, password])
+  }
+  return Buffer.concat(hash)
 }
 
 /**
- * Encrypts a text with the configured encryption key via ENCRYPTION_KEY env
- * @param plaintext
- */
+ * Replicate CryptoJs.AES.decrypt method
+ * */
+export function decrypt(ciphertext: string): string {
+  try {
+    const cipherBuffer = Buffer.from(ciphertext, 'base64')
+    const salt = cipherBuffer.subarray(8, 16)
+    const keyDerivation = convertPassphraseToAesKeyBuffer(encryptionKey, salt)
+    const [key, iv] = [keyDerivation.subarray(0, 32), keyDerivation.subarray(32)]
+    const contents = cipherBuffer.subarray(16)
+    const decipher = createDecipheriv('aes-256-cbc', key, iv)
+    const decrypted = Buffer.concat([decipher.update(contents), decipher.final()])
+    return decrypted.toString('utf8')
+  } catch (e) {
+    throw e
+  }
+}
+
+/**
+ * Replicate CryptoJs.AES.encrypt method
+ * */
 export function encrypt(plaintext: string): string {
-  return AES.encrypt(plaintext, encryptionKey).toString()
+  try {
+    const salt = randomBytes(8)
+    const keyDerivation = convertPassphraseToAesKeyBuffer(encryptionKey, salt)
+    const [key, iv] = [keyDerivation.subarray(0, 32), keyDerivation.subarray(32)]
+    const cipher = createCipheriv('aes-256-cbc', key, iv)
+    const contents = Buffer.concat([cipher.update(plaintext), cipher.final()])
+    const encrypted = Buffer.concat([Buffer.from('Salted__', 'utf8'), salt, contents])
+    return encrypted.toString('base64')
+  } catch (e) {
+    throw e
+  }
 }

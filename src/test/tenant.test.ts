@@ -280,6 +280,90 @@ describe('Tenant configs', () => {
     expect(getResponseJSON).toEqual({ ...payload, fileSizeLimit: 2 })
   })
 
+  test('Update tenant databasePoolUrl to null', async () => {
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    const patchResponse = await adminApp.inject({
+      method: 'PATCH',
+      url: `/tenants/abc`,
+      payload: { databasePoolUrl: null },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(patchResponse.statusCode).toBe(204)
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+
+    const getResponseJSON = JSON.parse(getResponse.body)
+    expect(getResponseJSON).toEqual({ ...payload, databasePoolUrl: null })
+    expect(getResponseJSON.databasePoolUrl).toBeNull()
+  })
+
+  test('Upsert tenant config does not update iceberg/vector feature blocks when enabled is omitted', async () => {
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    const putPayloadWithoutFeatureEnabled = {
+      ...payload,
+      features: {
+        ...payload.features,
+        icebergCatalog: {
+          maxCatalogs: 999,
+          maxNamespaces: 999,
+          maxTables: 999,
+        },
+        vectorBuckets: {
+          maxBuckets: 999,
+          maxIndexes: 999,
+        },
+      },
+    }
+
+    const putResponse = await adminApp.inject({
+      method: 'PUT',
+      url: `/tenants/abc`,
+      payload: putPayloadWithoutFeatureEnabled,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(putResponse.statusCode).toBe(204)
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+
+    const getResponseJSON = JSON.parse(getResponse.body)
+    expect(getResponseJSON.features.icebergCatalog).toEqual(payload.features.icebergCatalog)
+    expect(getResponseJSON.features.vectorBuckets).toEqual(payload.features.vectorBuckets)
+  })
+
   test('Upsert tenant config', async () => {
     const firstPutResponse = await adminApp.inject({
       method: 'PUT',

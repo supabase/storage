@@ -241,7 +241,7 @@ export default async function routes(fastify: FastifyInstance) {
       anonKey: decrypt(anon_key),
       databaseUrl: decrypt(database_url),
       databasePoolUrl:
-        typeof database_pool_url === null
+        database_pool_url === null
           ? null
           : database_pool_url
           ? decrypt(database_pool_url)
@@ -490,14 +490,14 @@ export default async function routes(fastify: FastifyInstance) {
       tenantInfo.tracing_mode = tracingMode
     }
 
-    if (typeof features?.icebergCatalog?.enabled) {
+    if (typeof features?.icebergCatalog?.enabled !== 'undefined') {
       tenantInfo.feature_iceberg_catalog = features?.icebergCatalog?.enabled
       tenantInfo.feature_iceberg_catalog_max_namespaces = features?.icebergCatalog?.maxNamespaces
       tenantInfo.feature_iceberg_catalog_max_tables = features?.icebergCatalog?.maxTables
       tenantInfo.feature_iceberg_catalog_max_catalogs = features?.icebergCatalog?.maxCatalogs
     }
 
-    if (typeof features?.vectorBuckets?.enabled) {
+    if (typeof features?.vectorBuckets?.enabled !== 'undefined') {
       tenantInfo.feature_vector_buckets = features?.vectorBuckets?.enabled
       tenantInfo.feature_vector_buckets_max_buckets = features?.vectorBuckets?.maxBuckets
       tenantInfo.feature_vector_buckets_max_indexes = features?.vectorBuckets?.maxIndexes

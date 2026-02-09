@@ -77,6 +77,7 @@ export default async function routes(fastify: FastifyInstance) {
         options: {
           upsert: request.headers['x-upsert'] === 'true',
         },
+        signal: request.signals.disconnect.signal,
       })
 
       return response.status(200).send({ url: signedUpload.url, token: signedUpload.token })

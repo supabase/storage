@@ -179,6 +179,7 @@ export class ObjectStorage {
     const bucket = await this.db.asSuperUser().findBucketById({
       bucketId: this.bucketId,
       columns: 'id, file_size_limit, allowed_mime_types',
+      signal: file.signal,
     })
 
     const uploadRequest = await fileUploadFromRequest(request, {
@@ -221,33 +222,36 @@ export class ObjectStorage {
    */
   async deleteObject(input: DeleteObjectInput) {
     const { objectName, signal } = input
-    const obj = await this.db.withTransaction(async (db) => {
-      const obj = await db.asSuperUser().findObject({
-        bucketId: this.bucketId,
-        objectName,
-        columns: 'id,version',
-        filters: { forUpdate: true },
-      })
-
-      const deleted = await db.deleteObject({ bucketId: this.bucketId, objectName })
-
-      if (!deleted) {
-        throw ERRORS.NoSuchKey(objectName)
-      }
-
-      await this.backend.remove({
-        bucket: this.location.getRootLocation(),
-        key: this.location.getKeyLocation({
-          tenantId: this.db.tenantId,
+    const obj = await this.db.withTransaction(
+      async (db) => {
+        const obj = await db.asSuperUser().findObject({
           bucketId: this.bucketId,
           objectName,
-        }),
-        version: obj.version,
-        signal,
-      })
+          columns: 'id,version',
+          filters: { forUpdate: true },
+        })
 
-      return obj
-    })
+        const deleted = await db.deleteObject({ bucketId: this.bucketId, objectName })
+
+        if (!deleted) {
+          throw ERRORS.NoSuchKey(objectName)
+        }
+
+        await this.backend.remove({
+          bucket: this.location.getRootLocation(),
+          key: this.location.getKeyLocation({
+            tenantId: this.db.tenantId,
+            bucketId: this.bucketId,
+            objectName,
+          }),
+          version: obj.version,
+          signal,
+        })
+
+        return obj
+      },
+      { signal }
+    )
 
     await ObjectRemoved.sendWebhook({
       tenant: this.db.tenant(),
@@ -278,61 +282,64 @@ export class ObjectStorage {
         urlParamLength += encodeURIComponent(prefix).length + 9 // length of '%22%2C%22'
       }
 
-      await this.db.withTransaction(async (db) => {
-        const data = await db.deleteObjects({
-          bucketId: this.bucketId,
-          objectNames: prefixesSubset,
-          by: 'name',
-        })
+      await this.db.withTransaction(
+        async (db) => {
+          const data = await db.deleteObjects({
+            bucketId: this.bucketId,
+            objectNames: prefixesSubset,
+            by: 'name',
+          })
 
-        if (data.length > 0) {
-          results = results.concat(data)
+          if (data.length > 0) {
+            results = results.concat(data)
 
-          // if successfully deleted, delete from s3 too
-          // todo: consider moving this to a queue
-          const prefixesToDelete = data.reduce((all, { name, version }) => {
-            all.push(
-              this.location.getKeyLocation({
-                tenantId: db.tenantId,
-                bucketId: this.bucketId,
-                objectName: name,
-                version,
-              })
-            )
-
-            if (version) {
+            // if successfully deleted, delete from s3 too
+            // todo: consider moving this to a queue
+            const prefixesToDelete = data.reduce((all, { name, version }) => {
               all.push(
                 this.location.getKeyLocation({
                   tenantId: db.tenantId,
                   bucketId: this.bucketId,
                   objectName: name,
                   version,
-                }) + '.info'
+                })
               )
-            }
-            return all
-          }, [] as string[])
 
-          await this.backend.removeMany({
-            bucket: this.location.getRootLocation(),
-            prefixes: prefixesToDelete,
-            signal,
-          })
+              if (version) {
+                all.push(
+                  this.location.getKeyLocation({
+                    tenantId: db.tenantId,
+                    bucketId: this.bucketId,
+                    objectName: name,
+                    version,
+                  }) + '.info'
+                )
+              }
+              return all
+            }, [] as string[])
 
-          await Promise.allSettled(
-            data.map((object) =>
-              ObjectRemoved.sendWebhook({
-                tenant: db.tenant(),
-                name: object.name,
-                bucketId: this.bucketId,
-                reqId: this.db.reqId,
-                version: object.version,
-                metadata: object.metadata,
-              })
+            await this.backend.removeMany({
+              bucket: this.location.getRootLocation(),
+              prefixes: prefixesToDelete,
+              signal,
+            })
+
+            await Promise.allSettled(
+              data.map((object) =>
+                ObjectRemoved.sendWebhook({
+                  tenant: db.tenant(),
+                  name: object.name,
+                  bucketId: this.bucketId,
+                  reqId: this.db.reqId,
+                  version: object.version,
+                  metadata: object.metadata,
+                })
+              )
             )
-          )
-        }
-      })
+          }
+        },
+        { signal }
+      )
     }
 
     return results
@@ -343,13 +350,14 @@ export class ObjectStorage {
    * @param input
    */
   async updateObjectMetadata(input: UpdateObjectMetadataInput) {
-    const { objectName, metadata } = input
+    const { objectName, metadata, signal } = input
     mustBeValidKey(objectName)
 
     const result = await this.db.updateObjectMetadata({
       bucketId: this.bucketId,
       objectName,
       metadata,
+      signal,
     })
 
     await ObjectUpdatedMetadata.sendWebhook({
@@ -369,8 +377,8 @@ export class ObjectStorage {
    * @param input
    */
   updateObjectOwner(input: UpdateObjectOwnerInput) {
-    const { objectName, owner } = input
-    return this.db.updateObjectOwner({ bucketId: this.bucketId, objectName, owner })
+    const { objectName, owner, signal } = input
+    return this.db.updateObjectOwner({ bucketId: this.bucketId, objectName, owner, signal })
   }
 
   /**
@@ -378,10 +386,10 @@ export class ObjectStorage {
    * @param input
    */
   async findObject(input: FindObjectInput) {
-    const { objectName, columns = 'id', filters } = input
+    const { objectName, columns = 'id', filters, signal } = input
     mustBeValidKey(objectName)
 
-    return this.db.findObject({ bucketId: this.bucketId, objectName, columns, filters })
+    return this.db.findObject({ bucketId: this.bucketId, objectName, columns, filters, signal })
   }
 
   /**
@@ -389,8 +397,8 @@ export class ObjectStorage {
    * @param input
    */
   async findObjects(input: FindObjectsInput) {
-    const { objectNames, columns = 'id' } = input
-    return this.db.findObjects({ bucketId: this.bucketId, objectNames, columns })
+    const { objectNames, columns = 'id', signal } = input
+    return this.db.findObjects({ bucketId: this.bucketId, objectNames, columns, signal })
   }
 
   /**
@@ -437,6 +445,7 @@ export class ObjectStorage {
       bucketId: this.bucketId,
       objectName: sourceKey,
       columns: 'bucket_id,metadata,user_metadata,version',
+      signal,
     })
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -474,49 +483,52 @@ export class ObjectStorage {
         signal,
       })
 
-      const destinationObject = await this.db.asSuperUser().withTransaction(async (db) => {
-        await db.waitObjectLock({
-          bucketId: destinationBucket,
-          objectName: destinationKey,
-          timeout: 3000,
-        })
-
-        const existingDestObject = await db.findObject({
-          bucketId: destinationBucket,
-          objectName: destinationKey,
-          columns: 'id,name,metadata,version,bucket_id',
-          filters: {
-            dontErrorOnEmpty: true,
-            forUpdate: true,
-          },
-        })
-
-        const destinationObject = await db.upsertObject({
-          ...originObject,
-          bucket_id: destinationBucket,
-          name: destinationKey,
-          owner,
-          metadata: {
-            ...destinationMetadata,
-            lastModified: copyResult.lastModified,
-            eTag: copyResult.eTag,
-          },
-          user_metadata: copyMetadata ? originObject.user_metadata : userMetadata,
-          version: newVersion,
-        })
-
-        if (existingDestObject) {
-          await ObjectAdminDelete.send({
-            name: existingDestObject.name,
-            bucketId: existingDestObject.bucket_id,
-            tenant: this.db.tenant(),
-            version: existingDestObject.version,
-            reqId: this.db.reqId,
+      const destinationObject = await this.db.asSuperUser().withTransaction(
+        async (db) => {
+          await db.waitObjectLock({
+            bucketId: destinationBucket,
+            objectName: destinationKey,
+            timeout: 3000,
           })
-        }
 
-        return destinationObject
-      })
+          const existingDestObject = await db.findObject({
+            bucketId: destinationBucket,
+            objectName: destinationKey,
+            columns: 'id,name,metadata,version,bucket_id',
+            filters: {
+              dontErrorOnEmpty: true,
+              forUpdate: true,
+            },
+          })
+
+          const destinationObject = await db.upsertObject({
+            ...originObject,
+            bucket_id: destinationBucket,
+            name: destinationKey,
+            owner,
+            metadata: {
+              ...destinationMetadata,
+              lastModified: copyResult.lastModified,
+              eTag: copyResult.eTag,
+            },
+            user_metadata: copyMetadata ? originObject.user_metadata : userMetadata,
+            version: newVersion,
+          })
+
+          if (existingDestObject) {
+            await ObjectAdminDelete.send({
+              name: existingDestObject.name,
+              bucketId: existingDestObject.bucket_id,
+              tenant: this.db.tenant(),
+              version: existingDestObject.version,
+              reqId: this.db.reqId,
+            })
+          }
+
+          return destinationObject
+        },
+        { signal }
+      )
 
       await ObjectCreatedCopyEvent.sendWebhook({
         tenant: this.db.tenant(),
@@ -591,6 +603,7 @@ export class ObjectStorage {
       bucketId: this.bucketId,
       objectName: sourceObjectName,
       columns: 'id, version,user_metadata',
+      signal,
     })
 
     if (s3SourceKey === s3DestinationKey) {
@@ -616,80 +629,83 @@ export class ObjectStorage {
         signal,
       })
 
-      return this.db.asSuperUser().withTransaction(async (db) => {
-        await db.waitObjectLock({
-          bucketId: this.bucketId,
-          objectName: destinationObjectName,
-          timeout: 5000,
-        })
+      return this.db.asSuperUser().withTransaction(
+        async (db) => {
+          await db.waitObjectLock({
+            bucketId: this.bucketId,
+            objectName: destinationObjectName,
+            timeout: 5000,
+          })
 
-        const sourceObject = await db.findObject({
-          bucketId: this.bucketId,
-          objectName: sourceObjectName,
-          columns: 'id,version,metadata,user_metadata',
-          filters: {
-            forUpdate: true,
-            dontErrorOnEmpty: false,
-          },
-        })
+          const sourceObject = await db.findObject({
+            bucketId: this.bucketId,
+            objectName: sourceObjectName,
+            columns: 'id,version,metadata,user_metadata',
+            filters: {
+              forUpdate: true,
+              dontErrorOnEmpty: false,
+            },
+          })
 
-        await db.updateObject({
-          bucketId: this.bucketId,
-          name: sourceObjectName,
-          data: {
-            name: destinationObjectName,
-            bucket_id: destinationBucket,
-            version: newVersion,
-            owner: owner,
-            metadata,
-            user_metadata: sourceObj.user_metadata,
-          },
-        })
+          await db.updateObject({
+            bucketId: this.bucketId,
+            name: sourceObjectName,
+            data: {
+              name: destinationObjectName,
+              bucket_id: destinationBucket,
+              version: newVersion,
+              owner: owner,
+              metadata,
+              user_metadata: sourceObj.user_metadata,
+            },
+          })
 
-        await ObjectAdminDelete.send({
-          name: sourceObjectName,
-          bucketId: this.bucketId,
-          tenant: this.db.tenant(),
-          version: sourceObj.version,
-          reqId: this.db.reqId,
-        })
-
-        await Promise.allSettled([
-          ObjectRemovedMove.sendWebhook({
-            tenant: this.db.tenant(),
+          await ObjectAdminDelete.send({
             name: sourceObjectName,
             bucketId: this.bucketId,
-            reqId: this.db.reqId,
-            version: sourceObject.version,
-            metadata: sourceObject.metadata,
-          }),
-          ObjectCreatedMove.sendWebhook({
             tenant: this.db.tenant(),
-            name: destinationObjectName,
-            version: newVersion,
-            bucketId: this.bucketId,
-            metadata: metadata,
-            oldObject: {
+            version: sourceObj.version,
+            reqId: this.db.reqId,
+          })
+
+          await Promise.allSettled([
+            ObjectRemovedMove.sendWebhook({
+              tenant: this.db.tenant(),
               name: sourceObjectName,
               bucketId: this.bucketId,
               reqId: this.db.reqId,
               version: sourceObject.version,
-            },
-            reqId: this.db.reqId,
-          }),
-        ])
+              metadata: sourceObject.metadata,
+            }),
+            ObjectCreatedMove.sendWebhook({
+              tenant: this.db.tenant(),
+              name: destinationObjectName,
+              version: newVersion,
+              bucketId: this.bucketId,
+              metadata: metadata,
+              oldObject: {
+                name: sourceObjectName,
+                bucketId: this.bucketId,
+                reqId: this.db.reqId,
+                version: sourceObject.version,
+              },
+              reqId: this.db.reqId,
+            }),
+          ])
 
-        return {
-          destObject: {
-            id: sourceObject.id,
-            name: destinationObjectName,
-            bucket_id: destinationBucket,
-            version: newVersion,
-            owner: owner,
-            metadata,
-          },
-        }
-      })
+          return {
+            destObject: {
+              id: sourceObject.id,
+              name: destinationObjectName,
+              bucket_id: destinationBucket,
+              version: newVersion,
+              owner: owner,
+              metadata,
+            },
+          }
+        },
+        { signal }
+      )
     } catch (e) {
       await ObjectAdminDelete.send({
         name: destinationObjectName,
@@ -715,7 +731,7 @@ export class ObjectStorage {
       prefix = `${prefix}/`
     }
 
-    return this.db.searchObjects({ bucketId: this.bucketId, prefix, options })
+    return this.db.searchObjects({ bucketId: this.bucketId, prefix, options, signal: input.signal })
   }
 
   async listObjectsV2(input: ListObjectsV2Input = {}): Promise<ListObjectsV2Result> {
@@ -738,6 +754,7 @@ export class ObjectStorage {
           after: cursor?.sortColumnAfter,
         },
       },
+      signal: input.signal,
     })
 
     let prevPrefix = ''
@@ -826,7 +843,7 @@ export class ObjectStorage {
   async signObjectUrl(input: SignObjectUrlInput) {
     const { objectName, url, expiresIn } = input
     let { metadata } = input
-    await this.findObject({ objectName })
+    await this.findObject({ objectName, signal: input.signal })
 
     metadata = Object.keys(metadata || {}).reduce((all, key) => {
       if (!all[key]) {
@@ -873,7 +890,11 @@ export class ObjectStorage {
         urlParamLength += encodeURIComponent(path).length + 9 // length of '%22%2C%22'
       }
 
-      const objects = await this.findObjects({ objectNames: pathsSubset, columns: 'name' })
+      const objects = await this.findObjects({
+        objectNames: pathsSubset,
+        columns: 'name',
+        signal: input.signal,
+      })
       results = results.concat(objects)
     }
 

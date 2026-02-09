@@ -28,7 +28,8 @@ export default function CreateBucket(s3Router: S3Router) {
 
       return s3Protocol.createBucket(
         req.Params.Bucket,
-        req.Headers?.['x-amz-acl'] === 'public-read'
+        req.Headers?.['x-amz-acl'] === 'public-read',
+        ctx.signals.response
       )
     }
   )

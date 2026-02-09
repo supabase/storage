@@ -125,12 +125,11 @@ export default function PutObject(s3Router: S3Router) {
         key += '.emptyFolderPlaceholder'
       }
 
-      const bucket = await ctx.storage
-        .asSuperUser()
-        .findBucket({
-          bucketId: req.Params.Bucket,
-          columns: 'id,file_size_limit,allowed_mime_types',
-        })
+      const bucket = await ctx.storage.asSuperUser().findBucket({
+        bucketId: req.Params.Bucket,
+        columns: 'id,file_size_limit,allowed_mime_types',
+        signal: ctx.signals.body,
+      })
 
       const uploadRequest = await fileUploadFromRequest(ctx.req, {
         objectName: key,
@@ -177,12 +176,11 @@ export default function PutObject(s3Router: S3Router) {
         throw ERRORS.InvalidParameter('Missing file')
       }
 
-      const bucket = await ctx.storage
-        .asSuperUser()
-        .findBucket({
-          bucketId: req.Params.Bucket,
-          columns: 'id,file_size_limit,allowed_mime_types',
-        })
+      const bucket = await ctx.storage.asSuperUser().findBucket({
+        bucketId: req.Params.Bucket,
+        columns: 'id,file_size_limit,allowed_mime_types',
+        signal: ctx.signals.body,
+      })
 
       const fieldsObject = fieldsToObject(file?.fields || {})
       const metadata = s3Protocol.parseMetadataHeaders(fieldsObject)

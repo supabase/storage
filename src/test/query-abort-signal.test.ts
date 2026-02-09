@@ -178,39 +178,3 @@ describe('Statement Timeout', () => {
     }
   })
 })
-
-describe('TenantConnection Abort Signal', () => {
-  it('should store and retrieve abort signal', async () => {
-    const superUser = await getServiceKeyUser(tenantId)
-    const poolManager = new PoolManager()
-    const pool = poolManager.getPool({
-      tenantId,
-      isExternalPool: true,
-      maxConnections: 2,
-      dbUrl: databasePoolURL || databaseURL,
-      user: superUser,
-      superUser,
-    })
-
-    const connection = new TenantConnection(pool, {
-      tenantId,
-      isExternalPool: true,
-      maxConnections: 2,
-      dbUrl: databasePoolURL || databaseURL,
-      user: superUser,
-      superUser,
-    })
-
-    // Initially no signal
-    expect(connection.getAbortSignal()).toBeUndefined()
-
-    // Set signal
-    const controller = new AbortController()
-    connection.setAbortSignal(controller.signal)
-
-    // Should retrieve the same signal
-    expect(connection.getAbortSignal()).toBe(controller.signal)
-
-    await pool.destroy()
-  })
-})

@@ -60,8 +60,13 @@ export default async function routes(fastify: FastifyInstance) {
           filters: {
             isPublic: true,
           },
+          signal: request.signals.disconnect.signal,
         }),
-        bucketRef.findObject({ objectName, columns: 'id,version,metadata' }),
+        bucketRef.findObject({
+          objectName,
+          columns: 'id,version,metadata',
+          signal: request.signals.disconnect.signal,
+        }),
       ])
 
       // send the object from s3

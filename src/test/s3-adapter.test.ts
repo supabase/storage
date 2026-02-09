@@ -1,6 +1,6 @@
 'use strict'
 
-import { S3Backend } from '@storage/backend/s3/s3-adapter'
+import { S3Adapter } from '@storage/backend/s3/s3-adapter'
 import { S3Client } from '@aws-sdk/client-s3'
 import { Readable } from 'stream'
 
@@ -38,7 +38,7 @@ describe('S3Backend', () => {
         },
       })
 
-      const backend = new S3Backend({
+      const backend = new S3Adapter({
         region: 'us-east-1',
         endpoint: 'http://localhost:9000',
       })
@@ -68,7 +68,7 @@ describe('S3Backend', () => {
         },
       })
 
-      const backend = new S3Backend({
+      const backend = new S3Adapter({
         region: 'us-east-1',
         endpoint: 'http://localhost:9000',
       })

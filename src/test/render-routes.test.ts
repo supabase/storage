@@ -2,7 +2,7 @@ import dotenv from 'dotenv'
 import fs from 'fs/promises'
 import { getConfig, JwksConfig, mergeConfig } from '../config'
 import app from '../app'
-import { S3Backend } from '../storage/backend'
+import { S3Adapter } from '../storage/backend'
 import path from 'path'
 import { ImageRenderer } from '../storage/renderer'
 import axios from 'axios'
@@ -51,7 +51,7 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.tempPrivateAccessUrl).toBeCalledTimes(1)
+    expect(S3Adapter.prototype.tempPrivateAccessUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
@@ -69,7 +69,7 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.tempPrivateAccessUrl).toBeCalledTimes(1)
+    expect(S3Adapter.prototype.tempPrivateAccessUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
@@ -112,7 +112,7 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.tempPrivateAccessUrl).toBeCalledTimes(1)
+    expect(S3Adapter.prototype.tempPrivateAccessUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
       `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
@@ -159,7 +159,7 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.tempPrivateAccessUrl).toBeCalledTimes(1)
+    expect(S3Adapter.prototype.tempPrivateAccessUrl).toBeCalledTimes(1)
     expect(axiosSpy).toBeCalledWith(
       `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
@@ -171,7 +171,7 @@ describe('image rendering routes', () => {
     const url = '/render/image/sign/bucket2/authenticated/casestudy.png?token=' + token
     const response = await appInstance.inject({ method: 'GET', url })
 
-    expect(S3Backend.prototype.tempPrivateAccessUrl).not.toHaveBeenCalled()
+    expect(S3Adapter.prototype.tempPrivateAccessUrl).not.toHaveBeenCalled()
     expect(response.statusCode).toBe(400)
     const body = response.json<{ error: string }>()
     expect(body.error).toBe('InvalidJWT')
@@ -189,7 +189,7 @@ describe('image rendering routes', () => {
     const url = '/render/image/sign/bucket2/authenticated/casestudy.png?token=' + token
     const response = await appInstance.inject({ method: 'GET', url })
 
-    expect(S3Backend.prototype.tempPrivateAccessUrl).not.toHaveBeenCalled()
+    expect(S3Adapter.prototype.tempPrivateAccessUrl).not.toHaveBeenCalled()
     expect(response.statusCode).toBe(400)
     const body = response.json<{ error: string }>()
     expect(body.error).toBe('InvalidSignature')

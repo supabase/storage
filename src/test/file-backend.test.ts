@@ -4,7 +4,7 @@ import path from 'path'
 import { Readable } from 'stream'
 import * as xattr from 'fs-xattr'
 import { withOptionalVersion } from '../storage/backend/adapter'
-import { FileBackend } from '@storage/backend/file/file'
+import { FileAdapter } from '@storage/backend/file'
 import { getConfig } from '../config'
 
 jest.mock('fs-xattr', () => ({
@@ -32,7 +32,7 @@ describe('FileBackend xattr metadata', () => {
       process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
       getConfig({ reload: true })
 
-      const backend = new FileBackend()
+      const backend = new FileAdapter()
       const uploadId = await backend.createMultiPartUpload({
         bucket: 'bucket',
         key: 'key',
@@ -89,7 +89,7 @@ describe('FileBackend xattr metadata', () => {
       process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
       getConfig({ reload: true })
 
-      const backend = new FileBackend()
+      const backend = new FileAdapter()
       const uploadId = await backend.createMultiPartUpload({
         bucket: 'bucket',
         key: 'key',

@@ -60,10 +60,10 @@ export interface S3ClientOptions {
 }
 
 /**
- * S3Backend
+ * S3Adapter
  * Interacts with a s3-compatible file system with this S3Adapter
  */
-export class S3Backend implements StorageBackendAdapter {
+export class S3Adapter implements StorageBackendAdapter {
   client: S3Client
   agent: InstrumentedAgent
 

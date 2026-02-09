@@ -113,28 +113,25 @@ export class Storage {
 
   /**
    * Find a bucket by id
-   * @param id
-   * @param columns
-   * @param filters
+   * @param input
    */
   findBucket(input: FindBucketInput) {
-    const { bucketId, columns = 'id', filters } = input
-    return this.db.findBucketById({ bucketId, columns, filters })
+    const { bucketId, columns = 'id', filters, signal } = input
+    return this.db.findBucketById({ bucketId, columns, filters, signal })
   }
 
   /**
    * List buckets
-   * @param columns
-   * @param options
+   * @param input
    */
   listBuckets(input: ListBucketsInput = {}) {
-    const { columns = 'id', options } = input
-    return this.db.listBuckets({ columns, options })
+    const { columns = 'id', options, signal } = input
+    return this.db.listBuckets({ columns, options, signal })
   }
 
   listAnalyticsBuckets(input: ListBucketsInput = {}) {
-    const { columns = 'name', options } = input
-    return this.db.listAnalyticsBuckets({ columns, options })
+    const { columns = 'name', options, signal } = input
+    return this.db.listAnalyticsBuckets({ columns, options, signal })
   }
 
   /**
@@ -193,46 +190,49 @@ export class Storage {
   }
 
   async createIcebergBucket(data: Parameters<Database['createAnalyticsBucket']>[0]) {
-    return this.db.withTransaction(async (db) => {
-      const result = await db.createAnalyticsBucket(data)
+    const { signal } = data
+    return this.db.withTransaction(
+      async (db) => {
+        const result = await db.createAnalyticsBucket(data)
 
-      await BucketCreatedEvent.invokeOrSend(
-        {
-          bucketId: result.id,
-          bucketName: result.name,
-          type: 'ANALYTICS',
-          tenant: {
-            ref: db.tenantId,
-            host: db.tenantHost,
+        await BucketCreatedEvent.invokeOrSend(
+          {
+            bucketId: result.id,
+            bucketName: result.name,
+            type: 'ANALYTICS',
+            tenant: {
+              ref: db.tenantId,
+              host: db.tenantHost,
+            },
           },
-        },
-        {
-          sendWhenError: (error) => {
-            if (error instanceof StorageBackendError) {
-              return false
-            }
+          {
+            sendWhenError: (error) => {
+              if (error instanceof StorageBackendError) {
+                return false
+              }
 
-            logSchema.error(logger, 'Failed to invoke BucketCreatedEvent handler', {
-              project: db.tenantId,
-              type: 'event',
-              error: error,
-            })
-            return true
-          },
-        }
-      )
+              logSchema.error(logger, 'Failed to invoke BucketCreatedEvent handler', {
+                project: db.tenantId,
+                type: 'event',
+                error: error,
+              })
+              return true
+            },
+          }
+        )
 
-      return result
-    })
+        return result
+      },
+      { signal }
+    )
   }
 
   /**
    * Updates a bucket
-   * @param id
-   * @param data
+   * @param input
    */
   async updateBucket(input: UpdateBucketInput) {
-    const { bucketId, data } = input
+    const { bucketId, data, signal } = input
     mustBeValidBucketName(bucketId)
 
     const bucketData: Parameters<Database['updateBucket']>[0]['fields'] = data
@@ -250,38 +250,41 @@ export class Storage {
     }
     bucketData.allowed_mime_types = data.allowedMimeTypes
 
-    return this.db.updateBucket({ bucketId, fields: bucketData })
+    return this.db.updateBucket({ bucketId, fields: bucketData, signal })
   }
 
   /**
    * Delete a specific bucket if empty
-   * @param id
+   * @param input
    */
   async deleteBucket(input: DeleteBucketInput) {
-    const { bucketId } = input
-    return this.db.withTransaction(async (db) => {
-      await db
-        .asSuperUser()
-        .findBucketById({ bucketId, columns: 'id', filters: { forUpdate: true } })
+    const { bucketId, signal } = input
+    return this.db.withTransaction(
+      async (db) => {
+        await db
+          .asSuperUser()
+          .findBucketById({ bucketId, columns: 'id', filters: { forUpdate: true } })
 
-      const countObjects = await db.asSuperUser().countObjectsInBucket({ bucketId, limit: 1 })
+        const countObjects = await db.asSuperUser().countObjectsInBucket({ bucketId, limit: 1 })
 
-      if (countObjects && countObjects > 0) {
-        throw ERRORS.BucketNotEmpty(bucketId)
-      }
+        if (countObjects && countObjects > 0) {
+          throw ERRORS.BucketNotEmpty(bucketId)
+        }
 
-      const deleted = await db.deleteBucket({ bucketId })
+        const deleted = await db.deleteBucket({ bucketId })
 
-      if (!deleted) {
-        throw ERRORS.NoSuchBucket(bucketId)
-      }
+        if (!deleted) {
+          throw ERRORS.NoSuchBucket(bucketId)
+        }
 
-      return deleted
-    })
+        return deleted
+      },
+      { signal }
+    )
   }
 
   async deleteIcebergBucket(input: DeleteIcebergBucketInput) {
-    const { name } = input
+    const { name, signal } = input
     if (
       !(await tenantHasMigrations(this.db.tenantId, 'iceberg-catalog-flag-on-buckets')) ||
       !(await tenantHasFeature(this.db.tenantId, 'icebergCatalog'))
@@ -292,7 +295,7 @@ export class Storage {
       )
     }
 
-    const catalog = await this.db.findAnalyticsBucketByName({ name })
+    const catalog = await this.db.findAnalyticsBucketByName({ name, signal })
 
     await BucketDeleted.invoke({
       bucketId: catalog.id,
@@ -306,14 +309,17 @@ export class Storage {
 
   /**
    * Deletes all files in a bucket
-   * @param bucketId
-   * @param before limit to files before the specified time (defaults to now)
+   * @param input
    */
   async emptyBucket(input: EmptyBucketInput) {
-    const { bucketId, before = new Date() } = input
-    await this.findBucket({ bucketId, columns: 'name' })
+    const { bucketId, before = new Date(), signal } = input
+    await this.findBucket({ bucketId, columns: 'name', signal })
 
-    const count = await this.db.countObjectsInBucket({ bucketId, limit: emptyBucketMax + 1 })
+    const count = await this.db.countObjectsInBucket({
+      bucketId,
+      limit: emptyBucketMax + 1,
+      signal,
+    })
     if (count > emptyBucketMax) {
       throw ERRORS.UnableToEmptyBucket(
         bucketId,
@@ -321,16 +327,25 @@ export class Storage {
       )
     }
 
-    const objects = await this.db.listObjects({ bucketId, columns: 'id, name', limit: 1, before })
+    const objects = await this.db.listObjects({
+      bucketId,
+      columns: 'id, name',
+      limit: 1,
+      before,
+      signal,
+    })
     if (!objects || objects.length < 1) {
       // the bucket is already empty
       return
     }
 
     // ensure delete permissions
-    await this.db.testPermission((db) => {
-      return db.deleteObject({ bucketId, objectName: objects[0].id! })
-    })
+    await this.db.testPermission(
+      (db) => {
+        return db.deleteObject({ bucketId, objectName: objects[0].id! })
+      },
+      { signal }
+    )
 
     // use queue to recursively delete all objects created before the specified time
     await ObjectAdminDeleteAllBefore.send({

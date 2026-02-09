@@ -56,6 +56,7 @@ async function requestHandler(
     filters: {
       dontErrorOnEmpty: true,
     },
+    signal: request.signals.disconnect.signal,
   })
 
   // The request is not authenticated
@@ -75,15 +76,18 @@ async function requestHandler(
 
   if (bucket.public) {
     // request is authenticated but we still use the superUser as we don't need to check RLS
-    obj = await request.storage
-      .asSuperUser()
-      .from(bucketName)
-      .findObject({ objectName, columns: 'id, version, metadata' })
+    obj = await request.storage.asSuperUser().from(bucketName).findObject({
+      objectName,
+      columns: 'id, version, metadata',
+      signal: request.signals.disconnect.signal,
+    })
   } else {
     // request is authenticated use RLS
-    obj = await request.storage
-      .from(bucketName)
-      .findObject({ objectName, columns: 'id, version, metadata' })
+    obj = await request.storage.from(bucketName).findObject({
+      objectName,
+      columns: 'id, version, metadata',
+      signal: request.signals.disconnect.signal,
+    })
   }
 
   return request.storage.renderer('asset').render(request, response, {

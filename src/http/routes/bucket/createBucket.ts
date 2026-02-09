@@ -80,6 +80,7 @@ export default async function routes(fastify: FastifyInstance) {
         allowedMimeTypes: allowed_mime_types
           ? allowed_mime_types?.filter((mime) => mime)
           : allowed_mime_types,
+        signal: request.signals.disconnect.signal,
       })
 
       return response.status(200).send({

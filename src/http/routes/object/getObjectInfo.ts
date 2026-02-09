@@ -49,6 +49,7 @@ async function requestHandler(
     filters: {
       dontErrorOnEmpty: true,
     },
+    signal: request.signals.disconnect.signal,
   })
 
   // Not Authenticated flow
@@ -69,11 +70,13 @@ async function requestHandler(
     obj = await request.storage.asSuperUser().from(bucketName).findObject({
       objectName,
       columns: 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at',
+      signal: request.signals.disconnect.signal,
     })
   } else {
     obj = await request.storage.from(bucketName).findObject({
       objectName,
       columns: 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at',
+      signal: request.signals.disconnect.signal,
     })
   }
 

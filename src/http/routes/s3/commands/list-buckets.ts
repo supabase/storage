@@ -12,7 +12,7 @@ export default function ListBuckets(s3Router: S3Router) {
     { schema: ListObjectsInput, operation: ROUTE_OPERATIONS.S3_LIST_BUCKET },
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
-      return s3Protocol.listBuckets()
+      return s3Protocol.listBuckets(ctx.signals.response)
     }
   )
 }

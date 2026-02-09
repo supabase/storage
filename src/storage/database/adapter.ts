@@ -3,6 +3,10 @@ import { ObjectMetadata } from '../backend'
 import { TenantConnection } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 
+export interface Cancellable {
+  signal?: AbortSignal
+}
+
 export interface SearchObjectOption {
   search?: string
   sortBy?: {
@@ -44,6 +48,7 @@ export interface DatabaseOptions<TNX> {
   tnx?: TNX
   parentTnx?: TNX
   parentConnection?: TenantConnection
+  signal?: AbortSignal
 }
 
 export interface ListBucketOptions {
@@ -56,22 +61,22 @@ export interface ListBucketOptions {
 
 // --- Database method input interfaces ---
 
-export interface FindBucketByIdInput {
+export interface FindBucketByIdInput extends Cancellable {
   bucketId: string
   columns?: string
   filters?: FindBucketFilters
 }
 
-export interface CountObjectsInBucketInput {
+export interface CountObjectsInBucketInput extends Cancellable {
   bucketId: string
   limit?: number
 }
 
-export interface DbDeleteBucketInput {
+export interface DbDeleteBucketInput extends Cancellable {
   bucketId: string | string[]
 }
 
-export interface ListObjectsInput {
+export interface ListObjectsInput extends Cancellable {
   bucketId: string
   columns?: string
   limit?: number
@@ -79,7 +84,7 @@ export interface ListObjectsInput {
   nextToken?: string
 }
 
-export interface ListObjectsV2Input {
+export interface ListObjectsV2Input extends Cancellable {
   bucketId: string
   options?: {
     prefix?: string
@@ -95,7 +100,7 @@ export interface ListObjectsV2Input {
   }
 }
 
-export interface ListMultipartUploadsInput {
+export interface ListMultipartUploadsInput extends Cancellable {
   bucketId: string
   options?: {
     prefix?: string
@@ -106,90 +111,90 @@ export interface ListMultipartUploadsInput {
   }
 }
 
-export interface DbListBucketsInput {
+export interface DbListBucketsInput extends Cancellable {
   columns?: string
   options?: ListBucketOptions
 }
 
-export interface MustLockObjectInput {
+export interface MustLockObjectInput extends Cancellable {
   bucketId: string
   objectName: string
   version?: string
 }
 
-export interface WaitObjectLockInput {
+export interface WaitObjectLockInput extends Cancellable {
   bucketId: string
   objectName: string
   version?: string
   timeout?: number
 }
 
-export interface DbUpdateBucketInput {
+export interface DbUpdateBucketInput extends Cancellable {
   bucketId: string
   fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
 }
 
-export interface UpdateObjectInput {
+export interface UpdateObjectInput extends Cancellable {
   bucketId: string
   name: string
   data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>
 }
 
-export interface DeleteObjectInput {
+export interface DeleteObjectInput extends Cancellable {
   bucketId: string
   objectName: string
   version?: string
 }
 
-export interface DeleteObjectsInput {
+export interface DeleteObjectsInput extends Cancellable {
   bucketId: string
   objectNames: string[]
   by?: keyof Obj
 }
 
-export interface DeleteObjectVersionsInput {
+export interface DeleteObjectVersionsInput extends Cancellable {
   bucketId: string
   objectNames: { name: string; version: string }[]
 }
 
-export interface UpdateObjectMetadataInput {
+export interface UpdateObjectMetadataInput extends Cancellable {
   bucketId: string
   objectName: string
   metadata: ObjectMetadata
 }
 
-export interface UpdateObjectOwnerInput {
+export interface UpdateObjectOwnerInput extends Cancellable {
   bucketId: string
   objectName: string
   owner?: string
 }
 
-export interface FindObjectsInput {
+export interface FindObjectsInput extends Cancellable {
   bucketId: string
   objectNames: string[]
   columns?: string
 }
 
-export interface FindObjectVersionsInput {
+export interface FindObjectVersionsInput extends Cancellable {
   bucketId: string
   objectNames: { name: string; version: string }[]
   columns?: string
 }
 
-export interface FindObjectInput {
+export interface FindObjectInput extends Cancellable {
   bucketId: string
   objectName: string
   columns?: string
   filters?: FindObjectFilters
 }
 
-export interface SearchObjectsInput {
+export interface SearchObjectsInput extends Cancellable {
   bucketId: string
   prefix: string
   options: SearchObjectOption
 }
 
-export interface CreateMultipartUploadInput {
+export interface CreateMultipartUploadInput extends Cancellable {
   uploadId: string
   bucketId: string
   objectName: string
@@ -199,40 +204,53 @@ export interface CreateMultipartUploadInput {
   metadata?: Record<string, string | null>
 }
 
-export interface FindMultipartUploadInput {
+export interface FindMultipartUploadInput extends Cancellable {
   uploadId: string
   columns?: string
   options?: { forUpdate?: boolean }
 }
 
-export interface UpdateMultipartUploadProgressInput {
+export interface UpdateMultipartUploadProgressInput extends Cancellable {
   uploadId: string
   progress: number
   signature: string
 }
 
-export interface DeleteMultipartUploadInput {
+export interface DeleteMultipartUploadInput extends Cancellable {
   uploadId: string
 }
 
-export interface ListPartsInput {
+export interface ListPartsInput extends Cancellable {
   uploadId: string
   options: { afterPart?: string; maxParts: number }
 }
 
-export interface DeleteAnalyticsBucketInput {
+export interface DeleteAnalyticsBucketInput extends Cancellable {
   id: string
   opts?: { soft: boolean }
 }
 
-export interface ListAnalyticsBucketsInput {
+export interface ListAnalyticsBucketsInput extends Cancellable {
   columns?: string
   options?: ListBucketOptions
 }
 
-export interface FindAnalyticsBucketByNameInput {
+export interface FindAnalyticsBucketByNameInput extends Cancellable {
   name: string
 }
+
+export type CreateBucketInput = Cancellable &
+  Pick<Bucket, 'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types'>
+
+export type UpsertObjectInput = Cancellable &
+  Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
+
+export type CreateObjectInput = Cancellable &
+  Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
+
+export type InsertUploadPartInput = Cancellable & S3PartUpload
+
+export type CreateAnalyticsBucketInput = Cancellable & Pick<Bucket, 'name'>
 
 export interface Database {
   tenantHost: string
@@ -255,14 +273,9 @@ export interface Database {
     opts?: { signal?: AbortSignal }
   ): Promise<Awaited<ReturnType<T>>>
 
-  createBucket(
-    data: Pick<
-      Bucket,
-      'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types'
-    >
-  ): Promise<Pick<Bucket, 'id'>>
+  createBucket(input: CreateBucketInput): Promise<Pick<Bucket, 'id'>>
 
-  createAnalyticsBucket(data: Pick<Bucket, 'name'>): Promise<IcebergCatalog>
+  createAnalyticsBucket(input: CreateAnalyticsBucketInput): Promise<IcebergCatalog>
 
   findBucketById<Filters extends FindBucketFilters = FindObjectFilters>(
     input: FindBucketByIdInput & { filters?: Filters }
@@ -285,15 +298,11 @@ export interface Database {
 
   updateBucket(input: DbUpdateBucketInput): Promise<void>
 
-  upsertObject(
-    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
-  ): Promise<Obj>
+  upsertObject(input: UpsertObjectInput): Promise<Obj>
 
   updateObject(input: UpdateObjectInput): Promise<Obj>
 
-  createObject(
-    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
-  ): Promise<Obj>
+  createObject(input: CreateObjectInput): Promise<Obj>
 
   deleteObject(input: DeleteObjectInput): Promise<Obj | undefined>
 
@@ -327,7 +336,7 @@ export interface Database {
 
   deleteMultipartUpload(input: DeleteMultipartUploadInput): Promise<void>
 
-  insertUploadPart(part: S3PartUpload): Promise<S3PartUpload>
+  insertUploadPart(input: InsertUploadPartInput): Promise<S3PartUpload>
 
   listParts(input: ListPartsInput): Promise<S3PartUpload[]>
 

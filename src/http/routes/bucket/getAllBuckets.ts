@@ -75,6 +75,7 @@ export default async function routes(fastify: FastifyInstance) {
           'id, name, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types' +
           (omitBucketType ? '' : ', type'),
         options: { limit, offset, sortColumn, sortOrder, search },
+        signal: request.signals.disconnect.signal,
       })
 
       return response.send(results)

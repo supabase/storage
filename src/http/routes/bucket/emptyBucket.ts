@@ -42,7 +42,7 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketId } = request.params
 
-      await request.storage.emptyBucket({ bucketId })
+      await request.storage.emptyBucket({ bucketId, signal: request.signals.disconnect.signal })
 
       return response
         .status(200)

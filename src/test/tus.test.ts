@@ -329,14 +329,12 @@ describe('Tus multipart', () => {
 
       const objectName = randomUUID() + '-cat.jpeg'
 
-      const signedUpload = await storage
-        .from(bucketName)
-        .signUploadObjectUrl({
-          objectName,
-          url: `${bucketName}/${objectName}`,
-          expiresIn: 3600,
-          owner: 'some-owner-id',
-        })
+      const signedUpload = await storage.from(bucketName).signUploadObjectUrl({
+        objectName,
+        url: `${bucketName}/${objectName}`,
+        expiresIn: 3600,
+        owner: 'some-owner-id',
+      })
 
       const result = await new Promise((resolve, reject) => {
         const upload = new tus.Upload(oneChunkFile, {

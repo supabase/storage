@@ -1,7 +1,7 @@
 'use strict'
 import dotenv from 'dotenv'
 import app from '../app'
-import { S3Backend } from '../storage/backend'
+import { S3Adapter } from '../storage/backend'
 import { FastifyInstance } from 'fastify'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { StorageKnexDB } from '@storage/database'
@@ -13,11 +13,11 @@ const anonKey = process.env.ANON_KEY || ''
 let appInstance: FastifyInstance
 
 beforeAll(() => {
-  jest.spyOn(S3Backend.prototype, 'removeMany').mockImplementation(() => {
+  jest.spyOn(S3Adapter.prototype, 'removeMany').mockImplementation(() => {
     return Promise.resolve()
   })
 
-  jest.spyOn(S3Backend.prototype, 'read').mockImplementation(() => {
+  jest.spyOn(S3Adapter.prototype, 'read').mockImplementation(() => {
     return Promise.resolve({
       metadata: {
         httpStatusCode: 200,
@@ -365,7 +365,7 @@ describe('testing public bucket functionality', () => {
     expect(publicResponse.headers['etag']).toBe('abc')
     expect(publicResponse.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
 
-    const mockGetObject = jest.spyOn(S3Backend.prototype, 'read')
+    const mockGetObject = jest.spyOn(S3Adapter.prototype, 'read')
     mockGetObject.mockRejectedValue({
       $metadata: {
         httpStatusCode: 304,

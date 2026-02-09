@@ -81,6 +81,7 @@ export default async function routes(fastify: FastifyInstance) {
             order: sortBy?.order,
           },
         },
+        signal: request.signals.disconnect.signal,
       })
 
       return response.status(200).send(results)

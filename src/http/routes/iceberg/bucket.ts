@@ -58,7 +58,10 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       const { bucketName } = request.params
-      await request.storage.deleteIcebergBucket({ name: bucketName })
+      await request.storage.deleteIcebergBucket({
+        name: bucketName,
+        signal: request.signals.disconnect.signal,
+      })
 
       return response.status(200).send(createResponse('Successfully deleted'))
     }
@@ -80,6 +83,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { name } = request.body
       const bucket = await request.storage.createIcebergBucket({
         name,
+        signal: request.signals.disconnect.signal,
       })
 
       return response.status(200).send({
@@ -115,6 +119,7 @@ export default async function routes(fastify: FastifyInstance) {
           sortOrder: query.sortOrder,
           search: query.search,
         },
+        signal: request.signals.disconnect.signal,
       })
 
       return response.status(200).send(

@@ -40,6 +40,7 @@ export default async function routes(fastify: FastifyInstance) {
         bucketId: bucketId,
         columns:
           'id, name, owner, public, created_at, updated_at, file_size_limit, allowed_mime_types',
+        signal: request.signals.disconnect.signal,
       })
 
       return response.send(results)

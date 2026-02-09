@@ -20,21 +20,12 @@ pg.types.setTypeParser(20, 'text', parseInt)
 export class TenantConnection {
   static poolManager = new PoolManager()
   public readonly role: string
-  private abortSignal?: AbortSignal
 
   constructor(
     public readonly pool: PoolStrategy,
     protected readonly options: TenantConnectionOptions
   ) {
     this.role = options.user.payload.role || 'anon'
-  }
-
-  setAbortSignal(signal: AbortSignal) {
-    this.abortSignal = signal
-  }
-
-  getAbortSignal(): AbortSignal | undefined {
-    return this.abortSignal
   }
 
   static stop() {
@@ -76,6 +67,7 @@ export class TenantConnection {
         },
         {
           minTimeout: 50,
+          factor: 2,
           maxTimeout: 200,
           maxRetryTime: 3000,
           retries: 10,
@@ -144,16 +136,10 @@ export class TenantConnection {
   }
 
   asSuperUser() {
-    const tenantConnection = new TenantConnection(this.pool, {
+    return new TenantConnection(this.pool, {
       ...this.options,
       user: this.options.superUser,
     })
-
-    if (this.abortSignal) {
-      tenantConnection.setAbortSignal(this.abortSignal)
-    }
-
-    return tenantConnection
   }
 
   async setScope(tnx: Knex, opts?: { signal?: AbortSignal }) {

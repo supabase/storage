@@ -53,11 +53,14 @@ export default function AbortMultiPartUpload(s3Router: S3Router) {
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-      return s3Protocol.abortMultipartUpload({
-        Bucket: req.Params.Bucket,
-        Key: req.Params['*'],
-        UploadId: req.Querystring.uploadId,
-      })
+      return s3Protocol.abortMultipartUpload(
+        {
+          Bucket: req.Params.Bucket,
+          Key: req.Params['*'],
+          UploadId: req.Querystring.uploadId,
+        },
+        ctx.signals.response
+      )
     }
   )
 }

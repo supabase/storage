@@ -51,14 +51,13 @@ export default async function routes(fastify: FastifyInstance) {
 
       const destinationBucketId = destinationBucket || bucketId
 
-      const move = await request.storage
-        .from(bucketId)
-        .moveObject({
-          sourceObjectName: sourceKey,
-          destinationBucket: destinationBucketId,
-          destinationObjectName: destinationKey,
-          owner: request.owner,
-        })
+      const move = await request.storage.from(bucketId).moveObject({
+        sourceObjectName: sourceKey,
+        destinationBucket: destinationBucketId,
+        destinationObjectName: destinationKey,
+        owner: request.owner,
+        signal: request.signals.disconnect.signal,
+      })
 
       return response.status(200).send({
         message: 'Successfully moved',

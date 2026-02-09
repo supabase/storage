@@ -41,10 +41,13 @@ export default function HeadObject(s3Router: S3Router) {
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-      return s3Protocol.dbHeadObject({
-        Bucket: req.Params.Bucket,
-        Key: req.Params['*'],
-      })
+      return s3Protocol.dbHeadObject(
+        {
+          Bucket: req.Params.Bucket,
+          Key: req.Params['*'],
+        },
+        ctx.signals.response
+      )
     }
   )
 }

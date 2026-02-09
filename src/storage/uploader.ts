@@ -170,11 +170,10 @@ export class Uploader {
   }) {
     try {
       const db = this.db.asSuperUser()
-      // Since we have finished uploading the file,
-      // even if the request is aborted now, we want to complete the DB transaction
-      const abController = new AbortController()
-      db.connection.setAbortSignal(abController.signal)
 
+      // No signal passed to withTransaction intentionally:
+      // after uploading the file, we want to complete the DB transaction
+      // even if the request is aborted
       return await db.withTransaction(async (db) => {
         await db.waitObjectLock({
           bucketId,

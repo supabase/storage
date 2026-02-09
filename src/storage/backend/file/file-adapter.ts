@@ -51,10 +51,10 @@ const METADATA_ATTR_KEYS = {
 }
 
 /**
- * FileBackend
+ * FileAdapter
  * Interacts with the file system with this FileBackend adapter
  */
-export class FileBackend implements StorageBackendAdapter {
+export class FileAdapter implements StorageBackendAdapter {
   client = null
   filePath: string
   etagAlgorithm: 'mtime' | 'md5'

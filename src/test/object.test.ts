@@ -15,7 +15,7 @@ import { withDeleteEnabled } from './utils/storage'
 
 const { jwtSecret, serviceKeyAsync, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
-const S3Backend = backends.S3Backend
+const S3Backend = backends.S3Adapter
 let appInstance: FastifyInstance
 
 let tnx: Knex.Transaction | undefined

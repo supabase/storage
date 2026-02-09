@@ -38,6 +38,7 @@ export type MultiPartRequest = http.IncomingMessage & {
     tenantId: string
     isUpsert: boolean
     resources?: string[]
+    signal?: AbortSignal
   }
 }
 
@@ -215,9 +216,11 @@ export async function onCreate(
 
   const storage = req.upload.storage
 
-  const bucket = await storage
-    .asSuperUser()
-    .findBucket({ bucketId: uploadID.bucket, columns: 'id, file_size_limit, allowed_mime_types' })
+  const bucket = await storage.asSuperUser().findBucket({
+    bucketId: uploadID.bucket,
+    columns: 'id, file_size_limit, allowed_mime_types',
+    signal: req.upload.signal,
+  })
 
   const metadata = {
     ...(upload.metadata ? upload.metadata : {}),

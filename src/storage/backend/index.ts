@@ -1,6 +1,6 @@
 import { StorageBackendAdapter } from './adapter'
-import { FileBackend } from './file'
-import { S3Backend, S3ClientOptions } from './s3'
+import { FileAdapter } from './file'
+import { S3Adapter, S3ClientOptions } from './s3'
 import { getConfig, StorageBackendType } from '../../config'
 
 export * from './s3'
@@ -21,7 +21,7 @@ export function createStorageBackend<Type extends StorageBackendType>(
   let storageBackend: StorageBackendAdapter
 
   if (type === 'file') {
-    storageBackend = new FileBackend()
+    storageBackend = new FileAdapter()
   } else {
     const defaultOptions: S3ClientOptions = {
       region: storageS3Region,
@@ -30,7 +30,7 @@ export function createStorageBackend<Type extends StorageBackendType>(
       requestTimeout: storageS3ClientTimeout,
       ...(config ? config : {}),
     }
-    storageBackend = new S3Backend(defaultOptions)
+    storageBackend = new S3Adapter(defaultOptions)
   }
 
   return storageBackend

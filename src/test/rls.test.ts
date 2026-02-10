@@ -6,6 +6,8 @@ import FormData from 'form-data'
 import yaml from 'js-yaml'
 import Mustache from 'mustache'
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import * as tus from 'tus-js-client'
+import { DetailedError } from 'tus-js-client'
 
 import { StorageKnexDB } from '@storage/database'
 import { createStorageBackend } from '@storage/backend'
@@ -42,6 +44,7 @@ interface TestCaseAssert {
   operation:
     | 'upload'
     | 'upload.upsert'
+    | 'upload.tus'
     | 'bucket.create'
     | 'bucket.get'
     | 'bucket.list'
@@ -58,6 +61,9 @@ interface TestCaseAssert {
   useExistingBucketName?: string
   role?: string
   policies?: string[]
+  userMetadata?: Record<string, unknown>
+  mimeType?: string
+  contentLength?: number
   status: number
   error?: string
 }
@@ -236,6 +242,9 @@ describe('RLS policies', () => {
               bucket: bucketName,
               objectName: objectName,
               jwt: assert.role === 'service' ? await serviceKeyAsync : jwt,
+              userMetadata: assert.userMetadata,
+              mimeType: assert.mimeType,
+              contentLength: assert.contentLength,
             })
 
             console.log(
@@ -254,8 +263,7 @@ describe('RLS policies', () => {
             }
 
             if (assert.error) {
-              const body = await response.json()
-
+              const body = response.json()
               expect(body.message).toBe(assert.error)
             }
           } finally {
@@ -294,15 +302,24 @@ describe('RLS policies', () => {
 
 async function runOperation(
   operation: TestCaseAssert['operation'],
-  options: { bucket: string; jwt: string; objectName: string }
+  options: {
+    bucket: string
+    jwt: string
+    objectName: string
+    userMetadata?: Record<string, unknown>
+    mimeType?: string
+    contentLength?: number
+  }
 ) {
-  const { jwt, bucket, objectName } = options
+  const { jwt, bucket, objectName, userMetadata, mimeType, contentLength } = options
 
   switch (operation) {
     case 'upload':
-      return uploadFile(bucket, objectName, jwt)
+      return uploadFile(bucket, objectName, jwt, false, userMetadata, mimeType, contentLength)
     case 'upload.upsert':
-      return uploadFile(bucket, objectName, jwt, true)
+      return uploadFile(bucket, objectName, jwt, true, userMetadata, mimeType, contentLength)
+    case 'upload.tus':
+      return tusUploadFile(bucket, objectName, jwt, userMetadata, mimeType, contentLength)
     case 'bucket.list':
       return appInstance.inject({
         method: 'GET',
@@ -454,13 +471,31 @@ async function createPolicy(db: Knex, policy: Policy) {
   return Promise.all(created)
 }
 
-async function uploadFile(bucket: string, fileName: string, jwt: string, upsert?: boolean) {
+async function uploadFile(
+  bucket: string,
+  fileName: string,
+  jwt: string,
+  upsert?: boolean,
+  userMetadata?: Record<string, unknown>,
+  mimeType?: string,
+  contentLength?: number
+) {
   const testFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
   const form = new FormData()
   form.append('file', testFile)
+
+  if (userMetadata) {
+    form.append('metadata', JSON.stringify(userMetadata))
+  }
+
+  if (mimeType) {
+    form.append('contentType', mimeType)
+  }
+
   const headers = Object.assign({}, form.getHeaders(), {
     authorization: `Bearer ${jwt}`,
     ...(upsert ? { 'x-upsert': 'true' } : {}),
+    ...(contentLength ? { 'content-length': contentLength.toString() } : {}),
   })
 
   return appInstance.inject({
@@ -469,4 +504,69 @@ async function uploadFile(bucket: string, fileName: string, jwt: string, upsert?
     headers,
     payload: form,
   })
+}
+
+async function tusUploadFile(
+  bucket: string,
+  objectName: string,
+  jwt: string,
+  userMetadata?: Record<string, unknown>,
+  mimeType?: string,
+  contentLength?: number
+) {
+  if (!appInstance.server.listening) {
+    await appInstance.listen({ port: 0 })
+  }
+
+  const addressInfo = appInstance.server.address()
+  if (!addressInfo || typeof addressInfo === 'string') {
+    throw new Error('Unable to resolve local server address')
+  }
+
+  const localServerAddress = `http://127.0.0.1:${addressInfo.port}`
+
+  const file = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
+
+  let statusCode = 200
+  let message = ''
+
+  try {
+    await new Promise((resolve, reject) => {
+      const upload = new tus.Upload(file, {
+        endpoint: `${localServerAddress}/upload/resumable`,
+        uploadSize: contentLength || undefined,
+        onShouldRetry: () => false,
+        uploadDataDuringCreation: false,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+        metadata: {
+          bucketName: bucket,
+          objectName: objectName,
+          contentType: mimeType || 'application/octet-stream',
+          cacheControl: '3600',
+          ...(userMetadata ? { metadata: JSON.stringify(userMetadata) } : {}),
+        },
+        onError: function (error) {
+          console.log('Failed because: ' + error)
+          reject(error)
+        },
+        onSuccess: () => {
+          resolve(true)
+        },
+      })
+
+      upload.start()
+    })
+  } catch (e) {
+    if (e instanceof DetailedError) {
+      statusCode = e.originalResponse.getStatus()
+      message = e.originalResponse.getBody()
+    } else {
+      throw e
+    }
+  }
+
+  const body = message ? { message } : {}
+  return { statusCode, body: JSON.stringify(body), json: () => body }
 }

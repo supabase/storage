@@ -4,6 +4,7 @@ import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { getConfig } from '../../../config'
 import { ROUTE_OPERATIONS } from '../operations'
+import { parseUserMetadata } from '../../../storage/uploader'
 
 const { uploadSignedUrlExpirationTime } = getConfig()
 
@@ -20,6 +21,8 @@ const getSignedUploadURLHeadersSchema = {
   type: 'object',
   properties: {
     'x-upsert': { type: 'string' },
+    'content-type': { type: 'string' },
+    'content-length': { type: 'string' },
     authorization: { type: 'string' },
   },
   required: ['authorization'],
@@ -69,10 +72,27 @@ export default async function routes(fastify: FastifyInstance) {
 
       const urlPath = `${bucketName}/${objectName}`
 
+      let userMetadata: Record<string, unknown> | undefined
+
+      const customMd = request.headers['x-metadata']
+
+      if (typeof customMd === 'string') {
+        userMetadata = parseUserMetadata(customMd)
+      }
+
+      const contentType = request.headers['content-type']
+      const contentLengthHeader = request.headers['content-length']
+      const contentLength = contentLengthHeader ? Number(contentLengthHeader) : undefined
+
       const signedUpload = await request.storage
         .from(bucketName)
         .signUploadObjectUrl(objectName, urlPath as string, uploadSignedUrlExpirationTime, owner, {
           upsert: request.headers['x-upsert'] === 'true',
+          userMetadata,
+          metadata: {
+            mimetype: contentType,
+            contentLength,
+          },
         })
 
       return response.status(200).send({ url: signedUpload.url, token: signedUpload.token })

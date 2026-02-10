@@ -1,6 +1,6 @@
 import http from 'http'
 import { BaseLogger } from 'pino'
-import { Upload } from '@tus/server'
+import { DataStore, Metadata, Upload } from '@tus/server'
 import { randomUUID } from 'crypto'
 import { TenantConnection } from '@internal/database'
 import { ERRORS, isRenderableError } from '@internal/errors'
@@ -44,7 +44,7 @@ export type MultiPartRequest = http.IncomingMessage & {
 /**
  * Runs on every TUS incoming request
  */
-export async function onIncomingRequest(rawReq: Request, id: string) {
+export async function onIncomingRequest(rawReq: Request, id: string, datastore: DataStore) {
   const req = getNodeRequest(rawReq)
   const res = rawReq.node?.res as http.ServerResponse
 
@@ -96,11 +96,53 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
     req.upload.storage.location
   )
 
+  let contentType: string | undefined
+  let contentLength: number | undefined
+  let rawMetadata: string | null | undefined
+
+  if (req.method === 'POST') {
+    const uploadMetadataHeader = req.headers['upload-metadata']
+    if (uploadMetadataHeader && typeof uploadMetadataHeader === 'string') {
+      try {
+        const parsedMetadata = Metadata.parse(uploadMetadataHeader)
+        contentType = parsedMetadata?.contentType ?? undefined
+        rawMetadata = parsedMetadata?.metadata
+      } catch (e) {
+        req.log.warn({ error: e }, 'Failed to parse upload metadata')
+        throw ERRORS.InvalidParameter('upload-metadata', {
+          error: e as Error,
+          message: 'Invalid Upload-Metadata header',
+        })
+      }
+    }
+    const uploadLength = req.headers['upload-length']
+    contentLength = uploadLength ? Number(uploadLength) : undefined
+  } else {
+    const upload = await datastore.getUpload(id)
+    contentType = upload.metadata?.contentType ?? undefined
+    contentLength = upload.size ?? undefined
+    rawMetadata = upload.metadata?.metadata
+  }
+
+  let customMd: Record<string, string> | undefined
+  if (rawMetadata) {
+    try {
+      customMd = JSON.parse(rawMetadata)
+    } catch (e) {
+      req.log.warn({ error: e }, 'Failed to parse user metadata')
+    }
+  }
+
   await uploader.canUpload({
     owner: req.upload.owner,
     bucketId: uploadID.bucket,
     objectName: uploadID.objectName,
     isUpsert: isUpsert,
+    userMetadata: customMd,
+    metadata: {
+      mimetype: contentType,
+      contentLength: contentLength,
+    },
   })
 }
 

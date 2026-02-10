@@ -17,6 +17,8 @@ import app from '../app'
 import { getConfig } from '../config'
 import { Storage } from '../storage'
 import { checkBucketExists } from './common'
+import * as tus from 'tus-js-client'
+import { DetailedError } from 'tus-js-client'
 
 interface Policy {
   name: string
@@ -39,6 +41,7 @@ interface TestCaseAssert {
   operation:
     | 'upload'
     | 'upload.upsert'
+    | 'upload.tus'
     | 'bucket.create'
     | 'bucket.get'
     | 'bucket.list'
@@ -257,8 +260,7 @@ describe('RLS policies', () => {
             }
 
             if (assert.error) {
-              const body = await response.json()
-
+              const body = response.json()
               expect(body.message).toBe(assert.error)
             }
           } finally {
@@ -316,6 +318,8 @@ async function runOperation(
       return uploadFile(bucket, objectName, jwt, false, userMetadata, mimeType, contentLength)
     case 'upload.upsert':
       return uploadFile(bucket, objectName, jwt, true, userMetadata, mimeType, contentLength)
+    case 'upload.tus':
+      return tusUploadFile(bucket, objectName, jwt, userMetadata, mimeType, contentLength)
     case 'bucket.list':
       return appInstance.inject({
         method: 'GET',
@@ -500,4 +504,69 @@ async function uploadFile(
     headers,
     payload: form,
   })
+}
+
+async function tusUploadFile(
+  bucket: string,
+  objectName: string,
+  jwt: string,
+  userMetadata?: Record<string, unknown>,
+  mimeType?: string,
+  contentLength?: number
+) {
+  if (!appInstance.server.listening) {
+    await appInstance.listen({ port: 0 })
+  }
+
+  const addressInfo = appInstance.server.address()
+  if (!addressInfo || typeof addressInfo === 'string') {
+    throw new Error('Unable to resolve local server address')
+  }
+
+  const localServerAddress = `http://127.0.0.1:${addressInfo.port}`
+
+  const file = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
+
+  let statusCode = 200
+  let message = ''
+
+  try {
+    await new Promise((resolve, reject) => {
+      const upload = new tus.Upload(file, {
+        endpoint: `${localServerAddress}/upload/resumable`,
+        uploadSize: contentLength || undefined,
+        onShouldRetry: () => false,
+        uploadDataDuringCreation: false,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+        metadata: {
+          bucketName: bucket,
+          objectName: objectName,
+          contentType: mimeType || 'application/octet-stream',
+          cacheControl: '3600',
+          ...(userMetadata ? { metadata: JSON.stringify(userMetadata) } : {}),
+        },
+        onError: function (error) {
+          console.log('Failed because: ' + error)
+          reject(error)
+        },
+        onSuccess: () => {
+          resolve(true)
+        },
+      })
+
+      upload.start()
+    })
+  } catch (e) {
+    if (e instanceof DetailedError) {
+      statusCode = e.originalResponse.getStatus()
+      message = e.originalResponse.getBody()
+    } else {
+      throw e
+    }
+  }
+
+  const body = message ? { message } : {}
+  return { statusCode, body: JSON.stringify(body), json: () => body }
 }

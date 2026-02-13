@@ -52,10 +52,6 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
     throw ERRORS.InternalError(undefined, 'Response object is missing')
   }
 
-  if (!res) {
-    throw ERRORS.InternalError(undefined, 'Response object is missing')
-  }
-
   res.on('finish', () => {
     console.log('Tus request finished')
     req.upload.db.dispose().catch((e) => {
@@ -117,9 +113,6 @@ export function generateUrl(
     throw ERRORS.InvalidParameter('url')
   }
 
-  if (!req.url) {
-    throw ERRORS.InvalidParameter('url')
-  }
   proto = process.env.NODE_ENV === 'production' ? 'https' : proto
 
   let basePath = path
@@ -175,10 +168,6 @@ export function getFileIdFromRequest(rawReq: Request) {
  */
 export function namingFunction(rawReq: Request, metadata?: Record<string, string | null>) {
   const req = getNodeRequest(rawReq)
-
-  if (!req.url) {
-    throw new Error('no url set')
-  }
 
   if (!req.url) {
     throw new Error('no url set')

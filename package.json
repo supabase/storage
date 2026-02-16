@@ -46,7 +46,7 @@
     "@opentelemetry/auto-instrumentations-node": "^0.67.3",
     "@opentelemetry/exporter-metrics-otlp-grpc": "^0.208.0",
     "@opentelemetry/exporter-prometheus": "^0.208.0",
-    "@opentelemetry/host-metrics": "^0.38.0",
+    "@opentelemetry/host-metrics": "^0.38.2",
     "@opentelemetry/instrumentation-aws-sdk": "^0.56.0",
     "@opentelemetry/instrumentation-fastify": "^0.50.0",
     "@opentelemetry/instrumentation-http": "^0.208.0",

@@ -184,6 +184,10 @@ type StorageConfigType = {
   cdnPurgeEndpointKey?: string
 
   icebergEnabled: boolean
+  icebergCatalogMode: 'rest' | 'ducklake'
+  ducklakeSchema: string
+  ducklakeVirtualPrefix: string
+  ducklakeDataBucket: string
   icebergWarehouse: string
   icebergShards: string[]
   icebergCatalogUrl: string
@@ -540,6 +544,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
 
     icebergEnabled: getOptionalConfigFromEnv('ICEBERG_ENABLED') === 'true',
+    icebergCatalogMode: getOptionalConfigFromEnv('ICEBERG_CATALOG_MODE') || 'rest',
+    ducklakeSchema: getOptionalConfigFromEnv('DUCKLAKE_SCHEMA') || 'public',
+    ducklakeVirtualPrefix: getOptionalConfigFromEnv('DUCKLAKE_VIRTUAL_PREFIX') || '__ducklake__',
+    ducklakeDataBucket: getOptionalConfigFromEnv('DUCKLAKE_DATA_BUCKET') || 'data-lake',
     icebergWarehouse: getOptionalConfigFromEnv('ICEBERG_WAREHOUSE') || '',
     icebergShards: getOptionalConfigFromEnv('ICEBERG_SHARDS')?.trim().split(',') || [],
     icebergCatalogUrl:

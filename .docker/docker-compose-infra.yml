@@ -3,7 +3,7 @@
 services:
 
   tenant_db:
-    image: postgres:15
+    image: pgducklake/pgducklake:18-main
     shm_size: '1gb'
     ports:
       - '5432:5432'
@@ -17,6 +17,12 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_PORT: 5432
+      POSTGRES_HOST_AUTH_METHOD: trust
+    command: >
+      bash -c "
+        ln -sf /var/run/postgresql/.s.PGSQL.5432 /tmp/.s.PGSQL.5432 &
+        docker-entrypoint.sh postgres -c unix_socket_directories='/var/run/postgresql,/tmp'
+      "
 
   multitenant_db:
     image: postgres:15

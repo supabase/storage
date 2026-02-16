@@ -308,7 +308,7 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
 
     const namespaceName = this.getTenantNamespaceName(namespace.id)
 
-    if (!dbTable.shard_key) {
+    if (dbTable.shard_key == null) {
       throw ERRORS.ShardNotFound(`Table shard key not found for table ${params.table}`)
     }
 
@@ -336,19 +336,19 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
         name: params.warehouse,
       })
 
-      const namespace = await this.options.metastore.findNamespaceByName({
+      const namespace = await store.findNamespaceByName({
         tenantId: this.tenantId,
         name: params.namespace,
         catalogId: catalog.id,
       })
 
-      const dbTable = await this.options.metastore.findTableByName({
+      const dbTable = await store.findTableByName({
         tenantId: this.tenantId,
         name: params.table,
         namespaceId: namespace.id,
       })
 
-      if (!dbTable.shard_key) {
+      if (dbTable.shard_key == null) {
         throw ERRORS.ShardNotFound(`Table shard key not found for table ${params.table}`)
       }
 
@@ -388,7 +388,7 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
       namespaceId: namespace.id,
     })
 
-    if (!dbTable.shard_key) {
+    if (dbTable.shard_key == null) {
       throw ERRORS.ShardNotFound(`Table shard key not found for table ${params.table}`)
     }
 
@@ -527,7 +527,7 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
       namespaceId: namespace.id,
     })
 
-    if (!dbTable.shard_key || !dbTable.shard_id) {
+    if (dbTable.shard_key == null) {
       throw ERRORS.ShardNotFound(`Table shard key not found for table ${params.table}`)
     }
 

@@ -554,6 +554,9 @@ export class RestCatalogClient {
   }
 
   getEncodedWarehouse(warehouse: string) {
+    if (!warehouse) {
+      return ''
+    }
     return '/' + encodeURIComponent(warehouse)
   }
 

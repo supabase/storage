@@ -2,7 +2,12 @@ import fastifyPlugin from 'fastify-plugin'
 import { FastifyInstance } from 'fastify'
 import { KnexMetastore, TableIndex } from '@storage/protocols/iceberg/knex'
 import { getTenantConfig, multitenantKnex } from '@internal/database'
-import { getCatalogAuthStrategy, TenantAwareRestCatalog } from '@storage/protocols/iceberg/catalog'
+import {
+  getCatalogAuthStrategy,
+  TenantAwareRestCatalog,
+  IcebergCatalogInterface,
+  DuckLakeCatalog,
+} from '@storage/protocols/iceberg/catalog'
 import { getConfig } from '../../config'
 import { ICEBERG_BUCKET_RESERVED_SUFFIX } from '@storage/limits'
 import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
@@ -12,7 +17,7 @@ declare module 'fastify' {
     isIcebergBucket?: boolean
     internalIcebergBucketName?: string
     internalIcebergNamespaceId?: string
-    icebergCatalog?: TenantAwareRestCatalog
+    icebergCatalog?: IcebergCatalogInterface
   }
 }
 
@@ -24,13 +29,29 @@ const {
   icebergCatalogAuthType,
   icebergWarehouse,
   icebergCatalogUrl,
+  icebergCatalogMode,
+  ducklakeSchema,
+  ducklakeVirtualPrefix,
+  ducklakeDataBucket,
   isMultitenant,
 } = getConfig()
 
-const catalogAuthType = getCatalogAuthStrategy(icebergCatalogAuthType)
+const catalogAuthType =
+  icebergCatalogMode === 'rest' ? getCatalogAuthStrategy(icebergCatalogAuthType) : undefined
 
 export const icebergRestCatalog = fastifyPlugin(async function (fastify: FastifyInstance) {
   fastify.addHook('preHandler', async (req) => {
+    if (icebergCatalogMode === 'ducklake') {
+      req.icebergCatalog = new DuckLakeCatalog({
+        db: req.db.pool.acquire(),
+        ducklakeSchema: ducklakeSchema,
+        virtualPrefix: ducklakeVirtualPrefix,
+        dataBucket: ducklakeDataBucket,
+        warehouseName: icebergWarehouse,
+      })
+      return
+    }
+
     const limits = {
       maxCatalogsCount: icebergMaxCatalogsCount,
       maxNamespaceCount: icebergMaxNamespaceCount,
@@ -49,7 +70,7 @@ export const icebergRestCatalog = fastifyPlugin(async function (fastify: Fastify
       tenantId: req.tenantId,
       limits: limits,
       restCatalogUrl: icebergCatalogUrl,
-      auth: catalogAuthType,
+      auth: catalogAuthType!,
       sharding: isMultitenant
         ? new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
         : new SingleShard({
@@ -69,6 +90,18 @@ export const detectS3IcebergBucket = fastifyPlugin(
     fastify.addHook('preHandler', async (req) => {
       const params = req.params as { Bucket?: string; '*'?: string }
       if (!params.Bucket) {
+        return
+      }
+
+      // DuckLake mode: only intercept virtual metadata paths (__ducklake__/...)
+      // Regular file operations (parquet reads/writes) use normal S3 handlers
+      if (icebergCatalogMode === 'ducklake') {
+        const key = params['*']
+        if (params.Bucket === ducklakeDataBucket && key?.includes(`${ducklakeVirtualPrefix}/`)) {
+          req.isIcebergBucket = true
+          req.internalIcebergBucketName = ducklakeDataBucket
+          return
+        }
         return
       }
 

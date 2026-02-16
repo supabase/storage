@@ -24,3 +24,6 @@ export function getCatalogAuthStrategy(authType: string): CatalogAuthType {
 export * from './tenant-catalog'
 export * from './rest-catalog-client'
 export * from './reconciler'
+export * from './ducklake-catalog'
+export * from './ducklake-types'
+export * from './ducklake-avro'

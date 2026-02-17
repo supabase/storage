@@ -2,6 +2,7 @@ import { Bucket, S3MultipartUpload, Obj, S3PartUpload, IcebergCatalog } from '..
 import { ObjectMetadata } from '../backend'
 import { TenantConnection } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
+import { EventTransaction } from '@internal/queue/event-transaction'
 
 export interface Cancellable {
   signal?: AbortSignal
@@ -262,6 +263,8 @@ export interface Database {
   tenant(): { ref: string; host: string }
 
   asSuperUser(): Database
+
+  get eventTransaction(): EventTransaction
 
   withTransaction<T extends (db: Database) => Promise<any>>(
     fn: T,

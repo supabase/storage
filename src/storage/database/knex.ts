@@ -54,6 +54,7 @@ import { hashStringToInt } from '@internal/hashing'
 import { DBMigration, tenantHasMigrations } from '@internal/database/migrations'
 import { getConfig } from '../../config'
 import { isUuid } from '../limits'
+import { EventTransaction, KnexEventTransaction } from '@internal/queue/event-transaction'
 
 const { isMultitenant } = getConfig()
 
@@ -110,6 +111,13 @@ export class StorageKnexDB implements Database {
       ref: this.tenantId,
       host: this.tenantHost,
     }
+  }
+
+  get eventTransaction(): EventTransaction {
+    if (!this.options.tnx) {
+      throw new Error('eventTransaction requires an active transaction')
+    }
+    return new KnexEventTransaction(this.options.tnx, this.tenantId)
   }
 
   asSuperUser() {

@@ -77,6 +77,7 @@ type StorageConfigType = {
   jwtCachingEnabled: boolean
   jwtJWKS?: JwksConfig
   multitenantDatabaseUrl?: string
+  multitenantDatabasePoolUrl?: string
   dbAnonRole: string
   dbAuthenticatedRole: string
   dbServiceRole: string
@@ -201,6 +202,17 @@ type StorageConfigType = {
   vectorBucketRegion?: string
   vectorMaxBucketsCount: number
   vectorMaxIndexesCount: number
+
+  eventLogEnabled: boolean
+  eventLogBatchSize: number
+  eventLogConcurrency: number
+  eventLogPrefetchSize: number
+  eventLogPollIntervalMs: number
+  eventLogWarmPollDelaySeconds: number
+  eventLogSweepBatchSize: number
+  eventLogRegistrationTtlMs: number
+  eventLogLeaseTimeoutSeconds: number
+  eventLogSigningKey: string
 }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -390,6 +402,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'DATABASE_MULTITENANT_URL',
       'MULTITENANT_DATABASE_URL'
     ),
+    multitenantDatabasePoolUrl: getOptionalConfigFromEnv(
+      'DATABASE_MULTITENANT_POOL_URL',
+      'MULTITENANT_DATABASE_POOL_URL'
+    ),
     databaseSSLRootCert: getOptionalConfigFromEnv('DATABASE_SSL_ROOT_CERT'),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
     databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
@@ -565,6 +581,39 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     vectorBucketRegion: getOptionalConfigFromEnv('VECTOR_BUCKET_REGION') || undefined,
     vectorMaxBucketsCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_BUCKETS') || '10', 10),
     vectorMaxIndexesCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_INDEXES') || '20', 10),
+
+    // Event Log
+    eventLogEnabled: getOptionalConfigFromEnv('EVENT_LOG_ENABLED') === 'true',
+    eventLogBatchSize: parseInt(getOptionalConfigFromEnv('EVENT_LOG_BATCH_SIZE') || '100', 10),
+    eventLogConcurrency: parseInt(getOptionalConfigFromEnv('EVENT_LOG_CONCURRENCY') || '10', 10),
+    eventLogPrefetchSize: parseInt(
+      getOptionalConfigFromEnv('EVENT_LOG_PREFETCH_SIZE') || '100',
+      10
+    ),
+    eventLogPollIntervalMs: parseInt(
+      getOptionalConfigFromEnv('EVENT_LOG_POLL_INTERVAL_MS') || '500',
+      10
+    ),
+    eventLogWarmPollDelaySeconds: parseInt(
+      getOptionalConfigFromEnv('EVENT_LOG_WARM_POLL_DELAY_S') || '10',
+      10
+    ),
+    eventLogSweepBatchSize: parseInt(
+      getOptionalConfigFromEnv('EVENT_LOG_SWEEP_BATCH_SIZE') || '100',
+      10
+    ),
+    eventLogRegistrationTtlMs: parseInt(
+      getOptionalConfigFromEnv('EVENT_LOG_REGISTRATION_TTL_MS') || '30000',
+      10
+    ),
+    eventLogLeaseTimeoutSeconds: parseInt(
+      getOptionalConfigFromEnv('EVENT_LOG_LEASE_TIMEOUT_S') || '30',
+      10
+    ),
+    eventLogSigningKey:
+      getOptionalConfigFromEnv('EVENT_LOG_SIGNING_KEY') ||
+      getOptionalIfMultitenantConfigFromEnv('AUTH_JWT_SECRET', 'PGRST_JWT_SECRET') ||
+      '',
   } as StorageConfigType
 
   const serviceKey = getOptionalConfigFromEnv('SERVICE_KEY') || ''

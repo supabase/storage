@@ -7,6 +7,8 @@ import { getTenantConfig } from '@internal/database'
 import { ERRORS } from '@internal/errors'
 import { KnexQueueDB } from '@internal/queue/database'
 import { Knex } from 'knex'
+import { EventTransaction, KnexEventTransaction } from './event-transaction'
+import { EventNotifier } from './event-notifier'
 
 export interface BasePayload {
   $version?: string
@@ -19,7 +21,7 @@ export interface BasePayload {
   }
 }
 
-const { pgQueueEnable, region, isMultitenant } = getConfig()
+const { pgQueueEnable, region, isMultitenant, eventLogEnabled } = getConfig()
 
 export type StaticThis<T extends Event<any>> = BaseEventConstructor<T>
 
@@ -120,7 +122,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
   static send<T extends Event<any>>(
     this: StaticThis<T>,
     payload: Omit<T['payload'], '$version'>,
-    opts?: SendOptions & { tnx?: Knex }
+    opts?: SendOptions & { tnx?: Knex | EventTransaction }
   ) {
     if (!payload.$version) {
       ;(payload as T['payload']).$version = this.version
@@ -242,12 +244,46 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     })
   }
 
-  async send(customSendOptions?: SendOptions & { tnx?: Knex }): Promise<string | void | null> {
+  async send(
+    customSendOptions?: SendOptions & { tnx?: Knex | EventTransaction }
+  ): Promise<string | void | null> {
     const constructor = this.constructor as typeof Event
 
     const shouldSend = await constructor.shouldSend(this.payload)
 
     if (!shouldSend) {
+      return
+    }
+
+    // When event log is enabled and an EventTransaction is provided,
+    // write the event to the tenant's event_log table atomically within the transaction
+    if (eventLogEnabled && customSendOptions?.tnx instanceof KnexEventTransaction) {
+      const tnx = customSendOptions.tnx
+      const sendOptions = constructor.getSendOptions(this.payload) || {}
+
+      if (this.payload.scheduleAt) {
+        sendOptions.startAfter = new Date(this.payload.scheduleAt)
+      }
+
+      sendOptions.deadLetter = constructor.deadLetterQueueName()
+
+      await tnx.insertEventLog({
+        eventName: constructor.getQueueName(),
+        payload: {
+          region,
+          ...this.payload,
+          $version: constructor.version,
+        },
+        sendOptions: {
+          ...sendOptions,
+          ...customSendOptions,
+          tnx: undefined,
+        },
+      })
+
+      // Enqueue tenant for publisher discovery (flushed in batch on interval)
+      EventNotifier.getInstance()?.notify(tnx.tenantId)
+
       return
     }
 
@@ -282,12 +318,14 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     sendOptions!.deadLetter = constructor.deadLetterQueueName()
 
     try {
-      const queue = customSendOptions?.tnx
-        ? Queue.createPgBoss({
-            enableWorkers: false,
-            db: new KnexQueueDB(customSendOptions.tnx),
-          })
-        : Queue.getInstance()
+      const tnx = customSendOptions?.tnx
+      const queue =
+        tnx && tnx instanceof KnexEventTransaction === false
+          ? Queue.createPgBoss({
+              enableWorkers: false,
+              db: new KnexQueueDB(tnx as Knex),
+            })
+          : Queue.getInstance()
 
       const res = await queue.send({
         name: constructor.getQueueName(),

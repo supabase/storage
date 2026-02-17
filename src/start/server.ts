@@ -63,6 +63,7 @@ async function main() {
     dbMigrationFreezeAt,
     vectorS3Buckets,
     icebergShards,
+    eventLogEnabled,
   } = getConfig()
 
   // Queue
@@ -137,6 +138,16 @@ async function main() {
       clusterSize: data.size,
     })
   })
+
+  // Event Log Publisher (embedded mode for single-tenant / dev)
+  if (eventLogEnabled && !isMultitenant) {
+    const { startEventLogProcessor } = await import('./publisher')
+    await startEventLogProcessor(multitenantKnex, shutdownSignal.nextGroup.signal)
+
+    logSchema.info(logger, '[EventLogProcessor] Started (embedded)', {
+      type: 'event-log',
+    })
+  }
 
   // HTTP Server
   const app = await httpServer(shutdownSignal.signal)

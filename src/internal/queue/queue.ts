@@ -77,6 +77,7 @@ export abstract class Queue {
       isMultitenant,
       databaseURL,
       multitenantDatabaseUrl,
+      multitenantDatabasePoolUrl,
       pgQueueConnectionURL,
       pgQueueEnableWorkers,
       pgQueueReadWriteTimeout,
@@ -92,7 +93,7 @@ export abstract class Queue {
           'running storage in multi-tenant but DB_MULTITENANT_DATABASE_URL is not set'
         )
       }
-      url = multitenantDatabaseUrl
+      url = multitenantDatabasePoolUrl || multitenantDatabaseUrl
     }
 
     Queue.pgBossDb = new QueueDB({

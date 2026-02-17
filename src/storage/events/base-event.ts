@@ -7,6 +7,7 @@ import { getConfig } from '../../config'
 import { logger } from '@internal/monitoring'
 import { createAgent } from '@internal/http'
 import { TenantLocation } from '@storage/locator'
+import { EventTransaction } from '@internal/queue/event-transaction'
 
 const { storageS3Bucket, storageS3MaxSockets, storageBackendType, region } = getConfig()
 
@@ -24,26 +25,31 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
   /**
    * Sends a message as a webhook
    * @param payload
+   * @param opts
    */
   static async sendWebhook<T extends Event<any>>(
     this: StaticThis<T>,
-    payload: Omit<T['payload'], '$version'>
+    payload: Omit<T['payload'], '$version'>,
+    opts?: { tnx?: EventTransaction }
   ) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { Webhook } = require('./lifecycle/webhook')
     const eventType = this.eventName()
 
     try {
-      await Webhook.send({
-        event: {
-          type: eventType,
-          region,
-          $version: this.version,
-          applyTime: Date.now(),
-          payload,
+      await Webhook.send(
+        {
+          event: {
+            type: eventType,
+            region,
+            $version: this.version,
+            applyTime: Date.now(),
+            payload,
+          },
+          tenant: payload.tenant,
         },
-        tenant: payload.tenant,
-      })
+        opts?.tnx ? { tnx: opts.tnx } : undefined
+      )
     } catch (e) {
       logger.error(
         {

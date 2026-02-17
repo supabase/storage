@@ -208,13 +208,16 @@ export class Uploader {
         // schedule the deletion of the previous file
         if (currentObj && currentObj.version !== version) {
           events.push(
-            ObjectAdminDelete.send({
-              name: objectName,
-              bucketId: bucketId,
-              tenant: this.db.tenant(),
-              version: currentObj.version,
-              reqId: this.db.reqId,
-            })
+            ObjectAdminDelete.send(
+              {
+                name: objectName,
+                bucketId: bucketId,
+                tenant: this.db.tenant(),
+                version: currentObj.version,
+                reqId: this.db.reqId,
+              },
+              { tnx: db.eventTransaction }
+            )
           )
         }
 
@@ -222,15 +225,18 @@ export class Uploader {
 
         events.push(
           event
-            .sendWebhook({
-              tenant: this.db.tenant(),
-              name: objectName,
-              version: version,
-              bucketId: bucketId,
-              metadata: objectMetadata,
-              reqId: this.db.reqId,
-              uploadType,
-            })
+            .sendWebhook(
+              {
+                tenant: this.db.tenant(),
+                name: objectName,
+                version: version,
+                bucketId: bucketId,
+                metadata: objectMetadata,
+                reqId: this.db.reqId,
+                uploadType,
+              },
+              { tnx: db.eventTransaction }
+            )
             .catch((e) => {
               logSchema.error(logger, 'Failed to send webhook', {
                 type: 'event',

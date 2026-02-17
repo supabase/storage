@@ -1,11 +1,13 @@
 'use strict'
 
+import { randomUUID } from 'crypto'
 import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
 import { getConfig, JwksConfig, JwksConfigKeyOCT, mergeConfig } from '../config'
 import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
 import { Obj, backends } from '../storage'
+import { ObjectAdminDelete } from '../storage/events'
 import { useMockObject, useMockQueue } from './common'
 import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
 import { Knex } from 'knex'
@@ -2242,6 +2244,52 @@ describe('testing move object', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+  })
+
+  test('cross-bucket move rollback should cleanup destination bucket object', async () => {
+    const runId = randomUUID()
+    const sourceKey = `authenticated/move-orig-rollback-${runId}.png`
+    const destinationKey = `authenticated/move-new-rollback-${runId}.png`
+    const destinationBucket = 'bucket3'
+    const objectAdminDeleteSendSpy = jest.spyOn(ObjectAdminDelete, 'send')
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await seedTx.from<Obj>('objects').insert({
+      bucket_id: 'bucket2',
+      name: sourceKey,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: `rollback-version-${runId}`,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    jest
+      .spyOn(S3Backend.prototype, 'headObject')
+      .mockRejectedValueOnce(new Error('forced move failure'))
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/move`,
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey,
+        destinationBucket,
+        destinationKey,
+      },
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+
+    expect(response.statusCode).toBeGreaterThanOrEqual(400)
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+    expect(objectAdminDeleteSendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: destinationKey,
+        bucketId: destinationBucket,
+      })
+    )
   })
 
   test('cannot move objects across buckets because RLS checks', async () => {

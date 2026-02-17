@@ -20,6 +20,7 @@ const {
   databaseConnectionTimeout,
   dbSearchPath,
   dbPostgresVersion,
+  databaseApplicationName,
 } = getConfig()
 
 export interface TenantConnectionOptions {
@@ -271,6 +272,7 @@ class TenantPool implements PoolStrategy {
         connectionString: settings.dbUrl,
         connectionTimeoutMillis: databaseConnectionTimeout,
         ssl: sslSettings ? { ...sslSettings } : undefined,
+        application_name: databaseApplicationName,
       },
       acquireConnectionTimeout: databaseConnectionTimeout,
     })

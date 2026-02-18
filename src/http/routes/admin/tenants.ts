@@ -490,18 +490,14 @@ export default async function routes(fastify: FastifyInstance) {
       tenantInfo.tracing_mode = tracingMode
     }
 
-    if (typeof features?.icebergCatalog?.enabled !== 'undefined') {
-      tenantInfo.feature_iceberg_catalog = features?.icebergCatalog?.enabled
-      tenantInfo.feature_iceberg_catalog_max_namespaces = features?.icebergCatalog?.maxNamespaces
-      tenantInfo.feature_iceberg_catalog_max_tables = features?.icebergCatalog?.maxTables
-      tenantInfo.feature_iceberg_catalog_max_catalogs = features?.icebergCatalog?.maxCatalogs
-    }
+    tenantInfo.feature_iceberg_catalog = features?.icebergCatalog?.enabled
+    tenantInfo.feature_iceberg_catalog_max_namespaces = features?.icebergCatalog?.maxNamespaces
+    tenantInfo.feature_iceberg_catalog_max_tables = features?.icebergCatalog?.maxTables
+    tenantInfo.feature_iceberg_catalog_max_catalogs = features?.icebergCatalog?.maxCatalogs
 
-    if (typeof features?.vectorBuckets?.enabled !== 'undefined') {
-      tenantInfo.feature_vector_buckets = features?.vectorBuckets?.enabled
-      tenantInfo.feature_vector_buckets_max_buckets = features?.vectorBuckets?.maxBuckets
-      tenantInfo.feature_vector_buckets_max_indexes = features?.vectorBuckets?.maxIndexes
-    }
+    tenantInfo.feature_vector_buckets = features?.vectorBuckets?.enabled
+    tenantInfo.feature_vector_buckets_max_buckets = features?.vectorBuckets?.maxBuckets
+    tenantInfo.feature_vector_buckets_max_indexes = features?.vectorBuckets?.maxIndexes
 
     await multitenantKnex.transaction(async (trx) => {
       await trx('tenants').insert(tenantInfo).onConflict('id').merge()

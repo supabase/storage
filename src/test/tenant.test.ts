@@ -314,7 +314,7 @@ describe('Tenant configs', () => {
     expect(getResponseJSON.databasePoolUrl).toBeNull()
   })
 
-  test('Upsert tenant config does not update iceberg/vector feature blocks when enabled is omitted', async () => {
+  test('Upsert tenant config updates iceberg/vector limits when enabled is omitted', async () => {
     await adminApp.inject({
       method: 'POST',
       url: `/tenants/abc`,
@@ -324,18 +324,20 @@ describe('Tenant configs', () => {
       },
     })
 
+    const updatedValue = 999
+
     const putPayloadWithoutFeatureEnabled = {
       ...payload,
       features: {
         ...payload.features,
         icebergCatalog: {
-          maxCatalogs: 999,
-          maxNamespaces: 999,
-          maxTables: 999,
+          maxCatalogs: updatedValue,
+          maxNamespaces: updatedValue,
+          maxTables: updatedValue,
         },
         vectorBuckets: {
-          maxBuckets: 999,
-          maxIndexes: 999,
+          maxBuckets: updatedValue,
+          maxIndexes: updatedValue,
         },
       },
     }
@@ -360,8 +362,17 @@ describe('Tenant configs', () => {
     expect(getResponse.statusCode).toBe(200)
 
     const getResponseJSON = JSON.parse(getResponse.body)
-    expect(getResponseJSON.features.icebergCatalog).toEqual(payload.features.icebergCatalog)
-    expect(getResponseJSON.features.vectorBuckets).toEqual(payload.features.vectorBuckets)
+    expect(getResponseJSON.features.icebergCatalog).toEqual({
+      enabled: payload.features.icebergCatalog.enabled,
+      maxCatalogs: updatedValue,
+      maxNamespaces: updatedValue,
+      maxTables: updatedValue,
+    })
+    expect(getResponseJSON.features.vectorBuckets).toEqual({
+      enabled: payload.features.vectorBuckets.enabled,
+      maxBuckets: updatedValue,
+      maxIndexes: updatedValue,
+    })
   })
 
   test('Upsert tenant config', async () => {

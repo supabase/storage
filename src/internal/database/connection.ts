@@ -20,21 +20,12 @@ pg.types.setTypeParser(20, 'text', parseInt)
 export class TenantConnection {
   static poolManager = new PoolManager()
   public readonly role: string
-  private abortSignal?: AbortSignal
 
   constructor(
     public readonly pool: PoolStrategy,
     protected readonly options: TenantConnectionOptions
   ) {
     this.role = options.user.payload.role || 'anon'
-  }
-
-  setAbortSignal(signal: AbortSignal) {
-    this.abortSignal = signal
-  }
-
-  getAbortSignal(): AbortSignal | undefined {
-    return this.abortSignal
   }
 
   static stop() {
@@ -76,6 +67,7 @@ export class TenantConnection {
         },
         {
           minTimeout: 50,
+          factor: 2,
           maxTimeout: 200,
           maxRetryTime: 3000,
           retries: 10,
@@ -144,22 +136,17 @@ export class TenantConnection {
   }
 
   asSuperUser() {
-    const tenantConnection = new TenantConnection(this.pool, {
+    return new TenantConnection(this.pool, {
       ...this.options,
       user: this.options.superUser,
     })
-
-    if (this.abortSignal) {
-      tenantConnection.setAbortSignal(this.abortSignal)
-    }
-
-    return tenantConnection
   }
 
-  async setScope(tnx: Knex) {
+  async setScope(tnx: Knex, opts?: { signal?: AbortSignal }) {
     const headers = JSON.stringify(this.options.headers || {})
-    await tnx.raw(
-      `
+    await tnx
+      .raw(
+        `
         SELECT
           set_config('role', ?, true),
           set_config('request.jwt.claim.role', ?, true),
@@ -172,17 +159,18 @@ export class TenantConnection {
           set_config('storage.operation', ?, true),
           set_config('storage.allow_delete_query', 'true', true);
     `,
-      [
-        this.role,
-        this.role,
-        this.options.user.jwt || '',
-        this.options.user.payload.sub || '',
-        JSON.stringify(this.options.user.payload),
-        headers,
-        this.options.method || '',
-        this.options.path || '',
-        this.options.operation?.() || '',
-      ]
-    )
+        [
+          this.role,
+          this.role,
+          this.options.user.jwt || '',
+          this.options.user.payload.sub || '',
+          JSON.stringify(this.options.user.payload),
+          headers,
+          this.options.method || '',
+          this.options.path || '',
+          this.options.operation?.() || '',
+        ]
+      )
+      .abortOnSignal(opts?.signal)
   }
 }

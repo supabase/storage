@@ -81,6 +81,7 @@ export default async function routes(fastify: FastifyInstance) {
         maxKeys: limit,
         cursor,
         sortBy,
+        signal: request.signals.disconnect.signal,
       })
 
       return response.status(200).send(results)

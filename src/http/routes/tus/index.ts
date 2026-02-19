@@ -56,6 +56,7 @@ type MultiPartRequest = http.IncomingMessage & {
     db: TenantConnection
     isUpsert: boolean
     resources?: string[]
+    signal?: AbortSignal
   }
 }
 
@@ -156,9 +157,11 @@ function createTusServer(
 
       const resourceId = UploadId.fromString(uploadId)
 
-      const bucket = await req.upload.storage
-        .asSuperUser()
-        .findBucket(resourceId.bucket, 'id,file_size_limit')
+      const bucket = await req.upload.storage.asSuperUser().findBucket({
+        bucketId: resourceId.bucket,
+        columns: 'id,file_size_limit',
+        signal: req.upload.signal,
+      })
 
       const globalFileLimit = await getFileSizeLimit(req.upload.tenantId)
 
@@ -263,6 +266,7 @@ const authenticatedRoutes = fastifyPlugin(
           tenantId: req.tenantId,
           db: req.db,
           isUpsert: req.headers['x-upsert'] === 'true',
+          signal: req.signals.disconnect.signal,
         }
       })
 
@@ -365,6 +369,7 @@ const publicRoutes = fastifyPlugin(
           tenantId: req.tenantId,
           db: req.db,
           isUpsert: req.headers['x-upsert'] === 'true',
+          signal: req.signals.disconnect.signal,
         }
       })
 

@@ -205,8 +205,16 @@ export class ImageRenderer extends Renderer {
    */
   async getAsset(request: FastifyRequest, options: RenderOptions) {
     const [privateURL, headObj] = await Promise.all([
-      this.backend.privateAssetUrl(options.bucket, options.key, options.version),
-      this.backend.headObject(options.bucket, options.key, options.version),
+      this.backend.tempPrivateAccessUrl({
+        bucket: options.bucket,
+        key: options.key,
+        version: options.version,
+      }),
+      this.backend.stats({
+        bucket: options.bucket,
+        key: options.key,
+        version: options.version,
+      }),
     ])
     const transformations = ImageRenderer.applyTransformation(this.transformOptions || {})
     const transformLimits = ImageRenderer.applyTransformationLimits(this.limits || {})

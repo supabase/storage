@@ -83,7 +83,11 @@ export default async function routes(fastify: FastifyInstance) {
       const obj = await request.storage
         .asSuperUser()
         .from(bucketName)
-        .findObject(objParts.join('/'), 'id,version,metadata')
+        .findObject({
+          objectName: objParts.join('/'),
+          columns: 'id,version,metadata',
+          signal: request.signals.disconnect.signal,
+        })
 
       const renderer = request.storage.renderer('image') as ImageRenderer
 

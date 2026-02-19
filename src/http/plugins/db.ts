@@ -25,8 +25,7 @@ declare module 'fastify' {
   }
 }
 
-const { databaseEnableQueryCancellation, dbMigrationStrategy, isMultitenant, dbMigrationFreezeAt } =
-  getConfig()
+const { dbMigrationStrategy, isMultitenant, dbMigrationFreezeAt } = getConfig()
 
 export const db = fastifyPlugin(
   async function db(fastify) {
@@ -55,11 +54,6 @@ export const db = fastifyPlugin(
         method: request.method,
         operation: () => request.operation?.type,
       })
-
-      // Connect abort signal to DB connection for query cancellation
-      if (request.signals?.disconnect?.signal && databaseEnableQueryCancellation) {
-        request.db.setAbortSignal(request.signals.disconnect.signal)
-      }
     })
 
     fastify.addHook('onSend', async (request, reply, payload) => {
@@ -124,11 +118,6 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
         maxConnections: opts.maxConnections,
         operation: () => request.operation?.type,
       })
-
-      // Connect abort signal to DB connection for query cancellation
-      if (request.signals?.disconnect?.signal && databaseEnableQueryCancellation) {
-        request.db.setAbortSignal(request.signals.disconnect.signal)
-      }
     })
 
     fastify.addHook('onSend', async (request, reply, payload) => {

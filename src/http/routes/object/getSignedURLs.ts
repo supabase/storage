@@ -78,7 +78,9 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const { expiresIn, paths } = request.body
 
-      const signedURLs = await request.storage.from(bucketName).signObjectUrls(paths, expiresIn)
+      const signedURLs = await request.storage
+        .from(bucketName)
+        .signObjectUrls({ paths, expiresIn, signal: request.signals.disconnect.signal })
 
       return response.status(200).send(signedURLs)
     }

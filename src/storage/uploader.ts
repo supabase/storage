@@ -105,15 +105,15 @@ export class Uploader {
         objectName: request.objectName,
       })
 
-      const objectMetadata = await this.backend.uploadObject(
-        storageS3Bucket,
-        s3Key,
+      const objectMetadata = await this.backend.write({
+        bucket: storageS3Bucket,
+        key: s3Key,
         version,
-        file.body,
-        file.mimeType,
-        file.cacheControl,
-        request.signal
-      )
+        body: file.body,
+        contentType: file.mimeType,
+        cacheControl: file.cacheControl,
+        signal: request.signal,
+      })
 
       if (request.file.xRobotsTag) {
         objectMetadata.xRobotsTag = request.file.xRobotsTag
@@ -170,19 +170,25 @@ export class Uploader {
   }) {
     try {
       const db = this.db.asSuperUser()
-      // Since we have finished uploading the file,
-      // even if the request is aborted now, we want to complete the DB transaction
-      const abController = new AbortController()
-      db.connection.setAbortSignal(abController.signal)
 
+      // No signal passed to withTransaction intentionally:
+      // after uploading the file, we want to complete the DB transaction
+      // even if the request is aborted
       return await db.withTransaction(async (db) => {
-        await db.waitObjectLock(bucketId, objectName, undefined, {
+        await db.waitObjectLock({
+          bucketId,
+          objectName,
           timeout: 5000,
         })
 
-        const currentObj = await db.findObject(bucketId, objectName, 'id, version, metadata', {
-          forUpdate: true,
-          dontErrorOnEmpty: true,
+        const currentObj = await db.findObject({
+          bucketId,
+          objectName,
+          columns: 'id, version, metadata',
+          filters: {
+            forUpdate: true,
+            dontErrorOnEmpty: true,
+          },
         })
 
         const isNew = !Boolean(currentObj)

@@ -5,7 +5,7 @@ import { ObjectStorage } from '@storage/object'
 import { Uploader } from '@storage/uploader'
 import { Storage } from '@storage/storage'
 import { Event as QueueBaseEvent } from '@internal/queue'
-import { S3Backend } from '@storage/backend'
+import { S3Adapter } from '@storage/backend'
 import { StorageKnexDB } from '@storage/database'
 import { TenantConnection } from '@internal/database'
 import { S3Store } from '@tus/s3-store'
@@ -67,7 +67,7 @@ export const classInstrumentations = [
     },
   }),
   new ClassInstrumentation({
-    targetClass: S3Backend,
+    targetClass: S3Adapter,
     enabled: true,
     methodsToInstrument: [
       'getObject',

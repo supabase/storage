@@ -1,7 +1,7 @@
 import { BaseEvent } from '../base-event'
 import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
 import { BasePayload } from '@internal/queue'
-import { S3Backend } from '@storage/backend'
+import { S3Adapter } from '@storage/backend'
 import { getConfig } from '../../../config'
 import { logger, logSchema } from '@internal/monitoring'
 
@@ -44,7 +44,7 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
     const tenantId = job.data.tenant.ref
     const storage = await this.createStorage(job.data)
 
-    if (!(storage.backend instanceof S3Backend)) {
+    if (!(storage.backend instanceof S3Adapter)) {
       return
     }
 
@@ -88,15 +88,15 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
           reqId: job.data.reqId,
         })
 
-        await storage.backend.deleteObject(
-          storageS3Bucket,
-          storage.location.getKeyLocation({
+        await storage.backend.remove({
+          bucket: storageS3Bucket,
+          key: storage.location.getKeyLocation({
             tenantId,
             bucketId: job.data.bucketId,
             objectName: job.data.name,
           }),
-          job.data.version
-        )
+          version: job.data.version,
+        })
       }
     } catch (e) {
       logger.error(

@@ -5,15 +5,27 @@ import fileChecksum from 'md5-file'
 import { promisify } from 'util'
 import stream from 'stream'
 import MultiStream from 'multistream'
-import { getConfig } from '../../config'
+import { getConfig } from '../../../config'
 import {
   StorageBackendAdapter,
   ObjectMetadata,
   ObjectResponse,
   withOptionalVersion,
-  BrowserCacheHeaders,
   UploadPart,
-} from './adapter'
+  ListObjectsInput,
+  ReadObjectInput,
+  WriteObjectInput,
+  RemoveObjectInput,
+  CopyObjectInput,
+  RemoveManyObjectsInput,
+  StatsObjectInput,
+  TempPrivateAccessUrlInput,
+  CreateMultiPartUploadInput,
+  UploadPartInput,
+  CompleteMultipartUploadInput,
+  AbortMultipartUploadInput,
+  UploadPartCopyInput,
+} from '../adapter'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { randomUUID } from 'crypto'
 import fsExtra from 'fs-extra'
@@ -39,10 +51,10 @@ const METADATA_ATTR_KEYS = {
 }
 
 /**
- * FileBackend
+ * FileAdapter
  * Interacts with the file system with this FileBackend adapter
  */
-export class FileBackend implements StorageBackendAdapter {
+export class FileAdapter implements StorageBackendAdapter {
   client = null
   filePath: string
   etagAlgorithm: 'mtime' | 'md5'
@@ -59,32 +71,18 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   async list(
-    bucket: string,
-    options?: {
-      prefix?: string
-      delimiter?: string
-      nextToken?: string
-      startAfter?: string
-    }
+    input: ListObjectsInput
   ): Promise<{ keys: { name: string; size: number }[]; nextToken?: string }> {
     return Promise.resolve({ keys: [] })
   }
 
   /**
    * Gets an object body and metadata
-   * @param bucketName
-   * @param key
-   * @param version
-   * @param headers
    */
-  async getObject(
-    bucketName: string,
-    key: string,
-    version: string | undefined,
-    headers?: BrowserCacheHeaders
-  ): Promise<ObjectResponse> {
+  async read(input: ReadObjectInput): Promise<ObjectResponse> {
+    const { bucket, key, version, headers } = input
     // 'Range: bytes=#######-######
-    const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
+    const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
     const data = await fs.stat(file)
     const eTag = await this.etag(file, data)
     const fileSize = data.size
@@ -169,23 +167,11 @@ export class FileBackend implements StorageBackendAdapter {
 
   /**
    * Uploads and store an object
-   * @param bucketName
-   * @param key
-   * @param version
-   * @param body
-   * @param contentType
-   * @param cacheControl
    */
-  async uploadObject(
-    bucketName: string,
-    key: string,
-    version: string | undefined,
-    body: NodeJS.ReadableStream,
-    contentType: string,
-    cacheControl: string
-  ): Promise<ObjectMetadata> {
+  async write(input: WriteObjectInput): Promise<ObjectMetadata> {
+    const { bucket, key, version, body, contentType, cacheControl } = input
     try {
-      const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
+      const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
       await fs.ensureFile(file)
       const destFile = fs.createWriteStream(file)
       await pipeline(body, destFile)
@@ -195,7 +181,7 @@ export class FileBackend implements StorageBackendAdapter {
         cacheControl: cacheControl || 'no-cache',
       })
 
-      const metadata = await this.headObject(bucketName, key, version)
+      const metadata = await this.stats({ bucket, key, version })
 
       return {
         ...metadata,
@@ -208,11 +194,9 @@ export class FileBackend implements StorageBackendAdapter {
 
   /**
    * Deletes an object from the file system
-   * @param bucket
-   * @param key
-   * @param version
    */
-  async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
+  async remove(input: RemoveObjectInput): Promise<void> {
+    const { bucket, key, version } = input
     try {
       const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
       await fs.remove(file)
@@ -231,21 +215,11 @@ export class FileBackend implements StorageBackendAdapter {
 
   /**
    * Copies an existing object to the given location
-   * @param bucket
-   * @param source
-   * @param version
-   * @param destination
-   * @param destinationVersion
-   * @param metadata
    */
-  async copyObject(
-    bucket: string,
-    source: string,
-    version: string | undefined,
-    destination: string,
-    destinationVersion: string,
-    metadata: { cacheControl?: string; contentType?: string }
+  async copy(
+    input: CopyObjectInput
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
+    const { bucket, source, version, destination, destinationVersion, metadata } = input
     const srcFile = this.resolveSecurePath(withOptionalVersion(`${bucket}/${source}`, version))
     const destFile = this.resolveSecurePath(
       withOptionalVersion(`${bucket}/${destination}`, destinationVersion)
@@ -269,10 +243,9 @@ export class FileBackend implements StorageBackendAdapter {
 
   /**
    * Deletes multiple objects
-   * @param bucket
-   * @param prefixes
    */
-  async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
+  async removeMany(input: RemoveManyObjectsInput): Promise<void> {
+    const { bucket, prefixes } = input
     const promises = prefixes.map((prefix) => {
       return fs.rm(this.resolveSecurePath(`${bucket}/${prefix}`))
     })
@@ -306,15 +279,9 @@ export class FileBackend implements StorageBackendAdapter {
 
   /**
    * Returns metadata information of a specific object
-   * @param bucket
-   * @param key
-   * @param version
    */
-  async headObject(
-    bucket: string,
-    key: string,
-    version: string | undefined
-  ): Promise<ObjectMetadata> {
+  async stats(input: StatsObjectInput): Promise<ObjectMetadata> {
+    const { bucket, key, version } = input
     const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
 
     const data = await fs.stat(file)
@@ -334,19 +301,14 @@ export class FileBackend implements StorageBackendAdapter {
     }
   }
 
-  async createMultiPartUpload(
-    bucketName: string,
-    key: string,
-    version: string | undefined,
-    contentType: string,
-    cacheControl: string
-  ): Promise<string | undefined> {
+  async createMultiPartUpload(input: CreateMultiPartUploadInput): Promise<string | undefined> {
+    const { bucket, key, version, contentType, cacheControl } = input
     const uploadId = randomUUID()
     const multiPartFolder = path.join(
       this.filePath,
       'multiparts',
       uploadId,
-      bucketName,
+      bucket,
       withOptionalVersion(key, version)
     )
 
@@ -357,19 +319,13 @@ export class FileBackend implements StorageBackendAdapter {
     return uploadId
   }
 
-  async uploadPart(
-    bucketName: string,
-    key: string,
-    version: string,
-    uploadId: string,
-    partNumber: number,
-    body: stream.Readable
-  ): Promise<{ ETag?: string }> {
+  async uploadPart(input: UploadPartInput): Promise<{ ETag?: string }> {
+    const { bucket, key, version, uploadId, partNumber, body } = input
     const multiPartFolder = path.join(
       this.filePath,
       'multiparts',
       uploadId,
-      bucketName,
+      bucket,
       withOptionalVersion(key, version)
     )
 
@@ -377,7 +333,7 @@ export class FileBackend implements StorageBackendAdapter {
 
     const writeStream = fsExtra.createWriteStream(partPath)
 
-    await pipeline(body, writeStream)
+    await pipeline(body as stream.Readable, writeStream)
 
     const etag = await fileChecksum(partPath)
 
@@ -387,24 +343,19 @@ export class FileBackend implements StorageBackendAdapter {
     return { ETag: etag }
   }
 
-  async completeMultipartUpload(
-    bucketName: string,
-    key: string,
-    uploadId: string,
-    version: string,
-    parts: UploadPart[]
-  ): Promise<
+  async completeMultipartUpload(input: CompleteMultipartUploadInput): Promise<
     Omit<UploadPart, 'PartNumber'> & {
       location?: string
       bucket?: string
       version: string
     }
   > {
+    const { bucket, key, uploadId, version, parts } = input
     const multiPartFolder = path.join(
       this.filePath,
       'multiparts',
       uploadId,
-      bucketName,
+      bucket,
       withOptionalVersion(key, version)
     )
 
@@ -439,14 +390,14 @@ export class FileBackend implements StorageBackendAdapter {
 
     const metadata = JSON.parse(metadataContent)
 
-    const uploaded = await this.uploadObject(
-      bucketName,
+    const uploaded = await this.write({
+      bucket,
       key,
       version,
-      multistream,
-      metadata.contentType,
-      metadata.cacheControl
-    )
+      body: multistream,
+      contentType: metadata.contentType,
+      cacheControl: metadata.cacheControl,
+    })
 
     fsExtra.remove(path.join(this.filePath, 'multiparts', uploadId)).catch(() => {
       // no-op
@@ -455,17 +406,13 @@ export class FileBackend implements StorageBackendAdapter {
     return {
       version: version,
       ETag: uploaded.eTag,
-      bucket: bucketName,
-      location: `${bucketName}/${key}`,
+      bucket: bucket,
+      location: `${bucket}/${key}`,
     }
   }
 
-  async abortMultipartUpload(
-    bucketName: string,
-    key: string,
-    uploadId: string,
-    version?: string
-  ): Promise<void> {
+  async abortMultipartUpload(input: AbortMultipartUploadInput): Promise<void> {
+    const { uploadId } = input
     const multiPartFolder = path.join(this.filePath, 'multiparts', uploadId)
 
     await fsExtra.remove(multiPartFolder)
@@ -479,32 +426,27 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   async uploadPartCopy(
-    storageS3Bucket: string,
-    key: string,
-    version: string,
-    UploadId: string,
-    PartNumber: number,
-    sourceKey: string,
-    sourceVersion?: string,
-    rangeBytes?: { fromByte: number; toByte: number }
+    input: UploadPartCopyInput
   ): Promise<{ eTag?: string; lastModified?: Date }> {
+    const { bucket, key, version, uploadId, partNumber, sourceKey, sourceKeyVersion, bytesRange } =
+      input
     const multiPartFolder = path.join(
       this.filePath,
       'multiparts',
-      UploadId,
-      storageS3Bucket,
+      uploadId,
+      bucket,
       withOptionalVersion(key, version)
     )
 
-    const partFilePath = path.join(multiPartFolder, `part-${PartNumber}`)
+    const partFilePath = path.join(multiPartFolder, `part-${partNumber}`)
     const sourceFilePath = this.resolveSecurePath(
-      `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceVersion)}`
+      `${bucket}/${withOptionalVersion(sourceKey, sourceKeyVersion)}`
     )
 
     const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
 
-    const readStreamOptions = rangeBytes
-      ? { start: rangeBytes.fromByte, end: rangeBytes.toByte }
+    const readStreamOptions = bytesRange
+      ? { start: bytesRange.fromByte, end: bytesRange.toByte }
       : {}
     const partStream = fs.createReadStream(sourceFilePath, readStreamOptions)
 
@@ -524,11 +466,9 @@ export class FileBackend implements StorageBackendAdapter {
 
   /**
    * Returns a private url that can only be accessed internally by the system
-   * @param bucket
-   * @param key
-   * @param version
    */
-  async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
+  async tempPrivateAccessUrl(input: TempPrivateAccessUrlInput): Promise<string> {
+    const { bucket, key, version } = input
     return 'local:///' + this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
   }
 
@@ -613,9 +553,6 @@ export class FileBackend implements StorageBackendAdapter {
       }
     } catch {
       // Ignore errors during cleanup to not affect main operations
-      // Could be permission issues, concurrent access, directory not empty due to race conditions, etc.
-      // Optional: Log for debugging purposes (uncomment if needed)
-      // console.debug('Directory cleanup failed:', dirPath, e.message)
     }
   }
 

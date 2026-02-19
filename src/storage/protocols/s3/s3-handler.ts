@@ -77,8 +77,8 @@ export class S3ProtocolHandler {
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html
    */
-  async listBuckets() {
-    const buckets = await this.storage.listBuckets('name,created_at')
+  async listBuckets(signal?: AbortSignal) {
+    const buckets = await this.storage.listBuckets({ columns: 'name,created_at', signal })
 
     return {
       responseBody: {
@@ -104,7 +104,7 @@ export class S3ProtocolHandler {
    * @param Bucket
    * @param isPublic
    */
-  async createBucket(Bucket: string, isPublic: boolean) {
+  async createBucket(Bucket: string, isPublic: boolean, signal?: AbortSignal) {
     mustBeValidBucketName(Bucket || '')
 
     await this.storage.createBucket({
@@ -112,6 +112,7 @@ export class S3ProtocolHandler {
       id: Bucket,
       public: isPublic,
       owner: this.owner,
+      signal,
     })
 
     return {
@@ -128,8 +129,8 @@ export class S3ProtocolHandler {
    *
    * @param name
    */
-  async deleteBucket(name: string) {
-    await this.storage.deleteBucket(name)
+  async deleteBucket(name: string, signal?: AbortSignal) {
+    await this.storage.deleteBucket({ bucketId: name, signal })
 
     return {
       statusCode: 204,
@@ -143,8 +144,8 @@ export class S3ProtocolHandler {
    *
    * @param name
    */
-  async headBucket(name: string) {
-    await this.storage.findBucket(name)
+  async headBucket(name: string, signal?: AbortSignal) {
+    await this.storage.findBucket({ bucketId: name, signal })
     return {
       statusCode: 200,
       headers: {
@@ -159,16 +160,19 @@ export class S3ProtocolHandler {
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjects.html
    * @param command
    */
-  async listObjects(command: ListObjectsCommandInput) {
-    const list = await this.listObjectsV2({
-      Bucket: command.Bucket,
-      Delimiter: command.Delimiter,
-      EncodingType: command.EncodingType,
-      MaxKeys: command.MaxKeys,
-      Prefix: command.Prefix,
-      StartAfter: command.Marker,
-      cursorV1: true,
-    })
+  async listObjects(command: ListObjectsCommandInput, signal?: AbortSignal) {
+    const list = await this.listObjectsV2(
+      {
+        Bucket: command.Bucket,
+        Delimiter: command.Delimiter,
+        EncodingType: command.EncodingType,
+        MaxKeys: command.MaxKeys,
+        Prefix: command.Prefix,
+        StartAfter: command.Marker,
+        cursorV1: true,
+      },
+      signal
+    )
 
     return {
       responseBody: {
@@ -193,12 +197,15 @@ export class S3ProtocolHandler {
    *
    * @param command
    */
-  async listObjectsV2(command: ListObjectsV2CommandInput & { cursorV1?: boolean }) {
+  async listObjectsV2(
+    command: ListObjectsV2CommandInput & { cursorV1?: boolean },
+    signal?: AbortSignal
+  ) {
     if (!command.Bucket) {
       throw ERRORS.MissingParameter('Bucket')
     }
 
-    await this.storage.asSuperUser().findBucket(command.Bucket)
+    await this.storage.asSuperUser().findBucket({ bucketId: command.Bucket, signal })
 
     const continuationToken = command.ContinuationToken
     const startAfter = command.StartAfter
@@ -217,6 +224,7 @@ export class S3ProtocolHandler {
       cursor: continuationToken,
       startAfter: startAfter,
       encodingType: command.EncodingType,
+      signal,
     })
 
     const commonPrefixes = results.folders.map((object) => {
@@ -271,12 +279,12 @@ export class S3ProtocolHandler {
    *
    * @param command
    */
-  async listMultipartUploads(command: ListMultipartUploadsCommandInput) {
+  async listMultipartUploads(command: ListMultipartUploadsCommandInput, signal?: AbortSignal) {
     if (!command.Bucket) {
       throw ERRORS.MissingParameter('Bucket')
     }
 
-    await this.storage.asSuperUser().findBucket(command.Bucket)
+    await this.storage.asSuperUser().findBucket({ bucketId: command.Bucket, signal })
 
     const keyContinuationToken = command.KeyMarker
     const uploadContinuationToken = command.UploadIdMarker
@@ -289,16 +297,20 @@ export class S3ProtocolHandler {
 
     const limit = maxKeys || 200
 
-    const multipartUploads = await this.storage.db.listMultipartUploads(bucket, {
-      prefix,
-      deltimeter: delimiter,
-      maxKeys: limit + 1,
-      nextUploadKeyToken: keyContinuationToken
-        ? decodeContinuationToken(keyContinuationToken)
-        : undefined,
-      nextUploadToken: uploadContinuationToken
-        ? decodeContinuationToken(uploadContinuationToken)
-        : undefined,
+    const multipartUploads = await this.storage.db.listMultipartUploads({
+      bucketId: bucket,
+      options: {
+        prefix,
+        deltimeter: delimiter,
+        maxKeys: limit + 1,
+        nextUploadKeyToken: keyContinuationToken
+          ? decodeContinuationToken(keyContinuationToken)
+          : undefined,
+        nextUploadToken: uploadContinuationToken
+          ? decodeContinuationToken(uploadContinuationToken)
+          : undefined,
+      },
+      signal,
     })
 
     let results: Partial<S3MultipartUpload & { isFolder: boolean }>[] = multipartUploads
@@ -394,14 +406,16 @@ export class S3ProtocolHandler {
    *
    * @param command
    */
-  async createMultiPartUpload(command: CreateMultipartUploadCommandInput) {
+  async createMultiPartUpload(command: CreateMultipartUploadCommandInput, signal?: AbortSignal) {
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     const { Bucket, Key } = command
 
     mustBeValidBucketName(Bucket)
     mustBeValidKey(Key)
 
-    const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'id,allowed_mime_types')
+    const bucket = await this.storage
+      .asSuperUser()
+      .findBucket({ bucketId: Bucket, columns: 'id,allowed_mime_types', signal })
 
     if (command.ContentType && bucket.allowed_mime_types && bucket.allowed_mime_types.length > 0) {
       validateMimeType(command.ContentType, bucket.allowed_mime_types || [])
@@ -415,34 +429,33 @@ export class S3ProtocolHandler {
       owner: this.owner,
     })
 
-    const uploadId = await this.storage.backend.createMultiPartUpload(
-      storageS3Bucket,
-      this.storage.location.getKeyLocation({
+    const uploadId = await this.storage.backend.createMultiPartUpload({
+      bucket: storageS3Bucket,
+      key: this.storage.location.getKeyLocation({
         bucketId: command.Bucket as string,
         objectName: command.Key as string,
         tenantId: this.tenantId,
       }),
       version,
-      command.ContentType || '',
-      command.CacheControl || ''
-    )
+      contentType: command.ContentType || '',
+      cacheControl: command.CacheControl || '',
+    })
 
     if (!uploadId) {
       throw ERRORS.InvalidUploadId(uploadId)
     }
 
     const signature = this.uploadSignature({ in_progress_size: 0 })
-    await this.storage.db
-      .asSuperUser()
-      .createMultipartUpload(
-        uploadId,
-        Bucket,
-        Key,
-        version,
-        signature,
-        this.owner,
-        command.Metadata
-      )
+    await this.storage.db.asSuperUser().createMultipartUpload({
+      uploadId,
+      bucketId: Bucket,
+      objectName: Key,
+      version,
+      signature,
+      owner: this.owner,
+      metadata: command.Metadata,
+      signal,
+    })
 
     return {
       responseBody: {
@@ -479,14 +492,14 @@ export class S3ProtocolHandler {
 
     const multiPartUpload = await this.storage.db
       .asSuperUser()
-      .findMultipartUpload(UploadId, 'id,version,user_metadata')
+      .findMultipartUpload({ uploadId: UploadId, columns: 'id,version,user_metadata' })
 
     const parts = command.MultipartUpload?.Parts || []
 
     if (parts.length === 0) {
-      const allParts = await this.storage.db.asSuperUser().listParts(UploadId, {
-        maxParts: 10000,
-      })
+      const allParts = await this.storage.db
+        .asSuperUser()
+        .listParts({ uploadId: UploadId, options: { maxParts: 10000 } })
 
       parts.push(
         ...allParts.map((part) => ({
@@ -496,28 +509,28 @@ export class S3ProtocolHandler {
       )
     }
 
-    const resp = await this.storage.backend.completeMultipartUpload(
-      storageS3Bucket,
-      this.storage.location.getKeyLocation({
+    const resp = await this.storage.backend.completeMultipartUpload({
+      bucket: storageS3Bucket,
+      key: this.storage.location.getKeyLocation({
         bucketId: Bucket as string,
         objectName: Key as string,
         tenantId: this.tenantId,
       }),
-      UploadId as string,
-      multiPartUpload.version,
+      uploadId: UploadId as string,
+      version: multiPartUpload.version,
       parts,
-      { removePrefix: true }
-    )
+      opts: { removePrefix: true },
+    })
 
-    const metadata = await this.storage.backend.headObject(
-      storageS3Bucket,
-      this.storage.location.getKeyLocation({
+    const metadata = await this.storage.backend.stats({
+      bucket: storageS3Bucket,
+      key: this.storage.location.getKeyLocation({
         bucketId: Bucket as string,
         objectName: Key as string,
         tenantId: this.tenantId,
       }),
-      resp.version
-    )
+      version: resp.version,
+    })
 
     await uploader.completeUpload({
       bucketId: Bucket as string,
@@ -530,7 +543,7 @@ export class S3ProtocolHandler {
       userMetadata: multiPartUpload.user_metadata || undefined,
     })
 
-    await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
+    await this.storage.db.asSuperUser().deleteMultipartUpload({ uploadId: UploadId })
 
     return {
       responseBody: {
@@ -574,7 +587,9 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingContentLength()
     }
 
-    const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'file_size_limit')
+    const bucket = await this.storage
+      .asSuperUser()
+      .findBucket({ bucketId: Bucket, columns: 'file_size_limit', signal })
     const maxFileSize = await getFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
@@ -585,7 +600,7 @@ export class S3ProtocolHandler {
       isUpsert: true,
     })
 
-    const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize)
+    const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize, signal)
 
     if (signal?.aborted) {
       throw ERRORS.AbortedTerminate('UploadPart aborted')
@@ -612,20 +627,20 @@ export class S3ProtocolHandler {
         body,
         new ByteLimitTransformStream(ContentLength),
         async (stream) => {
-          return this.storage.backend.uploadPart(
-            storageS3Bucket,
-            this.storage.location.getKeyLocation({
+          return this.storage.backend.uploadPart({
+            bucket: storageS3Bucket,
+            key: this.storage.location.getKeyLocation({
               bucketId: Bucket as string,
               objectName: Key as string,
               tenantId: this.tenantId,
             }),
-            multipart.version,
-            UploadId,
-            PartNumber || 0,
-            stream as Readable,
-            ContentLength,
-            signal
-          )
+            version: multipart.version,
+            uploadId: UploadId,
+            partNumber: PartNumber || 0,
+            body: stream as Readable,
+            length: ContentLength,
+            signal,
+          })
         }
       )
 
@@ -637,6 +652,7 @@ export class S3ProtocolHandler {
         key: Key as string,
         bucket_id: Bucket,
         owner_id: this.owner,
+        signal,
       })
 
       return {
@@ -647,14 +663,17 @@ export class S3ProtocolHandler {
       }
     } catch (e) {
       try {
+        // No signal here - cleanup must complete
         await this.storage.db.asSuperUser().withTransaction(async (db) => {
-          const multipart = await db.findMultipartUpload(UploadId, 'in_progress_size', {
-            forUpdate: true,
+          const multipart = await db.findMultipartUpload({
+            uploadId: UploadId,
+            columns: 'in_progress_size',
+            options: { forUpdate: true },
           })
 
           const diff = multipart.in_progress_size - ContentLength
           const signature = this.uploadSignature({ in_progress_size: diff })
-          await db.updateMultipartUploadProgress(UploadId, diff, signature)
+          await db.updateMultipartUploadProgress({ uploadId: UploadId, progress: diff, signature })
         })
       } catch (e) {
         logSchema.error(logger, 'Failed to update multipart upload progress', {
@@ -718,7 +737,7 @@ export class S3ProtocolHandler {
    *
    * @param command
    */
-  async abortMultipartUpload(command: AbortMultipartUploadCommandInput) {
+  async abortMultipartUpload(command: AbortMultipartUploadCommandInput, signal?: AbortSignal) {
     const { Bucket, Key, UploadId } = command
 
     if (!UploadId) {
@@ -735,7 +754,7 @@ export class S3ProtocolHandler {
 
     const multipart = await this.storage.db
       .asSuperUser()
-      .findMultipartUpload(UploadId, 'id,version')
+      .findMultipartUpload({ uploadId: UploadId, columns: 'id,version', signal })
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     await uploader.canUpload({
@@ -745,18 +764,18 @@ export class S3ProtocolHandler {
       isUpsert: true,
     })
 
-    await this.storage.backend.abortMultipartUpload(
-      storageS3Bucket,
-      this.storage.location.getKeyLocation({
+    await this.storage.backend.abortMultipartUpload({
+      bucket: storageS3Bucket,
+      key: this.storage.location.getKeyLocation({
         bucketId: Bucket,
         objectName: Key,
         tenantId: this.tenantId,
       }),
-      UploadId,
-      multipart.version
-    )
+      uploadId: UploadId,
+      version: multipart.version,
+    })
 
-    await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
+    await this.storage.db.asSuperUser().deleteMultipartUpload({ uploadId: UploadId, signal })
 
     return {}
   }
@@ -772,7 +791,7 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Bucket')
     }
 
-    const r = await this.storage.backend.headObject(Bucket, Key, undefined)
+    const r = await this.storage.backend.stats({ bucket: Bucket, key: Key, version: undefined })
 
     return {
       headers: {
@@ -791,9 +810,9 @@ export class S3ProtocolHandler {
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html
    *
    * @param command
-   * @param opts
+   * @param signal
    */
-  async dbHeadObject(command: HeadObjectCommandInput) {
+  async dbHeadObject(command: HeadObjectCommandInput, signal?: AbortSignal) {
     const { Bucket, Key } = command
 
     if (!Bucket) {
@@ -804,9 +823,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Bucket')
     }
 
-    const object = await this.storage
-      .from(Bucket)
-      .findObject(Key, 'metadata,user_metadata,created_at,updated_at')
+    const object = await this.storage.from(Bucket).findObject({
+      objectName: Key,
+      columns: 'metadata,user_metadata,created_at,updated_at',
+      signal,
+    })
 
     if (!object) {
       throw ERRORS.NoSuchKey(Key)
@@ -832,7 +853,7 @@ export class S3ProtocolHandler {
     }
   }
 
-  async getObjectTagging(command: GetObjectTaggingCommandInput) {
+  async getObjectTagging(command: GetObjectTaggingCommandInput, signal?: AbortSignal) {
     const { Bucket, Key } = command
 
     if (!Bucket) {
@@ -843,7 +864,9 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Key')
     }
 
-    const object = await this.storage.from(Bucket).findObject(Key, 'id')
+    const object = await this.storage
+      .from(Bucket)
+      .findObject({ objectName: Key, columns: 'id', signal })
 
     if (!object) {
       throw ERRORS.NoSuchKey(Key)
@@ -878,26 +901,28 @@ export class S3ProtocolHandler {
     let userMetadata: Record<string, unknown> | undefined | null
 
     if (!options?.skipDbCheck) {
-      const object = await this.storage.from(bucket).findObject(key, 'version,user_metadata')
+      const object = await this.storage
+        .from(bucket)
+        .findObject({ objectName: key, columns: 'version,user_metadata', signal: options?.signal })
       version = object.version
       userMetadata = object.user_metadata
     }
 
-    const response = await this.storage.backend.getObject(
-      this.storage.location.getRootLocation(),
-      this.storage.location.getKeyLocation({
+    const response = await this.storage.backend.read({
+      bucket: this.storage.location.getRootLocation(),
+      key: this.storage.location.getKeyLocation({
         bucketId: bucket,
         objectName: key,
         tenantId: this.tenantId,
       }),
       version,
-      {
+      headers: {
         ifModifiedSince: command.IfModifiedSince?.toISOString(),
         ifNoneMatch: command.IfNoneMatch,
         range: command.Range,
       },
-      options?.signal
-    )
+      signal: options?.signal,
+    })
 
     let metadataHeaders: Record<string, unknown> = {}
 
@@ -961,7 +986,7 @@ export class S3ProtocolHandler {
    *
    * @param command
    */
-  async deleteObject(command: DeleteObjectCommandInput) {
+  async deleteObject(command: DeleteObjectCommandInput, signal?: AbortSignal) {
     const { Bucket, Key } = command
 
     if (!Bucket) {
@@ -972,7 +997,7 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Key')
     }
 
-    await this.storage.from(Bucket).deleteObject(Key)
+    await this.storage.from(Bucket).deleteObject({ objectName: Key, signal })
 
     return {}
   }
@@ -984,7 +1009,7 @@ export class S3ProtocolHandler {
    *
    * @param command
    */
-  async deleteObjects(command: DeleteObjectsCommandInput) {
+  async deleteObjects(command: DeleteObjectsCommandInput, signal?: AbortSignal) {
     const { Bucket, Delete } = command
 
     if (!Bucket) {
@@ -1005,7 +1030,7 @@ export class S3ProtocolHandler {
 
     const deletedResult = await this.storage
       .from(Bucket)
-      .deleteObjects(Delete.Objects.map((o) => o.Key || ''))
+      .deleteObjects({ prefixes: Delete.Objects.map((o) => o.Key || ''), signal })
 
     const deleted = Delete.Objects.filter((o) => deletedResult.find((d) => d.name === o.Key)).map(
       (o) => ({ Key: o.Key })
@@ -1036,7 +1061,7 @@ export class S3ProtocolHandler {
    *
    * @param command
    */
-  async copyObject(command: CopyObjectCommandInput) {
+  async copyObject(command: CopyObjectCommandInput, signal?: AbortSignal) {
     const { Bucket, Key, CopySource } = command
 
     if (!Bucket) {
@@ -1091,6 +1116,7 @@ export class S3ProtocolHandler {
       },
       userMetadata: command.Metadata,
       copyMetadata: command.MetadataDirective === 'COPY',
+      signal,
     })
 
     return {
@@ -1110,19 +1136,22 @@ export class S3ProtocolHandler {
    *
    * @param command
    */
-  async listParts(command: ListPartsCommandInput) {
+  async listParts(command: ListPartsCommandInput, signal?: AbortSignal) {
     if (!command.UploadId) {
       throw ERRORS.MissingParameter('UploadId')
     }
 
     // check if multipart exists
-    await this.storage.db.asSuperUser().findMultipartUpload(command.UploadId, 'id')
+    await this.storage.db
+      .asSuperUser()
+      .findMultipartUpload({ uploadId: command.UploadId, columns: 'id', signal })
 
     const maxParts = Math.min(command.MaxParts || 1000, 1000)
 
-    let result = await this.storage.db.listParts(command.UploadId, {
-      afterPart: command.PartNumberMarker,
-      maxParts: maxParts + 1,
+    let result = await this.storage.db.listParts({
+      uploadId: command.UploadId,
+      options: { afterPart: command.PartNumberMarker, maxParts: maxParts + 1 },
+      signal,
     })
 
     const isTruncated = result.length > maxParts
@@ -1159,7 +1188,7 @@ export class S3ProtocolHandler {
    *
    * @param command UploadPartCopyCommandInput
    */
-  async uploadPartCopy(command: UploadPartCopyCommandInput) {
+  async uploadPartCopy(command: UploadPartCopyCommandInput, signal?: AbortSignal) {
     const { Bucket, Key, UploadId, PartNumber, CopySource, CopySourceRange } = command
 
     if (!UploadId) {
@@ -1204,11 +1233,12 @@ export class S3ProtocolHandler {
     }
 
     // Check if copy source exists
-    const copySource = await this.storage.db.findObject(
-      sourceBucketName,
-      sourceKey,
-      'id,name,version,metadata'
-    )
+    const copySource = await this.storage.db.findObject({
+      bucketId: sourceBucketName,
+      objectName: sourceKey,
+      columns: 'id,name,version,metadata',
+      signal,
+    })
 
     let copySize = copySource.metadata?.size || 0
     let rangeBytes: { fromByte: number; toByte: number } | undefined = undefined
@@ -1240,37 +1270,45 @@ export class S3ProtocolHandler {
       isUpsert: true,
     })
 
-    const [destinationBucket] = await this.storage.db.asSuperUser().withTransaction(async (db) => {
-      return Promise.all([
-        db.findBucketById(Bucket, 'file_size_limit'),
-        db.findBucketById(sourceBucketName, 'id'),
-      ])
-    })
+    const [destinationBucket] = await this.storage.db.asSuperUser().withTransaction(
+      async (db) => {
+        return Promise.all([
+          db.findBucketById({ bucketId: Bucket, columns: 'file_size_limit' }),
+          db.findBucketById({ bucketId: sourceBucketName, columns: 'id' }),
+        ])
+      },
+      { signal }
+    )
     const maxFileSize = await getFileSizeLimit(
       this.storage.db.tenantId,
       destinationBucket?.file_size_limit
     )
 
-    const multipart = await this.shouldAllowPartUpload(UploadId, Number(copySize), maxFileSize)
+    const multipart = await this.shouldAllowPartUpload(
+      UploadId,
+      Number(copySize),
+      maxFileSize,
+      signal
+    )
 
-    const uploadPart = await this.storage.backend.uploadPartCopy(
-      storageS3Bucket,
-      this.storage.location.getKeyLocation({
+    const uploadPart = await this.storage.backend.uploadPartCopy({
+      bucket: storageS3Bucket,
+      key: this.storage.location.getKeyLocation({
         bucketId: Bucket,
         objectName: Key,
         tenantId: this.tenantId,
       }),
-      multipart.version,
-      UploadId,
-      PartNumber,
-      this.storage.location.getKeyLocation({
+      version: multipart.version,
+      uploadId: UploadId,
+      partNumber: PartNumber,
+      sourceKey: this.storage.location.getKeyLocation({
         bucketId: sourceBucketName,
         objectName: copySource.name,
         tenantId: this.tenantId,
       }),
-      copySource.version,
-      rangeBytes
-    )
+      sourceKeyVersion: copySource.version,
+      bytesRange: rangeBytes,
+    })
 
     await this.storage.db.asSuperUser().insertUploadPart({
       upload_id: UploadId,
@@ -1280,6 +1318,7 @@ export class S3ProtocolHandler {
       key: Key as string,
       bucket_id: Bucket,
       owner_id: this.owner,
+      signal,
     })
 
     return {
@@ -1319,33 +1358,37 @@ export class S3ProtocolHandler {
   protected async shouldAllowPartUpload(
     uploadId: string,
     contentLength: number,
-    maxFileSize: number
+    maxFileSize: number,
+    signal?: AbortSignal
   ) {
-    return this.storage.db.asSuperUser().withTransaction(async (db) => {
-      const multipart = await db.findMultipartUpload(
-        uploadId,
-        'in_progress_size,version,upload_signature',
-        {
-          forUpdate: true,
+    return this.storage.db.asSuperUser().withTransaction(
+      async (db) => {
+        const multipart = await db.findMultipartUpload({
+          uploadId,
+          columns: 'in_progress_size,version,upload_signature',
+          options: {
+            forUpdate: true,
+          },
+        })
+
+        const { progress } = this.decryptUploadSignature(multipart.upload_signature)
+
+        if (progress !== multipart.in_progress_size) {
+          throw ERRORS.InvalidUploadSignature()
         }
-      )
 
-      const { progress } = this.decryptUploadSignature(multipart.upload_signature)
+        const currentProgress = multipart.in_progress_size + contentLength
 
-      if (progress !== multipart.in_progress_size) {
-        throw ERRORS.InvalidUploadSignature()
-      }
+        if (currentProgress > maxFileSize) {
+          throw ERRORS.EntityTooLarge()
+        }
 
-      const currentProgress = multipart.in_progress_size + contentLength
-
-      if (currentProgress > maxFileSize) {
-        throw ERRORS.EntityTooLarge()
-      }
-
-      const signature = this.uploadSignature({ in_progress_size: currentProgress })
-      await db.updateMultipartUploadProgress(uploadId, currentProgress, signature)
-      return multipart
-    })
+        const signature = this.uploadSignature({ in_progress_size: currentProgress })
+        await db.updateMultipartUploadProgress({ uploadId, progress: currentProgress, signature })
+        return multipart
+      },
+      { signal }
+    )
   }
 }
 

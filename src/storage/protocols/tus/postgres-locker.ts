@@ -119,7 +119,11 @@ export class PgLock implements Lock {
 
     while (!signal.aborted) {
       try {
-        await db.mustLockObject(uploadId.bucket, uploadId.objectName, uploadId.version)
+        await db.mustLockObject({
+          bucketId: uploadId.bucket,
+          objectName: uploadId.objectName,
+          version: uploadId.version,
+        })
         return true
       } catch (e) {
         if (e instanceof StorageBackendError && e.code === ErrorCode.ResourceLocked) {

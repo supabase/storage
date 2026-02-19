@@ -38,6 +38,7 @@ export type MultiPartRequest = http.IncomingMessage & {
     tenantId: string
     isUpsert: boolean
     resources?: string[]
+    signal?: AbortSignal
   }
 }
 
@@ -72,7 +73,7 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
 
     const payload = await req.upload.storage
       .from(uploadID.bucket)
-      .verifyObjectSignature(signature, uploadID.objectName)
+      .verifyObjectSignature({ token: signature, objectName: uploadID.objectName })
 
     req.upload.owner = payload.owner
     req.upload.isUpsert = payload.upsert
@@ -204,9 +205,11 @@ export async function onCreate(
 
   const storage = req.upload.storage
 
-  const bucket = await storage
-    .asSuperUser()
-    .findBucket(uploadID.bucket, 'id, file_size_limit, allowed_mime_types')
+  const bucket = await storage.asSuperUser().findBucket({
+    bucketId: uploadID.bucket,
+    columns: 'id, file_size_limit, allowed_mime_types',
+    signal: req.upload.signal,
+  })
 
   const metadata = {
     ...(upload.metadata ? upload.metadata : {}),
@@ -239,11 +242,11 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       bucketId: resourceId.bucket,
       objectName: resourceId.objectName,
     })
-    const metadata = await req.upload.storage.backend.headObject(
-      storageS3Bucket,
-      s3Key,
-      resourceId.version
-    )
+    const metadata = await req.upload.storage.backend.stats({
+      bucket: storageS3Bucket,
+      key: s3Key,
+      version: resourceId.version,
+    })
 
     const uploader = new Uploader(
       req.upload.storage.backend,

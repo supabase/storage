@@ -50,8 +50,11 @@ export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
             },
           })
 
-          const tenantBuckets = await storage.listAnalyticsBuckets('id,name', {
-            limit: 1000,
+          const tenantBuckets = await storage.listAnalyticsBuckets({
+            columns: 'id,name',
+            options: {
+              limit: 1000,
+            },
           })
 
           logSchema.info(

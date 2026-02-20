@@ -89,15 +89,14 @@ export class FileBackend implements StorageBackendAdapter {
     const eTag = await this.etag(file, data)
     const fileSize = data.size
     const { cacheControl, contentType } = await this.getFileMetadata(file)
-    const lastModified = new Date(0)
-    lastModified.setUTCMilliseconds(data.mtimeMs)
+    const lastModified = data.mtime
 
     if (headers?.ifNoneMatch && headers.ifNoneMatch === eTag) {
       return {
         metadata: {
           cacheControl: cacheControl || 'no-cache',
           mimetype: contentType || 'application/octet-stream',
-          lastModified: lastModified,
+          lastModified,
           httpStatusCode: 304,
           size: data.size,
           eTag,
@@ -115,7 +114,7 @@ export class FileBackend implements StorageBackendAdapter {
           metadata: {
             cacheControl: cacheControl || 'no-cache',
             mimetype: contentType || 'application/octet-stream',
-            lastModified: lastModified,
+            lastModified,
             httpStatusCode: 304,
             size: data.size,
             eTag,
@@ -155,7 +154,7 @@ export class FileBackend implements StorageBackendAdapter {
         metadata: {
           cacheControl: cacheControl || 'no-cache',
           mimetype: contentType || 'application/octet-stream',
-          lastModified: lastModified,
+          lastModified,
           httpStatusCode: 200,
           size: data.size,
           eTag,
@@ -319,8 +318,7 @@ export class FileBackend implements StorageBackendAdapter {
 
     const data = await fs.stat(file)
     const { cacheControl, contentType } = await this.getFileMetadata(file)
-    const lastModified = new Date(0)
-    lastModified.setUTCMilliseconds(data.mtimeMs)
+    const lastModified = data.mtime
     const eTag = await this.etag(file, data)
 
     return {
@@ -329,7 +327,7 @@ export class FileBackend implements StorageBackendAdapter {
       cacheControl: cacheControl || 'no-cache',
       mimetype: contentType || 'application/octet-stream',
       eTag,
-      lastModified: data.birthtime,
+      lastModified,
       contentLength: data.size,
     }
   }

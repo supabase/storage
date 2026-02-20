@@ -99,6 +99,7 @@ type StorageConfigType = {
   databaseConnectionTimeout: number
   databaseEnableQueryCancellation: boolean
   databaseStatementTimeout: number
+  databaseApplicationName: string
   region: string
   requestTraceHeader?: string
   requestEtagHeaders: string[]
@@ -427,6 +428,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('DATABASE_STATEMENT_TIMEOUT') || '30000',
       10
     ),
+    databaseApplicationName:
+      getOptionalConfigFromEnv('DATABASE_APPLICATION_NAME') ||
+      `Supabase Storage API ${getOptionalConfigFromEnv('VERSION') || '0.0.0'}`,
 
     // CDN
     cdnPurgeEndpointURL: getOptionalConfigFromEnv('CDN_PURGE_ENDPOINT_URL'),

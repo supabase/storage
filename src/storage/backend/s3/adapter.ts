@@ -33,8 +33,13 @@ import { createAgent, InstrumentedAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
 import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
 
-const { storageS3UploadQueueSize, tracingFeatures, storageS3MaxSockets, tracingEnabled } =
-  getConfig()
+const {
+  storageS3UploadQueueSize,
+  tracingFeatures,
+  storageS3MaxSockets,
+  tracingEnabled,
+  storageS3DisableChecksum,
+} = getConfig()
 
 export interface S3ClientOptions {
   endpoint?: string
@@ -600,6 +605,11 @@ export class S3Backend implements StorageBackendAdapter {
     }
     if (options.forcePathStyle) {
       params.forcePathStyle = true
+    }
+
+    if (storageS3DisableChecksum) {
+      params.requestChecksumCalculation = 'WHEN_REQUIRED'
+      params.responseChecksumValidation = 'WHEN_REQUIRED'
     }
     return new S3Client(params)
   }

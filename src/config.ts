@@ -180,6 +180,7 @@ type StorageConfigType = {
   prometheusMetricsEnabled: boolean
   prometheusMetricsIncludeTenantId: boolean
   otelMetricsEnabled: boolean
+  otelMetricsTemporality: 'DELTA' | 'CUMULATIVE'
   otelMetricsExportIntervalMs: number
   cdnPurgeEndpointURL?: string
   cdnPurgeEndpointKey?: string
@@ -443,6 +444,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     prometheusMetricsIncludeTenantId:
       getOptionalConfigFromEnv('PROMETHEUS_METRICS_INCLUDE_TENANT') === 'true',
     otelMetricsEnabled: getOptionalConfigFromEnv('OTEL_METRICS_ENABLED') === 'true',
+    otelMetricsTemporality: getOptionalConfigFromEnv('OTEL_METRICS_TEMPORALITY') || 'CUMULATIVE',
     otelMetricsExportIntervalMs: parseInt(
       getOptionalConfigFromEnv('OTEL_METRICS_EXPORT_INTERVAL_MS') || '60000',
       10

@@ -59,6 +59,15 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.addSchema(schemas.authSchema)
   app.addSchema(schemas.errorSchema)
 
+  // Fixes security vulnerability:
+  // https://hackerone.com/reports/3464114
+  app.addHook('onRequest', async (request, reply) => {
+    const contentType = request.headers['content-type']
+    if (contentType && contentType.includes('\t')) {
+      return reply.code(400).send({ error: 'Invalid Content-Type header' })
+    }
+  })
+
   app.register(plugins.signals)
   app.register(plugins.tenantId)
   app.register(

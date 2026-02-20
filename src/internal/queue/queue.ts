@@ -94,12 +94,12 @@ export abstract class Queue {
     let url = pgQueueConnectionURL || databaseURL
 
     if (isMultitenant && !pgQueueConnectionURL) {
-      if (!multitenantDatabaseUrl) {
+      if (!multitenantDatabaseUrl && !multitenantDatabasePoolUrl) {
         throw new Error(
           'running storage in multi-tenant but DB_MULTITENANT_DATABASE_URL is not set'
         )
       }
-      url = multitenantDatabasePoolUrl || multitenantDatabaseUrl
+      url = (multitenantDatabasePoolUrl || multitenantDatabaseUrl) as string
     }
 
     Queue.pgBossDb = new QueueDB({

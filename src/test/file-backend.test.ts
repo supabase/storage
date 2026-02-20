@@ -157,3 +157,60 @@ describe('FileBackend xattr metadata', () => {
     }
   })
 })
+
+describe('FileBackend lastModified', () => {
+  let tmpDir: string
+  let backend: FileBackend
+  let originalStoragePath: string | undefined
+  let originalFilePath: string | undefined
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
+    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
+    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
+    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
+    getConfig({ reload: true })
+    backend = new FileBackend()
+  })
+
+  afterEach(async () => {
+    if (originalStoragePath === undefined) {
+      delete process.env.STORAGE_FILE_BACKEND_PATH
+    } else {
+      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
+    }
+    if (originalFilePath === undefined) {
+      delete process.env.FILE_STORAGE_BACKEND_PATH
+    } else {
+      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
+    }
+    await fs.remove(tmpDir)
+  })
+
+  it('headObject/getObject should return mtime as lastModified', async () => {
+    const bucket = 'test-bucket'
+    const key = 'test-file.txt'
+    const version = 'v1'
+
+    await backend.uploadObject(
+      bucket,
+      key,
+      version,
+      Readable.from('initial content'),
+      'text/plain',
+      'no-cache'
+    )
+
+    const filePath = path.join(tmpDir, withOptionalVersion(`${bucket}/${key}`, version))
+    const stat = await fs.stat(filePath)
+    const knownMtime = new Date(stat.birthtimeMs + 60_000) // mtime must be in the future
+    await fs.utimes(filePath, knownMtime, knownMtime)
+
+    const headResult = await backend.headObject(bucket, key, version)
+    expect(headResult.lastModified).toEqual(knownMtime)
+
+    const getResult = await backend.getObject(bucket, key, version)
+    expect(getResult.metadata.lastModified).toEqual(knownMtime)
+  })
+})

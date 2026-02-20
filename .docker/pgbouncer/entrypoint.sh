@@ -16,11 +16,24 @@ hostpart="${rest#*@}"
 hostport="${hostpart%%/*}"
 dbname_params="${hostpart#*/}"
 
-DB_USER="${userinfo%%:*}"
-DB_PASS="${userinfo#*:}"
+if [[ "$userinfo" == *:* ]]; then
+    DB_USER="${userinfo%%:*}"
+    DB_PASS="${userinfo#*:}"
+else
+    echo "ERROR: DATABASE_URL must include user:password" >&2
+    exit 1
+fi
 DB_HOST="${hostport%%:*}"
 DB_PORT="${hostport##*:}"
 DB_NAME="${dbname_params%%\?*}"
+
+# Decode percent-encoded characters in URI components (RFC 3986)
+urldecode() {
+    printf '%b' "${1//%/\\x}"
+}
+DB_USER="$(urldecode "$DB_USER")"
+DB_PASS="$(urldecode "$DB_PASS")"
+DB_NAME="$(urldecode "$DB_NAME")"
 
 # Parse query parameters (e.g. sslmode=no-verify)
 DB_QUERY=""
@@ -165,7 +178,7 @@ calculate_pool_settings() {
 
     MAX_DB_CONNECTIONS=0
 
-    echo "pgbouncer: instance=${AWS_DB_INSTANCE_TYPE} memory=${memory_gb}GB rds_maxk_conn≈${rds_max_conn}"
+    echo "pgbouncer: instance=${AWS_DB_INSTANCE_TYPE} memory=${memory_gb}GB rds_max_conn=${rds_max_conn}"
 }
 
 # --- Compute settings ---
@@ -227,6 +240,9 @@ else
     fi
 fi
 
+TLS_FILE="$(mktemp)"
+printf '%s\n' "$TLS_CONFIG" > "$TLS_FILE"
+
 # --- Generate userlist.txt ---
 printf '"%s" "%s"\n' "$DB_USER" "$DB_PASS" > /etc/pgbouncer/userlist.txt
 
@@ -245,8 +261,13 @@ sed \
     -e "s|{{MAX_DB_CONNECTIONS}}|${MAX_DB_CONNECTIONS}|g" \
     -e "s|{{ADMIN_USERS}}|${ADMIN_USERS}|g" \
     -e "s|{{STATS_USERS}}|${STATS_USERS}|g" \
-    -e "s|{{TLS_CONFIG}}|${TLS_CONFIG}|g" \
+    -e "/{{TLS_CONFIG}}/{
+        r ${TLS_FILE}
+        d
+    }" \
     /etc/pgbouncer/pgbouncer.ini.template > /etc/pgbouncer/pgbouncer.ini
+
+rm -f "$TLS_FILE"
 
 echo "pgbouncer: starting on port 6432"
 exec pgbouncer /etc/pgbouncer/pgbouncer.ini

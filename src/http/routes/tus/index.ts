@@ -137,7 +137,7 @@ function createTusServer(
     namingFunction: namingFunction,
     onUploadCreate: onCreate,
     onUploadFinish: onUploadFinish,
-    onIncomingRequest: onIncomingRequest,
+    onIncomingRequest: (req, id) => onIncomingRequest(req, id, datastore),
     generateUrl: generateUrl,
     getFileIdFromRequest: getFileIdFromRequest,
     onResponseError: onResponseError,

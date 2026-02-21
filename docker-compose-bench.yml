@@ -1,0 +1,168 @@
+x-storage-common: &storage-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  depends_on:
+    tenant_db:
+      condition: service_healthy
+    pg_bouncer:
+      condition: service_started
+    minio_setup:
+      condition: service_completed_successfully
+  deploy:
+    resources:
+      limits:
+        memory: 512M
+  environment: &storage-env
+    SERVER_PORT: 5000
+    SERVER_ADMIN_PORT: 5001
+    SERVER_REGION: local
+    AUTH_JWT_SECRET: f023d3db-39dc-4ac9-87b2-b2be72e9162b
+    AUTH_JWT_ALGORITHM: HS256
+    DATABASE_URL: postgres://postgres:postgres@tenant_db:5432/postgres
+    DATABASE_POOL_URL: postgresql://postgres:postgres@pg_bouncer:6432/postgres
+    DATABASE_MAX_CONNECTIONS: 20
+    DB_INSTALL_ROLES: "true"
+    DB_ANON_ROLE: anon
+    DB_SERVICE_ROLE: service_role
+    DB_AUTHENTICATED_ROLE: authenticated
+    DB_SUPER_USER: postgres
+    STORAGE_BACKEND: s3
+    STORAGE_S3_BUCKET: supa-storage-bucket
+    STORAGE_S3_ENDPOINT: http://minio:9000
+    STORAGE_S3_FORCE_PATH_STYLE: "true"
+    STORAGE_S3_REGION: us-east-1
+    AWS_ACCESS_KEY_ID: supa-storage
+    AWS_SECRET_ACCESS_KEY: secret1234
+    UPLOAD_FILE_SIZE_LIMIT: 524288000
+    TUS_URL_PATH: /upload/resumable
+    IMAGE_TRANSFORMATION_ENABLED: "true"
+    IMGPROXY_URL: http://imgproxy:8080
+    S3_PROTOCOL_ACCESS_KEY_ID: 625729a08b95bf1b7ff351a663f3a23c
+    S3_PROTOCOL_ACCESS_KEY_SECRET: 850181e4652dd023b7a98c58ae0d2d34bd487ee0cc3254aed6eda37307425907
+    # OTEL / Monitoring
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel:4317
+    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: http://otel:4317
+    OTEL_METRICS_EXPORT_INTERVAL_MS: 5000
+    OTEL_METRICS_ENABLED: "true"
+    PROMETHEUS_METRICS_ENABLED: "true"
+    TRACING_ENABLED: "true"
+
+services:
+  # Standard Node.js image
+  storage-standard:
+    <<: *storage-common
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: node:24-alpine3.23
+    hostname: node-standard
+    ports:
+      - '5000:5000'
+      - '5001:5001'
+    environment:
+      <<: *storage-env
+      OTEL_RESOURCE_ATTRIBUTES: "instance=node-standard,region=local"
+
+  # node-caged image (V8 pointer compression)
+  storage-caged:
+    <<: *storage-common
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: platformatic/node-caged:25-slim
+    hostname: node-caged
+    ports:
+      - '5002:5000'
+      - '5003:5001'
+    environment:
+      <<: *storage-env
+      OTEL_RESOURCE_ATTRIBUTES: "instance=node-caged,region=local"
+
+  # k6 targeting standard
+  k6-standard:
+    image: grafana/k6:latest
+    volumes:
+      - ./benchmarks:/benchmarks
+    environment:
+      K6_OUT: experimental-prometheus-rw
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM: "true"
+      K6_PROMETHEUS_RW_STALE_MARKERS: "true"
+      BENCH_VARIANT: node-standard
+      BASE_URL: http://storage-standard:5000
+      AUTH_JWT_SECRET: f023d3db-39dc-4ac9-87b2-b2be72e9162b
+    depends_on:
+      - storage-standard
+    profiles:
+      - test
+
+  # k6 targeting node-caged
+  k6-caged:
+    image: grafana/k6:latest
+    volumes:
+      - ./benchmarks:/benchmarks
+    environment:
+      K6_OUT: experimental-prometheus-rw
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM: "true"
+      K6_PROMETHEUS_RW_STALE_MARKERS: "true"
+      BENCH_VARIANT: node-caged
+      BASE_URL: http://storage-caged:5000
+      AUTH_JWT_SECRET: f023d3db-39dc-4ac9-87b2-b2be72e9162b
+    depends_on:
+      - storage-caged
+    profiles:
+      - test
+
+  # Infrastructure services (extended from existing compose files)
+  tenant_db:
+    extends:
+      service: tenant_db
+      file: ./.docker/docker-compose-infra.yml
+
+  pg_bouncer:
+    extends:
+      service: pg_bouncer
+      file: ./.docker/docker-compose-infra.yml
+
+  minio:
+    extends:
+      service: minio
+      file: ./.docker/docker-compose-infra.yml
+
+  minio_setup:
+    extends:
+      service: minio_setup
+      file: ./.docker/docker-compose-infra.yml
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  imgproxy:
+    extends:
+      service: imgproxy
+      file: ./.docker/docker-compose-infra.yml
+
+  # Monitoring services (extended from existing compose files)
+  otel:
+    extends:
+      service: otel-collector
+      file: ./.docker/docker-compose-monitoring.yml
+
+  jaeger:
+    extends:
+      service: jaeger
+      file: ./.docker/docker-compose-monitoring.yml
+
+  grafana:
+    extends:
+      service: grafana
+      file: ./.docker/docker-compose-monitoring.yml
+
+  prometheus:
+    extends:
+      service: prometheus
+      file: ./.docker/docker-compose-monitoring.yml

@@ -1,0 +1,417 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "k6 Benchmark: node-caged vs standard Node.js",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "panels": [],
+      "title": "k6 Load Test Metrics",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "Requests/sec by Variant",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "sum(rate(k6_http_reqs_total{variant=~\"$variant\"}[$__rate_interval])) by (variant)",
+          "legendFormat": "{{variant}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "p95 Response Time by Variant",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(k6_http_req_duration_seconds_bucket{variant=~\"$variant\"}[$__rate_interval])) by (le, variant))",
+          "legendFormat": "p95 {{variant}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "Error Rate by Variant",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "sum(rate(k6_http_req_failed_total{variant=~\"$variant\"}[$__rate_interval])) by (variant)",
+          "legendFormat": "{{variant}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "Response Time Percentiles by Variant",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(k6_http_req_duration_seconds_bucket{variant=~\"$variant\"}[$__rate_interval])) by (le, variant))",
+          "legendFormat": "p50 {{variant}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.90, sum(rate(k6_http_req_duration_seconds_bucket{variant=~\"$variant\"}[$__rate_interval])) by (le, variant))",
+          "legendFormat": "p90 {{variant}}",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(k6_http_req_duration_seconds_bucket{variant=~\"$variant\"}[$__rate_interval])) by (le, variant))",
+          "legendFormat": "p99 {{variant}}",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "VUs Active",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "k6_vus{variant=~\"$variant\"}",
+          "legendFormat": "VUs {{variant}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "id": 10,
+      "panels": [],
+      "title": "Application Memory & Runtime",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "V8 Heap Used (Total)",
+      "description": "Sum of all V8 heap spaces used bytes",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 18 },
+      "id": 11,
+      "targets": [
+        {
+          "expr": "sum(storage_api_otel_v8js_memory_heap_used_bytes{instance=~\"$variant\"}) by (instance)",
+          "legendFormat": "heap used {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "RSS Memory",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 18 },
+      "id": 12,
+      "targets": [
+        {
+          "expr": "storage_api_otel_nodejs_memory_rss_bytes{instance=~\"$variant\"}",
+          "legendFormat": "RSS {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "V8 Heap Limit vs Used",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 18 },
+      "id": 13,
+      "targets": [
+        {
+          "expr": "sum(storage_api_otel_v8js_memory_heap_limit_bytes{instance=~\"$variant\"}) by (instance)",
+          "legendFormat": "heap limit {{instance}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(storage_api_otel_v8js_memory_heap_used_bytes{instance=~\"$variant\"}) by (instance)",
+          "legendFormat": "heap used {{instance}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "V8 Heap by Space",
+      "description": "Heap used broken down by V8 heap space (old_space, new_space, code_space, etc.)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "id": 17,
+      "targets": [
+        {
+          "expr": "storage_api_otel_v8js_memory_heap_used_bytes{instance=~\"$variant\", v8js_heap_space_name=~\"old_space|new_space|code_space|trusted_space|large_object_space\"}",
+          "legendFormat": "{{instance}} {{v8js_heap_space_name}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "External + ArrayBuffers Memory",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "id": 18,
+      "targets": [
+        {
+          "expr": "storage_api_otel_nodejs_memory_external_bytes{instance=~\"$variant\"}",
+          "legendFormat": "external {{instance}}",
+          "refId": "A"
+        },
+        {
+          "expr": "storage_api_otel_nodejs_memory_array_buffers_bytes{instance=~\"$variant\"}",
+          "legendFormat": "array buffers {{instance}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 },
+      "id": 19,
+      "panels": [],
+      "title": "Application Runtime",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "Event Loop Utilization",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 35 },
+      "id": 14,
+      "targets": [
+        {
+          "expr": "storage_api_otel_nodejs_eventloop_utilization_ratio{instance=~\"$variant\"}",
+          "legendFormat": "ELU {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "CPU Usage",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 35 },
+      "id": 15,
+      "targets": [
+        {
+          "expr": "rate(storage_api_otel_process_cpu_seconds_total{instance=~\"$variant\"}[$__rate_interval])",
+          "legendFormat": "CPU {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "GC Duration",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 35 },
+      "id": 16,
+      "targets": [
+        {
+          "expr": "rate(storage_api_otel_v8js_gc_duration_seconds_sum{instance=~\"$variant\"}[$__rate_interval])",
+          "legendFormat": "{{instance}} {{v8js_gc_type}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "id": 20,
+      "panels": [],
+      "title": "Application Request Performance",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "HTTP p95 Latency (App-Side)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+      "id": 21,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(storage_api_otel_http_request_duration_seconds_bucket{instance=~\"$variant\"}[$__rate_interval])) by (le, instance))",
+          "legendFormat": "p95 {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+      "title": "DB Connection Pool",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+      "id": 22,
+      "targets": [
+        {
+          "expr": "storage_api_otel_db_connections{instance=~\"$variant\"}",
+          "legendFormat": "connections {{instance}}",
+          "refId": "A"
+        },
+        {
+          "expr": "storage_api_otel_db_connections_in_use{instance=~\"$variant\"}",
+          "legendFormat": "in use {{instance}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["k6", "benchmark"],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": ["All"],
+          "value": ["$__all"]
+        },
+        "datasource": { "type": "prometheus", "uid": "local_prometheus" },
+        "definition": "label_values(storage_api_otel_nodejs_memory_rss_bytes, instance)",
+        "includeAll": true,
+        "multi": true,
+        "name": "variant",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(storage_api_otel_nodejs_memory_rss_bytes, instance)"
+        },
+        "refresh": 2,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "title": "k6 Benchmark: node-caged vs standard",
+  "uid": "k6-benchmark"
+}

@@ -1,6 +1,11 @@
 # Base stage for shared environment setup
-FROM node:24-alpine3.23 AS base
-RUN apk add --no-cache g++ make python3
+ARG BASE_IMAGE=platformatic/node-caged:25-slim
+FROM ${BASE_IMAGE} AS base
+RUN if command -v apk > /dev/null; then \
+      apk add --no-cache g++ make python3; \
+    else \
+      apt-get update && apt-get install -y --no-install-recommends g++ make python3 && rm -rf /var/lib/apt/lists/*; \
+    fi
 WORKDIR /app
 COPY package.json package-lock.json ./
 

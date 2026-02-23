@@ -6,9 +6,10 @@ import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc'
 import { PrometheusExporter } from '@opentelemetry/exporter-prometheus'
 import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
 import {
+  AggregationTemporality,
+  AggregationType,
   MeterProvider,
   PeriodicExportingMetricReader,
-  AggregationType,
 } from '@opentelemetry/sdk-metrics'
 import { HostMetrics } from '@opentelemetry/host-metrics'
 import { registerInstrumentations } from '@opentelemetry/instrumentation'
@@ -19,7 +20,8 @@ import * as os from 'os'
 import { logger, logSchema } from '@internal/monitoring/logger'
 import { FastifyReply, FastifyRequest } from 'fastify'
 
-const { version, otelMetricsExportIntervalMs, otelMetricsEnabled, region } = getConfig()
+const { version, otelMetricsExportIntervalMs, otelMetricsEnabled, otelMetricsTemporality, region } =
+  getConfig()
 
 let prometheusExporter: PrometheusExporter | undefined
 
@@ -85,6 +87,10 @@ if (otelMetricsEnabled) {
       compression: process.env.OTEL_EXPORTER_OTLP_COMPRESSION as CompressionAlgorithm,
       headers: exporterHeaders,
       metadata: grpcMetadata,
+      temporalityPreference:
+        otelMetricsTemporality === 'DELTA'
+          ? AggregationTemporality.DELTA
+          : AggregationTemporality.CUMULATIVE,
     })
 
     readers.push(

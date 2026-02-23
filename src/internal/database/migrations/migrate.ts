@@ -211,14 +211,16 @@ export async function areMigrationsUpToDate(tenantId: string) {
   )
 }
 
-export async function obtainLockOnMultitenantDB<T>(fn: () => Promise<T>) {
+export async function obtainLockOnMultitenantDB<T>(fn: (tnx: Knex.Transaction) => Promise<T>) {
+  const trx = await multitenantKnex.transaction()
   try {
-    const result = await multitenantKnex.raw(`SELECT pg_try_advisory_lock(?);`, [
-      '-8575985245963000605',
+    const result = await trx.raw(`SELECT pg_try_advisory_xact_lock(?) AS locked;`, [
+      -8575985245963000605,
     ])
-    const lockAcquired = result.rows.shift()?.pg_try_advisory_lock || false
+    const lockAcquired = result.rows.shift()?.locked || false
 
     if (!lockAcquired) {
+      await trx.rollback()
       return
     }
 
@@ -226,11 +228,12 @@ export async function obtainLockOnMultitenantDB<T>(fn: () => Promise<T>) {
       type: 'migrations',
     })
 
-    return await fn()
-  } finally {
-    try {
-      await multitenantKnex.raw(`SELECT pg_advisory_unlock(?);`, ['-8575985245963000605'])
-    } catch {}
+    const fnResult = await fn(trx)
+    await trx.commit()
+    return fnResult
+  } catch (e) {
+    await trx.rollback()
+    throw e
   }
 }
 

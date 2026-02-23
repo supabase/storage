@@ -1,6 +1,4 @@
-# Supabase Storage Engine
-
-[![Coverage Status](https://coveralls.io/repos/github/supabase/storage/badge.svg?branch=master)](https://coveralls.io/github/supabase/storage?branch=master)
+# Supabase Storage Engine [![Coverage Status](https://coveralls.io/repos/github/supabase/storage/badge.svg?branch=master)](https://coveralls.io/github/supabase/storage?branch=master) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/supabase/storage)
 
 A scalable, lightweight object storage service.
 
@@ -11,7 +9,6 @@ A scalable, lightweight object storage service.
 - Authorization rules are written as Postgres Row Level Security policies
 - Integrates with S3 Compatible Storages
 - Extremely lightweight and performant
-
 
 **Supported Protocols**
 
@@ -35,7 +32,7 @@ A scalable, lightweight object storage service.
 
 ```bash
 cp .env.sample .env && cp .env.test.sample .env.test
-````
+```
 
 **Your root directory should now have both `.env` and `.env.test` files.**
 
@@ -69,4 +66,3 @@ curl --location --request GET 'http://localhost:5000/bucket' \
 ### Testing
 
 To perform your tests you can run the following command: `npm test`
-

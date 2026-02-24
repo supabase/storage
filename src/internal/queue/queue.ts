@@ -21,6 +21,7 @@ export abstract class Queue {
     const {
       isMultitenant,
       databaseURL,
+      multitenantDatabasePoolUrl,
       multitenantDatabaseUrl,
       pgQueueConnectionURL,
       pgQueueArchiveCompletedAfterSeconds,
@@ -30,6 +31,7 @@ export abstract class Queue {
     } = getConfig()
 
     let url = pgQueueConnectionURL ?? databaseURL
+    let migrate = true
 
     if (isMultitenant && !pgQueueConnectionURL) {
       if (!multitenantDatabaseUrl) {
@@ -37,12 +39,16 @@ export abstract class Queue {
           'running storage in multi-tenant but DB_MULTITENANT_DATABASE_URL is not set'
         )
       }
-      url = multitenantDatabaseUrl
+      url = multitenantDatabasePoolUrl || multitenantDatabaseUrl
+
+      if (multitenantDatabasePoolUrl) {
+        migrate = false
+      }
     }
 
     return new PgBoss({
       connectionString: url,
-      migrate: true,
+      migrate: migrate,
       db: opts.db,
       schema: 'pgboss_v10',
       application_name: 'storage-pgboss',
@@ -77,6 +83,7 @@ export abstract class Queue {
       isMultitenant,
       databaseURL,
       multitenantDatabaseUrl,
+      multitenantDatabasePoolUrl,
       pgQueueConnectionURL,
       pgQueueEnableWorkers,
       pgQueueReadWriteTimeout,
@@ -87,12 +94,12 @@ export abstract class Queue {
     let url = pgQueueConnectionURL || databaseURL
 
     if (isMultitenant && !pgQueueConnectionURL) {
-      if (!multitenantDatabaseUrl) {
+      if (!multitenantDatabaseUrl && !multitenantDatabasePoolUrl) {
         throw new Error(
           'running storage in multi-tenant but DB_MULTITENANT_DATABASE_URL is not set'
         )
       }
-      url = multitenantDatabaseUrl
+      url = (multitenantDatabasePoolUrl || multitenantDatabaseUrl) as string
     }
 
     Queue.pgBossDb = new QueueDB({

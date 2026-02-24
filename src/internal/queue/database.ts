@@ -33,9 +33,33 @@ export class QueueDB extends EventEmitter implements Db {
     await this.pool?.end()
   }
 
+  protected async useTransaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+    if (!this.opened || !this.pool) {
+      throw ERRORS.InternalError(undefined, `QueueDB not opened ${this.opened}`)
+    }
+
+    const client = await this.pool.connect()
+    try {
+      await client.query('BEGIN')
+
+      if (this.config.statement_timeout && this.config.statement_timeout > 0) {
+        await client.query(`SET LOCAL statement_timeout = ${this.config.statement_timeout}`)
+      }
+
+      const result = await fn(client)
+      await client.query('COMMIT')
+      return result
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw err
+    } finally {
+      client.release()
+    }
+  }
+
   async executeSql(text: string, values: any[]) {
     if (this.opened && this.pool) {
-      return await this.pool.query(text, values)
+      return this.useTransaction((client) => client.query(text, values))
     }
 
     throw ERRORS.InternalError(undefined, `QueueDB not opened ${this.opened} ${text}`)

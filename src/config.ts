@@ -65,6 +65,7 @@ type StorageConfigType = {
   storageFileEtagAlgorithm: 'mtime' | 'md5'
   storageS3InternalTracesEnabled?: boolean
   storageS3MaxSockets: number
+  storageS3DisableChecksum: boolean
   storageS3UploadQueueSize: number
   storageS3Bucket: string
   storageS3Endpoint?: string
@@ -77,6 +78,8 @@ type StorageConfigType = {
   jwtCachingEnabled: boolean
   jwtJWKS?: JwksConfig
   multitenantDatabaseUrl?: string
+  multitenantDatabasePoolUrl?: string
+  multitenantMaxConnections: number
   dbAnonRole: string
   dbAuthenticatedRole: string
   dbServiceRole: string
@@ -359,6 +362,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('STORAGE_S3_MAX_SOCKETS', 'GLOBAL_S3_MAX_SOCKETS') || '200',
       10
     ),
+    storageS3DisableChecksum: getOptionalConfigFromEnv('STORAGE_S3_DISABLE_CHECKSUM') === 'true',
     storageS3UploadQueueSize:
       envNumber(getOptionalConfigFromEnv('STORAGE_S3_UPLOAD_QUEUE_SIZE')) ?? 2,
     storageS3InternalTracesEnabled:
@@ -391,6 +395,17 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     multitenantDatabaseUrl: getOptionalConfigFromEnv(
       'DATABASE_MULTITENANT_URL',
       'MULTITENANT_DATABASE_URL'
+    ),
+    multitenantDatabasePoolUrl: getOptionalConfigFromEnv(
+      'DATABASE_MULTITENANT_POOL_URL',
+      'MULTITENANT_DATABASE_POOL_URL'
+    ),
+    multitenantMaxConnections: envNumber(
+      getOptionalConfigFromEnv(
+        'DATABASE_MULTITENANT_MAX_CONNECTIONS',
+        'MULTITENANT_DATABASE_MAX_CONNECTIONS'
+      ),
+      10
     ),
     databaseSSLRootCert: getOptionalConfigFromEnv('DATABASE_SSL_ROOT_CERT'),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
@@ -462,7 +477,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       10
     ),
     pgQueueDeleteAfterHours:
-      Number(getOptionalConfigFromEnv('PG_QUEUE_DELETE_AFTER_HOURS')) || undefined,
+      envNumber(getOptionalConfigFromEnv('PG_QUEUE_DELETE_AFTER_HOURS')) || undefined,
     pgQueueArchiveCompletedAfterSeconds: parseInt(
       getOptionalConfigFromEnv('PG_QUEUE_ARCHIVE_COMPLETED_AFTER_SECONDS') || '7200',
       10
@@ -608,13 +623,13 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   return config
 }
 
-function envNumber(value: string | undefined): number | undefined {
+function envNumber(value: string | undefined, defaultValue?: number): number | undefined {
   if (!value) {
-    return undefined
+    return defaultValue
   }
   const parsed = parseInt(value, 10)
   if (isNaN(parsed)) {
-    return undefined
+    return defaultValue
   }
   return parsed
 }

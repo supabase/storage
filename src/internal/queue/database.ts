@@ -39,6 +39,15 @@ export class QueueDB extends EventEmitter implements Db {
     }
 
     const client = await this.pool.connect()
+
+    // Create a promise that rejects if the client emits an error
+    // (e.g. connection lost, statement_timeout at the backend level)
+    let clientError: Error | undefined
+    const onError = (e: Error) => {
+      clientError = e
+    }
+    client.on('error', onError)
+
     try {
       await client.query('BEGIN')
 
@@ -47,13 +56,25 @@ export class QueueDB extends EventEmitter implements Db {
       }
 
       const result = await fn(client)
+
+      if (clientError) {
+        throw clientError
+      }
+
       await client.query('COMMIT')
       return result
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => {})
-      throw err
+      const rollbackErr = await client.query('ROLLBACK').catch((e) => e as Error)
+
+      const errors = [err as Error, clientError, rollbackErr].filter(
+        (e): e is Error => e instanceof Error
+      )
+
+      if (errors.length === 1) throw errors[0]
+      throw new AggregateError(errors, 'Queue transaction failed')
     } finally {
-      client.release()
+      client.off('error', onError)
+      client.release(clientError)
     }
   }
 

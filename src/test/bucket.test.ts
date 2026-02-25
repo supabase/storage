@@ -183,6 +183,17 @@ describe('testing GET all buckets', () => {
   })
 
   test('user is able to get buckets with limit, offset, search and sorting', async () => {
+    const allBucketsResponse = await appInstance.inject({
+      method: 'GET',
+      url: `/bucket?sortColumn=name&sortOrder=asc&search=bucket`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(allBucketsResponse.statusCode).toBe(200)
+    const allBuckets = JSON.parse(allBucketsResponse.body)
+    expect(allBuckets.length).toBeGreaterThanOrEqual(4)
+
     const response = await appInstance.inject({
       method: 'GET',
       url: `/bucket?limit=1&offset=3&sortColumn=name&sortOrder=asc&search=bucket`,
@@ -193,9 +204,10 @@ describe('testing GET all buckets', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON.length).toEqual(1)
+    const expectedBucket = allBuckets[3]
     expect(responseJSON[0]).toMatchObject({
-      id: 'bucket4',
-      name: 'bucket4',
+      id: expectedBucket.id,
+      name: expectedBucket.name,
       type: expect.any(String),
       public: false,
       file_size_limit: null,
@@ -449,11 +461,10 @@ describe('testing public bucket functionality', () => {
 
 describe('testing count objects in bucket', () => {
   const { tenantId } = getConfig()
-  const testObjectCount = 27
+  const testObjectNames = ['object-1.txt', 'object-2.txt', 'object-3.txt']
   const testOwnerId = randomUUID()
   let db: StorageKnexDB
   let testBucketId: string
-  let testObjectNames: string[]
 
   beforeAll(async () => {
     const serviceKeyUser = await getServiceKeyUser(tenantId)
@@ -470,10 +481,6 @@ describe('testing count objects in bucket', () => {
     })
 
     testBucketId = `count-objects-${randomUUID()}`
-    testObjectNames = Array.from({ length: testObjectCount }, (_, idx) => {
-      return `fixtures/count-object-${idx}`
-    })
-
     await db.createBucket({
       id: testBucketId,
       name: testBucketId,
@@ -490,7 +497,7 @@ describe('testing count objects in bucket', () => {
           name,
           owner: testOwnerId,
           bucket_id: testBucketId,
-          metadata: { size: 1 },
+          metadata: { size: 1234 },
           user_metadata: null,
           version: undefined,
         })
@@ -505,13 +512,13 @@ describe('testing count objects in bucket', () => {
   })
 
   it('should return correct object count', async () => {
-    await expect(db.countObjectsInBucket(testBucketId)).resolves.toBe(testObjectCount)
+    await expect(db.countObjectsInBucket(testBucketId)).resolves.toBe(testObjectNames.length)
   })
   it('should return limited object count', async () => {
-    await expect(db.countObjectsInBucket(testBucketId, 22)).resolves.toBe(22)
+    await expect(db.countObjectsInBucket(testBucketId, 2)).resolves.toBe(2)
   })
   it('should return full object count if limit is greater than total', async () => {
-    await expect(db.countObjectsInBucket(testBucketId, 999)).resolves.toBe(testObjectCount)
+    await expect(db.countObjectsInBucket(testBucketId, 999)).resolves.toBe(testObjectNames.length)
   })
   it('should return 0 object count if there are no objects with provided bucket id', async () => {
     await expect(db.countObjectsInBucket('this-is-not-a-bucket-at-all', 999)).resolves.toBe(0)

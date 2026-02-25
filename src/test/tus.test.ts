@@ -553,8 +553,8 @@ describe('Tus multipart', () => {
             'x-upsert': 'true',
           },
           metadata: {
-            bucketName: bucketName,
-            objectName: objectName,
+            bucketName,
+            objectName,
             contentType: 'image/jpeg',
             cacheControl: '3600',
             metadata: JSON.stringify({
@@ -562,7 +562,7 @@ describe('Tus multipart', () => {
               test2: 'test2',
             }),
           },
-          onError: function (error) {
+          onError(error) {
             reject(error)
           },
           onSuccess: () => {
@@ -602,18 +602,23 @@ describe('Tus multipart', () => {
         version: expect.any(String),
       })
 
-      const getResponse = await app().inject({
-        method: 'GET',
-        url: `/object/${bucketName}/${encodeURIComponent(objectName)}`,
-        headers: {
-          authorization,
-        },
-      })
-      expect(getResponse.statusCode).toBe(200)
-      expect(getResponse.headers['etag']).toBe('"53e1323c929d57b09b95fbe6d531865c-1"')
-      expect(getResponse.headers['cache-control']).toBe('max-age=3600')
-      expect(getResponse.headers['content-length']).toBe('29526')
-      expect(getResponse.headers['content-type']).toBe('image/jpeg')
+      const appInstance = app()
+      try {
+        const getResponse = await appInstance.inject({
+          method: 'GET',
+          url: `/object/${bucketName}/${encodeURIComponent(objectName)}`,
+          headers: {
+            authorization,
+          },
+        })
+        expect(getResponse.statusCode).toBe(200)
+        expect(getResponse.headers['etag']).toBe('"53e1323c929d57b09b95fbe6d531865c-1"')
+        expect(getResponse.headers['cache-control']).toBe('max-age=3600')
+        expect(getResponse.headers['content-length']).toBe('29526')
+        expect(getResponse.headers['content-type']).toBe('image/jpeg')
+      } finally {
+        await appInstance.close()
+      }
     })
 
     it('should not upload if the name contains invalid characters', async () => {
@@ -636,12 +641,12 @@ describe('Tus multipart', () => {
               'x-upsert': 'true',
             },
             metadata: {
-              bucketName: bucketName,
+              bucketName,
               objectName: invalidObjectName,
               contentType: 'image/jpeg',
               cacheControl: '3600',
             },
-            onError: function (error) {
+            onError(error) {
               reject(error)
             },
             onSuccess: () => {

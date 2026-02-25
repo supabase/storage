@@ -23,6 +23,7 @@ const { requestUrlLengthLimit } = getConfig()
 
 interface CopyObjectParams {
   sourceKey: string
+  sourceVersion?: string
   destinationBucket: string
   destinationKey: string
   owner?: string
@@ -294,6 +295,7 @@ export class ObjectStorage {
    */
   async copyObject({
     sourceKey,
+    sourceVersion,
     destinationBucket,
     destinationKey,
     owner,
@@ -324,6 +326,11 @@ export class ObjectStorage {
       'bucket_id,metadata,user_metadata,version'
     )
 
+    if (sourceVersion && originObject.version !== sourceVersion) {
+      throw ERRORS.NoSuchKey(sourceKey)
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const baseMetadata = originObject.metadata || {}
     const destinationMetadata = copyMetadata
       ? baseMetadata
@@ -343,7 +350,7 @@ export class ObjectStorage {
       const copyResult = await this.backend.copyObject(
         this.location.getRootLocation(),
         s3SourceKey,
-        originObject.version,
+        sourceVersion || originObject.version,
         s3DestinationKey,
         newVersion,
         destinationMetadata,
@@ -792,6 +799,8 @@ export class ObjectStorage {
     owner?: string,
     options?: { upsert?: boolean }
   ) {
+    mustBeValidKey(objectName)
+
     // check if user has INSERT permissions
     await this.uploader.canUpload({
       bucketId: this.bucketId,

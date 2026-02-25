@@ -568,7 +568,9 @@ export class S3Backend implements StorageBackendAdapter {
       Key: withOptionalVersion(key, version),
       UploadId,
       PartNumber,
-      CopySource: `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceKeyVersion)}`,
+      CopySource: encodeURIComponent(
+        `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceKeyVersion)}`
+      ),
       CopySourceRange: bytesRange ? `bytes=${bytesRange.fromByte}-${bytesRange.toByte}` : undefined,
     })
 

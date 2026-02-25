@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [ubuntu-24.04]
-        node: ['24']
+        node: ["24"]
 
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 15
@@ -68,7 +68,7 @@ jobs:
           PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
           AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
-          FILE_SIZE_LIMIT: '52428800'
+          FILE_SIZE_LIMIT: "52428800"
           STORAGE_BACKEND: s3
           MULTITENANT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5433/postgres
           ADMIN_API_KEYS: apikey
@@ -91,9 +91,11 @@ jobs:
           ICEBERG_ENABLED: true
 
       - name: Upload coverage results to Coveralls
-        uses: coverallsapp/github-action@master
+        uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2.3.7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on-error: false
+        continue-on-error: true
 
       - name: Verify migration idempotency
         run: |
@@ -101,14 +103,14 @@ jobs:
             --exclude-table-data=storage.migrations \
             --restrict-key=test \
             > before.sql
-          
+
           npm run migration:test-idempotency
-          
+
           pg_dump "$DATABASE_URL" \
             --exclude-table-data=storage.migrations \
             --restrict-key=test \
             > after.sql
-          
+
           diff before.sql after.sql || (echo 'Schema mismatch!'; exit 1)
 
         env:

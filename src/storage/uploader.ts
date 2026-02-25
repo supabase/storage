@@ -27,7 +27,7 @@ export interface UploadRequest {
   bucketId: string
   objectName: string
   file: FileUpload
-  userMetadata: Record<string, unknown> | undefined
+  userMetadata?: Record<string, unknown>
   owner?: string
   isUpsert?: boolean
   uploadType?: 'standard' | 's3' | 'resumable'

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.4/schema.json",
+  "files": {
+    "includes": [
+      "src/**/*.ts",
+      "!src/internal/sharding/architecture.md",
+      "!src/test/rls_tests.yaml",
+      "!src/test/db/docker-compose.yml",
+      "!src/http/error-handler.ts",
+      "!src/http/plugins/metrics.ts",
+      "!src/http/routes/admin/tenants.ts",
+      "!src/http/routes/s3/commands/put-object.ts",
+      "!src/http/routes/s3/router.ts",
+      "!src/internal/database/migrations/migrate.ts",
+      "!src/internal/monitoring/otel-metrics.ts",
+      "!src/internal/monitoring/otel-tracing.ts",
+      "!src/internal/queue/queue.ts",
+      "!src/storage/database/knex.ts",
+      "!src/storage/protocols/iceberg/catalog/rest-catalog-client.ts",
+      "!src/storage/protocols/tus/postgres-locker.ts",
+      "!src/test/jwt.test.ts",
+      "!src/test/rls.test.ts"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": false
+  },
+  "assist": {
+    "enabled": false
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "asNeeded",
+      "trailingCommas": "es5"
+    }
+  }
+}

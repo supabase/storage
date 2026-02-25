@@ -78,6 +78,8 @@ export default async function routes(fastify: FastifyInstance) {
       const customMd = request.headers['x-metadata']
 
       if (typeof customMd === 'string') {
+        // TODO: parseUserMetadata casts to Record<string, string> but values could be anything;
+        // validation should be added in a follow-up
         userMetadata = parseUserMetadata(customMd)
       }
 

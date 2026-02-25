@@ -586,16 +586,20 @@ export class S3ProtocolHandler {
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
 
-    const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize)
+    const multipartData = await this.storage.db
+      .asSuperUser()
+      .findMultipartUpload(UploadId, 'version,user_metadata,metadata')
 
     await uploader.canUpload({
       bucketId: Bucket as string,
       objectName: Key as string,
       owner: this.owner,
       isUpsert: true,
-      userMetadata: multipart.user_metadata || undefined,
-      metadata: multipart.metadata || undefined,
+      userMetadata: multipartData.user_metadata || undefined,
+      metadata: multipartData.metadata || undefined,
     })
+
+    const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize)
 
     if (signal?.aborted) {
       throw ERRORS.AbortedTerminate('UploadPart aborted')
@@ -1257,16 +1261,20 @@ export class S3ProtocolHandler {
       destinationBucket?.file_size_limit
     )
 
-    const multipart = await this.shouldAllowPartUpload(UploadId, Number(copySize), maxFileSize)
+    const multipartData = await this.storage.db
+      .asSuperUser()
+      .findMultipartUpload(UploadId, 'version,user_metadata,metadata')
 
     await uploader.canUpload({
       bucketId: Bucket,
       objectName: Key,
       owner: this.owner,
       isUpsert: true,
-      userMetadata: multipart.user_metadata || undefined,
-      metadata: multipart.metadata || undefined,
+      userMetadata: multipartData.user_metadata || undefined,
+      metadata: multipartData.metadata || undefined,
     })
+
+    const multipart = await this.shouldAllowPartUpload(UploadId, Number(copySize), maxFileSize)
 
     const uploadPart = await this.storage.backend.uploadPartCopy(
       storageS3Bucket,

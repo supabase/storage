@@ -333,12 +333,20 @@ export class ObjectStorage {
           ...(fileMetadata || {}),
         }
 
+    const baseUserMetadata = originObject.user_metadata || {}
+    const destinationUserMetadata = copyMetadata
+      ? baseUserMetadata
+      : {
+          ...baseUserMetadata,
+          ...(userMetadata || {}),
+        }
+
     await this.uploader.canUpload({
       bucketId: destinationBucket,
       objectName: destinationKey,
       owner,
       isUpsert: upsert,
-      userMetadata: userMetadata,
+      userMetadata: destinationUserMetadata,
       metadata: destinationMetadata,
     })
 
@@ -384,7 +392,7 @@ export class ObjectStorage {
             lastModified: copyResult.lastModified,
             eTag: copyResult.eTag,
           },
-          user_metadata: copyMetadata ? originObject.user_metadata : userMetadata,
+          user_metadata: destinationUserMetadata,
           version: newVersion,
         })
 

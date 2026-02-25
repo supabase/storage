@@ -404,7 +404,7 @@ export class ObjectStorage {
         tenant: this.db.tenant(),
         name: destinationKey,
         version: newVersion,
-        bucketId: this.bucketId,
+        bucketId: destinationBucket,
         metadata,
         reqId: this.db.reqId,
       })
@@ -537,7 +537,7 @@ export class ObjectStorage {
             tenant: this.db.tenant(),
             name: destinationObjectName,
             version: newVersion,
-            bucketId: this.bucketId,
+            bucketId: destinationBucket,
             metadata: metadata,
             oldObject: {
               name: sourceObjectName,

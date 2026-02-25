@@ -21,6 +21,7 @@ const getSignedUploadURLHeadersSchema = {
   type: 'object',
   properties: {
     'x-upsert': { type: 'string' },
+    'x-metadata': { type: 'string' },
     'content-type': { type: 'string' },
     'content-length': { type: 'string' },
     authorization: { type: 'string' },

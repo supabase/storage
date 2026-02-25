@@ -24,7 +24,6 @@ describe('ObjectScanner', () => {
         bucketId: bucket.id,
         objectName: randomUUID() + `-test-${i}.text`,
         uploadType: 'standard',
-        userMetadata: {},
         file: {
           body: Readable.from(Buffer.from('test')),
           mimeType: 'text/plain',
@@ -91,7 +90,6 @@ describe('ObjectScanner', () => {
         bucketId: bucket.id,
         objectName: randomUUID() + `-test-${i}.text`,
         uploadType: 'standard',
-        userMetadata: {},
         file: {
           body: Readable.from(Buffer.from('test')),
           mimeType: 'text/plain',

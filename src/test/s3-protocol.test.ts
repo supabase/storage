@@ -35,8 +35,9 @@ import axios from 'axios'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
 import { wait } from '@internal/concurrency'
 import { getInvalidObjectName, getUnicodeObjectName } from './common'
+import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 
-const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
+const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region, tenantId } = getConfig()
 
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
   let bucketName: string
@@ -75,6 +76,37 @@ async function uploadFile(
   })
 
   return await uploader.done()
+}
+
+async function getObjectVersion(bucketId: string, objectName: string): Promise<string> {
+  const superUser = await getServiceKeyUser(tenantId)
+  const connection = await getPostgresConnection({
+    superUser,
+    user: superUser,
+    tenantId,
+    host: 'localhost',
+  })
+  const tx = await connection.transaction()
+
+  try {
+    const object = (await tx
+      .from('objects')
+      .select('version')
+      .where({
+        bucket_id: bucketId,
+        name: objectName,
+      })
+      .first()) as { version?: string } | undefined
+
+    if (!object?.version) {
+      throw new Error(`Object version not found for ${bucketId}/${objectName}`)
+    }
+
+    return object.version
+  } finally {
+    await tx.rollback()
+    await connection.dispose()
+  }
 }
 
 jest.setTimeout(10 * 1000)
@@ -1141,6 +1173,43 @@ describe('S3 Protocol', () => {
         expect(headObj.CacheControl).toBe('max-age=2009')
       })
 
+      it('will copy an object when CopySource includes versionId', async () => {
+        const bucketName = await createBucket(client)
+        const sourceKey = `test-copy-versioned-${randomUUID()}.jpg`
+        await uploadFile(client, bucketName, sourceKey, 1)
+        const sourceVersion = await getObjectVersion(bucketName, sourceKey)
+
+        const copyObjectCommand = new CopyObjectCommand({
+          Bucket: bucketName,
+          Key: `test-copied-versioned-${randomUUID()}.jpg`,
+          CopySource: `${bucketName}/${sourceKey}?versionId=${sourceVersion}`,
+        })
+
+        const resp = await client.send(copyObjectCommand)
+        expect(resp.CopyObjectResult?.ETag).toBeTruthy()
+      })
+
+      it('will not copy an object when CopySource versionId does not match', async () => {
+        const bucketName = await createBucket(client)
+        const sourceKey = `test-copy-versioned-${randomUUID()}.jpg`
+        await uploadFile(client, bucketName, sourceKey, 1)
+
+        const copyObjectCommand = new CopyObjectCommand({
+          Bucket: bucketName,
+          Key: `test-copied-versioned-${randomUUID()}.jpg`,
+          CopySource: `${bucketName}/${sourceKey}?versionId=${randomUUID()}`,
+        })
+
+        try {
+          await client.send(copyObjectCommand)
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+          expect((e as S3ServiceException).message).toEqual('Object not found')
+        }
+      })
+
       it('will not be able to copy an object that doesnt exist', async () => {
         const bucketName1 = await createBucket(client)
         await uploadFile(client, bucketName1, 'test-copy-1.jpg', 1)
@@ -1158,6 +1227,44 @@ describe('S3 Protocol', () => {
           expect((e as Error).message).not.toEqual('Should not reach here')
           expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
           expect((e as S3ServiceException).message).toEqual('Object not found')
+        }
+      })
+
+      it('will reject malformed url-encoded CopySource', async () => {
+        const bucketName = await createBucket(client)
+
+        const copyObjectCommand = new CopyObjectCommand({
+          Bucket: bucketName,
+          Key: 'test-copied-malformed.jpg',
+          CopySource: `${bucketName}/test-copy-%ZZ.jpg`,
+        })
+
+        try {
+          await client.send(copyObjectCommand)
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(400)
+          expect((e as S3ServiceException).message).toEqual('Invalid Parameter CopySource')
+        }
+      })
+
+      it('will reject CopySource without an object key', async () => {
+        const bucketName = await createBucket(client)
+
+        const copyObjectCommand = new CopyObjectCommand({
+          Bucket: bucketName,
+          Key: 'test-copied-missing-source-key.jpg',
+          CopySource: bucketName,
+        })
+
+        try {
+          await client.send(copyObjectCommand)
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(400)
+          expect((e as S3ServiceException).message).toEqual('Missing Required Parameter CopySource')
         }
       })
     })
@@ -1449,6 +1556,166 @@ describe('S3 Protocol', () => {
 
         const parts = await client.send(listPartsCmd)
         expect(parts.Parts?.length).toBe(1)
+      })
+
+      it('will copy a part when CopySource includes versionId', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `${randomUUID()}.jpg`
+        const newKey = `new-${randomUUID()}.jpg`
+
+        await uploadFile(client, bucket, sourceKey, 12)
+        const sourceVersion = await getObjectVersion(bucket, sourceKey)
+
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucket,
+          Key: newKey,
+          ContentType: 'image/jpg',
+          CacheControl: 'max-age=2000',
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+
+        const copyPart = new UploadPartCopyCommand({
+          Bucket: bucket,
+          Key: newKey,
+          UploadId: resp.UploadId,
+          PartNumber: 1,
+          CopySource: `${bucket}/${sourceKey}?versionId=${sourceVersion}`,
+          CopySourceRange: `bytes=0-${1024 * 4}`,
+        })
+
+        const copyResp = await client.send(copyPart)
+        expect(copyResp.CopyPartResult?.ETag).toBeTruthy()
+
+        const listPartsCmd = new ListPartsCommand({
+          Bucket: bucket,
+          Key: newKey,
+          UploadId: resp.UploadId,
+        })
+
+        const parts = await client.send(listPartsCmd)
+        expect(parts.Parts?.length).toBe(1)
+      })
+
+      it('will not copy a part when CopySource versionId does not match', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `${randomUUID()}.jpg`
+        const newKey = `new-${randomUUID()}.jpg`
+
+        await uploadFile(client, bucket, sourceKey, 12)
+
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucket,
+          Key: newKey,
+          ContentType: 'image/jpg',
+          CacheControl: 'max-age=2000',
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+
+        const copyPart = new UploadPartCopyCommand({
+          Bucket: bucket,
+          Key: newKey,
+          UploadId: resp.UploadId,
+          PartNumber: 1,
+          CopySource: `${bucket}/${sourceKey}?versionId=${randomUUID()}`,
+          CopySourceRange: `bytes=0-${1024 * 4}`,
+        })
+
+        try {
+          await client.send(copyPart)
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+          expect((e as S3ServiceException).message).toEqual('Object not found')
+        }
+      })
+
+      it('will reject malformed url-encoded CopySource', async () => {
+        const bucket = await createBucket(client)
+        const newKey = `new-${randomUUID()}.jpg`
+
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucket,
+          Key: newKey,
+          ContentType: 'image/jpg',
+          CacheControl: 'max-age=2000',
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+        const uploadId = resp.UploadId
+
+        const copyPart = new UploadPartCopyCommand({
+          Bucket: bucket,
+          Key: newKey,
+          UploadId: uploadId,
+          PartNumber: 1,
+          CopySource: `${bucket}/test-copy-%ZZ.jpg`,
+          CopySourceRange: `bytes=0-${1024 * 4}`,
+        })
+
+        try {
+          await client.send(copyPart)
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(400)
+          expect((e as S3ServiceException).message).toEqual('Invalid Parameter CopySource')
+        } finally {
+          if (uploadId) {
+            await client.send(
+              new AbortMultipartUploadCommand({
+                Bucket: bucket,
+                Key: newKey,
+                UploadId: uploadId,
+              })
+            )
+          }
+        }
+      })
+
+      it('will reject CopySource without an object key', async () => {
+        const bucket = await createBucket(client)
+        const newKey = `new-${randomUUID()}.jpg`
+
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucket,
+          Key: newKey,
+          ContentType: 'image/jpg',
+          CacheControl: 'max-age=2000',
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+        const uploadId = resp.UploadId
+
+        const copyPart = new UploadPartCopyCommand({
+          Bucket: bucket,
+          Key: newKey,
+          UploadId: uploadId,
+          PartNumber: 1,
+          CopySource: bucket,
+          CopySourceRange: `bytes=0-${1024 * 4}`,
+        })
+
+        try {
+          await client.send(copyPart)
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(400)
+          expect((e as S3ServiceException).message).toEqual('Missing Required Parameter CopySource')
+        } finally {
+          if (uploadId) {
+            await client.send(
+              new AbortMultipartUploadCommand({
+                Bucket: bucket,
+                Key: newKey,
+                UploadId: uploadId,
+              })
+            )
+          }
+        }
       })
     })
 
@@ -1865,6 +2132,87 @@ describe('S3 Protocol', () => {
         } catch (e) {
           expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
         }
+      })
+
+      it('can copy objects using Unicode keys in CopySource', async () => {
+        const bucketName = await createBucket(client)
+        const sourceKey = `copy-src-${randomUUID()}-일이삼-🙂.jpg`
+        const destinationKey = `copy-dst-${randomUUID()}-일이삼-🙂.jpg`
+        const destinationKeyWithLeadingSlashSource = `copy-dst-leading-${randomUUID()}-🙂.jpg`
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucketName,
+            Key: sourceKey,
+            Body: Buffer.alloc(1024 * 128),
+          })
+        )
+
+        const copyObjectResp = await client.send(
+          new CopyObjectCommand({
+            Bucket: bucketName,
+            Key: destinationKey,
+            CopySource: encodeURI(`${bucketName}/${sourceKey}`),
+          })
+        )
+        expect(copyObjectResp.$metadata.httpStatusCode).toBe(200)
+
+        const copyObjectRespLeadingSlash = await client.send(
+          new CopyObjectCommand({
+            Bucket: bucketName,
+            Key: destinationKeyWithLeadingSlashSource,
+            CopySource: `/${encodeURI(`${bucketName}/${sourceKey}`)}`,
+          })
+        )
+        expect(copyObjectRespLeadingSlash.$metadata.httpStatusCode).toBe(200)
+
+        const listObjectsResp = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucketName,
+          })
+        )
+        const listedKeys = (listObjectsResp.Contents || []).map((item) => item.Key)
+        expect(listedKeys).toEqual(
+          expect.arrayContaining([sourceKey, destinationKey, destinationKeyWithLeadingSlashSource])
+        )
+      })
+
+      it('can upload part copy using Unicode keys in CopySource', async () => {
+        const bucketName = await createBucket(client)
+        const sourceKey = `copy-part-src-${randomUUID()}-일이삼-🙂.jpg`
+        const destinationKey = `copy-part-dst-${randomUUID()}-일이삼-🙂.jpg`
+
+        await uploadFile(client, bucketName, sourceKey, 8)
+
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: destinationKey,
+          ContentType: 'image/jpg',
+          CacheControl: 'max-age=2000',
+        })
+        const createMultipartResp = await client.send(createMultiPartUpload)
+        expect(createMultipartResp.UploadId).toBeTruthy()
+
+        const uploadPartCopyResp = await client.send(
+          new UploadPartCopyCommand({
+            Bucket: bucketName,
+            Key: destinationKey,
+            UploadId: createMultipartResp.UploadId,
+            PartNumber: 1,
+            CopySource: `/${encodeURI(`${bucketName}/${sourceKey}`)}`,
+            CopySourceRange: 'bytes=0-4096',
+          })
+        )
+        expect(uploadPartCopyResp.CopyPartResult?.ETag).toBeTruthy()
+
+        const listPartsResp = await client.send(
+          new ListPartsCommand({
+            Bucket: bucketName,
+            Key: destinationKey,
+            UploadId: createMultipartResp.UploadId,
+          })
+        )
+        expect(listPartsResp.Parts?.length).toBe(1)
       })
 
       it('should not upload if the name contains invalid characters', async () => {

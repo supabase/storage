@@ -1,7 +1,7 @@
 'use strict'
 
 import { S3Backend } from '../storage/backend/s3/adapter'
-import { S3Client } from '@aws-sdk/client-s3'
+import { S3Client, UploadPartCopyCommand } from '@aws-sdk/client-s3'
 import { Readable } from 'stream'
 
 jest.mock('@aws-sdk/client-s3', () => {
@@ -72,6 +72,47 @@ describe('S3Backend', () => {
       const result = await backend.getObject('test-bucket', 'test-key', undefined)
 
       expect(result.metadata.mimetype).toBe('image/png')
+    })
+  })
+
+  describe('uploadPartCopy', () => {
+    test('should URL-encode CopySource for unicode keys', async () => {
+      const lastModified = new Date('2024-01-01T00:00:00.000Z')
+      mockSend.mockResolvedValue({
+        CopyPartResult: {
+          ETag: '"copy-etag"',
+          LastModified: lastModified,
+        },
+      })
+
+      const backend = new S3Backend({
+        region: 'us-east-1',
+        endpoint: 'http://localhost:9000',
+      })
+
+      const sourceKey = 'source/path/일이삼-🙂.jpg'
+      const destinationKey = 'dest/path/copied-🙂.jpg'
+
+      const result = await backend.uploadPartCopy(
+        'test-bucket',
+        destinationKey,
+        '',
+        'upload-id',
+        1,
+        sourceKey,
+        undefined,
+        { fromByte: 0, toByte: 1024 }
+      )
+
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      const command = mockSend.mock.calls[0][0] as UploadPartCopyCommand
+      expect(command).toBeInstanceOf(UploadPartCopyCommand)
+      expect(command.input.CopySource).toBe(encodeURIComponent(`test-bucket/${sourceKey}`))
+      expect(command.input.CopySourceRange).toBe('bytes=0-1024')
+      expect(result).toEqual({
+        eTag: '"copy-etag"',
+        lastModified,
+      })
     })
   })
 })

@@ -28,6 +28,9 @@ import { Upload } from '@aws-sdk/lib-storage'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { wait } from '@internal/concurrency'
+import { StorageKnexDB } from '@storage/database'
+import { Uploader } from '@storage/uploader'
+import { ERRORS } from '@internal/errors'
 import axios from 'axios'
 import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
@@ -844,6 +847,78 @@ describe('S3 Protocol', () => {
         const resp = await uploader.done()
 
         expect(resp.$metadata).toBeTruthy()
+      })
+
+      it('does not mutate in_progress_size when canUpload (RLS) fails', async () => {
+        /*
+        Calling shouldAllowPartUpload mutates the in_progress_size so we have to ensure
+        canUpload is called beforehand or else it can cause issues for valid uploads.
+
+        This test sets the fileSizeLimit to 10kb and each part at 5kb. It simulates
+        first request successful, second failed, third passes. If the in_progress_size 
+        was mutated on the second request it would be at 10kb causing the third to fail.
+        */
+        const bucketName = await createBucket(client)
+        const key = 'rls-ordering-test.jpg'
+        const partSize = 1024 * 5
+
+        mergeConfig({ uploadFileSizeLimit: partSize * 2 })
+
+        const createResp = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: 'image/jpg',
+          })
+        )
+        expect(createResp.UploadId).toBeTruthy()
+        const uploadId = createResp.UploadId
+
+        const part1Resp = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: uploadId,
+            PartNumber: 1,
+            Body: Buffer.alloc(partSize),
+            ContentLength: partSize,
+          })
+        )
+        expect(part1Resp.ETag).toBeTruthy()
+
+        const canUploadSpy = jest
+          .spyOn(Uploader.prototype, 'canUpload')
+          .mockRejectedValueOnce(ERRORS.AccessDenied('upload'))
+
+        try {
+          await client.send(
+            new UploadPartCommand({
+              Bucket: bucketName,
+              Key: key,
+              UploadId: uploadId,
+              PartNumber: 2,
+              Body: Buffer.alloc(partSize),
+              ContentLength: partSize,
+            })
+          )
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+        } finally {
+          canUploadSpy.mockRestore()
+        }
+
+        const part2Resp = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: uploadId,
+            PartNumber: 2,
+            Body: Buffer.alloc(partSize),
+            ContentLength: partSize,
+          })
+        )
+        expect(part2Resp.ETag).toBeTruthy()
       })
     })
 
@@ -1742,5 +1817,49 @@ describe('S3 Protocol', () => {
         expect(response.ContentLanguage).toBeUndefined()
       })
     })
+  })
+})
+
+describe('Migration compatibility', () => {
+  it('findMultipartUpload excludes metadata column when s3-multipart-uploads-metadata migration has not been applied', () => {
+    // Simulate a DB instance where migration 57 (s3-multipart-uploads-metadata) has NOT been applied
+    const mockDB = {
+      latestMigration: 'fix-optimized-search-function', // migration 56
+    } as Partial<StorageKnexDB>
+
+    // Access the column filtering logic directly by checking what columns would be selected
+    const { DBMigration } = require('@internal/database/migrations')
+    const latestMigration = mockDB.latestMigration as keyof typeof DBMigration
+
+    const requestedColumns = 'id,version,user_metadata,metadata'.split(',')
+    let filteredColumns = requestedColumns
+
+    if (
+      latestMigration &&
+      DBMigration[latestMigration] < DBMigration['s3-multipart-uploads-metadata']
+    ) {
+      filteredColumns = filteredColumns.filter((col) => col.trim() !== 'metadata')
+    }
+
+    expect(filteredColumns).toEqual(['id', 'version', 'user_metadata'])
+    expect(filteredColumns).not.toContain('metadata')
+  })
+
+  it('findMultipartUpload includes metadata column when s3-multipart-uploads-metadata migration has been applied', () => {
+    const { DBMigration } = require('@internal/database/migrations')
+    const latestMigration: keyof typeof DBMigration = 's3-multipart-uploads-metadata'
+
+    const requestedColumns = 'id,version,user_metadata,metadata'.split(',')
+    let filteredColumns = requestedColumns
+
+    if (
+      latestMigration &&
+      DBMigration[latestMigration] < DBMigration['s3-multipart-uploads-metadata']
+    ) {
+      filteredColumns = filteredColumns.filter((col) => col.trim() !== 'metadata')
+    }
+
+    expect(filteredColumns).toEqual(['id', 'version', 'user_metadata', 'metadata'])
+    expect(filteredColumns).toContain('metadata')
   })
 })

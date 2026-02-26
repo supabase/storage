@@ -8,7 +8,9 @@ import { Event } from './event'
 import { Semaphore } from '@shopify/semaphore'
 
 //eslint-disable-next-line @typescript-eslint/no-explicit-any
-type SubclassOfBaseClass = (new (payload: any) => Event<any>) & {
+type SubclassOfBaseClass = (new (
+  payload: any
+) => Event<any>) & {
   [K in keyof typeof Event]: (typeof Event)[K]
 }
 

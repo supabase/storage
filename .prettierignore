@@ -1,3 +1,8 @@
+**
+!**/
+!**/*.md
+!**/*.yml
+!**/*.yaml
+
 node_modules
 package-lock.json
-src/test/db/docker-compose.yml

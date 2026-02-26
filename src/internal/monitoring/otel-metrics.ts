@@ -54,11 +54,14 @@ if (otelMetricsEnabled) {
   const exporterHeaders = headersEnv
     .split(',')
     .filter(Boolean)
-    .reduce((all, header) => {
-      const [name, value] = header.split('=')
-      all[name] = value
-      return all
-    }, {} as Record<string, string>)
+    .reduce(
+      (all, header) => {
+        const [name, value] = header.split('=')
+        all[name] = value
+        return all
+      },
+      {} as Record<string, string>
+    )
 
   const grpcMetadata = new grpc.Metadata()
   Object.keys(exporterHeaders).forEach((key) => {

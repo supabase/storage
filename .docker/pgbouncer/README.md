@@ -34,12 +34,12 @@ When `AWS_DB_INSTANCE_TYPE` is set, pool sizes are derived from the instance mem
 4. `min_pool_size` = 10% of default_pool_size
 5. `reserve_pool_size` = 5% of default_pool_size
 
-| Instance | Memory | Est. max_conn | Pool Size | Max Clients |
-|----------|--------|---------------|-----------|-------------|
-| db.t3.micro | 1 GB | 112 | 84 | 840 |
-| db.t3.large | 8 GB | 901 | 675 | 6,750 |
-| db.r6g.xlarge | 32 GB | 3,604 | 2,703 | 27,030 |
-| db.r6g.4xlarge | 128 GB | 5,000 | 3,750 | 37,500 |
+| Instance       | Memory | Est. max_conn | Pool Size | Max Clients |
+| -------------- | ------ | ------------- | --------- | ----------- |
+| db.t3.micro    | 1 GB   | 112           | 84        | 840         |
+| db.t3.large    | 8 GB   | 901           | 675       | 6,750       |
+| db.r6g.xlarge  | 32 GB  | 3,604         | 2,703     | 27,030      |
+| db.r6g.4xlarge | 128 GB | 5,000         | 3,750     | 37,500      |
 
 When no instance type is set, conservative local defaults are used: `default_pool_size=20`, `max_client_conn=200`.
 
@@ -81,21 +81,21 @@ This automatically enables `verify-full` mode unless overridden by `sslmode` in 
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DATABASE_URL` | Yes | — | PostgreSQL connection string |
-| `AWS_DB_INSTANCE_TYPE` | No | — | RDS instance type for auto-tuning (e.g. `db.r6g.xlarge`) |
-| `DATABASE_SSL_ROOT_CERT` | No | — | PEM or base64 CA cert; enables `verify-full` TLS |
-| `PGBOUNCER_POOL_MODE` | No | `transaction` | Pooling mode |
-| `PGBOUNCER_DEFAULT_POOL_SIZE` | No | auto | Max backend connections per database |
-| `PGBOUNCER_MAX_CLIENT_CONN` | No | auto | Max client connections |
-| `PGBOUNCER_MIN_POOL_SIZE` | No | auto | Min backend connections kept open |
-| `PGBOUNCER_RESERVE_POOL_SIZE` | No | auto | Extra connections for burst traffic |
-| `PGBOUNCER_MAX_DB_CONNECTIONS` | No | `0` (unlimited) | Hard cap on backend connections |
-| `PGBOUNCER_SERVER_TLS_MODE` | No | `verify-full` / `disable` | TLS mode (`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`) |
-| `PGBOUNCER_AUTH_TYPE` | No | `scram-sha-256` | Authentication method |
-| `PGBOUNCER_ADMIN_USERS` | No | DSN user | Users allowed to run admin commands |
-| `PGBOUNCER_STATS_USERS` | No | DSN user | Users allowed to view stats |
+| Variable                       | Required | Default                   | Description                                                                    |
+| ------------------------------ | -------- | ------------------------- | ------------------------------------------------------------------------------ |
+| `DATABASE_URL`                 | Yes      | —                         | PostgreSQL connection string                                                   |
+| `AWS_DB_INSTANCE_TYPE`         | No       | —                         | RDS instance type for auto-tuning (e.g. `db.r6g.xlarge`)                       |
+| `DATABASE_SSL_ROOT_CERT`       | No       | —                         | PEM or base64 CA cert; enables `verify-full` TLS                               |
+| `PGBOUNCER_POOL_MODE`          | No       | `transaction`             | Pooling mode                                                                   |
+| `PGBOUNCER_DEFAULT_POOL_SIZE`  | No       | auto                      | Max backend connections per database                                           |
+| `PGBOUNCER_MAX_CLIENT_CONN`    | No       | auto                      | Max client connections                                                         |
+| `PGBOUNCER_MIN_POOL_SIZE`      | No       | auto                      | Min backend connections kept open                                              |
+| `PGBOUNCER_RESERVE_POOL_SIZE`  | No       | auto                      | Extra connections for burst traffic                                            |
+| `PGBOUNCER_MAX_DB_CONNECTIONS` | No       | `0` (unlimited)           | Hard cap on backend connections                                                |
+| `PGBOUNCER_SERVER_TLS_MODE`    | No       | `verify-full` / `disable` | TLS mode (`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`) |
+| `PGBOUNCER_AUTH_TYPE`          | No       | `scram-sha-256`           | Authentication method                                                          |
+| `PGBOUNCER_ADMIN_USERS`        | No       | DSN user                  | Users allowed to run admin commands                                            |
+| `PGBOUNCER_STATS_USERS`        | No       | DSN user                  | Users allowed to view stats                                                    |
 
 Any auto-calculated value can be overridden by setting the corresponding env var explicitly.
 

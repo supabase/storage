@@ -1,14 +1,13 @@
 # docker-compose.yml
 
 services:
-
   tenant_db:
     image: postgres:15
-    shm_size: '1gb'
+    shm_size: "1gb"
     ports:
-      - '5432:5432'
+      - "5432:5432"
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready", "-d", "postgres" ]
+      test: ["CMD-SHELL", "pg_isready", "-d", "postgres"]
       interval: 5s
       timeout: 60s
       retries: 20
@@ -21,12 +20,12 @@ services:
   multitenant_db:
     image: postgres:15
     ports:
-      - '5433:5432'
+      - "5433:5432"
     configs:
       - source: init.sql
         target: /docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready", "-d", "postgres" ]
+      test: ["CMD-SHELL", "pg_isready", "-d", "postgres"]
       interval: 5s
       timeout: 60s
       retries: 20
@@ -47,76 +46,76 @@ services:
       PGBOUNCER_IGNORE_STARTUP_PARAMETERS: "extra_float_digits, options"
       PGBOUNCER_STATS_USERS: postgres
 
-#  supavisor:
-#    image: supabase/supavisor:1.1.23
-#    depends_on:
-#      multitenant_db:
-#        condition: service_healthy
-#      tenant_db:
-#        condition: service_healthy
-#    ports:
-#      - 4000:4000
-#      - 5452:5452
-#      - 6543:6543
-#    healthcheck:
-#      test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
-#      interval: 2s
-#      timeout: 10s
-#      retries: 5
-#    environment:
-#      PORT: 4000
-#      PROXY_PORT_SESSION: 5452
-#      PROXY_PORT_TRANSACTION: 6543
-#      DATABASE_URL: "ecto://postgres:postgres@multitenant_db:5432/postgres"
-#      CLUSTER_POSTGRES: "true"
-#      SECRET_KEY_BASE: "12345678901234567890121234567890123456789012345678903212345678901234567890123456789032123456789012345678901234567890323456789032"
-#      VAULT_ENC_KEY: "12345678901234567890123456789032"
-#      API_JWT_SECRET: "dev"
-#      METRICS_JWT_SECRET: "dev"
-#      REGION: "local"
-#      ERL_AFLAGS: -proto_dist inet_tcp
-#    command: sh -c "/app/bin/migrate && /app/bin/server"
-#
-#  supavisor_setup:
-#    image: supabase/supavisor:1.1.23
-#    command: |
-#      curl -X PUT \
-#        "http://supavisor:4000/api/tenants/bjhaohmqunupljrqypxz" \
-#        --header "Accept: application/json" \
-#        --header "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNjQ1MTkyODI0LCJleHAiOjE5NjA3Njg4MjR9.M9jrxyvPLkUxWgOYSf5dNdJ8v_eRrq810ShFRT8N-6M" \
-#        --header "Content-Type: application/json" \
-#        --data-raw "{
-#          \"tenant\": {
-#            \"db_host\": \"tenant_db\",
-#            \"db_port\": 5432,
-#            \"db_database\": \"postgres\",
-#            \"ip_version\": \"auto\",
-#            \"require_user\": true,
-#            \"upstream_ssl\": false,
-#            \"enforce_ssl\": false,
-#            \"default_max_clients\": 200,
-#            \"default_pool_size\": 15,
-#            \"users\": [
-#              {
-#                \"db_user\": \"postgres\",
-#                \"db_password\": \"postgres\",
-#                \"mode_type\": \"transaction\",
-#                \"pool_size\": 15,
-#                \"max_clients\": 200,
-#                \"pool_checkout_timeout\": 5000
-#              }
-#            ]
-#          }
-#        }"
-#    depends_on:
-#      supavisor:
-#        condition: service_healthy
+  #  supavisor:
+  #    image: supabase/supavisor:1.1.23
+  #    depends_on:
+  #      multitenant_db:
+  #        condition: service_healthy
+  #      tenant_db:
+  #        condition: service_healthy
+  #    ports:
+  #      - 4000:4000
+  #      - 5452:5452
+  #      - 6543:6543
+  #    healthcheck:
+  #      test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
+  #      interval: 2s
+  #      timeout: 10s
+  #      retries: 5
+  #    environment:
+  #      PORT: 4000
+  #      PROXY_PORT_SESSION: 5452
+  #      PROXY_PORT_TRANSACTION: 6543
+  #      DATABASE_URL: "ecto://postgres:postgres@multitenant_db:5432/postgres"
+  #      CLUSTER_POSTGRES: "true"
+  #      SECRET_KEY_BASE: "12345678901234567890121234567890123456789012345678903212345678901234567890123456789032123456789012345678901234567890323456789032"
+  #      VAULT_ENC_KEY: "12345678901234567890123456789032"
+  #      API_JWT_SECRET: "dev"
+  #      METRICS_JWT_SECRET: "dev"
+  #      REGION: "local"
+  #      ERL_AFLAGS: -proto_dist inet_tcp
+  #    command: sh -c "/app/bin/migrate && /app/bin/server"
+  #
+  #  supavisor_setup:
+  #    image: supabase/supavisor:1.1.23
+  #    command: |
+  #      curl -X PUT \
+  #        "http://supavisor:4000/api/tenants/bjhaohmqunupljrqypxz" \
+  #        --header "Accept: application/json" \
+  #        --header "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNjQ1MTkyODI0LCJleHAiOjE5NjA3Njg4MjR9.M9jrxyvPLkUxWgOYSf5dNdJ8v_eRrq810ShFRT8N-6M" \
+  #        --header "Content-Type: application/json" \
+  #        --data-raw "{
+  #          \"tenant\": {
+  #            \"db_host\": \"tenant_db\",
+  #            \"db_port\": 5432,
+  #            \"db_database\": \"postgres\",
+  #            \"ip_version\": \"auto\",
+  #            \"require_user\": true,
+  #            \"upstream_ssl\": false,
+  #            \"enforce_ssl\": false,
+  #            \"default_max_clients\": 200,
+  #            \"default_pool_size\": 15,
+  #            \"users\": [
+  #              {
+  #                \"db_user\": \"postgres\",
+  #                \"db_password\": \"postgres\",
+  #                \"mode_type\": \"transaction\",
+  #                \"pool_size\": 15,
+  #                \"max_clients\": 200,
+  #                \"pool_checkout_timeout\": 5000
+  #              }
+  #            ]
+  #          }
+  #        }"
+  #    depends_on:
+  #      supavisor:
+  #        condition: service_healthy
 
   minio:
     image: minio/minio
     ports:
-      - '9000:9000'
-      - '9001:9001'
+      - "9000:9000"
+      - "9001:9001"
     networks:
       default:
         aliases:
@@ -149,7 +148,7 @@ services:
   imgproxy:
     image: darthsim/imgproxy
     ports:
-      - '50020:8080'
+      - "50020:8080"
     volumes:
       - ${PWD}/data:${PWD}/data
     environment:
@@ -177,14 +176,14 @@ services:
       - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
       - CATALOG_S3_ENDPOINT=http://minio:9000
 
-# Optional for rate-limiting
-#  redis:
-#    image: redis:6.2-alpine
-#    restart: always
-#    ports:
-#      - '6379:6379'
+  # Optional for rate-limiting
+  #  redis:
+  #    image: redis:6.2-alpine
+  #    restart: always
+  #    ports:
+  #      - '6379:6379'
 
-# Optional for tracing
+  # Optional for tracing
   otel:
     extends:
       service: otel-collector

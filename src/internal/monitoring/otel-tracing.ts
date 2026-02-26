@@ -29,11 +29,14 @@ const headersEnv = process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS || ''
 const exporterHeaders = headersEnv
   .split(',')
   .filter(Boolean)
-  .reduce((all, header) => {
-    const [name, value] = header.split('=')
-    all[name] = value
-    return all
-  }, {} as Record<string, any>)
+  .reduce(
+    (all, header) => {
+      const [name, value] = header.split('=')
+      all[name] = value
+      return all
+    },
+    {} as Record<string, any>
+  )
 
 const grpcMetadata = new grpc.Metadata()
 Object.keys(exporterHeaders).forEach((key) => {

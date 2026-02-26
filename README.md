@@ -17,7 +17,7 @@ A scalable, lightweight object storage service.
 - [x] S3 Compatible API
 - [x] Iceberg REST Catalog
 
-![Architecture](./static/architecture.png?raw=true 'Architecture')
+![Architecture](./static/architecture.png?raw=true "Architecture")
 
 ## Documentation
 
@@ -66,3 +66,9 @@ curl --location --request GET 'http://localhost:5000/bucket' \
 ### Testing
 
 To perform your tests you can run the following command: `npm test`
+
+### Code Quality
+
+- Apply formatting: `npm run format`
+- Check formatting: `npm run lint`
+- Run ESLint rules: `npm run eslint:check`

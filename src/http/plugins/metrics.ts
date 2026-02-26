@@ -118,8 +118,8 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
             typeof responseContentLength === 'string'
               ? parseInt(responseContentLength, 10)
               : typeof responseContentLength === 'number'
-              ? responseContentLength
-              : 0
+                ? responseContentLength
+                : 0
           if (!isNaN(responseSize) && responseSize > 0) {
             httpResponseSizeBytes.add(responseSize, attributes)
           }

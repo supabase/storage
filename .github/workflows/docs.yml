@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [ubuntu-24.04]
-        node: ['24']
+        node: ["24"]
 
     runs-on: ${{ matrix.platform }}
 
@@ -49,7 +49,7 @@ jobs:
           AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
           PGOPTIONS: -c search_path=storage,public
-          FILE_SIZE_LIMIT: '52428800'
+          FILE_SIZE_LIMIT: "52428800"
           STORAGE_BACKEND: s3
           ENABLE_IMAGE_TRANSFORMATION: true
 

@@ -1,5 +1,8 @@
 import { Knex } from 'knex'
+import { getConfig } from '../../../config'
 import { JWKSManagerStore, JWKStoreItem, PaginatedTenantItem } from './store'
+
+const { multitenantDatabaseQueryTimeout } = getConfig()
 
 export class JWKSManagerStoreKnex implements JWKSManagerStore<Knex.Transaction> {
   constructor(private knex: Knex) {}
@@ -62,6 +65,7 @@ export class JWKSManagerStoreKnex implements JWKSManagerStore<Knex.Transaction> 
       .select('id', 'kind', 'content')
       .where('tenant_id', tenantId)
       .where('active', true)
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
   }
 
   async listTenantsWithoutKindPaginated(

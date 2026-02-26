@@ -32,6 +32,7 @@ const {
   dbRefreshMigrationHashesOnMismatch,
   dbMigrationFreezeAt,
   icebergShards,
+  multitenantDatabaseQueryTimeout,
 } = getConfig()
 
 /**
@@ -194,6 +195,7 @@ export async function updateTenantMigrationsState(
         : migrationVersion,
       migrations_status: state,
     })
+    .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
 }
 
 /**

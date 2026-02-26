@@ -76,6 +76,7 @@ const {
   dbMigrationFreezeAt,
   icebergEnabled,
   vectorEnabled,
+  multitenantDatabaseQueryTimeout,
 } = getConfig()
 
 const tenantConfigCache = new Map<string, TenantConfig>()
@@ -129,7 +130,12 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       return tenantConfigCache.get(tenantId)!
     }
 
-    const tenant = await multitenantKnex.table('tenants').first().where('id', tenantId)
+    const tenant = await multitenantKnex
+      .table('tenants')
+      .first()
+      .where('id', tenantId)
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
+
     if (!tenant) {
       throw ERRORS.MissingTenantConfig(tenantId)
     }

@@ -1,10 +1,13 @@
 import { Knex } from 'knex'
+import { getConfig } from '../../../../config'
 import {
   S3Credentials,
   S3CredentialsManagerStore,
   S3CredentialsRaw,
   S3CredentialWithDescription,
 } from './store'
+
+const { multitenantDatabaseQueryTimeout } = getConfig()
 
 export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore {
   constructor(private knex: Knex) {}
@@ -38,6 +41,7 @@ export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore 
       .where('tenant_id', tenantId)
       .where('access_key', accessKey)
       .first()
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
   }
 
   async count(tenantId: string): Promise<number> {

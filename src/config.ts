@@ -80,6 +80,7 @@ type StorageConfigType = {
   multitenantDatabaseUrl?: string
   multitenantDatabasePoolUrl?: string
   multitenantMaxConnections: number
+  multitenantDatabaseQueryTimeout: number
   dbAnonRole: string
   dbAuthenticatedRole: string
   dbServiceRole: string
@@ -405,6 +406,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
         'DATABASE_MULTITENANT_MAX_CONNECTIONS',
         'MULTITENANT_DATABASE_MAX_CONNECTIONS'
       ),
+      10
+    ),
+    multitenantDatabaseQueryTimeout: parseInt(
+      getOptionalConfigFromEnv('DATABASE_MULTITENANT_QUERY_TIMEOUT') || '10000',
       10
     ),
     databaseSSLRootCert: getOptionalConfigFromEnv('DATABASE_SSL_ROOT_CERT'),

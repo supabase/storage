@@ -1,9 +1,9 @@
-import pino, { BaseLogger, Logger } from 'pino'
-import { getConfig } from '../../config'
-import type { FastifyReply, FastifyRequest } from 'fastify'
+import { resolve } from 'node:path'
 import { URL } from 'node:url'
 import { normalizeRawError } from '@internal/errors'
-import { resolve } from 'node:path'
+import type { FastifyReply, FastifyRequest } from 'fastify'
+import pino, { BaseLogger, Logger } from 'pino'
+import { getConfig } from '../../config'
 
 const {
   logLevel,

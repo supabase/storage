@@ -1,6 +1,7 @@
 // ChunkSignatureParser.ts
-import { Transform, TransformCallback, TransformOptions } from 'stream'
+
 import crypto from 'crypto'
+import { Transform, TransformCallback, TransformOptions } from 'stream'
 
 type ParserState = 'HEADER' | 'DATA' | 'FOOTER' | 'TRAILER'
 

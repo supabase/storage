@@ -1,9 +1,9 @@
+import { decrypt, encrypt, generateHS512JWK } from '@internal/auth'
 import { createMutexByKey } from '@internal/concurrency'
+import { PubSubAdapter } from '@internal/pubsub'
+import { Knex } from 'knex'
 import { JwksConfig, JwksConfigKeyOCT } from '../../../config'
 import { JWKSManagerStore } from './store'
-import { PubSubAdapter } from '@internal/pubsub'
-import { decrypt, encrypt, generateHS512JWK } from '@internal/auth'
-import { Knex } from 'knex'
 
 const TENANTS_JWKS_UPDATE_CHANNEL = 'tenants_jwks_update'
 const JWK_KIND_STORAGE_URL_SIGNING = 'storage-url-signing-key'

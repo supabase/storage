@@ -1,16 +1,16 @@
 'use strict'
-import dotenv from 'dotenv'
-import * as migrate from '../internal/database/migrations/migrate'
-import { multitenantKnex } from '../internal/database/multitenant-db'
-import { adminApp } from './common'
+import { signJWT } from '@internal/auth'
+import { DBMigration } from '@internal/database/migrations'
 import {
   getFeatures,
   getFileSizeLimit,
   getServiceKey,
   getTenantConfig,
 } from '@internal/database/tenant'
-import { signJWT } from '@internal/auth'
-import { DBMigration } from '@internal/database/migrations'
+import dotenv from 'dotenv'
+import * as migrate from '../internal/database/migrations/migrate'
+import { multitenantKnex } from '../internal/database/multitenant-db'
+import { adminApp } from './common'
 
 dotenv.config({ path: '.env.test' })
 

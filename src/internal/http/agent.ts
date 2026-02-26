@@ -1,10 +1,10 @@
-import Agent, { HttpsAgent } from 'agentkeepalive'
 import {
   httpPoolBusySockets,
+  httpPoolErrors,
   httpPoolFreeSockets,
   httpPoolPendingRequests,
-  httpPoolErrors,
 } from '@internal/monitoring/metrics'
+import Agent, { HttpsAgent } from 'agentkeepalive'
 import { getConfig } from '../../config'
 
 const { region } = getConfig()

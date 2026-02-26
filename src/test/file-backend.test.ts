@@ -1,11 +1,11 @@
 import fs from 'fs-extra'
+import * as xattr from 'fs-xattr'
 import os from 'os'
 import path from 'path'
 import { Readable } from 'stream'
-import * as xattr from 'fs-xattr'
+import { getConfig } from '../config'
 import { withOptionalVersion } from '../storage/backend/adapter'
 import { FileBackend } from '../storage/backend/file'
-import { getConfig } from '../config'
 
 jest.mock('fs-xattr', () => ({
   set: jest.fn(() => Promise.resolve()),

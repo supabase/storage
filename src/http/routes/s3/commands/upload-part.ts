@@ -1,9 +1,9 @@
-import { S3ProtocolHandler, MAX_PART_SIZE } from '@storage/protocols/s3/s3-handler'
-import { S3Router } from '../router'
-import { ROUTE_OPERATIONS } from '../../operations'
-import { pipeline } from 'stream/promises'
-import { PassThrough, Readable } from 'stream'
 import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
+import { MAX_PART_SIZE, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { PassThrough, Readable } from 'stream'
+import { pipeline } from 'stream/promises'
+import { ROUTE_OPERATIONS } from '../../operations'
+import { S3Router } from '../router'
 
 const UploadPartInput = {
   summary: 'Upload Part',

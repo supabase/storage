@@ -1,11 +1,11 @@
-import fastifyPlugin from 'fastify-plugin'
-import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'
 import {
   httpRequestDuration,
-  httpRequestsTotal,
   httpRequestSizeBytes,
+  httpRequestsTotal,
   httpResponseSizeBytes,
 } from '@internal/monitoring/metrics'
+import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'
+import fastifyPlugin from 'fastify-plugin'
 import { getConfig } from '../../config'
 
 const { prometheusMetricsEnabled } = getConfig()

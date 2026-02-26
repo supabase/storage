@@ -1,8 +1,8 @@
-import { useStorage } from './utils/storage'
-import { Readable } from 'stream'
 import { eachParallel } from '@internal/testing/generators/array'
-import { getConfig } from '../config'
 import { randomUUID } from 'crypto'
+import { Readable } from 'stream'
+import { getConfig } from '../config'
+import { useStorage } from './utils/storage'
 
 const { storageS3Bucket, tenantId } = getConfig()
 

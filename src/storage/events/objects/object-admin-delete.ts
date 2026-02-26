@@ -1,10 +1,10 @@
-import { BaseEvent } from '../base-event'
-import { getConfig } from '../../../config'
-import { Job, SendOptions, WorkOptions } from 'pg-boss'
-import { withOptionalVersion } from '../../backend'
 import { logger, logSchema } from '@internal/monitoring'
-import { Storage } from '../../index'
 import { BasePayload } from '@internal/queue'
+import { Job, SendOptions, WorkOptions } from 'pg-boss'
+import { getConfig } from '../../../config'
+import { withOptionalVersion } from '../../backend'
+import { Storage } from '../../index'
+import { BaseEvent } from '../base-event'
 
 export interface ObjectDeleteEvent extends BasePayload {
   name: string

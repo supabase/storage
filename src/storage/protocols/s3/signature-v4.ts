@@ -1,9 +1,9 @@
-import crypto from 'crypto'
-import { ERRORS } from '@internal/errors'
-import { Readable } from 'stream'
 import { createHash } from 'node:crypto'
-import { pipeline } from 'stream/promises'
 import { Writable } from 'node:stream'
+import { ERRORS } from '@internal/errors'
+import crypto from 'crypto'
+import { Readable } from 'stream'
+import { pipeline } from 'stream/promises'
 
 export enum SignatureV4Service {
   S3 = 's3',

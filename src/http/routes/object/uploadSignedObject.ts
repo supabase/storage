@@ -1,7 +1,7 @@
+import fastifyMultipart from '@fastify/multipart'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { ROUTE_OPERATIONS } from '../operations'
-import fastifyMultipart from '@fastify/multipart'
 
 const uploadSignedObjectParamsSchema = {
   type: 'object',

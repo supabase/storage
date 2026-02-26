@@ -1,11 +1,11 @@
 'use strict'
-import dotenv from 'dotenv'
-import app from '../app'
-import { S3Backend } from '../storage/backend'
-import { FastifyInstance } from 'fastify'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { StorageKnexDB } from '@storage/database'
+import dotenv from 'dotenv'
+import { FastifyInstance } from 'fastify'
+import app from '../app'
 import { getConfig } from '../config'
+import { S3Backend } from '../storage/backend'
 
 dotenv.config({ path: '.env.test' })
 const anonKey = process.env.ANON_KEY || ''

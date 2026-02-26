@@ -1,6 +1,6 @@
-import { logger, logSchema } from '@internal/monitoring'
 import { AsyncAbortController } from '@internal/concurrency'
 import { multitenantKnex, TenantConnection } from '@internal/database'
+import { logger, logSchema } from '@internal/monitoring'
 import http from 'http'
 
 /**

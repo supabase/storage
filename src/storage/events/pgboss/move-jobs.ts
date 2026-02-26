@@ -1,8 +1,8 @@
-import { BaseEvent } from '../base-event'
-import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
-import { BasePayload, Queue } from '@internal/queue'
 import { multitenantKnex } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
+import { BasePayload, Queue } from '@internal/queue'
+import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
+import { BaseEvent } from '../base-event'
 
 interface MoveJobsPayload extends BasePayload {
   fromQueue: string

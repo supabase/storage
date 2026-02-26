@@ -1,4 +1,4 @@
-import { Meter, Counter } from '@opentelemetry/api'
+import { Counter, Meter } from '@opentelemetry/api'
 import { BaseCollector } from './base-collector'
 
 export class CpuCollector extends BaseCollector {

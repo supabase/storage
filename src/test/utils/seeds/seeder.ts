@@ -1,6 +1,6 @@
 import { KnexPersistence } from '@internal/testing/seeder'
-import { BucketsSeeder } from './bucket'
 import { Knex } from 'knex'
+import { BucketsSeeder } from './bucket'
 
 export class TestUtils {
   private persistence: KnexPersistence

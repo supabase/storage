@@ -1,10 +1,10 @@
-import { Readable, Writable } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
-import * as fsp from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
+import * as fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
+import { Readable, Writable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { HashSpillWritable } from '@internal/streams/hash-stream'
 
 function randBuf(size: number): Buffer {

@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream'
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
@@ -16,22 +17,21 @@ import {
   UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
 import { Progress, Upload } from '@aws-sdk/lib-storage'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { ERRORS, StorageBackendError } from '@internal/errors'
+import { createAgent, InstrumentedAgent } from '@internal/http'
+import { monitorStream } from '@internal/streams'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
+import { getConfig } from '../../../config'
 import {
-  StorageBackendAdapter,
   BrowserCacheHeaders,
   ObjectMetadata,
   ObjectResponse,
-  withOptionalVersion,
+  StorageBackendAdapter,
   UploadPart,
+  withOptionalVersion,
 } from './../adapter'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { ERRORS, StorageBackendError } from '@internal/errors'
-import { getConfig } from '../../../config'
-import { Readable } from 'node:stream'
-import { createAgent, InstrumentedAgent } from '@internal/http'
-import { monitorStream } from '@internal/streams'
-import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
 
 const {
   storageS3UploadQueueSize,

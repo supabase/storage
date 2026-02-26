@@ -1,10 +1,10 @@
-import { Lock, Locker, RequestRelease } from '@tus/server'
-import { clearTimeout } from 'node:timers'
 import EventEmitter from 'node:events'
-import { Database } from '../../database'
+import { clearTimeout } from 'node:timers'
+import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
 import { PubSubAdapter } from '@internal/pubsub'
+import { Lock, Locker, RequestRelease } from '@tus/server'
+import { Database } from '../../database'
 import { UploadId } from './upload-id'
-import { ErrorCode, ERRORS, StorageBackendError } from '@internal/errors'
 
 const REQUEST_LOCK_RELEASE_MESSAGE = 'REQUEST_LOCK_RELEASE'
 

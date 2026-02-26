@@ -1,6 +1,6 @@
+import { getServiceKeyUser } from '@internal/database'
 import { PoolManager } from '@internal/database/pool'
 import { getConfig } from '../config'
-import { getServiceKeyUser } from '@internal/database'
 
 const { databaseURL, databasePoolURL, tenantId } = getConfig()
 

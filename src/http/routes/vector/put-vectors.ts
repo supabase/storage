@@ -1,7 +1,7 @@
-import { FastifyInstance } from 'fastify'
-import { AuthenticatedRequest } from '../../types'
-import { FromSchema } from 'json-schema-to-ts'
 import { ERRORS } from '@internal/errors'
+import { FastifyInstance } from 'fastify'
+import { FromSchema } from 'json-schema-to-ts'
+import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const putVector = {

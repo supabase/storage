@@ -1,11 +1,11 @@
-import { Knex } from 'knex'
-import { VectorIndex } from '@storage/schemas/vector'
-import { ERRORS } from '@internal/errors'
-import { VectorBucket } from '@storage/schemas'
 import { ListVectorBucketsInput } from '@aws-sdk/client-s3vectors'
-import { DatabaseError } from 'pg'
 import { wait } from '@internal/concurrency'
+import { ERRORS } from '@internal/errors'
 import { hashStringToInt } from '@internal/hashing'
+import { VectorBucket } from '@storage/schemas'
+import { VectorIndex } from '@storage/schemas/vector'
+import { Knex } from 'knex'
+import { DatabaseError } from 'pg'
 
 type DBVectorIndex = VectorIndex & { id: string; created_at: Date; updated_at: Date }
 

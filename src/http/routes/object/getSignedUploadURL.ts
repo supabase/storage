@@ -1,8 +1,8 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
+import { getConfig } from '../../../config'
 import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
-import { getConfig } from '../../../config'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { uploadSignedUrlExpirationTime } = getConfig()

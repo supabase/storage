@@ -1,7 +1,7 @@
 import {
+  BearerTokenAuth,
   CatalogAuthType,
   SignV4Auth,
-  BearerTokenAuth,
 } from '@storage/protocols/iceberg/catalog/rest-catalog-client'
 import { getConfig } from '../../../../config'
 
@@ -21,6 +21,6 @@ export function getCatalogAuthStrategy(authType: string): CatalogAuthType {
   }
 }
 
-export * from './tenant-catalog'
-export * from './rest-catalog-client'
 export * from './reconciler'
+export * from './rest-catalog-client'
+export * from './tenant-catalog'

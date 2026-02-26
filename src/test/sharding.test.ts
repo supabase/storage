@@ -1,16 +1,16 @@
 'use strict'
 
-import { Knex } from 'knex'
+import { multitenantKnex } from '@internal/database'
+import { runMultitenantMigrations } from '@internal/database/migrations'
 import { KnexShardStoreFactory, ShardCatalog } from '@internal/sharding'
-import { useStorage } from './utils/storage'
 import {
   ExpiredReservationError,
   NoActiveShardError,
   ReservationNotFoundError,
 } from '@internal/sharding/errors'
-import { multitenantKnex } from '@internal/database'
 import { randomUUID } from 'crypto'
-import { runMultitenantMigrations } from '@internal/database/migrations'
+import { Knex } from 'knex'
+import { useStorage } from './utils/storage'
 
 describe('Sharding System', () => {
   const storageTest = useStorage()

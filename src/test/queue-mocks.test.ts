@@ -12,9 +12,9 @@ jest.mock('@internal/database/migrations', () => ({
   runMigrationsOnTenant: jest.fn(),
 }))
 
-import axios from 'axios'
 import { getTenantConfig } from '@internal/database'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
+import axios from 'axios'
 
 const mockAxios = axios as jest.Mocked<typeof axios>
 const mockGetTenantConfig = getTenantConfig as jest.MockedFunction<typeof getTenantConfig>

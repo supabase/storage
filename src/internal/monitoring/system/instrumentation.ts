@@ -1,10 +1,10 @@
 import { InstrumentationBase, InstrumentationConfig } from '@opentelemetry/instrumentation'
-import { MetricCollector, CollectorConfig } from './base-collector'
+import { CollectorConfig, MetricCollector } from './base-collector'
 import { CpuCollector } from './cpu-collector'
-import { HandlesCollector } from './handles-collector'
-import { ProcessStartCollector } from './process-start-collector'
-import { ExternalMemoryCollector } from './memory-collector'
 import { FileDescriptorCollector } from './file-descriptor-collector'
+import { HandlesCollector } from './handles-collector'
+import { ExternalMemoryCollector } from './memory-collector'
+import { ProcessStartCollector } from './process-start-collector'
 
 export interface StorageNodeInstrumentationConfig extends InstrumentationConfig, CollectorConfig {}
 

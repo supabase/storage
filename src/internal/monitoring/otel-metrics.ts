@@ -1,24 +1,24 @@
-import { getConfig } from '../../config'
+import * as grpc from '@grpc/grpc-js'
+import { logger, logSchema } from '@internal/monitoring/logger'
+import { StorageNodeInstrumentation } from '@internal/monitoring/system'
 import { metrics } from '@opentelemetry/api'
-import { resourceFromAttributes } from '@opentelemetry/resources'
-import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc'
 import { PrometheusExporter } from '@opentelemetry/exporter-prometheus'
+import { HostMetrics } from '@opentelemetry/host-metrics'
+import { registerInstrumentations } from '@opentelemetry/instrumentation'
+import { RuntimeNodeInstrumentation } from '@opentelemetry/instrumentation-runtime-node'
 import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
+import { resourceFromAttributes } from '@opentelemetry/resources'
 import {
   AggregationTemporality,
   AggregationType,
   MeterProvider,
   PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics'
-import { HostMetrics } from '@opentelemetry/host-metrics'
-import { registerInstrumentations } from '@opentelemetry/instrumentation'
-import { RuntimeNodeInstrumentation } from '@opentelemetry/instrumentation-runtime-node'
-import { StorageNodeInstrumentation } from '@internal/monitoring/system'
-import * as grpc from '@grpc/grpc-js'
-import * as os from 'os'
-import { logger, logSchema } from '@internal/monitoring/logger'
+import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
 import { FastifyReply, FastifyRequest } from 'fastify'
+import * as os from 'os'
+import { getConfig } from '../../config'
 
 const { version, otelMetricsExportIntervalMs, otelMetricsEnabled, otelMetricsTemporality, region } =
   getConfig()

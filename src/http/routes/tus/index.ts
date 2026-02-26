@@ -1,33 +1,33 @@
+import * as https from 'node:https'
+import { S3Client } from '@aws-sdk/client-s3'
+import { PubSub, TenantConnection } from '@internal/database'
+import { ERRORS } from '@internal/errors'
+import { createAgent } from '@internal/http'
+import { logSchema } from '@internal/monitoring'
+import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { getFileSizeLimit } from '@storage/limits'
+import { AlsMemoryKV, FileStore, LockNotifier, PgLocker, UploadId } from '@storage/protocols/tus'
+import { S3Locker } from '@storage/protocols/tus/s3-locker'
+import { Storage } from '@storage/storage'
+import { S3Store } from '@tus/s3-store'
+import { DataStore, Server, ServerOptions } from '@tus/server'
 import { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 import * as http from 'http'
-import { ServerOptions, DataStore, Server } from '@tus/server'
-import { getFileSizeLimit } from '@storage/limits'
-import { Storage } from '@storage/storage'
-import { jwt, storage, db, dbSuperUser } from '../../plugins'
+import type { ServerRequest as Request } from 'srvx'
 import { getConfig } from '../../../config'
-import { FileStore, LockNotifier, PgLocker, UploadId, AlsMemoryKV } from '@storage/protocols/tus'
+import { db, dbSuperUser, jwt, storage } from '../../plugins'
+import { ROUTE_OPERATIONS } from '../operations'
 import {
-  namingFunction,
-  onCreate,
-  onResponseError,
-  onIncomingRequest,
-  onUploadFinish,
   generateUrl,
   getFileIdFromRequest,
+  namingFunction,
+  onCreate,
+  onIncomingRequest,
+  onResponseError,
+  onUploadFinish,
   SIGNED_URL_SUFFIX,
 } from './lifecycle'
-import { TenantConnection, PubSub } from '@internal/database'
-import { S3Store } from '@tus/s3-store'
-import { NodeHttpHandler } from '@smithy/node-http-handler'
-import { ROUTE_OPERATIONS } from '../operations'
-import * as https from 'node:https'
-import { createAgent } from '@internal/http'
-import type { ServerRequest as Request } from 'srvx'
-import { S3Locker } from '@storage/protocols/tus/s3-locker'
-import { S3Client } from '@aws-sdk/client-s3'
-import { ERRORS } from '@internal/errors'
-import { logSchema } from '@internal/monitoring'
 
 const {
   storageS3MaxSockets,

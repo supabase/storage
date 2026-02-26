@@ -1,11 +1,11 @@
-import PgBoss, { Db, Job, JobWithMetadata } from 'pg-boss'
 import { ERRORS } from '@internal/errors'
 import { QueueDB } from '@internal/queue/database'
+import { Semaphore } from '@shopify/semaphore'
+import PgBoss, { Db, Job, JobWithMetadata } from 'pg-boss'
 import { getConfig } from '../../config'
 import { logger, logSchema } from '../monitoring'
-import { queueJobRetryFailed, queueJobCompleted, queueJobError } from '../monitoring/metrics'
+import { queueJobCompleted, queueJobError, queueJobRetryFailed } from '../monitoring/metrics'
 import { Event } from './event'
-import { Semaphore } from '@shopify/semaphore'
 
 // biome-ignore lint/suspicious/noExplicitAny: Event payload types are intentionally generic.
 type SubclassOfBaseClass = (new (

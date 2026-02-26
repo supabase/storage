@@ -1,10 +1,10 @@
+import { isImageTransformationEnabled } from '@storage/limits'
+import { ImageRenderer } from '@storage/renderer'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
-import { AuthenticatedRequest } from '../../types'
-import { ImageRenderer } from '@storage/renderer'
 import { transformationOptionsSchema } from '../../schemas/transformations'
-import { isImageTransformationEnabled } from '@storage/limits'
+import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const getSignedURLParamsSchema = {

@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
-import { ERRORS } from '@internal/errors'
 import { getJwtSecret } from '@internal/database'
-
+import { ERRORS } from '@internal/errors'
+import { StorageObjectLocator } from '@storage/locator'
+import { Obj } from '@storage/schemas'
+import { FastifyRequest } from 'fastify/types/request'
+import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
-import { mustBeValidKey } from './limits'
-import { fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
-import { getConfig } from '../config'
 import {
   ObjectAdminDelete,
   ObjectCreatedCopyEvent,
@@ -16,9 +16,8 @@ import {
   ObjectRemovedMove,
   ObjectUpdatedMetadata,
 } from './events'
-import { FastifyRequest } from 'fastify/types/request'
-import { Obj } from '@storage/schemas'
-import { StorageObjectLocator } from '@storage/locator'
+import { mustBeValidKey } from './limits'
+import { fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
 
 const { requestUrlLengthLimit } = getConfig()
 

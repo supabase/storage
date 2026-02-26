@@ -1,8 +1,8 @@
-import { FastifyInstance, RequestGenericInterface } from 'fastify'
-import apiKey from '../../plugins/apikey'
-import { dbSuperUser, storage } from '../../plugins'
 import { ObjectScanner } from '@storage/scanner/scanner'
+import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FastifyReply } from 'fastify/types/reply'
+import { dbSuperUser, storage } from '../../plugins'
+import apiKey from '../../plugins/apikey'
 
 const listOrphanedObjects = {
   description: 'List Orphaned Objects',

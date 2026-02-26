@@ -1,5 +1,5 @@
-import fastifyPlugin from 'fastify-plugin'
 import { Features, tenantHasFeature } from '@internal/database'
+import fastifyPlugin from 'fastify-plugin'
 
 import { getConfig } from '../../config'
 

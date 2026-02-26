@@ -1,32 +1,30 @@
 import '@internal/monitoring/otel-tracing'
 import '@internal/monitoring/otel-metrics'
 
-import { FastifyInstance } from 'fastify'
 import { IncomingMessage, Server, ServerResponse } from 'node:http'
-
-import build from '../app'
-import buildAdmin from '../admin-app'
-import { getConfig } from '../config'
+import { Cluster } from '@internal/cluster/cluster'
+import { AsyncAbortController } from '@internal/concurrency'
 import {
   listenForTenantUpdate,
   multitenantKnex,
   PubSub,
   TenantConnection,
 } from '@internal/database'
-import { logger, logSchema } from '@internal/monitoring'
-import { Queue } from '@internal/queue'
-import { registerWorkers } from '@storage/events'
-import { AsyncAbortController } from '@internal/concurrency'
-
-import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 import {
   runMigrationsOnTenant,
   runMultitenantMigrations,
   startAsyncMigrations,
 } from '@internal/database/migrations'
-import { Cluster } from '@internal/cluster/cluster'
+import { logger, logSchema } from '@internal/monitoring'
+import { Queue } from '@internal/queue'
 import { KnexShardStoreFactory, ShardCatalog } from '@internal/sharding'
+import { registerWorkers } from '@storage/events'
 import { SyncCatalogIds } from '@storage/events/upgrades/sync-catalog-ids'
+import { FastifyInstance } from 'fastify'
+import buildAdmin from '../admin-app'
+import build from '../app'
+import { getConfig } from '../config'
+import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 
 const shutdownSignal = new AsyncAbortController()
 

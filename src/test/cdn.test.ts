@@ -27,11 +27,11 @@ jest.mock('axios', () => {
   }
 })
 
-import { useStorage } from './utils/storage'
 import axios from 'axios'
-import { Readable } from 'stream'
-import { SignJWT } from 'jose'
 import { FastifyInstance } from 'fastify'
+import { SignJWT } from 'jose'
+import { Readable } from 'stream'
+import { useStorage } from './utils/storage'
 
 const { serviceKeyAsync, anonKeyAsync, tenantId, jwtSecret } = getConfig()
 

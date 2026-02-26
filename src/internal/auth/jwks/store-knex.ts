@@ -1,5 +1,5 @@
 import { Knex } from 'knex'
-import { JWKStoreItem, JWKSManagerStore, PaginatedTenantItem } from './store'
+import { JWKSManagerStore, JWKStoreItem, PaginatedTenantItem } from './store'
 
 export class JWKSManagerStoreKnex implements JWKSManagerStore<Knex.Transaction> {
   constructor(private knex: Knex) {}

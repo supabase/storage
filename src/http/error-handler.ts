@@ -1,7 +1,7 @@
-import { FastifyInstance } from 'fastify'
 import { FastifyError } from '@fastify/error'
-import { DatabaseError } from 'pg'
 import { ErrorCode, isRenderableError, StorageError } from '@internal/errors'
+import { FastifyInstance } from 'fastify'
+import { DatabaseError } from 'pg'
 
 /**
  * The global error handler for all the uncaught exceptions within a request.

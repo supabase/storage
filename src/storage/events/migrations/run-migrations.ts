@@ -1,8 +1,4 @@
-import { BaseEvent } from '../base-event'
 import { getTenantConfig, TenantMigrationStatus } from '@internal/database'
-import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
-import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload } from '@internal/queue'
 import {
   areMigrationsUpToDate,
   DBMigration,
@@ -10,6 +6,10 @@ import {
   updateTenantMigrationsState,
 } from '@internal/database/migrations'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { logger, logSchema } from '@internal/monitoring'
+import { BasePayload } from '@internal/queue'
+import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
+import { BaseEvent } from '../base-event'
 
 interface RunMigrationsPayload extends BasePayload {
   tenantId: string

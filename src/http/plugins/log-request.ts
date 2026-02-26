@@ -1,8 +1,8 @@
-import fastifyPlugin from 'fastify-plugin'
 import { logger, logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
 import { trace } from '@opentelemetry/api'
-import { FastifyRequest } from 'fastify/types/request'
 import { FastifyReply } from 'fastify/types/reply'
+import { FastifyRequest } from 'fastify/types/request'
+import fastifyPlugin from 'fastify-plugin'
 
 interface RequestLoggerOptions {
   excludeUrls?: string[]

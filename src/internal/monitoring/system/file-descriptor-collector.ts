@@ -1,8 +1,8 @@
 import { Meter } from '@opentelemetry/api'
-import { BaseCollector } from './base-collector'
-import * as fs from 'fs/promises'
 import { exec } from 'child_process'
+import * as fs from 'fs/promises'
 import { promisify } from 'util'
+import { BaseCollector } from './base-collector'
 
 const execAsync = promisify(exec)
 

@@ -1,12 +1,12 @@
-import { BaseEvent } from '../base-event'
-import { BasePayload } from '@internal/queue'
-import { BucketType } from '@storage/limits'
-import { Job } from 'pg-boss'
-import { KnexMetastore } from '@storage/protocols/iceberg/knex'
 import { multitenantKnex } from '@internal/database'
-import { getConfig } from '../../../config'
-import { DeleteIcebergResources } from '@storage/events/iceberg/delete-iceberg-resources'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { BasePayload } from '@internal/queue'
+import { DeleteIcebergResources } from '@storage/events/iceberg/delete-iceberg-resources'
+import { BucketType } from '@storage/limits'
+import { KnexMetastore } from '@storage/protocols/iceberg/knex'
+import { Job } from 'pg-boss'
+import { getConfig } from '../../../config'
+import { BaseEvent } from '../base-event'
 
 interface BucketDeletedEvent extends BasePayload {
   bucketId: string

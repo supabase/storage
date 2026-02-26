@@ -7,14 +7,13 @@ mergeConfig({
   isMultitenant: true,
 })
 
+import { encrypt, signJWT } from '@internal/auth'
+import { listenForTenantUpdate, s3CredentialsManager } from '@internal/database'
+import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { multitenantKnex } from '../internal/database/multitenant-db'
 import { adminApp } from './common'
-import { s3CredentialsManager } from '@internal/database'
-import { listenForTenantUpdate } from '@internal/database'
-import { PostgresPubSub } from '@internal/pubsub'
-import { encrypt, signJWT } from '@internal/auth'
 
 dotenv.config({ path: '.env.test' })
 

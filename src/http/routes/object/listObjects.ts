@@ -1,10 +1,10 @@
+import { objectSchema } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
+import { FastifyRequest } from 'fastify/types/request'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
-import { objectSchema } from '@storage/schemas'
 import { ROUTE_OPERATIONS } from '../operations'
-import { FastifyRequest } from 'fastify/types/request'
 
 const searchRequestParamsSchema = {
   type: 'object',

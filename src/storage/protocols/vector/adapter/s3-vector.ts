@@ -25,8 +25,8 @@ import {
   QueryVectorsOutput,
   S3VectorsClient,
 } from '@aws-sdk/client-s3vectors'
-import { getConfig } from '../../../../config'
 import { ERRORS } from '@internal/errors'
+import { getConfig } from '../../../../config'
 
 export interface VectorStore {
   createVectorIndex(command: CreateIndexCommandInput): Promise<CreateIndexCommandOutput>

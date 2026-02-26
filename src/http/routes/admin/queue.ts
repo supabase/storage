@@ -1,8 +1,8 @@
-import { FastifyInstance, RequestGenericInterface } from 'fastify'
-import apiKey from '../../plugins/apikey'
-import { getConfig } from '../../../config'
 import { MoveJobs, UpgradePgBossV10 } from '@storage/events'
+import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
+import { getConfig } from '../../../config'
+import apiKey from '../../plugins/apikey'
 
 const { pgQueueEnable } = getConfig()
 

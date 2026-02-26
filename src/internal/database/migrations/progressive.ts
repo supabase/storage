@@ -1,8 +1,8 @@
+import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
+import { RunMigrationsOnTenants } from '@storage/events'
+import { getConfig } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
-import { RunMigrationsOnTenants } from '@storage/events'
-import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
-import { getConfig } from '../../../config'
 
 const { dbMigrationFreezeAt } = getConfig()
 

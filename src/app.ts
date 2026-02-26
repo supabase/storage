@@ -1,8 +1,8 @@
-import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
-import { routes, schemas, plugins, setErrorHandler } from './http'
+import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
+import { plugins, routes, schemas, setErrorHandler } from './http'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean

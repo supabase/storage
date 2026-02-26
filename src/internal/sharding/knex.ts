@@ -1,3 +1,4 @@
+import { hashStringToInt } from '@internal/hashing'
 import { Knex } from 'knex'
 import {
   ReservationRow,
@@ -8,7 +9,6 @@ import {
   ShardStoreFactory,
   UniqueViolationError,
 } from './store'
-import { hashStringToInt } from '@internal/hashing'
 
 export class KnexShardStoreFactory implements ShardStoreFactory<Knex.Transaction> {
   constructor(private knex: Knex) {}

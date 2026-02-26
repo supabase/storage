@@ -1,23 +1,23 @@
 import { FastifyInstance } from 'fastify'
-import { jwt, storage, dbSuperUser, db } from '../../plugins'
+import { db, dbSuperUser, jwt, storage } from '../../plugins'
 import copyObject from './copyObject'
 import createObject from './createObject'
 import deleteObject from './deleteObject'
 import deleteObjects from './deleteObjects'
 import getObject from './getObject'
+import {
+  authenticatedRoutes as getObjectInfoAuth,
+  publicRoutes as getObjectInfoPublic,
+} from './getObjectInfo'
 import getPublicObject from './getPublicObject'
 import getSignedObject from './getSignedObject'
+import getSignedUploadURL from './getSignedUploadURL'
 import getSignedURL from './getSignedURL'
 import getSignedURLs from './getSignedURLs'
 import listObjects from './listObjects'
 import listObjectsV2 from './listObjectsV2'
 import moveObject from './moveObject'
 import updateObject from './updateObject'
-import {
-  publicRoutes as getObjectInfoPublic,
-  authenticatedRoutes as getObjectInfoAuth,
-} from './getObjectInfo'
-import getSignedUploadURL from './getSignedUploadURL'
 import uploadSignedObject from './uploadSignedObject'
 
 export default async function routes(fastify: FastifyInstance) {

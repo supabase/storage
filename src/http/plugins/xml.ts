@@ -1,11 +1,10 @@
-import { FastifyInstance } from 'fastify'
 import accepts from '@fastify/accepts'
+import { FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
-import xml from 'xml2js'
-
 // no types exists for this package
 // @ts-ignore
 import xmlBodyParser from 'fastify-xml-body-parser'
+import xml from 'xml2js'
 
 export const xmlParser = fastifyPlugin(
   async function (

@@ -1,7 +1,7 @@
-import { PoolManager } from '@internal/database/pool'
-import { TenantConnection } from '@internal/database/connection'
-import { getConfig } from '../config'
 import { getServiceKeyUser } from '@internal/database'
+import { TenantConnection } from '@internal/database/connection'
+import { PoolManager } from '@internal/database/pool'
+import { getConfig } from '../config'
 
 const { databaseURL, databasePoolURL, tenantId } = getConfig()
 

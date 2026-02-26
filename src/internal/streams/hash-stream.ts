@@ -1,11 +1,12 @@
 // HashSpillWritable.ts
+
+import { createHash, randomUUID } from 'node:crypto'
 import fs, { WriteStream } from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { Readable, Writable, WritableOptions } from 'node:stream'
 import { finished } from 'node:stream/promises'
-import { createHash, randomUUID } from 'node:crypto'
 
 export interface HashSpillWritableOptions {
   /** Max bytes to keep in memory before spilling to disk (required, > 0). */

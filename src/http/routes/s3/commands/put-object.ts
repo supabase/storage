@@ -1,12 +1,12 @@
-import { MAX_PART_SIZE, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
-import { S3Router } from '../router'
-import { ROUTE_OPERATIONS } from '../../operations'
 import { MultipartFields } from '@fastify/multipart'
-import { fileUploadFromRequest, getStandardMaxFileSizeLimit } from '@storage/uploader'
 import { ERRORS } from '@internal/errors'
-import { pipeline } from 'stream/promises'
 import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
+import { MAX_PART_SIZE, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { fileUploadFromRequest, getStandardMaxFileSizeLimit } from '@storage/uploader'
 import stream, { PassThrough, Readable } from 'stream'
+import { pipeline } from 'stream/promises'
+import { ROUTE_OPERATIONS } from '../../operations'
+import { S3Router } from '../router'
 
 const PutObjectInput = {
   summary: 'Put Object',

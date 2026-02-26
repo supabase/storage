@@ -1,15 +1,15 @@
-import fastifyPlugin from 'fastify-plugin'
-import { FastifyInstance } from 'fastify'
 import { getTenantConfig, multitenantKnex } from '@internal/database'
+import { ERRORS } from '@internal/errors'
+import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 import {
   createS3VectorClient,
   KnexVectorMetadataDB,
-  VectorStoreManager,
   S3Vector,
+  VectorStoreManager,
 } from '@storage/protocols/vector'
+import { FastifyInstance } from 'fastify'
+import fastifyPlugin from 'fastify-plugin'
 import { getConfig } from '../../config'
-import { ERRORS } from '@internal/errors'
-import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 
 declare module 'fastify' {
   interface FastifyRequest {

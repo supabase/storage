@@ -1,5 +1,5 @@
-import axios from 'axios'
 import { NdJsonTransform } from '@internal/streams/ndjson'
+import axios from 'axios'
 import fs from 'fs'
 import path from 'path'
 import { Transform, TransformCallback } from 'stream'

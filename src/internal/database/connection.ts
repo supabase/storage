@@ -1,16 +1,18 @@
-import pg, { DatabaseError } from 'pg'
-import { Knex, knex } from 'knex'
 import retry from 'async-retry'
+import { Knex, knex } from 'knex'
+import pg, { DatabaseError } from 'pg'
+
 import KnexTimeoutError = knex.KnexTimeoutError
-import { ERRORS } from '@internal/errors'
+
 import {
-  PoolStrategy,
   PoolManager,
+  PoolStrategy,
   searchPath,
   TenantConnectionOptions,
 } from '@internal/database/pool'
-import { getConfig } from '../../config'
+import { ERRORS } from '@internal/errors'
 import { TransactionOptions } from '@storage/database'
+import { getConfig } from '../../config'
 
 const { databaseStatementTimeout } = getConfig()
 

@@ -1,8 +1,7 @@
-import fastifyPlugin from 'fastify-plugin'
 import { getTenantConfig } from '@internal/database'
-
-import { getConfig } from '../../config'
 import { logSchema } from '@internal/monitoring'
+import fastifyPlugin from 'fastify-plugin'
+import { getConfig } from '../../config'
 
 declare module 'fastify' {
   interface FastifyRequest {

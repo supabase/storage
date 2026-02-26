@@ -1,19 +1,19 @@
+import { TenantConnection } from '@internal/database/connection'
+import { lastLocalMigrationName } from '@internal/database/migrations/files'
+import { ERRORS } from '@internal/errors'
+import { logger, logSchema } from '@internal/monitoring'
+import {
+  S3CredentialsManager,
+  S3CredentialsManagerStoreKnex,
+} from '@storage/protocols/s3/credentials'
+import { JWTPayload } from 'jose'
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import { decrypt } from '../auth'
 import { JWKSManager, JWKSManagerStoreKnex } from '../auth/jwks'
-import { multitenantKnex } from './multitenant-db'
-import { JWTPayload } from 'jose'
-import { PubSubAdapter } from '../pubsub'
 import { createMutexByKey } from '../concurrency'
-import { ERRORS } from '@internal/errors'
-import {
-  S3CredentialsManagerStoreKnex,
-  S3CredentialsManager,
-} from '@storage/protocols/s3/credentials'
-import { TenantConnection } from '@internal/database/connection'
-import { logger, logSchema } from '@internal/monitoring'
+import { PubSubAdapter } from '../pubsub'
 import { DBMigration } from './migrations/types'
-import { lastLocalMigrationName } from '@internal/database/migrations/files'
+import { multitenantKnex } from './multitenant-db'
 
 type DBPoolMode = 'single_use' | 'recycled'
 

@@ -1,10 +1,10 @@
-import { BaseEvent } from '../base-event'
 import { getTenantConfig } from '@internal/database'
-import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
-import { BasePayload } from '@internal/queue'
 import { DBMigration, resetMigration } from '@internal/database/migrations'
-import { RunMigrationsOnTenants } from './run-migrations'
 import { logger, logSchema } from '@internal/monitoring'
+import { BasePayload } from '@internal/queue'
+import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
+import { BaseEvent } from '../base-event'
+import { RunMigrationsOnTenants } from './run-migrations'
 
 interface ResetMigrationsPayload extends BasePayload {
   tenantId: string

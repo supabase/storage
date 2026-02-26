@@ -1,4 +1,5 @@
 import dotenv from 'dotenv'
+
 dotenv.config()
 
 import { resetMigration, runMigrationsOnTenant } from '@internal/database/migrations'

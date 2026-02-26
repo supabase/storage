@@ -1,5 +1,5 @@
-import * as glob from 'glob'
 import fs from 'fs'
+import * as glob from 'glob'
 import path from 'path'
 
 function main() {

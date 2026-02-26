@@ -1,14 +1,14 @@
-import { FastifyInstance } from 'fastify'
-import { Queue } from '@internal/queue'
 import { multitenantKnex } from '@internal/database'
-import { RunMigrationsOnTenants } from '@storage/events'
-import apiKey from '../../plugins/apikey'
-import { getConfig } from '../../../config'
 import {
   DBMigration,
   resetMigrationsOnTenants,
   runMigrationsOnAllTenants,
 } from '@internal/database/migrations'
+import { Queue } from '@internal/queue'
+import { RunMigrationsOnTenants } from '@storage/events'
+import { FastifyInstance } from 'fastify'
+import { getConfig } from '../../../config'
+import apiKey from '../../plugins/apikey'
 
 const { pgQueueEnable } = getConfig()
 

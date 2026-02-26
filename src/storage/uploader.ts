@@ -126,7 +126,7 @@ export class Uploader {
       return this.completeUpload({
         ...request,
         version,
-        objectMetadata: objectMetadata,
+        objectMetadata,
         userMetadata: { ...file.userMetadata },
       })
     } catch (e) {
@@ -134,7 +134,7 @@ export class Uploader {
         name: request.objectName,
         bucketId: request.bucketId,
         tenant: this.db.tenant(),
-        version: version,
+        version,
         reqId: this.db.reqId,
       })
       throw e
@@ -204,7 +204,7 @@ export class Uploader {
           events.push(
             ObjectAdminDelete.send({
               name: objectName,
-              bucketId: bucketId,
+              bucketId,
               tenant: this.db.tenant(),
               version: currentObj.version,
               reqId: this.db.reqId,
@@ -219,8 +219,8 @@ export class Uploader {
             .sendWebhook({
               tenant: this.db.tenant(),
               name: objectName,
-              version: version,
-              bucketId: bucketId,
+              version,
+              bucketId,
               metadata: objectMetadata,
               reqId: this.db.reqId,
               uploadType,
@@ -232,7 +232,7 @@ export class Uploader {
                 project: this.db.tenantId,
                 metadata: JSON.stringify({
                   name: objectName,
-                  bucketId: bucketId,
+                  bucketId,
                   metadata: objectMetadata,
                   reqId: this.db.reqId,
                   uploadType,
@@ -253,7 +253,7 @@ export class Uploader {
     } catch (e) {
       await ObjectAdminDelete.send({
         name: objectName,
-        bucketId: bucketId,
+        bucketId,
         tenant: this.db.tenant(),
         version,
         reqId: this.db.reqId,

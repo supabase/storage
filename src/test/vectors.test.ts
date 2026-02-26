@@ -111,7 +111,7 @@ describe('Vectors API', () => {
         dimension: 1536,
         distanceMetric: 'cosine',
         indexName: 'test-index',
-        vectorBucketName: vectorBucketName,
+        vectorBucketName,
         metadataConfiguration: {
           nonFilterableMetadataKeys: ['key1', 'key2'],
         },
@@ -327,7 +327,7 @@ describe('Vectors API', () => {
         dimension: 1536,
         distanceMetric: 'euclidean' as const,
         indexName: 'test-index-2',
-        vectorBucketName: vectorBucketName,
+        vectorBucketName,
       }
 
       const response = await appInstance.inject({
@@ -463,7 +463,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -492,7 +492,7 @@ describe('Vectors API', () => {
           dimension: 1536,
           distanceMetric: 'cosine',
           indexName: 'test-index',
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -504,7 +504,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -518,7 +518,7 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/DeleteVectorBucket',
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -686,7 +686,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -703,7 +703,7 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/GetVectorBucket',
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -753,8 +753,8 @@ describe('Vectors API', () => {
         dataType: 'float32',
         dimension: 1536,
         distanceMetric: 'cosine',
-        indexName: indexName,
-        vectorBucketName: vectorBucketName,
+        indexName,
+        vectorBucketName,
       })
     })
 
@@ -766,8 +766,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -797,8 +797,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/DeleteIndex',
         payload: {
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -813,7 +813,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          indexName: indexName,
+          indexName,
         },
       })
 
@@ -829,7 +829,7 @@ describe('Vectors API', () => {
         },
         payload: {
           indexName: 'INVALID_NAME',
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -845,7 +845,7 @@ describe('Vectors API', () => {
         },
         payload: {
           indexName: 'non-existent-index',
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -867,7 +867,7 @@ describe('Vectors API', () => {
           dimension: 1536,
           distanceMetric: 'cosine',
           indexName: `index-a-${Date.now()}`,
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -882,7 +882,7 @@ describe('Vectors API', () => {
           dimension: 768,
           distanceMetric: 'euclidean',
           indexName: `index-b-${Date.now()}`,
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
     })
@@ -895,7 +895,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -922,7 +922,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           maxResults: 1,
         },
       })
@@ -941,7 +941,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           prefix,
         },
       })
@@ -958,7 +958,7 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/ListIndexes',
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -994,8 +994,8 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 1536,
           distanceMetric: 'cosine',
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
           metadataConfiguration: {
             nonFilterableMetadataKeys: ['key1'],
           },
@@ -1011,8 +1011,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1036,8 +1036,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/GetIndex',
         payload: {
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1052,7 +1052,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          indexName: indexName,
+          indexName,
         },
       })
 
@@ -1068,7 +1068,7 @@ describe('Vectors API', () => {
         },
         payload: {
           indexName: 'INVALID_NAME',
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -1084,7 +1084,7 @@ describe('Vectors API', () => {
         },
         payload: {
           indexName: 'non-existent-index',
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -1107,8 +1107,8 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 3,
           distanceMetric: 'cosine',
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1125,8 +1125,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           vectors: [
             {
               key: 'vec1',
@@ -1177,8 +1177,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/PutVectors',
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           vector: [
             {
               data: {
@@ -1200,8 +1200,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
         },
       })
 
@@ -1216,8 +1216,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           vector: [
             {
               data: {
@@ -1245,8 +1245,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           vector: tooManyVectors,
         },
       })
@@ -1262,7 +1262,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           indexName: 'non-existent-index',
           vectors: [
             {
@@ -1293,8 +1293,8 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 3,
           distanceMetric: 'cosine',
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1316,8 +1316,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           queryVector: {
             float32: [1.0, 2.0, 3.0],
           },
@@ -1354,8 +1354,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           queryVector: {
             float32: [1.0, 2.0, 3.0],
           },
@@ -1384,8 +1384,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           queryVector: {
             float32: [1.0, 2.0, 3.0],
           },
@@ -1411,8 +1411,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/QueryVectors',
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           queryVector: {
             float32: [1.0, 2.0, 3.0],
           },
@@ -1431,8 +1431,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           queryVector: {
             float32: [1.0, 2.0, 3.0],
           },
@@ -1450,8 +1450,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           queryVector: {
             // missing float32
           },
@@ -1470,7 +1470,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           indexName: 'non-existent-index',
           queryVector: {
             float32: [1.0, 2.0, 3.0],
@@ -1498,8 +1498,8 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 3,
           distanceMetric: 'cosine',
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1514,8 +1514,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           keys: ['vec1', 'vec2', 'vec3'],
         },
       })
@@ -1535,8 +1535,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/DeleteVectors',
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           keys: ['vec1'],
         },
       })
@@ -1552,8 +1552,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
         },
       })
 
@@ -1568,7 +1568,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           indexName: 'non-existent-index',
           keys: ['vec1'],
         },
@@ -1593,8 +1593,8 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 3,
           distanceMetric: 'cosine',
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1612,8 +1612,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
         },
       })
 
@@ -1639,8 +1639,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           maxResults: 10,
         },
       })
@@ -1661,8 +1661,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           returnData: true,
           returnMetadata: true,
         },
@@ -1685,8 +1685,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           nextToken: 'some-token',
         },
       })
@@ -1707,8 +1707,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           segmentCount: 4,
           segmentIndex: 2,
         },
@@ -1728,8 +1728,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/ListVectors',
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
         },
       })
 
@@ -1744,7 +1744,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -1759,8 +1759,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           maxResults: 501,
         },
       })
@@ -1776,8 +1776,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           segmentCount: 4,
           segmentIndex: 16,
         },
@@ -1794,7 +1794,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           indexName: 'non-existent-index',
         },
       })
@@ -1818,8 +1818,8 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 3,
           distanceMetric: 'cosine',
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1850,8 +1850,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           keys: ['vec1', 'vec2'],
           returnData: true,
           returnMetadata: true,
@@ -1881,8 +1881,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           keys: ['vec1'],
         },
       })
@@ -1901,8 +1901,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/GetVectors',
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           keys: ['vec1'],
         },
       })
@@ -1918,8 +1918,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
         },
       })
 
@@ -1934,7 +1934,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           indexName: 'non-existent-index',
           keys: ['vec1'],
         },

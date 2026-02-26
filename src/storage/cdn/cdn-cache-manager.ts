@@ -16,7 +16,7 @@ const httpsAgent = new HttpsAgent({
 
 const client = axios.create({
   baseURL: cdnPurgeEndpointURL,
-  httpsAgent: httpsAgent,
+  httpsAgent,
   headers: {
     Authorization: `Bearer ${cdnPurgeEndpointKey}`,
     'Content-Type': 'application/json',

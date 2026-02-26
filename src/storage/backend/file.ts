@@ -138,10 +138,10 @@ export class FileBackend implements StorageBackendAdapter {
         metadata: {
           cacheControl: cacheControl || 'no-cache',
           mimetype: contentType || 'application/octet-stream',
-          lastModified: lastModified,
+          lastModified,
           contentRange: `bytes ${startRange}-${endRange}/${fileSize}`,
           httpStatusCode: 206,
-          size: size,
+          size,
           eTag,
           contentLength: chunkSize,
         },
@@ -451,7 +451,7 @@ export class FileBackend implements StorageBackendAdapter {
     })
 
     return {
-      version: version,
+      version,
       ETag: uploaded.eTag,
       bucket: bucketName,
       location: `${bucketName}/${key}`,

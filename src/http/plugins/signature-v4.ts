@@ -137,7 +137,7 @@ async function authorizeRequestSignV4(
 
   const isVerified = await signatureV4.verify(clientSignature, {
     url: request.url,
-    body: body,
+    body,
     headers: request.headers as Record<string, string | string[]>,
     method: request.method,
     query: request.query as Record<string, string>,

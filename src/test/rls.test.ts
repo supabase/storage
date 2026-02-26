@@ -234,7 +234,7 @@ describe('RLS policies', () => {
           try {
             const response = await runOperation(assert.operation, {
               bucket: bucketName,
-              objectName: objectName,
+              objectName,
               jwt: assert.role === 'service' ? await serviceKeyAsync : jwt,
             })
 

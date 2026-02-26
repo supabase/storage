@@ -90,7 +90,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     })
 
     storageBackend = createStorageBackend(storageBackendType, {
-      httpAgent: httpAgent,
+      httpAgent,
     })
 
     if (monitor) {

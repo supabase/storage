@@ -124,7 +124,7 @@ describe('CDN Cache Manager', () => {
         ref: tenantId,
       },
       bucketId: bucketName,
-      objectName: objectName,
+      objectName,
     })
   })
 })

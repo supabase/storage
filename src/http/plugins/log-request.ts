@@ -161,7 +161,7 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     res: options.reply,
     responseTime: options.responseTime,
     executionTime: options.executionTime,
-    error: error,
+    error,
     owner: req.owner,
     role: req.jwtPayload?.role,
     resources: req.resources,

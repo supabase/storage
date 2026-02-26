@@ -57,7 +57,7 @@ export class StorageBackendError extends Error implements RenderableError {
 
     return new StorageBackendError({
       error: oldErrorMessage,
-      code: code,
+      code,
       httpStatusCode,
       message,
       originalError: error,

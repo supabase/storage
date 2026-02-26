@@ -9,12 +9,12 @@
       "**/*.json",
       "**/*.jsonc",
       "!package-lock.json",
-      "!build/**",
-      "!coverage/**",
-      "!dist/**",
-      "!static/**",
-      "!data/**",
-      "!node_modules/**"
+      "!build/",
+      "!coverage/",
+      "!dist/",
+      "!static/",
+      "!data/",
+      "!node_modules/"
     ]
   },
   "formatter": {
@@ -31,7 +31,8 @@
         "noUnusedVariables": "warn"
       },
       "style": {
-        "noCommonJs": "warn"
+        "noCommonJs": "warn",
+        "useConsistentObjectDefinitions": "error"
       },
       "suspicious": {
         "noExplicitAny": "warn"

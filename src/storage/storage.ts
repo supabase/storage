@@ -171,7 +171,7 @@ export class Storage {
             logSchema.error(logger, 'Failed to invoke BucketCreatedEvent handler', {
               project: db.tenantId,
               type: 'event',
-              error: error,
+              error,
             })
             return true
           },

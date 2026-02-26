@@ -48,7 +48,7 @@ export class ResetMigrationsOnTenant extends BaseEvent<ResetMigrationsPayload> {
     })
 
     const reset = await resetMigration({
-      tenantId: tenantId,
+      tenantId,
       markCompletedTillMigration: job.data.markCompletedTillMigration,
       untilMigration: job.data.untilMigration,
       databaseUrl: tenant.databaseUrl,
@@ -56,7 +56,7 @@ export class ResetMigrationsOnTenant extends BaseEvent<ResetMigrationsPayload> {
 
     if (reset) {
       await RunMigrationsOnTenants.send({
-        tenantId: tenantId,
+        tenantId,
         tenant: {
           ref: tenantId,
         },

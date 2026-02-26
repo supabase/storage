@@ -203,7 +203,7 @@ export class VectorStoreManager {
     } catch (error) {
       logSchema.error(logger, 'Create vector index transaction failed', {
         type: 'vector',
-        error: error,
+        error,
         project: this.config.tenantId,
       })
       if (shardReservation) {

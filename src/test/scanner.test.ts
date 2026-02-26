@@ -136,7 +136,7 @@ describe('ObjectScanner', () => {
     while (true) {
       const s3Objects = await storage.adapter.list(storageS3Bucket, {
         prefix: `${tenantId}/${bucket.id}`,
-        nextToken: nextToken,
+        nextToken,
       })
       s3ObjectAll.push(...s3Objects.keys)
       if (!s3Objects.nextToken) {

@@ -49,8 +49,8 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
 
     req.s3Vector = new VectorStoreManager(s3VectorAdapter, store, shard, {
       tenantId: req.tenantId,
-      maxBucketCount: maxBucketCount,
-      maxIndexCount: maxIndexCount,
+      maxBucketCount,
+      maxIndexCount,
     })
   })
 })

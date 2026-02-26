@@ -244,8 +244,8 @@ export class ImageRenderer extends Renderer {
         metadata: {
           httpStatusCode: response.status,
           size: contentLength,
-          contentLength: contentLength,
-          lastModified: lastModified,
+          contentLength,
+          lastModified,
           eTag: headObj.eTag,
           cacheControl: headObj.cacheControl,
           mimetype: response.headers['content-type'],

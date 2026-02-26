@@ -220,8 +220,8 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
           namespaceId: dbNamespace.id,
           tenantId: this.options.tenantId,
           location: icebergTable['metadata'].location as string,
-          shardKey: shardKey,
-          shardId: shardId,
+          shardKey,
+          shardId,
           remoteTableId: icebergTable['metadata']['table-uuid'],
         })
 

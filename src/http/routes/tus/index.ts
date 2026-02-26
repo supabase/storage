@@ -95,7 +95,7 @@ function createTusServer(
     datastore: DataStore
   } = {
     path: tusPath,
-    datastore: datastore,
+    datastore,
     disableTerminationForFinishedUploads: true,
     locker: (rawReq: Request) => {
       const req = rawReq.node?.req as MultiPartRequest
@@ -134,13 +134,13 @@ function createTusServer(
           throw ERRORS.InternalError(undefined, 'Unsupported TUS locker type')
       }
     },
-    namingFunction: namingFunction,
+    namingFunction,
     onUploadCreate: onCreate,
-    onUploadFinish: onUploadFinish,
-    onIncomingRequest: onIncomingRequest,
-    generateUrl: generateUrl,
-    getFileIdFromRequest: getFileIdFromRequest,
-    onResponseError: onResponseError,
+    onUploadFinish,
+    onIncomingRequest,
+    generateUrl,
+    getFileIdFromRequest,
+    onResponseError,
     respectForwardedHeaders: true,
     allowedHeaders: ['Authorization', 'X-Upsert', 'Upload-Expires', 'ApiKey', 'x-signature'],
     maxSize: async (rawReq, uploadId) => {

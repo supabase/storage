@@ -75,7 +75,7 @@ export default async function routes(fastify: FastifyInstance) {
         .uploadFromRequest(request, {
           objectName,
           signal: request.signals.body.signal,
-          owner: owner,
+          owner,
           isUpsert: true,
         })
 

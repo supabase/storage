@@ -125,7 +125,7 @@ class ClassInstrumentation implements Instrumentation {
   private patchMethod(proto: any, methodName: string): void {
     const original = proto[methodName]
     const instrumentationName = this.instrumentationName
-    const config = this._config
+    const instrumentation = this
 
     proto[methodName] = function (...args: any[]) {
       const tracer = trace.getTracer(instrumentationName)
@@ -139,10 +139,11 @@ class ClassInstrumentation implements Instrumentation {
         },
         async (span: Span) => {
           try {
-            const customAttrs = config.setAttributes?.[methodName]?.apply(this, args) || {}
+            const customAttrs =
+              instrumentation._config.setAttributes?.[methodName]?.apply(this, args) || {}
             span.setAttributes(customAttrs)
 
-            const spanName = config.setName?.(
+            const spanName = instrumentation._config.setName?.(
               `${instrumentationName}.${methodName}`,
               customAttrs,
               this

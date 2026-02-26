@@ -33,7 +33,7 @@ describe('Tus multipart', () => {
 
   beforeAll(async () => {
     server = await app({
-      logger: logger,
+      logger,
     })
 
     await server.listen({
@@ -61,7 +61,7 @@ describe('Tus multipart', () => {
     const pg = await getPostgresConnection({
       superUser,
       user: superUser,
-      tenantId: tenantId,
+      tenantId,
       host: 'localhost',
     })
 
@@ -95,8 +95,8 @@ describe('Tus multipart', () => {
           'x-upsert': 'true',
         },
         metadata: {
-          bucketName: bucketName,
-          objectName: objectName,
+          bucketName,
+          objectName,
           contentType: 'image/jpeg',
           cacheControl: '3600',
           metadata: JSON.stringify({
@@ -104,7 +104,7 @@ describe('Tus multipart', () => {
             test2: 'test2',
           }),
         },
-        onError: function (error) {
+        onError(error) {
           console.log('Failed because: ' + error)
           reject(error)
         },
@@ -170,11 +170,11 @@ describe('Tus multipart', () => {
             },
             metadata: {
               bucketName: 'doesn-exist',
-              objectName: objectName,
+              objectName,
               contentType: 'image/jpeg',
               cacheControl: '3600',
             },
-            onError: function (error) {
+            onError(error) {
               console.log('Failed because: ' + error)
               reject(error)
             },
@@ -218,12 +218,12 @@ describe('Tus multipart', () => {
               'x-upsert': 'true',
             },
             metadata: {
-              bucketName: bucketName,
-              objectName: objectName,
+              bucketName,
+              objectName,
               contentType: 'image/jpeg',
               cacheControl: '3600',
             },
-            onError: function (error) {
+            onError(error) {
               console.log('Failed because: ' + error)
               reject(error)
             },
@@ -269,8 +269,8 @@ describe('Tus multipart', () => {
             'x-signature': signedUpload.token,
           },
           metadata: {
-            bucketName: bucketName,
-            objectName: objectName,
+            bucketName,
+            objectName,
             contentType: 'image/jpeg',
             cacheControl: '3600',
             metadata: JSON.stringify({
@@ -278,7 +278,7 @@ describe('Tus multipart', () => {
               test3: 'test3',
             }),
           },
-          onError: function (error) {
+          onError(error) {
             console.log('Failed because: ' + error)
             reject(error)
           },
@@ -342,12 +342,12 @@ describe('Tus multipart', () => {
             'x-signature': signedUpload.token,
           },
           metadata: {
-            bucketName: bucketName,
-            objectName: objectName,
+            bucketName,
+            objectName,
             contentType: 'image/jpeg',
             cacheControl: '3600',
           },
-          onError: function (error) {
+          onError(error) {
             console.log('Failed because: ' + error)
             reject(error)
           },
@@ -411,12 +411,12 @@ describe('Tus multipart', () => {
               'x-signature': signedUpload.token,
             },
             metadata: {
-              bucketName: bucketName,
-              objectName: objectName,
+              bucketName,
+              objectName,
               contentType: 'image/jpeg',
               cacheControl: '3600',
             },
-            onError: function (error) {
+            onError(error) {
               console.log('Failed because: ' + error)
               reject(error)
             },
@@ -459,12 +459,12 @@ describe('Tus multipart', () => {
               'x-signature': 'invalid-token',
             },
             metadata: {
-              bucketName: bucketName,
-              objectName: objectName,
+              bucketName,
+              objectName,
               contentType: 'image/jpeg',
               cacheControl: '3600',
             },
-            onError: function (error) {
+            onError(error) {
               console.log('Failed because: ' + error)
               reject(error)
             },
@@ -504,12 +504,12 @@ describe('Tus multipart', () => {
             onShouldRetry: () => false,
             uploadDataDuringCreation: false,
             metadata: {
-              bucketName: bucketName,
-              objectName: objectName,
+              bucketName,
+              objectName,
               contentType: 'image/jpeg',
               cacheControl: '3600',
             },
-            onError: function (error) {
+            onError(error) {
               console.log('Failed because: ' + error)
               reject(error)
             },

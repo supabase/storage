@@ -50,7 +50,7 @@ export abstract class Queue {
 
     return new PgBoss({
       connectionString: url,
-      migrate: migrate,
+      migrate,
       db: opts.db,
       schema: 'pgboss_v10',
       application_name: 'storage-pgboss',
@@ -298,8 +298,8 @@ export abstract class Queue {
       type: 'queue',
       metadata: JSON.stringify({
         queueName: event.getQueueName(),
-        batchSize: batchSize,
-        pollingInterval: pollingInterval,
+        batchSize,
+        pollingInterval,
       }),
     })
 

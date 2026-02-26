@@ -45,7 +45,7 @@ export class ObjectScanner {
       }
 
       const s3Keys = this.listS3Orphans(tmpTable, {
-        bucket: bucket,
+        bucket,
         prefix,
         signal: options.signal,
       })
@@ -169,7 +169,7 @@ export class ObjectScanner {
 
       const dbKeys = storageObjects.map(({ name, version, metadata }) => {
         if (version) {
-          return { name: `${name}`, version: version, size: (metadata?.size as number) || 0 }
+          return { name: `${name}`, version, size: (metadata?.size as number) || 0 }
         }
         return { name, size: (metadata?.size as number) || 0 }
       })

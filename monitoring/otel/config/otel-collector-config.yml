@@ -9,6 +9,9 @@ processors:
     check_interval: 1s
     limit_percentage: 70
     spike_limit_percentage: 20
+  deltatocumulative:
+    max_stale: 2m # how long to keep inactive streams
+    max_streams: 50000 # how many streams to keep
   batch/traces:
     send_batch_size: 10000
     timeout: 10s
@@ -169,7 +172,13 @@ service:
     metrics/otel:
       receivers: [otlp]
       processors:
-        [memory_limiter, transform/add_resource_attributes, metricstransform/host, batch/metrics]
+        [
+          memory_limiter,
+          deltatocumulative,
+          transform/add_resource_attributes,
+          metricstransform/host,
+          batch/metrics,
+        ]
       exporters: [prometheusremotewrite]
     metrics/prometheus:
       receivers: [otlp]

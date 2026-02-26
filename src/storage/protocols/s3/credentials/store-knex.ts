@@ -23,6 +23,7 @@ export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore 
         claims: JSON.stringify(credential.claims),
       })
       .returning('id')
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
     return credentials[0].id
   }
 
@@ -32,6 +33,7 @@ export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore 
       .select<S3CredentialsRaw[]>('id', 'description', 'access_key', 'created_at')
       .where('tenant_id', tenantId)
       .orderBy('created_at', 'asc')
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
   }
 
   getOneByAccessKey(tenantId: string, accessKey: string): Promise<S3Credentials> {
@@ -50,6 +52,7 @@ export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore 
       .count<{ count: number }>('id')
       .where('tenant_id', tenantId)
       .first()
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
     return Number(data?.count || 0)
   }
 
@@ -59,5 +62,6 @@ export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore 
       .where('tenant_id', tenantId)
       .where('id', credentialId)
       .delete()
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
   }
 }

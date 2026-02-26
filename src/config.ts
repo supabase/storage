@@ -408,9 +408,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       ),
       10
     ),
-    multitenantDatabaseQueryTimeout: parseInt(
-      getOptionalConfigFromEnv('DATABASE_MULTITENANT_QUERY_TIMEOUT') || '10000',
-      10
+    multitenantDatabaseQueryTimeout: envNumber(
+      getOptionalConfigFromEnv('DATABASE_MULTITENANT_QUERY_TIMEOUT'),
+      10_000
     ),
     databaseSSLRootCert: getOptionalConfigFromEnv('DATABASE_SSL_ROOT_CERT'),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',

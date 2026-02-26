@@ -38,6 +38,8 @@ services:
     image: bitnamilegacy/pgbouncer:latest
     ports:
       - 6453:6432
+    depends_on:
+      - tenant_db      
     environment:
       POSTGRESQL_USERNAME: postgres
       POSTGRESQL_HOST: tenant_db

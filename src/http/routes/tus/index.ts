@@ -18,7 +18,7 @@ import {
   SIGNED_URL_SUFFIX,
 } from './lifecycle'
 import { TenantConnection, PubSub } from '@internal/database'
-import { S3Store } from '@tus/s3-store'
+import { CustomS3Store } from './custom-s3-store'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { ROUTE_OPERATIONS } from '../operations'
 import * as https from 'node:https'
@@ -61,7 +61,7 @@ type MultiPartRequest = http.IncomingMessage & {
 
 function createTusStore(agent: { httpsAgent: https.Agent; httpAgent: http.Agent }) {
   if (storageBackendType === 's3') {
-    return new S3Store({
+    return new CustomS3Store({
       partSize: tusPartSize * 1024 * 1024, // Each uploaded part will have ${tusPartSize}MB,
       expirationPeriodInMilliseconds: tusUrlExpiryMs,
       cache: new AlsMemoryKV(),
@@ -256,14 +256,14 @@ const authenticatedRoutes = fastifyPlugin(
       })
 
       fastify.addHook('preHandler', async (req) => {
-        ;(req.raw as MultiPartRequest).log = req.log
-        ;(req.raw as MultiPartRequest).upload = {
-          storage: req.storage,
-          owner: req.owner,
-          tenantId: req.tenantId,
-          db: req.db,
-          isUpsert: req.headers['x-upsert'] === 'true',
-        }
+        ; (req.raw as MultiPartRequest).log = req.log
+          ; (req.raw as MultiPartRequest).upload = {
+            storage: req.storage,
+            owner: req.owner,
+            tenantId: req.tenantId,
+            db: req.db,
+            isUpsert: req.headers['x-upsert'] === 'true',
+          }
       })
 
       fastify.post(
@@ -358,14 +358,14 @@ const publicRoutes = fastifyPlugin(
       )
 
       fastify.addHook('preHandler', async (req) => {
-        ;(req.raw as MultiPartRequest).log = req.log
-        ;(req.raw as MultiPartRequest).upload = {
-          storage: req.storage,
-          owner: req.owner,
-          tenantId: req.tenantId,
-          db: req.db,
-          isUpsert: req.headers['x-upsert'] === 'true',
-        }
+        ; (req.raw as MultiPartRequest).log = req.log
+          ; (req.raw as MultiPartRequest).upload = {
+            storage: req.storage,
+            owner: req.owner,
+            tenantId: req.tenantId,
+            db: req.db,
+            isUpsert: req.headers['x-upsert'] === 'true',
+          }
       })
 
       fastify.options(

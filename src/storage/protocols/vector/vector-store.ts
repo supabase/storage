@@ -1,25 +1,25 @@
 import {
+  ConflictException,
   CreateIndexInput,
   DeleteIndexInput,
+  DeleteVectorsInput,
   DistanceMetric,
   GetIndexCommandInput,
-  ListIndexesInput,
-  MetadataConfiguration,
   GetIndexOutput,
-  PutVectorsInput,
-  ListVectorsInput,
-  ListVectorBucketsInput,
-  QueryVectorsInput,
-  DeleteVectorsInput,
   GetVectorBucketInput,
   GetVectorsCommandInput,
-  ConflictException,
+  ListIndexesInput,
+  ListVectorBucketsInput,
+  ListVectorsInput,
+  MetadataConfiguration,
+  PutVectorsInput,
+  QueryVectorsInput,
 } from '@aws-sdk/client-s3vectors'
-import { VectorMetadataDB } from './knex'
-import { VectorStore } from './adapter/s3-vector'
 import { ERRORS } from '@internal/errors'
-import { Sharder } from '@internal/sharding/sharder'
 import { logger, logSchema } from '@internal/monitoring'
+import { Sharder } from '@internal/sharding/sharder'
+import { VectorStore } from './adapter/s3-vector'
+import { VectorMetadataDB } from './knex'
 
 interface VectorStoreConfig {
   tenantId: string

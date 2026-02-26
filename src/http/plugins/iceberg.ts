@@ -1,11 +1,11 @@
-import fastifyPlugin from 'fastify-plugin'
-import { FastifyInstance } from 'fastify'
-import { KnexMetastore, TableIndex } from '@storage/protocols/iceberg/knex'
 import { getTenantConfig, multitenantKnex } from '@internal/database'
-import { getCatalogAuthStrategy, TenantAwareRestCatalog } from '@storage/protocols/iceberg/catalog'
-import { getConfig } from '../../config'
-import { ICEBERG_BUCKET_RESERVED_SUFFIX } from '@storage/limits'
 import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
+import { ICEBERG_BUCKET_RESERVED_SUFFIX } from '@storage/limits'
+import { getCatalogAuthStrategy, TenantAwareRestCatalog } from '@storage/protocols/iceberg/catalog'
+import { KnexMetastore, TableIndex } from '@storage/protocols/iceberg/knex'
+import { FastifyInstance } from 'fastify'
+import fastifyPlugin from 'fastify-plugin'
+import { getConfig } from '../../config'
 
 declare module 'fastify' {
   interface FastifyRequest {

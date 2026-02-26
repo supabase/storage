@@ -1,7 +1,7 @@
 import * as crypto from 'crypto'
-import { generateHS512JWK, signJWT, verifyJWT } from '../internal/auth'
-import { JwksConfigKey } from '../config'
 import { SignJWT } from 'jose'
+import { JwksConfigKey } from '../config'
+import { generateHS512JWK, signJWT, verifyJWT } from '../internal/auth'
 
 describe('JWT', () => {
   describe('verifyJWT with JWKS', () => {

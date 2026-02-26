@@ -1,5 +1,5 @@
-import { bucketSchema } from './bucket'
 import { FromSchema } from 'json-schema-to-ts'
+import { bucketSchema } from './bucket'
 
 export const uploadSchema = {
   $id: 'uploadSchema',

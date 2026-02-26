@@ -1,7 +1,6 @@
+import { EventEmitter } from 'node:events'
 import { ClusterDiscoveryECS } from '@internal/cluster/ecs'
 import { ClusterDiscoveryEKS } from '@internal/cluster/eks'
-
-import { EventEmitter } from 'node:events'
 import { logger } from '@internal/monitoring'
 
 const clusterEvent = new EventEmitter()

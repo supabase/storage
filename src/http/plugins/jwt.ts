@@ -1,9 +1,8 @@
-import fastifyPlugin from 'fastify-plugin'
-import { JWTPayload } from 'jose'
-
-import { verifyJWTWithCache, verifyJWT } from '@internal/auth'
+import { verifyJWT, verifyJWTWithCache } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
 import { ERRORS } from '@internal/errors'
+import fastifyPlugin from 'fastify-plugin'
+import { JWTPayload } from 'jose'
 import { getConfig } from '../../config'
 
 declare module 'fastify' {

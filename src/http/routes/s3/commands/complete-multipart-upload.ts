@@ -1,7 +1,7 @@
-import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
-import { S3Router } from '../router'
-import { ROUTE_OPERATIONS } from '../../operations'
 import { ERRORS } from '@internal/errors'
+import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { ROUTE_OPERATIONS } from '../../operations'
+import { S3Router } from '../router'
 
 const CompletedMultipartUpload = {
   summary: 'Complete multipart upload',

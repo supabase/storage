@@ -1,16 +1,16 @@
-import { getConfig } from '../../config'
-import TTLCache from '@isaacs/ttlcache'
-import { knex, Knex } from 'knex'
-import { logger, logSchema } from '@internal/monitoring'
-import { getSslSettings } from '@internal/database/ssl'
 import { wait } from '@internal/concurrency'
-import { JWTPayload } from 'jose'
+import { getSslSettings } from '@internal/database/ssl'
+import { logger, logSchema } from '@internal/monitoring'
 import {
-  dbActivePool,
   dbActiveConnection,
-  dbInUseConnection,
+  dbActivePool,
   dbConnectionAcquireTime,
+  dbInUseConnection,
 } from '@internal/monitoring/metrics'
+import TTLCache from '@isaacs/ttlcache'
+import { JWTPayload } from 'jose'
+import { Knex, knex } from 'knex'
+import { getConfig } from '../../config'
 
 const {
   isMultitenant,

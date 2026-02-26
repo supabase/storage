@@ -1,17 +1,15 @@
+import { ERRORS } from '@internal/errors'
+import { logger, logSchema } from '@internal/monitoring'
+import { fileUploadedSuccess, fileUploadStarted } from '@internal/monitoring/metrics'
+import { StorageObjectLocator } from '@storage/locator'
 import { randomUUID } from 'crypto'
 import { FastifyRequest } from 'fastify'
-
-import { ERRORS } from '@internal/errors'
-import { fileUploadedSuccess, fileUploadStarted } from '@internal/monitoring/metrics'
-
+import { Readable } from 'stream'
+import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
-import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { Database } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
-import { getConfig } from '../config'
-import { logger, logSchema } from '@internal/monitoring'
-import { Readable } from 'stream'
-import { StorageObjectLocator } from '@storage/locator'
+import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()

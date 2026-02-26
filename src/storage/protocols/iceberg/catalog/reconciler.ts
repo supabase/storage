@@ -1,10 +1,10 @@
-import { TableIndex } from '@storage/protocols/iceberg/knex'
+import { multitenantKnex } from '@internal/database'
+import { KnexShardStoreFactory, ShardCatalog, ShardRow } from '@internal/sharding'
 import {
   ListTableResponse,
   RestCatalogClient,
 } from '@storage/protocols/iceberg/catalog/rest-catalog-client'
-import { multitenantKnex } from '@internal/database'
-import { KnexShardStoreFactory, ShardCatalog, ShardRow } from '@internal/sharding'
+import { TableIndex } from '@storage/protocols/iceberg/knex'
 import { IcebergCatalog } from '@storage/schemas'
 
 type NamespaceWithShardInfo = TableIndex & { shard_id?: string; shard_key?: string }

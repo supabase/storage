@@ -1,16 +1,12 @@
-import { FastifyInstance, RequestGenericInterface } from 'fastify'
-import { FromSchema } from 'json-schema-to-ts'
-import apiKey from '../../plugins/apikey'
 import { decrypt, encrypt } from '@internal/auth'
 import {
   deleteTenantConfig,
-  TenantMigrationStatus,
-  multitenantKnex,
+  getTenantCapabilities,
   getTenantConfig,
   jwksManager,
-  getTenantCapabilities,
+  multitenantKnex,
+  TenantMigrationStatus,
 } from '@internal/database'
-import { dbSuperUser, storage } from '../../plugins'
 import {
   DBMigration,
   lastLocalMigrationName,
@@ -18,8 +14,12 @@ import {
   resetMigration,
   runMigrationsOnTenant,
 } from '@internal/database/migrations'
-import { getConfig, JwksConfigKey } from '../../../config'
 import { StorageBackendError } from '@internal/errors'
+import { FastifyInstance, RequestGenericInterface } from 'fastify'
+import { FromSchema } from 'json-schema-to-ts'
+import { getConfig, JwksConfigKey } from '../../../config'
+import { dbSuperUser, storage } from '../../plugins'
+import apiKey from '../../plugins/apikey'
 
 const patchSchema = {
   body: {

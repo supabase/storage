@@ -1,20 +1,21 @@
 import dotenv from 'dotenv'
 import path from 'path'
+
 dotenv.config({ path: path.resolve(__dirname, '..', '..', '.env.test') })
 
 import {
-  S3Client,
   CreateBucketCommand,
   DeleteObjectsCommand,
+  GetObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
-  GetObjectCommand,
+  S3Client,
 } from '@aws-sdk/client-s3'
 import { getConfig } from '../config'
-import { S3Locker, S3Lock } from '../storage/protocols/tus/s3-locker'
-import { LockNotifier } from '../storage/protocols/tus/postgres-locker'
-import { checkBucketExists } from './common'
 import { backends } from '../storage'
+import { LockNotifier } from '../storage/protocols/tus/postgres-locker'
+import { S3Lock, S3Locker } from '../storage/protocols/tus/s3-locker'
+import { checkBucketExists } from './common'
 
 const { storageS3Bucket, storageBackendType } = getConfig()
 const backend = backends.createStorageBackend(storageBackendType)

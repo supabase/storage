@@ -1,9 +1,9 @@
+import { ERRORS } from '@internal/errors'
 import { getConfig } from '../config'
 import {
-  getFileSizeLimit as getFileSizeLimitForTenant,
   getFeatures,
+  getFileSizeLimit as getFileSizeLimitForTenant,
 } from '../internal/database/tenant'
-import { ERRORS } from '@internal/errors'
 
 const { isMultitenant, imageTransformationEnabled, icebergBucketDetectionSuffix } = getConfig()
 

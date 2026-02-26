@@ -1,9 +1,9 @@
+import { Cluster } from '@internal/cluster'
+import { ERRORS } from '@internal/errors'
 import { getConfig } from '../../config'
-import { getTenantConfig } from './tenant'
 import { TenantConnection } from './connection'
 import { User } from './pool'
-import { ERRORS } from '@internal/errors'
-import { Cluster } from '@internal/cluster'
+import { getTenantConfig } from './tenant'
 
 interface ConnectionOptions {
   host: string

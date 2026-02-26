@@ -1,7 +1,7 @@
-import { logger, logSchema } from '../../monitoring'
 import { JwksCreateSigningSecret } from '@storage/events'
-import { jwksManager } from '../../database/tenant'
 import { getConfig } from '../../../config'
+import { jwksManager } from '../../database/tenant'
+import { logger, logSchema } from '../../monitoring'
 
 const { isMultitenant, pgQueueEnable } = getConfig()
 

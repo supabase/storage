@@ -7,16 +7,14 @@ mergeConfig({
   pgQueueEnable: true,
 })
 
-import { mockQueue, useMockObject } from './common'
-import FormData from 'form-data'
-
-import fs from 'fs'
-import app from '../app'
-import { getPostgresConnection } from '@internal/database'
+import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { Obj } from '@storage/schemas'
 import { randomUUID } from 'crypto'
-import { getServiceKeyUser } from '@internal/database'
 import { FastifyInstance } from 'fastify'
+import FormData from 'form-data'
+import fs from 'fs'
+import app from '../app'
+import { mockQueue, useMockObject } from './common'
 
 describe('Webhooks', () => {
   useMockObject()

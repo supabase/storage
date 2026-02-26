@@ -1,7 +1,7 @@
 import EventEmitter from 'node:events'
-import createSubscriber, { Subscriber } from 'pg-listen'
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
+import createSubscriber, { Subscriber } from 'pg-listen'
 import { PubSubAdapter } from './adapter'
 
 export class PostgresPubSub extends EventEmitter implements PubSubAdapter {

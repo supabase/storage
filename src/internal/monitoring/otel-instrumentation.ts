@@ -1,14 +1,13 @@
-import { Instrumentation, InstrumentationConfig } from '@opentelemetry/instrumentation'
 import {
-  trace,
+  Context,
+  MeterProvider,
   Span,
   SpanStatusCode,
   TracerProvider,
-  MeterProvider,
-  Context,
+  trace,
 } from '@opentelemetry/api'
-import { ReadableSpan, SpanProcessor } from '@opentelemetry/sdk-trace-base'
-import { Span as SdkSpan } from '@opentelemetry/sdk-trace-base'
+import { Instrumentation, InstrumentationConfig } from '@opentelemetry/instrumentation'
+import { ReadableSpan, Span as SdkSpan, SpanProcessor } from '@opentelemetry/sdk-trace-base'
 
 export class TenantSpanProcessor implements SpanProcessor {
   private readonly attributesToPropagate: string[]

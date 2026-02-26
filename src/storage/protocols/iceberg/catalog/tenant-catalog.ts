@@ -1,3 +1,8 @@
+import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
+import { Sharder } from '@internal/sharding'
+import { ICEBERG_BUCKET_RESERVED_SUFFIX } from '@storage/limits'
+import { IcebergError } from '@storage/protocols/iceberg/catalog/errors'
+import { Metastore } from '../knex'
 import {
   CatalogAuthType,
   CommitTableRequest,
@@ -14,11 +19,6 @@ import {
   RestCatalogClient,
   TableExistsRequest,
 } from './rest-catalog-client'
-import { Metastore } from '../knex'
-import { ErrorCode, ERRORS, StorageBackendError } from '@internal/errors'
-import { Sharder } from '@internal/sharding'
-import { ICEBERG_BUCKET_RESERVED_SUFFIX } from '@storage/limits'
-import { IcebergError } from '@storage/protocols/iceberg/catalog/errors'
 
 /**
  * Configuration options for the tenant-aware REST catalog client

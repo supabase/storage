@@ -1,8 +1,8 @@
-import { Db } from 'pg-boss'
-import pg from 'pg'
+import EventEmitter from 'node:events'
 import { ERRORS } from '@internal/errors'
 import { Knex } from 'knex'
-import EventEmitter from 'node:events'
+import pg from 'pg'
+import { Db } from 'pg-boss'
 
 export class QueueDB extends EventEmitter implements Db {
   opened = false

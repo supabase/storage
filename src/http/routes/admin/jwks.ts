@@ -1,9 +1,9 @@
-import { FastifyInstance, RequestGenericInterface } from 'fastify'
-import apiKey from '../../plugins/apikey'
-import { jwksManager } from '@internal/database'
-import { FromSchema } from 'json-schema-to-ts'
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
+import { jwksManager } from '@internal/database'
 import { logSchema } from '@internal/monitoring'
+import { FastifyInstance, RequestGenericInterface } from 'fastify'
+import { FromSchema } from 'json-schema-to-ts'
+import apiKey from '../../plugins/apikey'
 
 const addSchema = {
   body: {

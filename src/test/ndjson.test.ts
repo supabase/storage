@@ -1,7 +1,7 @@
 // NdJsonTransform.test.ts
 
-import { Buffer } from 'buffer'
 import { NdJsonTransform } from '@internal/streams/ndjson'
+import { Buffer } from 'buffer'
 
 /**
  * Helper that writes the given chunks into the transform,

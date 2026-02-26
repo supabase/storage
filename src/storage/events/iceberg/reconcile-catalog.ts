@@ -1,12 +1,12 @@
-import { BaseEvent } from '../base-event'
-import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
 import { BasePayload } from '@internal/queue'
-import { getConfig } from '../../../config'
 import {
   getCatalogAuthStrategy,
   IcebergCatalogReconciler,
   RestCatalogClient,
 } from '@storage/protocols/iceberg/catalog'
+import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
+import { getConfig } from '../../../config'
+import { BaseEvent } from '../base-event'
 
 const { isMultitenant, icebergCatalogUrl, icebergCatalogAuthType } = getConfig()
 

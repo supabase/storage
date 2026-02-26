@@ -1,13 +1,13 @@
-import { Lock, Locker, RequestRelease } from '@tus/server'
 import {
-  S3Client,
-  PutObjectCommand,
-  GetObjectCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
+  GetObjectCommand,
   ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
 } from '@aws-sdk/client-s3'
 import { ERRORS } from '@internal/errors'
+import { Lock, Locker, RequestRelease } from '@tus/server'
 import { LockNotifier } from './postgres-locker'
 
 export interface S3LockerOptions {

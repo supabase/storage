@@ -1,11 +1,11 @@
+import { ERRORS } from '@internal/errors'
+import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { FromSchema } from 'json-schema-to-ts'
 import { IncomingMessage, Server, ServerResponse } from 'http'
+import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../types'
-import { Obj } from '@storage/schemas'
 import { ROUTE_OPERATIONS } from '../operations'
-import { ERRORS } from '@internal/errors'
 
 const { storageS3Bucket } = getConfig()
 

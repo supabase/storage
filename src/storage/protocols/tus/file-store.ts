@@ -1,8 +1,7 @@
-import { FileStore as TusFileStore } from '@tus/file-store'
+import { Configstore, FileStore as TusFileStore } from '@tus/file-store'
 import { Upload } from '@tus/server'
 import fsExtra from 'fs-extra'
 import path from 'path'
-import { Configstore } from '@tus/file-store'
 import { FileBackend } from '../../backend'
 
 type FileStoreOptions = {

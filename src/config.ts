@@ -1,5 +1,5 @@
-import dotenv from 'dotenv'
 import type { DBMigration } from '@internal/database/migrations'
+import dotenv from 'dotenv'
 import { SignJWT } from 'jose'
 
 export type StorageBackendType = 'file' | 's3'

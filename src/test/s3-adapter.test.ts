@@ -1,8 +1,8 @@
 'use strict'
 
-import { S3Backend } from '../storage/backend/s3/adapter'
 import { S3Client } from '@aws-sdk/client-s3'
 import { Readable } from 'stream'
+import { S3Backend } from '../storage/backend/s3/adapter'
 
 jest.mock('@aws-sdk/client-s3', () => {
   const originalModule = jest.requireActual('@aws-sdk/client-s3')

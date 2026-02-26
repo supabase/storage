@@ -1,5 +1,5 @@
-import { Sharder, ShardResource } from '../sharder'
 import { ResourceKind, ShardRow, ShardStatus } from '@internal/sharding/store'
+import { Sharder, ShardResource } from '../sharder'
 
 export class SingleShard implements Sharder {
   constructor(

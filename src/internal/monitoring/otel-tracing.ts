@@ -10,18 +10,18 @@ const {
   storageS3InternalTracesEnabled,
 } = getConfig()
 
-import { NodeSDK } from '@opentelemetry/sdk-node'
-import { resourceFromAttributes } from '@opentelemetry/resources'
-import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc'
-import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node'
-import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
-import { SpanExporter, BatchSpanProcessor, SpanProcessor } from '@opentelemetry/sdk-trace-base'
 import * as grpc from '@grpc/grpc-js'
 import { logger, logSchema } from '@internal/monitoring/logger'
-import { registerInstrumentations } from '@opentelemetry/instrumentation'
-import { trace } from '@opentelemetry/api'
 import { TenantSpanProcessor } from '@internal/monitoring/otel-instrumentation'
+import { trace } from '@opentelemetry/api'
+import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node'
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc'
+import { registerInstrumentations } from '@opentelemetry/instrumentation'
+import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
+import { resourceFromAttributes } from '@opentelemetry/resources'
+import { NodeSDK } from '@opentelemetry/sdk-node'
+import { BatchSpanProcessor, SpanExporter, SpanProcessor } from '@opentelemetry/sdk-trace-base'
+import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
 
 const tracingEnabled = process.env.TRACING_ENABLED === 'true'
 const headersEnv = process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS || ''

@@ -1,17 +1,17 @@
 import { ERRORS } from '@internal/errors'
-import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import {
   exportJWK,
   generateSecret,
   importJWK,
   JWTHeaderParameters,
   JWTPayload,
-  jwtVerify,
   JWTVerifyGetKey,
+  jwtVerify,
   SignJWT,
 } from 'jose'
 import { LRUCache } from 'lru-cache'
 import objectSizeOf from 'object-sizeof'
+import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 
 const { jwtAlgorithm } = getConfig()
 

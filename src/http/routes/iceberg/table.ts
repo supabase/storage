@@ -1,10 +1,10 @@
-import { FastifyInstance } from 'fastify'
-import { AuthenticatedRequest } from '../../types'
-import { FromSchema } from 'json-schema-to-ts'
 import { ERRORS } from '@internal/errors'
 import { CreateTableRequest } from '@storage/protocols/iceberg/catalog/rest-catalog-client'
-import { ROUTE_OPERATIONS } from '../operations'
+import { FastifyInstance } from 'fastify'
 import JSONBigint from 'json-bigint'
+import { FromSchema } from 'json-schema-to-ts'
+import { AuthenticatedRequest } from '../../types'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const createTableSchema = {
   body: {

@@ -1,12 +1,12 @@
-import { Event as QueueBaseEvent, BasePayload, StaticThis, Event } from '@internal/queue'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
-import { StorageKnexDB } from '../database'
-import { createStorageBackend, StorageBackendAdapter } from '../backend'
-import { Storage } from '../storage'
-import { getConfig } from '../../config'
-import { logger } from '@internal/monitoring'
 import { createAgent } from '@internal/http'
+import { logger } from '@internal/monitoring'
+import { BasePayload, Event, Event as QueueBaseEvent, StaticThis } from '@internal/queue'
 import { TenantLocation } from '@storage/locator'
+import { getConfig } from '../../config'
+import { createStorageBackend, StorageBackendAdapter } from '../backend'
+import { StorageKnexDB } from '../database'
+import { Storage } from '../storage'
 
 const { storageS3Bucket, storageS3MaxSockets, storageBackendType, region } = getConfig()
 

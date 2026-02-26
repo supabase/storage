@@ -1,9 +1,9 @@
-import { FastifyError } from '@fastify/error'
-import { FastifyRequest } from 'fastify/types/request'
-import { FastifyReply } from 'fastify/types/reply'
 import { S3ServiceException } from '@aws-sdk/client-s3'
-import { DatabaseError } from 'pg'
+import { FastifyError } from '@fastify/error'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { FastifyReply } from 'fastify/types/reply'
+import { FastifyRequest } from 'fastify/types/request'
+import { DatabaseError } from 'pg'
 
 export const s3ErrorHandler = (
   error: FastifyError | Error,

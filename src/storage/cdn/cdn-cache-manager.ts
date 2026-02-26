@@ -1,7 +1,7 @@
-import { Storage } from '@storage/storage'
-import axios, { AxiosError } from 'axios'
-import { HttpsAgent } from 'agentkeepalive'
 import { ERRORS } from '@internal/errors'
+import { Storage } from '@storage/storage'
+import { HttpsAgent } from 'agentkeepalive'
+import axios, { AxiosError } from 'axios'
 
 import { getConfig } from '../../config'
 

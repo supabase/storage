@@ -1,6 +1,6 @@
 import { BasePayload } from '@internal/queue'
-import { BaseEvent } from '../base-event'
 import { ObjectMetadata } from '@storage/backend'
+import { BaseEvent } from '../base-event'
 
 export interface ObjectRemovedEvent extends BasePayload {
   name: string

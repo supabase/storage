@@ -1,9 +1,9 @@
 import {
-  ChunkSignatureV4Parser,
   ChunkSignatureParserOptions,
+  ChunkSignatureV4Parser,
 } from '@storage/protocols/s3/signature-v4-stream'
-import crypto from 'crypto'
 import { Buffer } from 'buffer'
+import crypto from 'crypto'
 
 describe('ChunkSignatureV4Parser', () => {
   const makeParser = (opts: Partial<ChunkSignatureParserOptions> = {}) => {

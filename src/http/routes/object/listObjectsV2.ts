@@ -1,11 +1,11 @@
-import { FastifyInstance } from 'fastify'
-import { FromSchema } from 'json-schema-to-ts'
-import { AuthenticatedRequest } from '../../types'
-import { ROUTE_OPERATIONS } from '../operations'
-import { getConfig } from '../../../config'
 import { getTenantConfig } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
+import { FastifyInstance } from 'fastify'
 import { FastifyRequest } from 'fastify/types/request'
+import { FromSchema } from 'json-schema-to-ts'
+import { getConfig } from '../../../config'
+import { AuthenticatedRequest } from '../../types'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const { isMultitenant } = getConfig()
 

@@ -58,11 +58,11 @@ mergeConfig({
   requestXForwardedHostRegExp: '^([a-z]{20})\\.supabase\\.(?:co|in|net)$',
 })
 
-import { adminApp } from './common'
+import { FastifyInstance } from 'fastify'
+import app from '../app'
 import * as migrate from '../internal/database/migrations/migrate'
 import { multitenantKnex } from '../internal/database/multitenant-db'
-import app from '../app'
-import { FastifyInstance } from 'fastify'
+import { adminApp } from './common'
 
 let appInstance: FastifyInstance
 

@@ -1,6 +1,6 @@
-import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 import { ERRORS } from '@internal/errors'
 import { signRequest } from 'aws-sigv4-sign'
+import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 import JSONBigint from 'json-bigint'
 import {
   createAlreadyExistsError,

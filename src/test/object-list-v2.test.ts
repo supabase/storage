@@ -1,11 +1,11 @@
 'use strict'
 
+import { ListObjectsV2Result } from '@storage/object'
+import { FastifyInstance } from 'fastify'
+import { Knex } from 'knex'
 import app from '../app'
 import { getConfig } from '../config'
 import { useMockObject, useMockQueue } from './common'
-import { Knex } from 'knex'
-import { FastifyInstance } from 'fastify'
-import { ListObjectsV2Result } from '@storage/object'
 
 const { serviceKeyAsync } = getConfig()
 let appInstance: FastifyInstance

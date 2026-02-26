@@ -1,22 +1,22 @@
 import dotenv from 'dotenv'
 import path from 'path'
+
 dotenv.config({ path: path.resolve(__dirname, '..', '..', '.env.test') })
 
-import fs from 'fs'
-import { FastifyInstance } from 'fastify'
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import { wait } from '@internal/concurrency'
+import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
+import { logger } from '@internal/monitoring'
+import { TenantLocation } from '@storage/locator'
 import { randomUUID } from 'crypto'
+import { FastifyInstance } from 'fastify'
+import fs from 'fs'
 import * as tus from 'tus-js-client'
 import { DetailedError } from 'tus-js-client'
-import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
-
-import { logger } from '@internal/monitoring'
-import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
-import { getConfig } from '../config'
 import app from '../app'
+import { getConfig } from '../config'
+import { backends, Storage, StorageKnexDB } from '../storage'
 import { checkBucketExists } from './common'
-import { Storage, backends, StorageKnexDB } from '../storage'
-import { wait } from '@internal/concurrency'
-import { TenantLocation } from '@storage/locator'
 
 const { serviceKeyAsync, tenantId, storageS3Bucket, storageBackendType } = getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))

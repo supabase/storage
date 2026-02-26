@@ -1,5 +1,5 @@
-export * from './store'
+export * from './knex'
 export * from './sharder'
+export * from './store'
 export * from './strategy/catalog'
 export * from './strategy/single-shard'
-export * from './knex'

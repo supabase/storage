@@ -1,6 +1,6 @@
-import { AsyncLocalStorage } from 'async_hooks'
-import { KvStore } from '@tus/server'
 import { MetadataValue } from '@tus/s3-store'
+import { KvStore } from '@tus/server'
+import { AsyncLocalStorage } from 'async_hooks'
 
 export class AlsMemoryKV implements KvStore<MetadataValue> {
   static localStorage = new AsyncLocalStorage<Map<string, MetadataValue>>()

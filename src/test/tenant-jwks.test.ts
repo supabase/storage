@@ -7,16 +7,15 @@ mergeConfig({
   isMultitenant: true,
 })
 
+import { signJWT } from '@internal/auth'
+import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
+import { JWKSManagerStoreKnex } from '@internal/auth/jwks/store-knex'
+import { getJwtSecret, jwksManager, listenForTenantUpdate } from '@internal/database'
+import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { multitenantKnex } from '../internal/database/multitenant-db'
 import { adminApp, mockQueue } from './common'
-import { jwksManager, getJwtSecret } from '@internal/database'
-import { listenForTenantUpdate } from '@internal/database'
-import { PostgresPubSub } from '@internal/pubsub'
-import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
-import { signJWT } from '@internal/auth'
-import { JWKSManagerStoreKnex } from '@internal/auth/jwks/store-knex'
 import { createMockKnexReturning } from './mocks/knex-mock'
 
 dotenv.config({ path: '.env.test' })

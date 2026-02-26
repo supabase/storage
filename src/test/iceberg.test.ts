@@ -1,16 +1,16 @@
-import { createBucketIfNotExists, useStorage } from './utils/storage'
-import makeApp from '../app'
-import { getConfig, mergeConfig } from '../config'
+import assert from 'node:assert'
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { isS3Error } from '@internal/errors'
 import {
   CreateTableResponse,
   LoadTableResult,
   RestCatalogClient,
 } from '@storage/protocols/iceberg/catalog'
-import { FastifyInstance } from 'fastify'
 import { KnexMetastore, Metastore } from '@storage/protocols/iceberg/knex'
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
-import assert from 'node:assert'
-import { isS3Error } from '@internal/errors'
+import { FastifyInstance } from 'fastify'
+import makeApp from '../app'
+import { getConfig, mergeConfig } from '../config'
+import { createBucketIfNotExists, useStorage } from './utils/storage'
 
 const {
   serviceKeyAsync,

@@ -1,22 +1,23 @@
-import * as xattr from 'fs-xattr'
-import fs from 'fs-extra'
-import path from 'path'
-import fileChecksum from 'md5-file'
-import { promisify } from 'util'
-import stream from 'stream'
-import MultiStream from 'multistream'
-import { getConfig } from '../../config'
-import {
-  StorageBackendAdapter,
-  ObjectMetadata,
-  ObjectResponse,
-  withOptionalVersion,
-  BrowserCacheHeaders,
-  UploadPart,
-} from './adapter'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { randomUUID } from 'crypto'
+import fs from 'fs-extra'
 import fsExtra from 'fs-extra'
+import * as xattr from 'fs-xattr'
+import fileChecksum from 'md5-file'
+import MultiStream from 'multistream'
+import path from 'path'
+import stream from 'stream'
+import { promisify } from 'util'
+import { getConfig } from '../../config'
+import {
+  BrowserCacheHeaders,
+  ObjectMetadata,
+  ObjectResponse,
+  StorageBackendAdapter,
+  UploadPart,
+  withOptionalVersion,
+} from './adapter'
+
 const pipeline = promisify(stream.pipeline)
 
 interface FileMetadata {

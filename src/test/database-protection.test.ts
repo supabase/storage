@@ -1,7 +1,7 @@
 'use strict'
 
-import { useStorage, withDeleteEnabled } from './utils/storage'
 import { DatabaseError } from 'pg'
+import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('Database Protection Triggers', () => {
   const tHelper = useStorage()

@@ -24,16 +24,16 @@ import {
   UploadPartCommand,
   UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
-import { getConfig, mergeConfig } from '../config'
-import app from '../app'
-import { FastifyInstance } from 'fastify'
 import { Upload } from '@aws-sdk/lib-storage'
-import { ReadableStreamBuffer } from 'stream-buffers'
-import { randomUUID } from 'crypto'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import axios from 'axios'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { wait } from '@internal/concurrency'
+import axios from 'axios'
+import { randomUUID } from 'crypto'
+import { FastifyInstance } from 'fastify'
+import { ReadableStreamBuffer } from 'stream-buffers'
+import app from '../app'
+import { getConfig, mergeConfig } from '../config'
 
 const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
 

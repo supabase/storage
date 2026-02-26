@@ -1,6 +1,6 @@
+import fastifyRateLimit from '@fastify/rate-limit'
 import { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
-import fastifyRateLimit from '@fastify/rate-limit'
 import Redis from 'ioredis'
 import { getConfig } from '../../../config'
 

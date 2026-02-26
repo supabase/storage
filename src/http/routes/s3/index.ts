@@ -1,19 +1,19 @@
-import { FastifyInstance, RouteHandlerMethod } from 'fastify'
 import fastifyMultipart from '@fastify/multipart'
-import { JSONSchema } from 'json-schema-to-ts'
 import { trace } from '@opentelemetry/api'
+import { FastifyInstance, RouteHandlerMethod } from 'fastify'
+import { JSONSchema } from 'json-schema-to-ts'
+import { getConfig } from '../../../config'
 import {
   db,
-  xmlParser,
+  detectS3IcebergBucket,
+  icebergRestCatalog,
   requireTenantFeature,
   signatureV4,
   storage,
-  detectS3IcebergBucket,
-  icebergRestCatalog,
+  xmlParser,
 } from '../../plugins'
-import { findArrayPathsInSchemas, getRouter, RequestInput } from './router'
 import { s3ErrorHandler } from './error-handler'
-import { getConfig } from '../../../config'
+import { findArrayPathsInSchemas, getRouter, RequestInput } from './router'
 
 const { s3ProtocolEnabled } = getConfig()
 

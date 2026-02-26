@@ -1,21 +1,20 @@
-import { FastifyInstance, FastifyRequest } from 'fastify'
-import fastifyPlugin from 'fastify-plugin'
-import { getJwtSecret, getTenantConfig, s3CredentialsManager } from '@internal/database'
-import { ClientSignature, SignatureV4, SignatureV4Service } from '@storage/protocols/s3'
-import { isJwtToken, signJWT, verifyJWT } from '@internal/auth'
-import { ERRORS } from '@internal/errors'
-
-import { getConfig } from '../../config'
+import { Writable } from 'node:stream'
 import { MultipartFile, MultipartValue } from '@fastify/multipart'
+import { isJwtToken, signJWT, verifyJWT } from '@internal/auth'
+import { getJwtSecret, getTenantConfig, s3CredentialsManager } from '@internal/database'
+import { ERRORS } from '@internal/errors'
+import { RequestByteCounterStream } from '@internal/streams'
+import { HashSpillWritable } from '@internal/streams/hash-stream'
+import { ClientSignature, SignatureV4, SignatureV4Service } from '@storage/protocols/s3'
+import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
 import {
   ChunkSignatureV4Parser,
   V4StreamingAlgorithm,
 } from '@storage/protocols/s3/signature-v4-stream'
+import { FastifyInstance, FastifyRequest } from 'fastify'
+import fastifyPlugin from 'fastify-plugin'
 import { compose, Readable } from 'stream'
-import { HashSpillWritable } from '@internal/streams/hash-stream'
-import { RequestByteCounterStream } from '@internal/streams'
-import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
-import { Writable } from 'node:stream'
+import { getConfig } from '../../config'
 import { enforceJwtRole } from './jwt'
 
 const {

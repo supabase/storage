@@ -1,7 +1,7 @@
+import { Readable } from 'node:stream'
+import { trace } from '@opentelemetry/api'
 import { createByteCounterStream } from './byte-counter'
 import { monitorStreamSpeed } from './stream-speed'
-import { trace } from '@opentelemetry/api'
-import { Readable } from 'node:stream'
 
 /**
  * Monitor readable streams by tracking their speed and bytes read

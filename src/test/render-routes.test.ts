@@ -1,14 +1,14 @@
-import dotenv from 'dotenv'
-import fs from 'fs/promises'
-import { getConfig, JwksConfig, mergeConfig } from '../config'
-import app from '../app'
-import { S3Backend } from '../storage/backend'
-import path from 'path'
-import { ImageRenderer } from '../storage/renderer'
-import axios from 'axios'
-import { useMockObject } from './common'
 import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
+import axios from 'axios'
+import dotenv from 'dotenv'
 import { FastifyInstance } from 'fastify'
+import fs from 'fs/promises'
+import path from 'path'
+import app from '../app'
+import { getConfig, JwksConfig, mergeConfig } from '../config'
+import { S3Backend } from '../storage/backend'
+import { ImageRenderer } from '../storage/renderer'
+import { useMockObject } from './common'
 
 dotenv.config({ path: '.env.test' })
 const { imgProxyURL, jwtSecret } = getConfig()

@@ -1,9 +1,9 @@
+import { BucketType } from '@aws-sdk/client-s3'
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
-import { BucketType } from '@aws-sdk/client-s3'
 
 const createBucketBodySchema = {
   type: 'object',

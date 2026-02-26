@@ -1,7 +1,7 @@
-import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
-import { routes, plugins, setErrorHandler } from './http'
-import { getConfig } from './config'
 import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'
+import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
+import { getConfig } from './config'
+import { plugins, routes, setErrorHandler } from './http'
 
 const { version, prometheusMetricsEnabled } = getConfig()
 

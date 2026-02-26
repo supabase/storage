@@ -1,9 +1,5 @@
 'use strict'
 
-import app from '../app'
-import { getConfig, mergeConfig } from '../config'
-import { FastifyInstance } from 'fastify'
-import { useMockObject, useMockQueue } from './common'
 import {
   CreateIndexCommandOutput,
   DeleteVectorsOutput,
@@ -12,10 +8,14 @@ import {
   PutVectorsOutput,
   QueryVectorsOutput,
 } from '@aws-sdk/client-s3vectors'
-import { KnexVectorMetadataDB, VectorStore, VectorStoreManager } from '@storage/protocols/vector'
-import { useStorage } from './utils/storage'
 import { signJWT } from '@internal/auth'
 import { SingleShard } from '@internal/sharding'
+import { KnexVectorMetadataDB, VectorStore, VectorStoreManager } from '@storage/protocols/vector'
+import { FastifyInstance } from 'fastify'
+import app from '../app'
+import { getConfig, mergeConfig } from '../config'
+import { useMockObject, useMockQueue } from './common'
+import { useStorage } from './utils/storage'
 
 const { serviceKeyAsync, vectorS3Buckets, tenantId, jwtSecret } = getConfig()
 

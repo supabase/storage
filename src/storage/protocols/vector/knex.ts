@@ -192,7 +192,7 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
       .withSchema('storage')
       .select('*')
       .table('vector_indexes')
-      .where({ bucket_id: bucketId, name: name })
+      .where({ bucket_id: bucketId, name })
       .first<DBVectorIndex>()
 
     if (!index) {

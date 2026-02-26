@@ -212,10 +212,10 @@ export class S3ProtocolHandler {
 
     const results = await this.storage.from(bucket).listObjectsV2({
       prefix,
-      delimiter: delimiter,
+      delimiter,
       maxKeys: limit,
       cursor: continuationToken,
-      startAfter: startAfter,
+      startAfter,
       encodingType: command.EncodingType,
     })
 
@@ -536,8 +536,8 @@ export class S3ProtocolHandler {
       responseBody: {
         CompleteMultipartUploadResult: {
           Location: `${Bucket}/${Key}`,
-          Bucket: Bucket,
-          Key: Key,
+          Bucket,
+          Key,
           ChecksumCRC32: resp.ChecksumCRC32,
           ChecksumCRC32C: resp.ChecksumCRC32,
           ChecksumSHA1: resp.ChecksumSHA1,

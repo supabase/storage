@@ -55,7 +55,7 @@ export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
       }
 
       await metastoreTx.dropCatalog({
-        bucketId: bucketId,
+        bucketId,
         tenantId: job.data.tenant.ref,
         soft: true,
       })

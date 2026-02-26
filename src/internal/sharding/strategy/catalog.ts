@@ -175,7 +175,7 @@ export class ShardCatalog implements Sharder {
         const { lease_expires_at } = await store.insertReservation({
           id: reservationId,
           kind: opts.kind,
-          resourceId: resourceId,
+          resourceId,
           tenantId: opts.tenantId,
           shardId: shard.id,
           shardKey: shard.shard_key,

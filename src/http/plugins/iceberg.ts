@@ -47,7 +47,7 @@ export const icebergRestCatalog = fastifyPlugin(async function (fastify: Fastify
 
     req.icebergCatalog = new TenantAwareRestCatalog({
       tenantId: req.tenantId,
-      limits: limits,
+      limits,
       restCatalogUrl: icebergCatalogUrl,
       auth: catalogAuthType,
       sharding: isMultitenant

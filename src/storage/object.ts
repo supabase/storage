@@ -510,7 +510,7 @@ export class ObjectStorage {
           name: destinationObjectName,
           bucket_id: destinationBucket,
           version: newVersion,
-          owner: owner,
+          owner,
           metadata,
           user_metadata: sourceObj.user_metadata,
         })
@@ -537,7 +537,7 @@ export class ObjectStorage {
             name: destinationObjectName,
             version: newVersion,
             bucketId: destinationBucket,
-            metadata: metadata,
+            metadata,
             oldObject: {
               name: sourceObjectName,
               bucketId: this.bucketId,
@@ -554,7 +554,7 @@ export class ObjectStorage {
             name: destinationObjectName,
             bucket_id: destinationBucket,
             version: newVersion,
-            owner: owner,
+            owner,
             metadata,
           },
         }
@@ -686,8 +686,8 @@ export class ObjectStorage {
       hasNext: isTruncated,
       nextCursor: nextContinuationToken,
       nextCursorKey,
-      folders: folders,
-      objects: objects,
+      folders,
+      objects,
     }
   }
 

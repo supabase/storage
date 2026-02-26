@@ -262,7 +262,7 @@ describe('Tenant jwks configs', () => {
 
     const config2 = await jwksManager.getJwksTenantConfig(tenantId)
     expect(config2.keys.length).toBe(1)
-    expect(config2.keys[0]).toMatchObject({ kid: kid })
+    expect(config2.keys[0]).toMatchObject({ kid })
   })
 
   test('Update unknown jwk', async () => {

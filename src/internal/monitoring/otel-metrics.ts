@@ -207,7 +207,7 @@ if (otelMetricsEnabled) {
     } catch (error) {
       logSchema.error(logger, '[OTel Metrics] Shutdown error', {
         type: 'otel-metrics',
-        error: error,
+        error,
       })
     }
   }

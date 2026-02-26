@@ -146,7 +146,7 @@ export const classInstrumentations = [
       return name
     },
     setAttributes: {
-      emitEvent: function (event) {
+      emitEvent(event) {
         return {
           part: this.part as any,
           event,

@@ -82,7 +82,7 @@ export default async function routes(fastify: FastifyInstance) {
                 }
 
                 const output = await route.handler(data, {
-                  req: req,
+                  req,
                   storage: req.storage,
                   tenantId: req.tenantId,
                   owner: req.owner,
@@ -148,7 +148,7 @@ export default async function routes(fastify: FastifyInstance) {
 
           localFastify.register(signatureV4)
           localFastify.register(xmlParser, {
-            disableContentParser: disableContentParser,
+            disableContentParser,
             parseAsArray: findArrayPathsInSchemas(
               routesByMethod.filter((r) => r.schema.Body).map((r) => r.schema.Body as JSONSchema)
             ),

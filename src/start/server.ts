@@ -69,7 +69,7 @@ async function main() {
   if (pgQueueEnable) {
     await Queue.start({
       signal: shutdownSignal.nextGroup.signal,
-      registerWorkers: registerWorkers,
+      registerWorkers,
     })
 
     logSchema.info(logger, '[Queue] Started', {

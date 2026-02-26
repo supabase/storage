@@ -71,7 +71,7 @@ export default async function routes(fastify: FastifyInstance) {
         owner: request.owner,
         userMetadata:
           typeof userMetadata === 'string' ? parseUserMetadata(userMetadata) : undefined,
-        metadata: metadata,
+        metadata,
         copyMetadata: request.body.copyMetadata ?? true,
         upsert: request.headers['x-upsert'] === 'true',
       })

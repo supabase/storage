@@ -96,7 +96,7 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
     owner: req.upload.owner,
     bucketId: uploadID.bucket,
     objectName: uploadID.objectName,
-    isUpsert: isUpsert,
+    isUpsert,
   })
 }
 

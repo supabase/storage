@@ -76,7 +76,7 @@ if (tracingEnabled && spanProcessors.length > 0) {
       [ATTR_SERVICE_NAME]: 'storage',
       [ATTR_SERVICE_VERSION]: version,
     }),
-    spanProcessors: spanProcessors,
+    spanProcessors,
     traceExporter,
     instrumentations: [
       getNodeAutoInstrumentations({
@@ -174,7 +174,7 @@ if (tracingEnabled && spanProcessors.length > 0) {
       .catch((error) =>
         logSchema.error(logger, '[Otel] Shutdown error', {
           type: 'otel',
-          error: error,
+          error,
         })
       )
   })

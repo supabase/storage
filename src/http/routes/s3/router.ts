@@ -198,7 +198,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       path: normalizedUrl,
       querystringMatches: query,
       headersMatches: headers,
-      schema: schema,
+      schema,
       compiledSchema: () => this.ajv.getSchema(method + url) as ValidateFunction<JTDDataType<R>>,
       handler: handler as Handler<R, Context>,
       disableContentTypeParser,
@@ -246,9 +246,9 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     const headers = queryString.split('|').splice(1)
 
     if (queries.length === 0) {
-      return { query: [{ key: '*', value: '*' }], headers: headers }
+      return { query: [{ key: '*', value: '*' }], headers }
     }
-    return { query: queries.map(this.parseQueryMatch), headers: headers }
+    return { query: queries.map(this.parseQueryMatch), headers }
   }
 
   routes() {

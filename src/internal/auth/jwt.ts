@@ -150,7 +150,7 @@ export async function verifyJWTWithCache(
 
     jwtCache.set(
       token,
-      { token, payload: payload },
+      { token, payload },
       {
         ttl: payload.exp * 1000 - Date.now(),
       }

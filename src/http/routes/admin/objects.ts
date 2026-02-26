@@ -99,7 +99,7 @@ export default async function routes(fastify: FastifyInstance) {
       const scanner = new ObjectScanner(req.storage)
       const orphanObjects = scanner.listOrphaned(bucket, {
         signal: req.signals.disconnect.signal,
-        before: before,
+        before,
         keepTmpTable: Boolean(req.query.keepTmpTable),
       })
 

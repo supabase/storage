@@ -455,7 +455,7 @@ describe('testing count objects in bucket', () => {
     const pg = await getPostgresConnection({
       superUser,
       user: superUser,
-      tenantId: tenantId,
+      tenantId,
       host: 'localhost',
     })
 

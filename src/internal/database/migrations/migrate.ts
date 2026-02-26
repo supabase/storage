@@ -485,7 +485,7 @@ async function connect(options: {
   const { ssl, tenantId, connectionString } = options
 
   const dbConfig: ClientConfig = {
-    connectionString: connectionString,
+    connectionString,
     connectionTimeoutMillis: 60_000,
     options: `-c search_path=${searchPath}`,
     ssl,

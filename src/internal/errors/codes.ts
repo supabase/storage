@@ -81,7 +81,7 @@ export const ERRORS = {
   FeatureNotEnabled: (resource: string, feature: string, e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.InvalidRequest,
-      resource: resource,
+      resource,
       httpStatusCode: 409,
       message: `The feature ${feature} is not enabled for this resource`,
       originalError: e,
@@ -234,7 +234,7 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.TusError,
       httpStatusCode: statusCode,
-      message: message,
+      message,
     }),
 
   MissingTenantConfig: (tenantId: string) =>
@@ -289,7 +289,7 @@ export const ERRORS = {
     new StorageBackendError({
       code: statusCode > 499 ? ErrorCode.InternalError : ErrorCode.InvalidRequest,
       httpStatusCode: statusCode,
-      message: message,
+      message,
       originalError: e,
     }),
 
@@ -384,7 +384,7 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.TransactionError,
       httpStatusCode: 409,
-      message: message,
+      message,
       originalError: err,
     }),
 
@@ -392,7 +392,7 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.DatabaseError,
       httpStatusCode: 500,
-      message: message,
+      message,
       originalError: err,
     }),
 
@@ -423,7 +423,7 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.InvalidChecksum,
       httpStatusCode: 400,
-      message: message,
+      message,
     }),
 
   MissingPart: (partNumber: number, uploadId: string) =>
@@ -437,14 +437,14 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.Aborted,
       httpStatusCode: 500,
-      message: message,
+      message,
       originalError,
     }),
   AbortedTerminate: (message: string, originalError?: unknown) =>
     new StorageBackendError({
       code: ErrorCode.AbortedTerminate,
       httpStatusCode: 500,
-      message: message,
+      message,
       originalError,
     }),
   NoSuchCatalog: (name: string) => {

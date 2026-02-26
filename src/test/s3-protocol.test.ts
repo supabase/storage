@@ -63,7 +63,7 @@ async function uploadFile(
   headers?: Record<string, string>
 ) {
   const uploader = new Upload({
-    client: client,
+    client,
     params: {
       Bucket: bucketName,
       Key: key,
@@ -758,7 +758,7 @@ describe('S3 Protocol', () => {
         })
 
         const uploader = new Upload({
-          client: client,
+          client,
           leavePartsOnError: true,
 
           params: {
@@ -832,7 +832,7 @@ describe('S3 Protocol', () => {
         const bucketName = await createBucket(client)
 
         const uploader = new Upload({
-          client: client,
+          client,
           params: {
             Bucket: bucketName,
             Key: 'test-1.jpg',
@@ -1511,7 +1511,7 @@ describe('S3 Protocol', () => {
 
         const resp = await fetch(uploadUrl, {
           method: 'PUT',
-          body: body,
+          body,
           headers: {
             'Content-Length': body.length.toString(),
           },

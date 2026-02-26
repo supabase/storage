@@ -169,9 +169,9 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
       databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
       databasePoolMode: database_pool_mode,
       fileSizeLimit: Number(file_size_limit),
-      jwtSecret: jwtSecret,
+      jwtSecret,
       jwks,
-      serviceKey: serviceKey,
+      serviceKey,
       serviceKeyPayload: { role: dbServiceRole },
       maxConnections: max_connections ? Number(max_connections) : undefined,
       features: {

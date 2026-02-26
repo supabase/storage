@@ -5730,7 +5730,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Storage API - OTel Metrics",
-  "uid": "storage-otel-metrics",
+  "title": "Storage API - OTel Metrics - Pull",
+  "uid": "storage-otel-pull-metrics",
   "version": 1
 }

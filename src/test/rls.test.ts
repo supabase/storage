@@ -41,6 +41,7 @@ interface TestCaseAssert {
     | 'upload'
     | 'upload.upsert'
     | 'upload.tus'
+    | 'upload.signed'
     | 'bucket.create'
     | 'bucket.get'
     | 'bucket.list'
@@ -60,6 +61,8 @@ interface TestCaseAssert {
   userMetadata?: Record<string, unknown>
   mimeType?: string
   contentLength?: number
+  copyMetadata?: boolean
+  destinationObjectName?: string
   status: number
   error?: string
 }
@@ -257,6 +260,8 @@ describe('RLS policies', () => {
               userMetadata: assert.userMetadata,
               mimeType: assert.mimeType,
               contentLength: assert.contentLength,
+              copyMetadata: assert.copyMetadata,
+              destinationObjectName: assert.destinationObjectName,
             })
 
             console.log(
@@ -324,9 +329,11 @@ async function runOperation(
     userMetadata?: Record<string, unknown>
     mimeType?: string
     contentLength?: number
+    copyMetadata?: boolean
+    destinationObjectName?: string
   }
 ) {
-  const { jwt, bucket, objectName, userMetadata, mimeType, contentLength } = options
+  const { jwt, bucket, objectName, userMetadata, mimeType, contentLength, copyMetadata, destinationObjectName } = options
 
   switch (operation) {
     case 'upload':
@@ -335,6 +342,8 @@ async function runOperation(
       return uploadFile(bucket, objectName, jwt, true, userMetadata, mimeType, contentLength)
     case 'upload.tus':
       return tusUploadFile(bucket, objectName, jwt, userMetadata, mimeType, contentLength)
+    case 'upload.signed':
+      return signUploadUrl(bucket, objectName, jwt, userMetadata)
     case 'bucket.list':
       return appInstance.inject({
         method: 'GET',
@@ -432,11 +441,15 @@ async function runOperation(
         url: `/object/copy`,
         headers: {
           authorization: `Bearer ${jwt}`,
+          ...(userMetadata
+            ? { 'x-metadata': Buffer.from(JSON.stringify(userMetadata)).toString('base64') }
+            : {}),
         },
         payload: {
           bucketId: bucket,
           sourceKey: objectName,
-          destinationKey: 'copied_' + objectName,
+          destinationKey: destinationObjectName ?? 'copied_' + objectName,
+          copyMetadata: copyMetadata ?? true,
         },
       })
     default:
@@ -584,4 +597,24 @@ async function tusUploadFile(
 
   const body = message ? { message } : {}
   return { statusCode, body: JSON.stringify(body), json: () => body }
+}
+
+async function signUploadUrl(
+  bucket: string,
+  objectName: string,
+  jwt: string,
+  userMetadata?: Record<string, unknown>
+) {
+  const metadata = userMetadata
+    ? Buffer.from(JSON.stringify(userMetadata)).toString('base64')
+    : undefined
+
+  return appInstance.inject({
+    method: 'POST',
+    url: `/object/upload/sign/${bucket}/${objectName}`,
+    headers: {
+      authorization: `Bearer ${jwt}`,
+      ...(metadata ? { 'x-metadata': metadata } : {}),
+    },
+  })
 }

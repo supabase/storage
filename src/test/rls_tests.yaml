@@ -497,6 +497,7 @@ tests:
   - description: 'Will only upload files with correct user metadata'
     policies:
       - insert_with_metadata_check
+      - read_only_all_objects
     asserts:
       - operation: upload
         objectName: 'test_file.jpg'
@@ -516,6 +517,46 @@ tests:
 
       - operation: upload.tus
         status: 403
+        error: 'new row violates row-level security policy'
+
+      - operation: upload
+        objectName: 'source_copy_meta.jpg'
+        userMetadata:
+          department: 'engineering'
+        status: 200
+
+      - operation: object.copy
+        objectName: 'source_copy_meta.jpg'
+        destinationObjectName: 'copied_source_copy_meta_1.jpg'
+        copyMetadata: false
+        status: 200
+
+      - operation: object.copy
+        objectName: 'source_copy_meta.jpg'
+        destinationObjectName: 'copied_source_copy_meta_2.jpg'
+        copyMetadata: false
+        userMetadata:
+          department: 'engineering'
+        status: 200
+
+      - operation: object.copy
+        objectName: 'source_copy_meta.jpg'
+        destinationObjectName: 'copied_source_copy_meta_3.jpg'
+        copyMetadata: false
+        userMetadata:
+          department: 'marketing'
+        status: 400
+        error: 'new row violates row-level security policy'
+
+      - operation: upload.signed
+        objectName: 'signed_file.jpg'
+        userMetadata:
+          department: 'engineering'
+        status: 200
+
+      - operation: upload.signed
+        objectName: 'signed_file_no_meta.jpg'
+        status: 400
         error: 'new row violates row-level security policy'
 
   - description: 'Will only upload image files based on mimetype'

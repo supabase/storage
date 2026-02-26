@@ -1,4 +1,11 @@
-import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import {
+  CompleteMultipartUploadCommand,
+  CreateBucketCommand,
+  CreateMultipartUploadCommand,
+  S3Client,
+  S3ServiceException,
+  UploadPartCommand,
+} from '@aws-sdk/client-s3'
 import { signJWT } from '@internal/auth'
 import { wait } from '@internal/concurrency'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
@@ -43,6 +50,7 @@ interface TestCaseAssert {
     | 'upload.upsert'
     | 'upload.tus'
     | 'upload.signed'
+    | 'upload.s3.multipart'
     | 'bucket.create'
     | 'bucket.get'
     | 'bucket.list'
@@ -77,8 +85,16 @@ const testSpec = yaml.load(
   fs.readFileSync(path.resolve(__dirname, 'rls_tests.yaml'), 'utf8')
 ) as RlsTestSpec
 
-const { serviceKeyAsync, tenantId, jwtSecret, databaseURL, storageS3Bucket, storageBackendType } =
-  getConfig()
+const {
+  serviceKeyAsync,
+  anonKeyAsync,
+  tenantId,
+  jwtSecret,
+  databaseURL,
+  storageS3Bucket,
+  storageBackendType,
+  storageS3Region,
+} = getConfig()
 const backend = createStorageBackend(storageBackendType)
 const client = backend.client
 let appInstance: FastifyInstance
@@ -318,7 +334,16 @@ async function runOperation(
     destinationObjectName?: string
   }
 ) {
-  const { jwt, bucket, objectName, userMetadata, mimeType, contentLength, copyMetadata, destinationObjectName } = options
+  const {
+    jwt,
+    bucket,
+    objectName,
+    userMetadata,
+    mimeType,
+    contentLength,
+    copyMetadata,
+    destinationObjectName,
+  } = options
 
   switch (operation) {
     case 'upload':
@@ -329,6 +354,8 @@ async function runOperation(
       return tusUploadFile(bucket, objectName, jwt, userMetadata, mimeType, contentLength)
     case 'upload.signed':
       return signUploadUrl(bucket, objectName, jwt, userMetadata)
+    case 'upload.s3.multipart':
+      return s3MultipartUpload(bucket, objectName, jwt, userMetadata)
     case 'bucket.list':
       return appInstance.inject({
         method: 'GET',
@@ -572,12 +599,10 @@ async function tusUploadFile(
       upload.start()
     })
   } catch (e) {
-    if (e instanceof DetailedError) {
-      statusCode = e.originalResponse.getStatus()
-      message = e.originalResponse.getBody()
-    } else {
-      throw e
-    }
+    if (!(e instanceof DetailedError)) throw e
+
+    statusCode = e.originalResponse.getStatus()
+    message = e.originalResponse.getBody()
   }
 
   const body = message ? { message } : {}
@@ -602,4 +627,78 @@ async function signUploadUrl(
       ...(metadata ? { 'x-metadata': metadata } : {}),
     },
   })
+}
+
+async function s3MultipartUpload(
+  bucket: string,
+  objectName: string,
+  jwt: string,
+  userMetadata?: Record<string, unknown>
+) {
+  if (!appInstance.server.listening) {
+    await appInstance.listen({ port: 0 })
+  }
+
+  const listener = appInstance.server.address() as { port: number }
+  const anonKey = await anonKeyAsync
+  const s3Client = new S3Client({
+    endpoint: `http://127.0.0.1:${listener.port}/s3`,
+    forcePathStyle: true,
+    region: storageS3Region,
+    credentials: {
+      accessKeyId: tenantId,
+      secretAccessKey: anonKey,
+      sessionToken: jwt,
+    },
+  })
+
+  let statusCode = 200
+  let message = ''
+
+  try {
+    const s3Metadata = userMetadata
+      ? Object.fromEntries(Object.entries(userMetadata).map(([k, v]) => [k, String(v)]))
+      : undefined
+
+    const createResp = await s3Client.send(
+      new CreateMultipartUploadCommand({
+        Bucket: bucket,
+        Key: objectName,
+        ContentType: 'image/jpg',
+        ...(s3Metadata ? { Metadata: s3Metadata } : {}),
+      })
+    )
+
+    const data = Buffer.alloc(5 * 1024)
+    const partResp = await s3Client.send(
+      new UploadPartCommand({
+        Bucket: bucket,
+        Key: objectName,
+        UploadId: createResp.UploadId,
+        PartNumber: 1,
+        Body: data,
+        ContentLength: data.length,
+      })
+    )
+
+    await s3Client.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: bucket,
+        Key: objectName,
+        UploadId: createResp.UploadId,
+        MultipartUpload: { Parts: [{ PartNumber: 1, ETag: partResp.ETag }] },
+      })
+    )
+
+  } catch (e: unknown) {
+    if (!(e instanceof S3ServiceException)) throw e
+
+    statusCode = e.$metadata.httpStatusCode ?? 400
+    message = e.message
+
+  } finally {
+    s3Client.destroy()
+  }
+  const body = message ? { message } : {}
+  return { statusCode, body: JSON.stringify(body), json: () => body }
 }

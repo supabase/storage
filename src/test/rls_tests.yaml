@@ -559,6 +559,16 @@ tests:
         status: 400
         error: 'new row violates row-level security policy'
 
+      - operation: upload.s3.multipart
+        objectName: 's3_multi_file.jpg'
+        userMetadata:
+          department: 'engineering'
+        status: 200
+
+      - operation: upload.s3.multipart
+        objectName: 's3_multi_file_no_meta.jpg'
+        status: 403
+
   - description: 'Will only upload image files based on mimetype'
     policies:
       - insert_only_images

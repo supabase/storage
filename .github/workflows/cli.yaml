@@ -8,13 +8,13 @@ permissions:
   contents: read
 
 env:
-  service_to_update: 'storage-api'
+  service_to_update: "storage-api"
   cli_repo_owner: supabase
   cli_repo: cli
-  cli_repo_main_branch: 'main'
-  cli_repo_pr_title: 'fix(storage): update storage image version to '
-  github_user: 'Supa CLI Bot'
-  github_user_email: 'fabri.feno@gmail.com'
+  cli_repo_main_branch: "main"
+  cli_repo_pr_title: "fix(storage): update storage image version to "
+  github_user: "Supa CLI Bot"
+  github_user_email: "fabri.feno@gmail.com"
 
 jobs:
   update-remote-repo:
@@ -29,9 +29,9 @@ jobs:
       - name: Checkout remote repository
         uses: actions/checkout@v6
         with:
-          repository: '${{ env.cli_repo_owner }}/${{ env.cli_repo }}'
+          repository: "${{ env.cli_repo_owner }}/${{ env.cli_repo }}"
           token: ${{ secrets.CLI_PR_USER_ACCESS_TOKEN }}
-          path: '${{ env.cli_repo }}'
+          path: "${{ env.cli_repo }}"
 
       - name: Create a new branch
         run: |

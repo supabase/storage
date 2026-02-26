@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "paths": {
-        "@internal/*": ["./src/internal/*"],
-        "@storage/*": ["./src/storage/*"],
+      "@internal/*": ["./src/internal/*"],
+      "@storage/*": ["./src/storage/*"]
     },
     "downlevelIteration": true,
     "emitDecoratorMetadata": true,

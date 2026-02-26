@@ -214,9 +214,10 @@ export async function areMigrationsUpToDate(tenantId: string) {
 export async function obtainLockOnMultitenantDB<T>(fn: (tnx: Knex.Transaction) => Promise<T>) {
   const trx = await multitenantKnex.transaction()
   try {
-    const result = await trx.raw(`SELECT pg_try_advisory_xact_lock(?) AS locked;`, [
-      -8575985245963000605,
-    ])
+    const result = await trx.raw(
+      `SELECT pg_try_advisory_xact_lock(?) AS locked;`,
+      [-8575985245963000605]
+    )
     const lockAcquired = result.rows.shift()?.locked || false
 
     if (!lockAcquired) {

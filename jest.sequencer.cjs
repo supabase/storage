@@ -13,16 +13,16 @@ const testOrder = [
 class CustomSequencer extends Sequencer {
   sort(tests) {
     const testBuckets = {}
-    testOrder.forEach(k => {
+    testOrder.forEach((k) => {
       testBuckets[k] = []
     })
 
-    Array.from(tests).forEach(t => {
+    Array.from(tests).forEach((t) => {
       const fileName = t.path.split('/').pop()
       const bucket = testBuckets[fileName] || testBuckets['*']
       bucket.push(t)
     })
-    return testOrder.flatMap(k => super.sort(testBuckets[k]))
+    return testOrder.flatMap((k) => super.sort(testBuckets[k]))
   }
 }
 

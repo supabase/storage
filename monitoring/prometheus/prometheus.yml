@@ -18,11 +18,11 @@ scrape_configs:
     scheme: http
     static_configs:
       - targets:
-#          - storage:5000
-#          - storage:5001
+          #          - storage:5000
+          #          - storage:5001
           - otel:9200
 
-  - job_name: 'postgres'
+  - job_name: "postgres"
     static_configs:
       - targets:
           - postgres_exporter:9187

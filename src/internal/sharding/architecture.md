@@ -243,7 +243,7 @@ The slot is considered free because the NOT EXISTS check only looks for **pendin
 Before inserting a new reservation, we call:
 
 ```typescript
-await store.deleteStaleReservationsForSlot(shardId, slotNo)
+await store.deleteStaleReservationsForSlot(shardId, slotNo);
 ```
 
 This deletes any old reservation rows (cancelled, expired, or confirmed) for the same `(shard_id, slot_no)` pair, allowing the slot to be reused with a new reservation.

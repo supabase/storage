@@ -1041,7 +1041,7 @@ export class StorageKnexDB implements Database {
   }
 
   protected async runQuery<
-    T extends (...args: [db: Knex.Transaction, signal?: AbortSignal]) => Promise<any>
+    T extends (...args: [db: Knex.Transaction, signal?: AbortSignal]) => Promise<any>,
   >(queryName: string, fn: T): Promise<Awaited<ReturnType<T>>> {
     const startTime = process.hrtime.bigint()
     const recordDuration = () => {

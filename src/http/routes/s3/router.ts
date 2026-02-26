@@ -65,7 +65,7 @@ export type Schema<
   Q extends JSONSchema = JSONSchema,
   H extends JSONSchema = JSONSchema,
   P extends JSONSchema = JSONSchema,
-  B extends JSONSchema = JSONSchema
+  B extends JSONSchema = JSONSchema,
 > = {
   summary?: string
   Querystring?: Q
@@ -86,7 +86,7 @@ export type RequestInput<
     [key in keyof S]: S[key] extends JSONSchema ? FromSchema<S[key]> : undefined
   } = {
     [key in keyof S]: S[key] extends JSONSchema ? FromSchema<S[key]> : undefined
-  }
+  },
 > = {
   Querystring: A['Querystring']
   Headers: A['Headers']

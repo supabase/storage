@@ -32,7 +32,6 @@ export default async function routes(fastify: FastifyInstance) {
         return
       }
 
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
       // @ts-ignore
       const methods = new Set(routes.map((e) => e.method))
 

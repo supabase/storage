@@ -10,9 +10,9 @@ describe('JWT', () => {
       options?: object
       alg: string
       kid?: string
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // biome-ignore lint/suspicious/noExplicitAny: Crypto key variants are intentionally broad in this test matrix.
       publicKey: any
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // biome-ignore lint/suspicious/noExplicitAny: Crypto key variants are intentionally broad in this test matrix.
       privateKey: any
     }[] = [
       { type: 'rsa', options: { modulusLength: 2048 }, alg: 'RS256' },

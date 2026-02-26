@@ -113,7 +113,6 @@ export function parseFileSizeToBytes(valueWithUnit: string) {
     throw ERRORS.InvalidFileSizeLimit()
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
   const [, valueS, unit] = valueWithUnit.match(valuesRegex)!
   const value = +parseFloat(valueS).toPrecision(3)
 

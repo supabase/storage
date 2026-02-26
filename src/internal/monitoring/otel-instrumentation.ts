@@ -125,8 +125,7 @@ class ClassInstrumentation implements Instrumentation {
   private patchMethod(proto: any, methodName: string): void {
     const original = proto[methodName]
     const instrumentationName = this.instrumentationName
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const _this = this
+    const config = this._config
 
     proto[methodName] = function (...args: any[]) {
       const tracer = trace.getTracer(instrumentationName)
@@ -140,10 +139,10 @@ class ClassInstrumentation implements Instrumentation {
         },
         async (span: Span) => {
           try {
-            const customAttrs = _this._config.setAttributes?.[methodName]?.apply(this, args) || {}
+            const customAttrs = config.setAttributes?.[methodName]?.apply(this, args) || {}
             span.setAttributes(customAttrs)
 
-            const spanName = _this._config.setName?.(
+            const spanName = config.setName?.(
               `${instrumentationName}.${methodName}`,
               customAttrs,
               this

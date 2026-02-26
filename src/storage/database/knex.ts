@@ -50,7 +50,7 @@ export class StorageKnexDB implements Database {
     this.latestMigration = options.latestMigration
   }
 
-  //eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // biome-ignore lint/suspicious/noExplicitAny: Generic return type for transaction wrapper.
   async withTransaction<T extends (db: Database) => Promise<any>>(
     fn: T,
     opts?: TransactionOptions
@@ -388,7 +388,6 @@ export class StorageKnexDB implements Database {
           query.orderBy(sortColumn, sortOrder)
         }
         // knex typing is wrong, it doesn't accept a knex.raw on orderBy, even though is totally legit
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
         query.orderBy(knex.raw(`name COLLATE "C"`), sortOrder)
 
@@ -523,7 +522,6 @@ export class StorageKnexDB implements Database {
           .limit(options?.maxKeys || 100)
 
         // knex typing is wrong, it doesn't accept a knex.raw on orderBy, even though is totally legit
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
         query.orderBy(knex.raw('key COLLATE "C", created_at'))
 

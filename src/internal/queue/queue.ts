@@ -7,7 +7,7 @@ import { queueJobRetryFailed, queueJobCompleted, queueJobError } from '../monito
 import { Event } from './event'
 import { Semaphore } from '@shopify/semaphore'
 
-//eslint-disable-next-line @typescript-eslint/no-explicit-any
+// biome-ignore lint/suspicious/noExplicitAny: Event payload types are intentionally generic.
 type SubclassOfBaseClass = (new (
   payload: any
 ) => Event<any>) & {

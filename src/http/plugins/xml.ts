@@ -4,7 +4,6 @@ import fastifyPlugin from 'fastify-plugin'
 import xml from 'xml2js'
 
 // no types exists for this package
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 import xmlBodyParser from 'fastify-xml-body-parser'
 

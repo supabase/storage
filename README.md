@@ -69,6 +69,5 @@ To perform your tests you can run the following command: `npm test`
 
 ### Code Quality
 
-- Apply formatting: `npm run format`
-- Check formatting: `npm run lint`
-- Run ESLint rules: `npm run eslint:check`
+- Check: `npm run lint`
+- Automatic fix if possible: `npm run lint:fix`

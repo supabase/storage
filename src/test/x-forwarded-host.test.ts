@@ -47,6 +47,7 @@ jest.mock('@storage/database', () => ({
 }))
 
 // Access the mock after it's been created by the Jest runtime
+// biome-ignore lint/style/noCommonJs: build script runs as CommonJS
 const storageDbMock = require('@storage/database').StorageKnexDB
 
 // Use this reference in tests

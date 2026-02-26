@@ -325,7 +325,6 @@ export class ObjectStorage {
       'bucket_id,metadata,user_metadata,version'
     )
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const baseMetadata = originObject.metadata || {}
     const destinationMetadata = copyMetadata
       ? baseMetadata

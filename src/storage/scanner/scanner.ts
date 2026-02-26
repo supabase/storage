@@ -102,7 +102,6 @@ export class ObjectScanner {
       if (!options.tmpTable) {
         const s3LocalCache = this.syncS3KeysToDB(tmpTable, prefix, options)
 
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         for await (const _ of s3LocalCache) {
           // await all of the operation finished
           if (options.signal.aborted) {

@@ -43,13 +43,9 @@ jobs:
         run: |
           npm ci
 
-      - name: Biome format checks
+      - name: Lint
         run: |
           npm run lint
-
-      - name: ESLint checks
-        run: |
-          npm run eslint:check
 
       - name: Builds successfully
         run: |

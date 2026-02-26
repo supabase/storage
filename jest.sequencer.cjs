@@ -1,4 +1,3 @@
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const Sequencer = require('@jest/test-sequencer').default
 
 // order to sort tests based on name matching

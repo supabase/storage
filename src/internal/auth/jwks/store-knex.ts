@@ -23,7 +23,6 @@ export class JWKSManagerStoreKnex implements JWKSManagerStore<Knex.Transaction> 
         active: true,
       })
       .returning('id')
-      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
 
     if (idempotent) {
       insertQuery.onConflict().ignore()
@@ -42,7 +41,6 @@ export class JWKSManagerStoreKnex implements JWKSManagerStore<Knex.Transaction> 
         .select('id')
         .where({ tenant_id, kind, active: true })
         .first<{ id: string }>()
-        .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
 
       if (!result?.id) {
         throw new Error('failed to find existing jwk on idempotent insert')

@@ -22,8 +22,8 @@ export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore 
         secret_key: credential.secretKey,
         claims: JSON.stringify(credential.claims),
       })
-      .returning('id')
       .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
+      .returning('id')
     return credentials[0].id
   }
 

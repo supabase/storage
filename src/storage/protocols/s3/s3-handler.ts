@@ -1051,14 +1051,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    const sourceBucket = (
-      CopySource.startsWith('/') ? CopySource.replace('/', '').split('/') : CopySource.split('/')
-    ).shift()
-
-    const sourceKey = (CopySource.startsWith('/') ? CopySource.replace('/', '') : CopySource)
-      .split('/')
-      .slice(1)
-      .join('/')
+    const {
+      bucketName: sourceBucket,
+      objectKey: sourceKey,
+      sourceVersion,
+    } = parseCopySource(CopySource)
 
     if (!sourceBucket) {
       throw ERRORS.InvalidBucketName('')
@@ -1075,6 +1072,7 @@ export class S3ProtocolHandler {
 
     const copyResult = await this.storage.from(sourceBucket).copyObject({
       sourceKey,
+      sourceVersion,
       destinationBucket: Bucket,
       destinationKey: Key,
       owner: this.owner,
@@ -1186,14 +1184,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySourceRange')
     }
 
-    const sourceBucketName = (
-      CopySource.startsWith('/') ? CopySource.replace('/', '').split('/') : CopySource.split('/')
-    ).shift()
-
-    const sourceKey = (CopySource.startsWith('/') ? CopySource.replace('/', '') : CopySource)
-      .split('/')
-      .slice(1)
-      .join('/')
+    const {
+      bucketName: sourceBucketName,
+      objectKey: sourceKey,
+      sourceVersion,
+    } = parseCopySource(CopySource)
 
     if (!sourceBucketName) {
       throw ERRORS.NoSuchBucket('')
@@ -1209,6 +1204,10 @@ export class S3ProtocolHandler {
       sourceKey,
       'id,name,version,metadata'
     )
+
+    if (sourceVersion && copySource.version !== sourceVersion) {
+      throw ERRORS.NoSuchKey(sourceKey)
+    }
 
     let copySize = copySource.metadata?.size || 0
     let rangeBytes: { fromByte: number; toByte: number } | undefined = undefined
@@ -1268,7 +1267,7 @@ export class S3ProtocolHandler {
         objectName: copySource.name,
         tenantId: this.tenantId,
       }),
-      copySource.version,
+      sourceVersion || copySource.version,
       rangeBytes
     )
 
@@ -1399,6 +1398,41 @@ function isUSASCII(str: string): boolean {
     }
   }
   return true
+}
+
+function parseCopySource(copySource: string): {
+  bucketName: string
+  objectKey: string
+  sourceVersion?: string
+} {
+  const normalizedCopySource = copySource.startsWith('/') ? copySource.slice(1) : copySource
+  const [encodedPath, queryParams = ''] = normalizedCopySource.split('?')
+  const [encodedBucketName, ...encodedObjectKeyParts] = encodedPath.split('/')
+
+  if (!encodedBucketName) {
+    throw ERRORS.InvalidBucketName('')
+  }
+
+  if (!encodedObjectKeyParts.length) {
+    throw ERRORS.MissingParameter('CopySource')
+  }
+
+  try {
+    const searchParams = new URLSearchParams(queryParams)
+    const sourceVersion = searchParams.get('versionId') || undefined
+
+    if (searchParams.has('versionId') && !sourceVersion) {
+      throw ERRORS.InvalidParameter('CopySource')
+    }
+
+    return {
+      bucketName: decodeURIComponent(encodedBucketName),
+      objectKey: decodeURIComponent(encodedObjectKeyParts.join('/')),
+      sourceVersion,
+    }
+  } catch {
+    throw ERRORS.InvalidParameter('CopySource')
+  }
 }
 
 function encodeContinuationToken(name: string) {

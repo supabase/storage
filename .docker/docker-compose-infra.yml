@@ -38,12 +38,30 @@ services:
     image: bitnamilegacy/pgbouncer:latest
     ports:
       - 6453:6432
+    depends_on:
+      - tenant_db
     environment:
       POSTGRESQL_USERNAME: postgres
       POSTGRESQL_HOST: tenant_db
       POSTGRESQL_PASSWORD: postgres
       PGBOUNCER_POOL_MODE: transaction
       PGBOUNCER_IGNORE_STARTUP_PARAMETERS: "extra_float_digits, options"
+      PGBOUNCER_STATS_USERS: postgres
+
+  multitenant_pgbouncer:
+    image: bitnamilegacy/pgbouncer:latest
+    ports:
+      - 6454:6432
+    depends_on:
+      - multitenant_db
+    environment:
+      POSTGRESQL_USERNAME: postgres
+      POSTGRESQL_HOST: multitenant_db
+      POSTGRESQL_PASSWORD: postgres
+      POSTGRESQL_DATABASE: postgres
+      POSTGRESQL_PORT: 5432
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_IGNORE_STARTUP_PARAMETERS: "extra_float_digits, options, statement_timeout"
       PGBOUNCER_STATS_USERS: postgres
 
   #  supavisor:

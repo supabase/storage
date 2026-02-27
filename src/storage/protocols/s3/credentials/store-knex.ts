@@ -1,10 +1,13 @@
 import { Knex } from 'knex'
+import { getConfig } from '../../../../config'
 import {
   S3Credentials,
   S3CredentialsManagerStore,
   S3CredentialsRaw,
   S3CredentialWithDescription,
 } from './store'
+
+const { multitenantDatabaseQueryTimeout } = getConfig()
 
 export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore {
   constructor(private knex: Knex) {}
@@ -19,6 +22,7 @@ export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore 
         secret_key: credential.secretKey,
         claims: JSON.stringify(credential.claims),
       })
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
       .returning('id')
     return credentials[0].id
   }
@@ -29,6 +33,7 @@ export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore 
       .select<S3CredentialsRaw[]>('id', 'description', 'access_key', 'created_at')
       .where('tenant_id', tenantId)
       .orderBy('created_at', 'asc')
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
   }
 
   getOneByAccessKey(tenantId: string, accessKey: string): Promise<S3Credentials> {
@@ -38,6 +43,7 @@ export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore 
       .where('tenant_id', tenantId)
       .where('access_key', accessKey)
       .first()
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
   }
 
   async count(tenantId: string): Promise<number> {
@@ -46,6 +52,7 @@ export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore 
       .count<{ count: number }>('id')
       .where('tenant_id', tenantId)
       .first()
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
     return Number(data?.count || 0)
   }
 
@@ -55,5 +62,6 @@ export class S3CredentialsManagerStoreKnex implements S3CredentialsManagerStore 
       .where('tenant_id', tenantId)
       .where('id', credentialId)
       .delete()
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
   }
 }

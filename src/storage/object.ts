@@ -333,20 +333,14 @@ export class ObjectStorage {
           ...(fileMetadata || {}),
         }
 
-    const baseUserMetadata = originObject.user_metadata || {}
-    const destinationUserMetadata = copyMetadata
-      ? baseUserMetadata
-      : {
-          ...baseUserMetadata,
-          ...(userMetadata || {}),
-        }
+    const destinationUserMetadata = copyMetadata ? originObject.user_metadata : userMetadata
 
     await this.uploader.canUpload({
       bucketId: destinationBucket,
       objectName: destinationKey,
       owner,
       isUpsert: upsert,
-      userMetadata: destinationUserMetadata,
+      userMetadata: destinationUserMetadata || undefined,
       metadata: destinationMetadata,
     })
 

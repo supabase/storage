@@ -8,7 +8,7 @@ const { encryptionKey } = getConfig()
  * https://github.com/brix/crypto-js/issues/468
  * */
 function convertPassphraseToAesKeyBuffer(key: string, salt: Buffer): Buffer {
-  const password = Buffer.concat([Buffer.from(key, 'binary'), salt])
+  const password = Buffer.concat([Buffer.from(key, 'utf8'), salt])
   const hash: Buffer[] = []
   let digest = password
   for (let i = 0; i < 3; i++) {

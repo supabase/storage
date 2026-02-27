@@ -20,12 +20,12 @@ import yaml from 'js-yaml'
 import { Knex, knex } from 'knex'
 import Mustache from 'mustache'
 import path from 'path'
+import * as tus from 'tus-js-client'
+import { DetailedError } from 'tus-js-client'
 import app from '../app'
 import { getConfig } from '../config'
 import { Storage } from '../storage'
 import { checkBucketExists } from './common'
-import * as tus from 'tus-js-client'
-import { DetailedError } from 'tus-js-client'
 
 interface Policy {
   name: string
@@ -582,12 +582,12 @@ async function tusUploadFile(
         },
         metadata: {
           bucketName: bucket,
-          objectName: objectName,
+          objectName,
           contentType: mimeType || 'application/octet-stream',
           cacheControl: '3600',
           ...(userMetadata ? { metadata: JSON.stringify(userMetadata) } : {}),
         },
-        onError: function (error) {
+        onError(error) {
           console.log('Failed because: ' + error)
           reject(error)
         },
@@ -689,13 +689,11 @@ async function s3MultipartUpload(
         MultipartUpload: { Parts: [{ PartNumber: 1, ETag: partResp.ETag }] },
       })
     )
-
   } catch (e: unknown) {
     if (!(e instanceof S3ServiceException)) throw e
 
     statusCode = e.$metadata.httpStatusCode ?? 400
     message = e.message
-
   } finally {
     s3Client.destroy()
   }

@@ -48,21 +48,21 @@ policies:
     content: "USING(owner = '{{uid}}')"
 
   - name: insert_with_metadata_check
-    tables: ['storage.objects']
-    roles: ['authenticated']
-    permissions: ['insert']
+    tables: ["storage.objects"]
+    roles: ["authenticated"]
+    permissions: ["insert"]
     content: "WITH CHECK(user_metadata->>'department' = 'engineering')"
 
   - name: insert_only_images
-    tables: ['storage.objects']
-    roles: ['authenticated']
-    permissions: ['insert']
+    tables: ["storage.objects"]
+    roles: ["authenticated"]
+    permissions: ["insert"]
     content: "WITH CHECK(metadata->>'mimetype' LIKE 'image/%')"
 
   - name: insert_max_size_limit
-    tables: ['storage.objects']
-    roles: ['authenticated']
-    permissions: ['insert']
+    tables: ["storage.objects"]
+    roles: ["authenticated"]
+    permissions: ["insert"]
     content: "WITH CHECK((metadata->>'contentLength')::int <= 100000)"
 
 tests:
@@ -492,129 +492,129 @@ tests:
 
       - operation: bucket.delete
         status: 400
-        error: 'Bucket not found'
+        error: "Bucket not found"
 
-  - description: 'Will only upload files with correct user metadata'
+  - description: "Will only upload files with correct user metadata"
     policies:
       - insert_with_metadata_check
       - read_only_all_objects
     asserts:
       - operation: upload
-        objectName: 'test_file.jpg'
+        objectName: "test_file.jpg"
         userMetadata:
-          department: 'engineering'
+          department: "engineering"
         status: 200
 
       - operation: upload
         status: 400
-        error: 'new row violates row-level security policy'
+        error: "new row violates row-level security policy"
 
       - operation: upload.tus
-        objectName: 'test_file_tus.jpg'
+        objectName: "test_file_tus.jpg"
         userMetadata:
-          department: 'engineering'
+          department: "engineering"
         status: 200
 
       - operation: upload.tus
         status: 403
-        error: 'new row violates row-level security policy'
+        error: "new row violates row-level security policy"
 
       - operation: upload
-        objectName: 'source_copy_meta.jpg'
+        objectName: "source_copy_meta.jpg"
         userMetadata:
-          department: 'engineering'
+          department: "engineering"
         status: 200
 
       - operation: object.copy
-        objectName: 'source_copy_meta.jpg'
-        destinationObjectName: 'copied_source_copy_meta_1.jpg'
+        objectName: "source_copy_meta.jpg"
+        destinationObjectName: "copied_source_copy_meta_1.jpg"
         copyMetadata: false
         status: 200
 
       - operation: object.copy
-        objectName: 'source_copy_meta.jpg'
-        destinationObjectName: 'copied_source_copy_meta_2.jpg'
+        objectName: "source_copy_meta.jpg"
+        destinationObjectName: "copied_source_copy_meta_2.jpg"
         copyMetadata: false
         userMetadata:
-          department: 'engineering'
+          department: "engineering"
         status: 200
 
       - operation: object.copy
-        objectName: 'source_copy_meta.jpg'
-        destinationObjectName: 'copied_source_copy_meta_3.jpg'
+        objectName: "source_copy_meta.jpg"
+        destinationObjectName: "copied_source_copy_meta_3.jpg"
         copyMetadata: false
         userMetadata:
-          department: 'marketing'
+          department: "marketing"
         status: 400
-        error: 'new row violates row-level security policy'
+        error: "new row violates row-level security policy"
 
       - operation: upload.signed
-        objectName: 'signed_file.jpg'
+        objectName: "signed_file.jpg"
         userMetadata:
-          department: 'engineering'
+          department: "engineering"
         status: 200
 
       - operation: upload.signed
-        objectName: 'signed_file_no_meta.jpg'
+        objectName: "signed_file_no_meta.jpg"
         status: 400
-        error: 'new row violates row-level security policy'
+        error: "new row violates row-level security policy"
 
       - operation: upload.s3.multipart
-        objectName: 's3_multi_file.jpg'
+        objectName: "s3_multi_file.jpg"
         userMetadata:
-          department: 'engineering'
+          department: "engineering"
         status: 200
 
       - operation: upload.s3.multipart
-        objectName: 's3_multi_file_no_meta.jpg'
+        objectName: "s3_multi_file_no_meta.jpg"
         status: 403
 
-  - description: 'Will only upload image files based on mimetype'
+  - description: "Will only upload image files based on mimetype"
     policies:
       - insert_only_images
     asserts:
       - operation: upload
-        objectName: 'test_image.jpg'
-        mimeType: 'image/jpeg'
+        objectName: "test_image.jpg"
+        mimeType: "image/jpeg"
         status: 200
 
       - operation: upload
-        objectName: 'test_file.txt'
-        mimeType: 'text/plain'
+        objectName: "test_file.txt"
+        mimeType: "text/plain"
         status: 400
-        error: 'new row violates row-level security policy'
+        error: "new row violates row-level security policy"
 
       - operation: upload.tus
-        objectName: 'test_image_tus.jpg'
-        mimeType: 'image/jpeg'
+        objectName: "test_image_tus.jpg"
+        mimeType: "image/jpeg"
         status: 200
 
       - operation: upload.tus
-        objectName: 'test_file_tus.txt'
-        mimeType: 'text/plain'
+        objectName: "test_file_tus.txt"
+        mimeType: "text/plain"
         status: 403
-        error: 'new row violates row-level security policy'
+        error: "new row violates row-level security policy"
 
-  - description: 'Will only upload files under size limit based on contentLength'
+  - description: "Will only upload files under size limit based on contentLength"
     policies:
       - insert_max_size_limit
     asserts:
       - operation: upload
-        objectName: 'small_file.jpg'
+        objectName: "small_file.jpg"
         status: 200
 
       - operation: upload
-        objectName: 'large_file.jpg'
+        objectName: "large_file.jpg"
         contentLength: 200000
         status: 400
-        error: 'new row violates row-level security policy'
+        error: "new row violates row-level security policy"
 
       - operation: upload.tus
-        objectName: 'small_file_tus.jpg'
+        objectName: "small_file_tus.jpg"
         status: 200
 
       - operation: upload.tus
-        objectName: 'large_file_tus.jpg'
+        objectName: "large_file_tus.jpg"
         contentLength: 200000
         status: 403
-        error: 'new row violates row-level security policy'
+        error: "new row violates row-level security policy"

@@ -949,10 +949,7 @@ export class StorageKnexDB implements Database {
         ? columns.split(',')
         : columns.split(',').filter((col) => col.trim() !== 'metadata')
 
-      const query = knex
-        .from('s3_multipart_uploads')
-        .select(cols)
-        .where('id', uploadId)
+      const query = knex.from('s3_multipart_uploads').select(cols).where('id', uploadId)
 
       if (options?.forUpdate) {
         return query.abortOnSignal(signal).forUpdate().first()

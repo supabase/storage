@@ -118,6 +118,14 @@ describe('S3 Protocol', () => {
         expect(Location).toBeTruthy()
       })
 
+      it('cannot create a bucket named "public"', async () => {
+        const createBucketRequest = new CreateBucketCommand({
+          Bucket: 'public',
+        })
+
+        await expect(client.send(createBucketRequest)).rejects.toThrow('Bucket name invalid')
+      })
+
       it('can get bucket versioning', async () => {
         const bucket = await createBucket(client)
         const bucketVersioningCommand = new GetBucketVersioningCommand({

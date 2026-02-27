@@ -137,7 +137,7 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
     userMetadata: customMd,
     metadata: {
       mimetype: contentType,
-      contentLength: contentLength,
+      contentLength,
     },
   })
 }

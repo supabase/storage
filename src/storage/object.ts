@@ -17,7 +17,7 @@ import {
   ObjectUpdatedMetadata,
 } from './events'
 import { mustBeValidKey } from './limits'
-import { fileUploadFromRequest, Uploader, UploadRequest, CanUploadMetadata} from './uploader'
+import { CanUploadMetadata, fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
 
 const { requestUrlLengthLimit } = getConfig()
 

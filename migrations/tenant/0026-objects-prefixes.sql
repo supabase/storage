@@ -147,24 +147,28 @@ END;
 $func$ LANGUAGE plpgsql VOLATILE;
 
 -- "storage"."prefixes"
-CREATE OR REPLACE TRIGGER "prefixes_delete_hierarchy"
+DROP TRIGGER IF EXISTS "prefixes_delete_hierarchy" ON "storage"."prefixes";
+CREATE TRIGGER "prefixes_delete_hierarchy"
     AFTER DELETE ON "storage"."prefixes"
     FOR EACH ROW
 EXECUTE FUNCTION "storage"."delete_prefix_hierarchy_trigger"();
 
 -- "storage"."objects"
-CREATE OR REPLACE TRIGGER "objects_insert_create_prefix"
+DROP TRIGGER IF EXISTS "objects_insert_create_prefix" ON "storage"."objects";
+CREATE TRIGGER "objects_insert_create_prefix"
     BEFORE INSERT ON "storage"."objects"
     FOR EACH ROW
 EXECUTE FUNCTION "storage"."objects_insert_prefix_trigger"();
 
-CREATE OR REPLACE TRIGGER "objects_update_create_prefix"
+DROP TRIGGER IF EXISTS "objects_update_create_prefix" ON "storage"."objects";
+CREATE TRIGGER "objects_update_create_prefix"
     BEFORE UPDATE ON "storage"."objects"
     FOR EACH ROW
     WHEN (NEW.name != OLD.name)
 EXECUTE FUNCTION "storage"."objects_insert_prefix_trigger"();
 
-CREATE OR REPLACE TRIGGER "objects_delete_delete_prefix"
+DROP TRIGGER IF EXISTS "objects_delete_delete_prefix" ON "storage"."objects";
+CREATE TRIGGER "objects_delete_delete_prefix"
     AFTER DELETE ON "storage"."objects"
     FOR EACH ROW
 EXECUTE FUNCTION "storage"."delete_prefix_hierarchy_trigger"();

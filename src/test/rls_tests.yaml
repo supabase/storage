@@ -528,7 +528,7 @@ tests:
       - operation: object.copy
         objectName: "source_copy_meta.jpg"
         destinationObjectName: "copied_source_copy_meta_1.jpg"
-        copyMetadata: false
+        copyMetadata: true
         status: 200
 
       - operation: object.copy

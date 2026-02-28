@@ -28,7 +28,6 @@ describe('ObjectScanner', () => {
           body: Readable.from(Buffer.from('test')),
           mimeType: 'text/plain',
           cacheControl: 'no-cache',
-          userMetadata: {},
           isTruncated: () => false,
         },
       })
@@ -95,7 +94,6 @@ describe('ObjectScanner', () => {
           body: Readable.from(Buffer.from('test')),
           mimeType: 'text/plain',
           cacheControl: 'no-cache',
-          userMetadata: {},
           isTruncated: () => false,
         },
       })

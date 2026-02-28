@@ -28,6 +28,11 @@ import { Upload } from '@aws-sdk/lib-storage'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { wait } from '@internal/concurrency'
+import { getPostgresConnection, getServiceKeyUser, TenantConnection } from '@internal/database'
+import { DBMigration } from '@internal/database/migrations'
+import { ERRORS } from '@internal/errors'
+import { StorageKnexDB } from '@storage/database'
+import { Uploader } from '@storage/uploader'
 import axios from 'axios'
 import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
@@ -844,6 +849,78 @@ describe('S3 Protocol', () => {
         const resp = await uploader.done()
 
         expect(resp.$metadata).toBeTruthy()
+      })
+
+      it('does not mutate in_progress_size when canUpload (RLS) fails', async () => {
+        /*
+        Calling shouldAllowPartUpload mutates the in_progress_size so we have to ensure
+        canUpload is called beforehand or else it can cause issues for valid uploads.
+
+        This test sets the fileSizeLimit to 10kb and each part at 5kb. It simulates
+        first request successful, second failed, third passes. If the in_progress_size 
+        was mutated on the second request it would be at 10kb causing the third to fail.
+        */
+        const bucketName = await createBucket(client)
+        const key = 'rls-ordering-test.jpg'
+        const partSize = 1024 * 5
+
+        mergeConfig({ uploadFileSizeLimit: partSize * 2 })
+
+        const createResp = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: 'image/jpg',
+          })
+        )
+        expect(createResp.UploadId).toBeTruthy()
+        const uploadId = createResp.UploadId
+
+        const part1Resp = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: uploadId,
+            PartNumber: 1,
+            Body: Buffer.alloc(partSize),
+            ContentLength: partSize,
+          })
+        )
+        expect(part1Resp.ETag).toBeTruthy()
+
+        const canUploadSpy = jest
+          .spyOn(Uploader.prototype, 'canUpload')
+          .mockRejectedValueOnce(ERRORS.AccessDenied('upload'))
+
+        try {
+          await client.send(
+            new UploadPartCommand({
+              Bucket: bucketName,
+              Key: key,
+              UploadId: uploadId,
+              PartNumber: 2,
+              Body: Buffer.alloc(partSize),
+              ContentLength: partSize,
+            })
+          )
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+        } finally {
+          canUploadSpy.mockRestore()
+        }
+
+        const part2Resp = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: uploadId,
+            PartNumber: 2,
+            Body: Buffer.alloc(partSize),
+            ContentLength: partSize,
+          })
+        )
+        expect(part2Resp.ETag).toBeTruthy()
       })
     })
 
@@ -1740,6 +1817,133 @@ describe('S3 Protocol', () => {
         )
         // invalid content-language header removed
         expect(response.ContentLanguage).toBeUndefined()
+      })
+    })
+  })
+})
+
+describe('Migration compatibility', () => {
+  describe('integration', () => {
+    const { tenantId } = getConfig()
+    let connection: TenantConnection
+    let bucketId: string
+
+    beforeAll(async () => {
+      const adminUser = await getServiceKeyUser(tenantId)
+      connection = await getPostgresConnection({
+        tenantId,
+        user: adminUser,
+        superUser: adminUser,
+        host: 'localhost',
+      })
+
+      bucketId = randomUUID()
+      const db = new StorageKnexDB(connection, { tenantId, host: 'localhost' })
+      await db.createBucket({ id: bucketId, name: `migration-test-${bucketId}`, public: false })
+    })
+
+    afterAll(async () => {
+      const db = new StorageKnexDB(connection, { tenantId, host: 'localhost' })
+      await db.deleteBucket(bucketId)
+      await connection.dispose()
+    })
+
+    const makeDB = (latestMigration?: keyof typeof DBMigration) =>
+      new StorageKnexDB(connection, { tenantId, host: 'localhost', latestMigration })
+
+    describe('createMultipartUpload', () => {
+      it('does not store metadata when latestMigration is before s3-multipart-uploads-metadata', async () => {
+        const db = makeDB('fix-optimized-search-function') // migration 56
+        const uploadId = randomUUID()
+        try {
+          const result = await db.createMultipartUpload(
+            uploadId,
+            bucketId,
+            'test-pre-migration.txt',
+            randomUUID(),
+            'sig',
+            undefined,
+            undefined,
+            {
+              cacheControl: 'no-cache',
+              contentLength: 0,
+              size: 0,
+              mimetype: 'text/plain',
+              eTag: 'abc',
+            }
+          )
+          expect(result.metadata).toBeNull()
+        } finally {
+          await makeDB().deleteMultipartUpload(uploadId)
+        }
+      })
+
+      it('stores metadata when latestMigration is s3-multipart-uploads-metadata', async () => {
+        const db = makeDB('s3-multipart-uploads-metadata') // migration 57
+        const uploadId = randomUUID()
+        const metadata = {
+          cacheControl: 'no-cache',
+          contentLength: 0,
+          size: 0,
+          mimetype: 'text/plain',
+          eTag: 'abc',
+        }
+        try {
+          const result = await db.createMultipartUpload(
+            uploadId,
+            bucketId,
+            'test-post-migration.txt',
+            randomUUID(),
+            'sig',
+            undefined,
+            undefined,
+            metadata
+          )
+          expect(result.metadata).toEqual(metadata)
+        } finally {
+          await makeDB().deleteMultipartUpload(uploadId)
+        }
+      })
+    })
+
+    describe('findMultipartUpload', () => {
+      let uploadId: string
+
+      beforeAll(async () => {
+        uploadId = randomUUID()
+        const db = makeDB('s3-multipart-uploads-metadata')
+        await db.createMultipartUpload(
+          uploadId,
+          bucketId,
+          'test-find.txt',
+          randomUUID(),
+          'sig',
+          undefined,
+          undefined,
+          {
+            cacheControl: 'no-cache',
+            contentLength: 0,
+            size: 0,
+            mimetype: 'text/plain',
+            eTag: 'abc',
+          }
+        )
+      })
+
+      afterAll(async () => {
+        await makeDB().deleteMultipartUpload(uploadId)
+      })
+
+      it('excludes metadata from result when latestMigration is before s3-multipart-uploads-metadata', async () => {
+        const db = makeDB('fix-optimized-search-function') // migration 56
+        const result = await db.findMultipartUpload(uploadId, 'id,version,metadata')
+        expect(result).not.toHaveProperty('metadata')
+      })
+
+      it('includes metadata in result when latestMigration is s3-multipart-uploads-metadata', async () => {
+        const db = makeDB('s3-multipart-uploads-metadata') // migration 57
+        const result = await db.findMultipartUpload(uploadId, 'id,version,metadata')
+        expect(result).toHaveProperty('metadata')
       })
     })
   })

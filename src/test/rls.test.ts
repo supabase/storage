@@ -1,4 +1,11 @@
-import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import {
+  CompleteMultipartUploadCommand,
+  CreateBucketCommand,
+  CreateMultipartUploadCommand,
+  S3Client,
+  S3ServiceException,
+  UploadPartCommand,
+} from '@aws-sdk/client-s3'
 import { signJWT } from '@internal/auth'
 import { wait } from '@internal/concurrency'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
@@ -13,6 +20,8 @@ import yaml from 'js-yaml'
 import { Knex, knex } from 'knex'
 import Mustache from 'mustache'
 import path from 'path'
+import * as tus from 'tus-js-client'
+import { DetailedError } from 'tus-js-client'
 import app from '../app'
 import { getConfig } from '../config'
 import { Storage } from '../storage'
@@ -39,6 +48,9 @@ interface TestCaseAssert {
   operation:
     | 'upload'
     | 'upload.upsert'
+    | 'upload.tus'
+    | 'upload.signed'
+    | 'upload.s3.multipart'
     | 'bucket.create'
     | 'bucket.get'
     | 'bucket.list'
@@ -55,6 +67,11 @@ interface TestCaseAssert {
   useExistingBucketName?: string
   role?: string
   policies?: string[]
+  userMetadata?: Record<string, unknown>
+  mimeType?: string
+  contentLength?: number
+  copyMetadata?: boolean
+  destinationObjectName?: string
   status: number
   error?: string
 }
@@ -68,8 +85,16 @@ const testSpec = yaml.load(
   fs.readFileSync(path.resolve(__dirname, 'rls_tests.yaml'), 'utf8')
 ) as RlsTestSpec
 
-const { serviceKeyAsync, tenantId, jwtSecret, databaseURL, storageS3Bucket, storageBackendType } =
-  getConfig()
+const {
+  serviceKeyAsync,
+  anonKeyAsync,
+  tenantId,
+  jwtSecret,
+  databaseURL,
+  storageS3Bucket,
+  storageBackendType,
+  storageS3Region,
+} = getConfig()
 const backend = createStorageBackend(storageBackendType)
 const client = backend.client
 let appInstance: FastifyInstance
@@ -233,6 +258,11 @@ describe('RLS policies', () => {
               bucket: bucketName,
               objectName,
               jwt: assert.role === 'service' ? await serviceKeyAsync : jwt,
+              userMetadata: assert.userMetadata,
+              mimeType: assert.mimeType,
+              contentLength: assert.contentLength,
+              copyMetadata: assert.copyMetadata,
+              destinationObjectName: assert.destinationObjectName,
             })
 
             console.log(
@@ -251,8 +281,7 @@ describe('RLS policies', () => {
             }
 
             if (assert.error) {
-              const body = await response.json()
-
+              const body = response.json()
               expect(body.message).toBe(assert.error)
             }
           } finally {
@@ -294,15 +323,39 @@ describe('RLS policies', () => {
 
 async function runOperation(
   operation: TestCaseAssert['operation'],
-  options: { bucket: string; jwt: string; objectName: string }
+  options: {
+    bucket: string
+    jwt: string
+    objectName: string
+    userMetadata?: Record<string, unknown>
+    mimeType?: string
+    contentLength?: number
+    copyMetadata?: boolean
+    destinationObjectName?: string
+  }
 ) {
-  const { jwt, bucket, objectName } = options
+  const {
+    jwt,
+    bucket,
+    objectName,
+    userMetadata,
+    mimeType,
+    contentLength,
+    copyMetadata,
+    destinationObjectName,
+  } = options
 
   switch (operation) {
     case 'upload':
-      return uploadFile(bucket, objectName, jwt)
+      return uploadFile(bucket, objectName, jwt, false, userMetadata, mimeType, contentLength)
     case 'upload.upsert':
-      return uploadFile(bucket, objectName, jwt, true)
+      return uploadFile(bucket, objectName, jwt, true, userMetadata, mimeType, contentLength)
+    case 'upload.tus':
+      return tusUploadFile(bucket, objectName, jwt, userMetadata, mimeType, contentLength)
+    case 'upload.signed':
+      return signUploadUrl(bucket, objectName, jwt, userMetadata)
+    case 'upload.s3.multipart':
+      return s3MultipartUpload(bucket, objectName, jwt, userMetadata)
     case 'bucket.list':
       return appInstance.inject({
         method: 'GET',
@@ -400,11 +453,15 @@ async function runOperation(
         url: `/object/copy`,
         headers: {
           authorization: `Bearer ${jwt}`,
+          ...(userMetadata
+            ? { 'x-metadata': Buffer.from(JSON.stringify(userMetadata)).toString('base64') }
+            : {}),
         },
         payload: {
           bucketId: bucket,
           sourceKey: objectName,
-          destinationKey: 'copied_' + objectName,
+          destinationKey: destinationObjectName ?? 'copied_' + objectName,
+          copyMetadata: copyMetadata ?? true,
         },
       })
     default:
@@ -454,13 +511,31 @@ async function createPolicy(db: Knex, policy: Policy) {
   return Promise.all(created)
 }
 
-async function uploadFile(bucket: string, fileName: string, jwt: string, upsert?: boolean) {
+async function uploadFile(
+  bucket: string,
+  fileName: string,
+  jwt: string,
+  upsert?: boolean,
+  userMetadata?: Record<string, unknown>,
+  mimeType?: string,
+  contentLength?: number
+) {
   const testFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
   const form = new FormData()
   form.append('file', testFile)
+
+  if (userMetadata) {
+    form.append('metadata', JSON.stringify(userMetadata))
+  }
+
+  if (mimeType) {
+    form.append('contentType', mimeType)
+  }
+
   const headers = Object.assign({}, form.getHeaders(), {
     authorization: `Bearer ${jwt}`,
     ...(upsert ? { 'x-upsert': 'true' } : {}),
+    ...(contentLength ? { 'content-length': contentLength.toString() } : {}),
   })
 
   return appInstance.inject({
@@ -469,4 +544,159 @@ async function uploadFile(bucket: string, fileName: string, jwt: string, upsert?
     headers,
     payload: form,
   })
+}
+
+async function tusUploadFile(
+  bucket: string,
+  objectName: string,
+  jwt: string,
+  userMetadata?: Record<string, unknown>,
+  mimeType?: string,
+  contentLength?: number
+) {
+  if (!appInstance.server.listening) {
+    await appInstance.listen({ port: 0 })
+  }
+
+  const addressInfo = appInstance.server.address()
+  if (!addressInfo || typeof addressInfo === 'string') {
+    throw new Error('Unable to resolve local server address')
+  }
+
+  const localServerAddress = `http://127.0.0.1:${addressInfo.port}`
+
+  const file = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
+
+  let statusCode = 200
+  let message = ''
+
+  try {
+    await new Promise((resolve, reject) => {
+      const upload = new tus.Upload(file, {
+        endpoint: `${localServerAddress}/upload/resumable`,
+        uploadSize: contentLength || undefined,
+        onShouldRetry: () => false,
+        uploadDataDuringCreation: false,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+        metadata: {
+          bucketName: bucket,
+          objectName,
+          contentType: mimeType || 'application/octet-stream',
+          cacheControl: '3600',
+          ...(userMetadata ? { metadata: JSON.stringify(userMetadata) } : {}),
+        },
+        onError(error) {
+          console.log('Failed because: ' + error)
+          reject(error)
+        },
+        onSuccess: () => {
+          resolve(true)
+        },
+      })
+
+      upload.start()
+    })
+  } catch (e) {
+    if (!(e instanceof DetailedError)) throw e
+
+    statusCode = e.originalResponse.getStatus()
+    message = e.originalResponse.getBody()
+  }
+
+  const body = message ? { message } : {}
+  return { statusCode, body: JSON.stringify(body), json: () => body }
+}
+
+async function signUploadUrl(
+  bucket: string,
+  objectName: string,
+  jwt: string,
+  userMetadata?: Record<string, unknown>
+) {
+  const metadata = userMetadata
+    ? Buffer.from(JSON.stringify(userMetadata)).toString('base64')
+    : undefined
+
+  return appInstance.inject({
+    method: 'POST',
+    url: `/object/upload/sign/${bucket}/${objectName}`,
+    headers: {
+      authorization: `Bearer ${jwt}`,
+      ...(metadata ? { 'x-metadata': metadata } : {}),
+    },
+  })
+}
+
+async function s3MultipartUpload(
+  bucket: string,
+  objectName: string,
+  jwt: string,
+  userMetadata?: Record<string, unknown>
+) {
+  if (!appInstance.server.listening) {
+    await appInstance.listen({ port: 0 })
+  }
+
+  const listener = appInstance.server.address() as { port: number }
+  const anonKey = await anonKeyAsync
+  const s3Client = new S3Client({
+    endpoint: `http://127.0.0.1:${listener.port}/s3`,
+    forcePathStyle: true,
+    region: storageS3Region,
+    credentials: {
+      accessKeyId: tenantId,
+      secretAccessKey: anonKey,
+      sessionToken: jwt,
+    },
+  })
+
+  let statusCode = 200
+  let message = ''
+
+  try {
+    const s3Metadata = userMetadata
+      ? Object.fromEntries(Object.entries(userMetadata).map(([k, v]) => [k, String(v)]))
+      : undefined
+
+    const createResp = await s3Client.send(
+      new CreateMultipartUploadCommand({
+        Bucket: bucket,
+        Key: objectName,
+        ContentType: 'image/jpg',
+        ...(s3Metadata ? { Metadata: s3Metadata } : {}),
+      })
+    )
+
+    const data = Buffer.alloc(5 * 1024)
+    const partResp = await s3Client.send(
+      new UploadPartCommand({
+        Bucket: bucket,
+        Key: objectName,
+        UploadId: createResp.UploadId,
+        PartNumber: 1,
+        Body: data,
+        ContentLength: data.length,
+      })
+    )
+
+    await s3Client.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: bucket,
+        Key: objectName,
+        UploadId: createResp.UploadId,
+        MultipartUpload: { Parts: [{ PartNumber: 1, ETag: partResp.ETag }] },
+      })
+    )
+  } catch (e: unknown) {
+    if (!(e instanceof S3ServiceException)) throw e
+
+    statusCode = e.$metadata.httpStatusCode ?? 400
+    message = e.message
+  } finally {
+    s3Client.destroy()
+  }
+  const body = message ? { message } : {}
+  return { statusCode, body: JSON.stringify(body), json: () => body }
 }

@@ -902,22 +902,33 @@ export class StorageKnexDB implements Database {
     version: string,
     signature: string,
     owner?: string,
-    metadata?: Record<string, string | null>
+    userMetadata?: Record<string, string | null>,
+    metadata?: Partial<ObjectMetadata>
   ) {
     return this.runQuery('CreateMultipartUpload', async (knex, signal) => {
+      const data: Record<string, unknown> = {
+        id: uploadId,
+        bucket_id: bucketId,
+        key: objectName,
+        version,
+        upload_signature: signature,
+        owner_id: owner,
+        user_metadata: userMetadata,
+      }
+
+      // TODO: move this guard into normalizeColumns once it is table-aware.
+      // metadata was added to s3_multipart_uploads in migration 57 but has existed on
+      // objects since much earlier, so a table-agnostic rule would incorrectly strip it.
+      if (
+        !this.latestMigration ||
+        DBMigration[this.latestMigration] >= DBMigration['s3-multipart-uploads-metadata']
+      ) {
+        data.metadata = metadata
+      }
+
       const multipart = await knex
         .table<S3MultipartUpload>('s3_multipart_uploads')
-        .insert(
-          this.normalizeColumns({
-            id: uploadId,
-            bucket_id: bucketId,
-            key: objectName,
-            version,
-            upload_signature: signature,
-            owner_id: owner,
-            user_metadata: metadata,
-          })
-        )
+        .insert(this.normalizeColumns(data))
         .returning('*')
         .abortOnSignal(signal)
 
@@ -927,10 +938,18 @@ export class StorageKnexDB implements Database {
 
   async findMultipartUpload(uploadId: string, columns = 'id', options?: { forUpdate?: boolean }) {
     const multiPart = await this.runQuery('FindMultipartUpload', async (knex, signal) => {
-      const query = knex
-        .from('s3_multipart_uploads')
-        .select(columns.split(','))
-        .where('id', uploadId)
+      // TODO: move this guard into normalizeColumns once it is table-aware.
+      // metadata was added to s3_multipart_uploads in migration 57 but has existed on
+      // objects since much earlier, so a table-agnostic rule would incorrectly strip it.
+      const hasMetadataColumn =
+        !this.latestMigration ||
+        DBMigration[this.latestMigration] >= DBMigration['s3-multipart-uploads-metadata']
+
+      const cols = hasMetadataColumn
+        ? columns.split(',')
+        : columns.split(',').filter((col) => col.trim() !== 'metadata')
+
+      const query = knex.from('s3_multipart_uploads').select(cols).where('id', uploadId)
 
       if (options?.forUpdate) {
         return query.abortOnSignal(signal).forUpdate().first()

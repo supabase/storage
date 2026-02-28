@@ -28,6 +28,8 @@ import { Upload } from '@aws-sdk/lib-storage'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { wait } from '@internal/concurrency'
+import { getPostgresConnection, getServiceKeyUser, TenantConnection } from '@internal/database'
+import { DBMigration } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
 import { StorageKnexDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
@@ -1821,45 +1823,128 @@ describe('S3 Protocol', () => {
 })
 
 describe('Migration compatibility', () => {
-  it('findMultipartUpload excludes metadata column when s3-multipart-uploads-metadata migration has not been applied', () => {
-    // Simulate a DB instance where migration 57 (s3-multipart-uploads-metadata) has NOT been applied
-    const mockDB = {
-      latestMigration: 'fix-optimized-search-function', // migration 56
-    } as Partial<StorageKnexDB>
+  describe('integration', () => {
+    const { tenantId } = getConfig()
+    let connection: TenantConnection
+    let bucketId: string
 
-    // Access the column filtering logic directly by checking what columns would be selected
-    const { DBMigration } = require('@internal/database/migrations')
-    const latestMigration = mockDB.latestMigration as keyof typeof DBMigration
+    beforeAll(async () => {
+      const adminUser = await getServiceKeyUser(tenantId)
+      connection = await getPostgresConnection({
+        tenantId,
+        user: adminUser,
+        superUser: adminUser,
+        host: 'localhost',
+      })
 
-    const requestedColumns = 'id,version,user_metadata,metadata'.split(',')
-    let filteredColumns = requestedColumns
+      bucketId = randomUUID()
+      const db = new StorageKnexDB(connection, { tenantId, host: 'localhost' })
+      await db.createBucket({ id: bucketId, name: `migration-test-${bucketId}`, public: false })
+    })
 
-    if (
-      latestMigration &&
-      DBMigration[latestMigration] < DBMigration['s3-multipart-uploads-metadata']
-    ) {
-      filteredColumns = filteredColumns.filter((col) => col.trim() !== 'metadata')
-    }
+    afterAll(async () => {
+      const db = new StorageKnexDB(connection, { tenantId, host: 'localhost' })
+      await db.deleteBucket(bucketId)
+      await connection.dispose()
+    })
 
-    expect(filteredColumns).toEqual(['id', 'version', 'user_metadata'])
-    expect(filteredColumns).not.toContain('metadata')
-  })
+    const makeDB = (latestMigration?: keyof typeof DBMigration) =>
+      new StorageKnexDB(connection, { tenantId, host: 'localhost', latestMigration })
 
-  it('findMultipartUpload includes metadata column when s3-multipart-uploads-metadata migration has been applied', () => {
-    const { DBMigration } = require('@internal/database/migrations')
-    const latestMigration: keyof typeof DBMigration = 's3-multipart-uploads-metadata'
+    describe('createMultipartUpload', () => {
+      it('does not store metadata when latestMigration is before s3-multipart-uploads-metadata', async () => {
+        const db = makeDB('fix-optimized-search-function') // migration 56
+        const uploadId = randomUUID()
+        try {
+          const result = await db.createMultipartUpload(
+            uploadId,
+            bucketId,
+            'test-pre-migration.txt',
+            randomUUID(),
+            'sig',
+            undefined,
+            undefined,
+            {
+              cacheControl: 'no-cache',
+              contentLength: 0,
+              size: 0,
+              mimetype: 'text/plain',
+              eTag: 'abc',
+            }
+          )
+          expect(result.metadata).toBeNull()
+        } finally {
+          await makeDB().deleteMultipartUpload(uploadId)
+        }
+      })
 
-    const requestedColumns = 'id,version,user_metadata,metadata'.split(',')
-    let filteredColumns = requestedColumns
+      it('stores metadata when latestMigration is s3-multipart-uploads-metadata', async () => {
+        const db = makeDB('s3-multipart-uploads-metadata') // migration 57
+        const uploadId = randomUUID()
+        const metadata = {
+          cacheControl: 'no-cache',
+          contentLength: 0,
+          size: 0,
+          mimetype: 'text/plain',
+          eTag: 'abc',
+        }
+        try {
+          const result = await db.createMultipartUpload(
+            uploadId,
+            bucketId,
+            'test-post-migration.txt',
+            randomUUID(),
+            'sig',
+            undefined,
+            undefined,
+            metadata
+          )
+          expect(result.metadata).toEqual(metadata)
+        } finally {
+          await makeDB().deleteMultipartUpload(uploadId)
+        }
+      })
+    })
 
-    if (
-      latestMigration &&
-      DBMigration[latestMigration] < DBMigration['s3-multipart-uploads-metadata']
-    ) {
-      filteredColumns = filteredColumns.filter((col) => col.trim() !== 'metadata')
-    }
+    describe('findMultipartUpload', () => {
+      let uploadId: string
 
-    expect(filteredColumns).toEqual(['id', 'version', 'user_metadata', 'metadata'])
-    expect(filteredColumns).toContain('metadata')
+      beforeAll(async () => {
+        uploadId = randomUUID()
+        const db = makeDB('s3-multipart-uploads-metadata')
+        await db.createMultipartUpload(
+          uploadId,
+          bucketId,
+          'test-find.txt',
+          randomUUID(),
+          'sig',
+          undefined,
+          undefined,
+          {
+            cacheControl: 'no-cache',
+            contentLength: 0,
+            size: 0,
+            mimetype: 'text/plain',
+            eTag: 'abc',
+          }
+        )
+      })
+
+      afterAll(async () => {
+        await makeDB().deleteMultipartUpload(uploadId)
+      })
+
+      it('excludes metadata from result when latestMigration is before s3-multipart-uploads-metadata', async () => {
+        const db = makeDB('fix-optimized-search-function') // migration 56
+        const result = await db.findMultipartUpload(uploadId, 'id,version,metadata')
+        expect(result).not.toHaveProperty('metadata')
+      })
+
+      it('includes metadata in result when latestMigration is s3-multipart-uploads-metadata', async () => {
+        const db = makeDB('s3-multipart-uploads-metadata') // migration 57
+        const result = await db.findMultipartUpload(uploadId, 'id,version,metadata')
+        expect(result).toHaveProperty('metadata')
+      })
+    })
   })
 })

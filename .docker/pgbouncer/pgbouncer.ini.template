@@ -1,5 +1,5 @@
 [databases]
-{{DB_NAME}} = host={{DB_HOST}} port={{DB_PORT}} dbname={{DB_NAME}} auth_user={{DB_USER}}
+{{DB_NAME}} = host={{DB_HOST}} port={{DB_PORT}} dbname={{DB_NAME}} auth_user={{DB_USER}} application_name='{{APP_NAME}}'
 
 [pgbouncer]
 listen_addr = 0.0.0.0

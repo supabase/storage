@@ -84,7 +84,7 @@ export default async function routes(fastify: FastifyInstance) {
           isUpsert,
         })
 
-      return response.status(objectMetadata?.httpStatusCode ?? 200).send({
+      return response.status(objectMetadata?.httpStatusCode ?? 201).send({
         Id: id,
         Key: path,
       })

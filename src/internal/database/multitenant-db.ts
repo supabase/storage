@@ -1,8 +1,12 @@
 import Knex from 'knex'
 import { getConfig } from '../../config'
 
-const { multitenantDatabaseUrl, multitenantDatabasePoolUrl, multitenantMaxConnections } =
-  getConfig()
+const {
+  multitenantDatabaseUrl,
+  multitenantDatabasePoolUrl,
+  multitenantMaxConnections,
+  databaseApplicationName,
+} = getConfig()
 
 const poolSize = multitenantDatabasePoolUrl
   ? multitenantMaxConnections * 10
@@ -13,6 +17,7 @@ export const multitenantKnex = Knex({
   connection: {
     connectionString: multitenantDatabasePoolUrl || multitenantDatabaseUrl,
     connectionTimeoutMillis: 5000,
+    application_name: databaseApplicationName,
   },
   version: '12',
   pool: {

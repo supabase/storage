@@ -3,6 +3,7 @@ import { ERRORS } from '@internal/errors'
 import { Knex } from 'knex'
 import pg from 'pg'
 import { Db } from 'pg-boss'
+import { getConfig } from '../../config'
 
 export class QueueDB extends EventEmitter implements Db {
   opened = false
@@ -16,7 +17,7 @@ export class QueueDB extends EventEmitter implements Db {
   constructor(config: pg.PoolConfig) {
     super()
 
-    config.application_name = config.application_name || 'pgboss'
+    config.application_name = config.application_name || getConfig().pgQueueApplicationName
 
     this.config = config
   }

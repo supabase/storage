@@ -53,7 +53,6 @@ export abstract class Queue {
       migrate,
       db: opts.db,
       schema: 'pgboss_v10',
-      application_name: 'storage-pgboss',
       ...(pgQueueDeleteAfterHours
         ? { deleteAfterHours: pgQueueDeleteAfterHours }
         : { deleteAfterDays: pgQueueDeleteAfterDays }),

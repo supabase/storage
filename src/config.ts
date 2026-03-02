@@ -101,6 +101,7 @@ type StorageConfigType = {
   databaseEnableQueryCancellation: boolean
   databaseStatementTimeout: number
   databaseApplicationName: string
+  pgQueueApplicationName: string
   region: string
   requestTraceHeader?: string
   requestEtagHeaders: string[]
@@ -437,6 +438,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     databaseApplicationName:
       getOptionalConfigFromEnv('DATABASE_APPLICATION_NAME') ||
       `Supabase Storage API ${getOptionalConfigFromEnv('VERSION') || '0.0.0'}`,
+    pgQueueApplicationName:
+      getOptionalConfigFromEnv('PG_QUEUE_APPLICATION_NAME') ||
+      `Supabase Storage PgBoss ${getOptionalConfigFromEnv('VERSION') || '0.0.0'}`,
 
     // CDN
     cdnPurgeEndpointURL: getOptionalConfigFromEnv('CDN_PURGE_ENDPOINT_URL'),

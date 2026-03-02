@@ -24,6 +24,64 @@ const { version, otelMetricsExportIntervalMs, otelMetricsEnabled, otelMetricsTem
   getConfig()
 
 let prometheusExporter: PrometheusExporter | undefined
+let meterProvider: MeterProvider | undefined
+let metricsShutdownPromise: Promise<void> | undefined
+let runtimeNodeInstrumentation: RuntimeNodeInstrumentation | undefined
+let storageNodeInstrumentation: StorageNodeInstrumentation | undefined
+
+interface OTelMetricsGlobalState {
+  __otelMetricsShutdown?: () => Promise<void>
+}
+
+/**
+ * Explicit shutdown hook for test and process teardown.
+ * Safe to call multiple times.
+ */
+export async function shutdownOtelMetrics(): Promise<void> {
+  if (metricsShutdownPromise) {
+    await metricsShutdownPromise
+    return
+  }
+
+  if (!meterProvider) {
+    return
+  }
+
+  const provider = meterProvider
+  metricsShutdownPromise = (async () => {
+    logSchema.info(logger, '[OTel Metrics] Stopping', {
+      type: 'otel-metrics',
+    })
+
+    try {
+      // Disable custom/system instrumentations first to clear background timers
+      storageNodeInstrumentation?.disable()
+      runtimeNodeInstrumentation?.disable()
+
+      await provider.shutdown()
+      logSchema.info(logger, '[OTel Metrics] Shutdown complete', {
+        type: 'otel-metrics',
+      })
+    } catch (error) {
+      logSchema.error(logger, '[OTel Metrics] Shutdown error', {
+        type: 'otel-metrics',
+        error,
+      })
+    } finally {
+      if (meterProvider === provider) {
+        meterProvider = undefined
+      }
+      prometheusExporter = undefined
+      runtimeNodeInstrumentation = undefined
+      storageNodeInstrumentation = undefined
+    }
+  })()
+
+  await metricsShutdownPromise
+}
+
+;(globalThis as typeof globalThis & OTelMetricsGlobalState).__otelMetricsShutdown =
+  shutdownOtelMetrics
 
 /**
  * Handles the /metrics endpoint request using OTel Prometheus exporter
@@ -123,7 +181,7 @@ if (otelMetricsEnabled) {
     options: { boundaries: durationBuckets },
   } as const
 
-  const meterProvider = new MeterProvider({
+  meterProvider = new MeterProvider({
     resource,
     readers,
     views: [
@@ -177,15 +235,18 @@ if (otelMetricsEnabled) {
   hostMetrics.start()
 
   // Register Node.js runtime instrumentations
+  runtimeNodeInstrumentation = new RuntimeNodeInstrumentation()
+  storageNodeInstrumentation = new StorageNodeInstrumentation({
+    labels: { region, instance },
+  })
+
   registerInstrumentations({
     meterProvider,
     instrumentations: [
       // Official OTel: event loop delay/time/utilization, GC, heap spaces
-      new RuntimeNodeInstrumentation(),
+      runtimeNodeInstrumentation,
       // Custom: event loop lag, CPU, handles, process start time, external memory, file descriptors
-      new StorageNodeInstrumentation({
-        labels: { region, instance },
-      }),
+      storageNodeInstrumentation,
     ],
   })
 
@@ -194,22 +255,8 @@ if (otelMetricsEnabled) {
   })
 
   // Graceful shutdown
-  const shutdown = async () => {
-    logSchema.info(logger, '[OTel Metrics] Stopping', {
-      type: 'otel-metrics',
-    })
-
-    try {
-      await meterProvider.shutdown()
-      logSchema.info(logger, '[OTel Metrics] Shutdown complete', {
-        type: 'otel-metrics',
-      })
-    } catch (error) {
-      logSchema.error(logger, '[OTel Metrics] Shutdown error', {
-        type: 'otel-metrics',
-        error,
-      })
-    }
+  const shutdown = () => {
+    void shutdownOtelMetrics()
   }
 
   process.once('SIGTERM', shutdown)

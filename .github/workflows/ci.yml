@@ -77,7 +77,6 @@ jobs:
           GLOBAL_S3_PROTOCOL: http
           GLOBAL_S3_FORCE_PATH_STYLE: true
           DB_INSTALL_ROLES: true
-          ENABLE_DEFAULT_METRICS: false
           PG_QUEUE_ENABLE: false
           MULTI_TENANT: false
           S3_PROTOCOL_ACCESS_KEY_ID: ${{ secrets.TENANT_ID }}
@@ -113,7 +112,6 @@ jobs:
           PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
           DB_INSTALL_ROLES: true
-          ENABLE_DEFAULT_METRICS: false
           PG_QUEUE_ENABLE: false
           MULTI_TENANT: false
 
@@ -124,6 +122,5 @@ jobs:
           PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
           DB_INSTALL_ROLES: true
-          ENABLE_DEFAULT_METRICS: false
           PG_QUEUE_ENABLE: false
           MULTI_TENANT: false

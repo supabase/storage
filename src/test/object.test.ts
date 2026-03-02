@@ -2576,6 +2576,132 @@ describe('testing list objects', () => {
     expect(responseJSON[0].name).toBe('sadcat-upload23.png')
     expect(responseJSON[1].name).toBe('sadcat-upload.png')
   })
+
+  test('list-v1 should treat % as a literal character when using non-name sorting', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectNames = [`percent-${runId}/first.txt`, `percent-${runId}/second.txt`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await seedTx.from<Obj>('objects').insert(
+      objectNames.map((name, idx) => ({
+        bucket_id: bucketName,
+        name,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-${idx}`,
+        metadata: {
+          eTag: `${runId}-${idx}`,
+          size: idx + 1,
+          mimetype: 'text/plain',
+        },
+      }))
+    )
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: '%',
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'created_at',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json()
+      expect(responseJSON).toHaveLength(0)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await db
+          .from<Obj>('objects')
+          .where({ bucket_id: bucketName })
+          .whereIn('name', objectNames)
+          .delete()
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('list-v1 should treat _ as a literal character when using non-name sorting', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const literalMatch = `wild_${runId}/hit.txt`
+    const wildcardOnlyMatch = `wildX${runId}/miss.txt`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await seedTx.from<Obj>('objects').insert([
+      {
+        bucket_id: bucketName,
+        name: literalMatch,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-literal`,
+        metadata: {
+          eTag: `${runId}-literal`,
+          size: 1,
+          mimetype: 'text/plain',
+        },
+      },
+      {
+        bucket_id: bucketName,
+        name: wildcardOnlyMatch,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-wildcard`,
+        metadata: {
+          eTag: `${runId}-wildcard`,
+          size: 2,
+          mimetype: 'text/plain',
+        },
+      },
+    ])
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: `wild_${runId}/`,
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'created_at',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json<{ name: string }[]>()
+      expect(responseJSON.map((obj) => obj.name)).toEqual(['hit.txt'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await db
+          .from<Obj>('objects')
+          .where({ bucket_id: bucketName })
+          .whereIn('name', [literalMatch, wildcardOnlyMatch])
+          .delete()
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
 })
 
 describe('x-robots-tag header', () => {

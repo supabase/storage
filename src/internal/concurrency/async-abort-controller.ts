@@ -18,14 +18,16 @@ export class AsyncAbortController extends AbortController {
       }
 
       let resolving: undefined | (() => Promise<void>) = undefined
-      const promise = new Promise<void>(async (resolve, reject) => {
+      const promise = new Promise<void>((resolve, reject) => {
         resolving = async (): Promise<void> => {
-          try {
-            const result = await listener()
-            resolve(result)
-          } catch (e) {
-            reject(e)
-          }
+          return Promise.resolve()
+            .then(() => listener())
+            .then(() => {
+              resolve()
+            })
+            .catch((error) => {
+              reject(error)
+            })
         }
       })
       this.promises.push(promise)

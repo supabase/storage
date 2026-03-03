@@ -1,12 +1,7 @@
 import { wait } from '@internal/concurrency'
 import { getSslSettings } from '@internal/database/ssl'
 import { logger, logSchema } from '@internal/monitoring'
-import {
-  dbActiveConnection,
-  dbActivePool,
-  dbConnectionAcquireTime,
-  dbInUseConnection,
-} from '@internal/monitoring/metrics'
+import { dbActiveConnection, dbActivePool, dbInUseConnection } from '@internal/monitoring/metrics'
 import TTLCache from '@isaacs/ttlcache'
 import { JWTPayload } from 'jose'
 import { Knex, knex } from 'knex'

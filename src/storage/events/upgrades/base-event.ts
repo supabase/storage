@@ -1,7 +1,7 @@
 import { multitenantKnex } from '@internal/database'
 import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload, Event } from '@internal/queue'
+import { BasePayload } from '@internal/queue'
 import { BaseEvent } from '@storage/events'
 import { Knex } from 'knex'
 import { Job, Queue as PgBossQueue, SendOptions } from 'pg-boss'

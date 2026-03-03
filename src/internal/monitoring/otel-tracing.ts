@@ -56,20 +56,22 @@ if (tracingEnabled && endpoint) {
   })
 }
 
-// Create a BatchSpanProcessor using the trace exporter
-const batchProcessor = traceExporter ? new BatchSpanProcessor(traceExporter) : undefined
-
 const spanProcessors: SpanProcessor[] = []
 
-if (tracingEnabled) {
+if (tracingEnabled && traceExporter) {
   spanProcessors.push(new TenantSpanProcessor())
+  spanProcessors.push(new BatchSpanProcessor(traceExporter))
+} else if (tracingEnabled) {
+  logSchema.warning(
+    logger,
+    '[Otel] TRACING_ENABLED=true but no OTLP trace endpoint configured; skipping tracing SDK startup',
+    {
+      type: 'otel',
+    }
+  )
 }
 
-if (batchProcessor) {
-  spanProcessors.push(batchProcessor)
-}
-
-if (tracingEnabled && spanProcessors.length > 0) {
+if (tracingEnabled && traceExporter && spanProcessors.length > 0) {
   // Configure the OpenTelemetry Node SDK
   const sdk = new NodeSDK({
     resource: resourceFromAttributes({

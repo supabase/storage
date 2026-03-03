@@ -28,6 +28,10 @@ import {
 
 const { isMultitenant } = getConfig()
 
+export function escapeLike(str: string) {
+  return str.replace(/([%_])/g, '\\$1')
+}
+
 /**
  * Database
  * the only source of truth for interacting with the storage database
@@ -150,7 +154,7 @@ export class StorageKnexDB implements Database {
         .whereNull('deleted_at')
 
       if (options?.search !== undefined && options.search.length > 0) {
-        query.where('name', 'like', `%${options.search}%`)
+        query.where('name', 'like', `%${escapeLike(options.search)}%`)
       }
 
       if (options?.sortColumn !== undefined) {
@@ -392,7 +396,7 @@ export class StorageKnexDB implements Database {
         query.orderBy(knex.raw(`name COLLATE "C"`), sortOrder)
 
         if (options?.prefix) {
-          query.where('name', 'like', `${options.prefix}%`)
+          query.where('name', 'like', `${escapeLike(options.prefix)}%`)
         }
 
         if (options?.startAfter && !options?.nextToken) {
@@ -482,7 +486,7 @@ export class StorageKnexDB implements Database {
       const query = knex.from<Bucket>('buckets').select(selectColumns)
 
       if (options?.search !== undefined && options.search.length > 0) {
-        query.where('name', 'ilike', `%${options.search}%`)
+        query.where('name', 'ilike', `%${escapeLike(options.search)}%`)
       }
 
       if (options?.sortColumn !== undefined) {
@@ -526,7 +530,7 @@ export class StorageKnexDB implements Database {
         query.orderBy(knex.raw('key COLLATE "C", created_at'))
 
         if (options?.prefix) {
-          query.where('key', 'ilike', `${options.prefix}%`)
+          query.where('key', 'ilike', `${escapeLike(options.prefix)}%`)
         }
 
         if (options?.nextUploadKeyToken && !options.nextUploadToken) {
@@ -543,7 +547,7 @@ export class StorageKnexDB implements Database {
       const result = await knex
         .raw('select * from storage.list_multipart_uploads_with_delimiter(?,?,?,?,?,?)', [
           bucketId,
-          options?.prefix,
+          options?.prefix ? escapeLike(options.prefix) : options?.prefix,
           options?.deltimeter,
           options?.maxKeys,
           options?.nextUploadKeyToken || '',
@@ -878,15 +882,22 @@ export class StorageKnexDB implements Database {
 
   async searchObjects(bucketId: string, prefix: string, options: SearchObjectOption) {
     return this.runQuery('SearchObjects', async (knex, signal) => {
+      const sortColumn = options.sortBy?.column ?? 'name'
+      const shouldEscapePattern = sortColumn !== 'name'
+      const safePrefix = shouldEscapePattern ? escapeLike(prefix) : prefix
+      const safeSearch = shouldEscapePattern
+        ? escapeLike(options.search || '')
+        : options.search || ''
+
       const result = await knex
         .raw<{ rows: Obj[] }>('select * from storage.search(?,?,?,?,?,?,?,?)', [
-          prefix,
+          safePrefix,
           bucketId,
           options.limit || 100,
-          prefix.split('/').length,
+          safePrefix.split('/').length,
           options.offset || 0,
-          options.search || '',
-          options.sortBy?.column ?? 'name',
+          safeSearch,
+          sortColumn,
           options.sortBy?.order ?? 'asc',
         ])
         .abortOnSignal(signal)

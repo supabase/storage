@@ -1,5 +1,6 @@
 'use strict'
 
+import { randomUUID } from 'node:crypto'
 import { ListObjectsV2Result } from '@storage/object'
 import { FastifyInstance } from 'fastify'
 import { Knex } from 'knex'
@@ -574,4 +575,128 @@ describe('objects - list v2 sorting tests', () => {
       expect(pageCount).toBe(Math.ceil((expected.objects.length + expected.folders.length) / limit))
     })
   }
+})
+
+const LIST_V2_WILDCARD_BUCKET = `list-v2-wildcard-${randomUUID()}`
+
+describe('objects - list v2 prefix wildcard handling', () => {
+  beforeAll(async () => {
+    appInstance = app()
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        name: LIST_V2_WILDCARD_BUCKET,
+      },
+    })
+    await appInstance.close()
+  })
+
+  afterAll(async () => {
+    appInstance = app()
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket/${LIST_V2_WILDCARD_BUCKET}/empty`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    await appInstance.inject({
+      method: 'DELETE',
+      url: `/bucket/${LIST_V2_WILDCARD_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    await appInstance.close()
+  })
+
+  test('treats % as a literal character in list-v2 prefix filters', async () => {
+    const runId = Date.now().toString(36)
+    const firstObject = `percent-${runId}/first.txt`
+    const secondObject = `percent-${runId}/second.txt`
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/object/${LIST_V2_WILDCARD_BUCKET}/${firstObject}`,
+      payload: createUpload('first.txt', 'first'),
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/object/${LIST_V2_WILDCARD_BUCKET}/${secondObject}`,
+      payload: createUpload('second.txt', 'second'),
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_WILDCARD_BUCKET}`,
+      payload: {
+        with_delimiter: false,
+        prefix: '%',
+        limit: 100,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const data = response.json<ListObjectsV2Result>()
+    expect(data.folders).toHaveLength(0)
+    expect(data.objects).toHaveLength(0)
+  })
+
+  test('treats _ as a literal character in list-v2 prefix filters', async () => {
+    const runId = randomUUID()
+    const literalMatch = `wild_${runId}/hit.txt`
+    const wildcardOnlyMatch = `wildX${runId}/miss.txt`
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/object/${LIST_V2_WILDCARD_BUCKET}/${literalMatch}`,
+      payload: createUpload('hit.txt', 'hit'),
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/object/${LIST_V2_WILDCARD_BUCKET}/${wildcardOnlyMatch}`,
+      payload: createUpload('miss.txt', 'miss'),
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_WILDCARD_BUCKET}`,
+      payload: {
+        with_delimiter: false,
+        prefix: `wild_${runId}/`,
+        limit: 100,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const data = response.json<ListObjectsV2Result>()
+    expect(data.folders).toHaveLength(0)
+    expect(data.objects.map((obj) => obj.name)).toEqual([literalMatch])
+  })
 })

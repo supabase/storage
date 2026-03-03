@@ -1221,6 +1221,62 @@ describe('S3 Protocol', () => {
         expect(resp.Uploads?.[2].Key).toBe('test-3.jpg')
         expect(resp.CommonPrefixes?.[0].Prefix).toBe('nested/')
       })
+
+      it('treats % as a literal character in multipart prefix filtering with delimiter', async () => {
+        const bucketName = await createBucket(client)
+        const createMultiPartUpload = (key: string) =>
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: 'image/jpg',
+            CacheControl: 'max-age=2000',
+          })
+
+        await Promise.all([
+          client.send(createMultiPartUpload(`percent-${randomUUID()}.jpg`)),
+          client.send(createMultiPartUpload(`percent-${randomUUID()}.jpg`)),
+        ])
+
+        const listMultipartUploads = new ListMultipartUploadsCommand({
+          Bucket: bucketName,
+          Delimiter: '/',
+          Prefix: '%',
+        })
+
+        const resp = await client.send(listMultipartUploads)
+        expect(resp.Uploads).toBeUndefined()
+        expect(resp.CommonPrefixes).toBeUndefined()
+      })
+
+      it('treats _ as a literal character in multipart prefix filtering with delimiter', async () => {
+        const bucketName = await createBucket(client)
+        const runId = randomUUID()
+        const literalMatchKey = `wild_${runId}/hit.jpg`
+        const wildcardOnlyMatchKey = `wildX${runId}/miss.jpg`
+        const createMultiPartUpload = (key: string) =>
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: 'image/jpg',
+            CacheControl: 'max-age=2000',
+          })
+
+        await Promise.all([
+          client.send(createMultiPartUpload(literalMatchKey)),
+          client.send(createMultiPartUpload(wildcardOnlyMatchKey)),
+        ])
+
+        const listMultipartUploads = new ListMultipartUploadsCommand({
+          Bucket: bucketName,
+          Delimiter: '/',
+          Prefix: `wild_${runId}/`,
+        })
+
+        const resp = await client.send(listMultipartUploads)
+        expect(resp.CommonPrefixes).toBeUndefined()
+        expect(resp.Uploads?.length).toBe(1)
+        expect(resp.Uploads?.[0].Key).toBe(literalMatchKey)
+      })
     })
 
     it('will list multipart uploads with delimiter and pagination', async () => {

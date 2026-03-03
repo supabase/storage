@@ -158,6 +158,258 @@ describe('FileBackend xattr metadata', () => {
   })
 })
 
+describe('FileBackend resolveSecurePath unit', () => {
+  let tmpDir: string
+  let backend: FileBackend
+  let originalStoragePath: string | undefined
+  let originalFilePath: string | undefined
+
+  const resolveSecurePath = (relativePath: string) =>
+    (
+      backend as unknown as {
+        resolveSecurePath: (relativePath: string) => string
+      }
+    ).resolveSecurePath(relativePath)
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
+    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
+    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
+    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
+    getConfig({ reload: true })
+    backend = new FileBackend()
+  })
+
+  afterEach(async () => {
+    if (originalStoragePath === undefined) {
+      delete process.env.STORAGE_FILE_BACKEND_PATH
+    } else {
+      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
+    }
+    if (originalFilePath === undefined) {
+      delete process.env.FILE_STORAGE_BACKEND_PATH
+    } else {
+      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
+    }
+
+    await fs.remove(tmpDir)
+  })
+
+  it('resolves safe paths under storage root', () => {
+    expect(resolveSecurePath('bucket/folder/file.txt')).toBe(
+      path.join(tmpDir, 'bucket', 'folder', 'file.txt')
+    )
+  })
+
+  it('rejects parent-directory segments even if they normalize within storage root', () => {
+    expect(() => resolveSecurePath('bucket/dir/../file.txt')).toThrow(
+      expect.objectContaining({
+        code: 'InvalidKey',
+      })
+    )
+  })
+
+  it('allows double-dot in file names when not a path segment', () => {
+    expect(resolveSecurePath('bucket/file..name.txt')).toBe(
+      path.join(tmpDir, 'bucket', 'file..name.txt')
+    )
+  })
+
+  it('rejects current-directory segments', () => {
+    expect(() => resolveSecurePath('.')).toThrow(
+      expect.objectContaining({
+        code: 'InvalidKey',
+      })
+    )
+  })
+
+  it('rejects absolute paths', () => {
+    expect(() => resolveSecurePath('/tmp/escape.txt')).toThrow(
+      expect.objectContaining({
+        code: 'InvalidKey',
+      })
+    )
+  })
+
+  it('rejects Windows absolute path formats', () => {
+    expect(() => resolveSecurePath('C:\\temp\\escape.txt')).toThrow(
+      expect.objectContaining({
+        code: 'InvalidKey',
+      })
+    )
+    expect(() => resolveSecurePath('\\\\server\\share\\escape.txt')).toThrow(
+      expect.objectContaining({
+        code: 'InvalidKey',
+      })
+    )
+  })
+
+  it('rejects null bytes', () => {
+    expect(() => resolveSecurePath('bucket/\0escape.txt')).toThrow(
+      expect.objectContaining({
+        code: 'InvalidKey',
+      })
+    )
+  })
+
+  it('rejects traversal outside storage root', () => {
+    expect(() => resolveSecurePath('../escape.txt')).toThrow(
+      expect.objectContaining({
+        code: 'InvalidKey',
+      })
+    )
+  })
+})
+
+describe('FileBackend traversal protection', () => {
+  let tmpDir: string
+  let backend: FileBackend
+  let originalStoragePath: string | undefined
+  let originalFilePath: string | undefined
+  let escapePrefix: string
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
+    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
+    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
+    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
+    getConfig({ reload: true })
+    backend = new FileBackend()
+    escapePrefix = `storage-traversal-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  })
+
+  afterEach(async () => {
+    if (originalStoragePath === undefined) {
+      delete process.env.STORAGE_FILE_BACKEND_PATH
+    } else {
+      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
+    }
+    if (originalFilePath === undefined) {
+      delete process.env.FILE_STORAGE_BACKEND_PATH
+    } else {
+      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
+    }
+
+    await fs.remove(tmpDir)
+    await fs.remove(path.join('/tmp', escapePrefix))
+  })
+
+  it('rejects traversal key in multipart create with InvalidKey', async () => {
+    const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/multipart-escape.txt`
+    await expect(
+      backend.createMultiPartUpload('bucket', traversalKey, 'v1', 'text/plain', 'no-cache')
+    ).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+  })
+
+  it('rejects traversal key in multipart upload-part with InvalidKey', async () => {
+    const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/multipart-escape.txt`
+    await expect(
+      backend.uploadPart('bucket', traversalKey, 'v1', 'upload-id', 1, Readable.from('escape-part'))
+    ).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+  })
+
+  it('rejects traversal key in object operations with InvalidKey', async () => {
+    const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/object-escape.txt`
+
+    await expect(
+      backend.uploadObject(
+        'bucket',
+        traversalKey,
+        'v1',
+        Readable.from('escape'),
+        'text/plain',
+        'no-cache'
+      )
+    ).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+
+    await expect(backend.headObject('bucket', traversalKey, 'v1')).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+
+    await expect(backend.getObject('bucket', traversalKey, 'v1')).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+
+    await expect(backend.deleteObject('bucket', traversalKey, 'v1')).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+
+    await expect(backend.privateAssetUrl('bucket', traversalKey, 'v1')).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+  })
+
+  it('rejects traversal key in copy/delete list operations with InvalidKey', async () => {
+    const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/copy-escape.txt`
+
+    await backend.uploadObject(
+      'bucket',
+      'safe-source.txt',
+      'v1',
+      Readable.from('safe-source'),
+      'text/plain',
+      'no-cache'
+    )
+
+    await expect(
+      backend.copyObject('bucket', 'safe-source.txt', 'v1', traversalKey, 'v2', {})
+    ).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+
+    await expect(backend.deleteObjects('bucket', [traversalKey])).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+  })
+
+  it('rejects traversal key in multipart auxiliary operations with InvalidKey', async () => {
+    const traversalDestKey = `${'../'.repeat(20)}tmp/${escapePrefix}/multipart-dest-escape.txt`
+    const traversalSourceKey = `${'../'.repeat(20)}tmp/${escapePrefix}/multipart-source-escape.txt`
+
+    await expect(
+      backend.abortMultipartUpload('bucket', 'key', traversalDestKey)
+    ).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+
+    await expect(
+      backend.uploadPartCopy(
+        'bucket',
+        traversalDestKey,
+        'v1',
+        'upload-id',
+        1,
+        'safe-source.txt',
+        'v1'
+      )
+    ).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+
+    await expect(
+      backend.uploadPartCopy(
+        'bucket',
+        'safe-dest.txt',
+        'v1',
+        'upload-id',
+        1,
+        traversalSourceKey,
+        'v1'
+      )
+    ).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+  })
+})
+
 describe('FileBackend lastModified', () => {
   let tmpDir: string
   let backend: FileBackend

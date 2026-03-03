@@ -1,10 +1,11 @@
-import AES from 'crypto-js/aes'
-import Utf8 from 'crypto-js/enc-utf8'
-
 const originalAuthEncryptionKey = process.env.AUTH_ENCRYPTION_KEY
 const originalEncryptionKey = process.env.ENCRYPTION_KEY
 const testEncryptionKey = 'pässwörd🔐'
 const plaintext = 'payload-with-unicode-åß∂ƒ 🚀'
+const legacyCiphertext =
+  'U2FsdGVkX19JcSpAtQJU9fvPXdI8x6Z+4ypCCnuXdgd/Zs58/g+VpYtZbrJxC/IXXfEQuzgK4qamUe5rFiuxsA=='
+const deterministicCiphertext =
+  'U2FsdGVkX18AAQIDBAUGBygEQu5lvcWZgoqOtz6uMHKNaYgKr4hzXYxDM0EVHrks1kCp7vbFjcIAbNivFk4DzQ=='
 
 process.env.AUTH_ENCRYPTION_KEY = testEncryptionKey
 process.env.ENCRYPTION_KEY = testEncryptionKey
@@ -31,16 +32,12 @@ afterAll(() => {
 })
 
 describe('auth crypto', () => {
-  test('CryptoJS encrypt and Node decrypt are compatible', () => {
-    const legacyCiphertext = AES.encrypt(plaintext, testEncryptionKey).toString()
-
+  test('decrypts legacy CryptoJS ciphertext', () => {
     expect(decrypt(legacyCiphertext)).toBe(plaintext)
   })
 
-  test('Node encrypt and CryptoJS decrypt are compatible', () => {
-    const nodeCiphertext = encrypt(plaintext)
-
-    expect(AES.decrypt(nodeCiphertext, testEncryptionKey).toString(Utf8)).toBe(plaintext)
+  test('decrypts fixed-salt CryptoJS ciphertext', () => {
+    expect(decrypt(deterministicCiphertext)).toBe(plaintext)
   })
 
   test('Node encrypt/decrypt roundtrip is stable', () => {

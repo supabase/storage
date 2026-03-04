@@ -33,7 +33,7 @@ describe('Tus multipart', () => {
 
   beforeAll(async () => {
     server = await app({
-      logger,
+      loggerInstance: logger,
     })
 
     await server.listen({

@@ -44,25 +44,31 @@ interface listBucketRequestInterface extends AuthenticatedRequest {
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.delete<deleteBucketRequestInterface>(
-    '/bucket/:bucketName',
-    {
-      schema: {
-        params: deleteBucketParamsSchema,
-        summary: 'Delete an analytics bucket',
-        tags: ['bucket'],
-      },
-      config: {
-        operation: { type: ROUTE_OPERATIONS.DELETE_BUCKET },
-      },
-    },
-    async (request, response) => {
-      const { bucketName } = request.params
-      await request.storage.deleteIcebergBucket(bucketName)
+  fastify.register(async (f) => {
+    f.addContentTypeParser('application/json', { bodyLimit: 0 }, (_request, _payload, done) => {
+      done(null, null)
+    })
 
-      return response.status(200).send(createResponse('Successfully deleted'))
-    }
-  )
+    f.delete<deleteBucketRequestInterface>(
+      '/bucket/:bucketName',
+      {
+        schema: {
+          params: deleteBucketParamsSchema,
+          summary: 'Delete an analytics bucket',
+          tags: ['bucket'],
+        },
+        config: {
+          operation: { type: ROUTE_OPERATIONS.DELETE_BUCKET },
+        },
+      },
+      async (request, response) => {
+        const { bucketName } = request.params
+        await request.storage.deleteIcebergBucket(bucketName)
+
+        return response.status(200).send(createResponse('Successfully deleted'))
+      }
+    )
+  })
 
   fastify.post<createBucketRequestInterface>(
     '/bucket',

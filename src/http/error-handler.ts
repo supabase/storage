@@ -1,5 +1,5 @@
 import { FastifyError } from '@fastify/error'
-import { ErrorCode, isRenderableError, StorageError } from '@internal/errors'
+import { ERRORS, ErrorCode, isRenderableError, StorageError } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
 import { DatabaseError } from 'pg'
 
@@ -78,6 +78,22 @@ export const setErrorHandler = (
     // Fastify errors
     if ('statusCode' in error) {
       const err = error as FastifyError
+
+      if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') {
+        const contentTypeHeader = request.headers['content-type']
+        const mimeType =
+          typeof contentTypeHeader === 'string' ? contentTypeHeader.split(';')[0].trim() : 'unknown'
+        const invalidMimeTypeError = ERRORS.InvalidMimeType(mimeType)
+        const renderableError = invalidMimeTypeError.render()
+
+        return reply.status(invalidMimeTypeError.userStatusCode).send(
+          formatter({
+            ...renderableError,
+            error: invalidMimeTypeError.error || renderableError.code,
+          })
+        )
+      }
+
       return reply.status(err.statusCode || 500).send(
         formatter({
           statusCode: `${err.statusCode}`,

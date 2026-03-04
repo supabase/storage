@@ -231,6 +231,7 @@ if (otelMetricsEnabled) {
   const hostMetrics = new HostMetrics({
     meterProvider,
     name: 'storage-api-host-metrics',
+    metricGroups: ['system.cpu', 'system.memory', 'process.cpu', 'process.memory'],
   })
   hostMetrics.start()
 

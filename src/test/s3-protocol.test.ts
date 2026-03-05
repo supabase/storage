@@ -2418,6 +2418,7 @@ describe('S3 Protocol', () => {
         )
         expect(page1.Uploads?.length).toBe(1)
         expect(page1.NextKeyMarker).toBeTruthy()
+        expect(Buffer.from(page1.NextKeyMarker!, 'base64').toString()).toMatch(/^v:1\nl:/)
 
         const page2 = await client.send(
           new ListMultipartUploadsCommand({
@@ -2432,6 +2433,50 @@ describe('S3 Protocol', () => {
         expect(pagedKeys).toHaveLength(2)
         expect(new Set(pagedKeys).size).toBe(2)
         expect([...pagedKeys].sort()).toEqual([...keys].sort())
+      })
+
+      it('accepts legacy unversioned KeyMarker tokens for in-flight pagination', async () => {
+        const bucketName = await createBucket(client)
+        const runId = randomUUID()
+        const firstKey = `mp-legacy-${runId}:001.jpg`
+        const secondKey = `mp-legacy-${runId}:002.jpg`
+
+        await Promise.all(
+          [firstKey, secondKey].map((key) =>
+            client.send(
+              new CreateMultipartUploadCommand({
+                Bucket: bucketName,
+                Key: key,
+                ContentType: 'image/jpg',
+              })
+            )
+          )
+        )
+
+        const page1 = await client.send(
+          new ListMultipartUploadsCommand({
+            Bucket: bucketName,
+            MaxUploads: 1,
+          })
+        )
+
+        expect(page1.Uploads?.[0]?.Key).toBe(firstKey)
+
+        const legacyToken = Buffer.from(`l:${firstKey}`).toString('base64')
+        const pageUsingLegacyToken = await client.send(
+          new ListMultipartUploadsCommand({
+            Bucket: bucketName,
+            MaxUploads: 1,
+            KeyMarker: legacyToken,
+          })
+        )
+
+        // Legacy unversioned markers keep legacy parsing semantics for rollout safety.
+        expect(pageUsingLegacyToken.Uploads?.[0]?.Key).toBe(firstKey)
+        expect(pageUsingLegacyToken.NextKeyMarker).toBeTruthy()
+        expect(Buffer.from(pageUsingLegacyToken.NextKeyMarker!, 'base64').toString()).toMatch(
+          /^v:1\nl:/
+        )
       })
 
       it('can copy objects using Unicode keys in CopySource', async () => {

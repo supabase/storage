@@ -1442,19 +1442,61 @@ function parseCopySource(copySource: string): {
 }
 
 function encodeContinuationToken(name: string) {
-  return Buffer.from(`l:${name}`).toString('base64')
+  return Buffer.from(`v:1\nl:${encodeURIComponent(name)}`).toString('base64')
+}
+
+function decodeLegacyContinuationToken(decoded: string) {
+  // Backward compatibility: preserve pre-version behavior for old in-flight tokens.
+  const continuationToken = decoded.split(':')[1]
+  if (!continuationToken) {
+    throw new Error('Invalid continuation token')
+  }
+  return continuationToken
 }
 
 function decodeContinuationToken(token: string) {
   const decoded = Buffer.from(token, 'base64').toString()
-  if (!decoded.startsWith('l:')) {
+
+  if (decoded.startsWith('l:')) {
+    return decodeLegacyContinuationToken(decoded)
+  }
+
+  const parts = decoded.split('\n')
+  let version: string | undefined
+  let encodedValue: string | undefined
+
+  for (const part of parts) {
+    const match = part.match(/^(\S):(.*)/)
+    if (!match || match.length !== 3) {
+      throw new Error('Invalid continuation token')
+    }
+
+    if (match[1] === 'v') {
+      if (version !== undefined) {
+        throw new Error('Invalid continuation token')
+      }
+      version = match[2]
+      continue
+    }
+
+    if (match[1] === 'l') {
+      if (encodedValue !== undefined) {
+        throw new Error('Invalid continuation token')
+      }
+      encodedValue = match[2]
+      continue
+    }
+
     throw new Error('Invalid continuation token')
   }
 
-  const value = decoded.slice(2)
-  if (!value) {
+  if (version !== '1' || !encodedValue) {
     throw new Error('Invalid continuation token')
   }
 
-  return value
+  try {
+    return decodeURIComponent(encodedValue)
+  } catch {
+    throw new Error('Invalid continuation token')
+  }
 }

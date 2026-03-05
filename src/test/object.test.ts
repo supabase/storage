@@ -2255,6 +2255,54 @@ describe('testing generating signed URLs', () => {
     const result = JSON.parse(response.body)
     expect(result[0].error).toBe('Either the object does not exist or you do not have access to it')
   })
+
+  test('can generate and use batch signed URLs with Unicode and URL-reserved characters', async () => {
+    const objectName = `signed-batch-${randomUUID()}-éè-中文-🙂-q?foo=1&bar=%25+plus;semi:colon,#frag.png`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const uploadResponse = await appInstance.inject({
+      method: 'PUT',
+      url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+        'Content-Length': size,
+        'Content-Type': 'image/jpeg',
+      },
+      payload: fs.createReadStream(path),
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const signResponse = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2',
+      headers: {
+        authorization,
+      },
+      payload: {
+        expiresIn: 60,
+        paths: [objectName],
+      },
+    })
+    expect(signResponse.statusCode).toBe(200)
+
+    const [signedObject] =
+      signResponse.json<{ error: string | null; path: string; signedURL: string | null }[]>()
+    expect(signedObject.error).toBeNull()
+    expect(signedObject.path).toBe(objectName)
+    expect(signedObject.signedURL).toBeTruthy()
+
+    const signedURLParsed = new URL(signedObject.signedURL || '', 'http://localhost')
+    expect(signedURLParsed.searchParams.get('token')).toBeTruthy()
+
+    const getResponse = await appInstance.inject({
+      method: 'GET',
+      url: `${signedURLParsed.pathname}${signedURLParsed.search}`,
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(getResponse.headers['etag']).toBe('abc')
+  })
 })
 
 /**
@@ -3367,14 +3415,17 @@ describe('Object key names with Unicode characters', () => {
     })
     expect(signedUploadResponse.statusCode).toBe(200)
 
-    const token = signedUploadResponse.json<{ token: string }>().token
+    const signedUpload = signedUploadResponse.json<{ token: string; url: string }>()
+    const token = signedUpload.token
     expect(token).toBeTruthy()
+    const signedUploadURL = new URL(signedUpload.url, 'http://localhost')
+    expect(signedUploadURL.searchParams.get('token')).toBe(token)
 
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const uploadResponse = await appInstance.inject({
       method: 'PUT',
-      url: `/object/upload/sign/bucket2/${encodeURIComponent(objectName)}?token=${token}`,
+      url: `${signedUploadURL.pathname}${signedUploadURL.search}`,
       headers: {
         ...form.getHeaders(),
       },

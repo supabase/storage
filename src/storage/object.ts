@@ -49,6 +49,13 @@ export interface ListObjectsV2Result {
   nextCursorKey?: string
 }
 
+function encodeObjectPathForURL(bucketId: string, objectName: string): string {
+  return `${encodeURIComponent(bucketId)}/${objectName
+    .split('/')
+    .map((pathToken) => encodeURIComponent(pathToken))
+    .join('/')}`
+}
+
 /**
  * ObjectStorage
  * interact with remote objects and database state
@@ -731,10 +738,7 @@ export class ObjectStorage {
       urlPath = 'render/image'
     }
 
-    const encodedUrlToSign = `${encodeURIComponent(this.bucketId)}/${objectName
-      .split('/')
-      .map((pathToken) => encodeURIComponent(pathToken))
-      .join('/')}`
+    const encodedUrlToSign = encodeObjectPathForURL(this.bucketId, objectName)
 
     // @todo parse the url properly
     return `/${urlPath}/sign/${encodedUrlToSign}?token=${token}`
@@ -773,7 +777,8 @@ export class ObjectStorage {
         if (nameSet.has(path)) {
           const urlToSign = `${this.bucketId}/${path}`
           const token = await signJWT({ url: urlToSign }, urlSigningKey, expiresIn)
-          signedURL = `/object/sign/${urlToSign}?token=${token}`
+          const encodedUrlToSign = encodeObjectPathForURL(this.bucketId, path)
+          signedURL = `/object/sign/${encodedUrlToSign}?token=${token}`
         } else {
           error = 'Either the object does not exist or you do not have access to it'
         }
@@ -796,7 +801,7 @@ export class ObjectStorage {
    */
   async signUploadObjectUrl(
     objectName: string,
-    url: string,
+    _url: string,
     expiresIn: number,
     owner?: string,
     options?: { upsert?: boolean }
@@ -812,13 +817,16 @@ export class ObjectStorage {
     })
 
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
+    const urlToSign = `${this.bucketId}/${objectName}`
     const token = await signJWT(
-      { owner, url, upsert: Boolean(options?.upsert) },
+      { owner, url: urlToSign, upsert: Boolean(options?.upsert) },
       urlSigningKey,
       expiresIn
     )
 
-    return { url: `/object/upload/sign/${url}?token=${token}`, token }
+    const encodedUrlToSign = encodeObjectPathForURL(this.bucketId, objectName)
+
+    return { url: `/object/upload/sign/${encodedUrlToSign}?token=${token}`, token }
   }
 
   /**

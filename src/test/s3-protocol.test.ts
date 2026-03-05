@@ -559,6 +559,39 @@ describe('S3 Protocol', () => {
         expect(resp.status).toBe(200)
       })
 
+      it('can upload using multipart/form-data with a Unicode key', async () => {
+        const bucketName = await createBucket(client)
+        const key = `post-form-${randomUUID()}-中文-일이삼-🙂.jpg`
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          Key: key,
+          Expires: 5000,
+          Fields: {
+            'Content-Type': 'image/jpg',
+          },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((fieldName) => {
+          formData.set(fieldName, signedURL.fields[fieldName])
+        })
+
+        const data = Buffer.alloc(1024)
+        formData.set('file', new Blob([data]), 'upload.jpg')
+
+        const resp = await axios.post(signedURL.url, formData, {
+          validateStatus: () => true,
+        })
+        expect(resp.status).toBe(200)
+
+        const listResp = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucketName,
+          })
+        )
+        expect((listResp.Contents || []).map((item) => item.Key)).toEqual(expect.arrayContaining([key]))
+      })
+
       it('prevent uploading files larger than the maxFileSize limit', async () => {
         mergeConfig({
           uploadFileSizeLimit: 1024,
@@ -1189,6 +1222,24 @@ describe('S3 Protocol', () => {
         expect(resp.CopyObjectResult?.ETag).toBeTruthy()
       })
 
+      it('will copy an object when CopySource is fully URL-encoded and includes versionId', async () => {
+        const bucketName = await createBucket(client)
+        const sourceKey = getUnicodeObjectName()
+        const destinationKey = `test-copied-versioned-encoded-${randomUUID()}.jpg`
+
+        await uploadFile(client, bucketName, sourceKey, 1)
+        const sourceVersion = await getObjectVersion(bucketName, sourceKey)
+
+        const copyObjectCommand = new CopyObjectCommand({
+          Bucket: bucketName,
+          Key: destinationKey,
+          CopySource: `${encodeURIComponent(`${bucketName}/${sourceKey}`)}?versionId=${sourceVersion}`,
+        })
+
+        const resp = await client.send(copyObjectCommand)
+        expect(resp.CopyObjectResult?.ETag).toBeTruthy()
+      })
+
       it('will not copy an object when CopySource versionId does not match', async () => {
         const bucketName = await createBucket(client)
         const sourceKey = `test-copy-versioned-${randomUUID()}.jpg`
@@ -1637,6 +1688,45 @@ describe('S3 Protocol', () => {
           UploadId: resp.UploadId,
           PartNumber: 1,
           CopySource: `${bucket}/${sourceKey}?versionId=${sourceVersion}`,
+          CopySourceRange: `bytes=0-${1024 * 4}`,
+        })
+
+        const copyResp = await client.send(copyPart)
+        expect(copyResp.CopyPartResult?.ETag).toBeTruthy()
+
+        const listPartsCmd = new ListPartsCommand({
+          Bucket: bucket,
+          Key: newKey,
+          UploadId: resp.UploadId,
+        })
+
+        const parts = await client.send(listPartsCmd)
+        expect(parts.Parts?.length).toBe(1)
+      })
+
+      it('will copy a part when CopySource is fully URL-encoded and includes versionId', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = getUnicodeObjectName()
+        const newKey = `new-versioned-encoded-${randomUUID()}.jpg`
+
+        await uploadFile(client, bucket, sourceKey, 12)
+        const sourceVersion = await getObjectVersion(bucket, sourceKey)
+
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucket,
+          Key: newKey,
+          ContentType: 'image/jpg',
+          CacheControl: 'max-age=2000',
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+
+        const copyPart = new UploadPartCopyCommand({
+          Bucket: bucket,
+          Key: newKey,
+          UploadId: resp.UploadId,
+          PartNumber: 1,
+          CopySource: `${encodeURIComponent(`${bucket}/${sourceKey}`)}?versionId=${sourceVersion}`,
           CopySourceRange: `bytes=0-${1024 * 4}`,
         })
 

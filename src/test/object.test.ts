@@ -2943,6 +2943,35 @@ describe('Object key names with Unicode characters', () => {
     expect(deleteResponse.statusCode).toBe(200)
   })
 
+  test('can upload and get via binary upload with a Unicode key', async () => {
+    const objectName = `binary-${randomUUID()}-일이삼-🙂.jpg`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const uploadResponse = await appInstance.inject({
+      method: 'PUT',
+      url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+        'Content-Length': size,
+        'Content-Type': 'image/jpeg',
+      },
+      payload: fs.createReadStream(path),
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const getResponse = await appInstance.inject({
+      method: 'GET',
+      url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(getResponse.headers['etag']).toBe('abc')
+  })
+
   test('should not upload if the name contains invalid characters', async () => {
     const invalidObjectName = getInvalidObjectName()
     const authorization = `Bearer ${await serviceKeyAsync}`

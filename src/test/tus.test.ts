@@ -256,9 +256,7 @@ describe('Tus multipart', () => {
 
       const objectName = randomUUID() + '-cat.jpeg'
 
-      const signedUpload = await storage
-        .from(bucketName)
-        .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 3600)
+      const signedUpload = await storage.from(bucketName).signUploadObjectUrl(objectName, 3600)
 
       const result = await new Promise((resolve, reject) => {
         const upload = new tus.Upload(oneChunkFile, {
@@ -328,9 +326,7 @@ describe('Tus multipart', () => {
       })
 
       const objectName = `${randomUUID()}-${getUnicodeObjectName()}`
-      const signedUpload = await storage
-        .from(bucketName)
-        .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 3600)
+      const signedUpload = await storage.from(bucketName).signUploadObjectUrl(objectName, 3600)
 
       const result = await new Promise((resolve, reject) => {
         const upload = new tus.Upload(oneChunkFile, {
@@ -375,7 +371,7 @@ describe('Tus multipart', () => {
 
       const signedUpload = await storage
         .from(bucketName)
-        .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 3600, 'some-owner-id')
+        .signUploadObjectUrl(objectName, 3600, 'some-owner-id')
 
       const result = await new Promise((resolve, reject) => {
         const upload = new tus.Upload(oneChunkFile, {
@@ -439,9 +435,7 @@ describe('Tus multipart', () => {
 
       const objectName = randomUUID() + '-cat.jpeg'
 
-      const signedUpload = await storage
-        .from(bucketName)
-        .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 1)
+      const signedUpload = await storage.from(bucketName).signUploadObjectUrl(objectName, 1)
 
       await wait(2000)
 

@@ -801,7 +801,6 @@ export class ObjectStorage {
    */
   async signUploadObjectUrl(
     objectName: string,
-    _url: string,
     expiresIn: number,
     owner?: string,
     options?: { upsert?: boolean }

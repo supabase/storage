@@ -589,7 +589,9 @@ describe('S3 Protocol', () => {
             Bucket: bucketName,
           })
         )
-        expect((listResp.Contents || []).map((item) => item.Key)).toEqual(expect.arrayContaining([key]))
+        expect((listResp.Contents || []).map((item) => item.Key)).toEqual(
+          expect.arrayContaining([key])
+        )
       })
 
       it('prevent uploading files larger than the maxFileSize limit', async () => {

@@ -7,10 +7,25 @@ type XmlParserOptions = { disableContentParser?: boolean; parseAsArray?: string[
 type RequestError = Error & { statusCode?: number }
 
 export function decodeXmlNumericEntities(value: string): string {
+  const isValidXmlCodePoint = (codePoint: number) => {
+    if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) {
+      return false
+    }
+
+    return (
+      codePoint === 0x9 ||
+      codePoint === 0xa ||
+      codePoint === 0xd ||
+      (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+      (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+      (codePoint >= 0x10000 && codePoint <= 0x10ffff)
+    )
+  }
+
   return value.replace(/&#([xX][0-9a-fA-F]{1,6}|[0-9]{1,7});/g, (match: string, rawValue: string) => {
     const isHex = rawValue[0].toLowerCase() === 'x'
     const codePoint = Number.parseInt(isHex ? rawValue.slice(1) : rawValue, isHex ? 16 : 10)
-    if (codePoint > 0x10ffff) {
+    if (!isValidXmlCodePoint(codePoint)) {
       return match
     }
 

@@ -1406,32 +1406,38 @@ function parseCopySource(copySource: string): {
   sourceVersion?: string
 } {
   const normalizedCopySource = copySource.startsWith('/') ? copySource.slice(1) : copySource
-  const [encodedPath, queryParams = ''] = normalizedCopySource.split('?')
-  const [encodedBucketName, ...encodedObjectKeyParts] = encodedPath.split('/')
+  const [encodedPath, ...queryParts] = normalizedCopySource.split('?')
+  const queryParams = queryParts.join('?')
 
-  if (!encodedBucketName) {
-    throw ERRORS.InvalidBucketName('')
+  let decodedPath = ''
+  try {
+    decodedPath = decodeURIComponent(encodedPath)
+  } catch {
+    throw ERRORS.InvalidParameter('CopySource')
   }
 
-  if (!encodedObjectKeyParts.length) {
+  const separatorIdx = decodedPath.indexOf('/')
+  if (separatorIdx <= 0) {
     throw ERRORS.MissingParameter('CopySource')
   }
 
-  try {
-    const searchParams = new URLSearchParams(queryParams)
-    const sourceVersion = searchParams.get('versionId') || undefined
+  const bucketName = decodedPath.slice(0, separatorIdx)
+  const objectKey = decodedPath.slice(separatorIdx + 1)
+  if (!objectKey) {
+    throw ERRORS.MissingParameter('CopySource')
+  }
 
-    if (searchParams.has('versionId') && !sourceVersion) {
-      throw ERRORS.InvalidParameter('CopySource')
-    }
+  const searchParams = new URLSearchParams(queryParams)
+  const sourceVersion = searchParams.get('versionId') || undefined
 
-    return {
-      bucketName: decodeURIComponent(encodedBucketName),
-      objectKey: decodeURIComponent(encodedObjectKeyParts.join('/')),
-      sourceVersion,
-    }
-  } catch {
+  if (searchParams.has('versionId') && !sourceVersion) {
     throw ERRORS.InvalidParameter('CopySource')
+  }
+
+  return {
+    bucketName,
+    objectKey,
+    sourceVersion,
   }
 }
 
@@ -1440,11 +1446,15 @@ function encodeContinuationToken(name: string) {
 }
 
 function decodeContinuationToken(token: string) {
-  const decoded = Buffer.from(token, 'base64').toString().split(':')
-
-  if (decoded.length === 0) {
+  const decoded = Buffer.from(token, 'base64').toString()
+  if (!decoded.startsWith('l:')) {
     throw new Error('Invalid continuation token')
   }
 
-  return decoded[1]
+  const value = decoded.slice(2)
+  if (!value) {
+    throw new Error('Invalid continuation token')
+  }
+
+  return value
 }

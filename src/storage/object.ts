@@ -864,13 +864,14 @@ const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
 }
 
 function encodeContinuationToken(tokenInfo: ContinuationToken) {
-  let result = ''
+  const result: string[] = []
   for (const [k, v] of Object.entries(CONTINUATION_TOKEN_PART_MAP)) {
-    if (tokenInfo[v]) {
-      result += `${k}:${tokenInfo[v]}\n`
+    const value = tokenInfo[v]
+    if (value) {
+      result.push(`${k}:${encodeURIComponent(value)}`)
     }
   }
-  return Buffer.from(result.slice(0, -1)).toString('base64')
+  return Buffer.from(result.join('\n')).toString('base64')
 }
 
 function decodeContinuationToken(token: string): ContinuationToken {
@@ -884,7 +885,13 @@ function decodeContinuationToken(token: string): ContinuationToken {
     if (!partMatch || partMatch.length !== 3 || !(partMatch[1] in CONTINUATION_TOKEN_PART_MAP)) {
       throw new Error('Invalid continuation token')
     }
-    result[CONTINUATION_TOKEN_PART_MAP[partMatch[1]]] = partMatch[2]
+    let value = partMatch[2]
+    try {
+      value = decodeURIComponent(value)
+    } catch {
+      // Backward compatibility: previously cursor values were stored unescaped.
+    }
+    result[CONTINUATION_TOKEN_PART_MAP[partMatch[1]]] = value
   }
   return result
 }

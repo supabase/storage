@@ -578,6 +578,7 @@ describe('objects - list v2 sorting tests', () => {
 })
 
 const LIST_V2_WILDCARD_BUCKET = `list-v2-wildcard-${randomUUID()}`
+const LIST_V2_CURSOR_BUCKET = `list-v2-cursor-${randomUUID()}`
 
 describe('objects - list v2 prefix wildcard handling', () => {
   beforeAll(async () => {
@@ -698,5 +699,100 @@ describe('objects - list v2 prefix wildcard handling', () => {
     const data = response.json<ListObjectsV2Result>()
     expect(data.folders).toHaveLength(0)
     expect(data.objects.map((obj) => obj.name)).toEqual([literalMatch])
+  })
+})
+
+describe('objects - list v2 cursor encoding', () => {
+  beforeAll(async () => {
+    appInstance = app()
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        name: LIST_V2_CURSOR_BUCKET,
+      },
+    })
+    await appInstance.close()
+  })
+
+  afterAll(async () => {
+    appInstance = app()
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket/${LIST_V2_CURSOR_BUCKET}/empty`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    await appInstance.inject({
+      method: 'DELETE',
+      url: `/bucket/${LIST_V2_CURSOR_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    await appInstance.close()
+  })
+
+  test('paginates when keys contain newline and percent characters', async () => {
+    const runId = randomUUID()
+    const prefix = `cursor-${runId}-`
+    const keys = [`${prefix}first-\n-🙂-%.txt`, `${prefix}second-\n-일이삼-:.txt`]
+
+    for (const key of keys) {
+      const uploadResponse = await appInstance.inject({
+        method: 'POST',
+        url: `/object/${LIST_V2_CURSOR_BUCKET}/${encodeURIComponent(key)}`,
+        payload: createUpload('utf8.txt', 'cursor test'),
+        headers: {
+          authorization: `Bearer ${serviceKey}`,
+        },
+      })
+      expect(uploadResponse.statusCode).toBe(200)
+    }
+
+    const page1Response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_CURSOR_BUCKET}`,
+      payload: {
+        with_delimiter: false,
+        prefix,
+        limit: 1,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+    expect(page1Response.statusCode).toBe(200)
+    const page1 = page1Response.json<ListObjectsV2Result>()
+    expect(page1.objects).toHaveLength(1)
+    expect(page1.hasNext).toBe(true)
+    expect(page1.nextCursor).toBeTruthy()
+
+    const page2Response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_CURSOR_BUCKET}`,
+      payload: {
+        with_delimiter: false,
+        prefix,
+        limit: 1,
+        cursor: page1.nextCursor,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+    expect(page2Response.statusCode).toBe(200)
+    const page2 = page2Response.json<ListObjectsV2Result>()
+    expect(page2.objects).toHaveLength(1)
+    expect(page2.hasNext).toBe(false)
+
+    const listed = [page1.objects[0]?.name, page2.objects[0]?.name].filter(Boolean).sort()
+    expect(listed).toEqual([...keys].sort())
   })
 })

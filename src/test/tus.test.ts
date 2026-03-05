@@ -320,6 +320,50 @@ describe('Tus multipart', () => {
       })
     })
 
+    it('will allow uploading using signed upload url with a Unicode object key', async () => {
+      const bucket = await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+      })
+
+      const objectName = `${randomUUID()}-${getUnicodeObjectName()}`
+      const signedUpload = await storage
+        .from(bucketName)
+        .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 3600)
+
+      const result = await new Promise((resolve, reject) => {
+        const upload = new tus.Upload(oneChunkFile, {
+          endpoint: `${localServerAddress}/upload/resumable/sign`,
+          onShouldRetry: () => false,
+          uploadDataDuringCreation: false,
+          headers: {
+            'x-signature': signedUpload.token,
+          },
+          metadata: {
+            bucketName,
+            objectName,
+            contentType: 'image/jpeg',
+            cacheControl: '3600',
+          },
+          onError(error) {
+            reject(error)
+          },
+          onSuccess: () => {
+            resolve(true)
+          },
+        })
+
+        upload.start()
+      })
+
+      expect(result).toEqual(true)
+
+      const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+      expect(dbAsset?.name).toBe(objectName)
+      expect(dbAsset?.bucket_id).toBe(bucket.id)
+    })
+
     it('will allow uploading using signed upload url without authorization token, honouring the owner id', async () => {
       const bucket = await storage.createBucket({
         id: bucketName,

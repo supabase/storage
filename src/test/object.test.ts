@@ -1873,7 +1873,7 @@ describe('testing uploading with generated signed upload URL', () => {
     })
 
     const BUCKET_ID = 'bucket2'
-    const OBJECT_NAME = 'public/sadcat-upload1.png'
+    const OBJECT_NAME = `public/sadcat-upload-${randomUUID()}.png`
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
@@ -1917,10 +1917,11 @@ describe('testing uploading with generated signed upload URL', () => {
     const headers = Object.assign({}, form.getHeaders(), {
       'content-type': 'image/jpeg',
     })
+    const objectName = `public/sadcat-upload-${randomUUID()}.png`
 
     const response = await appInstance.inject({
       method: 'PUT',
-      url: `/object/upload/sign/bucket2/public/sadcat-upload1.png`,
+      url: `/object/upload/sign/bucket2/${objectName}`,
       headers,
       payload: form,
     })
@@ -1934,10 +1935,11 @@ describe('testing uploading with generated signed upload URL', () => {
     const headers = Object.assign({}, form.getHeaders(), {
       'content-type': 'image/jpeg',
     })
+    const objectName = `public/sadcat-upload-${randomUUID()}.png`
 
     const response = await appInstance.inject({
       method: 'PUT',
-      url: `/object/upload/sign/bucket2/public/sadcat-upload1.png?token=xxx`,
+      url: `/object/upload/sign/bucket2/${objectName}?token=xxx`,
       headers,
       payload: form,
     })
@@ -1953,7 +1955,7 @@ describe('testing uploading with generated signed upload URL', () => {
     })
 
     const BUCKET_ID = 'bucket2'
-    const OBJECT_NAME = 'public/sadcat-upload1.png'
+    const OBJECT_NAME = `public/sadcat-upload-${randomUUID()}.png`
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
@@ -1976,7 +1978,7 @@ describe('testing uploading with generated signed upload URL', () => {
     }
 
     const BUCKET_ID = 'bucket2'
-    const OBJECT_NAME = 'signed/sadcat-upload-signed-2.png'
+    const OBJECT_NAME = `signed/sadcat-upload-signed-${randomUUID()}.png`
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
 
     // Upload a file first
@@ -2021,7 +2023,7 @@ describe('testing uploading with generated signed upload URL', () => {
     }
 
     const BUCKET_ID = 'bucket2'
-    const OBJECT_NAME = 'signed/sadcat-upload-signed-3.png'
+    const OBJECT_NAME = `signed/sadcat-upload-signed-${randomUUID()}.png`
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 

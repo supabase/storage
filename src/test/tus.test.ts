@@ -576,6 +576,199 @@ describe('Tus multipart', () => {
     })
   })
 
+  describe('TUS control endpoints', () => {
+    function encodeTusMetadataValue(value: string) {
+      return Buffer.from(value, 'utf8').toString('base64')
+    }
+
+    function buildTusMetadata(objectName: string) {
+      return [
+        `bucketName ${encodeTusMetadataValue(bucketName)}`,
+        `objectName ${encodeTusMetadataValue(objectName)}`,
+        `contentType ${encodeTusMetadataValue('image/jpeg')}`,
+        `cacheControl ${encodeTusMetadataValue('3600')}`,
+      ].join(',')
+    }
+
+    async function createTusUploadSession(objectName: string, authorization: string) {
+      const createResponse = await fetch(`${localServerAddress}/upload/resumable`, {
+        method: 'POST',
+        headers: {
+          authorization,
+          'x-upsert': 'true',
+          'tus-resumable': '1.0.0',
+          'upload-length': '32',
+          'upload-metadata': buildTusMetadata(objectName),
+        },
+      })
+
+      expect(createResponse.status).toBe(201)
+      const location = createResponse.headers.get('location')
+      expect(location).toBeTruthy()
+
+      return new URL(location || '', localServerAddress).toString()
+    }
+
+    async function patchTusUploadSession(uploadUrl: string, authorization: string, body: Buffer) {
+      const patchResponse = await fetch(uploadUrl, {
+        method: 'PATCH',
+        headers: {
+          authorization,
+          'tus-resumable': '1.0.0',
+          'upload-offset': '0',
+          'content-type': 'application/offset+octet-stream',
+          'content-length': String(body.length),
+        },
+        body,
+      })
+
+      expect(patchResponse.status).toBe(204)
+      expect(patchResponse.headers.get('upload-offset')).toBe(String(body.length))
+    }
+
+    test('supports HEAD and DELETE flow for ASCII object keys', async () => {
+      await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+      })
+
+      const authorization = `Bearer ${await serviceKeyAsync}`
+      const objectName = `${randomUUID()}-ascii-control-q?foo=1&bar=%25+plus;semi:colon,.jpg`
+      const uploadUrl = await createTusUploadSession(objectName, authorization)
+
+      const headBeforeDelete = await fetch(uploadUrl, {
+        method: 'HEAD',
+        headers: {
+          authorization,
+          'tus-resumable': '1.0.0',
+        },
+      })
+      expect(headBeforeDelete.status).toBe(200)
+      expect(headBeforeDelete.headers.get('upload-offset')).toBe('0')
+      expect(headBeforeDelete.headers.get('upload-length')).toBe('32')
+
+      const deleteResponse = await fetch(uploadUrl, {
+        method: 'DELETE',
+        headers: {
+          authorization,
+          'tus-resumable': '1.0.0',
+        },
+      })
+      expect([200, 204]).toContain(deleteResponse.status)
+
+      const headAfterDelete = await fetch(uploadUrl, {
+        method: 'HEAD',
+        headers: {
+          authorization,
+          'tus-resumable': '1.0.0',
+        },
+      })
+      expect([404, 410]).toContain(headAfterDelete.status)
+    })
+
+    test('supports HEAD and DELETE flow for Unicode object keys', async () => {
+      await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+      })
+
+      const authorization = `Bearer ${await serviceKeyAsync}`
+      const objectName = `${randomUUID()}-${getUnicodeObjectName()}`
+      const uploadUrl = await createTusUploadSession(objectName, authorization)
+
+      const headBeforeDelete = await fetch(uploadUrl, {
+        method: 'HEAD',
+        headers: {
+          authorization,
+          'tus-resumable': '1.0.0',
+        },
+      })
+      expect(headBeforeDelete.status).toBe(200)
+      expect(headBeforeDelete.headers.get('upload-offset')).toBe('0')
+      expect(headBeforeDelete.headers.get('upload-length')).toBe('32')
+
+      const deleteResponse = await fetch(uploadUrl, {
+        method: 'DELETE',
+        headers: {
+          authorization,
+          'tus-resumable': '1.0.0',
+        },
+      })
+      expect([200, 204]).toContain(deleteResponse.status)
+
+      const headAfterDelete = await fetch(uploadUrl, {
+        method: 'HEAD',
+        headers: {
+          authorization,
+          'tus-resumable': '1.0.0',
+        },
+      })
+      expect([404, 410]).toContain(headAfterDelete.status)
+    })
+
+    test('supports upload completion and object GET for ASCII URL-reserved keys', async () => {
+      const bucket = await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+      })
+
+      const authorization = `Bearer ${await serviceKeyAsync}`
+      const objectName = `${randomUUID()}-ascii-get-q?foo=1&bar=%25+plus;semi:colon,#frag.jpg`
+      const uploadUrl = await createTusUploadSession(objectName, authorization)
+      const payload = Buffer.from('abcdefghijklmnopqrstuvwxyz012345')
+
+      await patchTusUploadSession(uploadUrl, authorization, payload)
+
+      const appInstance = app()
+      try {
+        const getResponse = await appInstance.inject({
+          method: 'GET',
+          url: `/object/${bucket.id}/${encodeURIComponent(objectName)}`,
+          headers: {
+            authorization,
+          },
+        })
+        expect(getResponse.statusCode).toBe(200)
+        expect(getResponse.headers['content-length']).toBe(String(payload.length))
+      } finally {
+        await appInstance.close()
+      }
+    })
+
+    test('supports upload completion and object GET for Unicode URL-reserved keys', async () => {
+      const bucket = await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+      })
+
+      const authorization = `Bearer ${await serviceKeyAsync}`
+      const objectName = `${randomUUID()}-${getUnicodeObjectName()}-q?foo=1&bar=%25+plus;semi:colon,#frag.jpg`
+      const uploadUrl = await createTusUploadSession(objectName, authorization)
+      const payload = Buffer.from('abcdefghijklmnopqrstuvwxyz012345')
+
+      await patchTusUploadSession(uploadUrl, authorization, payload)
+
+      const appInstance = app()
+      try {
+        const getResponse = await appInstance.inject({
+          method: 'GET',
+          url: `/object/${bucket.id}/${encodeURIComponent(objectName)}`,
+          headers: {
+            authorization,
+          },
+        })
+        expect(getResponse.statusCode).toBe(200)
+        expect(getResponse.headers['content-length']).toBe(String(payload.length))
+      } finally {
+        await appInstance.close()
+      }
+    })
+  })
+
   describe('Object key names with Unicode characters', () => {
     it('can be uploaded with the TUS protocol', async () => {
       const objectName = randomUUID() + '-' + getUnicodeObjectName()

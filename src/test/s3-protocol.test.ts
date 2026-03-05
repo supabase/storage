@@ -2282,6 +2282,60 @@ describe('S3 Protocol', () => {
         }
       })
 
+      it('can head an object with Unicode and URL-reserved characters in key', async () => {
+        const bucketName = await createBucket(client)
+        const objectName = `head-${randomUUID()}-일이삼-🙂-q?foo=1&bar=%25+plus;semi:colon,#frag.jpg`
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucketName,
+            Key: objectName,
+            Body: Buffer.alloc(1024),
+          })
+        )
+
+        const headResp = await client.send(
+          new HeadObjectCommand({
+            Bucket: bucketName,
+            Key: objectName,
+          })
+        )
+        expect(headResp.$metadata.httpStatusCode).toEqual(200)
+        expect(headResp.ETag).toBeTruthy()
+      })
+
+      it('can delete an object with Unicode and URL-reserved characters using DeleteObjectCommand', async () => {
+        const bucketName = await createBucket(client)
+        const objectName = `delete-one-${randomUUID()}-éè-中文-🙂-q?foo=1&bar=%25+plus;semi:colon,#frag.jpg`
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucketName,
+            Key: objectName,
+            Body: Buffer.alloc(1024),
+          })
+        )
+
+        await client.send(
+          new DeleteObjectCommand({
+            Bucket: bucketName,
+            Key: objectName,
+          })
+        )
+
+        try {
+          await client.send(
+            new GetObjectCommand({
+              Bucket: bucketName,
+              Key: objectName,
+            })
+          )
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+        }
+      })
+
       it('can paginate ListObjectsV2 with Unicode keys', async () => {
         const bucketName = await createBucket(client)
         const keys = [

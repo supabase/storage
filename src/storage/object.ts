@@ -705,7 +705,6 @@ export class ObjectStorage {
    */
   async signObjectUrl(
     objectName: string,
-    url: string,
     expiresIn: number,
     metadata?: Record<string, string | object | undefined>
   ) {
@@ -722,8 +721,7 @@ export class ObjectStorage {
     // make sure it's never able to specify a role JWT claim
     delete metadata['role']
 
-    const urlParts = url.split('/')
-    const urlToSign = decodeURI(urlParts.splice(3).join('/'))
+    const urlToSign = `${this.bucketId}/${objectName}`
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
     const token = await signJWT({ url: urlToSign, ...metadata }, urlSigningKey, expiresIn)
 
@@ -733,8 +731,13 @@ export class ObjectStorage {
       urlPath = 'render/image'
     }
 
+    const encodedUrlToSign = `${encodeURIComponent(this.bucketId)}/${objectName
+      .split('/')
+      .map((pathToken) => encodeURIComponent(pathToken))
+      .join('/')}`
+
     // @todo parse the url properly
-    return `/${urlPath}/sign/${urlToSign}?token=${token}`
+    return `/${urlPath}/sign/${encodedUrlToSign}?token=${token}`
   }
 
   /**

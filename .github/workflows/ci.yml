@@ -15,17 +15,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test / OS ${{ matrix.platform }} / Node ${{ matrix.node }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ubuntu-24.04]
-        node: ["24"]
-
-    runs-on: ${{ matrix.platform }}
-    timeout-minutes: 15
-
+  lint_build:
+    name: Lint & Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/cache@v5
@@ -37,61 +30,71 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
-          node-version: ${{ matrix.node }}
-
+          node-version: "24"
       - name: Install dependencies
-        run: |
-          npm ci
-
+        run: npm ci
       - name: Lint
-        run: |
-          npm run lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
 
-      - name: Builds successfully
-        run: |
-          npm run build
-
+  test_postgres:
+    name: Test / Postgres
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env: &test_env
+      ANON_KEY: ${{ secrets.ANON_KEY }}
+      SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
+      TENANT_ID: ${{ secrets.TENANT_ID }}
+      REGION: ${{ secrets.REGION }}
+      GLOBAL_S3_BUCKET: ${{ secrets.GLOBAL_S3_BUCKET }}
+      PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
+      AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
+      FILE_SIZE_LIMIT: "52428800"
+      STORAGE_BACKEND: s3
+      MULTITENANT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5433/postgres
+      ADMIN_API_KEYS: apikey
+      ENABLE_IMAGE_TRANSFORMATION: true
+      IMGPROXY_URL: http://127.0.0.1:50020
+      AWS_ACCESS_KEY_ID: supa-storage
+      AWS_SECRET_ACCESS_KEY: secret1234
+      AWS_DEFAULT_REGION: ap-southeast-1
+      GLOBAL_S3_ENDPOINT: http://127.0.0.1:9000
+      GLOBAL_S3_PROTOCOL: http
+      GLOBAL_S3_FORCE_PATH_STYLE: true
+      DB_INSTALL_ROLES: true
+      PG_QUEUE_ENABLE: false
+      MULTI_TENANT: false
+      S3_PROTOCOL_ACCESS_KEY_ID: ${{ secrets.TENANT_ID }}
+      S3_PROTOCOL_ACCESS_KEY_SECRET: ${{ secrets.SERVICE_KEY }}
+      VECTOR_S3_BUCKETS: supa-test-local-dev
+      VECTOR_ENABLED: true
+      ICEBERG_ENABLED: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/cache@v5
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: npm ci
       - name: Tests pass
         run: |
-          mkdir data && chmod -R 777 data && \
+          mkdir -p data && chmod -R 777 data && \
           npm run test:coverage
-        env:
-          ANON_KEY: ${{ secrets.ANON_KEY }}
-          SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
-          TENANT_ID: ${{ secrets.TENANT_ID }}
-          REGION: ${{ secrets.REGION }}
-          GLOBAL_S3_BUCKET: ${{ secrets.GLOBAL_S3_BUCKET }}
-          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
-          AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
-          FILE_SIZE_LIMIT: "52428800"
-          STORAGE_BACKEND: s3
-          MULTITENANT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5433/postgres
-          ADMIN_API_KEYS: apikey
-          ENABLE_IMAGE_TRANSFORMATION: true
-          IMGPROXY_URL: http://127.0.0.1:50020
-          AWS_ACCESS_KEY_ID: supa-storage
-          AWS_SECRET_ACCESS_KEY: secret1234
-          AWS_DEFAULT_REGION: ap-southeast-1
-          GLOBAL_S3_ENDPOINT: http://127.0.0.1:9000
-          GLOBAL_S3_PROTOCOL: http
-          GLOBAL_S3_FORCE_PATH_STYLE: true
-          DB_INSTALL_ROLES: true
-          PG_QUEUE_ENABLE: false
-          MULTI_TENANT: false
-          S3_PROTOCOL_ACCESS_KEY_ID: ${{ secrets.TENANT_ID }}
-          S3_PROTOCOL_ACCESS_KEY_SECRET: ${{ secrets.SERVICE_KEY }}
-          VECTOR_S3_BUCKETS: supa-test-local-dev
-          VECTOR_ENABLED: true
-          ICEBERG_ENABLED: true
-
       - name: Upload coverage results to Coveralls
         uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2.3.7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           fail-on-error: false
         continue-on-error: true
-
       - name: Verify migration idempotency
         run: |
           pg_dump "$DATABASE_URL" \
@@ -108,19 +111,49 @@ jobs:
 
           diff before.sql after.sql || (echo 'Schema mismatch!'; exit 1)
 
-        env:
-          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
-          DB_INSTALL_ROLES: true
-          PG_QUEUE_ENABLE: false
-          MULTI_TENANT: false
-
-      - name: Ensure OrioleDB migration compatibility
+  test_oriole:
+    name: Test / OrioleDB
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env: *test_env
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/cache@v5
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: npm ci
+      - name: Tests pass with OrioleDB
         run: |
-          npm run infra:restart:oriole
-        env:
-          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
-          DB_INSTALL_ROLES: true
-          PG_QUEUE_ENABLE: false
-          MULTI_TENANT: false
+          mkdir -p data && chmod -R 777 data && \
+          npm run test:oriole
+      - name: Verify OrioleDB migration idempotency
+        run: |
+          docker compose --project-directory . \
+            -f ./.docker/docker-compose-infra.yml \
+            -f ./.docker/docker-compose-infra-oriole-override.yml \
+            exec -T tenant_db \
+            pg_dump -U postgres -d postgres \
+            --exclude-table-data=storage.migrations \
+            --restrict-key=test \
+            > before-oriole.sql
+
+          npm run migration:test-idempotency
+
+          docker compose --project-directory . \
+            -f ./.docker/docker-compose-infra.yml \
+            -f ./.docker/docker-compose-infra-oriole-override.yml \
+            exec -T tenant_db \
+            pg_dump -U postgres -d postgres \
+            --exclude-table-data=storage.migrations \
+            --restrict-key=test \
+            > after-oriole.sql
+
+          diff before-oriole.sql after-oriole.sql || (echo 'Oriole schema mismatch!'; exit 1)

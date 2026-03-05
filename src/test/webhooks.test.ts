@@ -8,7 +8,10 @@ mergeConfig({
 })
 
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
+import { StorageKnexDB } from '@storage/database'
+import { TenantLocation } from '@storage/locator'
 import { Obj } from '@storage/schemas'
+import { Storage } from '@storage/storage'
 import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import FormData from 'form-data'
@@ -385,17 +388,195 @@ describe('Webhooks', () => {
       })
     )
   })
+
+  it('will emit Unicode and URL-reserved object names in creation webhook payloads', async () => {
+    const form = new FormData()
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization,
+    })
+
+    const objectName = `public/${randomUUID()}-폴더/子目录/파일-🙂-q?foo=1&bar=%25+plus;semi:colon,#frag.png`
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/bucket6/${encodeURIComponent(objectName)}`,
+      headers,
+      payload: form,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(sendSpy).toBeCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          event: expect.objectContaining({
+            type: 'ObjectCreated:Post',
+            payload: expect.objectContaining({
+              bucketId: 'bucket6',
+              name: objectName,
+            }),
+          }),
+        }),
+      })
+    )
+  })
+
+  it('will emit a webhook with ObjectCreated:Put when uploading with upsert to an existing key', async () => {
+    const objectName = `upsert-${randomUUID()}-existing-key.png`
+    await createObject(pg, 'bucket6', objectName)
+
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const response = await appInstance.inject({
+      method: 'PUT',
+      url: `/object/bucket6/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+        'Content-Type': 'image/png',
+      },
+      payload: fs.createReadStream(`./src/test/assets/sadcat.jpg`),
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const webhookCalls = sendSpy.mock.calls
+      .map(([payload]) => payload)
+      .filter((payload) => payload?.name === 'webhooks')
+
+    expect(webhookCalls).toHaveLength(1)
+    expect(webhookCalls[0]).toEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          event: expect.objectContaining({
+            type: 'ObjectCreated:Put',
+            payload: expect.objectContaining({
+              bucketId: 'bucket6',
+              name: objectName,
+              uploadType: 'standard',
+            }),
+          }),
+        }),
+      })
+    )
+  })
+
+  it('will emit a webhook with ObjectUpdated:Metadata when object metadata is updated', async () => {
+    const objectName = `metadata-${randomUUID()}-update-target.png`
+    const obj = await createObject(pg, 'bucket6', objectName)
+
+    const db = new StorageKnexDB(pg, {
+      tenantId,
+      host: 'localhost',
+    })
+    const storage = new Storage({} as any, db, new TenantLocation('bucket'))
+
+    const metadata = {
+      cacheControl: 'public, max-age=120',
+      contentLength: 3746,
+      eTag: 'etag-metadata-update',
+      lastModified: new Date('2026-03-05T12:00:00.000Z'),
+      httpStatusCode: 200,
+      mimetype: 'image/png',
+      size: 3746,
+      xRobotsTag: 'noindex',
+    }
+
+    await storage.from('bucket6').updateObjectMetadata(objectName, metadata)
+
+    expect(sendSpy).toBeCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'webhooks',
+        data: expect.objectContaining({
+          event: expect.objectContaining({
+            type: 'ObjectUpdated:Metadata',
+            payload: expect.objectContaining({
+              bucketId: 'bucket6',
+              name: objectName,
+              metadata: expect.objectContaining({
+                cacheControl: metadata.cacheControl,
+                mimetype: metadata.mimetype,
+                size: metadata.size,
+                xRobotsTag: metadata.xRobotsTag,
+              }),
+            }),
+          }),
+        }),
+      })
+    )
+  })
+
+  it('will preserve Unicode and URL-reserved object names in move webhook payloads', async () => {
+    const sourceKey = `source-${randomUUID()}-일이삼/子目录/파일-🙂-q?foo=1&bar=%25+plus;semi:colon,#frag.png`
+    const destinationKey = `dest-${randomUUID()}-폴더/子目录/파일-🙂-q?x=1&y=%25+plus;semi:colon,#frag.png`
+    const obj = await createObject(pg, 'bucket6', sourceKey)
+
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/move`,
+      headers: {
+        authorization,
+      },
+      payload: {
+        bucketId: 'bucket6',
+        sourceKey: obj.name,
+        destinationKey,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(sendSpy).toBeCalledTimes(3)
+
+    expect(sendSpy).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          event: expect.objectContaining({
+            type: 'ObjectRemoved:Move',
+            payload: expect.objectContaining({
+              bucketId: 'bucket6',
+              name: sourceKey,
+            }),
+          }),
+        }),
+      })
+    )
+
+    expect(sendSpy).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          event: expect.objectContaining({
+            type: 'ObjectCreated:Move',
+            payload: expect.objectContaining({
+              bucketId: 'bucket6',
+              name: destinationKey,
+              oldObject: expect.objectContaining({
+                bucketId: 'bucket6',
+                name: sourceKey,
+              }),
+            }),
+          }),
+        }),
+      })
+    )
+  })
 })
 
-async function createObject(pg: TenantConnection, bucketId: string) {
-  const objectName = Date.now()
+async function createObject(
+  pg: TenantConnection,
+  bucketId: string,
+  objectName = Date.now().toString()
+) {
   const tnx = await pg.transaction()
 
   const [data] = await tnx
     .from<Obj>('objects')
     .insert([
       {
-        name: objectName.toString(),
+        name: objectName,
         bucket_id: bucketId,
         version: randomUUID(),
         metadata: {

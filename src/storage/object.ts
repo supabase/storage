@@ -871,9 +871,11 @@ const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
   c: 'sortColumn',
   a: 'sortColumnAfter',
 }
+const CONTINUATION_TOKEN_VERSION = '1'
+const CONTINUATION_TOKEN_VERSION_KEY = 'v'
 
 function encodeContinuationToken(tokenInfo: ContinuationToken) {
-  const result: string[] = []
+  const result: string[] = [`${CONTINUATION_TOKEN_VERSION_KEY}:${CONTINUATION_TOKEN_VERSION}`]
   for (const [k, v] of Object.entries(CONTINUATION_TOKEN_PART_MAP)) {
     const value = tokenInfo[v]
     if (value) {
@@ -889,18 +891,47 @@ function decodeContinuationToken(token: string): ContinuationToken {
     startAfter: '',
     sortOrder: 'asc',
   }
+  const parsedParts: { key: string; value: string }[] = []
+  let version: string | undefined
+
   for (const part of decodedParts) {
     const partMatch = part.match(/^(\S):(.*)/)
-    if (!partMatch || partMatch.length !== 3 || !(partMatch[1] in CONTINUATION_TOKEN_PART_MAP)) {
+    if (!partMatch || partMatch.length !== 3) {
       throw new Error('Invalid continuation token')
     }
-    let value = partMatch[2]
-    try {
-      value = decodeURIComponent(value)
-    } catch {
-      // Backward compatibility: previously cursor values were stored unescaped.
+    const key = partMatch[1]
+    const value = partMatch[2]
+
+    if (key === CONTINUATION_TOKEN_VERSION_KEY) {
+      if (version !== undefined) {
+        throw new Error('Invalid continuation token')
+      }
+      version = value
+      continue
     }
-    result[CONTINUATION_TOKEN_PART_MAP[partMatch[1]]] = value
+
+    if (!(key in CONTINUATION_TOKEN_PART_MAP)) {
+      throw new Error('Invalid continuation token')
+    }
+    parsedParts.push({ key, value })
+  }
+
+  if (version && version !== CONTINUATION_TOKEN_VERSION) {
+    throw new Error('Invalid continuation token')
+  }
+
+  for (const part of parsedParts) {
+    if (!version) {
+      // Backward compatibility: legacy cursor values were stored unescaped.
+      result[CONTINUATION_TOKEN_PART_MAP[part.key]] = part.value
+      continue
+    }
+
+    try {
+      result[CONTINUATION_TOKEN_PART_MAP[part.key]] = decodeURIComponent(part.value)
+    } catch {
+      throw new Error('Invalid continuation token')
+    }
   }
   return result
 }

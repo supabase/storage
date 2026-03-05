@@ -1,7 +1,6 @@
 import { ERRORS } from '@internal/errors'
 import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { IncomingMessage, Server, ServerResponse } from 'http'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../types'
@@ -30,16 +29,9 @@ interface getObjectRequestInterface extends AuthenticatedRangeRequest {
   Querystring: FromSchema<typeof getObjectQuerySchema>
 }
 
-async function requestHandler(
-  request: FastifyRequest<getObjectRequestInterface, Server, IncomingMessage>,
-  response: FastifyReply<
-    getObjectRequestInterface,
-    Server,
-    IncomingMessage,
-    ServerResponse,
-    unknown
-  >
-) {
+type GetObjectRequest = FastifyRequest<getObjectRequestInterface>
+
+async function requestHandler(request: GetObjectRequest, response: FastifyReply) {
   const { bucketName } = request.params
   const { download } = request.query
   const objectName = request.params['*']

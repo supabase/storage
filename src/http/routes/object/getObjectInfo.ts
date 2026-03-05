@@ -1,7 +1,6 @@
 import { ERRORS } from '@internal/errors'
 import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { IncomingMessage, Server, ServerResponse } from 'http'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../types'
@@ -22,15 +21,11 @@ interface getObjectRequestInterface extends AuthenticatedRangeRequest {
   Params: FromSchema<typeof getObjectParamsSchema>
 }
 
+type GetObjectInfoRequest = FastifyRequest<getObjectRequestInterface>
+
 async function requestHandler(
-  request: FastifyRequest<getObjectRequestInterface, Server, IncomingMessage>,
-  response: FastifyReply<
-    getObjectRequestInterface,
-    Server,
-    IncomingMessage,
-    ServerResponse,
-    unknown
-  >,
+  request: GetObjectInfoRequest,
+  response: FastifyReply,
   publicRoute = false,
   method: 'head' | 'info' = 'head'
 ) {

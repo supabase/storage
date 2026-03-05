@@ -330,7 +330,6 @@ export class ObjectStorage {
       throw ERRORS.NoSuchKey(sourceKey)
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const baseMetadata = originObject.metadata || {}
     const destinationMetadata = copyMetadata
       ? baseMetadata

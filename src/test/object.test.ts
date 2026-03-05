@@ -1652,7 +1652,7 @@ describe('testing deleting multiple objects', () => {
     const { size } = fs.statSync(path)
     const prefixes = [
       `authenticated/delete-many-${randomUUID()}-일이삼-🙂.png`,
-      `authenticated/delete-many-${randomUUID()}-éè-中文.png`,
+      `authenticated/delete-many-${randomUUID()}-éè-中文-?query&x=1#frag%25+plus;semi:colon,.png`,
     ]
 
     for (const prefix of prefixes) {

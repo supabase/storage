@@ -1,4 +1,6 @@
 DO $$
+DECLARE
+  server_encoding text := current_setting('server_encoding');
 BEGIN
   IF NOT EXISTS (
     SELECT 1
@@ -9,13 +11,25 @@ BEGIN
       AND n.nspname = 'storage'
       AND t.relname = 'objects'
   ) THEN
-    ALTER TABLE "storage"."objects"
-      ADD CONSTRAINT objects_name_check
-      CHECK (
-        name !~ E'[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]'
-        AND POSITION(U&'\FFFE' IN name) = 0
-        AND POSITION(U&'\FFFF' IN name) = 0
-      );
+    IF server_encoding = 'SQL_ASCII' THEN
+      EXECUTE $ddl$
+        ALTER TABLE "storage"."objects"
+          ADD CONSTRAINT objects_name_check
+          CHECK (
+            name !~ E'[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]'
+          )
+      $ddl$;
+    ELSE
+      EXECUTE $ddl$
+        ALTER TABLE "storage"."objects"
+          ADD CONSTRAINT objects_name_check
+          CHECK (
+            name !~ E'[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]'
+            AND POSITION(U&'\FFFE' IN name) = 0
+            AND POSITION(U&'\FFFF' IN name) = 0
+          )
+      $ddl$;
+    END IF;
   END IF;
 END
 $$;

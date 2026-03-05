@@ -2,6 +2,7 @@ import { ListVectorBucketsInput } from '@aws-sdk/client-s3vectors'
 import { wait } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { hashStringToInt } from '@internal/hashing'
+import { escapeLike } from '@storage/database'
 import { VectorBucket } from '@storage/schemas'
 import { VectorIndex } from '@storage/schemas/vector'
 import { Knex } from 'knex'
@@ -90,7 +91,7 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
   async listBuckets(param: ListVectorBucketsInput): Promise<ListBucketResult> {
     const query = this.knex.withSchema('storage').table<VectorBucket>('buckets_vectors')
     if (param.prefix) {
-      query.where('id', 'like', `${param.prefix}%`)
+      query.where('id', 'like', `${escapeLike(param.prefix)}%`)
     }
 
     if (param.nextToken) {
@@ -169,11 +170,11 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
       .table('vector_indexes')
 
     if (command.prefix) {
-      query.andWhere('name', 'like', `${command.prefix}%`)
+      query.andWhere('name', 'like', `${escapeLike(command.prefix)}%`)
     }
 
     if (command.nextToken) {
-      query.andWhere('id', '>', command.nextToken)
+      query.andWhere('name', '>', command.nextToken)
     }
 
     const result = await query.limit(maxResults + 1)

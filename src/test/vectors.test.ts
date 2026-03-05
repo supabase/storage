@@ -666,6 +666,152 @@ describe('Vectors API', () => {
       })
     })
 
+    it('supports prefix filtering with nextToken for buckets', async () => {
+      const runId = Date.now().toString(36)
+      const prefix = `page-bucket-${runId}`
+      const firstBucket = `${prefix}-a`
+      const secondBucket = `${prefix}-b`
+
+      await s3Vector.createBucket(firstBucket)
+      await s3Vector.createBucket(secondBucket)
+      await s3Vector.createBucket(`other-${runId}-bucket`)
+
+      const page1Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          prefix,
+          maxResults: 1,
+        },
+      })
+
+      expect(page1Response.statusCode).toBe(200)
+      const page1 = JSON.parse(page1Response.body)
+      expect(page1.vectorBuckets).toHaveLength(1)
+      expect(page1.vectorBuckets[0].vectorBucketName.startsWith(prefix)).toBe(true)
+      expect(page1.nextToken).toBeDefined()
+
+      const page2Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          prefix,
+          maxResults: 1,
+          nextToken: page1.nextToken,
+        },
+      })
+
+      expect(page2Response.statusCode).toBe(200)
+      const page2 = JSON.parse(page2Response.body)
+      expect(page2.vectorBuckets).toHaveLength(1)
+      expect(page2.vectorBuckets[0].vectorBucketName.startsWith(prefix)).toBe(true)
+      expect(page2.vectorBuckets[0].vectorBucketName).not.toBe(
+        page1.vectorBuckets[0].vectorBucketName
+      )
+    })
+
+    it('returns nextToken only on truncated bucket pages', async () => {
+      const runId = Date.now().toString(36)
+      const prefix = `terminal-bucket-${runId}`
+
+      await s3Vector.createBucket(`${prefix}-a`)
+      await s3Vector.createBucket(`${prefix}-b`)
+
+      const page1Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          prefix,
+          maxResults: 1,
+        },
+      })
+
+      expect(page1Response.statusCode).toBe(200)
+      const page1 = JSON.parse(page1Response.body)
+      expect(page1.nextToken).toBeDefined()
+
+      const page2Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          prefix,
+          maxResults: 1,
+          nextToken: page1.nextToken,
+        },
+      })
+
+      expect(page2Response.statusCode).toBe(200)
+      const page2 = JSON.parse(page2Response.body)
+      expect(page2.vectorBuckets).toHaveLength(1)
+      expect(page2.nextToken).toBeUndefined()
+    })
+
+    it('treats % as a literal character in bucket prefix filtering', async () => {
+      const runId = Date.now().toString(36)
+      const prefix = `%literal-${runId}`
+      const matchingBucket = `${prefix}-bucket`
+      const nonMatchingBucket = `x${prefix}-bucket`
+
+      await s3Vector.createBucket(matchingBucket)
+      await s3Vector.createBucket(nonMatchingBucket)
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          prefix,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const body = JSON.parse(response.body)
+      const names = body.vectorBuckets.map((bucket: any) => bucket.vectorBucketName)
+      expect(names).toContain(matchingBucket)
+      expect(names).not.toContain(nonMatchingBucket)
+    })
+
+    it('treats _ as a literal character in bucket prefix filtering', async () => {
+      const runId = Date.now().toString(36)
+      const prefix = `_literal-${runId}`
+      const matchingBucket = `${prefix}-bucket`
+      const nonMatchingBucket = `aliteral-${runId}-bucket`
+
+      await s3Vector.createBucket(matchingBucket)
+      await s3Vector.createBucket(nonMatchingBucket)
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          prefix,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const body = JSON.parse(response.body)
+      const names = body.vectorBuckets.map((bucket: any) => bucket.vectorBucketName)
+      expect(names).toContain(matchingBucket)
+      expect(names).not.toContain(nonMatchingBucket)
+    })
+
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
@@ -932,6 +1078,43 @@ describe('Vectors API', () => {
       expect(body.indexes.length).toBeLessThanOrEqual(1)
     })
 
+    it('supports pagination with nextToken for indexes', async () => {
+      const page1Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          maxResults: 1,
+        },
+      })
+
+      expect(page1Response.statusCode).toBe(200)
+      const page1 = JSON.parse(page1Response.body)
+      expect(page1.indexes).toHaveLength(1)
+      expect(page1.nextToken).toBeDefined()
+
+      const page2Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          maxResults: 1,
+          nextToken: page1.nextToken,
+        },
+      })
+
+      expect(page2Response.statusCode).toBe(200)
+      const page2 = JSON.parse(page2Response.body)
+      expect(page2.indexes).toHaveLength(1)
+      expect(page2.indexes[0].indexName).not.toBe(page1.indexes[0].indexName)
+    })
+
     it('should support prefix filtering', async () => {
       const prefix = 'index-a'
       const response = await appInstance.inject({
@@ -951,6 +1134,191 @@ describe('Vectors API', () => {
       body.indexes.forEach((index: any) => {
         expect(index.indexName).toMatch(new RegExp(`^${prefix}`))
       })
+    })
+
+    it('supports prefix filtering with nextToken for indexes', async () => {
+      const runId = Date.now().toString(36)
+      const prefix = `page-index-${runId}`
+
+      const createFirstResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/CreateIndex',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          dataType: 'float32',
+          dimension: 128,
+          distanceMetric: 'cosine',
+          indexName: `${prefix}-a`,
+          vectorBucketName,
+        },
+      })
+      expect(createFirstResponse.statusCode).toBe(200)
+
+      const createSecondResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/CreateIndex',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          dataType: 'float32',
+          dimension: 128,
+          distanceMetric: 'cosine',
+          indexName: `${prefix}-b`,
+          vectorBucketName,
+        },
+      })
+      expect(createSecondResponse.statusCode).toBe(200)
+
+      const page1Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          prefix,
+          maxResults: 1,
+        },
+      })
+
+      expect(page1Response.statusCode).toBe(200)
+      const page1 = JSON.parse(page1Response.body)
+      expect(page1.indexes).toHaveLength(1)
+      expect(page1.indexes[0].indexName.startsWith(prefix)).toBe(true)
+      expect(page1.nextToken).toBeDefined()
+
+      const page2Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          prefix,
+          maxResults: 1,
+          nextToken: page1.nextToken,
+        },
+      })
+
+      expect(page2Response.statusCode).toBe(200)
+      const page2 = JSON.parse(page2Response.body)
+      expect(page2.indexes).toHaveLength(1)
+      expect(page2.indexes[0].indexName.startsWith(prefix)).toBe(true)
+      expect(page2.indexes[0].indexName).not.toBe(page1.indexes[0].indexName)
+    })
+
+    it('returns nextToken only on truncated index pages', async () => {
+      const runId = Date.now().toString(36)
+      const prefix = `terminal-index-${runId}`
+
+      const createFirstResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/CreateIndex',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          dataType: 'float32',
+          dimension: 128,
+          distanceMetric: 'cosine',
+          indexName: `${prefix}-a`,
+          vectorBucketName,
+        },
+      })
+      expect(createFirstResponse.statusCode).toBe(200)
+
+      const createSecondResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/CreateIndex',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          dataType: 'float32',
+          dimension: 128,
+          distanceMetric: 'cosine',
+          indexName: `${prefix}-b`,
+          vectorBucketName,
+        },
+      })
+      expect(createSecondResponse.statusCode).toBe(200)
+
+      const page1Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          prefix,
+          maxResults: 1,
+        },
+      })
+
+      expect(page1Response.statusCode).toBe(200)
+      const page1 = JSON.parse(page1Response.body)
+      expect(page1.nextToken).toBeDefined()
+
+      const page2Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          prefix,
+          maxResults: 1,
+          nextToken: page1.nextToken,
+        },
+      })
+
+      expect(page2Response.statusCode).toBe(200)
+      const page2 = JSON.parse(page2Response.body)
+      expect(page2.indexes).toHaveLength(1)
+      expect(page2.nextToken).toBeUndefined()
+    })
+
+    it('treats % as a literal character in index prefix filtering', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          prefix: '%',
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const body = JSON.parse(response.body)
+      expect(body.indexes).toHaveLength(0)
+    })
+
+    it('treats _ as a literal character in index prefix filtering', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          prefix: '_',
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const body = JSON.parse(response.body)
+      expect(body.indexes).toHaveLength(0)
     })
 
     it('should require authentication with service role', async () => {

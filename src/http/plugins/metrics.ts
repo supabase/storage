@@ -88,19 +88,17 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
         const statusCode = groupStatusCodes
           ? `${Math.floor(reply.statusCode / 100)}xx`
           : String(reply.statusCode)
-        const tenantId = request.tenantId || ''
 
         const attributes = {
           method,
           route,
           operation: request.operation?.type || 'unknown',
           status_code: statusCode,
-          tenantId,
+          tenantId: request.tenantId || '',
         }
 
-        // Record metrics
+        // Record duration (histogram count replaces httpRequestsTotal)
         httpRequestDuration.record(durationSeconds, attributes)
-        httpRequestsTotal.add(1, attributes)
 
         // Record request size from content-length header
         const requestContentLength = request.headers['content-length']

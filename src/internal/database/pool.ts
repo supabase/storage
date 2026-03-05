@@ -157,6 +157,7 @@ export class PoolManager {
  */
 class TenantPool implements PoolStrategy {
   protected pool?: Knex
+  protected monitorHandle?: ReturnType<typeof setInterval>
 
   constructor(protected readonly options: TenantConnectionOptions) {}
 
@@ -166,10 +167,12 @@ class TenantPool implements PoolStrategy {
     }
 
     this.pool = this.createKnexPool()
+    this.startMonitor()
     return this.pool
   }
 
   destroy(): Promise<void> {
+    this.stopMonitor()
     const originalPool = this.pool
 
     if (!originalPool) {
@@ -178,6 +181,27 @@ class TenantPool implements PoolStrategy {
 
     this.pool = undefined
     return this.drainPool(originalPool)
+  }
+
+  protected startMonitor() {
+    this.monitorHandle = setInterval(() => {
+      const tarnPool = this.pool?.client?.pool
+      if (!tarnPool) return
+
+      dbInUseConnection.record(tarnPool.numUsed(), { tenant_id: this.options.tenantId })
+      dbActiveConnection.record(tarnPool.numUsed() + tarnPool.numFree(), {
+        tenant_id: this.options.tenantId,
+      })
+    }, 2000)
+
+    this.monitorHandle.unref()
+  }
+
+  protected stopMonitor() {
+    if (this.monitorHandle) {
+      clearInterval(this.monitorHandle)
+      this.monitorHandle = undefined
+    }
   }
 
   getSettings() {
@@ -208,6 +232,7 @@ class TenantPool implements PoolStrategy {
       return
     }
 
+    this.stopMonitor()
     const originalPool = this.pool
 
     this.options.clusterSize = options.clusterSize
@@ -255,9 +280,8 @@ class TenantPool implements PoolStrategy {
     })
 
     const maxConnections = settings.maxConnections
-    const tenantId = this.options.tenantId
 
-    const pool = knex({
+    return knex({
       client: 'pg',
       version: dbPostgresVersion,
       searchPath: settings.searchPath,
@@ -276,50 +300,5 @@ class TenantPool implements PoolStrategy {
       },
       acquireConnectionTimeout: databaseConnectionTimeout,
     })
-
-    // Track total connections in pool per tenant
-    pool.client.pool.on('createSuccess', () => {
-      dbActiveConnection.add(1, { tenant_id: tenantId })
-    })
-
-    pool.client.pool.on('destroySuccess', () => {
-      dbActiveConnection.add(-1, { tenant_id: tenantId })
-    })
-
-    // Track in-use connections per tenant
-    pool.client.pool.on('acquireSuccess', () => {
-      dbInUseConnection.add(1, { tenant_id: tenantId })
-    })
-
-    pool.client.pool.on('release', () => {
-      dbInUseConnection.add(-1, { tenant_id: tenantId })
-    })
-
-    // Track connection acquisition time using eventId to correlate requests with completions
-    const pendingAcquires = new Map<number, number>()
-
-    pool.client.pool.on('acquireRequest', (eventId: number) => {
-      pendingAcquires.set(eventId, performance.now())
-    })
-
-    pool.client.pool.on('acquireSuccess', (eventId: number) => {
-      const startTime = pendingAcquires.get(eventId)
-      if (startTime !== undefined) {
-        pendingAcquires.delete(eventId)
-        const durationSeconds = (performance.now() - startTime) / 1000
-        dbConnectionAcquireTime.record(durationSeconds, { tenant_id: tenantId })
-      }
-    })
-
-    pool.client.pool.on('acquireFail', (eventId: number) => {
-      const startTime = pendingAcquires.get(eventId)
-      if (startTime !== undefined) {
-        pendingAcquires.delete(eventId)
-        const durationSeconds = (performance.now() - startTime) / 1000
-        dbConnectionAcquireTime.record(durationSeconds, { tenant_id: tenantId, failed: 'true' })
-      }
-    })
-
-    return pool
   }
 }

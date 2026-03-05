@@ -16,6 +16,7 @@ const build = (opts: FastifyServerOptions = {}): FastifyInstance => {
   app.register(routes.migrations, { prefix: 'migrations' })
   app.register(routes.s3Credentials, { prefix: 's3' })
   app.register(routes.queue, { prefix: 'queue' })
+  app.register(routes.metricsConfig, { prefix: 'metrics' })
 
   // Register /metrics endpoint - uses OTel Prometheus exporter
   if (prometheusMetricsEnabled) {

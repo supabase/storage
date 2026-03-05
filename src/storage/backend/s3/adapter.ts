@@ -52,6 +52,13 @@ export interface S3ClientOptions {
   requestTimeout?: number
 }
 
+function encodeCopySource(bucket: string, key: string): string {
+  return `${encodeURIComponent(bucket)}/${key
+    .split('/')
+    .map((pathToken) => encodeURIComponent(pathToken))
+    .join('/')}`
+}
+
 /**
  * S3Backend
  * Interacts with a s3-compatible file system with this S3Adapter
@@ -255,7 +262,7 @@ export class S3Backend implements StorageBackendAdapter {
     try {
       const command = new CopyObjectCommand({
         Bucket: bucket,
-        CopySource: encodeURIComponent(`${bucket}/${withOptionalVersion(source, version)}`),
+        CopySource: encodeCopySource(bucket, withOptionalVersion(source, version)),
         Key: withOptionalVersion(destination, destinationVersion),
         CopySourceIfMatch: conditions?.ifMatch,
         CopySourceIfNoneMatch: conditions?.ifNoneMatch,
@@ -568,8 +575,9 @@ export class S3Backend implements StorageBackendAdapter {
       Key: withOptionalVersion(key, version),
       UploadId,
       PartNumber,
-      CopySource: encodeURIComponent(
-        `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceKeyVersion)}`
+      CopySource: encodeCopySource(
+        storageS3Bucket,
+        withOptionalVersion(sourceKey, sourceKeyVersion)
       ),
       CopySourceRange: bytesRange ? `bytes=${bytesRange.fromByte}-${bytesRange.toByte}` : undefined,
     })

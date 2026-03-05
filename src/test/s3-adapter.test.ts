@@ -1,6 +1,6 @@
 'use strict'
 
-import { S3Client, UploadPartCopyCommand } from '@aws-sdk/client-s3'
+import { CopyObjectCommand, S3Client, UploadPartCopyCommand } from '@aws-sdk/client-s3'
 import { Readable } from 'stream'
 import { S3Backend } from '../storage/backend/s3/adapter'
 
@@ -13,6 +13,12 @@ jest.mock('@aws-sdk/client-s3', () => {
     })),
   }
 })
+
+const encodeCopySourceByPathToken = (bucket: string, key: string) =>
+  `${encodeURIComponent(bucket)}/${key
+    .split('/')
+    .map((pathToken) => encodeURIComponent(pathToken))
+    .join('/')}`
 
 describe('S3Backend', () => {
   let mockSend: jest.Mock
@@ -75,8 +81,42 @@ describe('S3Backend', () => {
     })
   })
 
+  describe('copyObject', () => {
+    test('should preserve "/" and encode path tokens in CopySource', async () => {
+      const lastModified = new Date('2024-01-01T00:00:00.000Z')
+      mockSend.mockResolvedValue({
+        CopyObjectResult: {
+          ETag: '"copy-etag"',
+          LastModified: lastModified,
+        },
+        $metadata: {
+          httpStatusCode: 200,
+        },
+      })
+
+      const backend = new S3Backend({
+        region: 'us-east-1',
+        endpoint: 'http://localhost:9000',
+      })
+
+      const sourceKey = 'source path/일이삼-🙂?#%.jpg'
+      const destinationKey = 'dest/path/copied-🙂.jpg'
+
+      await backend.copyObject('test-bucket', sourceKey, undefined, destinationKey, undefined)
+
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      const command = mockSend.mock.calls[0][0] as CopyObjectCommand
+      expect(command).toBeInstanceOf(CopyObjectCommand)
+      expect(command.input.CopySource).toBe(
+        encodeCopySourceByPathToken('test-bucket', sourceKey)
+      )
+      expect(command.input.CopySource).toContain('test-bucket/source%20path/')
+      expect(command.input.CopySource).not.toContain('test-bucket%2F')
+    })
+  })
+
   describe('uploadPartCopy', () => {
-    test('should URL-encode CopySource for unicode keys', async () => {
+    test('should preserve "/" and encode path tokens in CopySource', async () => {
       const lastModified = new Date('2024-01-01T00:00:00.000Z')
       mockSend.mockResolvedValue({
         CopyPartResult: {
@@ -90,7 +130,7 @@ describe('S3Backend', () => {
         endpoint: 'http://localhost:9000',
       })
 
-      const sourceKey = 'source/path/일이삼-🙂.jpg'
+      const sourceKey = 'source path/folder/일이삼-🙂?#%.jpg'
       const destinationKey = 'dest/path/copied-🙂.jpg'
 
       const result = await backend.uploadPartCopy(
@@ -107,7 +147,11 @@ describe('S3Backend', () => {
       expect(mockSend).toHaveBeenCalledTimes(1)
       const command = mockSend.mock.calls[0][0] as UploadPartCopyCommand
       expect(command).toBeInstanceOf(UploadPartCopyCommand)
-      expect(command.input.CopySource).toBe(encodeURIComponent(`test-bucket/${sourceKey}`))
+      expect(command.input.CopySource).toBe(
+        encodeCopySourceByPathToken('test-bucket', sourceKey)
+      )
+      expect(command.input.CopySource).toContain('test-bucket/source%20path/folder/')
+      expect(command.input.CopySource).not.toContain('test-bucket%2F')
       expect(command.input.CopySourceRange).toBe('bytes=0-1024')
       expect(result).toEqual({
         eTag: '"copy-etag"',

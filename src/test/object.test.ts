@@ -2303,6 +2303,63 @@ describe('testing generating signed URLs', () => {
     expect(getResponse.statusCode).toBe(200)
     expect(getResponse.headers['etag']).toBe('abc')
   })
+
+  test('can generate and use batch signed URLs for nested Unicode and URL-reserved paths', async () => {
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+    const objectNames = [
+      `signed-batch-${randomUUID()}-폴더?x=1/세그먼트#tag/leaf+plus;semi,.png`,
+      `signed-batch-${randomUUID()}-éè/中文&name=1/끝🙂.png`,
+    ]
+
+    for (const objectName of objectNames) {
+      const uploadResponse = await appInstance.inject({
+        method: 'PUT',
+        url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+        headers: {
+          authorization,
+          'Content-Length': size,
+          'Content-Type': 'image/jpeg',
+        },
+        payload: fs.createReadStream(path),
+      })
+      expect(uploadResponse.statusCode).toBe(200)
+    }
+
+    const signResponse = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2',
+      headers: {
+        authorization,
+      },
+      payload: {
+        expiresIn: 60,
+        paths: objectNames,
+      },
+    })
+    expect(signResponse.statusCode).toBe(200)
+
+    const signedObjects =
+      signResponse.json<{ error: string | null; path: string; signedURL: string | null }[]>()
+    expect(signedObjects).toHaveLength(2)
+
+    for (const signedObject of signedObjects) {
+      expect(signedObject.error).toBeNull()
+      expect(objectNames).toContain(signedObject.path)
+      expect(signedObject.signedURL).toBeTruthy()
+
+      const signedURLParsed = new URL(signedObject.signedURL || '', 'http://localhost')
+      expect(signedURLParsed.searchParams.get('token')).toBeTruthy()
+
+      const getResponse = await appInstance.inject({
+        method: 'GET',
+        url: `${signedURLParsed.pathname}${signedURLParsed.search}`,
+      })
+      expect(getResponse.statusCode).toBe(200)
+      expect(getResponse.headers['etag']).toBe('abc')
+    }
+  })
 })
 
 /**
@@ -3420,6 +3477,48 @@ describe('Object key names with Unicode characters', () => {
     expect(token).toBeTruthy()
     const signedUploadURL = new URL(signedUpload.url, 'http://localhost')
     expect(signedUploadURL.searchParams.get('token')).toBe(token)
+
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const uploadResponse = await appInstance.inject({
+      method: 'PUT',
+      url: `${signedUploadURL.pathname}${signedUploadURL.search}`,
+      headers: {
+        ...form.getHeaders(),
+      },
+      payload: form,
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const db = await getSuperuserPostgrestClient()
+    const objectResponse = await db
+      .from<Obj>('objects')
+      .select('*')
+      .where({
+        name: objectName,
+        bucket_id: 'bucket2',
+      })
+      .first()
+    expect(objectResponse?.name).toBe(objectName)
+  })
+
+  test('can sign and upload using returned signed upload URL for nested Unicode and URL-reserved object names', async () => {
+    const objectName = `signed-upload-unicode-${randomUUID()}-폴더?x=1&y=%25+plus;semi:colon,/子目录#frag/파일-🙂.png`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    const signedUploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/upload/sign/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(signedUploadResponse.statusCode).toBe(200)
+
+    const signedUpload = signedUploadResponse.json<{ token: string; url: string }>()
+    expect(signedUpload.token).toBeTruthy()
+    const signedUploadURL = new URL(signedUpload.url, 'http://localhost')
+    expect(signedUploadURL.searchParams.get('token')).toBe(signedUpload.token)
 
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))

@@ -1645,6 +1645,65 @@ describe('testing deleting multiple objects', () => {
     expect(results).toHaveLength(1)
     expect(results[0].name).toBe('authenticated/delete-multiple7.png')
   })
+
+  test('can delete multiple objects with Unicode keys', async () => {
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+    const prefixes = [
+      `authenticated/delete-many-${randomUUID()}-일이삼-🙂.png`,
+      `authenticated/delete-many-${randomUUID()}-éè-中文.png`,
+    ]
+
+    for (const prefix of prefixes) {
+      const uploadResponse = await appInstance.inject({
+        method: 'PUT',
+        url: `/object/bucket2/${encodeURIComponent(prefix)}`,
+        headers: {
+          authorization,
+          'Content-Length': size,
+          'Content-Type': 'image/jpeg',
+        },
+        payload: fs.createReadStream(path),
+      })
+
+      expect(uploadResponse.statusCode).toBe(200)
+    }
+
+    const deleteResponse = await appInstance.inject({
+      method: 'DELETE',
+      url: '/object/bucket2',
+      headers: {
+        authorization,
+      },
+      payload: {
+        prefixes,
+      },
+    })
+
+    expect(deleteResponse.statusCode).toBe(200)
+    expect(S3Backend.prototype.deleteObjects).toBeCalled()
+    const results = JSON.parse(deleteResponse.body)
+    expect(results).toHaveLength(2)
+    expect(results.map((item: { name: string }) => item.name).sort()).toEqual([...prefixes].sort())
+
+    for (const prefix of prefixes) {
+      const getResponse = await appInstance.inject({
+        method: 'GET',
+        url: `/object/bucket2/${encodeURIComponent(prefix)}`,
+        headers: {
+          authorization,
+        },
+      })
+
+      expect(getResponse.statusCode).toBe(400)
+      expect(getResponse.json()).toMatchObject({
+        statusCode: '404',
+        error: 'not_found',
+        message: 'Object not found',
+      })
+    }
+  })
 })
 
 /**

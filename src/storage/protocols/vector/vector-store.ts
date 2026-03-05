@@ -297,6 +297,7 @@ export class VectorStoreManager {
         vectorBucketName: i.bucket_id,
         creationTime: Math.floor(i.created_at.getTime() / 1000),
       })),
+      nextToken: result.nextToken,
     }
   }
 

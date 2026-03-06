@@ -17,6 +17,7 @@ BEGIN
           ADD CONSTRAINT objects_name_check
           CHECK (
             name !~ E'[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]'
+            AND name !~ E'\\xEF\\xBF\\xBE|\\xEF\\xBF\\xBF'
           )
       $ddl$;
     ELSE

@@ -17,6 +17,10 @@ describe('isValidKey', () => {
     expect(isValidKey('invalid\x01name')).toBe(false)
   })
 
+  test('accepts DEL (0x7F) as a valid key character', () => {
+    expect(isValidKey('valid\x7Fname')).toBe(true)
+  })
+
   test('rejects non-characters U+FFFE and U+FFFF', () => {
     expect(isValidKey(`invalid${'\uFFFE'}`)).toBe(false)
     expect(isValidKey(`invalid${'\uFFFF'}`)).toBe(false)

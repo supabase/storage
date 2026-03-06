@@ -18,9 +18,9 @@ describe('signed URL route path verification', () => {
     const signedObjectPath = 'bucket2/authenticated/casestudy.png'
     const rawPath = `/render/image/sign/${encodeObjectPathForURL(signedObjectPath)}?token=jwt`
 
-    expect(
-      doesSignedTokenMatchRequestPath(rawPath, '/render/image/sign', signedObjectPath)
-    ).toBe(true)
+    expect(doesSignedTokenMatchRequestPath(rawPath, '/render/image/sign', signedObjectPath)).toBe(
+      true
+    )
   })
 
   test('rejects double-encoded request paths', () => {

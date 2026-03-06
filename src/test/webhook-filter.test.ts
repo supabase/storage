@@ -28,6 +28,26 @@ describe('webhook filter', () => {
 
     expect(disabled).toBe(false)
   })
+
+  test('does not match path-segment URL-encoded disableEvents entries from external config', () => {
+    const objectName = '폴더/子目录/파일-🙂-q?foo=1&bar=%25+plus;semi:colon,#frag.png'
+    const eventType = 'ObjectCreated:Post'
+    const encodedByPathSegment = objectName
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')
+
+    const disabled = shouldDisableWebhookEvent(
+      [`Webhook:${eventType}:bucket6/${encodedByPathSegment}`],
+      eventType,
+      {
+        bucketId: 'bucket6',
+        name: objectName,
+      }
+    )
+
+    expect(disabled).toBe(false)
+  })
 })
 
 function disabledEvents(eventType: string, objectName: string) {

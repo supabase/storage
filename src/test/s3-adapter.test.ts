@@ -107,16 +107,14 @@ describe('S3Backend', () => {
       expect(mockSend).toHaveBeenCalledTimes(1)
       const command = mockSend.mock.calls[0][0] as CopyObjectCommand
       expect(command).toBeInstanceOf(CopyObjectCommand)
-      expect(command.input.CopySource).toBe(
-        encodeCopySourceByPathToken('test-bucket', sourceKey)
-      )
+      expect(command.input.CopySource).toBe(encodeCopySourceByPathToken('test-bucket', sourceKey))
       expect(command.input.CopySource).toContain('test-bucket/source%20path/')
       expect(command.input.CopySource).not.toContain('test-bucket%2F')
     })
   })
 
   describe('uploadPartCopy', () => {
-    test('should preserve "/" and encode path tokens in CopySource', async () => {
+    test('should preserve "/" and encode path tokens in CopySource for unicode source keys', async () => {
       const lastModified = new Date('2024-01-01T00:00:00.000Z')
       mockSend.mockResolvedValue({
         CopyPartResult: {
@@ -147,9 +145,7 @@ describe('S3Backend', () => {
       expect(mockSend).toHaveBeenCalledTimes(1)
       const command = mockSend.mock.calls[0][0] as UploadPartCopyCommand
       expect(command).toBeInstanceOf(UploadPartCopyCommand)
-      expect(command.input.CopySource).toBe(
-        encodeCopySourceByPathToken('test-bucket', sourceKey)
-      )
+      expect(command.input.CopySource).toBe(encodeCopySourceByPathToken('test-bucket', sourceKey))
       expect(command.input.CopySource).toContain('test-bucket/source%20path/folder/')
       expect(command.input.CopySource).not.toContain('test-bucket%2F')
       expect(command.input.CopySourceRange).toBe('bytes=0-1024')

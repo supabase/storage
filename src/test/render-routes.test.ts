@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
 import axios from 'axios'
 import dotenv from 'dotenv'
@@ -192,6 +193,55 @@ describe('image rendering routes', () => {
     expect(S3Backend.prototype.privateAssetUrl).not.toHaveBeenCalled()
     expect(response.statusCode).toBe(400)
     const body = response.json<{ error: string }>()
+    expect(body.error).toBe('InvalidSignature')
+  })
+
+  it('will reject double-encoded signed render paths', async () => {
+    const objectName = `authenticated/render-double-${randomUUID()}-일이삼.png`
+    const encodedObjectName = objectName
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')
+
+    const uploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/bucket2/${encodedObjectName}`,
+      payload: Buffer.from('render double-encoded test'),
+      headers: {
+        authorization: `Bearer ${process.env.SERVICE_KEY}`,
+        'content-type': 'image/png',
+        'x-upsert': 'true',
+      },
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const signURLResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/sign/bucket2/${encodedObjectName}`,
+      payload: {
+        expiresIn: 60000,
+        transform: {
+          width: 100,
+          height: 100,
+          resize: 'contain',
+        },
+      },
+      headers: {
+        authorization: `Bearer ${process.env.SERVICE_KEY}`,
+      },
+    })
+    expect(signURLResponse.statusCode).toBe(200)
+
+    const signedURL = signURLResponse.json<{ signedURL: string }>().signedURL
+    const signedURLParsed = new URL(signedURL, 'http://localhost')
+    const doubleEncodedPath = signedURLParsed.pathname.replaceAll('%', '%25')
+    const doubleEncodedResponse = await appInstance.inject({
+      method: 'GET',
+      url: `${doubleEncodedPath}${signedURLParsed.search}`,
+    })
+
+    expect(doubleEncodedResponse.statusCode).toBe(400)
+    const body = doubleEncodedResponse.json<{ error: string }>()
     expect(body.error).toBe('InvalidSignature')
   })
 })

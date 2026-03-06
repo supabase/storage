@@ -2455,6 +2455,34 @@ describe('testing retrieving signed URL', () => {
     expect(body.error).toBe('InvalidSignature')
   })
 
+  test('rejects double-encoded signed object paths', async () => {
+    const objectName = `public/signed-double-${randomUUID()}-일이삼.txt`
+    await seedObjectForRouteTest(objectName)
+
+    const urlToSign = `bucket2/${objectName}`
+    const jwtToken = await signJWT({ url: urlToSign }, jwtSecret, 100)
+    const encodedPath = urlToSign
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')
+
+    const validResponse = await appInstance.inject({
+      method: 'GET',
+      url: `/object/sign/${encodedPath}?token=${jwtToken}`,
+    })
+    expect(validResponse.statusCode).toBe(200)
+
+    const doubleEncodedPath = encodedPath.replaceAll('%', '%25')
+    const doubleEncodedResponse = await appInstance.inject({
+      method: 'GET',
+      url: `/object/sign/${doubleEncodedPath}?token=${jwtToken}`,
+    })
+
+    expect(doubleEncodedResponse.statusCode).toBe(400)
+    const body = doubleEncodedResponse.json<{ error: string }>()
+    expect(body.error).toBe('InvalidSignature')
+  })
+
   test('get object without a token', async () => {
     const response = await appInstance.inject({
       method: 'GET',

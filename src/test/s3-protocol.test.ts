@@ -2394,6 +2394,25 @@ describe('S3 Protocol', () => {
         expect([...pagedKeys].sort()).toEqual([...keys].sort())
       })
 
+      it('returns a structured 400 for an invalid ListObjectsV2 continuation token', async () => {
+        const bucketName = await createBucket(client)
+        const invalidToken = Buffer.from('v:1\nl:%E0%A4%A').toString('base64')
+
+        await expect(
+          client.send(
+            new ListObjectsV2Command({
+              Bucket: bucketName,
+              ContinuationToken: invalidToken,
+            })
+          )
+        ).rejects.toMatchObject({
+          $metadata: {
+            httpStatusCode: 400,
+          },
+          message: 'Invalid Parameter ContinuationToken',
+        })
+      })
+
       it('can paginate ListMultipartUploads with Unicode and reserved characters in keys', async () => {
         const bucketName = await createBucket(client)
         const keys = [`mp-${randomUUID()}-🙂:one.jpg`, `mp-${randomUUID()}-일이삼:two.jpg`]
@@ -2477,6 +2496,44 @@ describe('S3 Protocol', () => {
         expect(Buffer.from(pageUsingLegacyToken.NextKeyMarker!, 'base64').toString()).toMatch(
           /^v:1\nl:/
         )
+      })
+
+      it('returns a structured 400 for an invalid multipart KeyMarker', async () => {
+        const bucketName = await createBucket(client)
+        const invalidToken = Buffer.from('v:1\nl:%E0%A4%A').toString('base64')
+
+        await expect(
+          client.send(
+            new ListMultipartUploadsCommand({
+              Bucket: bucketName,
+              KeyMarker: invalidToken,
+            })
+          )
+        ).rejects.toMatchObject({
+          $metadata: {
+            httpStatusCode: 400,
+          },
+          message: 'Invalid Parameter KeyMarker',
+        })
+      })
+
+      it('returns a structured 400 for an invalid multipart UploadIdMarker', async () => {
+        const bucketName = await createBucket(client)
+        const invalidToken = Buffer.from('v:1\nl:%E0%A4%A').toString('base64')
+
+        await expect(
+          client.send(
+            new ListMultipartUploadsCommand({
+              Bucket: bucketName,
+              UploadIdMarker: invalidToken,
+            })
+          )
+        ).rejects.toMatchObject({
+          $metadata: {
+            httpStatusCode: 400,
+          },
+          message: 'Invalid Parameter UploadIdMarker',
+        })
       })
 
       it('can copy objects using Unicode keys in CopySource', async () => {

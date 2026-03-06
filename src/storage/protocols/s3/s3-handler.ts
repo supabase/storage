@@ -288,17 +288,31 @@ export class S3ProtocolHandler {
     const bucket = command.Bucket
 
     const limit = maxKeys || 200
+    let nextUploadKeyToken: string | undefined
+    let nextUploadToken: string | undefined
+
+    if (keyContinuationToken) {
+      try {
+        nextUploadKeyToken = decodeContinuationToken(keyContinuationToken)
+      } catch (error) {
+        throw ERRORS.InvalidParameter('KeyMarker', { error: error as Error })
+      }
+    }
+
+    if (uploadContinuationToken) {
+      try {
+        nextUploadToken = decodeContinuationToken(uploadContinuationToken)
+      } catch (error) {
+        throw ERRORS.InvalidParameter('UploadIdMarker', { error: error as Error })
+      }
+    }
 
     const multipartUploads = await this.storage.db.listMultipartUploads(bucket, {
       prefix,
       deltimeter: delimiter,
       maxKeys: limit + 1,
-      nextUploadKeyToken: keyContinuationToken
-        ? decodeContinuationToken(keyContinuationToken)
-        : undefined,
-      nextUploadToken: uploadContinuationToken
-        ? decodeContinuationToken(uploadContinuationToken)
-        : undefined,
+      nextUploadKeyToken,
+      nextUploadToken,
     })
 
     let results: Partial<S3MultipartUpload & { isFolder: boolean }>[] = multipartUploads

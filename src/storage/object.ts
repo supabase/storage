@@ -613,7 +613,15 @@ export class ObjectStorage {
     const prefix = options?.prefix || ''
     const delimiter = options?.delimiter
 
-    const cursor = options?.cursor ? decodeContinuationToken(options.cursor) : undefined
+    let cursor: ContinuationToken | undefined
+    if (options?.cursor) {
+      try {
+        cursor = decodeContinuationToken(options.cursor)
+      } catch (error) {
+        throw ERRORS.InvalidParameter('ContinuationToken', { error: error as Error })
+      }
+    }
+
     let searchResult = await this.db.listObjectsV2(this.bucketId, {
       prefix: options?.prefix,
       delimiter: options?.delimiter,

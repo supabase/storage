@@ -1,10 +1,8 @@
 import { ERRORS, StorageBackendError } from '@internal/errors'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import fs from 'fs-extra'
 import fsExtra from 'fs-extra'
 import * as xattr from 'fs-xattr'
-import fileChecksum from 'md5-file'
-import MultiStream from 'multistream'
 import path from 'path'
 import stream from 'stream'
 import { promisify } from 'util'
@@ -384,7 +382,7 @@ export class FileBackend implements StorageBackendAdapter {
 
     await pipeline(body, writeStream)
 
-    const etag = await fileChecksum(partPath)
+    const etag = await this.computeMd5(partPath)
 
     const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
     await this.setMetadataAttr(partPath, METADATA_ATTR_KEYS[platform]['etag'], etag)
@@ -432,11 +430,7 @@ export class FileBackend implements StorageBackendAdapter {
     const finalParts = await Promise.all(partsByEtags)
     finalParts.sort((a, b) => parseInt(a.split('-')[1]) - parseInt(b.split('-')[1]))
 
-    const fileStreams = finalParts.map((partPath) => {
-      return fs.createReadStream(partPath)
-    })
-
-    const multistream = new MultiStream(fileStreams)
+    const multipartStream = this.mergePartStreams(finalParts)
     const metadataContent = await fsExtra.readFile(
       this.resolveSecurePath(
         path.join(
@@ -456,7 +450,7 @@ export class FileBackend implements StorageBackendAdapter {
       bucketName,
       key,
       version,
-      multistream,
+      multipartStream,
       metadata.contentType,
       metadata.cacheControl
     )
@@ -524,7 +518,7 @@ export class FileBackend implements StorageBackendAdapter {
     const writePart = fs.createWriteStream(partFilePath)
     await pipeline(partStream, writePart)
 
-    const etag = await fileChecksum(partFilePath)
+    const etag = await this.computeMd5(partFilePath)
     await this.setMetadataAttr(partFilePath, METADATA_ATTR_KEYS[platform]['etag'], etag)
 
     const fileStat = await fs.lstat(partFilePath)
@@ -533,6 +527,30 @@ export class FileBackend implements StorageBackendAdapter {
       eTag: etag,
       lastModified: fileStat.mtime,
     }
+  }
+
+  private mergePartStreams(partPaths: string[]): stream.Readable {
+    return stream.Readable.from(this.iteratePartChunks(partPaths))
+  }
+
+  private async *iteratePartChunks(partPaths: string[]): AsyncGenerator<Buffer> {
+    for (const partPath of partPaths) {
+      const partStream = fs.createReadStream(partPath)
+      for await (const chunk of partStream) {
+        yield chunk as Buffer
+      }
+    }
+  }
+
+  private async computeMd5(filePath: string): Promise<string> {
+    const hash = createHash('md5')
+    const readStream = fs.createReadStream(filePath)
+
+    for await (const chunk of readStream) {
+      hash.update(chunk)
+    }
+
+    return hash.digest('hex')
   }
 
   /**
@@ -676,7 +694,7 @@ export class FileBackend implements StorageBackendAdapter {
 
   private async etag(file: string, stats: fs.Stats): Promise<string> {
     if (this.etagAlgorithm === 'md5') {
-      const checksum = await fileChecksum(file)
+      const checksum = await this.computeMd5(file)
       return `"${checksum}"`
     } else if (this.etagAlgorithm === 'mtime') {
       return `"${stats.mtimeMs.toString(16)}-${stats.size.toString(16)}"`

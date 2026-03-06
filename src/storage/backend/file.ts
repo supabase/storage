@@ -384,7 +384,7 @@ export class FileBackend implements StorageBackendAdapter {
 
     const etag = await this.computeMd5(partPath)
 
-    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+    const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
     await this.setMetadataAttr(partPath, METADATA_ATTR_KEYS[platform]['etag'], etag)
 
     return { ETag: etag }
@@ -416,7 +416,7 @@ export class FileBackend implements StorageBackendAdapter {
       const partExists = await fsExtra.pathExists(partFilePath)
 
       if (partExists) {
-        const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+        const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
         const etag = await this.getMetadataAttr(partFilePath, METADATA_ATTR_KEYS[platform]['etag'])
         if (etag === part.ETag) {
           return partFilePath
@@ -508,7 +508,7 @@ export class FileBackend implements StorageBackendAdapter {
       `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceVersion)}`
     )
 
-    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+    const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
 
     const readStreamOptions = rangeBytes
       ? { start: rangeBytes.fromByte, end: rangeBytes.toByte }
@@ -564,7 +564,7 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   async setFileMetadata(file: string, { contentType, cacheControl }: FileMetadata) {
-    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+    const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
     await Promise.all([
       this.setMetadataAttr(file, METADATA_ATTR_KEYS[platform]['cache-control'], cacheControl),
       this.setMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type'], contentType),
@@ -576,7 +576,7 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   protected async getFileMetadata(file: string) {
-    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+    const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
     const [cacheControl, contentType] = await Promise.all([
       this.getMetadataAttr(file, METADATA_ATTR_KEYS[platform]['cache-control']),
       this.getMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type']),

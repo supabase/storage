@@ -1,6 +1,7 @@
 'use strict'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { StorageKnexDB } from '@storage/database'
+import { randomUUID } from 'crypto'
 import dotenv from 'dotenv'
 import { FastifyInstance } from 'fastify'
 import app from '../app'
@@ -143,7 +144,7 @@ describe('testing GET all buckets', () => {
     [{ 'x-client-info': 'supabase-py/2.18.1' }, true],
     [{ 'x-client-info': 'supabase-py/2.19.0' }, true],
   ]) {
-    test.only(`Should ${shouldIncludeType ? '' : 'NOT '}include type for ${JSON.stringify(
+    test(`Should ${shouldIncludeType ? '' : 'NOT '}include type for ${JSON.stringify(
       headers
     )} client`, async () => {
       const response = await appInstance.inject({
@@ -448,13 +449,17 @@ describe('testing public bucket functionality', () => {
 
 describe('testing count objects in bucket', () => {
   const { tenantId } = getConfig()
+  const testObjectCount = 27
+  const testOwnerId = randomUUID()
   let db: StorageKnexDB
+  let testBucketId: string
+  let testObjectNames: string[]
 
   beforeAll(async () => {
-    const superUser = await getServiceKeyUser(tenantId)
+    const serviceKeyUser = await getServiceKeyUser(tenantId)
     const pg = await getPostgresConnection({
-      superUser,
-      user: superUser,
+      superUser: serviceKeyUser,
+      user: serviceKeyUser,
       tenantId,
       host: 'localhost',
     })
@@ -463,16 +468,50 @@ describe('testing count objects in bucket', () => {
       host: 'localhost',
       tenantId,
     })
+
+    testBucketId = `count-objects-${randomUUID()}`
+    testObjectNames = Array.from({ length: testObjectCount }, (_, idx) => {
+      return `fixtures/count-object-${idx}`
+    })
+
+    await db.createBucket({
+      id: testBucketId,
+      name: testBucketId,
+      public: false,
+      owner: testOwnerId,
+      file_size_limit: null,
+      allowed_mime_types: null,
+      type: 'STANDARD',
+    })
+
+    await Promise.all(
+      testObjectNames.map((name) => {
+        return db.createObject({
+          name,
+          owner: testOwnerId,
+          bucket_id: testBucketId,
+          metadata: { size: 1 },
+          user_metadata: null,
+          version: undefined,
+        })
+      })
+    )
+  })
+
+  afterAll(async () => {
+    await db.deleteObjects(testBucketId, testObjectNames, 'name')
+    await db.deleteBucket(testBucketId)
+    await db.destroyConnection()
   })
 
   it('should return correct object count', async () => {
-    await expect(db.countObjectsInBucket('bucket2')).resolves.toBe(27)
+    await expect(db.countObjectsInBucket(testBucketId)).resolves.toBe(testObjectCount)
   })
   it('should return limited object count', async () => {
-    await expect(db.countObjectsInBucket('bucket2', 22)).resolves.toBe(22)
+    await expect(db.countObjectsInBucket(testBucketId, 22)).resolves.toBe(22)
   })
   it('should return full object count if limit is greater than total', async () => {
-    await expect(db.countObjectsInBucket('bucket2', 999)).resolves.toBe(27)
+    await expect(db.countObjectsInBucket(testBucketId, 999)).resolves.toBe(testObjectCount)
   })
   it('should return 0 object count if there are no objects with provided bucket id', async () => {
     await expect(db.countObjectsInBucket('this-is-not-a-bucket-at-all', 999)).resolves.toBe(0)

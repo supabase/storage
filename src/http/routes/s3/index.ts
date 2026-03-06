@@ -32,7 +32,6 @@ export default async function routes(fastify: FastifyInstance) {
         return
       }
 
-      // @ts-ignore
       const methods = new Set(routes.map((e) => e.method))
 
       methods.forEach((method) => {
@@ -78,7 +77,10 @@ export default async function routes(fastify: FastifyInstance) {
                 const isValid = compiler(data)
 
                 if (!isValid) {
-                  throw { validation: compiler.errors }
+                  const validationError = new Error('Invalid request')
+                  ;(validationError as Error & { validation?: unknown }).validation =
+                    compiler.errors
+                  throw validationError
                 }
 
                 const output = await route.handler(data, {

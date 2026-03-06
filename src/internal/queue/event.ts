@@ -203,9 +203,9 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
   async invokeOrSend(
     sendOptions?: SendOptions & { sendWhenError?: (error: unknown) => boolean }
   ): Promise<string | void | null> {
-    const constructor = this.constructor as typeof Event
+    const eventClass = this.constructor as typeof Event
 
-    if (!constructor.allowSync) {
+    if (!eventClass.allowSync) {
       throw ERRORS.InternalError(undefined, 'Cannot send this event synchronously')
     }
 
@@ -227,50 +227,50 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
   }
 
   async invoke(): Promise<string | void | null> {
-    const constructor = this.constructor as typeof Event
+    const eventClass = this.constructor as typeof Event
 
-    if (!constructor.allowSync) {
+    if (!eventClass.allowSync) {
       throw ERRORS.InternalError(undefined, 'Cannot send this event synchronously')
     }
 
-    await constructor.handle({
+    await eventClass.handle({
       id: '__sync',
       expireInSeconds: 0,
-      name: constructor.getQueueName(),
+      name: eventClass.getQueueName(),
       data: {
         region,
         ...this.payload,
-        $version: constructor.version,
+        $version: eventClass.version,
       },
     })
   }
 
   async send(customSendOptions?: SendOptions & { tnx?: Knex }): Promise<string | void | null> {
-    const constructor = this.constructor as typeof Event
+    const eventClass = this.constructor as typeof Event
 
-    const shouldSend = await constructor.shouldSend(this.payload)
+    const shouldSend = await eventClass.shouldSend(this.payload)
 
     if (!shouldSend) {
       return
     }
 
     if (!pgQueueEnable) {
-      if (constructor.allowSync) {
-        return constructor.handle({
+      if (eventClass.allowSync) {
+        return eventClass.handle({
           id: '__sync',
           expireInSeconds: 0,
-          name: constructor.getQueueName(),
+          name: eventClass.getQueueName(),
           data: {
             region,
             ...this.payload,
-            $version: constructor.version,
+            $version: eventClass.version,
           },
         })
       } else {
         logger.warn(
           {
             type: 'queue',
-            eventType: constructor.eventName(),
+            eventType: eventClass.eventName(),
           },
           '[Queue] skipped sending message'
         )
@@ -279,13 +279,13 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     }
 
     const startTime = process.hrtime.bigint()
-    const sendOptions = constructor.getSendOptions(this.payload) || {}
+    const sendOptions = eventClass.getSendOptions(this.payload) || {}
 
     if (this.payload.scheduleAt) {
       sendOptions.startAfter = new Date(this.payload.scheduleAt)
     }
 
-    sendOptions!.deadLetter = constructor.deadLetterQueueName()
+    sendOptions!.deadLetter = eventClass.deadLetterQueueName()
 
     try {
       const queue = customSendOptions?.tnx
@@ -296,11 +296,11 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         : Queue.getInstance()
 
       const res = await queue.send({
-        name: constructor.getQueueName(),
+        name: eventClass.getQueueName(),
         data: {
           region,
           ...this.payload,
-          $version: constructor.version,
+          $version: eventClass.version,
         },
         options: {
           ...sendOptions,
@@ -309,7 +309,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       })
 
       queueJobScheduled.add(1, {
-        name: constructor.getQueueName(),
+        name: eventClass.getQueueName(),
       })
 
       return res
@@ -327,24 +327,24 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         }
       )
 
-      if (!constructor.allowSync) {
+      if (!eventClass.allowSync) {
         throw e
       }
 
-      return constructor.handle({
+      return eventClass.handle({
         id: '__sync',
         expireInSeconds: 0,
-        name: constructor.getQueueName(),
+        name: eventClass.getQueueName(),
         data: {
           region,
           ...this.payload,
-          $version: constructor.version,
+          $version: eventClass.version,
         },
       })
     } finally {
       const duration = Number(process.hrtime.bigint() - startTime) / 1e9
       queueJobSchedulingTime.record(duration, {
-        name: constructor.getQueueName(),
+        name: eventClass.getQueueName(),
       })
     }
   }

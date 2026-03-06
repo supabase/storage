@@ -7,7 +7,6 @@ import { logger, logSchema } from '../monitoring'
 import { queueJobCompleted, queueJobError, queueJobRetryFailed } from '../monitoring/metrics'
 import { Event } from './event'
 
-// biome-ignore lint/suspicious/noExplicitAny: Event payload types are intentionally generic.
 type SubclassOfBaseClass = (new (
   payload: any
 ) => Event<any>) & {

@@ -195,15 +195,20 @@ export class HashSpillWritable extends Writable {
   }
 
   private writeToFile(buf: Buffer): Promise<void> {
-    return new Promise<void>(async (resolve, reject) => {
-      try {
-        await this.ensureFile()
-        const ok = this.fileStream!.write(buf)
-        if (ok) return resolve()
-        this.fileStream!.once('drain', resolve)
-      } catch (e) {
-        reject(e)
-      }
+    return new Promise<void>((resolve, reject) => {
+      void this.ensureFile()
+        .then(() => {
+          const ok = this.fileStream!.write(buf)
+          if (ok) {
+            resolve()
+            return
+          }
+
+          this.fileStream!.once('drain', resolve)
+        })
+        .catch((error) => {
+          reject(error)
+        })
     })
   }
 

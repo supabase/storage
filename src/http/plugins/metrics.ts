@@ -1,7 +1,6 @@
 import {
   httpRequestDuration,
   httpRequestSizeBytes,
-  httpRequestsTotal,
   httpResponseSizeBytes,
 } from '@internal/monitoring/metrics'
 import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'

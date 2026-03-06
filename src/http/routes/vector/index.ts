@@ -3,7 +3,6 @@ import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
 import { setErrorHandler } from '../../error-handler'
 import {
-  db,
   dbSuperUser,
   enforceJwtRole,
   jwt,

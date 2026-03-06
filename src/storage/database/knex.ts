@@ -54,7 +54,6 @@ export class StorageKnexDB implements Database {
     this.latestMigration = options.latestMigration
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: Generic return type for transaction wrapper.
   async withTransaction<T extends (db: Database) => Promise<any>>(
     fn: T,
     opts?: TransactionOptions
@@ -392,7 +391,7 @@ export class StorageKnexDB implements Database {
           query.orderBy(sortColumn, sortOrder)
         }
         // knex typing is wrong, it doesn't accept a knex.raw on orderBy, even though is totally legit
-        // @ts-ignore
+        // @ts-expect-error
         query.orderBy(knex.raw(`name COLLATE "C"`), sortOrder)
 
         if (options?.prefix) {
@@ -526,7 +525,7 @@ export class StorageKnexDB implements Database {
           .limit(options?.maxKeys || 100)
 
         // knex typing is wrong, it doesn't accept a knex.raw on orderBy, even though is totally legit
-        // @ts-ignore
+        // @ts-expect-error
         query.orderBy(knex.raw('key COLLATE "C", created_at'))
 
         if (options?.prefix) {

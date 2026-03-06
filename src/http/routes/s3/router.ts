@@ -2,6 +2,7 @@ import { Storage } from '@storage/storage'
 import type { ValidateFunction } from 'ajv'
 import Ajv from 'ajv'
 import { JTDDataType } from 'ajv/dist/jtd'
+import fastUri from 'fast-uri'
 import { FastifyRequest } from 'fastify'
 import { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import { default as AbortMultiPartUpload } from './commands/abort-multipart-upload'
@@ -128,7 +129,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     coerceTypes: 'array',
     useDefaults: true,
     removeAdditional: true,
-    uriResolver: require('fast-uri'),
+    uriResolver: fastUri,
     addUsedSchema: false,
     allErrors: false,
   })

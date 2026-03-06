@@ -30,17 +30,27 @@
     "rules": {
       "recommended": false,
       "correctness": {
+        "noUnusedImports": "error",
         "noUnusedVariables": "warn"
       },
       "style": {
         "noCommonJs": "warn",
-        "useConsistentObjectDefinitions": "error"
+        "useConsistentObjectDefinitions": "error",
+        "useThrowOnlyError": "warn"
       },
       "suspicious": {
-        "noExplicitAny": "warn"
+        "noAssignInExpressions": "error",
+        "noAsyncPromiseExecutor": "error",
+        "noDoubleEquals": "error",
+        "noExplicitAny": "warn",
+        "noFocusedTests": "error",
+        "noImplicitAnyLet": "error",
+        "noShadowRestrictedNames": "error",
+        "noTsIgnore": "error"
       },
       "nursery": {
-        "noFloatingPromises": "error"
+        "noFloatingPromises": "error",
+        "noUnnecessaryConditions": "warn"
       }
     }
   },

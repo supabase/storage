@@ -1,4 +1,3 @@
-import { BucketType } from '@aws-sdk/client-s3'
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'

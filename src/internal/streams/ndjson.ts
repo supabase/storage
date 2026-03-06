@@ -13,12 +13,12 @@ export class NdJsonTransform extends Transform {
     // decode safely across chunk boundaries
     this.buffer += this.decoder.write(chunk)
 
-    let newlineIdx: number
-    while ((newlineIdx = this.buffer.indexOf('\n')) !== -1) {
+    let newlineIdx = this.buffer.indexOf('\n')
+    while (newlineIdx !== -1) {
       const line = this.buffer.slice(0, newlineIdx)
       this.buffer = this.buffer.slice(newlineIdx + 1)
       if (line.trim()) {
-        let obj
+        let obj: unknown
         try {
           obj = JSON.parse(line)
         } catch (err) {
@@ -32,6 +32,8 @@ export class NdJsonTransform extends Transform {
         // .push() participates in backpressure automatically
         this.push(obj)
       }
+
+      newlineIdx = this.buffer.indexOf('\n')
     }
 
     callback()

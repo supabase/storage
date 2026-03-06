@@ -214,7 +214,7 @@ export async function onCreate(
 
   if (/^-?\d+$/.test(metadata.cacheControl || '')) {
     metadata.cacheControl = `max-age=${metadata.cacheControl}`
-  } else if (metadata) {
+  } else {
     metadata.cacheControl = 'no-cache'
   }
 

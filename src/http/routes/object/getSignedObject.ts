@@ -5,6 +5,7 @@ import { SignedToken, verifyJWT } from '../../../internal/auth'
 import { getJwtSecret } from '../../../internal/database'
 import { ERRORS } from '../../../internal/errors'
 import { ROUTE_OPERATIONS } from '../operations'
+import { doesSignedTokenMatchRequestPath } from '../signed-url'
 
 const { storageS3Bucket } = getConfig()
 
@@ -71,9 +72,8 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const { url, exp } = payload
-      const path = `${request.params.bucketName}/${request.params['*']}`
 
-      if (url !== path) {
+      if (!doesSignedTokenMatchRequestPath(request.raw.url, '/object/sign', url)) {
         throw ERRORS.InvalidSignature()
       }
 

@@ -6,6 +6,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
 import { ROUTE_OPERATIONS } from '../operations'
+import { doesSignedTokenMatchRequestPath } from '../signed-url'
 
 const { storageS3Bucket, isMultitenant } = getConfig()
 
@@ -68,10 +69,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const { url, transformations, exp } = payload
-
-      const path = `${request.params.bucketName}/${request.params['*']}`
-
-      if (url !== path) {
+      if (!doesSignedTokenMatchRequestPath(request.raw.url, '/render/image/sign', url)) {
         throw ERRORS.InvalidSignature()
       }
 

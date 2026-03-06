@@ -19,6 +19,7 @@ const { jwtSecret, serviceKeyAsync, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
 const S3Backend = backends.S3Backend
 const TEST_OWNER_ID = '317eadce-631a-4429-a0bb-f19a7a517b4a'
+const routeTestObjectsToCleanup: Array<{ bucketId: string; name: string }> = []
 let appInstance: FastifyInstance
 
 let tnx: Knex.Transaction | undefined
@@ -47,6 +48,47 @@ async function seedObjectForRouteTest(name: string, bucketId = 'bucket2') {
   })
   await seedTx.commit()
   tnx = undefined
+  routeTestObjectsToCleanup.push({ bucketId, name })
+}
+
+async function cleanupRouteTestObjects() {
+  const authorization = `Bearer ${await serviceKeyAsync}`
+
+  for (const { bucketId, name } of routeTestObjectsToCleanup.splice(0)) {
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: `/object/${bucketId}/${encodeURIComponent(name)}`,
+      headers: {
+        authorization,
+      },
+    })
+
+    if (response.statusCode !== 200 && response.statusCode !== 400) {
+      throw new Error(`Unexpected cleanup response ${response.statusCode} for ${bucketId}/${name}`)
+    }
+  }
+}
+
+async function cleanupObjectsByPrefix(prefix: string, bucketId = 'bucket2') {
+  const cleanupTx = await getSuperuserPostgrestClient()
+  const objects = await cleanupTx
+    .from<Obj>('objects')
+    .select('name')
+    .where({ bucket_id: bucketId })
+    .whereLike('name', `${prefix}%`)
+  await cleanupTx.commit()
+  tnx = undefined
+
+  const authorization = `Bearer ${await serviceKeyAsync}`
+  for (const object of objects) {
+    await appInstance.inject({
+      method: 'DELETE',
+      url: `/object/${bucketId}/${encodeURIComponent(object.name)}`,
+      headers: {
+        authorization,
+      },
+    })
+  }
 }
 
 useMockObject()
@@ -60,7 +102,13 @@ beforeEach(() => {
 afterEach(async () => {
   if (tnx) {
     await tnx.commit()
+    tnx = undefined
   }
+
+  if (routeTestObjectsToCleanup.length > 0) {
+    await cleanupRouteTestObjects()
+  }
+
   await appInstance.close()
 })
 
@@ -2456,7 +2504,7 @@ describe('testing retrieving signed URL', () => {
   })
 
   test('rejects double-encoded signed object paths', async () => {
-    const objectName = `public/signed-double-${randomUUID()}-일이삼.txt`
+    const objectName = `authenticated/signed-double-${randomUUID()}-일이삼.txt`
     await seedObjectForRouteTest(objectName)
 
     const urlToSign = `bucket2/${objectName}`
@@ -2768,6 +2816,10 @@ describe('testing move object', () => {
 })
 
 describe('testing list objects', () => {
+  beforeEach(async () => {
+    await cleanupObjectsByPrefix('public/signed-double-')
+  })
+
   test('searching the bucket root folder', async () => {
     const response = await appInstance.inject({
       method: 'POST',

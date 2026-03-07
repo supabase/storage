@@ -11,7 +11,8 @@ import type { ServerRequest as Request } from 'srvx'
 
 import { getConfig } from '../../../config'
 
-const { storageS3Bucket, tusPath, requestAllowXForwardedPrefix } = getConfig()
+const { storageS3Bucket, tusPath, requestAllowXForwardedPrefix, storagePublicUrl } = getConfig()
+const parsedPublicUrl = storagePublicUrl ? new URL(storagePublicUrl) : undefined
 const reExtractFileID = /([^/]+)\/?$/
 
 export const SIGNED_URL_SUFFIX = '/sign'
@@ -113,7 +114,12 @@ export function generateUrl(
     throw ERRORS.InvalidParameter('url')
   }
 
-  proto = process.env.NODE_ENV === 'production' ? 'https' : proto
+  if (parsedPublicUrl) {
+    proto = parsedPublicUrl.protocol.replace(':', '')
+    host = parsedPublicUrl.host
+  } else {
+    proto = process.env.NODE_ENV === 'production' ? 'https' : proto
+  }
 
   let basePath = path
 
@@ -126,7 +132,7 @@ export function generateUrl(
   const isSigned = req.url?.endsWith(SIGNED_URL_SUFFIX)
   const fullPath = isSigned ? `${basePath}${SIGNED_URL_SUFFIX}` : basePath
 
-  if (req.headers['x-forwarded-host']) {
+  if (!parsedPublicUrl && req.headers['x-forwarded-host']) {
     const port = req.headers['x-forwarded-port']
 
     if (typeof port === 'string' && port && !['443', '80'].includes(port)) {

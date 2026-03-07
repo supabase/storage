@@ -74,4 +74,56 @@ describe('S3Backend', () => {
       expect(result.metadata.mimetype).toBe('image/png')
     })
   })
+
+  describe('deleteObjects', () => {
+    test('should use batch DeleteObjectsCommand when backend supports it', async () => {
+      mockSend.mockResolvedValue({
+        Deleted: [{ Key: 'file1.txt' }, { Key: 'file2.txt' }],
+        $metadata: { httpStatusCode: 200 },
+      })
+
+      const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+      await backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
+
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      expect(mockSend.mock.calls[0][0].constructor.name).toBe('DeleteObjectsCommand')
+    })
+
+    test('should fall back to individual DeleteObjectCommands when backend returns NotImplemented', async () => {
+      const err = Object.assign(new Error('NotImplemented'), { Code: 'NotImplemented' })
+      mockSend
+        .mockRejectedValueOnce(err)
+        .mockResolvedValue({ $metadata: { httpStatusCode: 204 } })
+
+      const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+      await backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
+
+      expect(mockSend).toHaveBeenCalledTimes(3)
+      expect(mockSend.mock.calls[0][0].constructor.name).toBe('DeleteObjectsCommand')
+      expect(mockSend.mock.calls[1][0].constructor.name).toBe('DeleteObjectCommand')
+      expect(mockSend.mock.calls[2][0].constructor.name).toBe('DeleteObjectCommand')
+    })
+
+    test('should not throw if some individual fallback deletes fail', async () => {
+      const notImplemented = Object.assign(new Error('NotImplemented'), { Code: 'NotImplemented' })
+      mockSend
+        .mockRejectedValueOnce(notImplemented)
+        .mockResolvedValueOnce({ $metadata: { httpStatusCode: 204 } })
+        .mockRejectedValueOnce(new Error('AccessDenied'))
+
+      const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+      await expect(
+        backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
+      ).resolves.toBeUndefined()
+    })
+
+    test('should rethrow errors that are not NotImplemented', async () => {
+      const err = Object.assign(new Error('AccessDenied'), { Code: 'AccessDenied' })
+      mockSend.mockRejectedValue(err)
+
+      const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+      await expect(backend.deleteObjects('test-bucket', ['file1.txt'])).rejects.toThrow()
+      expect(mockSend).toHaveBeenCalledTimes(1)
+    })
+  })
 })

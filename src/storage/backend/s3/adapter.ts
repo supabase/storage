@@ -346,11 +346,21 @@ export class S3Backend implements StorageBackendAdapter {
       // Some S3-compatible backends (e.g. GCS) do not support DeleteObjects; fall back to individual deletes
       const code = (e as { Code?: string; name?: string })?.Code ?? (e as { name?: string })?.name
       if (code === 'NotImplemented') {
-        await Promise.allSettled(
+        const results = await Promise.allSettled(
           prefixes.map((key) =>
             this.client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
           )
         )
+        for (const result of results) {
+          if (result.status === 'rejected') {
+            const errCode =
+              (result.reason as { Code?: string })?.Code ??
+              (result.reason as { name?: string })?.name
+            if (errCode !== 'NoSuchKey') {
+              throw StorageBackendError.fromError(result.reason)
+            }
+          }
+        }
         return
       }
       throw StorageBackendError.fromError(e)

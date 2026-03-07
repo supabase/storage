@@ -20,9 +20,9 @@ describe('S3Backend', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     mockSend = jest.fn()
-    ;(S3Client as jest.Mock).mockImplementation(() => ({
-      send: mockSend,
-    }))
+      ; (S3Client as jest.Mock).mockImplementation(() => ({
+        send: mockSend,
+      }))
   })
 
   describe('getObject', () => {
@@ -104,17 +104,32 @@ describe('S3Backend', () => {
       expect(mockSend.mock.calls[2][0].constructor.name).toBe('DeleteObjectCommand')
     })
 
-    test('should not throw if some individual fallback deletes fail', async () => {
+    test('should ignore NoSuchKey errors in the individual fallback', async () => {
       const notImplemented = Object.assign(new Error('NotImplemented'), { Code: 'NotImplemented' })
+      const noSuchKey = Object.assign(new Error('NoSuchKey'), { Code: 'NoSuchKey' })
       mockSend
         .mockRejectedValueOnce(notImplemented)
         .mockResolvedValueOnce({ $metadata: { httpStatusCode: 204 } })
-        .mockRejectedValueOnce(new Error('AccessDenied'))
+        .mockRejectedValueOnce(noSuchKey)
 
       const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
       await expect(
         backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
       ).resolves.toBeUndefined()
+    })
+
+    test('should throw when an individual fallback delete fails with a real error', async () => {
+      const notImplemented = Object.assign(new Error('NotImplemented'), { Code: 'NotImplemented' })
+      const accessDenied = Object.assign(new Error('AccessDenied'), { Code: 'AccessDenied' })
+      mockSend
+        .mockRejectedValueOnce(notImplemented)
+        .mockResolvedValueOnce({ $metadata: { httpStatusCode: 204 } })
+        .mockRejectedValueOnce(accessDenied)
+
+      const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+      await expect(
+        backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
+      ).rejects.toThrow()
     })
 
     test('should rethrow errors that are not NotImplemented', async () => {

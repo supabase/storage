@@ -9,6 +9,7 @@ import { Knex } from 'knex'
 import { DatabaseError } from 'pg'
 
 type DBVectorIndex = VectorIndex & { id: string; created_at: Date; updated_at: Date }
+export type VectorLockResourceType = 'bucket' | 'index' | 'global'
 
 interface CreateVectorIndexParams {
   dataType: string
@@ -44,7 +45,7 @@ export interface VectorMetadataDB {
     config?: Knex.TransactionConfig
   ): Promise<T>
 
-  lockResource(resourceType: 'bucket' | 'index', resourceId: string): Promise<void>
+  lockResource(resourceType: VectorLockResourceType, resourceId: string): Promise<void>
 
   findVectorBucket(vectorBucketName: string): Promise<VectorBucket>
   createVectorBucket(bucketName: string): Promise<void>
@@ -63,7 +64,7 @@ export interface VectorMetadataDB {
 export class KnexVectorMetadataDB implements VectorMetadataDB {
   constructor(protected readonly knex: Knex) {}
 
-  lockResource(resourceType: 'bucket' | 'index', resourceId: string): Promise<void> {
+  lockResource(resourceType: VectorLockResourceType, resourceId: string): Promise<void> {
     const lockId = hashStringToInt(`vector:${resourceType}:${resourceId}`)
     return this.knex.raw('SELECT pg_advisory_xact_lock(?::bigint)', [lockId])
   }

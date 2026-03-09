@@ -16,7 +16,7 @@
     "docs:export": "tsx ./src/scripts/export-docs.ts",
     "test:dummy-data": "tsx -r dotenv/config ./src/test/db/import-dummy-data.ts",
     "test": "npm run infra:restart && npm run test:dummy-data && jest --no-cache --runInBand",
-    "test:oriole": "npm run infra:restart:oriole && npm run test:dummy-data && jest --no-cache --runInBand --testPathIgnorePatterns=src/test/vectors.test.ts",
+    "test:oriole": "npm run infra:restart:oriole && npm run test:dummy-data && jest --no-cache --runInBand",
     "test:coverage": "npm run infra:restart && npm run test:dummy-data && jest --no-cache --runInBand --coverage",
     "infra:stop": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml down --remove-orphans",
     "infra:start": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml up -d && sleep 5 && npm run migration:run",

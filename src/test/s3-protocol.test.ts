@@ -385,6 +385,25 @@ describe('S3 Protocol', () => {
         expect(resp.KeyCount).toBe(3)
       })
 
+      it('preserves delimiter slashes in CommonPrefixes when EncodingType=url', async () => {
+        const bucket = await createBucket(client)
+        await Promise.all([
+          uploadFile(client, bucket, '日本語/子目录/test-1.jpg', 1),
+          uploadFile(client, bucket, 'plain-root.jpg', 1),
+        ])
+
+        const resp = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+            Delimiter: '/',
+            EncodingType: 'url',
+          })
+        )
+
+        expect(resp.CommonPrefixes?.[0].Prefix).toBe(`${encodeURIComponent('日本語')}/`)
+        expect(resp.CommonPrefixes?.[0].Prefix).not.toContain('%2F')
+      })
+
       it('paginate keys and common prefixes', async () => {
         const bucket = await createBucket(client)
         const listBucketsPage1 = new ListObjectsV2Command({
@@ -1381,6 +1400,32 @@ describe('S3 Protocol', () => {
         expect(resp.Uploads?.[1].Key).toBe('test-2.jpg')
         expect(resp.Uploads?.[2].Key).toBe('test-3.jpg')
         expect(resp.CommonPrefixes?.[0].Prefix).toBe('nested/')
+      })
+
+      it('preserves delimiter slashes in multipart CommonPrefixes when EncodingType=url', async () => {
+        const bucketName = await createBucket(client)
+        const createMultiPartUpload = (key: string) =>
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: 'image/jpg',
+          })
+
+        await Promise.all([
+          client.send(createMultiPartUpload('日本語/子目录/test-4.jpg')),
+          client.send(createMultiPartUpload('root-file.jpg')),
+        ])
+
+        const resp = await client.send(
+          new ListMultipartUploadsCommand({
+            Bucket: bucketName,
+            Delimiter: '/',
+            EncodingType: 'url',
+          })
+        )
+
+        expect(resp.CommonPrefixes?.[0].Prefix).toBe(`${encodeURIComponent('日本語')}/`)
+        expect(resp.CommonPrefixes?.[0].Prefix).not.toContain('%2F')
       })
 
       it('treats % as a literal character in multipart prefix filtering with delimiter', async () => {

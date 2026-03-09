@@ -56,6 +56,13 @@ function encodeObjectPathForURL(bucketId: string, objectName: string): string {
     .join('/')}`
 }
 
+function encodePathPreservingSeparators(path: string): string {
+  return path
+    .split('/')
+    .map((pathToken) => encodeURIComponent(pathToken))
+    .join('/')
+}
+
 /**
  * ObjectStorage
  * interact with remote objects and database state
@@ -676,7 +683,12 @@ export class ObjectStorage {
       const name = obj.id === null && !obj.name.endsWith('/') ? obj.name + '/' : obj.name
       target.push({
         ...obj,
-        name: options?.encodingType === 'url' ? encodeURIComponent(name) : name,
+        name:
+          options?.encodingType === 'url'
+            ? obj.id === null
+              ? encodePathPreservingSeparators(name)
+              : encodeURIComponent(name)
+            : name,
       })
     })
 

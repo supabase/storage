@@ -333,7 +333,10 @@ export class S3ProtocolHandler {
           delimitedResults.push({
             isFolder: true,
             id: object.id,
-            key: command.EncodingType === 'url' ? encodeURIComponent(currPrefix) : currPrefix,
+            key:
+              command.EncodingType === 'url'
+                ? encodePathPreservingSeparators(currPrefix)
+                : currPrefix,
             bucket_id: bucket,
           })
           continue
@@ -1412,6 +1415,13 @@ function isUSASCII(str: string): boolean {
     }
   }
   return true
+}
+
+function encodePathPreservingSeparators(path: string): string {
+  return path
+    .split('/')
+    .map((pathToken) => encodeURIComponent(pathToken))
+    .join('/')
 }
 
 function parseCopySource(copySource: string): {

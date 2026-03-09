@@ -850,4 +850,59 @@ describe('objects - list v2 cursor encoding', () => {
     expect(page2.objects).toHaveLength(1)
     expect(page2.objects[0]?.name).toBe(secondKey)
   })
+
+  test('supports legacy unescaped cursor values with mixed Unicode and literal % sequences', async () => {
+    const runId = randomUUID()
+    const prefix = `cursor-legacy-unicode-${runId}-`
+    const firstKey = `${prefix}일이삼-%20-🙂.txt`
+    const secondKey = `${prefix}일이삼-~.txt`
+
+    for (const key of [firstKey, secondKey]) {
+      const uploadResponse = await appInstance.inject({
+        method: 'POST',
+        url: `/object/${LIST_V2_CURSOR_BUCKET}/${encodeURIComponent(key)}`,
+        payload: createUpload('utf8.txt', 'cursor legacy unicode test'),
+        headers: {
+          authorization: `Bearer ${serviceKey}`,
+        },
+      })
+      expect(uploadResponse.statusCode).toBe(200)
+    }
+
+    const page1Response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_CURSOR_BUCKET}`,
+      payload: {
+        with_delimiter: false,
+        prefix,
+        limit: 1,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+    expect(page1Response.statusCode).toBe(200)
+    const page1 = page1Response.json<ListObjectsV2Result>()
+    expect(page1.objects).toHaveLength(1)
+    expect(page1.objects[0]?.name).toBe(firstKey)
+
+    const legacyCursor = Buffer.from(`l:${firstKey}\no:asc`).toString('base64')
+    const page2Response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_CURSOR_BUCKET}`,
+      payload: {
+        with_delimiter: false,
+        prefix,
+        limit: 1,
+        cursor: legacyCursor,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+    expect(page2Response.statusCode).toBe(200)
+    const page2 = page2Response.json<ListObjectsV2Result>()
+    expect(page2.objects).toHaveLength(1)
+    expect(page2.objects[0]?.name).toBe(secondKey)
+  })
 })

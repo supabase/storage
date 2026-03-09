@@ -2457,8 +2457,8 @@ describe('S3 Protocol', () => {
       it('accepts legacy unversioned KeyMarker tokens for in-flight pagination', async () => {
         const bucketName = await createBucket(client)
         const runId = randomUUID()
-        const firstKey = `mp-legacy-${runId}:001.jpg`
-        const secondKey = `mp-legacy-${runId}:002.jpg`
+        const firstKey = `mp-legacy-${runId}:001%25.jpg`
+        const secondKey = `mp-legacy-${runId}:002%25.jpg`
 
         await Promise.all(
           [firstKey, secondKey].map((key) =>
@@ -2480,6 +2480,8 @@ describe('S3 Protocol', () => {
         )
 
         expect(page1.Uploads?.[0]?.Key).toBe(firstKey)
+        expect(page1.NextKeyMarker).toBeTruthy()
+        expect(Buffer.from(page1.NextKeyMarker!, 'base64').toString()).toMatch(/^v:1\nl:/)
 
         const legacyToken = Buffer.from(`l:${firstKey}`).toString('base64')
         const pageUsingLegacyToken = await client.send(
@@ -2491,11 +2493,9 @@ describe('S3 Protocol', () => {
         )
 
         // Legacy unversioned markers keep legacy parsing semantics for rollout safety.
-        expect(pageUsingLegacyToken.Uploads?.[0]?.Key).toBe(firstKey)
-        expect(pageUsingLegacyToken.NextKeyMarker).toBeTruthy()
-        expect(Buffer.from(pageUsingLegacyToken.NextKeyMarker!, 'base64').toString()).toMatch(
-          /^v:1\nl:/
-        )
+        expect(pageUsingLegacyToken.Uploads?.[0]?.Key).toBe(secondKey)
+        expect(pageUsingLegacyToken.Uploads?.map((upload) => upload.Key)).not.toContain(firstKey)
+        expect(pageUsingLegacyToken.NextKeyMarker).toBeFalsy()
       })
 
       it('returns a structured 400 for an invalid multipart KeyMarker', async () => {

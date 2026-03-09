@@ -1461,7 +1461,7 @@ function encodeContinuationToken(name: string) {
 
 function decodeLegacyContinuationToken(decoded: string) {
   // Backward compatibility: preserve pre-version behavior for old in-flight tokens.
-  const continuationToken = decoded.split(':')[1]
+  const continuationToken = decoded.slice(2)
   if (!continuationToken) {
     throw new Error('Invalid continuation token')
   }

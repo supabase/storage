@@ -3398,6 +3398,50 @@ describe('Object key names with Unicode characters', () => {
     expect(headResponse.headers['cache-control']).toBe('no-cache')
   })
 
+  test('treats NFC and NFD object names as distinct keys', async () => {
+    const prefix = `normalize-${randomUUID()}`
+    const nfcObjectName = `${prefix}/caf\u00e9.txt`
+    const nfdObjectName = `${prefix}/cafe\u0301.txt`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    for (const objectName of [nfcObjectName, nfdObjectName]) {
+      const form = new FormData()
+      form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+      const uploadResponse = await appInstance.inject({
+        method: 'POST',
+        url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+        headers: {
+          authorization,
+          ...form.getHeaders(),
+        },
+        payload: form,
+      })
+      expect(uploadResponse.statusCode).toBe(200)
+    }
+
+    const db = await getSuperuserPostgrestClient()
+    const storedObjects = await db
+      .from<Obj>('objects')
+      .select('name')
+      .where('bucket_id', 'bucket2')
+      .whereIn('name', [nfcObjectName, nfdObjectName])
+
+    const storedNames = storedObjects.map((entry) => entry.name)
+    expect(storedNames).toEqual(expect.arrayContaining([nfcObjectName, nfdObjectName]))
+    expect(new Set(storedNames).size).toBe(2)
+
+    for (const objectName of [nfcObjectName, nfdObjectName]) {
+      const deleteResponse = await appInstance.inject({
+        method: 'DELETE',
+        url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+        headers: {
+          authorization,
+        },
+      })
+      expect(deleteResponse.statusCode).toBe(200)
+    }
+  })
+
   test('should not upload if the name contains invalid characters', async () => {
     const invalidObjectName = getInvalidObjectName()
     const authorization = `Bearer ${await serviceKeyAsync}`

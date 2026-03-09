@@ -1114,6 +1114,12 @@ export class DBError extends StorageBackendError implements RenderableError {
   }
 
   static fromDBError(pgError: DatabaseError, query?: string) {
+    const objectNameConstraintNames = new Set([
+      'objects_name_check',
+      's3_multipart_uploads_key_check',
+      's3_multipart_uploads_parts_key_check',
+    ])
+
     switch (pgError.code) {
       case '42501':
         return ERRORS.AccessDenied(
@@ -1146,7 +1152,9 @@ export class DBError extends StorageBackendError implements RenderableError {
         })
       default:
         const errorMessage =
-          pgError.code === '23514' && pgError.constraint === 'objects_name_check'
+          pgError.code === '23514' &&
+          pgError.constraint &&
+          objectNameConstraintNames.has(pgError.constraint)
             ? 'Invalid object name'
             : pgError.message
         return ERRORS.DatabaseError(errorMessage, pgError).withMetadata({

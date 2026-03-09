@@ -1,4 +1,6 @@
 import fastifyMultipart from '@fastify/multipart'
+import { SignedUploadToken, verifyJWT } from '@internal/auth'
+import { getJwtSecret } from '@internal/database'
 import { ERRORS } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -85,12 +87,24 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const objectName = request.params['*']
 
-      const { owner, upsert, url } = await request.storage
-        .from(bucketName)
-        .verifyObjectSignature(token)
+      let payload: SignedUploadToken
+      const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId)
+
+      try {
+        payload = (await verifyJWT(token, jwtSecret, jwks)) as SignedUploadToken
+      } catch (e) {
+        const err = e as Error
+        throw ERRORS.InvalidJWT(err)
+      }
+
+      const { owner, upsert, url, exp } = payload
 
       if (!doesSignedTokenMatchRequestPath(request.raw.url, '/object/upload/sign', url)) {
         throw ERRORS.InvalidSignature()
+      }
+
+      if (exp * 1000 < Date.now()) {
+        throw ERRORS.ExpiredSignature()
       }
 
       const { objectMetadata, path } = await request.storage

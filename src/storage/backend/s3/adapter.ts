@@ -32,6 +32,7 @@ import {
   UploadPart,
   withOptionalVersion,
 } from './../adapter'
+import { encodeCopySource } from './copy-source'
 
 const {
   storageS3UploadQueueSize,
@@ -50,13 +51,6 @@ export interface S3ClientOptions {
   role?: string
   httpAgent?: InstrumentedAgent
   requestTimeout?: number
-}
-
-function encodeCopySource(bucket: string, key: string): string {
-  return `${encodeURIComponent(bucket)}/${key
-    .split('/')
-    .map((pathToken) => encodeURIComponent(pathToken))
-    .join('/')}`
 }
 
 /**

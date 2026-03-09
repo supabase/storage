@@ -3602,6 +3602,38 @@ describe('Object key names with Unicode characters', () => {
     expect(objectResponse?.name).toBe(objectName)
   })
 
+  test('rejects double-encoded signed upload paths', async () => {
+    const objectName = `signed-upload-double-${randomUUID()}-éè-中文-🙂.png`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    const signedUploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/upload/sign/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(signedUploadResponse.statusCode).toBe(200)
+
+    const signedUpload = signedUploadResponse.json<{ url: string }>()
+    const signedUploadURL = new URL(signedUpload.url, 'http://localhost')
+    const doubleEncodedPath = signedUploadURL.pathname.replaceAll('%', '%25')
+
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const uploadResponse = await appInstance.inject({
+      method: 'PUT',
+      url: `${doubleEncodedPath}${signedUploadURL.search}`,
+      headers: {
+        ...form.getHeaders(),
+      },
+      payload: form,
+    })
+
+    expect(uploadResponse.statusCode).toBe(400)
+    expect(uploadResponse.json<{ error: string }>().error).toBe('InvalidSignature')
+  })
+
   test('can sign and upload using returned signed upload URL for nested Unicode and URL-reserved object names', async () => {
     const objectName = `signed-upload-unicode-${randomUUID()}-폴더?x=1&y=%25+plus;semi:colon,/子目录#frag/파일-🙂.png`
     const authorization = `Bearer ${await serviceKeyAsync}`

@@ -23,6 +23,15 @@ describe('signed URL route path verification', () => {
     )
   })
 
+  test('matches canonical encoded object path for upload signed route', () => {
+    const signedObjectPath = 'bucket2/public/일이삼-🙂-q?foo=1&bar=%25+plus;semi:colon,#frag.png'
+    const rawPath = `/object/upload/sign/${encodeObjectPathForURL(signedObjectPath)}?token=jwt`
+
+    expect(doesSignedTokenMatchRequestPath(rawPath, '/object/upload/sign', signedObjectPath)).toBe(
+      true
+    )
+  })
+
   test('rejects double-encoded request paths', () => {
     const signedObjectPath = 'bucket2/public/일이삼.txt'
     const encodedPath = encodeObjectPathForURL(signedObjectPath)

@@ -1,7 +1,9 @@
 import fastifyMultipart from '@fastify/multipart'
+import { ERRORS } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { ROUTE_OPERATIONS } from '../operations'
+import { doesSignedTokenMatchRequestPath } from '../signed-url'
 
 const uploadSignedObjectParamsSchema = {
   type: 'object',
@@ -83,9 +85,13 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const objectName = request.params['*']
 
-      const { owner, upsert } = await request.storage
+      const { owner, upsert, url } = await request.storage
         .from(bucketName)
-        .verifyObjectSignature(token, objectName)
+        .verifyObjectSignature(token)
+
+      if (!doesSignedTokenMatchRequestPath(request.raw.url, '/object/upload/sign', url)) {
+        throw ERRORS.InvalidSignature()
+      }
 
       const { objectMetadata, path } = await request.storage
         .asSuperUser()

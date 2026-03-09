@@ -841,7 +841,7 @@ export class ObjectStorage {
    * @param token
    * @param objectName
    */
-  async verifyObjectSignature(token: string, objectName: string) {
+  async verifyObjectSignature(token: string, objectName?: string) {
     const { secret: jwtSecret, jwks } = await getJwtSecret(this.db.tenantId)
 
     let payload: SignedUploadToken
@@ -854,7 +854,7 @@ export class ObjectStorage {
 
     const { url, exp } = payload
 
-    if (url !== `${this.bucketId}/${objectName}`) {
+    if (objectName && url !== `${this.bucketId}/${objectName}`) {
       throw ERRORS.InvalidSignature()
     }
 

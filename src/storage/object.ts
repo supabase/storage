@@ -17,6 +17,7 @@ import {
   ObjectUpdatedMetadata,
 } from './events'
 import { mustBeValidKey } from './limits'
+import { encodeBucketAndObjectPath, encodePathPreservingSeparators } from './path-encoding'
 import { fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
 
 const { requestUrlLengthLimit } = getConfig()
@@ -50,17 +51,7 @@ export interface ListObjectsV2Result {
 }
 
 function encodeObjectPathForURL(bucketId: string, objectName: string): string {
-  return `${encodeURIComponent(bucketId)}/${objectName
-    .split('/')
-    .map((pathToken) => encodeURIComponent(pathToken))
-    .join('/')}`
-}
-
-function encodePathPreservingSeparators(path: string): string {
-  return path
-    .split('/')
-    .map((pathToken) => encodeURIComponent(pathToken))
-    .join('/')
+  return encodeBucketAndObjectPath(bucketId, objectName)
 }
 
 /**

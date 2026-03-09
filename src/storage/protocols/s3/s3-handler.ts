@@ -24,6 +24,7 @@ import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getConfig } from '../../../config'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
+import { encodePathPreservingSeparators } from '../../path-encoding'
 import { S3MultipartUpload } from '../../schemas'
 import { Storage } from '../../storage'
 import { Uploader, validateMimeType } from '../../uploader'
@@ -1415,13 +1416,6 @@ function isUSASCII(str: string): boolean {
     }
   }
   return true
-}
-
-function encodePathPreservingSeparators(path: string): string {
-  return path
-    .split('/')
-    .map((pathToken) => encodeURIComponent(pathToken))
-    .join('/')
 }
 
 function parseCopySource(copySource: string): {

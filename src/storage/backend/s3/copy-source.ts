@@ -1,6 +1,5 @@
+import { encodeBucketAndObjectPath } from '../../path-encoding'
+
 export function encodeCopySource(bucket: string, key: string): string {
-  return `${encodeURIComponent(bucket)}/${key
-    .split('/')
-    .map((pathToken) => encodeURIComponent(pathToken))
-    .join('/')}`
+  return encodeBucketAndObjectPath(bucket, key)
 }

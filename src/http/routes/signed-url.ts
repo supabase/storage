@@ -1,13 +1,12 @@
+import { encodePathPreservingSeparators } from '../../storage/path-encoding'
+
 function stripQueryString(rawUrl: string): string {
   const queryIdx = rawUrl.indexOf('?')
   return queryIdx === -1 ? rawUrl : rawUrl.slice(0, queryIdx)
 }
 
 function encodeObjectPathForURL(objectPath: string): string {
-  return objectPath
-    .split('/')
-    .map((pathToken) => encodeURIComponent(pathToken))
-    .join('/')
+  return encodePathPreservingSeparators(objectPath)
 }
 
 export function doesSignedTokenMatchRequestPath(

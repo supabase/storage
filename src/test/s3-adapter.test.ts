@@ -3,6 +3,7 @@
 import { CopyObjectCommand, S3Client, UploadPartCopyCommand } from '@aws-sdk/client-s3'
 import { Readable } from 'stream'
 import { S3Backend } from '../storage/backend/s3/adapter'
+import { encodeBucketAndObjectPathForTest } from './utils/path-encoding'
 
 jest.mock('@aws-sdk/client-s3', () => {
   const originalModule = jest.requireActual('@aws-sdk/client-s3')
@@ -13,12 +14,6 @@ jest.mock('@aws-sdk/client-s3', () => {
     })),
   }
 })
-
-const encodeCopySourceByPathToken = (bucket: string, key: string) =>
-  `${encodeURIComponent(bucket)}/${key
-    .split('/')
-    .map((pathToken) => encodeURIComponent(pathToken))
-    .join('/')}`
 
 describe('S3Backend', () => {
   let mockSend: jest.Mock
@@ -107,7 +102,9 @@ describe('S3Backend', () => {
       expect(mockSend).toHaveBeenCalledTimes(1)
       const command = mockSend.mock.calls[0][0] as CopyObjectCommand
       expect(command).toBeInstanceOf(CopyObjectCommand)
-      expect(command.input.CopySource).toBe(encodeCopySourceByPathToken('test-bucket', sourceKey))
+      expect(command.input.CopySource).toBe(
+        encodeBucketAndObjectPathForTest('test-bucket', sourceKey)
+      )
       expect(command.input.CopySource).toContain('test-bucket/source%20path/')
       expect(command.input.CopySource).not.toContain('test-bucket%2F')
     })
@@ -145,7 +142,9 @@ describe('S3Backend', () => {
       expect(mockSend).toHaveBeenCalledTimes(1)
       const command = mockSend.mock.calls[0][0] as UploadPartCopyCommand
       expect(command).toBeInstanceOf(UploadPartCopyCommand)
-      expect(command.input.CopySource).toBe(encodeCopySourceByPathToken('test-bucket', sourceKey))
+      expect(command.input.CopySource).toBe(
+        encodeBucketAndObjectPathForTest('test-bucket', sourceKey)
+      )
       expect(command.input.CopySource).toContain('test-bucket/source%20path/folder/')
       expect(command.input.CopySource).not.toContain('test-bucket%2F')
       expect(command.input.CopySourceRange).toBe('bytes=0-1024')

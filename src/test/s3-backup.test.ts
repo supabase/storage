@@ -8,6 +8,7 @@ import {
   UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
 import { ObjectBackup } from '../storage/backend/s3/backup'
+import { encodeBucketAndObjectPathForTest } from './utils/path-encoding'
 
 jest.mock('@aws-sdk/client-s3', () => {
   const originalModule = jest.requireActual('@aws-sdk/client-s3')
@@ -18,12 +19,6 @@ jest.mock('@aws-sdk/client-s3', () => {
     })),
   }
 })
-
-const encodeCopySourceByPathToken = (bucket: string, key: string) =>
-  `${encodeURIComponent(bucket)}/${key
-    .split('/')
-    .map((pathToken) => encodeURIComponent(pathToken))
-    .join('/')}`
 
 describe('ObjectBackup', () => {
   let mockSend: jest.Mock
@@ -57,7 +52,9 @@ describe('ObjectBackup', () => {
     expect(mockSend).toHaveBeenCalledTimes(1)
     const command = mockSend.mock.calls[0][0] as CopyObjectCommand
     expect(command).toBeInstanceOf(CopyObjectCommand)
-    expect(command.input.CopySource).toBe(encodeCopySourceByPathToken('source-bucket', sourceKey))
+    expect(command.input.CopySource).toBe(
+      encodeBucketAndObjectPathForTest('source-bucket', sourceKey)
+    )
     expect(command.input.CopySource).toContain('source-bucket/folder%20one/')
     expect(command.input.CopySource).not.toContain('%2Fsource-bucket%2F')
     expect(command.input.CopySource).not.toContain('source-bucket%2F')
@@ -105,7 +102,9 @@ describe('ObjectBackup', () => {
 
     expect(uploadPartCommands).toHaveLength(2)
     for (const command of uploadPartCommands) {
-      expect(command.input.CopySource).toBe(encodeCopySourceByPathToken('source-bucket', sourceKey))
+      expect(command.input.CopySource).toBe(
+        encodeBucketAndObjectPathForTest('source-bucket', sourceKey)
+      )
       expect(command.input.CopySource).toContain('source-bucket/folder%20one/')
       expect(command.input.CopySource).not.toContain('%2Fsource-bucket%2F')
       expect(command.input.CopySource).not.toContain('source-bucket%2F')

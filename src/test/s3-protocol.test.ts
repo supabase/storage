@@ -296,6 +296,54 @@ describe('S3 Protocol', () => {
         expect(resp2.CommonPrefixes?.length).toBe(2)
         expect(resp2.Contents?.length).toBe(1)
       })
+
+      it('paginates v1 listings with Unicode keys across pages', async () => {
+        const bucket = await createBucket(client)
+        const keys = [
+          `v1-unicode-${randomUUID()}-éè-中文-🙂.jpg`,
+          `v1-unicode-${randomUUID()}-일이삼-🙂.jpg`,
+          `v1-unicode-${randomUUID()}-폴더-子目录-🙂.jpg`,
+        ].sort()
+
+        await Promise.all(keys.map((key) => uploadFile(client, bucket, key, 1)))
+
+        const page1 = await client.send(
+          new ListObjectsCommand({
+            Bucket: bucket,
+            MaxKeys: 1,
+          })
+        )
+        expect(page1.Contents?.length).toBe(1)
+        expect(page1.Marker).toBeTruthy()
+
+        const page2 = await client.send(
+          new ListObjectsCommand({
+            Bucket: bucket,
+            MaxKeys: 1,
+            Marker: page1.Marker,
+          })
+        )
+        expect(page2.Contents?.length).toBe(1)
+        expect(page2.Marker).toBeTruthy()
+
+        const page3 = await client.send(
+          new ListObjectsCommand({
+            Bucket: bucket,
+            MaxKeys: 1,
+            Marker: page2.Marker,
+          })
+        )
+        expect(page3.Contents?.length).toBe(1)
+
+        const pagedKeys = [
+          page1.Contents?.[0]?.Key,
+          page2.Contents?.[0]?.Key,
+          page3.Contents?.[0]?.Key,
+        ].filter(Boolean)
+        expect(pagedKeys).toHaveLength(3)
+        expect(new Set(pagedKeys).size).toBe(3)
+        expect(pagedKeys).toEqual(keys)
+      })
     })
 
     describe('ListObjectsV2Command', () => {

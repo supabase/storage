@@ -342,18 +342,17 @@ export class FileBackend implements StorageBackendAdapter {
     cacheControl: string
   ): Promise<string | undefined> {
     const uploadId = randomUUID()
-    const multiPartFolder = this.resolveSecurePath(
-      path.join('multiparts', uploadId, bucketName, withOptionalVersion(key, version))
-    )
-    const multipartFile = this.resolveSecurePath(
-      path.join(
-        'multiparts',
-        uploadId,
-        bucketName,
-        withOptionalVersion(key, version),
-        'metadata.json'
-      )
-    )
+    const multiPartFolder = this.resolveSecureMultipartPath(uploadId, {
+      bucketName,
+      key,
+      version,
+    })
+    const multipartFile = this.resolveSecureMultipartPath(uploadId, {
+      bucketName,
+      key,
+      version,
+      suffix: 'metadata.json',
+    })
     await fsExtra.ensureDir(multiPartFolder)
     await fsExtra.writeFile(multipartFile, JSON.stringify({ contentType, cacheControl }))
 
@@ -368,15 +367,12 @@ export class FileBackend implements StorageBackendAdapter {
     partNumber: number,
     body: stream.Readable
   ): Promise<{ ETag?: string }> {
-    const partPath = this.resolveSecurePath(
-      path.join(
-        'multiparts',
-        uploadId,
-        bucketName,
-        withOptionalVersion(key, version),
-        `part-${partNumber}`
-      )
-    )
+    const partPath = this.resolveSecureMultipartPath(uploadId, {
+      bucketName,
+      key,
+      version,
+      suffix: `part-${partNumber}`,
+    })
 
     const writeStream = fsExtra.createWriteStream(partPath)
 
@@ -404,15 +400,12 @@ export class FileBackend implements StorageBackendAdapter {
     }
   > {
     const partsByEtags = parts.map(async (part) => {
-      const partFilePath = this.resolveSecurePath(
-        path.join(
-          'multiparts',
-          uploadId,
-          bucketName,
-          withOptionalVersion(key, version),
-          `part-${part.PartNumber}`
-        )
-      )
+      const partFilePath = this.resolveSecureMultipartPath(uploadId, {
+        bucketName,
+        key,
+        version,
+        suffix: `part-${part.PartNumber}`,
+      })
       const partExists = await fsExtra.pathExists(partFilePath)
 
       if (partExists) {
@@ -432,15 +425,12 @@ export class FileBackend implements StorageBackendAdapter {
 
     const multipartStream = this.mergePartStreams(finalParts)
     const metadataContent = await fsExtra.readFile(
-      this.resolveSecurePath(
-        path.join(
-          'multiparts',
-          uploadId,
-          bucketName,
-          withOptionalVersion(key, version),
-          'metadata.json'
-        )
-      ),
+      this.resolveSecureMultipartPath(uploadId, {
+        bucketName,
+        key,
+        version,
+        suffix: 'metadata.json',
+      }),
       'utf-8'
     )
 
@@ -455,7 +445,7 @@ export class FileBackend implements StorageBackendAdapter {
       metadata.cacheControl
     )
 
-    fsExtra.remove(this.resolveSecurePath(path.join('multiparts', uploadId))).catch(() => {
+    fsExtra.remove(this.resolveSecureMultipartPath(uploadId)).catch(() => {
       // no-op
     })
 
@@ -473,7 +463,7 @@ export class FileBackend implements StorageBackendAdapter {
     uploadId: string,
     version?: string
   ): Promise<void> {
-    const multiPartFolder = this.resolveSecurePath(path.join('multiparts', uploadId))
+    const multiPartFolder = this.resolveSecureMultipartPath(uploadId)
 
     await fsExtra.remove(multiPartFolder)
 
@@ -495,15 +485,12 @@ export class FileBackend implements StorageBackendAdapter {
     sourceVersion?: string,
     rangeBytes?: { fromByte: number; toByte: number }
   ): Promise<{ eTag?: string; lastModified?: Date }> {
-    const partFilePath = this.resolveSecurePath(
-      path.join(
-        'multiparts',
-        UploadId,
-        storageS3Bucket,
-        withOptionalVersion(key, version),
-        `part-${PartNumber}`
-      )
-    )
+    const partFilePath = this.resolveSecureMultipartPath(UploadId, {
+      bucketName: storageS3Bucket,
+      key,
+      version,
+      suffix: `part-${PartNumber}`,
+    })
     const sourceFilePath = this.resolveSecurePath(
       `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceVersion)}`
     )
@@ -690,6 +677,34 @@ export class FileBackend implements StorageBackendAdapter {
     }
 
     return normalizedPath
+  }
+
+  private resolveSecureMultipartPath(
+    uploadId: string,
+    options?: {
+      bucketName?: string
+      key?: string
+      version?: string
+      suffix?: string
+    }
+  ): string {
+    // Intentionally avoid path.join for attacker-controlled segments so dot segments remain visible
+    // to resolveSecurePath instead of being normalized away beforehand.
+    let relativePath = `multiparts/${uploadId}`
+
+    if (typeof options?.bucketName === 'string') {
+      relativePath += `/${options.bucketName}`
+    }
+
+    if (typeof options?.key === 'string') {
+      relativePath += `/${withOptionalVersion(options.key, options.version)}`
+    }
+
+    if (typeof options?.suffix === 'string') {
+      relativePath += `/${options.suffix}`
+    }
+
+    return this.resolveSecurePath(relativePath)
   }
 
   private async etag(file: string, stats: fs.Stats): Promise<string> {

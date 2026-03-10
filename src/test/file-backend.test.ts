@@ -314,6 +314,22 @@ describe('FileBackend traversal protection', () => {
     })
   })
 
+  it('rejects multipart keys that only rebase within the storage root', async () => {
+    const traversalKey = '../multipart-rebased.txt'
+
+    await expect(
+      backend.createMultiPartUpload('bucket', traversalKey, 'v1', 'text/plain', 'no-cache')
+    ).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+
+    await expect(
+      backend.uploadPart('bucket', traversalKey, 'v1', 'upload-id', 1, Readable.from('escape-part'))
+    ).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+  })
+
   it('rejects traversal key in object operations with InvalidKey', async () => {
     const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/object-escape.txt`
 
@@ -404,6 +420,14 @@ describe('FileBackend traversal protection', () => {
         traversalSourceKey,
         'v1'
       )
+    ).rejects.toMatchObject({
+      code: 'InvalidKey',
+    })
+  })
+
+  it('rejects multipart upload ids that would be normalized to sibling in-root paths', async () => {
+    await expect(
+      backend.abortMultipartUpload('bucket', 'key', '../upload-id')
     ).rejects.toMatchObject({
       code: 'InvalidKey',
     })

@@ -1151,13 +1151,18 @@ export class DBError extends StorageBackendError implements RenderableError {
           code: pgError.code,
         })
       default:
-        const errorMessage =
+        if (
           pgError.code === '23514' &&
           pgError.constraint &&
           objectNameConstraintNames.has(pgError.constraint)
-            ? 'Invalid object name'
-            : pgError.message
-        return ERRORS.DatabaseError(errorMessage, pgError).withMetadata({
+        ) {
+          return ERRORS.InvalidObjectName(pgError).withMetadata({
+            query,
+            code: pgError.code,
+          })
+        }
+
+        return ERRORS.DatabaseError(pgError.message, pgError).withMetadata({
           query,
           code: pgError.code,
         })

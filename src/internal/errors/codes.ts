@@ -359,6 +359,14 @@ export const ERRORS = {
       originalError: e,
     }),
 
+  InvalidObjectName: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidKey,
+      httpStatusCode: 400,
+      message: 'Invalid object name',
+      originalError: e,
+    }),
+
   InvalidKey: (key: string, e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.InvalidKey,

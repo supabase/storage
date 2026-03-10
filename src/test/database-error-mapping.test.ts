@@ -19,7 +19,7 @@ describe('DBError.fromDBError', () => {
 
     const err = DBError.fromDBError(pgError, query)
 
-    expect(err.code).toBe(ErrorCode.DatabaseError)
+    expect(err.code).toBe(ErrorCode.InvalidKey)
     expect(err.message).toBe('Invalid object name')
     expect(err.metadata).toMatchObject({
       code: '23514',

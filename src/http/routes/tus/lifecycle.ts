@@ -117,9 +117,9 @@ export function generateUrl(
   if (parsedPublicUrl) {
     proto = parsedPublicUrl.protocol.replace(':', '')
     host = parsedPublicUrl.host
-  } else {
-    proto = process.env.NODE_ENV === 'production' ? 'https' : proto
   }
+
+  proto = process.env.NODE_ENV === 'production' ? 'https' : proto
 
   let basePath = path
 

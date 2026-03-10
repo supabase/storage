@@ -1,19 +1,48 @@
 import { ERRORS } from '@internal/errors'
 
+const VERSION_ID_QUERY_DELIMITER = '?versionId='
+
+function splitCopySourceVersion(copySource: string): {
+  encodedPath: string
+  sourceVersion?: string
+} {
+  const versionQueryIdx = copySource.lastIndexOf(VERSION_ID_QUERY_DELIMITER)
+
+  if (versionQueryIdx === -1) {
+    return {
+      encodedPath: copySource,
+    }
+  }
+
+  const sourceVersion = copySource.slice(versionQueryIdx + VERSION_ID_QUERY_DELIMITER.length)
+  if (!sourceVersion) {
+    throw ERRORS.InvalidParameter('CopySource')
+  }
+
+  return {
+    encodedPath: copySource.slice(0, versionQueryIdx),
+    sourceVersion,
+  }
+}
+
 export function parseCopySource(copySource: string): {
   bucketName: string
   objectKey: string
   sourceVersion?: string
 } {
   const normalizedCopySource = copySource.startsWith('/') ? copySource.slice(1) : copySource
-  const [encodedPath, ...queryParts] = normalizedCopySource.split('?')
-  const queryParams = queryParts.join('?')
+  // Preserve raw '?' characters in partially encoded keys and only peel off a trailing versionId suffix.
+  const { encodedPath, sourceVersion } = splitCopySourceVersion(normalizedCopySource)
 
   let decodedPath = ''
   try {
     decodedPath = decodeURIComponent(encodedPath)
   } catch {
     throw ERRORS.InvalidParameter('CopySource')
+  }
+
+  if (decodedPath.startsWith('/')) {
+    decodedPath = decodedPath.slice(1)
   }
 
   const separatorIdx = decodedPath.indexOf('/')
@@ -25,13 +54,6 @@ export function parseCopySource(copySource: string): {
   const objectKey = decodedPath.slice(separatorIdx + 1)
   if (!objectKey) {
     throw ERRORS.MissingParameter('CopySource')
-  }
-
-  const searchParams = new URLSearchParams(queryParams)
-  const sourceVersion = searchParams.get('versionId') || undefined
-
-  if (searchParams.has('versionId') && !sourceVersion) {
-    throw ERRORS.InvalidParameter('CopySource')
   }
 
   return {

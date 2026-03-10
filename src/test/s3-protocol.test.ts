@@ -2703,6 +2703,68 @@ describe('S3 Protocol', () => {
         expect(listedKeys).toEqual(expect.arrayContaining([sourceKey, destinationKey]))
       })
 
+      it('can copy objects when partially encoded CopySource keeps raw ? and # in the key', async () => {
+        const bucketName = await createBucket(client)
+        const sourceKey = `copy-src-reserved-${randomUUID()}-일이삼?x=1#frag.png`
+        const destinationKey = `copy-dst-reserved-${randomUUID()}-🙂.jpg`
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucketName,
+            Key: sourceKey,
+            Body: Buffer.alloc(1024 * 128),
+          })
+        )
+
+        const copyObjectResp = await client.send(
+          new CopyObjectCommand({
+            Bucket: bucketName,
+            Key: destinationKey,
+            CopySource: encodeURI(`${bucketName}/${sourceKey}`),
+          })
+        )
+        expect(copyObjectResp.$metadata.httpStatusCode).toBe(200)
+
+        const listObjectsResp = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucketName,
+          })
+        )
+        const listedKeys = (listObjectsResp.Contents || []).map((item) => item.Key)
+        expect(listedKeys).toEqual(expect.arrayContaining([sourceKey, destinationKey]))
+      })
+
+      it('can copy objects using fully URL-encoded leading-slash CopySource', async () => {
+        const bucketName = await createBucket(client)
+        const sourceKey = getUnicodeObjectName()
+        const destinationKey = `copy-dst-leading-encoded-${randomUUID()}-🙂.jpg`
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucketName,
+            Key: sourceKey,
+            Body: Buffer.alloc(1024 * 128),
+          })
+        )
+
+        const copyObjectResp = await client.send(
+          new CopyObjectCommand({
+            Bucket: bucketName,
+            Key: destinationKey,
+            CopySource: encodeURIComponent(`/${bucketName}/${sourceKey}`),
+          })
+        )
+        expect(copyObjectResp.$metadata.httpStatusCode).toBe(200)
+
+        const listObjectsResp = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucketName,
+          })
+        )
+        const listedKeys = (listObjectsResp.Contents || []).map((item) => item.Key)
+        expect(listedKeys).toEqual(expect.arrayContaining([sourceKey, destinationKey]))
+      })
+
       it('can upload part copy using Unicode keys in CopySource', async () => {
         const bucketName = await createBucket(client)
         const sourceKey = `copy-part-src-${randomUUID()}-일이삼-🙂.jpg`
@@ -2764,6 +2826,44 @@ describe('S3 Protocol', () => {
             UploadId: createMultipartResp.UploadId,
             PartNumber: 1,
             CopySource: encodeURIComponent(`${bucketName}/${sourceKey}`),
+            CopySourceRange: 'bytes=0-4096',
+          })
+        )
+        expect(uploadPartCopyResp.CopyPartResult?.ETag).toBeTruthy()
+
+        const listPartsResp = await client.send(
+          new ListPartsCommand({
+            Bucket: bucketName,
+            Key: destinationKey,
+            UploadId: createMultipartResp.UploadId,
+          })
+        )
+        expect(listPartsResp.Parts?.length).toBe(1)
+      })
+
+      it('can upload part copy when partially encoded CopySource keeps raw ? and # in the key', async () => {
+        const bucketName = await createBucket(client)
+        const sourceKey = `copy-part-src-reserved-${randomUUID()}-일이삼?x=1#frag.png`
+        const destinationKey = `copy-part-dst-reserved-${randomUUID()}-🙂.jpg`
+
+        await uploadFile(client, bucketName, sourceKey, 8)
+
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: destinationKey,
+          ContentType: 'image/jpg',
+          CacheControl: 'max-age=2000',
+        })
+        const createMultipartResp = await client.send(createMultiPartUpload)
+        expect(createMultipartResp.UploadId).toBeTruthy()
+
+        const uploadPartCopyResp = await client.send(
+          new UploadPartCopyCommand({
+            Bucket: bucketName,
+            Key: destinationKey,
+            UploadId: createMultipartResp.UploadId,
+            PartNumber: 1,
+            CopySource: encodeURI(`${bucketName}/${sourceKey}`),
             CopySourceRange: 'bytes=0-4096',
           })
         )

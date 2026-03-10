@@ -90,7 +90,6 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
 
         const attributes = {
           method,
-          route,
           operation: request.operation?.type || 'unknown',
           status_code: statusCode,
           tenantId: request.tenantId || '',

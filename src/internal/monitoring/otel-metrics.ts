@@ -26,17 +26,101 @@ const { version, otelMetricsExportIntervalMs, otelMetricsEnabled, otelMetricsTem
 let prometheusExporter: PrometheusExporter | undefined
 let meterProvider: MeterProvider | undefined
 let metricsShutdownPromise: Promise<void> | undefined
-let runtimeNodeInstrumentation: RuntimeNodeInstrumentation | undefined
-let storageNodeInstrumentation: StorageNodeInstrumentation | undefined
 
 interface OTelMetricsGlobalState {
   __otelMetricsShutdown?: () => Promise<void>
 }
 
-/**
- * Explicit shutdown hook for test and process teardown.
- * Safe to call multiple times.
- */
+// =============================================================================
+// Shared config
+// =============================================================================
+const instance = os.hostname()
+const headersEnv = process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS || ''
+const otlpEndpoint =
+  process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT || process.env.OTEL_EXPORTER_OTLP_ENDPOINT
+
+const exporterHeaders = headersEnv
+  .split(',')
+  .filter(Boolean)
+  .reduce(
+    (all, header) => {
+      const [name, value] = header.split('=')
+      all[name] = value
+      return all
+    },
+    {} as Record<string, string>
+  )
+
+const grpcMetadata = new grpc.Metadata()
+Object.keys(exporterHeaders).forEach((key) => {
+  grpcMetadata.set(key, exporterHeaders[key])
+})
+
+const resource = resourceFromAttributes({
+  [ATTR_SERVICE_NAME]: 'storage_api',
+  [ATTR_SERVICE_VERSION]: version,
+  'metric.version': '1',
+  region,
+  instance,
+})
+
+// Bucket boundaries for duration histograms (in seconds)
+const durationBuckets = [
+  0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
+]
+
+const histogramAggregation = {
+  type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+  options: { boundaries: durationBuckets },
+} as const
+
+const dropAggregation = { type: AggregationType.DROP } as const
+
+// Views — custom histogram buckets + drop auto-instrumentation duplicates.
+// Tenant attribute stripping is handled by registerMetric() in metrics.ts.
+const views = [
+  {
+    meterName: 'storage-api',
+    instrumentName: 'http_request_duration_seconds',
+    aggregation: histogramAggregation,
+  },
+  {
+    meterName: 'storage-api',
+    instrumentName: 'database_query_performance_seconds',
+    aggregation: histogramAggregation,
+  },
+  {
+    meterName: 'storage-api',
+    instrumentName: 'db_connection_acquire_seconds',
+    aggregation: histogramAggregation,
+  },
+  {
+    meterName: 'storage-api',
+    instrumentName: 'queue_job_scheduled_time_seconds',
+    aggregation: histogramAggregation,
+  },
+  {
+    meterName: 'storage-api',
+    instrumentName: 's3_upload_part_seconds',
+    aggregation: histogramAggregation,
+  },
+  // Drop duplicate HTTP metrics from auto-instrumentations — we have our own in metrics.ts
+  {
+    meterName: '@opentelemetry/instrumentation-http',
+    instrumentName: '*',
+    aggregation: dropAggregation,
+  },
+  // Drop any Fastify metrics from auto-instrumentations (now using @fastify/otel for traces only)
+  {
+    meterName: '@fastify/otel',
+    instrumentName: '*',
+    aggregation: dropAggregation,
+  },
+]
+
+// =============================================================================
+// Shutdown
+// =============================================================================
 export async function shutdownOtelMetrics(): Promise<void> {
   if (metricsShutdownPromise) {
     await metricsShutdownPromise
@@ -54,10 +138,6 @@ export async function shutdownOtelMetrics(): Promise<void> {
     })
 
     try {
-      // Disable custom/system instrumentations first to clear background timers
-      storageNodeInstrumentation?.disable()
-      runtimeNodeInstrumentation?.disable()
-
       await provider.shutdown()
       logSchema.info(logger, '[OTel Metrics] Shutdown complete', {
         type: 'otel-metrics',
@@ -72,8 +152,6 @@ export async function shutdownOtelMetrics(): Promise<void> {
         meterProvider = undefined
       }
       prometheusExporter = undefined
-      runtimeNodeInstrumentation = undefined
-      storageNodeInstrumentation = undefined
     }
   })()
 
@@ -83,9 +161,9 @@ export async function shutdownOtelMetrics(): Promise<void> {
 ;(globalThis as typeof globalThis & OTelMetricsGlobalState).__otelMetricsShutdown =
   shutdownOtelMetrics
 
-/**
- * Handles the /metrics endpoint request using OTel Prometheus exporter
- */
+// =============================================================================
+// /metrics endpoint handler
+// =============================================================================
 export async function handleMetricsRequest(
   request: FastifyRequest,
   reply: FastifyReply
@@ -104,44 +182,12 @@ export async function handleMetricsRequest(
   return Promise.resolve()
 }
 
+// =============================================================================
+// Initialize at import time
+// =============================================================================
 if (otelMetricsEnabled) {
-  const headersEnv = process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS || ''
-  const otlpEndpoint =
-    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT || process.env.OTEL_EXPORTER_OTLP_ENDPOINT
-
-  const exporterHeaders = headersEnv
-    .split(',')
-    .filter(Boolean)
-    .reduce(
-      (all, header) => {
-        const [name, value] = header.split('=')
-        all[name] = value
-        return all
-      },
-      {} as Record<string, string>
-    )
-
-  const grpcMetadata = new grpc.Metadata()
-  Object.keys(exporterHeaders).forEach((key) => {
-    grpcMetadata.set(key, exporterHeaders[key])
-  })
-
-  // =============================================================================
-  // Initialize MeterProvider at import time (before other modules use metrics)
-  // =============================================================================
-  const instance = os.hostname()
-
-  const resource = resourceFromAttributes({
-    [ATTR_SERVICE_NAME]: 'storage_api',
-    [ATTR_SERVICE_VERSION]: version,
-    'metric.version': '1',
-    region,
-    instance,
-  })
-
   const readers = []
 
-  // Add OTLP exporter if endpoint is configured (for pushing to collector)
   if (otlpEndpoint) {
     const otlpExporter = new OTLPMetricExporter({
       url: otlpEndpoint,
@@ -162,55 +208,17 @@ if (otelMetricsEnabled) {
     )
   }
 
-  // Always add Prometheus exporter for /metrics endpoint
   prometheusExporter = new PrometheusExporter({
     prefix: 'storage_api',
-    preventServerStart: true, // We'll handle the endpoint in Fastify
+    preventServerStart: true,
     withResourceConstantLabels: /^(region|instance|metric\.version)$/,
   })
   readers.push(prometheusExporter)
 
-  // Bucket boundaries for duration histograms (in seconds)
-  // Provides good resolution from 0.5ms to 10s
-  const durationBuckets = [
-    0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
-  ]
-
-  const histogramAggregation = {
-    type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
-    options: { boundaries: durationBuckets },
-  } as const
-
   meterProvider = new MeterProvider({
     resource,
     readers,
-    views: [
-      {
-        meterName: 'storage-api',
-        instrumentName: 'http_request_duration_seconds',
-        aggregation: histogramAggregation,
-      },
-      {
-        meterName: 'storage-api',
-        instrumentName: 'database_query_performance_seconds',
-        aggregation: histogramAggregation,
-      },
-      {
-        meterName: 'storage-api',
-        instrumentName: 'queue_job_scheduled_time_seconds',
-        aggregation: histogramAggregation,
-      },
-      {
-        meterName: 'storage-api',
-        instrumentName: 's3_upload_part_seconds',
-        aggregation: histogramAggregation,
-      },
-      {
-        meterName: 'storage-api',
-        instrumentName: 'db_connection_acquire_seconds',
-        aggregation: histogramAggregation,
-      },
-    ],
+    views,
   })
 
   // Register as global provider IMMEDIATELY so metrics.ts instruments work
@@ -231,29 +239,20 @@ if (otelMetricsEnabled) {
   const hostMetrics = new HostMetrics({
     meterProvider,
     name: 'storage-api-host-metrics',
-    metricGroups: ['system.cpu', 'system.memory', 'process.cpu', 'process.memory'],
+    metricGroups: ['process.cpu', 'process.memory'],
   })
   hostMetrics.start()
 
   // Register Node.js runtime instrumentations
-  runtimeNodeInstrumentation = new RuntimeNodeInstrumentation()
-  storageNodeInstrumentation = new StorageNodeInstrumentation({
-    labels: { region, instance },
-  })
-
   registerInstrumentations({
     meterProvider,
     instrumentations: [
-      // Official OTel: event loop delay/time/utilization, GC, heap spaces
-      runtimeNodeInstrumentation,
-      // Custom: event loop lag, CPU, handles, process start time, external memory, file descriptors
-      storageNodeInstrumentation,
+      new RuntimeNodeInstrumentation(),
+      new StorageNodeInstrumentation({ labels: { region, instance } }),
     ],
   })
 
-  logSchema.info(logger, '[OTel Metrics] Initialized successfully', {
-    type: 'otel-metrics',
-  })
+  logSchema.info(logger, '[OTel Metrics] Initialized', { type: 'otel-metrics' })
 
   // Graceful shutdown
   const shutdown = () => {

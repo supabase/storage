@@ -1,5 +1,4 @@
 import fastifyMultipart from '@fastify/multipart'
-import { trace } from '@opentelemetry/api'
 import { FastifyInstance, RouteHandlerMethod } from 'fastify'
 import { JSONSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
@@ -63,8 +62,8 @@ export default async function routes(fastify: FastifyInstance) {
 
                 req.operation = { type: operation }
 
-                if (req.operation.type) {
-                  trace.getActiveSpan()?.setAttribute('http.operation', req.operation.type)
+                if (req.operation.type && typeof req.opentelemetry === 'function') {
+                  req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)
                 }
 
                 const data: RequestInput<any> = {

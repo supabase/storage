@@ -53,7 +53,6 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
   }
 
   res.on('finish', () => {
-    console.log('Tus request finished')
     req.upload.db.dispose().catch((e) => {
       req.log.error({ error: e }, 'Error disposing db connection')
     })

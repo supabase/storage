@@ -57,4 +57,5 @@ export const DBMigration = {
   'prevent-direct-deletes': 55,
   'fix-optimized-search-function': 56,
   's3-multipart-uploads-metadata': 57,
+  'operation-ergonomics': 58,
 } as const

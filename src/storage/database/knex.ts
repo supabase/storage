@@ -1114,6 +1114,12 @@ export class DBError extends StorageBackendError implements RenderableError {
   }
 
   static fromDBError(pgError: DatabaseError, query?: string) {
+    const objectNameConstraintNames = new Set([
+      'objects_name_check',
+      's3_multipart_uploads_key_check',
+      's3_multipart_uploads_parts_key_check',
+    ])
+
     switch (pgError.code) {
       case '42501':
         return ERRORS.AccessDenied(
@@ -1145,7 +1151,18 @@ export class DBError extends StorageBackendError implements RenderableError {
           code: pgError.code,
         })
       default:
-        return ERRORS.DatabaseError(`database error, code: ${pgError.code}`, pgError).withMetadata({
+        if (
+          pgError.code === '23514' &&
+          pgError.constraint &&
+          objectNameConstraintNames.has(pgError.constraint)
+        ) {
+          return ERRORS.InvalidObjectName(pgError).withMetadata({
+            query,
+            code: pgError.code,
+          })
+        }
+
+        return ERRORS.DatabaseError(pgError.message, pgError).withMetadata({
           query,
           code: pgError.code,
         })

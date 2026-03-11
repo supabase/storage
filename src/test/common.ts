@@ -10,6 +10,42 @@ export const adminApp = app({})
 const ENV = process.env
 const projectRoot = path.join(__dirname, '..', '..')
 
+/**
+ * Should support all Unicode characters with UTF-8 encoding according to AWS S3 object naming guide, including:
+ * - Safe characters: 0-9 a-z A-Z !-_.*'()
+ * - Characters that might require special handling: &$@=;/:+,? and Space and ASCII characters \t, \n, and \r.
+ * - Characters: \{}^%`[]"<>~#| and non-printable ASCII characters (128–255 decimal characters).
+ *
+ * The following characters are not allowed:
+ * - ASCII characters 0x00–0x1F, except 0x09, 0x0A, and 0x0D.
+ * - Unicode \u{FFFE} and \u{FFFF}.
+ * - Lone surrogates characters.
+ * See: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+ * See: https://www.w3.org/TR/REC-xml/#charsets
+ */
+export function getUnicodeObjectName(): string {
+  const objectName = 'test'
+    .concat("!-_*.'()")
+    // Characters that might require special handling
+    .concat('&$@=;:+,? \x09\x0A\x0D')
+    // Characters to avoid
+    .concat('\\{}^%`[]"<>~#|\xFF')
+    // MinIO max. length for each '/' separated segment is 255
+    .concat('/')
+    .concat([...Array(127).keys()].map((i) => String.fromCodePoint(i + 128)).join(''))
+    .concat('/')
+    // Some special Unicode characters
+    .concat('\u2028\u202F\u{0001FFFF}')
+    // Some other Unicode characters
+    .concat('일이삼\u{0001f642}')
+
+  return objectName
+}
+
+export function getInvalidObjectName(): string {
+  return 'test\x01\x02\x03.txt'
+}
+
 export function useMockQueue() {
   const queueSpy: jest.SpyInstance | undefined = undefined
   beforeEach(() => {

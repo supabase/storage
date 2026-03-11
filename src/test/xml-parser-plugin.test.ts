@@ -50,6 +50,62 @@ describe('xmlParser plugin', () => {
     }
   })
 
+  it('accepts valid numeric entities and still applies value processors', async () => {
+    const app = await buildXmlApp(['CompleteMultipartUpload.Part'])
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/xml',
+        headers: {
+          'content-type': 'application/xml',
+          accept: 'application/json',
+        },
+        payload:
+          '<CompleteMultipartUpload><Part><PartNumber>&#49;</PartNumber><ETag>&#x1F642;</ETag></Part></CompleteMultipartUpload>',
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({
+        body: {
+          CompleteMultipartUpload: {
+            Part: [{ PartNumber: 1, ETag: '🙂' }],
+          },
+        },
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('accepts decimal astral numeric entities', async () => {
+    const app = await buildXmlApp(['CompleteMultipartUpload.Part'])
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/xml',
+        headers: {
+          'content-type': 'application/xml',
+          accept: 'application/json',
+        },
+        payload:
+          '<CompleteMultipartUpload><Part><ETag>&#128578;</ETag></Part></CompleteMultipartUpload>',
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({
+        body: {
+          CompleteMultipartUpload: {
+            Part: [{ ETag: '🙂' }],
+          },
+        },
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
   it('returns 400 for malformed XML payloads', async () => {
     const app = await buildXmlApp()
 
@@ -62,6 +118,57 @@ describe('xmlParser plugin', () => {
           accept: 'application/json',
         },
         payload: '<CompleteMultipartUpload><Part></CompleteMultipartUpload>',
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json().message).toContain('Invalid XML payload')
+    } finally {
+      await app.close()
+    }
+  })
+
+  it.each([
+    '&#0;',
+    '&#000;',
+    '&#x0;',
+    '&#xD800;',
+    '&#55296;',
+    '&#xFFFF;',
+    '&#65535;',
+  ])('returns 400 for XML-forbidden numeric entity %s', async (entity) => {
+    const app = await buildXmlApp()
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/xml',
+        headers: {
+          'content-type': 'application/xml',
+          accept: 'application/json',
+        },
+        payload: `<CompleteMultipartUpload><Part><ETag>${entity}</ETag></Part></CompleteMultipartUpload>`,
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json().message).toContain('Invalid XML payload')
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('returns 400 for out-of-range numeric entities', async () => {
+    const app = await buildXmlApp()
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/xml',
+        headers: {
+          'content-type': 'application/xml',
+          accept: 'application/json',
+        },
+        payload:
+          '<CompleteMultipartUpload><Part><ETag>&#x110000;</ETag></Part></CompleteMultipartUpload>',
       })
 
       expect(response.statusCode).toBe(400)

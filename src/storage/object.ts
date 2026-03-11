@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
 import { ERRORS } from '@internal/errors'
+import { encodeBucketAndObjectPath, encodePathPreservingSeparators } from '@internal/http'
 import { StorageObjectLocator } from '@storage/locator'
 import { Obj } from '@storage/schemas'
 import { FastifyRequest } from 'fastify/types/request'
@@ -23,6 +24,7 @@ const { requestUrlLengthLimit } = getConfig()
 
 interface CopyObjectParams {
   sourceKey: string
+  sourceVersion?: string
   destinationBucket: string
   destinationKey: string
   owner?: string
@@ -294,6 +296,7 @@ export class ObjectStorage {
    */
   async copyObject({
     sourceKey,
+    sourceVersion,
     destinationBucket,
     destinationKey,
     owner,
@@ -324,6 +327,10 @@ export class ObjectStorage {
       'bucket_id,metadata,user_metadata,version'
     )
 
+    if (sourceVersion && originObject.version !== sourceVersion) {
+      throw ERRORS.NoSuchKey(sourceKey)
+    }
+
     const baseMetadata = originObject.metadata || {}
     const destinationMetadata = copyMetadata
       ? baseMetadata
@@ -343,7 +350,7 @@ export class ObjectStorage {
       const copyResult = await this.backend.copyObject(
         this.location.getRootLocation(),
         s3SourceKey,
-        originObject.version,
+        sourceVersion || originObject.version,
         s3DestinationKey,
         newVersion,
         destinationMetadata,
@@ -600,7 +607,15 @@ export class ObjectStorage {
     const prefix = options?.prefix || ''
     const delimiter = options?.delimiter
 
-    const cursor = options?.cursor ? decodeContinuationToken(options.cursor) : undefined
+    let cursor: ContinuationToken | undefined
+    if (options?.cursor) {
+      try {
+        cursor = decodeContinuationToken(options.cursor)
+      } catch (error) {
+        throw ERRORS.InvalidParameter('ContinuationToken', { error: error as Error })
+      }
+    }
+
     let searchResult = await this.db.listObjectsV2(this.bucketId, {
       prefix: options?.prefix,
       delimiter: options?.delimiter,
@@ -655,7 +670,12 @@ export class ObjectStorage {
       const name = obj.id === null && !obj.name.endsWith('/') ? obj.name + '/' : obj.name
       target.push({
         ...obj,
-        name: options?.encodingType === 'url' ? encodeURIComponent(name) : name,
+        name:
+          options?.encodingType === 'url'
+            ? obj.id === null
+              ? encodePathPreservingSeparators(name)
+              : encodeURIComponent(name)
+            : name,
       })
     })
 
@@ -699,7 +719,6 @@ export class ObjectStorage {
    */
   async signObjectUrl(
     objectName: string,
-    url: string,
     expiresIn: number,
     metadata?: Record<string, string | object | undefined>
   ) {
@@ -716,8 +735,7 @@ export class ObjectStorage {
     // make sure it's never able to specify a role JWT claim
     delete metadata['role']
 
-    const urlParts = url.split('/')
-    const urlToSign = decodeURI(urlParts.splice(3).join('/'))
+    const urlToSign = `${this.bucketId}/${objectName}`
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
     const token = await signJWT({ url: urlToSign, ...metadata }, urlSigningKey, expiresIn)
 
@@ -727,8 +745,10 @@ export class ObjectStorage {
       urlPath = 'render/image'
     }
 
+    const encodedUrlToSign = encodeBucketAndObjectPath(this.bucketId, objectName)
+
     // @todo parse the url properly
-    return `/${urlPath}/sign/${urlToSign}?token=${token}`
+    return `/${urlPath}/sign/${encodedUrlToSign}?token=${token}`
   }
 
   /**
@@ -764,7 +784,8 @@ export class ObjectStorage {
         if (nameSet.has(path)) {
           const urlToSign = `${this.bucketId}/${path}`
           const token = await signJWT({ url: urlToSign }, urlSigningKey, expiresIn)
-          signedURL = `/object/sign/${urlToSign}?token=${token}`
+          const encodedUrlToSign = encodeBucketAndObjectPath(this.bucketId, path)
+          signedURL = `/object/sign/${encodedUrlToSign}?token=${token}`
         } else {
           error = 'Either the object does not exist or you do not have access to it'
         }
@@ -787,11 +808,12 @@ export class ObjectStorage {
    */
   async signUploadObjectUrl(
     objectName: string,
-    url: string,
     expiresIn: number,
     owner?: string,
     options?: { upsert?: boolean }
   ) {
+    mustBeValidKey(objectName)
+
     // check if user has INSERT permissions
     await this.uploader.canUpload({
       bucketId: this.bucketId,
@@ -801,13 +823,16 @@ export class ObjectStorage {
     })
 
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
+    const urlToSign = `${this.bucketId}/${objectName}`
     const token = await signJWT(
-      { owner, url, upsert: Boolean(options?.upsert) },
+      { owner, url: urlToSign, upsert: Boolean(options?.upsert) },
       urlSigningKey,
       expiresIn
     )
 
-    return { url: `/object/upload/sign/${url}?token=${token}`, token }
+    const encodedUrlToSign = encodeBucketAndObjectPath(this.bucketId, objectName)
+
+    return { url: `/object/upload/sign/${encodedUrlToSign}?token=${token}`, token }
   }
 
   /**
@@ -826,14 +851,10 @@ export class ObjectStorage {
       throw ERRORS.InvalidJWT(err)
     }
 
-    const { url, exp } = payload
+    const { url } = payload
 
     if (url !== `${this.bucketId}/${objectName}`) {
       throw ERRORS.InvalidSignature()
-    }
-
-    if (exp * 1000 < Date.now()) {
-      throw ERRORS.ExpiredSignature()
     }
 
     return payload
@@ -853,15 +874,18 @@ const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
   c: 'sortColumn',
   a: 'sortColumnAfter',
 }
+const CONTINUATION_TOKEN_VERSION = '1'
+const CONTINUATION_TOKEN_VERSION_KEY = 'v'
 
 function encodeContinuationToken(tokenInfo: ContinuationToken) {
-  let result = ''
+  const result: string[] = [`${CONTINUATION_TOKEN_VERSION_KEY}:${CONTINUATION_TOKEN_VERSION}`]
   for (const [k, v] of Object.entries(CONTINUATION_TOKEN_PART_MAP)) {
-    if (tokenInfo[v]) {
-      result += `${k}:${tokenInfo[v]}\n`
+    const value = tokenInfo[v]
+    if (value) {
+      result.push(`${k}:${encodeURIComponent(value)}`)
     }
   }
-  return Buffer.from(result.slice(0, -1)).toString('base64')
+  return Buffer.from(result.join('\n')).toString('base64')
 }
 
 function decodeContinuationToken(token: string): ContinuationToken {
@@ -870,12 +894,47 @@ function decodeContinuationToken(token: string): ContinuationToken {
     startAfter: '',
     sortOrder: 'asc',
   }
+  const parsedParts: { key: string; value: string }[] = []
+  let version: string | undefined
+
   for (const part of decodedParts) {
     const partMatch = part.match(/^(\S):(.*)/)
-    if (!partMatch || partMatch.length !== 3 || !(partMatch[1] in CONTINUATION_TOKEN_PART_MAP)) {
+    if (!partMatch || partMatch.length !== 3) {
       throw new Error('Invalid continuation token')
     }
-    result[CONTINUATION_TOKEN_PART_MAP[partMatch[1]]] = partMatch[2]
+    const key = partMatch[1]
+    const value = partMatch[2]
+
+    if (key === CONTINUATION_TOKEN_VERSION_KEY) {
+      if (version !== undefined) {
+        throw new Error('Invalid continuation token')
+      }
+      version = value
+      continue
+    }
+
+    if (!(key in CONTINUATION_TOKEN_PART_MAP)) {
+      throw new Error('Invalid continuation token')
+    }
+    parsedParts.push({ key, value })
+  }
+
+  if (version && version !== CONTINUATION_TOKEN_VERSION) {
+    throw new Error('Invalid continuation token')
+  }
+
+  for (const part of parsedParts) {
+    if (!version) {
+      // Backward compatibility: legacy cursor values were stored unescaped.
+      result[CONTINUATION_TOKEN_PART_MAP[part.key]] = part.value
+      continue
+    }
+
+    try {
+      result[CONTINUATION_TOKEN_PART_MAP[part.key]] = decodeURIComponent(part.value)
+    } catch {
+      throw new Error('Invalid continuation token')
+    }
   }
   return result
 }

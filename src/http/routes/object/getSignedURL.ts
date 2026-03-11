@@ -67,7 +67,6 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
       const { expiresIn } = request.body
 
-      const urlPath = request.url.split('?').shift()
       const imageTransformationEnabled = await isImageTransformationEnabled(request.tenantId)
 
       const transformationOptions = imageTransformationEnabled
@@ -82,7 +81,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       const signedURL = await request.storage
         .from(bucketName)
-        .signObjectUrl(objectName, urlPath as string, expiresIn, transformationOptions)
+        .signObjectUrl(objectName, expiresIn, transformationOptions)
 
       return response.status(200).send({ signedURL })
     }

@@ -5,6 +5,7 @@ import axios from 'axios'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
 import { BaseEvent } from '../base-event'
+import { shouldDisableWebhookEvent } from './webhook-filter'
 
 const {
   isMultitenant,
@@ -73,12 +74,7 @@ export class Webhook extends BaseEvent<WebhookEvent> {
       // Do not send an event if disabled for this specific tenant
       const tenant = await getTenantConfig(payload.tenant.ref)
       const disabledEvents = tenant.disableEvents || []
-      if (
-        disabledEvents.includes(`Webhook:${payload.event.type}`) ||
-        disabledEvents.includes(
-          `Webhook:${payload.event.type}:${payload.event.payload.bucketId}/${payload.event.payload.name}`
-        )
-      ) {
+      if (shouldDisableWebhookEvent(disabledEvents, payload.event.type, payload.event.payload)) {
         return false
       }
     }

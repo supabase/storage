@@ -1,6 +1,7 @@
 import { SignedToken, verifyJWT } from '@internal/auth'
 import { getJwtSecret, getTenantConfig } from '@internal/database'
 import { ERRORS } from '@internal/errors'
+import { doesSignedTokenMatchRequestPath } from '@internal/http'
 import { ImageRenderer } from '@storage/renderer'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -68,10 +69,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const { url, transformations, exp } = payload
-
-      const path = `${request.params.bucketName}/${request.params['*']}`
-
-      if (url !== path) {
+      if (!doesSignedTokenMatchRequestPath(request.raw.url, '/render/image/sign', url)) {
         throw ERRORS.InvalidSignature()
       }
 

@@ -1,3 +1,4 @@
+import { safeEncodeURIComponent } from '../http'
 import { StorageBackendError } from './storage-error'
 
 export enum ErrorCode {
@@ -319,12 +320,20 @@ export const ERRORS = {
       originalError: e,
     }),
 
+  InvalidObjectName: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidKey,
+      httpStatusCode: 400,
+      message: 'Invalid object name',
+      originalError: e,
+    }),
+
   InvalidKey: (key: string, e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.InvalidKey,
       resource: key,
       httpStatusCode: 400,
-      message: `Invalid key: ${key}`,
+      message: `Invalid key: ${safeEncodeURIComponent(key)}`,
       originalError: e,
     }),
 

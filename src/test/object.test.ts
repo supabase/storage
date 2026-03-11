@@ -12,12 +12,14 @@ import app from '../app'
 import { getConfig, JwksConfig, JwksConfigKeyOCT, mergeConfig } from '../config'
 import { backends, Obj } from '../storage'
 import { ObjectAdminDelete } from '../storage/events'
-import { useMockObject, useMockQueue } from './common'
+import { getInvalidObjectName, getUnicodeObjectName, useMockObject, useMockQueue } from './common'
 import { withDeleteEnabled } from './utils/storage'
 
 const { jwtSecret, serviceKeyAsync, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
 const S3Backend = backends.S3Backend
+const TEST_OWNER_ID = '317eadce-631a-4429-a0bb-f19a7a517b4a'
+const routeTestObjectsToCleanup: Array<{ bucketId: string; name: string }> = []
 let appInstance: FastifyInstance
 
 let tnx: Knex.Transaction | undefined
@@ -35,6 +37,60 @@ async function getSuperuserPostgrestClient() {
   return tnx
 }
 
+async function seedObjectForRouteTest(name: string, bucketId = 'bucket2') {
+  const seedTx = await getSuperuserPostgrestClient()
+  await seedTx.from<Obj>('objects').insert({
+    bucket_id: bucketId,
+    name,
+    owner: TEST_OWNER_ID,
+    version: `seed-version-${randomUUID()}`,
+    metadata: { mimetype: 'image/png', size: 1234 },
+  })
+  await seedTx.commit()
+  tnx = undefined
+  routeTestObjectsToCleanup.push({ bucketId, name })
+}
+
+async function cleanupRouteTestObjects() {
+  const authorization = `Bearer ${await serviceKeyAsync}`
+
+  for (const { bucketId, name } of routeTestObjectsToCleanup.splice(0)) {
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: `/object/${bucketId}/${encodeURIComponent(name)}`,
+      headers: {
+        authorization,
+      },
+    })
+
+    if (response.statusCode !== 200 && response.statusCode !== 400) {
+      throw new Error(`Unexpected cleanup response ${response.statusCode} for ${bucketId}/${name}`)
+    }
+  }
+}
+
+async function cleanupObjectsByPrefix(prefix: string, bucketId = 'bucket2') {
+  const cleanupTx = await getSuperuserPostgrestClient()
+  const objects = await cleanupTx
+    .from<Obj>('objects')
+    .select('name')
+    .where({ bucket_id: bucketId })
+    .whereLike('name', `${prefix}%`)
+  await cleanupTx.commit()
+  tnx = undefined
+
+  const authorization = `Bearer ${await serviceKeyAsync}`
+  for (const object of objects) {
+    await appInstance.inject({
+      method: 'DELETE',
+      url: `/object/${bucketId}/${encodeURIComponent(object.name)}`,
+      headers: {
+        authorization,
+      },
+    })
+  }
+}
+
 useMockObject()
 useMockQueue()
 
@@ -46,7 +102,13 @@ beforeEach(() => {
 afterEach(async () => {
   if (tnx) {
     await tnx.commit()
+    tnx = undefined
   }
+
+  if (routeTestObjectsToCleanup.length > 0) {
+    await cleanupRouteTestObjects()
+  }
+
   await appInstance.close()
 })
 
@@ -1479,6 +1541,56 @@ describe('testing copy object', () => {
     expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
   })
+
+  test('can copy objects when keys include ASCII URL-reserved characters', async () => {
+    const sourceKey = `authenticated/copy-src-${randomUUID()}-q?foo=1&bar=%25+plus;semi:colon,.png`
+    const destinationKey = `authenticated/copy-dst-${randomUUID()}-q?foo=2&bar=%25+plus;semi:colon,.png`
+    await seedObjectForRouteTest(sourceKey)
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/copy',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey,
+        destinationKey,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.copyObject).toBeCalled()
+    const jsonResponse = response.json()
+    expect(jsonResponse.Key).toBe(`bucket2/${destinationKey}`)
+    expect(jsonResponse.name).toBe(destinationKey)
+  })
+
+  test('can copy objects when keys include Unicode and URL-reserved characters', async () => {
+    const sourceKey = `authenticated/copy-src-${randomUUID()}-일이삼-🙂-q?foo=1&bar=%25+plus;semi:colon,.png`
+    const destinationKey = `authenticated/copy-dst-${randomUUID()}-éè-中文-🙂-q?foo=2&bar=%25+plus;semi:colon,.png`
+    await seedObjectForRouteTest(sourceKey)
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/copy',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey,
+        destinationKey,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.copyObject).toBeCalled()
+    const jsonResponse = response.json()
+    expect(jsonResponse.Key).toBe(`bucket2/${destinationKey}`)
+    expect(jsonResponse.name).toBe(destinationKey)
+  })
 })
 
 /**
@@ -1644,6 +1756,65 @@ describe('testing deleting multiple objects', () => {
     const results = JSON.parse(response.body)
     expect(results).toHaveLength(1)
     expect(results[0].name).toBe('authenticated/delete-multiple7.png')
+  })
+
+  test('can delete multiple objects with Unicode keys', async () => {
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+    const prefixes = [
+      `authenticated/delete-many-${randomUUID()}-일이삼-🙂.png`,
+      `authenticated/delete-many-${randomUUID()}-éè-中文-?query&x=1#frag%25+plus;semi:colon,.png`,
+    ]
+
+    for (const prefix of prefixes) {
+      const uploadResponse = await appInstance.inject({
+        method: 'PUT',
+        url: `/object/bucket2/${encodeURIComponent(prefix)}`,
+        headers: {
+          authorization,
+          'Content-Length': size,
+          'Content-Type': 'image/jpeg',
+        },
+        payload: fs.createReadStream(path),
+      })
+
+      expect(uploadResponse.statusCode).toBe(200)
+    }
+
+    const deleteResponse = await appInstance.inject({
+      method: 'DELETE',
+      url: '/object/bucket2',
+      headers: {
+        authorization,
+      },
+      payload: {
+        prefixes,
+      },
+    })
+
+    expect(deleteResponse.statusCode).toBe(200)
+    expect(S3Backend.prototype.deleteObjects).toBeCalled()
+    const results = JSON.parse(deleteResponse.body)
+    expect(results).toHaveLength(2)
+    expect(results.map((item: { name: string }) => item.name).sort()).toEqual([...prefixes].sort())
+
+    for (const prefix of prefixes) {
+      const getResponse = await appInstance.inject({
+        method: 'GET',
+        url: `/object/bucket2/${encodeURIComponent(prefix)}`,
+        headers: {
+          authorization,
+        },
+      })
+
+      expect(getResponse.statusCode).toBe(400)
+      expect(getResponse.json()).toMatchObject({
+        statusCode: '404',
+        error: 'not_found',
+        message: 'Object not found',
+      })
+    }
   })
 })
 
@@ -1873,7 +2044,7 @@ describe('testing uploading with generated signed upload URL', () => {
     })
 
     const BUCKET_ID = 'bucket2'
-    const OBJECT_NAME = 'public/sadcat-upload1.png'
+    const OBJECT_NAME = `public/sadcat-upload-${randomUUID()}.png`
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
@@ -1917,10 +2088,11 @@ describe('testing uploading with generated signed upload URL', () => {
     const headers = Object.assign({}, form.getHeaders(), {
       'content-type': 'image/jpeg',
     })
+    const objectName = `public/sadcat-upload-${randomUUID()}.png`
 
     const response = await appInstance.inject({
       method: 'PUT',
-      url: `/object/upload/sign/bucket2/public/sadcat-upload1.png`,
+      url: `/object/upload/sign/bucket2/${objectName}`,
       headers,
       payload: form,
     })
@@ -1934,10 +2106,11 @@ describe('testing uploading with generated signed upload URL', () => {
     const headers = Object.assign({}, form.getHeaders(), {
       'content-type': 'image/jpeg',
     })
+    const objectName = `public/sadcat-upload-${randomUUID()}.png`
 
     const response = await appInstance.inject({
       method: 'PUT',
-      url: `/object/upload/sign/bucket2/public/sadcat-upload1.png?token=xxx`,
+      url: `/object/upload/sign/bucket2/${objectName}?token=xxx`,
       headers,
       payload: form,
     })
@@ -1953,7 +2126,7 @@ describe('testing uploading with generated signed upload URL', () => {
     })
 
     const BUCKET_ID = 'bucket2'
-    const OBJECT_NAME = 'public/sadcat-upload1.png'
+    const OBJECT_NAME = `public/sadcat-upload-${randomUUID()}.png`
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
@@ -1976,7 +2149,7 @@ describe('testing uploading with generated signed upload URL', () => {
     }
 
     const BUCKET_ID = 'bucket2'
-    const OBJECT_NAME = 'signed/sadcat-upload-signed-2.png'
+    const OBJECT_NAME = `signed/sadcat-upload-signed-${randomUUID()}.png`
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
 
     // Upload a file first
@@ -2021,7 +2194,7 @@ describe('testing uploading with generated signed upload URL', () => {
     }
 
     const BUCKET_ID = 'bucket2'
-    const OBJECT_NAME = 'signed/sadcat-upload-signed-3.png'
+    const OBJECT_NAME = `signed/sadcat-upload-signed-${randomUUID()}.png`
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
@@ -2130,6 +2303,131 @@ describe('testing generating signed URLs', () => {
     const result = JSON.parse(response.body)
     expect(result[0].error).toBe('Either the object does not exist or you do not have access to it')
   })
+
+  test('can generate and use batch signed URLs with Unicode and URL-reserved characters', async () => {
+    const objectName = `authenticated/signed-batch-${randomUUID()}-éè-中文-🙂-q?foo=1&bar=%25+plus;semi:colon,#frag.png`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const uploadResponse = await appInstance.inject({
+      method: 'PUT',
+      url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+        'Content-Length': size,
+        'Content-Type': 'image/jpeg',
+      },
+      payload: fs.createReadStream(path),
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const signResponse = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2',
+      headers: {
+        authorization,
+      },
+      payload: {
+        expiresIn: 60,
+        paths: [objectName],
+      },
+    })
+    expect(signResponse.statusCode).toBe(200)
+
+    const [signedObject] =
+      signResponse.json<{ error: string | null; path: string; signedURL: string | null }[]>()
+    expect(signedObject.error).toBeNull()
+    expect(signedObject.path).toBe(objectName)
+    expect(signedObject.signedURL).toBeTruthy()
+
+    const signedURLParsed = new URL(signedObject.signedURL || '', 'http://localhost')
+    expect(signedURLParsed.searchParams.get('token')).toBeTruthy()
+
+    const getResponse = await appInstance.inject({
+      method: 'GET',
+      url: `${signedURLParsed.pathname}${signedURLParsed.search}`,
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(getResponse.headers['etag']).toBe('abc')
+
+    const deleteResponse = await appInstance.inject({
+      method: 'DELETE',
+      url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(deleteResponse.statusCode).toBe(200)
+  })
+
+  test('can generate and use batch signed URLs for nested Unicode and URL-reserved paths', async () => {
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+    const objectNames = [
+      `authenticated/signed-batch-${randomUUID()}-폴더?x=1/세그먼트#tag/leaf+plus;semi,.png`,
+      `authenticated/signed-batch-${randomUUID()}-éè/中文&name=1/끝🙂.png`,
+    ]
+
+    for (const objectName of objectNames) {
+      const uploadResponse = await appInstance.inject({
+        method: 'PUT',
+        url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+        headers: {
+          authorization,
+          'Content-Length': size,
+          'Content-Type': 'image/jpeg',
+        },
+        payload: fs.createReadStream(path),
+      })
+      expect(uploadResponse.statusCode).toBe(200)
+    }
+
+    const signResponse = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2',
+      headers: {
+        authorization,
+      },
+      payload: {
+        expiresIn: 60,
+        paths: objectNames,
+      },
+    })
+    expect(signResponse.statusCode).toBe(200)
+
+    const signedObjects =
+      signResponse.json<{ error: string | null; path: string; signedURL: string | null }[]>()
+    expect(signedObjects).toHaveLength(2)
+
+    for (const signedObject of signedObjects) {
+      expect(signedObject.error).toBeNull()
+      expect(objectNames).toContain(signedObject.path)
+      expect(signedObject.signedURL).toBeTruthy()
+
+      const signedURLParsed = new URL(signedObject.signedURL || '', 'http://localhost')
+      expect(signedURLParsed.searchParams.get('token')).toBeTruthy()
+
+      const getResponse = await appInstance.inject({
+        method: 'GET',
+        url: `${signedURLParsed.pathname}${signedURLParsed.search}`,
+      })
+      expect(getResponse.statusCode).toBe(200)
+      expect(getResponse.headers['etag']).toBe('abc')
+    }
+
+    for (const objectName of objectNames) {
+      const deleteResponse = await appInstance.inject({
+        method: 'DELETE',
+        url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+        headers: {
+          authorization,
+        },
+      })
+      expect(deleteResponse.statusCode).toBe(200)
+    }
+  })
 })
 
 /**
@@ -2202,6 +2500,34 @@ describe('testing retrieving signed URL', () => {
     })
     expect(response.statusCode).toBe(400)
     const body = response.json<{ error: string }>()
+    expect(body.error).toBe('InvalidSignature')
+  })
+
+  test('rejects double-encoded signed object paths', async () => {
+    const objectName = `authenticated/signed-double-${randomUUID()}-일이삼.txt`
+    await seedObjectForRouteTest(objectName)
+
+    const urlToSign = `bucket2/${objectName}`
+    const jwtToken = await signJWT({ url: urlToSign }, jwtSecret, 100)
+    const encodedPath = urlToSign
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')
+
+    const validResponse = await appInstance.inject({
+      method: 'GET',
+      url: `/object/sign/${encodedPath}?token=${jwtToken}`,
+    })
+    expect(validResponse.statusCode).toBe(200)
+
+    const doubleEncodedPath = encodedPath.replaceAll('%', '%25')
+    const doubleEncodedResponse = await appInstance.inject({
+      method: 'GET',
+      url: `/object/sign/${doubleEncodedPath}?token=${jwtToken}`,
+    })
+
+    expect(doubleEncodedResponse.statusCode).toBe(400)
+    const body = doubleEncodedResponse.json<{ error: string }>()
     expect(body.error).toBe('InvalidSignature')
   })
 
@@ -2421,9 +2747,79 @@ describe('testing move object', () => {
     expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
     expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
   })
+
+  test('can move objects when keys include ASCII URL-reserved characters', async () => {
+    const sourceKey = `authenticated/move-src-${randomUUID()}-q?foo=1&bar=%25+plus;semi:colon,.png`
+    const destinationKey = `authenticated/move-dst-${randomUUID()}-q?foo=2&bar=%25+plus;semi:colon,.png`
+    await seedObjectForRouteTest(sourceKey)
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/move',
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey,
+        destinationKey,
+      },
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+    expect(response.json().message).toBe('Successfully moved')
+
+    const conn = await getSuperuserPostgrestClient()
+    const movedObject = await conn
+      .table('objects')
+      .select('name')
+      .where('bucket_id', 'bucket2')
+      .where('name', destinationKey)
+      .first()
+    expect(movedObject?.name).toBe(destinationKey)
+  })
+
+  test('can move objects when keys include Unicode and URL-reserved characters', async () => {
+    const sourceKey = `authenticated/move-src-${randomUUID()}-일이삼-🙂-q?foo=1&bar=%25+plus;semi:colon,.png`
+    const destinationKey = `authenticated/move-dst-${randomUUID()}-éè-中文-🙂-q?foo=2&bar=%25+plus;semi:colon,.png`
+    await seedObjectForRouteTest(sourceKey)
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/move',
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey,
+        destinationKey,
+      },
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+    expect(response.json().message).toBe('Successfully moved')
+
+    const conn = await getSuperuserPostgrestClient()
+    const movedObject = await conn
+      .table('objects')
+      .select('name')
+      .where('bucket_id', 'bucket2')
+      .where('name', destinationKey)
+      .first()
+    expect(movedObject?.name).toBe(destinationKey)
+  })
 })
 
 describe('testing list objects', () => {
+  beforeEach(async () => {
+    await cleanupObjectsByPrefix('public/signed-double-')
+  })
+
   test('searching the bucket root folder', async () => {
     const response = await appInstance.inject({
       method: 'POST',
@@ -2879,5 +3275,472 @@ describe('x-robots-tag header', () => {
       error: 'invalid_x_robots_tag',
       message: 'Invalid X-Robots-Tag header: Invalid X-Robots-Tag rule: "invalidrule"',
     })
+  })
+})
+
+describe('Object key names with Unicode characters', () => {
+  test('can upload, get, list, and delete', async () => {
+    const prefix = `test-utf8-${randomUUID()}`
+    const objectName = getUnicodeObjectName()
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization,
+      'x-upsert': 'true',
+    })
+
+    const uploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/bucket2/${prefix}/${encodeURIComponent(objectName)}`,
+      headers: {
+        ...headers,
+        ...form.getHeaders(),
+      },
+      payload: form,
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const getResponse = await appInstance.inject({
+      method: 'GET',
+      url: `/object/bucket2/${prefix}/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(getResponse.headers['etag']).toBe('abc')
+    expect(getResponse.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
+    expect(getResponse.headers['cache-control']).toBe('no-cache')
+
+    const listResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list/bucket2`,
+      headers: {
+        authorization,
+      },
+      payload: { prefix },
+    })
+    expect(listResponse.statusCode).toBe(200)
+    const listResponseJSON = JSON.parse(listResponse.body)
+    expect(listResponseJSON).toHaveLength(1)
+    expect(listResponseJSON[0].name).toBe(objectName.split('/')[0])
+
+    const deleteResponse = await appInstance.inject({
+      method: 'DELETE',
+      url: `/object/bucket2/${prefix}/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(deleteResponse.statusCode).toBe(200)
+  })
+
+  test('can upload and get via binary upload with a Unicode key', async () => {
+    const objectName = `binary-${randomUUID()}-일이삼-🙂.jpg`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const uploadResponse = await appInstance.inject({
+      method: 'PUT',
+      url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+        'Content-Length': size,
+        'Content-Type': 'image/jpeg',
+      },
+      payload: fs.createReadStream(path),
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const getResponse = await appInstance.inject({
+      method: 'GET',
+      url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(getResponse.headers['etag']).toBe('abc')
+  })
+
+  test('can upload and read HEAD info with a Unicode and URL-reserved key', async () => {
+    const objectName = `head-${randomUUID()}-일이삼-🙂-q?foo=1&bar=%25+plus;semi:colon,#frag.jpg`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const uploadResponse = await appInstance.inject({
+      method: 'PUT',
+      url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+        'Content-Length': size,
+        'Content-Type': 'image/jpeg',
+      },
+      payload: fs.createReadStream(path),
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const headResponse = await appInstance.inject({
+      method: 'HEAD',
+      url: `/object/authenticated/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(headResponse.statusCode).toBe(200)
+    expect(headResponse.headers['etag']).toBe('abc')
+    expect(headResponse.headers['last-modified']).toBeTruthy()
+    expect(headResponse.headers['content-length']).toBeTruthy()
+    expect(headResponse.headers['cache-control']).toBe('no-cache')
+  })
+
+  test('treats NFC and NFD object names as distinct keys', async () => {
+    const prefix = `normalize-${randomUUID()}`
+    const nfcObjectName = `${prefix}/caf\u00e9.txt`
+    const nfdObjectName = `${prefix}/cafe\u0301.txt`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    for (const objectName of [nfcObjectName, nfdObjectName]) {
+      const form = new FormData()
+      form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+      const uploadResponse = await appInstance.inject({
+        method: 'POST',
+        url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+        headers: {
+          authorization,
+          ...form.getHeaders(),
+        },
+        payload: form,
+      })
+      expect(uploadResponse.statusCode).toBe(200)
+    }
+
+    const db = await getSuperuserPostgrestClient()
+    const storedObjects = await db
+      .from<Obj>('objects')
+      .select('name')
+      .where('bucket_id', 'bucket2')
+      .whereIn('name', [nfcObjectName, nfdObjectName])
+
+    const storedNames = storedObjects.map((entry) => entry.name)
+    expect(storedNames).toEqual(expect.arrayContaining([nfcObjectName, nfdObjectName]))
+    expect(new Set(storedNames).size).toBe(2)
+
+    for (const objectName of [nfcObjectName, nfdObjectName]) {
+      const deleteResponse = await appInstance.inject({
+        method: 'DELETE',
+        url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+        headers: {
+          authorization,
+        },
+      })
+      expect(deleteResponse.statusCode).toBe(200)
+    }
+  })
+
+  test('should not upload if the name contains invalid characters', async () => {
+    const invalidObjectName = getInvalidObjectName()
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization,
+      'x-upsert': 'true',
+    })
+    const uploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/bucket2/${encodeURIComponent(invalidObjectName)}`,
+      headers: {
+        ...headers,
+        ...form.getHeaders(),
+      },
+      payload: form,
+    })
+    expect(uploadResponse.statusCode).toBe(400)
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+    expect(uploadResponse.body).toBe(
+      JSON.stringify({
+        statusCode: '400',
+        error: 'InvalidKey',
+        message: `Invalid key: ${encodeURIComponent(invalidObjectName)}`,
+      })
+    )
+  })
+
+  test('can generate and use a signed download URL', async () => {
+    const objectName = `signed-download-${randomUUID()}-일이삼-🙂.png`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const uploadHeaders = Object.assign({}, form.getHeaders(), {
+      authorization,
+      'x-upsert': 'true',
+    })
+
+    const uploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        ...uploadHeaders,
+      },
+      payload: form,
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const signResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/sign/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+      payload: {
+        expiresIn: 60,
+      },
+    })
+    expect(signResponse.statusCode).toBe(200)
+
+    const signedURL = signResponse.json<{ signedURL: string }>().signedURL
+    expect(signedURL).toContain('?token=')
+    const token = signedURL.split('?token=').pop()
+    expect(token).toBeTruthy()
+
+    const getResponse = await appInstance.inject({
+      method: 'GET',
+      url: `/object/sign/bucket2/${encodeURIComponent(objectName)}?token=${token}`,
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(getResponse.headers['etag']).toBe('abc')
+    expect(getResponse.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
+  })
+
+  test('can generate and use a signed upload URL', async () => {
+    const objectName = `signed-upload-${randomUUID()}-일이삼-🙂.png`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    const signedUploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/upload/sign/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(signedUploadResponse.statusCode).toBe(200)
+
+    const token = signedUploadResponse.json<{ token: string }>().token
+    expect(token).toBeTruthy()
+
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const uploadResponse = await appInstance.inject({
+      method: 'PUT',
+      url: `/object/upload/sign/bucket2/${encodeURIComponent(objectName)}?token=${token}`,
+      headers: {
+        ...form.getHeaders(),
+      },
+      payload: form,
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+
+    const db = await getSuperuserPostgrestClient()
+    const objectResponse = await db
+      .from<Obj>('objects')
+      .select('*')
+      .where({
+        name: objectName,
+        bucket_id: 'bucket2',
+      })
+      .first()
+    expect(objectResponse?.name).toBe(objectName)
+  })
+
+  test('can generate and use a signed download URL with Unicode and URL-reserved characters', async () => {
+    const objectName = `signed-download-reserved-${randomUUID()}-일이삼-🙂-q?foo=1&bar=%25+plus;semi:colon,#frag.png`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const uploadHeaders = Object.assign({}, form.getHeaders(), {
+      authorization,
+      'x-upsert': 'true',
+    })
+
+    const uploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+      headers: uploadHeaders,
+      payload: form,
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const signResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/sign/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+      payload: {
+        expiresIn: 60,
+      },
+    })
+    expect(signResponse.statusCode).toBe(200)
+
+    const signedURL = signResponse.json<{ signedURL: string }>().signedURL
+    const signedURLParsed = new URL(signedURL, 'http://localhost')
+    const token = signedURLParsed.searchParams.get('token')
+    expect(token).toBeTruthy()
+
+    const getResponse = await appInstance.inject({
+      method: 'GET',
+      url: `${signedURLParsed.pathname}${signedURLParsed.search}`,
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(getResponse.headers['etag']).toBe('abc')
+  })
+
+  test('can generate and use a signed upload URL with Unicode and URL-reserved characters', async () => {
+    const objectName = `signed-upload-reserved-${randomUUID()}-éè-中文-🙂-q?foo=1&bar=%25+plus;semi:colon,#frag.png`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    const signedUploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/upload/sign/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(signedUploadResponse.statusCode).toBe(200)
+
+    const signedUpload = signedUploadResponse.json<{ token: string; url: string }>()
+    const token = signedUpload.token
+    expect(token).toBeTruthy()
+    const signedUploadURL = new URL(signedUpload.url, 'http://localhost')
+    expect(signedUploadURL.searchParams.get('token')).toBe(token)
+
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const uploadResponse = await appInstance.inject({
+      method: 'PUT',
+      url: `${signedUploadURL.pathname}${signedUploadURL.search}`,
+      headers: {
+        ...form.getHeaders(),
+      },
+      payload: form,
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const db = await getSuperuserPostgrestClient()
+    const objectResponse = await db
+      .from<Obj>('objects')
+      .select('*')
+      .where({
+        name: objectName,
+        bucket_id: 'bucket2',
+      })
+      .first()
+    expect(objectResponse?.name).toBe(objectName)
+  })
+
+  test('rejects double-encoded signed upload paths', async () => {
+    const objectName = `signed-upload-double-${randomUUID()}-éè-中文-🙂.png`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    const signedUploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/upload/sign/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(signedUploadResponse.statusCode).toBe(200)
+
+    const signedUpload = signedUploadResponse.json<{ url: string }>()
+    const signedUploadURL = new URL(signedUpload.url, 'http://localhost')
+    const doubleEncodedPath = signedUploadURL.pathname.replaceAll('%', '%25')
+
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const uploadResponse = await appInstance.inject({
+      method: 'PUT',
+      url: `${doubleEncodedPath}${signedUploadURL.search}`,
+      headers: {
+        ...form.getHeaders(),
+      },
+      payload: form,
+    })
+
+    expect(uploadResponse.statusCode).toBe(400)
+    expect(uploadResponse.json<{ error: string }>().error).toBe('InvalidSignature')
+  })
+
+  test('can sign and upload using returned signed upload URL for nested Unicode and URL-reserved object names', async () => {
+    const objectName = `signed-upload-unicode-${randomUUID()}-폴더?x=1&y=%25+plus;semi:colon,/子目录#frag/파일-🙂.png`
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    const signedUploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/upload/sign/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(signedUploadResponse.statusCode).toBe(200)
+
+    const signedUpload = signedUploadResponse.json<{ token: string; url: string }>()
+    expect(signedUpload.token).toBeTruthy()
+    const signedUploadURL = new URL(signedUpload.url, 'http://localhost')
+    expect(signedUploadURL.searchParams.get('token')).toBe(signedUpload.token)
+
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const uploadResponse = await appInstance.inject({
+      method: 'PUT',
+      url: `${signedUploadURL.pathname}${signedUploadURL.search}`,
+      headers: {
+        ...form.getHeaders(),
+      },
+      payload: form,
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    const db = await getSuperuserPostgrestClient()
+    const objectResponse = await db
+      .from<Obj>('objects')
+      .select('*')
+      .where({
+        name: objectName,
+        bucket_id: 'bucket2',
+      })
+      .first()
+    expect(objectResponse?.name).toBe(objectName)
+
+    const deleteResponse = await appInstance.inject({
+      method: 'DELETE',
+      url: `/object/bucket2/${encodeURIComponent(objectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(deleteResponse.statusCode).toBe(200)
+  })
+
+  test('should not generate signed upload URL for invalid key', async () => {
+    const invalidObjectName = getInvalidObjectName()
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    const signedUploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/upload/sign/bucket2/${encodeURIComponent(invalidObjectName)}`,
+      headers: {
+        authorization,
+      },
+    })
+    expect(signedUploadResponse.statusCode).toBe(400)
+    expect(signedUploadResponse.body).toContain('Invalid key')
   })
 })

@@ -19,6 +19,7 @@ import {
 } from '@aws-sdk/client-s3'
 import { decrypt, encrypt } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
+import { encodePathPreservingSeparators } from '@internal/http'
 import { logger, logSchema } from '@internal/monitoring'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
@@ -28,6 +29,7 @@ import { S3MultipartUpload } from '../../schemas'
 import { Storage } from '../../storage'
 import { Uploader, validateMimeType } from '../../uploader'
 import { ByteLimitTransformStream } from './byte-limit-stream'
+import { parseCopySource } from './copy-source-parser'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
 
@@ -288,17 +290,31 @@ export class S3ProtocolHandler {
     const bucket = command.Bucket
 
     const limit = maxKeys || 200
+    let nextUploadKeyToken: string | undefined
+    let nextUploadToken: string | undefined
+
+    if (keyContinuationToken) {
+      try {
+        nextUploadKeyToken = decodeContinuationToken(keyContinuationToken)
+      } catch (error) {
+        throw ERRORS.InvalidParameter('KeyMarker', { error: error as Error })
+      }
+    }
+
+    if (uploadContinuationToken) {
+      try {
+        nextUploadToken = decodeContinuationToken(uploadContinuationToken)
+      } catch (error) {
+        throw ERRORS.InvalidParameter('UploadIdMarker', { error: error as Error })
+      }
+    }
 
     const multipartUploads = await this.storage.db.listMultipartUploads(bucket, {
       prefix,
       deltimeter: delimiter,
       maxKeys: limit + 1,
-      nextUploadKeyToken: keyContinuationToken
-        ? decodeContinuationToken(keyContinuationToken)
-        : undefined,
-      nextUploadToken: uploadContinuationToken
-        ? decodeContinuationToken(uploadContinuationToken)
-        : undefined,
+      nextUploadKeyToken,
+      nextUploadToken,
     })
 
     let results: Partial<S3MultipartUpload & { isFolder: boolean }>[] = multipartUploads
@@ -319,7 +335,10 @@ export class S3ProtocolHandler {
           delimitedResults.push({
             isFolder: true,
             id: object.id,
-            key: command.EncodingType === 'url' ? encodeURIComponent(currPrefix) : currPrefix,
+            key:
+              command.EncodingType === 'url'
+                ? encodePathPreservingSeparators(currPrefix)
+                : currPrefix,
             bucket_id: bucket,
           })
           continue
@@ -1051,14 +1070,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    const sourceBucket = (
-      CopySource.startsWith('/') ? CopySource.replace('/', '').split('/') : CopySource.split('/')
-    ).shift()
-
-    const sourceKey = (CopySource.startsWith('/') ? CopySource.replace('/', '') : CopySource)
-      .split('/')
-      .slice(1)
-      .join('/')
+    const {
+      bucketName: sourceBucket,
+      objectKey: sourceKey,
+      sourceVersion,
+    } = parseCopySource(CopySource)
 
     if (!sourceBucket) {
       throw ERRORS.InvalidBucketName('')
@@ -1075,6 +1091,7 @@ export class S3ProtocolHandler {
 
     const copyResult = await this.storage.from(sourceBucket).copyObject({
       sourceKey,
+      sourceVersion,
       destinationBucket: Bucket,
       destinationKey: Key,
       owner: this.owner,
@@ -1186,14 +1203,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySourceRange')
     }
 
-    const sourceBucketName = (
-      CopySource.startsWith('/') ? CopySource.replace('/', '').split('/') : CopySource.split('/')
-    ).shift()
-
-    const sourceKey = (CopySource.startsWith('/') ? CopySource.replace('/', '') : CopySource)
-      .split('/')
-      .slice(1)
-      .join('/')
+    const {
+      bucketName: sourceBucketName,
+      objectKey: sourceKey,
+      sourceVersion,
+    } = parseCopySource(CopySource)
 
     if (!sourceBucketName) {
       throw ERRORS.NoSuchBucket('')
@@ -1209,6 +1223,10 @@ export class S3ProtocolHandler {
       sourceKey,
       'id,name,version,metadata'
     )
+
+    if (sourceVersion && copySource.version !== sourceVersion) {
+      throw ERRORS.NoSuchKey(sourceKey)
+    }
 
     let copySize = copySource.metadata?.size || 0
     let rangeBytes: { fromByte: number; toByte: number } | undefined = undefined
@@ -1268,7 +1286,7 @@ export class S3ProtocolHandler {
         objectName: copySource.name,
         tenantId: this.tenantId,
       }),
-      copySource.version,
+      sourceVersion || copySource.version,
       rangeBytes
     )
 
@@ -1402,15 +1420,61 @@ function isUSASCII(str: string): boolean {
 }
 
 function encodeContinuationToken(name: string) {
-  return Buffer.from(`l:${name}`).toString('base64')
+  return Buffer.from(`v:1\nl:${encodeURIComponent(name)}`).toString('base64')
+}
+
+function decodeLegacyContinuationToken(decoded: string) {
+  // Backward compatibility: preserve pre-version behavior for old in-flight tokens.
+  const continuationToken = decoded.slice(2)
+  if (!continuationToken) {
+    throw new Error('Invalid continuation token')
+  }
+  return continuationToken
 }
 
 function decodeContinuationToken(token: string) {
-  const decoded = Buffer.from(token, 'base64').toString().split(':')
+  const decoded = Buffer.from(token, 'base64').toString()
 
-  if (decoded.length === 0) {
+  if (decoded.startsWith('l:')) {
+    return decodeLegacyContinuationToken(decoded)
+  }
+
+  const parts = decoded.split('\n')
+  let version: string | undefined
+  let encodedValue: string | undefined
+
+  for (const part of parts) {
+    const match = part.match(/^(\S):(.*)/)
+    if (!match || match.length !== 3) {
+      throw new Error('Invalid continuation token')
+    }
+
+    if (match[1] === 'v') {
+      if (version !== undefined) {
+        throw new Error('Invalid continuation token')
+      }
+      version = match[2]
+      continue
+    }
+
+    if (match[1] === 'l') {
+      if (encodedValue !== undefined) {
+        throw new Error('Invalid continuation token')
+      }
+      encodedValue = match[2]
+      continue
+    }
+
     throw new Error('Invalid continuation token')
   }
 
-  return decoded[1]
+  if (version !== '1' || !encodedValue) {
+    throw new Error('Invalid continuation token')
+  }
+
+  try {
+    return decodeURIComponent(encodedValue)
+  } catch {
+    throw new Error('Invalid continuation token')
+  }
 }

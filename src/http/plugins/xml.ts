@@ -6,6 +6,38 @@ import xml from 'xml2js'
 type XmlParserOptions = { disableContentParser?: boolean; parseAsArray?: string[] }
 type RequestError = Error & { statusCode?: number }
 
+function isValidXmlCodePoint(codePoint: number): boolean {
+  if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) {
+    return false
+  }
+
+  return (
+    codePoint === 0x9 ||
+    codePoint === 0xa ||
+    codePoint === 0xd ||
+    (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+    (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+    (codePoint >= 0x10000 && codePoint <= 0x10ffff)
+  )
+}
+
+function getInvalidXmlNumericEntity(value: string): string | undefined {
+  const numericEntityPattern = /&#([xX][0-9a-fA-F]{1,6}|[0-9]{1,7});/g
+
+  let match = numericEntityPattern.exec(value)
+  while (match) {
+    const rawValue = match[1]
+    const isHex = rawValue[0].toLowerCase() === 'x'
+    const codePoint = Number.parseInt(isHex ? rawValue.slice(1) : rawValue, isHex ? 16 : 10)
+
+    if (!isValidXmlCodePoint(codePoint)) {
+      return match[0]
+    }
+
+    match = numericEntityPattern.exec(value)
+  }
+}
+
 function forcePathAsArray(node: unknown, pathSegments: string[]): void {
   if (pathSegments.length === 0 || node === null || node === undefined) {
     return
@@ -52,8 +84,19 @@ export const xmlParser = fastifyPlugin(
             return
           }
 
+          const xmlBody = typeof body === 'string' ? body : body.toString('utf8')
+          const invalidNumericEntity = getInvalidXmlNumericEntity(xmlBody)
+          if (invalidNumericEntity) {
+            const parseError: RequestError = new Error(
+              `Invalid XML payload: invalid numeric entity ${invalidNumericEntity}`
+            )
+            parseError.statusCode = 400
+            done(parseError)
+            return
+          }
+
           xml.parseString(
-            body,
+            xmlBody,
             {
               explicitArray: false,
               trim: true,

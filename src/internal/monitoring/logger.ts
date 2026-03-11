@@ -165,70 +165,74 @@ export function buildTransport(): pino.TransportMultiOptions {
   }
 }
 
+const allowlistedHeaders = new Set([
+  'accept',
+  'cf-connecting-ip',
+  'cf-ipcountry',
+  'host',
+  'user-agent',
+  'x-forwarded-proto',
+  'x-forwarded-host',
+  'x-forwarded-port',
+  'x-forwarded-prefix',
+  'referer',
+  'content-length',
+  'x-real-ip',
+  'x-client-info',
+  'x-forwarded-user-agent',
+  'x-client-trace-id',
+  'x-upsert',
+  'content-type',
+  'if-none-match',
+  'if-modified-since',
+  'upload-metadata',
+  'upload-length',
+  'upload-offset',
+  'tus-resumable',
+  'range',
+  'cf-cache-status',
+  'cf-ray',
+  'location',
+  'cache-control',
+  'content-location',
+  'content-range',
+  'date',
+  'transfer-encoding',
+  'x-kong-proxy-latency',
+  'x-kong-upstream-latency',
+  'sb-gateway-mode',
+  'sb-gateway-version',
+  'x-transformations',
+  'expires',
+  'etag',
+  'content-disposition',
+  'last-modified',
+])
+
 const whitelistHeaders = (headers: Record<string, unknown>) => {
   const responseMetadata: Record<string, unknown> = {}
-  const allowlistedRequestHeaders = [
-    'accept',
-    'cf-connecting-ip',
-    'cf-ipcountry',
-    'host',
-    'user-agent',
-    'x-forwarded-proto',
-    'x-forwarded-host',
-    'x-forwarded-port',
-    'x-forwarded-prefix',
-    'referer',
-    'content-length',
-    'x-real-ip',
-    'x-client-info',
-    'x-forwarded-user-agent',
-    'x-client-trace-id',
-    'x-upsert',
-    'content-type',
-    'if-none-match',
-    'if-modified-since',
-    'upload-metadata',
-    'upload-length',
-    'upload-offset',
-    'tus-resumable',
-    'range',
-  ]
-  const allowlistedResponseHeaders = [
-    'cf-cache-status',
-    'cf-ray',
-    'location',
-    'cache-control',
-    'content-location',
-    'content-range',
-    'content-type',
-    'content-length',
-    'date',
-    'transfer-encoding',
-    'x-kong-proxy-latency',
-    'x-kong-upstream-latency',
-    'sb-gateway-mode',
-    'sb-gateway-version',
-    'x-transformations',
-    'expires',
-    'etag',
-    'content-disposition',
-    'last-modified',
-  ]
-  Object.keys(headers)
-    .filter(
-      (header) =>
-        allowlistedRequestHeaders.includes(header) || allowlistedResponseHeaders.includes(header)
-    )
-    .forEach((header) => {
-      responseMetadata[header.replace(/-/g, '_')] = `${headers[header]}`
-    })
+
+  for (const header in headers) {
+    if (allowlistedHeaders.has(header)) {
+      responseMetadata[header.replaceAll('-', '_')] = `${headers[header]}`
+    }
+  }
 
   return responseMetadata
 }
 
 export function redactQueryParamFromRequest(req: FastifyRequest, params: string[]) {
-  const lUrl = new URL(req.url, `${req.protocol}://${req.hostname}`)
+  const url = req.url
+  const qIdx = url.indexOf('?')
 
+  // Fast path: no query string, nothing to redact
+  if (qIdx === -1) return url
+
+  const query = url.slice(qIdx + 1)
+  // Fast path: no sensitive params present
+  if (!params.some((p) => query.includes(p))) return url
+
+  const lUrl = new URL(url, `${req.protocol}://${req.hostname}`)
   params.forEach((param) => {
     if (lUrl.searchParams.has(param)) {
       lUrl.searchParams.set(param, 'redacted')

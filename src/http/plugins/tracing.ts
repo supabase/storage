@@ -26,6 +26,19 @@ export const tracing = fastifyPlugin(
         } else {
           request.tracingMode = defaultTracingMode
         }
+
+        // Use request.opentelemetry().span to get the root request span,
+        // not trace.getActiveSpan() which returns a child hook span.
+        const span =
+          typeof request.opentelemetry === 'function' ? request.opentelemetry()?.span : undefined
+        if (span) {
+          if (request.tenantId) {
+            span.setAttribute('tenant.ref', request.tenantId)
+          }
+          if (request.tracingMode) {
+            span.setAttribute('trace.mode', request.tracingMode)
+          }
+        }
       } catch (e) {
         logSchema.error(request.log, 'failed setting tracing mode', { error: e, type: 'tracing' })
       }

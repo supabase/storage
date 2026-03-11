@@ -10,6 +10,7 @@ const {
   storageS3InternalTracesEnabled,
 } = getConfig()
 
+import { FastifyOtelInstrumentation } from '@fastify/otel'
 import * as grpc from '@grpc/grpc-js'
 import { logger, logSchema } from '@internal/monitoring/logger'
 import { TenantSpanProcessor } from '@internal/monitoring/otel-instrumentation'
@@ -72,6 +73,8 @@ if (tracingEnabled && traceExporter) {
 }
 
 if (tracingEnabled && traceExporter && spanProcessors.length > 0) {
+  const ignoreRoutes = ['/metrics', '/status', '/health', '/healthcheck']
+
   // Configure the OpenTelemetry Node SDK
   const sdk = new NodeSDK({
     resource: resourceFromAttributes({
@@ -81,11 +84,21 @@ if (tracingEnabled && traceExporter && spanProcessors.length > 0) {
     spanProcessors,
     traceExporter,
     instrumentations: [
+      // @fastify/otel replaces @opentelemetry/instrumentation-fastify
+      // It auto-sets http.route, http.request.method, url.path on spans.
+      // Other attributes (tenant.ref, trace.mode, http.operation) are set
+      // in Fastify hooks via request.opentelemetry().span.
+      new FastifyOtelInstrumentation({
+        enabled: true,
+        registerOnInitialization: true,
+        ignorePaths: (routeOpts) => {
+          return ignoreRoutes.includes(routeOpts.url)
+        },
+      }),
       getNodeAutoInstrumentations({
         '@opentelemetry/instrumentation-http': {
           enabled: true,
           ignoreIncomingRequestHook: (req) => {
-            const ignoreRoutes = ['/metrics', '/status', '/health', '/healthcheck']
             return ignoreRoutes.some((url) => req.url?.includes(url)) ?? false
           },
           ignoreOutgoingRequestHook: (req) => {
@@ -132,16 +145,6 @@ if (tracingEnabled && traceExporter && spanProcessors.length > 0) {
         '@opentelemetry/instrumentation-pg': {
           enabled: true,
           requireParentSpan: true,
-        },
-        '@opentelemetry/instrumentation-fastify': {
-          enabled: true,
-          requestHook: (span, req) => {
-            span.setAttribute('http.method', req.request.method)
-            span.setAttribute('http.route', req.request.routerPath)
-            span.setAttribute('tenant.ref', req.request.tenantId)
-            span.setAttribute('http.operation', req.request.operation)
-            span.setAttribute('trace.mode', req.request.tracingMode)
-          },
         },
         '@opentelemetry/instrumentation-knex': {
           enabled: true,

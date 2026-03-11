@@ -1,7 +1,13 @@
 import { wait } from '@internal/concurrency'
 import { getSslSettings } from '@internal/database/ssl'
 import { logger, logSchema } from '@internal/monitoring'
-import { dbActiveConnection, dbActivePool, dbInUseConnection } from '@internal/monitoring/metrics'
+import {
+  dbActiveConnection,
+  dbActivePool,
+  dbInUseConnection,
+  isMetricEnabled,
+  meter,
+} from '@internal/monitoring/metrics'
 import TTLCache from '@isaacs/ttlcache'
 import { JWTPayload } from 'jose'
 import { Knex, knex } from 'knex'
@@ -41,10 +47,16 @@ export interface User {
   payload: { role?: string } & JWTPayload
 }
 
+export interface PoolStats {
+  used: number
+  total: number
+}
+
 export interface PoolStrategy {
   acquire(): Knex
   rebalance(options: { clusterSize: number }): void
   destroy(): Promise<void>
+  getPoolStats(): PoolStats | null
 }
 
 export const searchPath = ['storage', 'public', 'extensions', ...dbSearchPath.split(',')].filter(
@@ -72,22 +84,84 @@ const tenantPools = new TTLCache<string, PoolStrategy>({
   },
 })
 
+// ============================================================================
+// Pool stats collection — chunked to avoid blocking the event loop
+// ============================================================================
+interface PoolStatsSnapshot {
+  poolCount: number
+  totalConnections: number
+  totalInUse: number
+}
+
+const STATS_CHUNK_SIZE = 100
+const STATS_INTERVAL_MS = 5_000
+
+let cachedPoolStats: PoolStatsSnapshot = {
+  poolCount: 0,
+  totalConnections: 0,
+  totalInUse: 0,
+}
+let collectInProgress = false
+
+async function collectPoolStats() {
+  if (collectInProgress) return
+  collectInProgress = true
+
+  try {
+    let poolCount = 0
+    let totalConnections = 0
+    let totalInUse = 0
+    let chunkCount = 0
+
+    for (const [, pool] of tenantPools.entries()) {
+      poolCount++
+      const stats = pool.getPoolStats()
+      if (stats) {
+        totalConnections += stats.total
+        totalInUse += stats.used
+      }
+      // Yield to the event loop between chunks
+      if (++chunkCount % STATS_CHUNK_SIZE === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    }
+
+    cachedPoolStats = {
+      poolCount,
+      totalConnections,
+      totalInUse,
+    }
+  } finally {
+    collectInProgress = false
+  }
+}
+
 /**
  * PoolManager is a class that manages a pool of Knex connections.
  * It creates a new pool for each tenant and reuses existing pools.
  */
 export class PoolManager {
-  monitor(signal: AbortSignal) {
-    const monitorInterval = setInterval(() => {
-      dbActivePool.record(tenantPools.size)
-    }, 2000)
+  monitor() {
+    // Periodically collect stats in a non-blocking way
+    const interval = setInterval(() => {
+      void collectPoolStats()
+    }, STATS_INTERVAL_MS)
+    interval.unref()
 
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearInterval(monitorInterval)
+    // Observable callback reads the cached snapshot — O(1)
+    meter.addBatchObservableCallback(
+      (observer) => {
+        if (isMetricEnabled('db_active_local_pools')) {
+          observer.observe(dbActivePool, cachedPoolStats.poolCount)
+        }
+        if (isMetricEnabled('db_connections')) {
+          observer.observe(dbActiveConnection, cachedPoolStats.totalConnections)
+        }
+        if (isMetricEnabled('db_connections_in_use')) {
+          observer.observe(dbInUseConnection, cachedPoolStats.totalInUse)
+        }
       },
-      { once: true }
+      [dbActivePool, dbActiveConnection, dbInUseConnection]
     )
   }
 
@@ -152,7 +226,6 @@ export class PoolManager {
  */
 class TenantPool implements PoolStrategy {
   protected pool?: Knex
-  protected monitorHandle?: ReturnType<typeof setInterval>
 
   constructor(protected readonly options: TenantConnectionOptions) {}
 
@@ -162,12 +235,10 @@ class TenantPool implements PoolStrategy {
     }
 
     this.pool = this.createKnexPool()
-    this.startMonitor()
     return this.pool
   }
 
   destroy(): Promise<void> {
-    this.stopMonitor()
     const originalPool = this.pool
 
     if (!originalPool) {
@@ -178,24 +249,12 @@ class TenantPool implements PoolStrategy {
     return this.drainPool(originalPool)
   }
 
-  protected startMonitor() {
-    this.monitorHandle = setInterval(() => {
-      const tarnPool = this.pool?.client?.pool
-      if (!tarnPool) return
-
-      dbInUseConnection.record(tarnPool.numUsed(), { tenant_id: this.options.tenantId })
-      dbActiveConnection.record(tarnPool.numUsed() + tarnPool.numFree(), {
-        tenant_id: this.options.tenantId,
-      })
-    }, 2000)
-
-    this.monitorHandle.unref()
-  }
-
-  protected stopMonitor() {
-    if (this.monitorHandle) {
-      clearInterval(this.monitorHandle)
-      this.monitorHandle = undefined
+  getPoolStats(): PoolStats | null {
+    const tarnPool = this.pool?.client?.pool
+    if (!tarnPool) return null
+    return {
+      used: tarnPool.numUsed(),
+      total: tarnPool.numUsed() + tarnPool.numFree(),
     }
   }
 
@@ -227,7 +286,6 @@ class TenantPool implements PoolStrategy {
       return
     }
 
-    this.stopMonitor()
     const originalPool = this.pool
 
     this.options.clusterSize = options.clusterSize

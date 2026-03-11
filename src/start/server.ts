@@ -121,7 +121,7 @@ async function main() {
   }
 
   // PoolManager Monitoring
-  TenantConnection.poolManager.monitor(shutdownSignal.nextGroup.signal)
+  TenantConnection.poolManager.monitor()
 
   // Cluster information
   await Cluster.init(shutdownSignal.nextGroup.signal)

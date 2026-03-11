@@ -19,7 +19,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "id": 2,
+  "id": 1,
   "links": [],
   "panels": [
     {
@@ -1162,8 +1162,10 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "expr": "sum(rate(storage_api_otel_http_requests_total{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval]))",
+          "editorMode": "code",
+          "expr": "sum(rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "Total",
+          "range": true,
           "refId": "A"
         },
         {
@@ -1171,8 +1173,10 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "expr": "sum(rate(storage_api_otel_http_requests_total{region=~\"$region\", instance=~\"$instance\", status_code=~\"2xx\"}[$__rate_interval]))",
+          "editorMode": "code",
+          "expr": "sum(rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\", status_code=~\"2xx\"}[$__rate_interval]))",
           "legendFormat": "2xx",
+          "range": true,
           "refId": "B"
         },
         {
@@ -1180,8 +1184,10 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "expr": "sum(rate(storage_api_otel_http_requests_total{region=~\"$region\", instance=~\"$instance\", status_code=~\"4xx\"}[$__rate_interval]))",
+          "editorMode": "code",
+          "expr": "sum(rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\", status_code=~\"4xx\"}[$__rate_interval]))",
           "legendFormat": "4xx",
+          "range": true,
           "refId": "C"
         },
         {
@@ -1189,8 +1195,10 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "expr": "sum(rate(storage_api_otel_http_requests_total{region=~\"$region\", instance=~\"$instance\", status_code=~\"5xx\"}[$__rate_interval]))",
+          "editorMode": "code",
+          "expr": "sum(rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\", status_code=~\"5xx\"}[$__rate_interval]))",
           "legendFormat": "5xx",
+          "range": true,
           "refId": "D"
         }
       ],
@@ -1395,8 +1403,10 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "expr": "sum(rate(storage_api_otel_http_requests_total{region=~\"$region\", instance=~\"$instance\", status_code=~\"5xx\"}[$__rate_interval])) / sum(rate(storage_api_otel_http_requests_total{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval]))",
+          "editorMode": "code",
+          "expr": "sum(rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\", status_code=~\"5xx\"}[$__rate_interval])) / sum(rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "Error Rate",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1634,7 +1644,8 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "expr": "topk(10, sum by (route) (rate(storage_api_otel_http_requests_total{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])))",
+          "editorMode": "code",
+          "expr": "topk(10, sum by (route) (rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])))",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -1773,8 +1784,10 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "expr": "sum(rate(storage_api_otel_http_requests_total{region=~\"$region\", instance=~\"$instance\", status_code=~\"4xx\"}[$__rate_interval]))",
+          "editorMode": "code",
+          "expr": "sum(rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\", status_code=~\"4xx\"}[$__rate_interval]))",
           "legendFormat": "4xx Errors",
+          "range": true,
           "refId": "A"
         },
         {
@@ -1782,8 +1795,10 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "expr": "sum(rate(storage_api_otel_http_requests_total{region=~\"$region\", instance=~\"$instance\", status_code=~\"5xx\"}[$__rate_interval]))",
+          "editorMode": "code",
+          "expr": "sum(rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\", status_code=~\"5xx\"}[$__rate_interval]))",
           "legendFormat": "5xx Errors",
+          "range": true,
           "refId": "B"
         }
       ],
@@ -1891,7 +1906,8 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "expr": "topk(10, sum by (route) (rate(storage_api_otel_http_requests_total{region=~\"$region\", instance=~\"$instance\", status_code=~\"4xx|5xx\"}[$__rate_interval])))",
+          "editorMode": "code",
+          "expr": "topk(10, sum by (route) (rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\", status_code=~\"4xx|5xx\"}[$__rate_interval])))",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -2012,8 +2028,10 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "expr": "sum(rate(storage_api_otel_http_requests_total{region=~\"$region\", instance=~\"$instance\", tenantId=~\"$tenant\"}[$__rate_interval])) by (tenantId)",
+          "editorMode": "code",
+          "expr": "sum(rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\", tenantId=~\"$tenant\"}[$__rate_interval])) by (tenantId)",
           "legendFormat": "{{ tenantId }}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -2841,8 +2859,10 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
+          "editorMode": "code",
           "expr": "sum(storage_api_otel_db_pool{region=~\"$region\", instance=~\"$instance\"})",
           "legendFormat": "Active Pools",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -3691,7 +3711,7 @@
             "h": 8,
             "w": 8,
             "x": 0,
-            "y": 145
+            "y": 185
           },
           "id": 61,
           "options": {
@@ -3805,7 +3825,7 @@
             "h": 8,
             "w": 8,
             "x": 8,
-            "y": 145
+            "y": 185
           },
           "id": 62,
           "options": {
@@ -3916,7 +3936,7 @@
             "h": 8,
             "w": 8,
             "x": 16,
-            "y": 145
+            "y": 185
           },
           "id": 63,
           "options": {
@@ -4491,7 +4511,7 @@
       "type": "timeseries"
     },
     {
-      "collapsed": true,
+      "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -4499,981 +4519,448 @@
         "y": 107
       },
       "id": 84,
-      "panels": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "local_prometheus"
-          },
-          "description": "V8 JavaScript engine heap memory usage vs limit. Used heap approaching the limit may trigger more frequent garbage collection or out-of-memory errors. Monitor for memory leaks (steadily increasing used heap).",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "axisBorderShow": false,
-                "axisCenteredZero": false,
-                "axisColorMode": "text",
-                "axisLabel": "",
-                "axisPlacement": "auto",
-                "barAlignment": 0,
-                "barWidthFactor": 0.6,
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "gradientMode": "none",
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "insertNulls": false,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "showPoints": "never",
-                "showValues": false,
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": 0
-                  }
-                ]
-              },
-              "unit": "bytes"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 0,
-            "y": 147
-          },
-          "id": 85,
-          "options": {
-            "legend": {
-              "calcs": ["mean", "max"],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "hideZeros": false,
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "sum(storage_api_otel_v8js_memory_heap_used_bytes)",
-              "legendFormat": "Heap Used",
-              "range": true,
-              "refId": "A"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "sum(storage_api_otel_v8js_memory_heap_limit_bytes)",
-              "legendFormat": "Heap Limit",
-              "range": true,
-              "refId": "B"
-            }
-          ],
-          "title": "V8 Heap Memory",
-          "type": "timeseries"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "local_prometheus"
-          },
-          "description": "Garbage collection duration percentiles by GC type (minor/major/incremental). Long GC pauses can cause request latency spikes. Major GC taking >100ms may require heap size tuning or memory optimization.",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "axisBorderShow": false,
-                "axisCenteredZero": false,
-                "axisColorMode": "text",
-                "axisLabel": "",
-                "axisPlacement": "auto",
-                "barAlignment": 0,
-                "barWidthFactor": 0.6,
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "gradientMode": "none",
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "insertNulls": false,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "showPoints": "never",
-                "showValues": false,
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": 0
-                  }
-                ]
-              },
-              "unit": "s"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 8,
-            "y": 147
-          },
-          "id": 86,
-          "options": {
-            "legend": {
-              "calcs": ["mean", "max"],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "hideZeros": false,
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(storage_api_otel_v8js_gc_duration_seconds_bucket[$__rate_interval])) by (le, v8js_gc_type))",
-              "legendFormat": "p50 {{ v8js_gc_type }}",
-              "range": true,
-              "refId": "A"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(storage_api_otel_v8js_gc_duration_seconds_bucket[$__rate_interval])) by (le, v8js_gc_type))",
-              "legendFormat": "p99 {{ v8js_gc_type }}",
-              "range": true,
-              "refId": "B"
-            }
-          ],
-          "title": "GC Duration by Type",
-          "type": "timeseries"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "local_prometheus"
-          },
-          "description": "Process memory breakdown: RSS (total resident memory), External (C++ objects bound to JS), ArrayBuffers (binary data buffers). High external/arraybuffer memory may indicate large file operations or buffer leaks.",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "axisBorderShow": false,
-                "axisCenteredZero": false,
-                "axisColorMode": "text",
-                "axisLabel": "",
-                "axisPlacement": "auto",
-                "barAlignment": 0,
-                "barWidthFactor": 0.6,
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "gradientMode": "none",
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "insertNulls": false,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "showPoints": "never",
-                "showValues": false,
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": 0
-                  }
-                ]
-              },
-              "unit": "bytes"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 16,
-            "y": 147
-          },
-          "id": 87,
-          "options": {
-            "legend": {
-              "calcs": ["mean", "max"],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "hideZeros": false,
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "storage_api_otel_nodejs_memory_rss_bytes{region=~\"$region\", instance=~\"$instance\"}",
-              "legendFormat": "RSS",
-              "range": true,
-              "refId": "A"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "storage_api_otel_nodejs_memory_external_bytes{region=~\"$region\", instance=~\"$instance\"}",
-              "legendFormat": "External",
-              "range": true,
-              "refId": "B"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "storage_api_otel_nodejs_memory_array_buffers_bytes{region=~\"$region\", instance=~\"$instance\"}",
-              "legendFormat": "Array Buffers",
-              "range": true,
-              "refId": "C"
-            }
-          ],
-          "title": "Process Memory (RSS/External)",
-          "type": "timeseries"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "local_prometheus"
-          },
-          "description": "Rate of garbage collection operations per second by GC type. Minor GC is fast and frequent (young generation), Major GC is slower (full heap). High major GC rates may indicate memory pressure.",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "axisBorderShow": false,
-                "axisCenteredZero": false,
-                "axisColorMode": "text",
-                "axisLabel": "",
-                "axisPlacement": "auto",
-                "barAlignment": 0,
-                "barWidthFactor": 0.6,
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "gradientMode": "none",
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "insertNulls": false,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "showPoints": "never",
-                "showValues": false,
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": 0
-                  }
-                ]
-              },
-              "unit": "ops"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 8,
-            "y": 155
-          },
-          "id": 221,
-          "options": {
-            "legend": {
-              "calcs": ["mean", "max"],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "hideZeros": false,
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "sum(rate(storage_api_otel_v8js_gc_duration_seconds_count[$__rate_interval])) by (v8js_gc_type)",
-              "legendFormat": "{{ v8js_gc_type }}",
-              "range": true,
-              "refId": "A"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "sum(rate(storage_api_otel_v8js_gc_duration_seconds_count[$__rate_interval]))",
-              "legendFormat": "Total",
-              "range": true,
-              "refId": "B"
-            }
-          ],
-          "title": "GC Rate by Type",
-          "type": "timeseries"
-        }
-      ],
+      "panels": [],
       "title": "Node.js Runtime (V8 Memory & GC)",
       "type": "row"
     },
     {
-      "collapsed": true,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local_prometheus"
+      },
+      "description": "V8 JavaScript engine heap memory usage vs limit. Used heap approaching the limit may trigger more frequent garbage collection or out-of-memory errors. Monitor for memory leaks (steadily increasing used heap).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
       "gridPos": {
-        "h": 1,
-        "w": 24,
+        "h": 8,
+        "w": 8,
         "x": 0,
         "y": 108
       },
-      "id": 88,
-      "panels": [
+      "id": 85,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "description": "Rate of CPU time consumption split between user (application code) and system (kernel operations) time. High system CPU may indicate excessive I/O operations or syscall overhead.",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "axisBorderShow": false,
-                "axisCenteredZero": false,
-                "axisColorMode": "text",
-                "axisLabel": "",
-                "axisPlacement": "auto",
-                "barAlignment": 0,
-                "barWidthFactor": 0.6,
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "gradientMode": "none",
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "insertNulls": false,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "showPoints": "never",
-                "showValues": false,
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": 0
-                  }
-                ]
-              },
-              "unit": "s"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 0,
-            "y": 148
-          },
-          "id": 89,
-          "options": {
-            "legend": {
-              "calcs": ["mean", "max"],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "hideZeros": false,
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "rate(storage_api_otel_process_cpu_user_seconds_total{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])",
-              "legendFormat": "User CPU",
-              "range": true,
-              "refId": "A"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "rate(storage_api_otel_process_cpu_system_seconds_total{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])",
-              "legendFormat": "System CPU",
-              "range": true,
-              "refId": "B"
-            }
-          ],
-          "title": "Process CPU Time (Rate)",
-          "type": "timeseries"
+          "editorMode": "code",
+          "expr": "sum(storage_api_otel_v8js_memory_heap_used_bytes)",
+          "legendFormat": "Heap Used",
+          "range": true,
+          "refId": "A"
         },
         {
           "datasource": {
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "description": "Active libuv handles (timers, sockets, file descriptors) and pending async requests. High handle counts may indicate resource leaks. Sudden spikes correlate with increased load or connection storms.",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "axisBorderShow": false,
-                "axisCenteredZero": false,
-                "axisColorMode": "text",
-                "axisLabel": "",
-                "axisPlacement": "auto",
-                "barAlignment": 0,
-                "barWidthFactor": 0.6,
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "gradientMode": "none",
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "insertNulls": false,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "showPoints": "never",
-                "showValues": false,
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": 0
-                  }
-                ]
-              },
-              "unit": "short"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 8,
-            "y": 148
-          },
-          "id": 90,
-          "options": {
-            "legend": {
-              "calcs": ["mean", "max"],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "hideZeros": false,
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "expr": "storage_api_otel_nodejs_active_handles_total{region=~\"$region\", instance=~\"$instance\"}",
-              "legendFormat": "Active Handles",
-              "refId": "A"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "expr": "storage_api_otel_nodejs_active_requests_total{region=~\"$region\", instance=~\"$instance\"}",
-              "legendFormat": "Active Requests",
-              "refId": "B"
-            }
-          ],
-          "title": "Active Handles & Requests",
-          "type": "timeseries"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "local_prometheus"
-          },
-          "description": "Time spent in different event loop phases (idle, active, poll). High poll time indicates waiting for I/O. High active time indicates CPU-bound work. Useful for understanding event loop behavior.",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "axisBorderShow": false,
-                "axisCenteredZero": false,
-                "axisColorMode": "text",
-                "axisLabel": "",
-                "axisPlacement": "auto",
-                "barAlignment": 0,
-                "barWidthFactor": 0.6,
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "gradientMode": "none",
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "insertNulls": false,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "showPoints": "never",
-                "showValues": false,
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": 0
-                  }
-                ]
-              },
-              "unit": "s"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 16,
-            "y": 148
-          },
-          "id": 91,
-          "options": {
-            "legend": {
-              "calcs": ["mean", "max"],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "hideZeros": false,
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "rate(storage_api_otel_nodejs_eventloop_time_seconds_total[$__rate_interval])",
-              "legendFormat": "{{ nodejs_eventloop_state }}",
-              "range": true,
-              "refId": "A"
-            }
-          ],
-          "title": "Event Loop Time by State",
-          "type": "timeseries"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "local_prometheus"
-          },
-          "description": "Percentage of file descriptors in use (open/max). High values (>80%) may indicate FD exhaustion risk. Monitor for leaks - a steadily increasing value without corresponding traffic increase suggests FD leaks. Only available on Linux.",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "custom": {
-                "axisBorderShow": false,
-                "axisCenteredZero": false,
-                "axisColorMode": "text",
-                "axisLabel": "",
-                "axisPlacement": "auto",
-                "barAlignment": 0,
-                "barWidthFactor": 0.6,
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "gradientMode": "none",
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "insertNulls": false,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "showPoints": "never",
-                "showValues": false,
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "line+area"
-                }
-              },
-              "mappings": [],
-              "max": 1,
-              "min": 0,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green"
-                  },
-                  {
-                    "color": "orange",
-                    "value": 0.7
-                  },
-                  {
-                    "color": "red",
-                    "value": 0.9
-                  }
-                ]
-              },
-              "unit": "percentunit"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 0,
-            "y": 164
-          },
-          "id": 222,
-          "options": {
-            "legend": {
-              "calcs": ["mean", "max"],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "hideZeros": false,
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "storage_api_otel_process_open_fds{region=~\"$region\", instance=~\"$instance\"} / storage_api_otel_process_max_fds{region=~\"$region\", instance=~\"$instance\"}",
-              "legendFormat": "FD Usage",
-              "range": true,
-              "refId": "A"
-            }
-          ],
-          "title": "Used File Descriptors",
-          "type": "timeseries"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "local_prometheus"
-          },
-          "description": "Number of open file descriptors over time. Useful for tracking FD usage patterns and identifying potential leaks. Compare with max FD limit to assess headroom. Only available on Linux.",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "axisBorderShow": false,
-                "axisCenteredZero": false,
-                "axisColorMode": "text",
-                "axisLabel": "",
-                "axisPlacement": "auto",
-                "barAlignment": 0,
-                "barWidthFactor": 0.6,
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "gradientMode": "none",
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "insertNulls": false,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "scaleDistribution": {
-                  "type": "linear"
-                },
-                "showPoints": "never",
-                "showValues": false,
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": 0
-                  }
-                ]
-              },
-              "unit": "short"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 8,
-            "y": 164
-          },
-          "id": 223,
-          "options": {
-            "legend": {
-              "calcs": ["mean", "max"],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "hideZeros": false,
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "storage_api_otel_process_open_fds{region=~\"$region\", instance=~\"$instance\"}",
-              "legendFormat": "Open FDs",
-              "range": true,
-              "refId": "A"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "local_prometheus"
-              },
-              "editorMode": "code",
-              "expr": "storage_api_otel_process_max_fds{region=~\"$region\", instance=~\"$instance\"}",
-              "legendFormat": "Max FDs",
-              "range": true,
-              "refId": "B"
-            }
-          ],
-          "title": "Open File Descriptors",
-          "type": "timeseries"
+          "editorMode": "code",
+          "expr": "sum(storage_api_otel_v8js_memory_heap_limit_bytes)",
+          "legendFormat": "Heap Limit",
+          "range": true,
+          "refId": "B"
         }
       ],
-      "title": "Node.js Runtime (Process)",
-      "type": "row"
+      "title": "V8 Heap Memory",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local_prometheus"
+      },
+      "description": "Garbage collection duration percentiles by GC type (minor/major/incremental). Long GC pauses can cause request latency spikes. Major GC taking >100ms may require heap size tuning or memory optimization.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 108
+      },
+      "id": 86,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum(rate(storage_api_otel_v8js_gc_duration_seconds_bucket[$__rate_interval])) by (le, v8js_gc_type))",
+          "legendFormat": "p50 {{ v8js_gc_type }}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum(rate(storage_api_otel_v8js_gc_duration_seconds_bucket[$__rate_interval])) by (le, v8js_gc_type))",
+          "legendFormat": "p99 {{ v8js_gc_type }}",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "GC Duration by Type",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local_prometheus"
+      },
+      "description": "Process memory breakdown: RSS (total resident memory), External (C++ objects bound to JS), ArrayBuffers (binary data buffers). High external/arraybuffer memory may indicate large file operations or buffer leaks.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 108
+      },
+      "id": 87,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "storage_api_otel_nodejs_memory_rss_bytes{region=~\"$region\", instance=~\"$instance\"}",
+          "legendFormat": "RSS",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "storage_api_otel_nodejs_memory_external_bytes{region=~\"$region\", instance=~\"$instance\"}",
+          "legendFormat": "External",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "storage_api_otel_nodejs_memory_array_buffers_bytes{region=~\"$region\", instance=~\"$instance\"}",
+          "legendFormat": "Array Buffers",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Process Memory (RSS/External)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local_prometheus"
+      },
+      "description": "Rate of garbage collection operations per second by GC type. Minor GC is fast and frequent (young generation), Major GC is slower (full heap). High major GC rates may indicate memory pressure.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 116
+      },
+      "id": 221,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(storage_api_otel_v8js_gc_duration_seconds_count[$__rate_interval])) by (v8js_gc_type)",
+          "legendFormat": "{{ v8js_gc_type }}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(storage_api_otel_v8js_gc_duration_seconds_count[$__rate_interval]))",
+          "legendFormat": "Total",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "GC Rate by Type",
+      "type": "timeseries"
     },
     {
       "collapsed": false,
@@ -5481,7 +4968,539 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 109
+        "y": 124
+      },
+      "id": 88,
+      "panels": [],
+      "title": "Node.js Runtime (Process)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local_prometheus"
+      },
+      "description": "Rate of CPU time consumption split between user (application code) and system (kernel operations) time. High system CPU may indicate excessive I/O operations or syscall overhead.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 125
+      },
+      "id": 89,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "rate(storage_api_otel_process_cpu_user_seconds_total{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "User CPU",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "rate(storage_api_otel_process_cpu_system_seconds_total{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "System CPU",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Process CPU Time (Rate)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local_prometheus"
+      },
+      "description": "Active libuv handles (timers, sockets, file descriptors) and pending async requests. High handle counts may indicate resource leaks. Sudden spikes correlate with increased load or connection storms.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 125
+      },
+      "id": 90,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "expr": "storage_api_otel_nodejs_active_handles_total{region=~\"$region\", instance=~\"$instance\"}",
+          "legendFormat": "Active Handles",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "expr": "storage_api_otel_nodejs_active_requests_total{region=~\"$region\", instance=~\"$instance\"}",
+          "legendFormat": "Active Requests",
+          "refId": "B"
+        }
+      ],
+      "title": "Active Handles & Requests",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local_prometheus"
+      },
+      "description": "Time spent in different event loop phases (idle, active, poll). High poll time indicates waiting for I/O. High active time indicates CPU-bound work. Useful for understanding event loop behavior.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 125
+      },
+      "id": 91,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "rate(storage_api_otel_nodejs_eventloop_time_seconds_total[$__rate_interval])",
+          "legendFormat": "{{ nodejs_eventloop_state }}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Event Loop Time by State",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local_prometheus"
+      },
+      "description": "Percentage of file descriptors in use (open/max). High values (>80%) may indicate FD exhaustion risk. Monitor for leaks - a steadily increasing value without corresponding traffic increase suggests FD leaks. Only available on Linux.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "line+area"
+            }
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "orange",
+                "value": 0.7
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 133
+      },
+      "id": 222,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "storage_api_otel_process_open_fds{region=~\"$region\", instance=~\"$instance\"} / storage_api_otel_process_max_fds{region=~\"$region\", instance=~\"$instance\"}",
+          "legendFormat": "FD Usage",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Used File Descriptors",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "local_prometheus"
+      },
+      "description": "Number of open file descriptors over time. Useful for tracking FD usage patterns and identifying potential leaks. Compare with max FD limit to assess headroom. Only available on Linux.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 133
+      },
+      "id": 223,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "storage_api_otel_process_open_fds{region=~\"$region\", instance=~\"$instance\"}",
+          "legendFormat": "Open FDs",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "editorMode": "code",
+          "expr": "storage_api_otel_process_max_fds{region=~\"$region\", instance=~\"$instance\"}",
+          "legendFormat": "Max FDs",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Open File Descriptors",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 141
       },
       "id": 70,
       "panels": [],
@@ -5522,7 +5541,7 @@
       {
         "allValue": ".*",
         "current": {
-          "text": ["All"],
+          "text": "All",
           "value": ["$__all"]
         },
         "datasource": {
@@ -5546,8 +5565,8 @@
       },
       {
         "current": {
-          "text": ["storage-single-tenant"],
-          "value": ["storage-single-tenant"]
+          "text": "All",
+          "value": ["$__all"]
         },
         "datasource": {
           "type": "prometheus",
@@ -5571,12 +5590,12 @@
     ]
   },
   "time": {
-    "from": "now-5m",
-    "to": "now"
+    "from": "2026-03-10T12:33:29.823Z",
+    "to": "2026-03-10T12:34:24.902Z"
   },
   "timepicker": {},
   "timezone": "browser",
   "title": "Storage API - OTel Metrics",
   "uid": "storage-otel-metrics",
-  "version": 1
+  "version": 3
 }

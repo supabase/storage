@@ -1556,7 +1556,7 @@
         "type": "prometheus",
         "uid": "local_prometheus"
       },
-      "description": "Top API endpoints by request count. Shows which routes receive the most traffic. Use this to identify hot paths, optimize frequently accessed endpoints, and understand API usage patterns.",
+      "description": "Top storage operations by request count. Shows which operations receive the most traffic. Use this to identify hot paths, optimize frequently accessed code paths, and understand API usage patterns.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1587,7 +1587,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "route"
+                "options": "operation"
             },
             "properties": [
               {
@@ -1645,14 +1645,14 @@
             "uid": "local_prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, sum by (route) (rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])))",
+          "expr": "topk(10, sum by (operation) (rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])))",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "A"
         }
       ],
-      "title": "Requests by Path",
+      "title": "Requests by Operation",
       "transformations": [
         {
           "id": "organize",
@@ -1810,7 +1810,7 @@
         "type": "prometheus",
         "uid": "local_prometheus"
       },
-      "description": "Top API endpoints by error count. Shows which routes are generating the most errors. Use this to identify problematic endpoints that need attention or debugging.",
+      "description": "Top storage operations by error count. Shows which operations are generating the most errors. Use this to identify problematic code paths that need attention or debugging.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1849,7 +1849,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "route"
+                "options": "operation"
             },
             "properties": [
               {
@@ -1907,14 +1907,14 @@
             "uid": "local_prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, sum by (route) (rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\", status_code=~\"4xx|5xx\"}[$__rate_interval])))",
+          "expr": "topk(10, sum by (operation) (rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\", status_code=~\"4xx|5xx\"}[$__rate_interval])))",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "A"
         }
       ],
-      "title": "Errors by Path",
+      "title": "Errors by Operation",
       "transformations": [
         {
           "id": "organize",
@@ -2228,12 +2228,12 @@
                 "type": "prometheus",
                 "uid": "local_prometheus"
               },
-              "expr": "topk(10, sum(rate(storage_api_otel_http_requests_total{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])) by (route))",
-              "legendFormat": "{{ route }}",
+              "expr": "topk(10, sum(rate(storage_api_otel_http_request_duration_seconds_count{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])) by (operation))",
+              "legendFormat": "{{ operation }}",
               "refId": "A"
             }
           ],
-          "title": "Top 10 Routes by Request Rate",
+          "title": "Top 10 Operations by Request Rate",
           "type": "timeseries"
         },
         {
@@ -2241,7 +2241,7 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "description": "The 10 slowest API endpoints by 95th percentile latency. These endpoints are prime candidates for performance optimization. High latency may indicate complex database operations, large file transfers, or inefficient code paths.",
+          "description": "The 10 slowest storage operations by 95th percentile latency. These operations are prime candidates for performance optimization. High latency may indicate complex database operations, large file transfers, or inefficient code paths.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -2323,17 +2323,17 @@
                 "uid": "local_prometheus"
               },
               "editorMode": "code",
-              "expr": "topk(10, histogram_quantile(0.95, sum(rate(storage_api_otel_http_request_duration_seconds_bucket{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])) by (le, route)))",
-              "legendFormat": "{{ route }}",
+              "expr": "topk(10, histogram_quantile(0.95, sum(rate(storage_api_otel_http_request_duration_seconds_bucket{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])) by (le, operation)))",
+              "legendFormat": "{{ operation }}",
               "range": true,
               "refId": "A"
             }
           ],
-          "title": "Top 10 Slowest Routes (P95)",
+          "title": "Top 10 Slowest Operations (P95)",
           "type": "timeseries"
         }
       ],
-      "title": "HTTP Requests by Route",
+      "title": "HTTP Requests by Operation",
       "type": "row"
     },
     {

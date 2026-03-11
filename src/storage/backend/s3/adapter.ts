@@ -19,7 +19,7 @@ import {
 import { Progress, Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ERRORS, StorageBackendError } from '@internal/errors'
-import { createAgent, InstrumentedAgent } from '@internal/http'
+import { createAgent, encodeBucketAndObjectPath, InstrumentedAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
@@ -32,7 +32,6 @@ import {
   UploadPart,
   withOptionalVersion,
 } from './../adapter'
-import { encodeCopySource } from './copy-source'
 
 const {
   storageS3UploadQueueSize,
@@ -256,7 +255,7 @@ export class S3Backend implements StorageBackendAdapter {
     try {
       const command = new CopyObjectCommand({
         Bucket: bucket,
-        CopySource: encodeCopySource(bucket, withOptionalVersion(source, version)),
+        CopySource: encodeBucketAndObjectPath(bucket, withOptionalVersion(source, version)),
         Key: withOptionalVersion(destination, destinationVersion),
         CopySourceIfMatch: conditions?.ifMatch,
         CopySourceIfNoneMatch: conditions?.ifNoneMatch,
@@ -569,7 +568,7 @@ export class S3Backend implements StorageBackendAdapter {
       Key: withOptionalVersion(key, version),
       UploadId,
       PartNumber,
-      CopySource: encodeCopySource(
+      CopySource: encodeBucketAndObjectPath(
         storageS3Bucket,
         withOptionalVersion(sourceKey, sourceKeyVersion)
       ),

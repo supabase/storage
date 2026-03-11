@@ -4,8 +4,8 @@ import { getConfig } from '../../../config'
 import { SignedToken, verifyJWT } from '../../../internal/auth'
 import { getJwtSecret } from '../../../internal/database'
 import { ERRORS } from '../../../internal/errors'
+import { doesSignedTokenMatchRequestPath } from '../../../internal/http'
 import { ROUTE_OPERATIONS } from '../operations'
-import { doesSignedTokenMatchRequestPath } from '../signed-url'
 
 const { storageS3Bucket } = getConfig()
 

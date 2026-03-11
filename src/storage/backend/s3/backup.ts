@@ -7,7 +7,7 @@ import {
   S3Client,
   UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
-import { encodeCopySource } from './copy-source'
+import { encodeBucketAndObjectPath } from '@internal/http'
 
 const FIVE_GB = 5 * 1024 * 1024 * 1024
 
@@ -70,7 +70,7 @@ export class ObjectBackup {
     const copyParams = {
       Bucket: destinationBucket,
       Key: destinationKey,
-      CopySource: encodeCopySource(sourceBucket, sourceKey),
+      CopySource: encodeBucketAndObjectPath(sourceBucket, sourceKey),
     }
 
     const copyCommand = new CopyObjectCommand(copyParams)
@@ -158,7 +158,7 @@ export class ObjectBackup {
         Key: destinationKey,
         PartNumber: partNumber,
         UploadId: uploadId,
-        CopySource: encodeCopySource(sourceBucket, sourceKey),
+        CopySource: encodeBucketAndObjectPath(sourceBucket, sourceKey),
         CopySourceRange: `bytes=${start}-${end}`,
       })
 

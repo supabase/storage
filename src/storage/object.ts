@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
 import { ERRORS } from '@internal/errors'
+import { encodeBucketAndObjectPath, encodePathPreservingSeparators } from '@internal/http'
 import { StorageObjectLocator } from '@storage/locator'
 import { Obj } from '@storage/schemas'
 import { FastifyRequest } from 'fastify/types/request'
@@ -17,7 +18,6 @@ import {
   ObjectUpdatedMetadata,
 } from './events'
 import { mustBeValidKey } from './limits'
-import { encodeBucketAndObjectPath, encodePathPreservingSeparators } from './path-encoding'
 import { fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
 
 const { requestUrlLengthLimit } = getConfig()
@@ -48,10 +48,6 @@ export interface ListObjectsV2Result {
   hasNext: boolean
   nextCursor?: string
   nextCursorKey?: string
-}
-
-function encodeObjectPathForURL(bucketId: string, objectName: string): string {
-  return encodeBucketAndObjectPath(bucketId, objectName)
 }
 
 /**
@@ -749,7 +745,7 @@ export class ObjectStorage {
       urlPath = 'render/image'
     }
 
-    const encodedUrlToSign = encodeObjectPathForURL(this.bucketId, objectName)
+    const encodedUrlToSign = encodeBucketAndObjectPath(this.bucketId, objectName)
 
     // @todo parse the url properly
     return `/${urlPath}/sign/${encodedUrlToSign}?token=${token}`
@@ -788,7 +784,7 @@ export class ObjectStorage {
         if (nameSet.has(path)) {
           const urlToSign = `${this.bucketId}/${path}`
           const token = await signJWT({ url: urlToSign }, urlSigningKey, expiresIn)
-          const encodedUrlToSign = encodeObjectPathForURL(this.bucketId, path)
+          const encodedUrlToSign = encodeBucketAndObjectPath(this.bucketId, path)
           signedURL = `/object/sign/${encodedUrlToSign}?token=${token}`
         } else {
           error = 'Either the object does not exist or you do not have access to it'
@@ -834,7 +830,7 @@ export class ObjectStorage {
       expiresIn
     )
 
-    const encodedUrlToSign = encodeObjectPathForURL(this.bucketId, objectName)
+    const encodedUrlToSign = encodeBucketAndObjectPath(this.bucketId, objectName)
 
     return { url: `/object/upload/sign/${encodedUrlToSign}?token=${token}`, token }
   }
@@ -855,14 +851,10 @@ export class ObjectStorage {
       throw ERRORS.InvalidJWT(err)
     }
 
-    const { url, exp } = payload
+    const { url } = payload
 
     if (url !== `${this.bucketId}/${objectName}`) {
       throw ERRORS.InvalidSignature()
-    }
-
-    if (exp * 1000 < Date.now()) {
-      throw ERRORS.ExpiredSignature()
     }
 
     return payload

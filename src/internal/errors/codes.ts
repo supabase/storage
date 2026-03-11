@@ -1,44 +1,5 @@
+import { safeEncodeURIComponent } from '../http'
 import { StorageBackendError } from './storage-error'
-
-function toWellFormedString(value: string): string {
-  const maybeToWellFormed = (value as unknown as { toWellFormed?: () => string }).toWellFormed
-  if (typeof maybeToWellFormed === 'function') {
-    return maybeToWellFormed.call(value)
-  }
-
-  let normalized = ''
-  for (let i = 0; i < value.length; i++) {
-    const currentCodeUnit = value.charCodeAt(i)
-
-    if (currentCodeUnit >= 0xd800 && currentCodeUnit <= 0xdbff) {
-      const nextCodeUnit = value.charCodeAt(i + 1)
-      if (i + 1 < value.length && nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff) {
-        normalized += value[i] + value[i + 1]
-        i += 1
-      } else {
-        normalized += '\uFFFD'
-      }
-      continue
-    }
-
-    if (currentCodeUnit >= 0xdc00 && currentCodeUnit <= 0xdfff) {
-      normalized += '\uFFFD'
-      continue
-    }
-
-    normalized += value[i]
-  }
-
-  return normalized
-}
-
-function safeEncodeURIComponent(value: string): string {
-  try {
-    return encodeURIComponent(value)
-  } catch {
-    return encodeURIComponent(toWellFormedString(value))
-  }
-}
 
 export enum ErrorCode {
   NoSuchBucket = 'NoSuchBucket',

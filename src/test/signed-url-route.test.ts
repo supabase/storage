@@ -1,4 +1,4 @@
-import { doesSignedTokenMatchRequestPath } from '../http/routes/signed-url'
+import { doesSignedTokenMatchRequestPath } from '@internal/http'
 import { encodePathPreservingSeparatorsForTest } from './utils/path-encoding'
 
 describe('signed URL route path verification', () => {

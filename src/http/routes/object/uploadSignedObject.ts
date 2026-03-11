@@ -2,10 +2,10 @@ import fastifyMultipart from '@fastify/multipart'
 import { SignedUploadToken, verifyJWT } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
 import { ERRORS } from '@internal/errors'
+import { doesSignedTokenMatchRequestPath } from '@internal/http'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { ROUTE_OPERATIONS } from '../operations'
-import { doesSignedTokenMatchRequestPath } from '../signed-url'
 
 const uploadSignedObjectParamsSchema = {
   type: 'object',
@@ -97,14 +97,10 @@ export default async function routes(fastify: FastifyInstance) {
         throw ERRORS.InvalidJWT(err)
       }
 
-      const { owner, upsert, url, exp } = payload
+      const { owner, upsert, url } = payload
 
       if (!doesSignedTokenMatchRequestPath(request.raw.url, '/object/upload/sign', url)) {
         throw ERRORS.InvalidSignature()
-      }
-
-      if (exp * 1000 < Date.now()) {
-        throw ERRORS.ExpiredSignature()
       }
 
       const { objectMetadata, path } = await request.storage

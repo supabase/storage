@@ -1,5 +1,8 @@
 DO $$
 DECLARE
+  -- SQL_ASCII databases do not have reliable Unicode code point semantics, so
+  -- the migration needs a byte-pattern branch instead of U&'' character checks.
+  -- This is the case for OrioleDB and/or --locale=C databases.
   server_encoding text := current_setting('server_encoding');
 BEGIN
   IF NOT EXISTS (

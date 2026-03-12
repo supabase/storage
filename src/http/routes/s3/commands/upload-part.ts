@@ -59,8 +59,8 @@ export default function UploadPart(s3Router: S3Router) {
 
         return pipeline(
           passThrough,
-          new ByteLimitTransformStream(MAX_PART_SIZE), // 5GB max part size
           ctx.req.streamingSignatureV4,
+          new ByteLimitTransformStream(MAX_PART_SIZE), // 5GB max part size
           async (body) => {
             const part = await ctx.req.storage.backend.uploadPart(
               icebergBucketName!,
@@ -131,8 +131,8 @@ export default function UploadPart(s3Router: S3Router) {
 
         return pipeline(
           passThrough,
-          new ByteLimitTransformStream(MAX_PART_SIZE),
           ctx.req.streamingSignatureV4,
+          new ByteLimitTransformStream(MAX_PART_SIZE),
           async (body) => {
             return s3Protocol.uploadPart(
               {

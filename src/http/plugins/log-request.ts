@@ -1,4 +1,3 @@
-import { PartialHttpData, parsePartialHttp } from '@internal/http'
 import { logger, logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
 import { FastifyInstance } from 'fastify'
 import { FastifyReply } from 'fastify/types/reply'
@@ -49,37 +48,23 @@ export const logRequest = (options: RequestLoggerOptions) =>
       // Watch for connections that timeout or disconnect before complete HTTP headers are received
       // For keep-alive connections, track each potential request independently
       const onConnection = (socket: Socket) => {
-        const captureByteLimit = 2048
-        let currentRequestData: Buffer[] = []
-        let currentRequestDataSize = 0
-        let currentRequestStart = Date.now()
-        let waitingForRequest = false
-        let pendingRequestLogged = false
+        const connectionStart = Date.now()
+        let currentRequestStart = connectionStart
+        let hasReceivedData = false
+        let requestLogged = false
 
-        // Store cleanup function so hooks can access it
+        // Store cleanup function so hooks can mark requests as logged
         socketCleanupMap.set(socket, () => {
-          pendingRequestLogged = true
-          waitingForRequest = false
-          currentRequestData = []
-          currentRequestDataSize = 0
+          requestLogged = true
         })
 
-        // Capture partial data sent before connection closes
-        const onData = (chunk: Buffer) => {
-          // Start tracking a new potential request when we receive data after a completed one
-          if (!waitingForRequest) {
-            waitingForRequest = true
-            currentRequestData = []
-            currentRequestDataSize = 0
+        // Track when data arrives for a potential request
+        const onData = () => {
+          // Reset tracking for each new request on keep-alive connections
+          if (!hasReceivedData || requestLogged) {
+            hasReceivedData = true
             currentRequestStart = Date.now()
-            pendingRequestLogged = false
-          }
-
-          const remaining = captureByteLimit - currentRequestDataSize
-          if (remaining > 0) {
-            const slicedChunk = chunk.subarray(0, Math.min(chunk.length, remaining))
-            currentRequestData.push(slicedChunk)
-            currentRequestDataSize += slicedChunk.length
+            requestLogged = false
           }
         }
         socket.on('data', onData)
@@ -93,19 +78,17 @@ export const logRequest = (options: RequestLoggerOptions) =>
           socket.removeListener('data', onData)
           socketCleanupMap.delete(socket)
 
-          // Only log if we were waiting for a request that was never properly logged
-          if (!waitingForRequest || currentRequestData.length === 0 || pendingRequestLogged) {
-            return
+          // Log if connection closed without a logged request
+          // This covers: idle timeouts, partial data, malformed requests
+          if (!requestLogged) {
+            const req = createPartialLogRequest(fastify, socket, currentRequestStart)
+
+            doRequestLog(req, {
+              excludeUrls: options.excludeUrls,
+              statusCode: 'ABORTED CONN',
+              responseTime: (Date.now() - req.startTime) / 1000,
+            })
           }
-
-          const parsedHttp = parsePartialHttp(currentRequestData)
-          const req = createPartialLogRequest(fastify, socket, parsedHttp, currentRequestStart)
-
-          doRequestLog(req, {
-            excludeUrls: options.excludeUrls,
-            statusCode: 'ABORTED CONN',
-            responseTime: (Date.now() - req.startTime) / 1000,
-          })
         })
       }
 
@@ -272,30 +255,25 @@ function getFirstDefined<T>(...values: any[]): T | undefined {
 }
 
 /**
- * Creates a minimal FastifyRequest from partial HTTP data.
- * Used for consistent logging when request parsing fails.
+ * Creates a minimal FastifyRequest for logging aborted connections.
+ * Used when connection closes before a complete HTTP request is received.
  */
 export function createPartialLogRequest(
   fastify: FastifyInstance,
   socket: Socket,
-  httpData: PartialHttpData,
   startTime: number
 ) {
   return {
-    method: httpData.method,
-    url: httpData.url,
-    headers: httpData.headers,
+    method: 'UNKNOWN',
+    headers: {},
+    url: '/',
     ip: socket.remoteAddress || 'unknown',
     id: 'no-request',
     log: fastify.log.child({
-      tenantId: httpData.tenantId,
-      project: httpData.tenantId,
       reqId: 'no-request',
       appVersion: version,
-      dataLength: httpData.length,
     }),
     startTime,
-    tenantId: httpData.tenantId,
     raw: {},
     routeOptions: { config: {} },
     resources: [],

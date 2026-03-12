@@ -29,13 +29,16 @@ import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { wait } from '@internal/concurrency'
 import axios from 'axios'
-import { randomUUID } from 'crypto'
+import { createHash, createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import { ReadableStreamBuffer } from 'stream-buffers'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
+import { SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
 
 const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
+const STREAMING_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
+const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
   let bucketName: string
@@ -76,18 +79,170 @@ async function uploadFile(
   return await uploader.done()
 }
 
+function formatAwsDate(date = new Date()) {
+  return date.toISOString().replace(/[:-]|\.\d{3}/g, '')
+}
+
+function hmacSha256(key: string | Buffer, value: string) {
+  return createHmac('sha256', key).update(value).digest()
+}
+
+function sha256Hex(value: Buffer) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function deriveSigningKey(secretKey: string, shortDate: string, region: string, service: string) {
+  const dateKey = hmacSha256(`AWS4${secretKey}`, shortDate)
+  const regionKey = hmacSha256(dateKey, region)
+  const serviceKey = hmacSha256(regionKey, service)
+  return hmacSha256(serviceKey, 'aws4_request')
+}
+
+function createSignedChunk(
+  payload: Buffer,
+  previousSignature: string,
+  options: {
+    longDate: string
+    shortDate: string
+    region: string
+    service: string
+    secretKey: string
+  }
+) {
+  const signingKey = deriveSigningKey(
+    options.secretKey,
+    options.shortDate,
+    options.region,
+    options.service
+  )
+  const scope = `${options.shortDate}/${options.region}/${options.service}/aws4_request`
+  const chunkHash = sha256Hex(payload)
+  const stringToSign = [
+    'AWS4-HMAC-SHA256-PAYLOAD',
+    options.longDate,
+    scope,
+    previousSignature,
+    EMPTY_SHA256_HASH,
+    chunkHash,
+  ].join('\n')
+  const signature = createHmac('sha256', signingKey).update(stringToSign).digest('hex')
+
+  return {
+    signature,
+    encoded: Buffer.concat([
+      Buffer.from(`${payload.length.toString(16)};chunk-signature=${signature}\r\n`),
+      payload,
+      Buffer.from('\r\n'),
+    ]),
+  }
+}
+
+async function sendAwsChunkedRequest(options: {
+  baseUrl: string
+  path: string
+  payload: Buffer
+  query?: Record<string, string>
+}) {
+  const longDate = formatAwsDate()
+  const shortDate = longDate.slice(0, 8)
+  const host = new URL(options.baseUrl).host
+  const signedHeaders = [
+    'host',
+    'x-amz-content-sha256',
+    'x-amz-date',
+    'x-amz-decoded-content-length',
+  ]
+  const service = SignatureV4Service.S3
+  const signer = new SignatureV4({
+    enforceRegion: false,
+    credentials: {
+      accessKey: s3ProtocolAccessKeyId!,
+      secretKey: s3ProtocolAccessKeySecret!,
+      region: storageS3Region,
+      service,
+    },
+  })
+  const headers = {
+    host,
+    'content-encoding': 'aws-chunked',
+    'x-amz-content-sha256': STREAMING_PAYLOAD_ALGORITHM,
+    'x-amz-date': longDate,
+    'x-amz-decoded-content-length': options.payload.length.toString(),
+  }
+  const clientSignature = {
+    credentials: {
+      accessKey: s3ProtocolAccessKeyId!,
+      shortDate,
+      region: storageS3Region,
+      service,
+    },
+    signedHeaders,
+    signature: '',
+    longDate,
+    contentSha: STREAMING_PAYLOAD_ALGORITHM,
+  }
+  const { signature } = await signer.sign(clientSignature, {
+    url: options.path,
+    method: 'PUT',
+    headers,
+    query: options.query,
+  })
+  const chunk = createSignedChunk(options.payload, signature, {
+    longDate,
+    shortDate,
+    region: storageS3Region,
+    service,
+    secretKey: s3ProtocolAccessKeySecret!,
+  })
+  const endChunk = createSignedChunk(Buffer.alloc(0), chunk.signature, {
+    longDate,
+    shortDate,
+    region: storageS3Region,
+    service,
+    secretKey: s3ProtocolAccessKeySecret!,
+  })
+  const encodedBody = Buffer.concat([chunk.encoded, endChunk.encoded])
+  const requestUrl = new URL(`${options.baseUrl}${options.path}`)
+
+  if (options.query) {
+    for (const [key, value] of Object.entries(options.query)) {
+      requestUrl.searchParams.set(key, value)
+    }
+  }
+
+  const response = await fetch(requestUrl, {
+    method: 'PUT',
+    headers: {
+      ...headers,
+      authorization:
+        `AWS4-HMAC-SHA256 Credential=${s3ProtocolAccessKeyId}/${shortDate}/` +
+        `${storageS3Region}/${service}/aws4_request, SignedHeaders=${signedHeaders.join(';')}, ` +
+        `Signature=${signature}`,
+      'content-length': encodedBody.length.toString(),
+    },
+    body: encodedBody,
+  })
+
+  return {
+    status: response.status,
+    data: await response.text(),
+  }
+}
+
 jest.setTimeout(10 * 1000)
 
 describe('S3 Protocol', () => {
   describe('Bucket', () => {
     let testApp: FastifyInstance
     let client: S3Client
+    let baseUrl: string
 
     beforeAll(async () => {
       testApp = app()
       const listener = await testApp.listen()
+      baseUrl = listener.replace('[::1]', 'localhost')
       client = new S3Client({
-        endpoint: `${listener.replace('[::1]', 'localhost')}/s3`,
+        endpoint: `${baseUrl}/s3`,
         forcePathStyle: true,
         region: storageS3Region,
         credentials: {
@@ -750,6 +905,33 @@ describe('S3 Protocol', () => {
         }
       })
 
+      it('accepts aws-chunked putObject bodies when decoded size is within the limit', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-aws-chunked-put-object.jpg'
+        const payload = Buffer.alloc(123, 1)
+
+        mergeConfig({
+          uploadFileSizeLimit: 150,
+        })
+
+        const response = await sendAwsChunkedRequest({
+          baseUrl,
+          path: `/s3/${bucketName}/${key}`,
+          payload,
+        })
+
+        expect(response.status).toBe(200)
+
+        const headObject = await client.send(
+          new HeadObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+          })
+        )
+
+        expect(headObject.ContentLength).toBe(payload.length)
+      })
+
       it('will not allow uploading a file that exceeded the maxFileSize', async () => {
         const bucketName = await createBucket(client)
 
@@ -826,6 +1008,46 @@ describe('S3 Protocol', () => {
           )
           expect((e as S3ServiceException).name).toEqual('EntityTooLarge')
         }
+      })
+
+      it('accepts aws-chunked uploadPart bodies when decoded size is within the limit', async () => {
+        const bucketName = await createBucket(client, 'chunked-part')
+        const payload = Buffer.alloc(123, 2)
+
+        mergeConfig({
+          uploadFileSizeLimit: 150,
+        })
+
+        const multipart = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: 'test-aws-chunked-upload-part.jpg',
+            ContentType: 'image/jpg',
+            CacheControl: 'max-age=2000',
+          })
+        )
+
+        const response = await sendAwsChunkedRequest({
+          baseUrl,
+          path: `/s3/${bucketName}/test-aws-chunked-upload-part.jpg`,
+          payload,
+          query: {
+            uploadId: multipart.UploadId!,
+            partNumber: '1',
+          },
+        })
+
+        expect(response.status).toBe(200)
+
+        const listedParts = await client.send(
+          new ListPartsCommand({
+            Bucket: bucketName,
+            Key: 'test-aws-chunked-upload-part.jpg',
+            UploadId: multipart.UploadId,
+          })
+        )
+
+        expect(listedParts.Parts?.map((part) => part.PartNumber)).toEqual([1])
       })
 
       it('upload a file using multipart upload', async () => {

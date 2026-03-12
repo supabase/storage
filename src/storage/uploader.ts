@@ -296,6 +296,18 @@ export function validateMimeType(mimeType: string, allowedMimeTypes: string[]) {
   throw ERRORS.InvalidMimeType(mimeType)
 }
 
+function getKnownRequestContentLength(request: FastifyRequest): number | undefined {
+  const contentLengthHeader =
+    request.headers['x-amz-decoded-content-length'] ?? request.headers['content-length']
+  const contentLength = Number(contentLengthHeader)
+
+  if (!Number.isFinite(contentLength) || contentLength < 0) {
+    return undefined
+  }
+
+  return contentLength
+}
+
 /**
  * Extracts the file information from the request
  * @param request
@@ -392,11 +404,10 @@ export async function fileUploadFromRequest(
       userMetadata = parseUserMetadata(customMd)
     }
 
-    // Extract content-length value to avoid capturing entire request object in closure
-    const contentLength = Number(request.headers['content-length'])
+    const contentLength = getKnownRequestContentLength(request)
     isTruncated = () => {
       // @todo more secure to get this from the stream or from s3 in the next step
-      return contentLength > maxFileSize
+      return typeof contentLength === 'number' && contentLength > maxFileSize
     }
   }
 

@@ -1,5 +1,4 @@
 import { logger, logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
-import { trace } from '@opentelemetry/api'
 import { FastifyReply } from 'fastify/types/reply'
 import { FastifyRequest } from 'fastify/types/request'
 import fastifyPlugin from 'fastify-plugin'
@@ -77,8 +76,8 @@ export const logRequest = (options: RequestLoggerOptions) =>
         req.resources = resources
         req.operation = req.routeOptions.config.operation
 
-        if (req.operation) {
-          trace.getActiveSpan()?.setAttribute('http.operation', req.operation.type)
+        if (req.operation && typeof req.opentelemetry === 'function') {
+          req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)
         }
       })
 
@@ -135,7 +134,9 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
 
       if (reqMetadata) {
         try {
-          trace.getActiveSpan()?.setAttribute('http.metadata', JSON.stringify(reqMetadata))
+          if (typeof req.opentelemetry === 'function') {
+            req.opentelemetry()?.span?.setAttribute('http.metadata', JSON.stringify(reqMetadata))
+          }
         } catch (e) {
           // do nothing
           logSchema.warning(logger, 'Failed to serialize log metadata', {

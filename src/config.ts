@@ -66,7 +66,6 @@ type StorageConfigType = {
   storageS3InternalTracesEnabled?: boolean
   storageS3MaxSockets: number
   storageS3DisableChecksum: boolean
-  storageS3UploadQueueSize: number
   storageS3Bucket: string
   storageS3Endpoint?: string
   storageS3ForcePathStyle?: boolean
@@ -367,8 +366,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       10
     ),
     storageS3DisableChecksum: getOptionalConfigFromEnv('STORAGE_S3_DISABLE_CHECKSUM') === 'true',
-    storageS3UploadQueueSize:
-      envNumber(getOptionalConfigFromEnv('STORAGE_S3_UPLOAD_QUEUE_SIZE')) ?? 2,
     storageS3InternalTracesEnabled:
       getOptionalConfigFromEnv('STORAGE_S3_ENABLED_METRICS') === 'true',
     storageS3Bucket: getOptionalConfigFromEnv('STORAGE_S3_BUCKET', 'GLOBAL_S3_BUCKET'),

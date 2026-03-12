@@ -694,6 +694,7 @@ export class S3ProtocolHandler {
         body: command.Body as Readable,
         cacheControl: command.CacheControl!,
         mimeType: command.ContentType!,
+        contentLength: command.ContentLength,
         isTruncated: options.isTruncated,
         userMetadata: command.Metadata,
       },

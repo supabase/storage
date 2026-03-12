@@ -123,7 +123,8 @@ export default function PutObject(s3Router: S3Router) {
             fileStream,
             uploadRequest.mimeType,
             uploadRequest.cacheControl,
-            ctx.signals.body
+            ctx.signals.body,
+            uploadRequest.contentLength
           )
 
           return {
@@ -177,6 +178,7 @@ export default function PutObject(s3Router: S3Router) {
               Key: key,
               CacheControl: uploadRequest.cacheControl,
               ContentType: uploadRequest.mimeType,
+              ContentLength: uploadRequest.contentLength,
               Expires: req.Headers?.['expires'] ? new Date(req.Headers?.['expires']) : undefined,
               ContentEncoding: req.Headers?.['content-encoding'],
               Metadata: metadata,

@@ -18,6 +18,7 @@ interface FileUpload {
   body: Readable
   mimeType: string
   cacheControl: string
+  contentLength?: number
   isTruncated: () => boolean
   xRobotsTag?: string
   userMetadata?: Record<string, unknown>
@@ -110,7 +111,8 @@ export class Uploader {
         file.body,
         file.mimeType,
         file.cacheControl,
-        request.signal
+        request.signal,
+        file.contentLength
       )
 
       if (request.file.xRobotsTag) {
@@ -335,6 +337,7 @@ export async function fileUploadFromRequest(
   let userMetadata: Record<string, unknown> | undefined
   let mimeType: string
   let isTruncated: () => boolean
+  let fileContentLength: number | undefined
   let maxFileSize = 0
 
   // When is an empty folder we restrict it to 0 bytes
@@ -407,10 +410,10 @@ export async function fileUploadFromRequest(
       userMetadata = parseUserMetadata(customMd)
     }
 
-    const contentLength = getKnownRequestContentLength(request)
+    fileContentLength = getKnownRequestContentLength(request)
     isTruncated = () => {
       // @todo more secure to get this from the stream or from s3 in the next step
-      return typeof contentLength === 'number' && contentLength > maxFileSize
+      return typeof fileContentLength === 'number' && fileContentLength > maxFileSize
     }
   }
 
@@ -425,6 +428,7 @@ export async function fileUploadFromRequest(
     body,
     mimeType,
     cacheControl,
+    contentLength: fileContentLength,
     isTruncated,
     userMetadata,
     maxFileSize,

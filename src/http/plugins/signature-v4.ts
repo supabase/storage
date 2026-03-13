@@ -201,7 +201,7 @@ async function authorizeRequestSignV4(
 }
 
 async function extractSignature(req: AWSRequest) {
-  if (typeof req.headers.authorization === 'string') {
+  if (typeof req.headers.authorization === 'string' && req.headers.authorization !== '') {
     return SignatureV4.parseAuthorizationHeader(req.headers)
   }
 

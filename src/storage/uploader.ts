@@ -297,8 +297,11 @@ export function validateMimeType(mimeType: string, allowedMimeTypes: string[]) {
 }
 
 function getKnownRequestContentLength(request: FastifyRequest): number | undefined {
-  const contentLengthHeader =
-    request.headers['x-amz-decoded-content-length'] ?? request.headers['content-length']
+  // Only authenticated aws-chunked S3 requests get a verified decoded length.
+  const decodedContentLengthHeader = request.streamingSignatureV4
+    ? request.headers['x-amz-decoded-content-length']
+    : undefined
+  const contentLengthHeader = decodedContentLengthHeader ?? request.headers['content-length']
   const contentLength = Number(contentLengthHeader)
 
   if (!Number.isFinite(contentLength) || contentLength < 0) {

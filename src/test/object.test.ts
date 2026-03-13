@@ -946,6 +946,58 @@ describe('testing POST object via binary upload', () => {
     )
   })
 
+  test('return 400 when a binary upload spoofs x-amz-decoded-content-length', async () => {
+    mergeConfig({
+      uploadFileSizeLimit: 1,
+    })
+
+    const bucketId = `spoof-decoded-${randomUUID()}`
+    const superUser = await getServiceKeyUser(tenantId)
+    const db = await getPostgresConnection({
+      superUser,
+      user: superUser,
+      tenantId,
+      host: 'localhost',
+    })
+    const setupTx = await db.transaction()
+    await setupTx.table('buckets').insert({
+      id: bucketId,
+      name: bucketId,
+      public: true,
+      file_size_limit: null,
+      allowed_mime_types: null,
+      type: 'STANDARD',
+    })
+    await setupTx.commit()
+    await db.dispose()
+
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${await serviceKeyAsync}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+      'x-amz-decoded-content-length': '1',
+    }
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/${bucketId}/public/sadcat-spoofed-decoded-length.jpg`,
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.body).toBe(
+      JSON.stringify({
+        statusCode: '413',
+        error: 'Payload too large',
+        message: 'The object exceeded the maximum allowed size',
+      })
+    )
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalledTimes(1)
+  })
+
   test('return 400 when uploading to object with no file name', async () => {
     const path = './src/test/assets/sadcat.jpg'
     const { size } = fs.statSync(path)

@@ -34,6 +34,8 @@ A scalable, lightweight object storage service.
 cp .env.sample .env && cp .env.test.sample .env.test
 ```
 
+The script at `scripts/init.sh` can be used to help generate strong values for important keys such as `SERVER_ADMIN_API_KEYS`.
+
 **Your root directory should now have both `.env` and `.env.test` files.**
 
 - Then run the following:

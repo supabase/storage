@@ -59,7 +59,7 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
 
       try {
         const sql = `
-            INSERT INTO ${schema}.job (
+            INSERT INTO :schema:.job (
                 id,
                 name,
                 priority,
@@ -78,9 +78,9 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
                 policy,
                 state
             )
-            SELECT 
+            SELECT
                 id,
-                '${toQueue.name}' as name,
+                :to_queue_name as name,
                 priority,
                 data,
                 retry_limit,
@@ -94,23 +94,31 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
                 created_on,
                 keep_until,
                 output,
-                '${toQueue.policy}' as policy,
+                :to_queue_policy as policy,
                 'created' as state
-            FROM ${schema}.job
-            WHERE name = '${fromQueueName}'
+            FROM :schema:.job
+            WHERE name = :from_queue_name
                 AND state IN ('created', 'active', 'retry')
             ON CONFLICT DO NOTHING
         `
 
-        await tnx.raw(sql)
+        await tnx.raw(sql, {
+          schema: schema,
+          to_queue_name: toQueue.name,
+          to_queue_policy: toQueue.policy,
+          from_queue_name: fromQueueName
+        })
 
         if (job.data.deleteJobsFromOriginalQueue) {
           const deleteSql = `
-                DELETE FROM ${schema}.job
-                WHERE name = '${fromQueueName}'
+                DELETE FROM :schema:.job
+                WHERE name = :from_queue_name
                     AND state IN ('created', 'active', 'retry')
             `
-          await tnx.raw(deleteSql)
+          await tnx.raw(deleteSql, {
+            schema: schema,
+            from_queue_name: fromQueueName
+          })
         }
       } catch (error) {
         logSchema.error(logger, '[PgBoss] Error while copying jobs', {

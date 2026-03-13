@@ -995,7 +995,8 @@ describe('testing POST object via binary upload', () => {
         message: 'The object exceeded the maximum allowed size',
       })
     )
-    expect(S3Backend.prototype.uploadObject).toHaveBeenCalledTimes(1)
+    // Early size check in fileUploadFromRequest rejects before reaching the backend
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when uploading to object with no file name', async () => {

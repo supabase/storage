@@ -35,13 +35,14 @@ import {
 } from './../adapter'
 
 const {
+  storageS3UploadQueueSize,
   tracingFeatures,
   storageS3MaxSockets,
   tracingEnabled,
   storageS3DisableChecksum,
 } = getConfig()
 
-const MAX_PUT_OBJECT_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
+export const MAX_PUT_OBJECT_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
 
 export interface S3ClientOptions {
   endpoint?: string
@@ -152,13 +153,17 @@ export class S3Backend implements StorageBackendAdapter {
       throw ERRORS.Aborted('Upload was aborted')
     }
 
-    if (typeof contentLength !== 'number') {
-      // If content length is unknown, use streaming multipart upload which does not require buffering the entire stream in memory.
-      return this.bufferedMultipartUpload(bucketName, key, version, body, contentType, cacheControl, signal)
-    }
-
-    if (contentLength > MAX_PUT_OBJECT_SIZE) {
-      throw ERRORS.EntityTooLarge(undefined)
+    if (typeof contentLength !== 'number' || contentLength > MAX_PUT_OBJECT_SIZE) {
+      // Use multipart when the length is unknown or exceeds S3's 5GB single-request limit.
+      return this.bufferedMultipartUpload(
+        bucketName,
+        key,
+        version,
+        body,
+        contentType,
+        cacheControl,
+        signal
+      )
     }
 
     // Use PutObject directly when content-length is known and within S3's single-object limit (5GB).
@@ -182,8 +187,8 @@ export class S3Backend implements StorageBackendAdapter {
     body: Readable,
     contentType: string,
     cacheControl: string,
-    signal?: AbortSignal,
-    contentLength?: number
+    signal: AbortSignal | undefined,
+    contentLength: number
   ): Promise<ObjectMetadata> {
     const dataStream = tracingFeatures?.upload ? monitorStream(body) : body
 
@@ -206,9 +211,10 @@ export class S3Backend implements StorageBackendAdapter {
         cacheControl,
         eTag: data.ETag || '',
         mimetype: contentType,
-        contentLength: contentLength || 0,
+        contentLength,
+        // PutObject does not return LastModified; keep the fast path single-request and use the local completion time.
         lastModified: new Date(),
-        size: contentLength || 0,
+        size: contentLength,
         contentRange: undefined,
       }
     } catch (err) {
@@ -232,7 +238,7 @@ export class S3Backend implements StorageBackendAdapter {
 
     const upload = new Upload({
       client: this.client,
-      queueSize: 1,
+      queueSize: storageS3UploadQueueSize,
       params: {
         Bucket: bucketName,
         Key: withOptionalVersion(key, version),
@@ -260,10 +266,11 @@ export class S3Backend implements StorageBackendAdapter {
 
       upload.off('httpUploadProgress', progressHandler)
 
-      const metadata = hasUploadedBytes
+      const metadata: ObjectMetadata = hasUploadedBytes
         ? await this.headObject(bucketName, key, version)
         : {
             httpStatusCode: 200,
+            cacheControl,
             eTag: data.ETag || '',
             mimetype: contentType,
             lastModified: new Date(),

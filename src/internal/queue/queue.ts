@@ -347,7 +347,6 @@ export abstract class Queue {
         await Promise.allSettled(
           jobs.map(async (job) => {
             const lock = await semaphore.acquire()
-            const opts = event.getQueueOptions()
             try {
               queueOpts.onMessage?.(job as Job)
 

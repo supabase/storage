@@ -526,7 +526,7 @@ export function normalizeRawError(error: any) {
     return {
       raw: JSON.stringify(error),
     }
-  } catch (e) {
+  } catch {
     return {
       raw: 'Failed to stringify error',
     }

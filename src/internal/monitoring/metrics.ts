@@ -122,6 +122,34 @@ export const fileUploadedSuccess = registerMetric('upload_success', 'counter', (
 )
 
 // ============================================================================
+// Cache Metrics
+// ============================================================================
+export const cacheRequestsTotal = registerMetric('cache_requests_total', 'counter', () =>
+  meter.createCounter('cache_requests_total', {
+    description: 'Total cache lookups by cache and outcome',
+  })
+)
+
+export const cacheEvictionsTotal = registerMetric('cache_evictions_total', 'counter', () =>
+  meter.createCounter('cache_evictions_total', {
+    description: 'Total cache evictions',
+  })
+)
+
+export const cacheEntries = registerMetric('cache_entries', 'gauge', () =>
+  meter.createObservableGauge('cache_entries', {
+    description: 'Current number of entries stored in each cache',
+  })
+)
+
+export const cacheSizeBytes = registerMetric('cache_size_bytes', 'gauge', () =>
+  meter.createObservableGauge('cache_size_bytes', {
+    description: 'Current estimated size of each cache in bytes',
+    unit: 'bytes',
+  })
+)
+
+// ============================================================================
 // Database Metrics
 // ============================================================================
 export const dbQueryPerformance = registerMetric(

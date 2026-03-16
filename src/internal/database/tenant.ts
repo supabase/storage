@@ -1,3 +1,8 @@
+import {
+  createLruCache,
+  DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
+  TENANT_CONFIG_CACHE_NAME,
+} from '@internal/cache'
 import { TenantConnection } from '@internal/database/connection'
 import { lastLocalMigrationName } from '@internal/database/migrations/files'
 import { ERRORS } from '@internal/errors'
@@ -7,6 +12,7 @@ import {
   S3CredentialsManagerStoreKnex,
 } from '@storage/protocols/s3/credentials'
 import { JWTPayload } from 'jose'
+import objectSizeOf from 'object-sizeof'
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import { decrypt } from '../auth'
 import { JWKSManager, JWKSManagerStoreKnex } from '../auth/jwks'
@@ -37,6 +43,12 @@ interface TenantConfig {
   tracingMode?: string
   disableEvents?: string[]
 }
+
+type GetTenantConfigOptions = {
+  recordMetrics?: boolean
+}
+
+type LegacyJwksConfig = NonNullable<TenantConfig['jwks']>
 
 export interface Features {
   vectorBuckets: {
@@ -71,15 +83,25 @@ export enum TenantMigrationStatus {
 const {
   isMultitenant,
   dbServiceRole,
-  serviceKeyAsync,
-  jwtSecret,
   dbMigrationFreezeAt,
   icebergEnabled,
   vectorEnabled,
   multitenantDatabaseQueryTimeout,
 } = getConfig()
 
-const tenantConfigCache = new Map<string, TenantConfig>()
+export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
+export const TENANT_CONFIG_CACHE_MAX_SIZE_BYTES = 1024 * 1024 * 50 // 50 MiB
+export const TENANT_CONFIG_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
+
+const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CACHE_NAME, {
+  max: TENANT_CONFIG_CACHE_MAX_ITEMS,
+  maxSize: TENANT_CONFIG_CACHE_MAX_SIZE_BYTES,
+  ttl: TENANT_CONFIG_CACHE_TTL_MS,
+  sizeCalculation: (value) => objectSizeOf(value),
+  updateAgeOnGet: true,
+  allowStale: false,
+  purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
+})
 
 const tenantMutex = createMutexByKey<TenantConfig>()
 
@@ -89,19 +111,62 @@ export const s3CredentialsManager = new S3CredentialsManager(
   new S3CredentialsManagerStoreKnex(multitenantKnex)
 )
 
-const singleTenantServiceKey:
-  | {
-      jwt: Promise<string>
-      payload: { role: string } & JWTPayload
-    }
-  | undefined = !isMultitenant
-  ? {
-      jwt: serviceKeyAsync,
-      payload: {
-        role: dbServiceRole,
-      },
-    }
-  : undefined
+// Cache merged legacy JWKS objects by the active + legacy config object identities
+// so repeated reads reuse a stable merged object without mutating either input.
+const mergedTenantJwksCache = new WeakMap<JwksConfig, WeakMap<LegacyJwksConfig, JwksConfig>>()
+
+function getSingleTenantJwtConfig(): {
+  secret: string
+  jwks: JwksConfig
+} {
+  const { jwtSecret, jwtJWKS } = getConfig()
+  const jwks = (jwtJWKS || { keys: [] }) as JwksConfig
+
+  return {
+    secret: jwtSecret,
+    jwks,
+  }
+}
+
+async function getSingleTenantServiceKeyUser(): Promise<{
+  jwt: string
+  payload: { role: string } & JWTPayload
+}> {
+  const { serviceKeyAsync, dbServiceRole } = getConfig()
+
+  return {
+    jwt: await serviceKeyAsync,
+    payload: {
+      role: dbServiceRole,
+    },
+  }
+}
+
+function mergeTenantJwksWithLegacyKeys(
+  tenantJwks: JwksConfig,
+  legacyJwks: LegacyJwksConfig
+): JwksConfig {
+  let mergedByLegacyJwks = mergedTenantJwksCache.get(tenantJwks)
+
+  if (!mergedByLegacyJwks) {
+    mergedByLegacyJwks = new WeakMap<LegacyJwksConfig, JwksConfig>()
+    mergedTenantJwksCache.set(tenantJwks, mergedByLegacyJwks)
+  }
+
+  const cachedMergedJwks = mergedByLegacyJwks.get(legacyJwks)
+  if (cachedMergedJwks) {
+    return cachedMergedJwks
+  }
+
+  const mergedJwks: JwksConfig = {
+    ...tenantJwks,
+    keys: [...tenantJwks.keys, ...legacyJwks.keys],
+  }
+
+  mergedByLegacyJwks.set(legacyJwks, mergedJwks)
+
+  return mergedJwks
+}
 
 /**
  * Deletes tenants config from the in-memory cache
@@ -116,18 +181,25 @@ export function deleteTenantConfig(tenantId: string): void {
  * for quick subsequent access
  * @param tenantId
  */
-export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
+export async function getTenantConfig(
+  tenantId: string,
+  options?: GetTenantConfigOptions
+): Promise<TenantConfig> {
   if (!tenantId) {
     throw ERRORS.InvalidTenantId()
   }
 
-  if (tenantConfigCache.has(tenantId)) {
-    return tenantConfigCache.get(tenantId)!
+  const cachedConfig = tenantConfigCache.get(tenantId, {
+    recordMetrics: options?.recordMetrics,
+  })
+  if (cachedConfig !== undefined) {
+    return cachedConfig
   }
 
   return tenantMutex(tenantId, async () => {
-    if (tenantConfigCache.has(tenantId)) {
-      return tenantConfigCache.get(tenantId)!
+    const cachedConfig = tenantConfigCache.get(tenantId, { recordMetrics: false })
+    if (cachedConfig !== undefined) {
+      return cachedConfig
     }
 
     const tenant = await multitenantKnex
@@ -211,7 +283,7 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
     }
     tenantConfigCache.set(tenantId, config)
 
-    return tenantConfigCache.get(tenantId)!
+    return config
   })
 }
 
@@ -225,10 +297,7 @@ export async function getServiceKeyUser(tenantId: string) {
     }
   }
 
-  return {
-    jwt: await singleTenantServiceKey!.jwt,
-    payload: singleTenantServiceKey!.payload,
-  }
+  return getSingleTenantServiceKeyUser()
 }
 
 /**
@@ -295,22 +364,18 @@ export async function tenantHasFeature(
  * Get the jwt key from the tenant config
  * @param tenantId
  */
-export async function getJwtSecret(
-  tenantId: string
-): Promise<{ secret: string; urlSigningKey: string | JwksConfigKeyOCT; jwks: JwksConfig }> {
-  const { jwtJWKS } = getConfig()
-  let secret = jwtSecret
-  let jwks = jwtJWKS || { keys: [] }
+export async function getJwtSecret(tenantId: string): Promise<{
+  secret: string
+  urlSigningKey: string | JwksConfigKeyOCT
+  jwks: JwksConfig
+}> {
+  let { secret, jwks } = getSingleTenantJwtConfig()
 
   if (isMultitenant) {
     const config = await getTenantConfig(tenantId)
     const tenantJwks = await jwksManager.getJwksTenantConfig(tenantId)
-    if (config.jwks?.keys) {
-      // merge jwks from legacy jwks column if they exist
-      tenantJwks.keys = [...tenantJwks.keys, ...config.jwks.keys]
-    }
     secret = config.jwtSecret
-    jwks = tenantJwks
+    jwks = config.jwks?.keys ? mergeTenantJwksWithLegacyKeys(tenantJwks, config.jwks) : tenantJwks
   }
 
   const urlSigningKey = jwks.urlSigningKey || secret
@@ -351,7 +416,7 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
  * @param cacheKey
  */
 async function onTenantConfigChange(cacheKey: string) {
-  const oldConfig = tenantConfigCache.get(cacheKey)
+  const oldConfig = tenantConfigCache.get(cacheKey, { recordMetrics: false })
   tenantConfigCache.delete(cacheKey)
 
   if (!oldConfig) {
@@ -359,7 +424,7 @@ async function onTenantConfigChange(cacheKey: string) {
   }
 
   try {
-    const newConfig = await getTenantConfig(cacheKey)
+    const newConfig = await getTenantConfig(cacheKey, { recordMetrics: false })
 
     if (newConfig.databasePoolMode === 'single_use' && oldConfig.databasePoolMode === 'recycled') {
       // if the pool mode changed to single use, we need destroy the current pool

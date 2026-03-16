@@ -1,16 +1,21 @@
 'use strict'
-import { signJWT } from '@internal/auth'
+import { encrypt, signJWT } from '@internal/auth'
+import { TENANT_CONFIG_CACHE_NAME } from '@internal/cache'
 import { DBMigration } from '@internal/database/migrations'
 import {
+  deleteTenantConfig,
   getFeatures,
   getFileSizeLimit,
   getServiceKey,
   getTenantConfig,
 } from '@internal/database/tenant'
+import { cacheRequestsTotal } from '@internal/monitoring/metrics'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { multitenantKnex } from '../internal/database/multitenant-db'
 import { adminApp } from './common'
+import { assertLogicalLookupMetrics } from './utils/cache-metrics'
+import { mockCreateLruCache } from './utils/cache-mock'
 
 dotenv.config({ path: '.env.test' })
 
@@ -103,6 +108,21 @@ const payload2 = {
     },
   },
   disableEvents: null,
+}
+
+type TenantModule = typeof import('../internal/database/tenant')
+type MultitenantDbModule = typeof import('../internal/database/multitenant-db')
+
+async function loadTenantModule(
+  maxItems: number
+): Promise<{ tenantModule: TenantModule; multitenantDbModule: MultitenantDbModule }> {
+  jest.resetModules()
+  mockCreateLruCache({ max: maxItems })
+
+  return {
+    tenantModule: await import('../internal/database/tenant'),
+    multitenantDbModule: await import('../internal/database/multitenant-db'),
+  }
 }
 
 beforeAll(async () => {
@@ -494,6 +514,128 @@ describe('Tenant configs', () => {
       })
     } finally {
       knexTableSpy.mockRestore()
+    }
+  })
+
+  test('Get tenant config evicts cold tenants from cache', async () => {
+    const tenantIds = ['cache-eviction-1', 'cache-eviction-2', 'cache-eviction-3']
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://tenant'),
+      database_pool_mode: null,
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: null,
+      max_connections: null,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+
+    const { tenantModule, multitenantDbModule } = await loadTenantModule(2)
+    const knexTableSpy = jest.spyOn(multitenantDbModule.multitenantKnex, 'table')
+    const queryBuilder = {
+      first: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      abortOnSignal: jest.fn().mockResolvedValue(encryptedTenant),
+    }
+
+    try {
+      knexTableSpy.mockReturnValue(queryBuilder as any)
+
+      for (const tenantId of tenantIds) {
+        await tenantModule.getTenantConfig(tenantId)
+      }
+
+      expect(knexTableSpy).toHaveBeenCalledTimes(tenantIds.length)
+
+      await tenantModule.getTenantConfig(tenantIds[0])
+
+      expect(knexTableSpy).toHaveBeenCalledTimes(tenantIds.length + 1)
+    } finally {
+      tenantIds.forEach((tenantId) => {
+        tenantModule.deleteTenantConfig(tenantId)
+      })
+      jest.dontMock('@internal/cache')
+      jest.resetModules()
+      knexTableSpy.mockRestore()
+    }
+  })
+
+  test('Get tenant config records one cache request per logical lookup', async () => {
+    const knexTableSpy = jest.spyOn(multitenantKnex, 'table')
+    const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+    const tenantId = 'cache-metrics-lookup'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://tenant'),
+      database_pool_mode: null,
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: null,
+      max_connections: null,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+
+    const tenantQuery = Promise.withResolvers<typeof encryptedTenant>()
+    const queryBuilder = {
+      first: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      abortOnSignal: jest.fn().mockImplementation(() => tenantQuery.promise),
+    }
+
+    try {
+      knexTableSpy.mockReturnValue(queryBuilder as any)
+      await assertLogicalLookupMetrics({
+        addSpy,
+        backendCallSpy: queryBuilder.abortOnSignal,
+        cacheName: TENANT_CONFIG_CACHE_NAME,
+        startLookups: () => [
+          getTenantConfig(tenantId),
+          getTenantConfig(tenantId),
+          getTenantConfig(tenantId),
+        ],
+        resolveBackend: () => tenantQuery.resolve(encryptedTenant),
+        assertCachedHit: async () => {
+          await expect(getTenantConfig(tenantId)).resolves.toMatchObject({
+            databaseUrl: 'postgres://tenant',
+          })
+        },
+      })
+    } finally {
+      deleteTenantConfig(tenantId)
+      knexTableSpy.mockRestore()
+      addSpy.mockRestore()
     }
   })
 })

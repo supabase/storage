@@ -7,16 +7,25 @@ mergeConfig({
   isMultitenant: true,
 })
 
-import { signJWT } from '@internal/auth'
+import { encrypt, signJWT } from '@internal/auth'
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
 import { JWKSManagerStoreKnex } from '@internal/auth/jwks/store-knex'
-import { getJwtSecret, jwksManager, listenForTenantUpdate } from '@internal/database'
+import { TENANT_JWKS_CACHE_NAME } from '@internal/cache'
+import {
+  deleteTenantConfig,
+  getJwtSecret,
+  jwksManager,
+  listenForTenantUpdate,
+} from '@internal/database'
+import { cacheRequestsTotal } from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { multitenantKnex } from '../internal/database/multitenant-db'
 import { adminApp, mockQueue } from './common'
 import { createMockKnexReturning } from './mocks/knex-mock'
+import { assertLogicalLookupMetrics } from './utils/cache-metrics'
+import { mockCreateLruCache } from './utils/cache-mock'
 
 dotenv.config({ path: '.env.test' })
 
@@ -50,10 +59,42 @@ const testJwks = {
 
 const pubSub = new PostgresPubSub(multitenantDatabaseUrl!)
 
+type DatabaseModule = typeof import('../internal/database')
+type JwksModule = typeof import('../internal/auth/jwks')
+
+async function loadJwksModules(
+  maxItems: number
+): Promise<{ databaseModule: DatabaseModule; jwksModule: JwksModule }> {
+  jest.resetModules()
+
+  const configModule = await import('../config')
+  configModule.getConfig({ reload: true })
+  configModule.mergeConfig({
+    pgQueueEnable: true,
+    isMultitenant: true,
+  })
+
+  mockCreateLruCache({ max: maxItems })
+
+  return {
+    databaseModule: await import('../internal/database'),
+    jwksModule: await import('../internal/auth/jwks'),
+  }
+}
+
 // returns a promise that resolves the next time the jwk cache is invalidated
-function createJwkConfigChangeAwaiter(): Promise<string> {
+function createJwkConfigChangeAwaiter(expectedCacheKey = tenantId): Promise<string> {
   return new Promise<string>((resolve) => {
-    pubSub.subscriber.notifications.once('tenants_jwks_update', resolve)
+    const onNotification = (cacheKey: string) => {
+      if (cacheKey !== expectedCacheKey) {
+        return
+      }
+
+      pubSub.subscriber.notifications.removeListener('tenants_jwks_update', onNotification)
+      resolve(cacheKey)
+    }
+
+    pubSub.subscriber.notifications.on('tenants_jwks_update', onNotification)
   })
 }
 
@@ -98,6 +139,25 @@ afterAll(async () => {
 })
 
 describe('Tenant jwks configs', () => {
+  test('JWK change awaiter ignores unrelated tenant notifications', async () => {
+    const expectedTenantId = 'expected-jwks-tenant'
+    const awaiter = createJwkConfigChangeAwaiter(expectedTenantId)
+    let resolved = false
+
+    void awaiter.then(() => {
+      resolved = true
+    })
+
+    pubSub.subscriber.notifications.emit('tenants_jwks_update', 'other-jwks-tenant')
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(resolved).toBe(false)
+
+    pubSub.subscriber.notifications.emit('tenants_jwks_update', expectedTenantId)
+
+    await expect(awaiter).resolves.toBe(expectedTenantId)
+  })
+
   test('Add jwk without jwk in payload', async () => {
     const response = await adminApp.inject({
       method: 'POST',
@@ -174,6 +234,8 @@ describe('Tenant jwks configs', () => {
     })
 
     test(`Add ${type} jwk via tenant patch (legacy)`, async () => {
+      const secretBeforePatch = await getJwtSecret(tenantId)
+
       const patchResponse = await adminApp.inject({
         method: 'PATCH',
         url: `/tenants/${tenantId}`,
@@ -186,9 +248,17 @@ describe('Tenant jwks configs', () => {
       })
       expect(patchResponse.statusCode).toBe(204)
 
-      const { jwks } = await getJwtSecret(tenantId)
+      deleteTenantConfig(tenantId)
+
+      const secretAfterPatch = await getJwtSecret(tenantId)
+      const secretAfterSecondRead = await getJwtSecret(tenantId)
+      const { jwks } = secretAfterPatch
+
       expect(jwks.keys.length).toBe(2)
       expect(jwks.keys[1]).toEqual(jwk)
+      expect(secretAfterPatch.secret).toBe(secretBeforePatch.secret)
+      expect(secretAfterSecondRead.jwks).toBe(secretAfterPatch.jwks)
+      expect(secretAfterSecondRead.jwks.keys).toEqual(jwks.keys)
     })
 
     test(`Add ${type} jwk with missing data`, async () => {
@@ -290,6 +360,78 @@ describe('Tenant jwks configs', () => {
       results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
     } finally {
       listActiveSpy.mockRestore()
+    }
+  })
+
+  test('Config evicts cold tenants from cache', async () => {
+    const tenantIds = ['jwks-cache-eviction-1', 'jwks-cache-eviction-2', 'jwks-cache-eviction-3']
+    const encryptedJwk = {
+      id: 'cache-eviction',
+      kind: 'storage-url-signing-key',
+      content: encrypt(JSON.stringify({ kty: 'oct', k: 'bounded-cache-test-key' })),
+    }
+
+    const { databaseModule, jwksModule } = await loadJwksModules(2)
+    const listActiveSpy = jest.spyOn(databaseModule.jwksManager['storage'], 'listActive')
+
+    try {
+      listActiveSpy.mockImplementation(async () => {
+        return [encryptedJwk]
+      })
+
+      for (const tenantId of tenantIds) {
+        await databaseModule.jwksManager.getJwksTenantConfig(tenantId)
+      }
+
+      expect(listActiveSpy).toHaveBeenCalledTimes(tenantIds.length)
+
+      await databaseModule.jwksManager.getJwksTenantConfig(tenantIds[0])
+
+      expect(listActiveSpy).toHaveBeenCalledTimes(tenantIds.length + 1)
+    } finally {
+      tenantIds.forEach((tenantId) => {
+        jwksModule.deleteTenantJwksConfig(tenantId)
+      })
+      jest.dontMock('@internal/cache')
+      jest.resetModules()
+      listActiveSpy.mockRestore()
+    }
+  })
+
+  test('Config records one cache request per logical lookup', async () => {
+    const listActiveSpy = jest.spyOn(jwksManager['storage'], 'listActive')
+    const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+    const lookupTenantId = 'jwks-cache-metrics-lookup'
+    const encryptedJwk = {
+      id: 'cache-metrics',
+      kind: 'storage-url-signing-key',
+      content: encrypt(JSON.stringify({ kty: 'oct', k: 'metric-cache-test-key' })),
+    }
+
+    const listActiveRequest = Promise.withResolvers<Array<typeof encryptedJwk>>()
+
+    try {
+      listActiveSpy.mockImplementation(() => listActiveRequest.promise)
+
+      await assertLogicalLookupMetrics({
+        addSpy,
+        backendCallSpy: listActiveSpy,
+        cacheName: TENANT_JWKS_CACHE_NAME,
+        startLookups: () => [
+          jwksManager.getJwksTenantConfig(lookupTenantId),
+          jwksManager.getJwksTenantConfig(lookupTenantId),
+          jwksManager.getJwksTenantConfig(lookupTenantId),
+        ],
+        resolveBackend: () => listActiveRequest.resolve([encryptedJwk]),
+        assertCachedHit: async () => {
+          await expect(jwksManager.getJwksTenantConfig(lookupTenantId)).resolves.toMatchObject({
+            keys: [expect.objectContaining({ kid: 'storage-url-signing-key_cache-metrics' })],
+          })
+        },
+      })
+    } finally {
+      listActiveSpy.mockRestore()
+      addSpy.mockRestore()
     }
   })
 

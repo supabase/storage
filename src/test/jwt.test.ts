@@ -1,10 +1,17 @@
+import { JWT_CACHE_NAME } from '@internal/cache'
+import { cacheRequestsTotal } from '@internal/monitoring/metrics'
 import * as crypto from 'crypto'
 import { SignJWT } from 'jose'
 import { JwksConfigKey } from '../config'
-import { generateHS512JWK, signJWT, verifyJWT } from '../internal/auth'
+import { generateHS512JWK, signJWT, verifyJWT, verifyJWTWithCache } from '../internal/auth'
 
 describe('JWT', () => {
   describe('verifyJWT with JWKS', () => {
+    afterEach(() => {
+      jest.restoreAllMocks()
+      jest.useRealTimers()
+    })
+
     const keys: {
       type?: string
       options?: object
@@ -145,6 +152,140 @@ describe('JWT', () => {
       await expect(verifyJWT('this is not a jwt', 'and this is not a secret')).rejects.toThrow(
         'Invalid Compact JWS'
       )
+    })
+
+    test('it should reuse cached JWT verifications for the same inputs until the token expires', async () => {
+      jest.useFakeTimers()
+      jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+
+      const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+      const secret = crypto.randomBytes(32).toString('base64url')
+      const token = await signJWT({ sub: 'cached-user' }, secret, 2)
+
+      addSpy.mockClear()
+
+      await expect(verifyJWTWithCache(token, secret)).resolves.toMatchObject({
+        sub: 'cached-user',
+      })
+      await expect(verifyJWTWithCache(token, secret)).resolves.toMatchObject({
+        sub: 'cached-user',
+      })
+
+      expect(addSpy.mock.calls).toEqual([
+        [1, { cache: JWT_CACHE_NAME, outcome: 'miss' }],
+        [1, { cache: JWT_CACHE_NAME, outcome: 'hit' }],
+      ])
+
+      jest.advanceTimersByTime(2200)
+
+      await expect(verifyJWTWithCache(token, secret)).rejects.toThrow()
+    })
+
+    test('it should not reuse cached JWT verifications when the secret changes', async () => {
+      const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+      const secret = crypto.randomBytes(32).toString('base64url')
+      const token = await signJWT({ sub: 'cached-user' }, secret, 2)
+
+      addSpy.mockClear()
+
+      await expect(verifyJWTWithCache(token, secret)).resolves.toMatchObject({
+        sub: 'cached-user',
+      })
+      await expect(verifyJWTWithCache(token, 'definitely-the-wrong-secret')).rejects.toThrow()
+
+      expect(addSpy.mock.calls).toEqual([
+        [1, { cache: JWT_CACHE_NAME, outcome: 'miss' }],
+        [1, { cache: JWT_CACHE_NAME, outcome: 'miss' }],
+      ])
+    })
+
+    test('it should not reuse cached JWT verifications when the JWKS changes', async () => {
+      const signingKey = await generateHS512JWK()
+      signingKey.kid = 'cache-signing-key'
+      const wrongKey = await generateHS512JWK()
+      wrongKey.kid = 'wrong-cache-signing-key'
+      const token = await signJWT({ sub: 'cached-user' }, signingKey, 2)
+
+      await expect(
+        verifyJWTWithCache(token, 'invalid-secret', { keys: [signingKey] })
+      ).resolves.toMatchObject({
+        sub: 'cached-user',
+      })
+      await expect(
+        verifyJWTWithCache(token, 'invalid-secret', { keys: [wrongKey] })
+      ).rejects.toThrow()
+    })
+
+    test('it should skip caching when the token expires before the cache ttl is computed', async () => {
+      jest.useFakeTimers()
+
+      const issuedAt = new Date('2026-01-01T00:00:00.000Z')
+      const issuedAtMs = issuedAt.getTime()
+      const tokenExp = issuedAtMs / 1000 + 2
+      const secret = 'ttl-edge-secret'
+      const token = 'header.payload.signature'
+
+      jest.setSystemTime(issuedAt)
+      jest.resetModules()
+
+      const actualJose = jest.requireActual('jose') as typeof import('jose')
+      const jwtVerifyMock = jest
+        .fn()
+        .mockImplementationOnce(async () => {
+          jest.setSystemTime(issuedAtMs + 2000)
+          return {
+            payload: {
+              sub: 'cached-user',
+              exp: tokenExp,
+            },
+          }
+        })
+        .mockResolvedValue({
+          payload: {
+            sub: 'cached-user',
+            exp: tokenExp,
+          },
+        })
+
+      jest.doMock('jose', () => ({
+        ...actualJose,
+        jwtVerify: jwtVerifyMock,
+      }))
+
+      try {
+        const { cacheRequestsTotal: isolatedCacheRequestsTotal } = await import(
+          '@internal/monitoring/metrics'
+        )
+        const { verifyJWTWithCache: isolatedVerifyJWTWithCache } = await import(
+          '../internal/auth/jwt'
+        )
+        const addSpy = jest.spyOn(isolatedCacheRequestsTotal, 'add')
+
+        addSpy.mockClear()
+
+        await expect(isolatedVerifyJWTWithCache(token, secret)).resolves.toMatchObject({
+          sub: 'cached-user',
+        })
+
+        jest.setSystemTime(issuedAtMs + 1000)
+
+        await expect(isolatedVerifyJWTWithCache(token, secret)).resolves.toMatchObject({
+          sub: 'cached-user',
+        })
+        await expect(isolatedVerifyJWTWithCache(token, secret)).resolves.toMatchObject({
+          sub: 'cached-user',
+        })
+
+        expect(jwtVerifyMock).toHaveBeenCalledTimes(2)
+        expect(addSpy.mock.calls).toEqual([
+          [1, { cache: JWT_CACHE_NAME, outcome: 'miss' }],
+          [1, { cache: JWT_CACHE_NAME, outcome: 'miss' }],
+          [1, { cache: JWT_CACHE_NAME, outcome: 'hit' }],
+        ])
+      } finally {
+        jest.dontMock('jose')
+        jest.resetModules()
+      }
     })
   })
 })

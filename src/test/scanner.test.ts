@@ -133,17 +133,14 @@ describe('ObjectScanner', () => {
     const s3ObjectAll = []
     let nextToken = ''
 
-    while (true) {
+    do {
       const s3Objects = await storage.adapter.list(storageS3Bucket, {
         prefix: `${tenantId}/${bucket.id}`,
         nextToken,
       })
       s3ObjectAll.push(...s3Objects.keys)
-      if (!s3Objects.nextToken) {
-        break
-      }
-      nextToken = s3Objects.nextToken
-    }
+      nextToken = s3Objects.nextToken ?? ''
+    } while (nextToken)
 
     // Check s3 files are deleted
     expect(s3ObjectAll).toHaveLength(maxUploads - numToDelete)

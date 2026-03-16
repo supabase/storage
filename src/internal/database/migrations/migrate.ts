@@ -99,11 +99,7 @@ export async function tenantHasMigrations(tenantId: string, migration: keyof typ
 export async function* listTenantsToMigrate(signal: AbortSignal) {
   let lastCursor = 0
 
-  while (true) {
-    if (signal.aborted) {
-      break
-    }
-
+  while (!signal.aborted) {
     const migrationVersion = await lastLocalMigrationName()
 
     const data = await multitenantKnex
@@ -140,11 +136,7 @@ export async function* listTenantsToResetMigrations(
 ) {
   let lastCursor = 0
 
-  while (true) {
-    if (signal.aborted) {
-      break
-    }
-
+  while (!signal.aborted) {
     const afterMigrations = Object.keys(DBMigration).filter((migrationName) => {
       return DBMigration[migrationName as keyof typeof DBMigration] > DBMigration[migration]
     })
@@ -675,7 +667,7 @@ function runMigrations({
       const icebergDefaultShard = icebergShards.length > 0 ? icebergShards[0] : ''
 
       if (migrationsToRun.length > 0) {
-        await client.query(SQL`SELECT 
+        await client.query(SQL`SELECT
           set_config('storage.install_roles', ${dbInstallRoles}, false),
           set_config('storage.multitenant', ${isMultitenant ? 'true' : 'false'}, false),
           set_config('storage.anon_role', ${dbAnonRole}, false),

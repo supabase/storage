@@ -31,7 +31,7 @@
       "recommended": false,
       "correctness": {
         "noUnusedImports": "error",
-        "noUnusedVariables": "warn"
+        "noUnusedVariables": "error"
       },
       "style": {
         "noCommonJs": "warn",

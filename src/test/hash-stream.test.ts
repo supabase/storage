@@ -204,7 +204,6 @@ describe('HashSpillWritable', () => {
 
     // Write into sink, then read out to a slow consumer to ensure stream semantics hold
     await pipeline(Readable.from(pieces), sink)
-    const outPieces: Buffer[] = []
     await pipeline(
       sink.toReadable(),
       new SlowWritable(2).on('pipe', function () {})
@@ -412,7 +411,6 @@ describe('HashSpillWritable', () => {
     const N = 10
 
     // Mock Date.now to return same timestamp for all instances
-    const originalDateNow = Date.now
     const fixedTimestamp = 1234567890123
     jest.spyOn(Date, 'now').mockReturnValue(fixedTimestamp)
 

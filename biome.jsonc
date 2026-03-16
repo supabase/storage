@@ -50,7 +50,7 @@
       },
       "nursery": {
         "noFloatingPromises": "error",
-        "noUnnecessaryConditions": "warn"
+        "noUnnecessaryConditions": "error"
       }
     }
   },

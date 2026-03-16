@@ -154,11 +154,7 @@ export class ObjectScanner {
   ) {
     let nextToken: string | undefined = undefined
 
-    while (true) {
-      if (options.signal.aborted) {
-        break
-      }
-
+    for (; !options.signal.aborted; ) {
       const storageObjects = await this.storage.db.listObjects(
         bucket,
         'id,name,version,metadata',
@@ -195,10 +191,7 @@ export class ObjectScanner {
   }
 
   protected async *listAllCacheS3Keys(tableName: string, nextItem: string, signal: AbortSignal) {
-    while (true) {
-      if (signal.aborted) {
-        break
-      }
+    for (; !signal.aborted; ) {
       const query = this.storage.db.connection.pool
         .acquire()
         .table(tableName)
@@ -299,11 +292,7 @@ export class ObjectScanner {
   ) {
     let nextToken: string | undefined = undefined
 
-    while (true) {
-      if (options.signal.aborted) {
-        break
-      }
-
+    for (; !options.signal.aborted; ) {
       const result = await this.storage.backend.list(storageS3Bucket, {
         prefix: prefix + '/',
         nextToken,

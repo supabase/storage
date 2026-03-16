@@ -1374,18 +1374,16 @@ function toAwsMeatadataHeaders(records: Record<string, unknown>) {
   const metadataHeaders: Record<string, unknown> = {}
   let missingCount = 0
 
-  if (records) {
-    Object.keys(records).forEach((key) => {
-      const value = records[key]
-      if (value && typeof value === 'string' && isUSASCII(value) && isValidHeader(key, value)) {
-        metadataHeaders['x-amz-meta-' + key.toLowerCase()] = value
-      } else {
-        missingCount++
-      }
-    })
-  }
+  Object.keys(records).forEach((key) => {
+    const value = records[key]
+    if (value && typeof value === 'string' && isUSASCII(value) && isValidHeader(key, value)) {
+      metadataHeaders['x-amz-meta-' + key.toLowerCase()] = value
+    } else {
+      missingCount++
+    }
+  })
 
-  if (missingCount) {
+  if (missingCount > 0) {
     metadataHeaders['x-amz-missing-meta'] = missingCount
   }
 

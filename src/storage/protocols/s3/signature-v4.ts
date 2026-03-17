@@ -15,6 +15,7 @@ interface SignatureV4Options {
   allowForwardedHeader?: boolean
   allowBodyHashing?: boolean
   nonCanonicalForwardedHost?: string
+  publicUrl?: URL
   credentials: Omit<Credentials, 'shortDate'> & { secretKey: string }
 }
 
@@ -99,6 +100,7 @@ export class SignatureV4 {
   allowForwardedHeader?: boolean
   allowBodyHashing?: boolean
   nonCanonicalForwardedHost?: string
+  publicUrl?: URL
 
   constructor(options: SignatureV4Options) {
     this.serverCredentials = options.credentials
@@ -106,6 +108,7 @@ export class SignatureV4 {
     this.allowForwardedHeader = options.allowForwardedHeader
     this.allowBodyHashing = options.allowBodyHashing
     this.nonCanonicalForwardedHost = options.nonCanonicalForwardedHost
+    this.publicUrl = options.publicUrl
   }
 
   static parseAuthorizationHeader(headers: Record<string, any>) {
@@ -493,6 +496,12 @@ export class SignatureV4 {
   }
 
   protected getHostHeader(request: SignatureRequest) {
+    // When a public URL is configured, use its host for signature verification.
+    // This avoids proxy header issues (e.g., Kong overwriting X-Forwarded-Port).
+    if (this.publicUrl) {
+      return `host:${this.publicUrl.host}`
+    }
+
     if (this.allowForwardedHeader) {
       const forwarded = this.getHeader(request, 'forwarded')
       if (forwarded) {

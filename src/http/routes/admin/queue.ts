@@ -5,6 +5,11 @@ import { getConfig } from '../../../config'
 import apiKey from '../../plugins/apikey'
 
 const { pgQueueEnable } = getConfig()
+// Empty ref/host mark system-scoped events and intentionally skip per-tenant shouldSend lookups.
+const systemTenant = {
+  ref: '',
+  host: '',
+} as const
 
 const moveJobsSchema = {
   body: {
@@ -37,7 +42,9 @@ export default async function routes(fastify: FastifyInstance) {
       return reply.status(400).send({ message: 'Queue is not enabled' })
     }
 
-    await UpgradePgBossV10.send({})
+    await UpgradePgBossV10.send({
+      tenant: systemTenant,
+    })
 
     return reply.send({ message: 'Migration scheduled' })
   })
@@ -58,6 +65,7 @@ export default async function routes(fastify: FastifyInstance) {
         fromQueue,
         toQueue,
         deleteJobsFromOriginalQueue,
+        tenant: systemTenant,
       })
 
       return reply.send({ message: 'Move jobs scheduled' })

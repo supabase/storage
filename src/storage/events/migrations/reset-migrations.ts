@@ -59,6 +59,7 @@ export class ResetMigrationsOnTenant extends BaseEvent<ResetMigrationsPayload> {
         tenantId,
         tenant: {
           ref: tenantId,
+          host: job.data.tenant.host,
         },
         singletonKey: tenantId,
       })

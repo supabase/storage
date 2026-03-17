@@ -126,9 +126,11 @@ export class ObjectStorage {
    */
   async deleteObject(objectName: string) {
     const obj = await this.db.withTransaction(async (db) => {
-      const obj = await db.asSuperUser().findObject(this.bucketId, objectName, 'id,version', {
-        forUpdate: true,
-      })
+      const obj = await db
+        .asSuperUser()
+        .findObject(this.bucketId, objectName, 'id,version,metadata', {
+          forUpdate: true,
+        })
 
       const deleted = await db.deleteObject(this.bucketId, objectName)
 
@@ -393,7 +395,9 @@ export class ObjectStorage {
         if (existingDestObject) {
           await ObjectAdminDelete.send({
             name: existingDestObject.name,
-            bucketId: existingDestObject.bucket_id,
+            // The generated Obj type leaves selected columns optional; this lookup is scoped
+            // to destinationBucket, so fall back only when the narrowed field is missing.
+            bucketId: existingDestObject.bucket_id ?? destinationBucket,
             tenant: this.db.tenant(),
             version: existingDestObject.version,
             reqId: this.db.reqId,

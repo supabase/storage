@@ -550,15 +550,16 @@ export const ERRORS = {
   },
 }
 
-export function isStorageError(errorType: ErrorCode, error: any): error is StorageBackendError {
+export function isStorageError(errorType: ErrorCode, error: unknown): error is StorageBackendError {
   return error instanceof StorageBackendError && error.code === errorType
 }
 
 function hasStatusCode(error: Error): error is Error & { statusCode: number } {
-  return 'statusCode' in error && typeof (error as any).statusCode === 'number'
+  const statusCode = (error as Error & { statusCode?: unknown }).statusCode
+  return typeof statusCode === 'number'
 }
 
-export function normalizeRawError(error: any) {
+export function normalizeRawError(error: unknown) {
   if (error instanceof Error) {
     let statusCode = 0
     if (error instanceof StorageBackendError && error.httpStatusCode) {

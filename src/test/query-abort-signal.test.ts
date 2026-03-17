@@ -107,11 +107,13 @@ describe('Query Abort Signal', () => {
           await queryPromise
           fail('Expected query to be aborted')
         } catch (error: unknown) {
-          expect(error).toMatchObject({
-            name: 'AbortError',
-            code: 'ABORT_ERR',
-            message: 'Query was aborted',
-          })
+          expect(error).toBeInstanceOf(Error)
+          if (!(error instanceof Error)) {
+            throw error
+          }
+          expect(error.name).toBe('AbortError')
+          expect('code' in error ? error.code : undefined).toBe('ABORT_ERR')
+          expect(error.message).toBe('Query was aborted')
         } finally {
           clearTimeout(abortTimeout)
         }

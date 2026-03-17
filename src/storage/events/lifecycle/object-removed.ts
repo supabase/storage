@@ -1,12 +1,12 @@
 import { BasePayload } from '@internal/queue'
-import { ObjectMetadata } from '@storage/backend'
+import type { Obj } from '../../schemas'
 import { BaseEvent } from '../base-event'
 
 export interface ObjectRemovedEvent extends BasePayload {
   name: string
   bucketId: string
-  version: string
-  metadata?: ObjectMetadata
+  version: Obj['version'] | null
+  metadata: Obj['metadata']
 }
 
 export class ObjectRemoved extends BaseEvent<ObjectRemovedEvent> {

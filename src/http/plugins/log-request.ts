@@ -1,10 +1,16 @@
 import { logger, logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
+import { RouteGenericInterface } from 'fastify'
 import { FastifyReply } from 'fastify/types/reply'
 import { FastifyRequest } from 'fastify/types/request'
 import fastifyPlugin from 'fastify-plugin'
 
 interface RequestLoggerOptions {
   excludeUrls?: string[]
+}
+
+type RawRequestMetadata = FastifyRequest['raw'] & {
+  executionError?: Error
+  resources?: string[]
 }
 
 declare module 'fastify' {
@@ -18,8 +24,8 @@ declare module 'fastify' {
 
   interface FastifyContextConfig {
     operation?: { type: string }
-    resources?: (req: FastifyRequest<any>) => string[]
-    logMetadata?: (req: FastifyRequest<any>) => Record<string, unknown>
+    resources?(req: FastifyRequest<RouteGenericInterface>): string[]
+    logMetadata?(req: FastifyRequest<RouteGenericInterface>): Record<string, unknown>
   }
 }
 
@@ -64,30 +70,11 @@ export const logRequest = (options: RequestLoggerOptions) =>
         }
 
         if (resources === undefined) {
-          resources = (req.raw as any).resources
+          resources = getRawRequest(req).resources
         }
 
         if (resources === undefined) {
-          const params = req.params as Record<string, unknown> | undefined
-          let resourceFromParams = ''
-
-          if (params) {
-            let first = true
-            for (const key in params) {
-              if (!Object.prototype.hasOwnProperty.call(params, key)) {
-                continue
-              }
-
-              if (!first) {
-                resourceFromParams += '/'
-              }
-
-              const value = params[key]
-              resourceFromParams += value == null ? '' : String(value)
-              first = false
-            }
-          }
-
+          const resourceFromParams = getResourceFromParams(req.params)
           resources = resourceFromParams ? [resourceFromParams] : []
         }
 
@@ -150,7 +137,7 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
   const rId = req.id
   const cIP = req.ip
   const statusCode = options.statusCode
-  const error = (req.raw as any).executionError || req.executionError
+  const error = getRawRequest(req).executionError || req.executionError
   const tenantId = req.tenantId
 
   let reqMetadata: Record<string, unknown> = {}
@@ -196,4 +183,33 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     operation: req.operation?.type ?? req.routeOptions.config.operation?.type,
     serverTimes: req.serverTimings,
   })
+}
+
+function getRawRequest(req: FastifyRequest): RawRequestMetadata {
+  return req.raw as RawRequestMetadata
+}
+
+function getResourceFromParams(params: unknown): string {
+  if (!params || typeof params !== 'object') {
+    return ''
+  }
+
+  let resource = ''
+  let first = true
+
+  for (const key in params) {
+    if (!Object.prototype.hasOwnProperty.call(params, key)) {
+      continue
+    }
+
+    if (!first) {
+      resource += '/'
+    }
+
+    const value = (params as Record<string, unknown>)[key]
+    resource += value == null ? '' : String(value)
+    first = false
+  }
+
+  return resource
 }

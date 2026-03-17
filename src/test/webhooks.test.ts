@@ -87,6 +87,7 @@ describe('Webhooks', () => {
                 size: 3746,
               }),
               name: `public/${fileName}.png`,
+              uploadType: 'standard',
               tenant: expect.objectContaining({
                 ref: 'bjhaohmqunupljrqypxz',
               }),
@@ -130,6 +131,15 @@ describe('Webhooks', () => {
             applyTime: expect.any(Number),
             payload: expect.objectContaining({
               bucketId: 'bucket6',
+              metadata: expect.objectContaining({
+                cacheControl: 'no-cache',
+                contentLength: 3746,
+                eTag: 'abc',
+                lastModified: expect.any(String),
+                httpStatusCode: 200,
+                mimetype: 'image/png',
+                size: 3746,
+              }),
               name: obj.name,
               tenant: {
                 host: undefined,
@@ -183,6 +193,15 @@ describe('Webhooks', () => {
             applyTime: expect.any(Number),
             payload: expect.objectContaining({
               bucketId: 'bucket6',
+              metadata: expect.objectContaining({
+                cacheControl: 'no-cache',
+                contentLength: 3746,
+                eTag: 'abc',
+                lastModified: expect.any(String),
+                httpStatusCode: 200,
+                mimetype: 'image/png',
+                size: 3746,
+              }),
               name: obj.name,
               version: expect.any(String),
               tenant: {

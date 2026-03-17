@@ -7,6 +7,12 @@ afterEach(() => {
   jest.restoreAllMocks()
 })
 
+type S3HandlerStorage = ConstructorParameters<typeof S3ProtocolHandler>[0]
+
+function createHandler() {
+  return new S3ProtocolHandler({} as unknown as S3HandlerStorage, 'tenant-id')
+}
+
 describe('S3 router query matching', () => {
   it('parses key-only query params with an undefined value', () => {
     const router = new Router()
@@ -112,7 +118,7 @@ describe('S3 router query matching', () => {
 
 describe('S3ProtocolHandler.parseMetadataHeaders', () => {
   it('returns only x-amz-meta headers without the prefix', () => {
-    const handler = new S3ProtocolHandler({} as any, 'tenant-id')
+    const handler = createHandler()
 
     expect(
       handler.parseMetadataHeaders({
@@ -127,7 +133,7 @@ describe('S3ProtocolHandler.parseMetadataHeaders', () => {
   })
 
   it('returns undefined when there are no metadata headers', () => {
-    const handler = new S3ProtocolHandler({} as any, 'tenant-id')
+    const handler = createHandler()
 
     expect(
       handler.parseMetadataHeaders({
@@ -138,7 +144,7 @@ describe('S3ProtocolHandler.parseMetadataHeaders', () => {
   })
 
   it('keeps only string metadata values', () => {
-    const handler = new S3ProtocolHandler({} as any, 'tenant-id')
+    const handler = createHandler()
 
     expect(
       handler.parseMetadataHeaders({
@@ -154,7 +160,7 @@ describe('S3ProtocolHandler.parseMetadataHeaders', () => {
   })
 
   it('returns undefined when metadata headers are present but none are strings', () => {
-    const handler = new S3ProtocolHandler({} as any, 'tenant-id')
+    const handler = createHandler()
 
     expect(
       handler.parseMetadataHeaders({

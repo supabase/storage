@@ -5,6 +5,10 @@ import {
 import { Buffer } from 'buffer'
 import crypto from 'crypto'
 
+type ParserWithHeaderParser = {
+  parseHeaderLine(line: string): { size: number; signature?: string }
+}
+
 describe('ChunkSignatureV4Parser', () => {
   const makeParser = (opts: Partial<ChunkSignatureParserOptions> = {}) => {
     const defaultOpts: ChunkSignatureParserOptions = {
@@ -17,13 +21,18 @@ describe('ChunkSignatureV4Parser', () => {
 
   test('constructor throws on invalid algorithm', () => {
     expect(
-      () => new ChunkSignatureV4Parser({ streamingAlgorithm: 'INVALID' as any, maxChunkSize: 1 })
+      () =>
+        new ChunkSignatureV4Parser({
+          streamingAlgorithm:
+            'INVALID' as unknown as ChunkSignatureParserOptions['streamingAlgorithm'],
+          maxChunkSize: 1,
+        })
     ).toThrow(/Invalid streaming algorithm/)
   })
 
   test('parseHeaderLine accepts signed header and rejects malformed signature', () => {
     const parser = makeParser()
-    const parse = (parser as any).parseHeaderLine.bind(parser)
+    const parse = (parser as unknown as ParserWithHeaderParser).parseHeaderLine.bind(parser)
     const validSig = 'a'.repeat(64)
     const { size, signature } = parse(`5;chunk-signature=${validSig}`)
     expect(size).toBe(5)
@@ -33,7 +42,7 @@ describe('ChunkSignatureV4Parser', () => {
 
   test('parseHeaderLine rejects invalid chunk size', () => {
     const parser = makeParser()
-    const parse = (parser as any).parseHeaderLine.bind(parser)
+    const parse = (parser as unknown as ParserWithHeaderParser).parseHeaderLine.bind(parser)
     expect(() => parse('zz;chunk-signature=' + 'a'.repeat(64))).toThrow(/Invalid header/)
     expect(() => parse('zz')).toThrow(/Invalid chunk size/)
   })
@@ -175,7 +184,7 @@ describe('ChunkSignatureV4Parser', () => {
       maxChunkSize: 10,
       signaturePattern: /^[0-9]+$/,
     })
-    const parse = (parser as any).parseHeaderLine.bind(parser)
+    const parse = (parser as unknown as ParserWithHeaderParser).parseHeaderLine.bind(parser)
     expect(parse('3;chunk-signature=123').signature).toBe('123')
     expect(() => parse('3;chunk-signature=abc')).toThrow()
   })

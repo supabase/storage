@@ -1,43 +1,53 @@
 import { BasePayload } from '@internal/queue'
 import { ObjectMetadata } from '../../backend'
+import type { Obj } from '../../schemas'
 import { BaseEvent } from '../base-event'
-import { ObjectRemovedEvent } from './object-removed'
 
-interface ObjectCreatedEvent extends BasePayload {
+interface ObjectCreatedEventBase extends BasePayload {
   name: string
   version: string
   bucketId: string
   metadata: ObjectMetadata
+}
+
+interface ObjectCreatedUploadEvent extends ObjectCreatedEventBase {
   uploadType: 'standard' | 'resumable' | 's3'
 }
 
-abstract class ObjectCreated extends BaseEvent<ObjectCreatedEvent> {
+interface ObjectCreatedMoveSource {
+  name: string
+  bucketId: string
+  version: Obj['version'] | null
+  reqId?: string
+}
+
+interface ObjectCreatedMoveEvent extends ObjectCreatedEventBase {
+  oldObject: ObjectCreatedMoveSource
+}
+
+abstract class ObjectCreated<T extends ObjectCreatedEventBase> extends BaseEvent<T> {
   protected static queueName = 'object:created'
 }
 
-export class ObjectCreatedPutEvent extends ObjectCreated {
+export class ObjectCreatedPutEvent extends ObjectCreated<ObjectCreatedUploadEvent> {
   static eventName() {
     return `ObjectCreated:Put`
   }
 }
 
-export class ObjectCreatedPostEvent extends ObjectCreated {
+export class ObjectCreatedPostEvent extends ObjectCreated<ObjectCreatedUploadEvent> {
   static eventName() {
     return `ObjectCreated:Post`
   }
 }
 
-export class ObjectCreatedCopyEvent extends ObjectCreated {
+export class ObjectCreatedCopyEvent extends ObjectCreated<ObjectCreatedEventBase> {
   static eventName() {
     return `ObjectCreated:Copy`
   }
 }
 
-export interface ObjectedCreatedMove extends ObjectCreatedEvent {
-  oldObject: Omit<ObjectRemovedEvent, 'tenant' | '$version'>
-}
-
-export class ObjectCreatedMove extends BaseEvent<ObjectedCreatedMove> {
+export class ObjectCreatedMove extends ObjectCreated<ObjectCreatedMoveEvent> {
   static eventName() {
     return `ObjectCreated:Move`
   }

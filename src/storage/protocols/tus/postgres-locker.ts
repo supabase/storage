@@ -8,11 +8,23 @@ import { UploadId } from './upload-id'
 
 const REQUEST_LOCK_RELEASE_MESSAGE = 'REQUEST_LOCK_RELEASE'
 
+function isRequestLockReleaseMessage(payload: unknown): payload is { id: string } {
+  if (!payload || typeof payload !== 'object') {
+    return false
+  }
+
+  return typeof (payload as { id?: unknown }).id === 'string'
+}
+
 export class LockNotifier {
   protected events = new EventEmitter()
 
-  handler = ({ id }: { id: string }) => {
-    this.events.emit(`release:${id}`)
+  handler = (payload: unknown) => {
+    if (!isRequestLockReleaseMessage(payload)) {
+      return
+    }
+
+    this.events.emit(`release:${payload.id}`)
   }
 
   constructor(private readonly pubSub: PubSubAdapter) {}

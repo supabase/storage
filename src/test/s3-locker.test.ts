@@ -11,6 +11,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
+import { Lock } from '@tus/server'
 import { getConfig } from '../config'
 import { backends } from '../storage'
 import { LockNotifier } from '../storage/protocols/tus/postgres-locker'
@@ -26,7 +27,12 @@ describe('S3Locker', () => {
   let locker: S3Locker
   let testBucket: string
   let mockNotifier: LockNotifier
-  let allLocks: Array<{ lock: any; locker: S3Locker }> = []
+  let allLocks: Array<{ lock: Lock; locker: S3Locker }> = []
+
+  const getErrorMessage = (error: unknown) =>
+    error instanceof Error ? error.message : String(error)
+
+  const getErrorName = (error: unknown) => (error instanceof Error ? error.name : undefined)
 
   beforeAll(async () => {
     // Use the configured S3 client from the backend
@@ -54,7 +60,7 @@ describe('S3Locker', () => {
       onRelease: jest.fn(),
       unsubscribe: jest.fn(),
       subscribe: jest.fn(),
-    } as any
+    } as unknown as LockNotifier
 
     // Create fresh locker instance
     locker = new S3Locker({
@@ -112,7 +118,7 @@ describe('S3Locker', () => {
     }
   })
 
-  function trackLock(lock: any, lockLocker: S3Locker = locker) {
+  function trackLock(lock: Lock, lockLocker: S3Locker = locker) {
     allLocks.push({ lock, locker: lockLocker })
     return lock
   }
@@ -368,8 +374,8 @@ describe('S3Locker', () => {
           })
         )
         fail('Lock should have been deleted')
-      } catch (error: any) {
-        expect(error.name).toBe('NoSuchKey')
+      } catch (error: unknown) {
+        expect(getErrorName(error)).toBe('NoSuchKey')
       }
     })
   })
@@ -440,10 +446,10 @@ describe('S3Locker', () => {
           const start = Date.now()
           try {
             await lock1.lock(abortController1.signal, cancelReq)
-          } catch (error: any) {
+          } catch (error: unknown) {
             const lockDuration = Date.now() - start
             throw new Error(
-              `Lock acquisition failed on iteration ${i} after ${lockDuration}ms with error: ${error.message}. This likely means a zombie lock exists from a previous iteration.`
+              `Lock acquisition failed on iteration ${i} after ${lockDuration}ms with error: ${getErrorMessage(error)}. This likely means a zombie lock exists from a previous iteration.`
             )
           }
           const lockDuration = Date.now() - start
@@ -483,8 +489,8 @@ describe('S3Locker', () => {
             throw new Error(
               `Zombie lock detected on iteration ${i}! A lock exists after deletion, indicating the IfMatch fix is missing.`
             )
-          } catch (error: any) {
-            if (error.name === 'NoSuchKey') {
+          } catch (error: unknown) {
+            if (getErrorName(error) === 'NoSuchKey') {
               // Good - no zombie lock exists
               continue
             }

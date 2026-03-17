@@ -1,10 +1,13 @@
 'use strict'
 
-type TestPool = {
-  acquire: jest.Mock
-  rebalance: jest.Mock
-  destroy: jest.Mock<Promise<void>, []>
-  getPoolStats: jest.Mock
+import type { CacheName } from '../internal/cache'
+import type { PoolStrategy, TenantConnectionOptions } from '../internal/database/pool'
+
+type TestPool<TPool extends PoolStrategy = PoolStrategy> = {
+  pool: TPool
+  rebalance: jest.SpiedFunction<PoolStrategy['rebalance']>
+  destroy: jest.SpiedFunction<PoolStrategy['destroy']>
+  getPoolStats: jest.SpiedFunction<PoolStrategy['getPoolStats']>
 }
 
 type PoolModule = typeof import('../internal/database/pool')
@@ -19,12 +22,17 @@ function createPoolSettings(tenantId: string) {
   }
 }
 
-function createTestPool(stats: { used: number; total: number } | null = null): TestPool {
+function createTestPool<TPool extends PoolStrategy>(
+  pool: TPool,
+  stats: { used: number; total: number } | null = null
+): TestPool<TPool> {
+  const strategyPool: PoolStrategy = pool
+
   return {
-    acquire: jest.fn(),
-    rebalance: jest.fn(),
-    destroy: jest.fn().mockResolvedValue(undefined),
-    getPoolStats: jest.fn().mockReturnValue(stats),
+    pool,
+    rebalance: jest.spyOn(strategyPool, 'rebalance'),
+    destroy: jest.spyOn(strategyPool, 'destroy').mockResolvedValue(undefined),
+    getPoolStats: jest.spyOn(strategyPool, 'getPoolStats').mockReturnValue(stats),
   }
 }
 
@@ -42,19 +50,16 @@ async function loadPoolModule(ttlMs: number): Promise<PoolModule> {
       ...actual,
       createTtlCache: ((optionsOrName: unknown, maybeOptions?: Record<string, unknown>) => {
         if (typeof optionsOrName === 'string') {
-          return actual.createTtlCache(
-            optionsOrName as never,
-            {
-              ...(maybeOptions || {}),
-              ttl: ttlMs,
-            } as never
-          )
+          return actual.createTtlCache(optionsOrName as CacheName, {
+            ...(maybeOptions || {}),
+            ttl: ttlMs,
+          })
         }
 
         return actual.createTtlCache({
           ...(optionsOrName as Record<string, unknown>),
           ttl: ttlMs,
-        } as never)
+        })
       }) as typeof actual.createTtlCache,
     }
   })
@@ -80,15 +85,10 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
 
-      protected newPool(_settings: any): any {
-        const pool: TestPool = {
-          acquire: jest.fn(),
-          rebalance: jest.fn(),
-          destroy: jest.fn().mockResolvedValue(undefined),
-          getPoolStats: jest.fn().mockReturnValue(null),
-        }
+      protected newPool(settings: TenantConnectionOptions) {
+        const pool = createTestPool(super.newPool(settings))
         this.created.push(pool)
-        return pool
+        return pool.pool
       }
     }
 
@@ -117,15 +117,10 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
 
-      protected newPool(_settings: any): any {
-        const pool: TestPool = {
-          acquire: jest.fn(),
-          rebalance: jest.fn(),
-          destroy: jest.fn().mockResolvedValue(undefined),
-          getPoolStats: jest.fn().mockReturnValue(null),
-        }
+      protected newPool(settings: TenantConnectionOptions) {
+        const pool = createTestPool(super.newPool(settings))
         this.created.push(pool)
-        return pool
+        return pool.pool
       }
     }
 
@@ -163,20 +158,20 @@ describe('PoolManager cache lifecycle', () => {
     )
     let batchObserver: ((observer: { observe: (...args: unknown[]) => void }) => void) | undefined
 
-    addBatchObservableCallbackSpy.mockImplementation((callback) => {
+    addBatchObservableCallbackSpy.mockImplementation((callback): void => {
       batchObserver = callback as typeof batchObserver
-      return undefined as never
     })
 
     class TestPoolManager extends poolModule.PoolManager {
       created: Record<string, TestPool> = {}
 
-      protected newPool(settings: any): any {
+      protected newPool(settings: TenantConnectionOptions) {
         const pool = createTestPool(
+          super.newPool(settings),
           settings.tenantId === 'tenant-a' ? { used: 2, total: 5 } : { used: 3, total: 7 }
         )
         this.created[settings.tenantId] = pool
-        return pool
+        return pool.pool
       }
     }
 
@@ -203,26 +198,26 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: Record<string, TestPool> = {}
 
-      protected newPool(settings: any): any {
-        const pool = createTestPool()
+      protected newPool(settings: TenantConnectionOptions) {
+        const pool = createTestPool(super.newPool(settings))
         this.created[settings.tenantId] = pool
-        return pool
+        return pool.pool
       }
     }
 
     const poolManager = new TestPoolManager()
     const first = poolManager.getPool(createPoolSettings('tenant-c'))
-    const second = poolManager.getPool(createPoolSettings('tenant-d'))
+    poolManager.getPool(createPoolSettings('tenant-d'))
 
     poolManager.rebalanceAll({ clusterSize: 4 })
 
-    expect(first.rebalance).toHaveBeenCalledWith({ clusterSize: 4 })
-    expect(second.rebalance).toHaveBeenCalledWith({ clusterSize: 4 })
+    expect(poolManager.created['tenant-c'].rebalance).toHaveBeenCalledWith({ clusterSize: 4 })
+    expect(poolManager.created['tenant-d'].rebalance).toHaveBeenCalledWith({ clusterSize: 4 })
 
     await poolManager.destroyAll()
 
-    expect(first.destroy).toHaveBeenCalledTimes(1)
-    expect(second.destroy).toHaveBeenCalledTimes(1)
+    expect(poolManager.created['tenant-c'].destroy).toHaveBeenCalledTimes(1)
+    expect(poolManager.created['tenant-d'].destroy).toHaveBeenCalledTimes(1)
 
     const recreated = poolManager.getPool(createPoolSettings('tenant-c'))
 
@@ -235,11 +230,11 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: Record<string, TestPool> = {}
 
-      protected newPool(settings: any): any {
-        const pool = createTestPool()
+      protected newPool(settings: TenantConnectionOptions) {
+        const pool = createTestPool(super.newPool(settings))
         pool.destroy.mockRejectedValue(new Error(`destroy failed for ${settings.tenantId}`))
         this.created[settings.tenantId] = pool
-        return pool
+        return pool.pool
       }
     }
 
@@ -258,15 +253,15 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: Record<string, TestPool> = {}
 
-      protected newPool(settings: any): any {
-        const pool = createTestPool()
+      protected newPool(settings: TenantConnectionOptions) {
+        const pool = createTestPool(super.newPool(settings))
 
         if (settings.tenantId === 'tenant-destroyall-error') {
           pool.destroy.mockRejectedValue(new Error('destroyAll failed'))
         }
 
         this.created[settings.tenantId] = pool
-        return pool
+        return pool.pool
       }
     }
 
@@ -296,18 +291,17 @@ describe('PoolManager cache lifecycle', () => {
     )
     let batchObserver: ((observer: { observe: (...args: unknown[]) => void }) => void) | undefined
 
-    addBatchObservableCallbackSpy.mockImplementation((callback) => {
+    addBatchObservableCallbackSpy.mockImplementation((callback): void => {
       batchObserver = callback as typeof batchObserver
-      return undefined as never
     })
 
     class TestPoolManager extends poolModule.PoolManager {
       created: Record<string, TestPool> = {}
 
-      protected newPool(settings: any): any {
-        const pool = createTestPool({ used: 1, total: 2 })
+      protected newPool(settings: TenantConnectionOptions) {
+        const pool = createTestPool(super.newPool(settings), { used: 1, total: 2 })
         this.created[settings.tenantId] = pool
-        return pool
+        return pool.pool
       }
     }
 

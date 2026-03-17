@@ -69,4 +69,29 @@ describe('AsyncAbortController', () => {
 
     expect(order).toEqual(['root:start', 'root:end', 'child', 'grandchild'])
   })
+
+  it('forwards the real abort event to listeners', async () => {
+    const controller = new AsyncAbortController()
+    const seen: {
+      target: EventTarget | null
+      currentTarget: EventTarget | null
+      context: unknown
+    } = {
+      target: null,
+      currentTarget: null,
+      context: undefined,
+    }
+
+    controller.signal.addEventListener('abort', function (event) {
+      seen.target = event.target
+      seen.currentTarget = event.currentTarget
+      seen.context = this
+    })
+
+    await controller.abortAsync()
+
+    expect(seen.target).toBe(controller.signal)
+    expect(seen.currentTarget).toBe(controller.signal)
+    expect(seen.context).toBe(controller.signal)
+  })
 })

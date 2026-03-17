@@ -1,7 +1,7 @@
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { createAgent } from '@internal/http'
 import { logger } from '@internal/monitoring'
-import { BasePayload, Event, Event as QueueBaseEvent, StaticThis } from '@internal/queue'
+import { BasePayload, Event, EventPayload, Event as QueueBaseEvent } from '@internal/queue'
 import { TenantLocation } from '@storage/locator'
 import { getConfig } from '../../config'
 import { createStorageBackend, StorageBackendAdapter } from '../backend'
@@ -12,7 +12,7 @@ const { storageS3Bucket, storageS3MaxSockets, storageBackendType, region } = get
 
 let storageBackend: StorageBackendAdapter | undefined = undefined
 
-export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends QueueBaseEvent<T> {
+export abstract class BaseEvent<T extends EventPayload> extends QueueBaseEvent<T> {
   static onStart() {
     this.getOrCreateStorageBackend()
   }
@@ -25,9 +25,9 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
    * Sends a message as a webhook
    * @param payload
    */
-  static async sendWebhook<T extends Event<any>>(
-    this: StaticThis<T>,
-    payload: Omit<T['payload'], '$version'>
+  static async sendWebhook<TThis extends abstract new (...args: never[]) => Event<EventPayload>>(
+    this: TThis & { version: string; eventName(): string },
+    payload: Omit<InstanceType<TThis>['payload'], '$version'>
   ) {
     // biome-ignore lint/style/noCommonJs: build script runs as CommonJS
     const { Webhook } = require('./lifecycle/webhook')

@@ -79,7 +79,7 @@ export class QueueDB extends EventEmitter implements Db {
     }
   }
 
-  async executeSql(text: string, values: any[]) {
+  async executeSql(...[text, values]: Parameters<Db['executeSql']>): ReturnType<Db['executeSql']> {
     if (this.opened && this.pool) {
       return this.useTransaction((client) => client.query(text, values))
     }
@@ -97,9 +97,9 @@ export class KnexQueueDB extends EventEmitter implements Db {
     super()
   }
 
-  async executeSql(text: string, values: any[]): Promise<{ rows: any[] }> {
+  async executeSql(...[text, values]: Parameters<Db['executeSql']>): ReturnType<Db['executeSql']> {
     const knexQuery = text.replaceAll('$', ':')
-    const params: Record<string, any> = {}
+    const params: Record<string, unknown> = {}
 
     values.forEach((value, index) => {
       const key = (index + 1).toString()

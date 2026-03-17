@@ -93,7 +93,7 @@ export interface Metastore<Tnx = unknown> {
     opts?: { isolationLevel?: Knex.IsolationLevels }
   ): Promise<T>
 
-  assignCatalog(param: { bucketName: string; tenantId: string }): Promise<any>
+  assignCatalog(param: { bucketName: string; tenantId: string }): Promise<Catalog>
   countCatalogs(params: { tenantId: string; limit: number }): Promise<number>
   countNamespaces(param: { tenantId: string; limit: number }): Promise<number>
   countTables(params: { namespaceId: string; tenantId?: string; limit: number }): Promise<number>

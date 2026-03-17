@@ -66,12 +66,12 @@ export default async function routes(fastify: FastifyInstance) {
                   req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)
                 }
 
-                const data: RequestInput<any> = {
+                const data = {
                   Params: req.params,
                   Body: req.body,
                   Headers: req.headers,
                   Querystring: req.query,
-                }
+                } as unknown as RequestInput<typeof route.schema>
                 const compiler = route.compiledSchema()
                 const isValid = compiler(data)
 

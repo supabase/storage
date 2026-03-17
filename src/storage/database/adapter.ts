@@ -64,12 +64,12 @@ export interface Database {
 
   asSuperUser(): Database
 
-  withTransaction<T extends (db: Database) => Promise<any>>(
-    fn: T,
+  withTransaction<T>(
+    fn: (db: Database) => Promise<T>,
     transactionOptions?: TransactionOptions
-  ): Promise<ReturnType<T>>
+  ): Promise<T>
 
-  testPermission<T extends (db: Database) => any>(fn: T): Promise<Awaited<ReturnType<T>>>
+  testPermission<T>(fn: (db: Database) => T | Promise<T>): Promise<Awaited<T>>
 
   createBucket(
     data: Pick<

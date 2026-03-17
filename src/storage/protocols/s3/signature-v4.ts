@@ -49,6 +49,9 @@ interface Credentials {
   service: string
 }
 
+type SignatureHeaders = Record<string, string | string[] | undefined>
+type SignatureQuery = Record<string, string | undefined>
+
 export interface Policy {
   expiration: string
   conditions: PolicyConditions
@@ -111,8 +114,8 @@ export class SignatureV4 {
     this.publicUrl = options.publicUrl
   }
 
-  static parseAuthorizationHeader(headers: Record<string, any>) {
-    const clientSignature = headers.authorization
+  static parseAuthorizationHeader(headers: SignatureHeaders) {
+    const clientSignature = getSingleValue(headers.authorization)
     if (typeof clientSignature !== 'string') {
       throw ERRORS.InvalidSignature('Missing authorization header')
     }
@@ -126,16 +129,18 @@ export class SignatureV4 {
     const credentialPart = params.get('Credential')
     const signedHeadersPart = params.get('SignedHeaders')
     const signature = params.get('Signature')
-    const longDate = headers['x-amz-date']
-    const contentSha = headers['x-amz-content-sha256']
-    const sessionToken = headers['x-amz-security-token']
+    const longDate = getSingleValue(headers['x-amz-date'])
+    const contentSha = getSingleValue(headers['x-amz-content-sha256'])
+    const sessionToken = getSingleValue(headers['x-amz-security-token'])
 
     if (!validateTypeOfStrings(credentialPart, signedHeadersPart, signature, longDate)) {
       throw ERRORS.InvalidSignature('Invalid signature format')
     }
 
+    const credential = credentialPart as string
+    const longDateValue = longDate as string
     const signedHeaders = signedHeadersPart?.split(';') || []
-    const credentialsPart = credentialPart?.split('/') || []
+    const credentialsPart = credential.split('/')
 
     if (credentialsPart.length !== 5) {
       throw ERRORS.InvalidSignature('Invalid credentials')
@@ -146,13 +151,13 @@ export class SignatureV4 {
       credentials: { accessKey, shortDate, region, service },
       signedHeaders,
       signature: signature as string,
-      longDate,
+      longDate: longDateValue,
       contentSha,
       sessionToken,
     }
   }
 
-  static isChunkedUpload(headers: Record<string, any>): boolean {
+  static isChunkedUpload(headers: SignatureHeaders): boolean {
     const sha = headers['x-amz-content-sha256']
     if (typeof sha !== 'string') return false
     // If it exactly matches or starts with streaming prefix...
@@ -162,24 +167,28 @@ export class SignatureV4 {
     )
   }
 
-  static parseQuerySignature(query: Record<string, any>) {
+  static parseQuerySignature(query: SignatureQuery) {
     const credentialPart = query['X-Amz-Credential']
-    const signedHeaders: string = query['X-Amz-SignedHeaders']
-    const signature: string = query['X-Amz-Signature']
-    const longDate: string = query['X-Amz-Date']
-    const contentSha: string = query['X-Amz-Content-Sha256']
-    const sessionToken: string | undefined = query['X-Amz-Security-Token']
+    const signedHeaders = query['X-Amz-SignedHeaders']
+    const signature = query['X-Amz-Signature']
+    const longDate = query['X-Amz-Date']
+    const contentSha = query['X-Amz-Content-Sha256']
+    const sessionToken = query['X-Amz-Security-Token']
     const expires = query['X-Amz-Expires']
 
     if (!validateTypeOfStrings(credentialPart, signedHeaders, signature, longDate)) {
       throw ERRORS.InvalidSignature('Invalid signature format')
     }
 
+    const credential = credentialPart as string
+    const signedHeadersValue = signedHeaders as string
+    const signatureValue = signature as string
+    const longDateValue = longDate as string
     if (expires) {
-      this.checkExpiration(longDate, expires)
+      this.checkExpiration(longDateValue, expires)
     }
 
-    const credentialsPart = credentialPart.split('/') as string[]
+    const credentialsPart = credential.split('/')
     if (credentialsPart.length !== 5) {
       throw ERRORS.InvalidSignature('Invalid credentials')
     }
@@ -187,9 +196,9 @@ export class SignatureV4 {
     const [accessKey, shortDate, region, service] = credentialsPart
     return {
       credentials: { accessKey, shortDate, region, service },
-      signedHeaders: signedHeaders.split(';'),
-      signature,
-      longDate,
+      signedHeaders: signedHeadersValue.split(';'),
+      signature: signatureValue,
+      longDate: longDateValue,
       contentSha,
       sessionToken,
     }
@@ -611,6 +620,10 @@ export class SignatureV4 {
   }
 }
 
-function validateTypeOfStrings(...values: any[]) {
+function validateTypeOfStrings(...values: unknown[]) {
   return values.every((value) => typeof value === 'string')
+}
+
+function getSingleValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value
 }

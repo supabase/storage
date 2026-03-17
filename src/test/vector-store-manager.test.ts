@@ -18,7 +18,24 @@ import {
   VectorStore,
   VectorStoreManager,
 } from '@storage/protocols/vector'
+import { VectorBucket } from '@storage/schemas'
 
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((res) => {
+    resolve = res
+  })
+
+  return { promise, resolve }
+}
+
+function createVectorBucket(bucketName: string): VectorBucket {
+  return {
+    id: bucketName,
+    created_at: new Date(),
+    updated_at: new Date().toISOString(),
+  } as unknown as VectorBucket
+}
 function createMockVectorStore(): jest.Mocked<VectorStore> {
   return {
     createVectorIndex: jest.fn().mockResolvedValue({} as CreateIndexCommandOutput),
@@ -119,11 +136,7 @@ function createDeterministicVectorDb(options: {
         },
         findVectorBucket: async (bucketName: string) => {
           if (state.existingBuckets.has(bucketName)) {
-            return {
-              id: bucketName,
-              created_at: new Date(),
-              updated_at: new Date().toISOString(),
-            } as any
+            return createVectorBucket(bucketName)
           }
 
           throw ERRORS.S3VectorNotFoundException('vector bucket', bucketName)
@@ -185,8 +198,8 @@ function createDeterministicVectorDb(options: {
 
 describe('VectorStoreManager bucket lifecycle', () => {
   it('serializes concurrent creates for the final bucket slot', async () => {
-    const releaseFirstCreate = Promise.withResolvers<void>()
-    const firstCreateStarted = Promise.withResolvers<void>()
+    const releaseFirstCreate = deferred()
+    const firstCreateStarted = deferred()
 
     const db = createDeterministicVectorDb({
       bucketCount: 1,
@@ -241,8 +254,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
   })
 
   it('shares the bucket-count lock between delete and create so capacity is observed after delete commits', async () => {
-    const releaseDelete = Promise.withResolvers<void>()
-    const deleteReachedRemoval = Promise.withResolvers<void>()
+    const releaseDelete = deferred()
+    const deleteReachedRemoval = deferred()
 
     const db = createDeterministicVectorDb({
       bucketCount: 1,
@@ -272,8 +285,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
   })
 
   it('does not block unrelated creates while delete waits on the target bucket lock', async () => {
-    const releaseBucketLock = Promise.withResolvers<void>()
-    const deleteWaitingOnBucketLock = Promise.withResolvers<void>()
+    const releaseBucketLock = deferred()
+    const deleteWaitingOnBucketLock = deferred()
 
     const db = createDeterministicVectorDb({
       bucketCount: 1,
@@ -331,11 +344,7 @@ describe('VectorStoreManager bucket lifecycle', () => {
     const vectorStore = createMockVectorStore()
 
     db.findVectorBucket
-      .mockResolvedValueOnce({
-        id: 'bucket-a',
-        created_at: new Date(),
-        updated_at: new Date().toISOString(),
-      } as any)
+      .mockResolvedValueOnce(createVectorBucket('bucket-a'))
       .mockRejectedValueOnce(ERRORS.S3VectorNotFoundException('vector bucket', 'bucket-a'))
     db.withTransaction.mockImplementation(async (fn) => fn(db as unknown as KnexVectorMetadataDB))
 

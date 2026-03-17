@@ -172,7 +172,7 @@ export class ImageRenderer extends Renderer {
     const params = transformations.split(',')
 
     this.transformOptions = params.reduce((all, param) => {
-      const [name, value] = param.split(':') as [keyof TransformOptions, any]
+      const [name, value] = param.split(':') as [keyof TransformOptions, string]
       switch (name) {
         case 'height':
           all.height = parseInt(value, 10)
@@ -181,10 +181,10 @@ export class ImageRenderer extends Renderer {
           all.width = parseInt(value, 10)
           break
         case 'resize':
-          all.resize = value
+          all.resize = value as TransformOptions['resize']
           break
         case 'format':
-          all.format = value
+          all.format = value as TransformOptions['format']
           break
         case 'quality':
           all.quality = parseInt(value, 10)

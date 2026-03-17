@@ -1,4 +1,4 @@
-import { ResourceKind, ShardRow, ShardStatus } from './store'
+import { ResourceKind, ShardRow, ShardStats, ShardStatus } from './store'
 
 export interface ShardResource {
   kind: ResourceKind
@@ -36,7 +36,7 @@ export interface Sharder {
   expireLeases(): Promise<number>
   freeByLocation(shardId: string | number, slotNo: number): Promise<void>
   freeByResource(shardId: string | number, resource: ShardResource): Promise<void>
-  shardStats(kind?: ResourceKind): Promise<any>
+  shardStats(kind?: ResourceKind): Promise<ShardStats>
   findShardByResourceId(param: ShardResource): Promise<ShardRow | null>
   listShardByKind(icebergTables: ResourceKind): Promise<ShardRow[]>
 

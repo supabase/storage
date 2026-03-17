@@ -17,9 +17,15 @@ export interface RenderOptions {
 }
 
 export interface AssetResponse {
-  body?: Readable | ReadableStream<any> | Blob | Buffer | Record<any, any>
+  body?: Readable | ReadableStream<unknown> | Blob | Buffer | Record<string, unknown>
   metadata: ObjectMetadata
   transformations?: string[]
+}
+
+type HttpMetadataError = {
+  $metadata?: {
+    httpStatusCode?: number
+  }
 }
 
 const { requestEtagHeaders, responseSMaxAge } = getConfig()
@@ -40,7 +46,7 @@ export abstract class Renderer {
    * @param response
    * @param options
    */
-  async render(request: FastifyRequest<any>, response: FastifyReply<any>, options: RenderOptions) {
+  async render(request: FastifyRequest, response: FastifyReply, options: RenderOptions) {
     try {
       if (options.signal?.aborted) {
         return response.send({ error: 'Request aborted', statusCode: '499' })
@@ -51,12 +57,12 @@ export abstract class Renderer {
       this.setHeaders(request, response, data, options)
 
       return response.send(data.body)
-    } catch (err: any) {
-      if (err.$metadata?.httpStatusCode === 304) {
+    } catch (err: unknown) {
+      if (hasMetadataStatusCode(err, 304)) {
         return response.status(304).send()
       }
 
-      if (err.$metadata?.httpStatusCode === 404) {
+      if (hasMetadataStatusCode(err, 404)) {
         response.header('cache-control', 'no-store')
         return response.status(400).send({
           error: 'Not found',
@@ -70,8 +76,8 @@ export abstract class Renderer {
   }
 
   protected setHeaders(
-    request: FastifyRequest<any>,
-    response: FastifyReply<any>,
+    request: FastifyRequest,
+    response: FastifyReply,
     data: AssetResponse,
     options: RenderOptions
   ) {
@@ -110,7 +116,7 @@ export abstract class Renderer {
     this.handleDownload(response, options.download)
   }
 
-  protected handleDownload(response: FastifyReply<any>, download?: string) {
+  protected handleDownload(response: FastifyReply, download?: string) {
     if (typeof download !== 'undefined') {
       if (download === '') {
         response.header('Content-Disposition', 'attachment;')
@@ -126,8 +132,8 @@ export abstract class Renderer {
   }
 
   protected handleCacheControl(
-    request: FastifyRequest<any>,
-    response: FastifyReply<any>,
+    request: FastifyRequest,
+    response: FastifyReply,
     metadata: ObjectMetadata
   ) {
     const etag = this.findEtagHeader(request)
@@ -150,7 +156,7 @@ export abstract class Renderer {
     response.header('Cache-Control', cacheControl.join(', '))
   }
 
-  protected findEtagHeader(request: FastifyRequest<any>) {
+  protected findEtagHeader(request: FastifyRequest) {
     for (const header of requestEtagHeaders) {
       const etag = request.headers[header]
       if (etag) {
@@ -165,4 +171,12 @@ function normalizeContentType(contentType: string | undefined): string | undefin
     return 'text/plain'
   }
   return contentType
+}
+
+function hasMetadataStatusCode(error: unknown, statusCode: number): error is HttpMetadataError {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+
+  return (error as HttpMetadataError).$metadata?.httpStatusCode === statusCode
 }

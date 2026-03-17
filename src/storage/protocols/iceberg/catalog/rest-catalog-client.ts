@@ -470,7 +470,7 @@ export class RestCatalogClient {
       .then((response) => {
         const data = response.data
 
-        const overrides: Record<string, any> = {
+        const overrides: Record<string, unknown> = {
           prefix: params.warehouse,
         }
 

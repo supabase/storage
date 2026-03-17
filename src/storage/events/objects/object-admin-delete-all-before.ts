@@ -99,7 +99,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
       if (moreObjectsToDelete) {
         // delete next batch
         await ObjectAdminDeleteAllBefore.send({
-          before,
+          before: before.toISOString(),
           bucketId,
           tenant: job.data.tenant,
           reqId: job.data.reqId,

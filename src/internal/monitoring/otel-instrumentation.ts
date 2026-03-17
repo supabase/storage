@@ -1,4 +1,5 @@
 import {
+  Attributes,
   Context,
   MeterProvider,
   Span,
@@ -8,6 +9,17 @@ import {
 } from '@opentelemetry/api'
 import { Instrumentation, InstrumentationConfig } from '@opentelemetry/instrumentation'
 import { ReadableSpan, Span as SdkSpan, SpanProcessor } from '@opentelemetry/sdk-trace-base'
+
+type InstrumentedMethod = ((...args: unknown[]) => unknown) & {
+  __original?: (...args: unknown[]) => unknown
+}
+
+type InstrumentedPrototype = Record<string, unknown>
+
+type InstrumentedClass = {
+  name: string
+  prototype: object
+}
 
 export class TenantSpanProcessor implements SpanProcessor {
   private readonly attributesToPropagate: string[]
@@ -49,13 +61,10 @@ export class TenantSpanProcessor implements SpanProcessor {
 }
 
 interface GenericInstrumentationConfig extends InstrumentationConfig {
-  targetClass: new (...args: any[]) => any
+  targetClass: InstrumentedClass
   methodsToInstrument: string[]
-  setName?: (name: string, attrs: Record<string, any>, targetClass: new () => any) => string
-  setAttributes?: Record<
-    GenericInstrumentationConfig['methodsToInstrument'][number],
-    (...args: any[]) => Record<string, string>
-  >
+  setName?: (name: string, attrs: Attributes, targetClass: object) => string
+  setAttributes?: Partial<Record<string, (...args: unknown[]) => Attributes>>
 }
 
 class ClassInstrumentation implements Instrumentation {
@@ -101,7 +110,7 @@ class ClassInstrumentation implements Instrumentation {
 
   private patchMethods(): void {
     const { targetClass, methodsToInstrument } = this._config
-    const proto = targetClass.prototype
+    const proto = targetClass.prototype as InstrumentedPrototype
 
     methodsToInstrument.forEach((methodName) => {
       if (methodName in proto && typeof proto[methodName] === 'function') {
@@ -112,21 +121,26 @@ class ClassInstrumentation implements Instrumentation {
 
   private unpatchMethods(): void {
     const { targetClass, methodsToInstrument } = this._config
-    const proto = targetClass.prototype
+    const proto = targetClass.prototype as InstrumentedPrototype
 
     methodsToInstrument.forEach((methodName) => {
-      if (methodName in proto && proto[methodName].__original) {
-        proto[methodName] = proto[methodName].__original
+      const method = proto[methodName]
+      if (methodName in proto && isInstrumentedMethod(method) && method.__original) {
+        proto[methodName] = method.__original
       }
     })
   }
 
-  private patchMethod(proto: any, methodName: string): void {
+  private patchMethod(proto: InstrumentedPrototype, methodName: string): void {
     const original = proto[methodName]
+    if (!isInstrumentedMethod(original)) {
+      return
+    }
+
     const instrumentationName = this.instrumentationName
     const instrumentation = this
 
-    proto[methodName] = function (...args: any[]) {
+    const wrappedMethod: InstrumentedMethod = function (this: object, ...args: unknown[]) {
       const tracer = trace.getTracer(instrumentationName)
 
       return tracer.startActiveSpan(
@@ -176,8 +190,13 @@ class ClassInstrumentation implements Instrumentation {
       )
     }
 
-    proto[methodName].__original = original
+    wrappedMethod.__original = original
+    proto[methodName] = wrappedMethod
   }
+}
+
+function isInstrumentedMethod(value: unknown): value is InstrumentedMethod {
+  return typeof value === 'function'
 }
 
 export { ClassInstrumentation, GenericInstrumentationConfig }

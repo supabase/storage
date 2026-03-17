@@ -5,11 +5,11 @@ import PgBoss, { Db, Job, JobWithMetadata } from 'pg-boss'
 import { getConfig } from '../../config'
 import { logger, logSchema } from '../monitoring'
 import { queueJobCompleted, queueJobError, queueJobRetryFailed } from '../monitoring/metrics'
-import { Event } from './event'
+import { Event, EventPayload } from './event'
 
-type SubclassOfBaseClass = (new (
-  payload: any
-) => Event<any>) & {
+type SubclassOfBaseClass = (abstract new (
+  ...args: never[]
+) => Event<EventPayload>) & {
   [K in keyof typeof Event]: (typeof Event)[K]
 }
 

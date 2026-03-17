@@ -16,7 +16,7 @@ export interface BrowserCacheHeaders {
 export type ObjectResponse = {
   metadata: ObjectMetadata
   httpStatusCode: number
-  body?: ReadableStream<any> | Readable | Blob | Buffer
+  body?: ReadableStream<unknown> | Readable | Blob | Buffer
 }
 
 /**
@@ -48,7 +48,7 @@ export type UploadPart = {
  * A generic storage Adapter to interact with files
  */
 export abstract class StorageBackendAdapter {
-  client: any
+  client: unknown
   constructor() {
     this.client = null
   }

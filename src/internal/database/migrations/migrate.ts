@@ -682,15 +682,18 @@ function runMigrations({
       for (const migration of migrationsToRun) {
         try {
           const ignore = migration.sql.includes('-- postgres-migrations ignore')
+          const migrationToRun = ignore
+            ? {
+                ...migration,
+                sql: 'SELECT 1;',
+                contents: 'SELECT 1;',
+              }
+            : migration
 
-          if (ignore) {
-            ;(migration as any).sql = 'SELECT 1;'
-            ;(migration as any).contents = 'SELECT 1;'
-          }
           const result = await runMigration(
             migrationTableName,
             client
-          )(runMigrationTransformers(migration, transformers))
+          )(runMigrationTransformers(migrationToRun, transformers))
           completedMigrations.push(result)
         } catch (e) {
           throw ERRORS.DatabaseError(

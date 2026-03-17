@@ -114,7 +114,7 @@ type Route<S extends Schema, Context> = {
   compiledSchema: () => ValidateFunction<JTDDataType<S>>
 }
 
-interface RouteOptions<S extends JSONSchema> {
+interface RouteOptions<S extends Schema> {
   disableContentTypeParser?: boolean
   acceptMultiformData?: boolean
   operation: string
@@ -134,11 +134,11 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     allErrors: false,
   })
 
-  registerRoute<R extends S = S>(
+  registerRoute(
     method: HTTPMethod,
     url: string,
-    options: RouteOptions<R>,
-    handler: Handler<R, Context>
+    options: RouteOptions<Schema>,
+    handler: Handler<Schema, Context>
   ) {
     const { query, headers } = this.parseRequestInfo(url)
     const normalizedUrl = url.split('?')[0].split('|')[0]
@@ -194,14 +194,15 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       )
     }
 
-    const newRoute: Route<R, Context> = {
+    const newRoute: Route<Schema, Context> = {
       method: method as HTTPMethod,
       path: normalizedUrl,
       querystringMatches: query,
       headersMatches: headers,
       schema,
-      compiledSchema: () => this.ajv.getSchema(method + url) as ValidateFunction<JTDDataType<R>>,
-      handler: handler as Handler<R, Context>,
+      compiledSchema: () =>
+        this.ajv.getSchema(method + url) as ValidateFunction<JTDDataType<Schema>>,
+      handler,
       disableContentTypeParser,
       acceptMultiformData,
       operation,
@@ -217,24 +218,58 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     this._routes.set(normalizedUrl, existingPath)
   }
 
-  get<R extends S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
-    this.registerRoute('get', url, options, handler as any)
+  private registerRouteUnsafe(
+    method: HTTPMethod,
+    url: string,
+    options: RouteOptions<Schema>,
+    handler: Handler<Schema, Context>
+  ) {
+    this.registerRoute(method, url, options, handler)
   }
 
-  post<R extends S = S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
-    this.registerRoute('post', url, options, handler as any)
+  get<R extends Schema>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRouteUnsafe(
+      'get',
+      url,
+      options as unknown as RouteOptions<Schema>,
+      handler as unknown as Handler<Schema, Context>
+    )
   }
 
-  put<R extends S = S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
-    this.registerRoute('put', url, options, handler as any)
+  post<R extends Schema>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRouteUnsafe(
+      'post',
+      url,
+      options as unknown as RouteOptions<Schema>,
+      handler as unknown as Handler<Schema, Context>
+    )
   }
 
-  delete<R extends S = S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
-    this.registerRoute('delete', url, options, handler as any)
+  put<R extends Schema>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRouteUnsafe(
+      'put',
+      url,
+      options as unknown as RouteOptions<Schema>,
+      handler as unknown as Handler<Schema, Context>
+    )
   }
 
-  head<R extends S = S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
-    this.registerRoute('head', url, options, handler as any)
+  delete<R extends Schema>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRouteUnsafe(
+      'delete',
+      url,
+      options as unknown as RouteOptions<Schema>,
+      handler as unknown as Handler<Schema, Context>
+    )
+  }
+
+  head<R extends Schema>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRouteUnsafe(
+      'head',
+      url,
+      options as unknown as RouteOptions<Schema>,
+      handler as unknown as Handler<Schema, Context>
+    )
   }
 
   parseQueryMatch(query: string) {

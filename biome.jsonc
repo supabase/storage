@@ -34,9 +34,9 @@
         "noUnusedVariables": "error"
       },
       "style": {
-        "noCommonJs": "warn",
+        "noCommonJs": "error",
         "useConsistentObjectDefinitions": "error",
-        "useThrowOnlyError": "warn"
+        "useThrowOnlyError": "error"
       },
       "suspicious": {
         "noAssignInExpressions": "error",

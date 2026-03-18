@@ -123,6 +123,9 @@
     "typescript": "5.2.2"
   },
   "overrides": {
+    "@aws-sdk/xml-builder": {
+      "fast-xml-parser": "5.5.6"
+    },
     "filelist@1": {
       "minimatch": "^5.1.8"
     },

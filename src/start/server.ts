@@ -61,7 +61,10 @@ async function main() {
     dbMigrationFreezeAt,
     vectorS3Buckets,
     icebergShards,
+    numWorkers,
   } = getConfig()
+
+  const effectiveNumWorkers = Math.max(numWorkers ?? 1, 1)
 
   // Queue
   if (pgQueueEnable) {
@@ -135,7 +138,7 @@ async function main() {
       `[Cluster] Cluster size changed to ${data.size}`
     )
     TenantConnection.poolManager.rebalanceAll({
-      clusterSize: data.size,
+      clusterSize: Math.max(Math.floor(data.size / effectiveNumWorkers), 1),
     })
   })
 

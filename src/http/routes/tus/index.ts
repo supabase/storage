@@ -185,7 +185,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.addHook('onClose', async () => {
     agent.close()
 
-    lockNotifier.stop().catch((e) => {
+    await lockNotifier.stop().catch((e) => {
       logSchema.error(fastify.log, 'Failed to stop TUS lock notifier', {
         type: 'tus',
         error: e,

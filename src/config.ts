@@ -115,6 +115,7 @@ type StorageConfigType = {
   requestUrlLengthLimit: number
   requestXForwardedHostRegExp?: string
   requestAllowXForwardedPrefix?: boolean
+  storagePublicUrl?: string
   logLevel?: string
   logflareEnabled?: boolean
   logflareApiKey?: string
@@ -286,6 +287,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     requestAllowXForwardedPrefix:
       getOptionalConfigFromEnv('REQUEST_ALLOW_X_FORWARDED_PATH') === 'true',
+    storagePublicUrl: getOptionalConfigFromEnv('STORAGE_PUBLIC_URL'),
     requestUrlLengthLimit:
       Number(getOptionalConfigFromEnv('REQUEST_URL_LENGTH_LIMIT', 'URL_LENGTH_LIMIT')) || 7_500,
     requestTraceHeader: getOptionalConfigFromEnv('REQUEST_TRACE_HEADER', 'REQUEST_ID_HEADER'),

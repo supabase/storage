@@ -299,17 +299,7 @@ class TenantPool implements PoolStrategy {
   }
 
   protected async drainPool(pool: Knex) {
-    if (!pool?.client?.pool) {
-      if (pool) return pool.destroy()
-      return
-    }
-
-    while (true) {
-      if (!pool?.client?.pool) {
-        if (pool) return pool.destroy()
-        return
-      }
-
+    for (; pool?.client?.pool; ) {
       let waiting = 0
       waiting += pool.client.pool.numPendingAcquires()
       waiting += pool.client.pool.numPendingValidations()

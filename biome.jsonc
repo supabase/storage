@@ -31,12 +31,12 @@
       "recommended": false,
       "correctness": {
         "noUnusedImports": "error",
-        "noUnusedVariables": "warn"
+        "noUnusedVariables": "error"
       },
       "style": {
-        "noCommonJs": "warn",
+        "noCommonJs": "error",
         "useConsistentObjectDefinitions": "error",
-        "useThrowOnlyError": "warn"
+        "useThrowOnlyError": "error"
       },
       "suspicious": {
         "noAssignInExpressions": "error",
@@ -50,7 +50,7 @@
       },
       "nursery": {
         "noFloatingPromises": "error",
-        "noUnnecessaryConditions": "warn"
+        "noUnnecessaryConditions": "error"
       }
     }
   },

@@ -524,13 +524,14 @@ describe('objects - list v2 sorting tests', () => {
   for (const { desc, options, expected } of TEST_CASES) {
     test(desc + ' in correct order with pagination', async () => {
       const limit = 5
-      let cursor: string | undefined = undefined
+      let cursor: string | undefined
       let pageCount = 0
       let lastObjectIdx = -1
       let lastFolderIdx = -1
+      let hasNext = false
 
       // Paginate through all results
-      while (true) {
+      do {
         const response = await appInstance.inject({
           method: 'POST',
           url: '/object/list-v2/' + LIST_V2_BUCKET,
@@ -560,14 +561,14 @@ describe('objects - list v2 sorting tests', () => {
         })
         pageCount++
 
-        if (!data.hasNext) {
+        hasNext = data.hasNext ?? false
+        if (!hasNext) {
           expect(data.nextCursor).toBeUndefined()
-          break
+        } else {
+          cursor = data.nextCursor as string
+          expect(cursor).toBeDefined()
         }
-
-        cursor = data.nextCursor as string
-        expect(cursor).toBeDefined()
-      }
+      } while (hasNext)
 
       // Verify we processed all expected items
       expect(lastObjectIdx).toBe(expected.objects.length - 1)

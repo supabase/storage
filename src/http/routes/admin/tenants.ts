@@ -8,7 +8,7 @@ import {
   TenantMigrationStatus,
 } from '@internal/database'
 import {
-  DBMigration,
+  isDBMigrationName,
   lastLocalMigrationName,
   progressiveMigrations,
   resetMigration,
@@ -596,20 +596,17 @@ export default async function routes(fastify: FastifyInstance) {
   })
 
   fastify.post<tenantRequestInterface>('/:tenantId/migrations/reset', async (req, reply) => {
-    const { untilMigration, markCompletedTillMigration } = req.body
+    const { untilMigration, markCompletedTillMigration } = req.body as Record<string, unknown>
 
     const { databaseUrl } = await getTenantConfig(req.params.tenantId)
 
-    if (
-      typeof untilMigration !== 'string' ||
-      !DBMigration[untilMigration as keyof typeof DBMigration]
-    ) {
+    if (!isDBMigrationName(untilMigration)) {
       return reply.status(400).send({ message: 'Invalid migration' })
     }
 
     if (
       typeof markCompletedTillMigration === 'string' &&
-      !DBMigration[untilMigration as keyof typeof DBMigration]
+      !isDBMigrationName(markCompletedTillMigration)
     ) {
       return reply.status(400).send({ message: 'Invalid migration' })
     }
@@ -618,9 +615,9 @@ export default async function routes(fastify: FastifyInstance) {
       await resetMigration({
         tenantId: req.params.tenantId,
         databaseUrl,
-        untilMigration: untilMigration as keyof typeof DBMigration,
-        markCompletedTillMigration: markCompletedTillMigration
-          ? (markCompletedTillMigration as keyof typeof DBMigration)
+        untilMigration,
+        markCompletedTillMigration: isDBMigrationName(markCompletedTillMigration)
+          ? markCompletedTillMigration
           : undefined,
       })
 

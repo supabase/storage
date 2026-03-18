@@ -34,6 +34,8 @@ COPY migrations migrations
 COPY --from=production-deps /app/node_modules node_modules
 # Copy build artifacts from the build stage
 COPY --from=build /app/dist dist
+COPY --from=build /app/watt.json /app
+
 
 EXPOSE 5000
 CMD ["node", "dist/start/server.js"]

@@ -56,18 +56,14 @@ export class Storage {
    * @param type
    */
   renderer(type: 'asset' | 'head' | 'image' | 'info') {
-    switch (type) {
-      case 'asset':
-        return new AssetRenderer(this.backend)
-      case 'head':
-        return new HeadRenderer()
-      case 'image':
-        return new ImageRenderer(this.backend)
-      case 'info':
-        return new InfoRenderer()
+    const renderers = {
+      asset: () => new AssetRenderer(this.backend),
+      head: () => new HeadRenderer(),
+      image: () => new ImageRenderer(this.backend),
+      info: () => new InfoRenderer(),
     }
 
-    throw new Error(`renderer of type "${type}" not supported`)
+    return renderers[type]()
   }
 
   /**

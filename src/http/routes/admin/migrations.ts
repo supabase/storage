@@ -1,6 +1,6 @@
 import { multitenantKnex } from '@internal/database'
 import {
-  DBMigration,
+  isDBMigrationName,
   resetMigrationsOnTenants,
   runMigrationsOnAllTenants,
 } from '@internal/database/migrations'
@@ -30,25 +30,22 @@ export default async function routes(fastify: FastifyInstance) {
       return reply.status(400).send({ message: 'Queue is not enabled' })
     }
 
-    const { untilMigration, markCompletedTillMigration } = req.body as any
+    const { untilMigration, markCompletedTillMigration } = req.body as Record<string, unknown>
 
-    if (
-      typeof untilMigration !== 'string' ||
-      !DBMigration[untilMigration as keyof typeof DBMigration]
-    ) {
+    if (!isDBMigrationName(untilMigration)) {
       return reply.status(400).send({ message: 'Invalid migration' })
     }
 
     if (
       typeof markCompletedTillMigration === 'string' &&
-      !DBMigration[untilMigration as keyof typeof DBMigration]
+      !isDBMigrationName(markCompletedTillMigration)
     ) {
       return reply.status(400).send({ message: 'Invalid migration' })
     }
 
     await resetMigrationsOnTenants({
-      till: untilMigration as keyof typeof DBMigration,
-      markCompletedTillMigration: markCompletedTillMigration
+      till: untilMigration,
+      markCompletedTillMigration: isDBMigrationName(markCompletedTillMigration)
         ? markCompletedTillMigration
         : undefined,
       signal: req.signals.disconnect.signal,

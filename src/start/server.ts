@@ -138,7 +138,7 @@ async function main() {
       `[Cluster] Cluster size changed to ${data.size}`
     )
     TenantConnection.poolManager.rebalanceAll({
-      clusterSize: Math.max(Math.floor(data.size / effectiveNumWorkers), 1),
+      clusterSize: Math.max(Math.floor(data.size * effectiveNumWorkers), 1),
     })
   })
 

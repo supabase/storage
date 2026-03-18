@@ -241,41 +241,29 @@ export class IcebergCatalogReconciler {
   }
 
   private async *listNamespaces(shardKey: string) {
-    let restToken: string | undefined = undefined
-    while (true) {
+    let restToken: string | undefined
+    do {
       const resp = await this.restCatalog.listNamespaces({
         warehouse: shardKey,
         pageSize: 1000,
         pageToken: restToken,
       })
-
       yield resp.namespaces
-
-      if (!resp['next-page-token']) {
-        break
-      }
-
       restToken = resp['next-page-token']
-    }
+    } while (restToken)
   }
 
   private async *listTables(namespaceName: string, shardKey: string) {
-    let restToken: string | undefined = undefined
-    while (true) {
+    let restToken: string | undefined
+    do {
       const resp = await this.restCatalog.listTables({
         warehouse: shardKey,
         namespace: namespaceName,
         pageSize: 1000,
         pageToken: restToken,
       })
-
       yield resp.identifiers
-
-      if (!resp['next-page-token']) {
-        break
-      }
-
       restToken = resp['next-page-token']
-    }
+    } while (restToken)
   }
 }

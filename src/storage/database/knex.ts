@@ -32,6 +32,14 @@ export function escapeLike(str: string) {
   return str.replace(/([%_])/g, '\\$1')
 }
 
+class TestPermissionRollbackError extends Error {
+  constructor() {
+    super('Rollback test permission transaction')
+    this.name = 'TestPermissionRollbackError'
+    Object.setPrototypeOf(this, TestPermissionRollbackError.prototype)
+  }
+}
+
 /**
  * Database
  * the only source of truth for interacting with the storage database
@@ -99,10 +107,10 @@ export class StorageKnexDB implements Database {
     try {
       await this.withTransaction(async (db) => {
         result = await fn(db)
-        throw true
+        throw new TestPermissionRollbackError()
       })
     } catch (e) {
-      if (e === true) {
+      if (e instanceof TestPermissionRollbackError) {
         return result
       }
       throw e

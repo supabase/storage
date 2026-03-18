@@ -36,13 +36,13 @@ export function bindShutdownSignals(serverSignal: AsyncAbortController) {
       logSchema.info(logger, `[Server] ${signal} Shutdown successfully`, {
         type: 'shutdown',
       })
-      process.exitCode = 0
+      process.exit(0)
     } catch (e) {
       logSchema.error(logger, `[Server] ${signal} Shutdown with error`, {
         type: 'shutdown',
         error: e,
       })
-      process.exitCode = 1
+      process.exit(1)
     }
   }
 

@@ -333,8 +333,10 @@ export class S3Backend implements StorageBackendAdapter {
     const { storageS3BatchDeleteEnabled } = getConfig()
 
     if (!storageS3BatchDeleteEnabled) {
-      // Batch delete explicitly disabled (e.g. GCS S3-interop mode)
-      return this.deleteObjectsIndividually(bucket, prefixes)
+      await Promise.allSettled(
+        prefixes.map((key) => this.client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key })))
+      )
+      return
     }
 
     try {
@@ -353,33 +355,24 @@ export class S3Backend implements StorageBackendAdapter {
       // Some S3-compatible backends (e.g. GCS) do not support DeleteObjects; fall back to individual deletes
       const code = (e as { Code?: string; name?: string })?.Code ?? (e as { name?: string })?.name
       if (code === 'NotImplemented') {
-        return this.deleteObjectsIndividually(bucket, prefixes)
+        const results = await Promise.allSettled(
+          prefixes.map((key) =>
+            this.client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+          )
+        )
+        for (const result of results) {
+          if (result.status === 'rejected') {
+            const errCode =
+              (result.reason as { Code?: string })?.Code ??
+              (result.reason as { name?: string })?.name
+            if (errCode !== 'NoSuchKey') {
+              throw StorageBackendError.fromError(result.reason)
+            }
+          }
+        }
+        return
       }
       throw StorageBackendError.fromError(e)
-    }
-  }
-
-  /**
-   * Deletes objects one-by-one in parallel.
-   * Used when batch delete is disabled or when the S3 backend returns NotImplemented.
-   * NoSuchKey errors are silently ignored (object already gone).
-   * @param bucket
-   * @param prefixes
-   */
-  private async deleteObjectsIndividually(bucket: string, prefixes: string[]): Promise<void> {
-    const results = await Promise.allSettled(
-      prefixes.map((key) =>
-        this.client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
-      )
-    )
-    for (const result of results) {
-      if (result.status === 'rejected') {
-        const errCode =
-          (result.reason as { Code?: string })?.Code ?? (result.reason as { name?: string })?.name
-        if (errCode !== 'NoSuchKey') {
-          throw StorageBackendError.fromError(result.reason)
-        }
-      }
     }
   }
 

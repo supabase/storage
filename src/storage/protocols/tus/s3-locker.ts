@@ -249,9 +249,11 @@ export class S3Locker implements Locker {
             const batch = expiredLocks.slice(i, i + 1000)
 
             if (!this.batchDeleteEnabled) {
-              // Batch delete explicitly disabled — use individual deletes directly
-              await this.deleteLocksIndividually(batch)
-              this.logger.log(`Cleaned up ${batch.length} expired locks (individual, batch disabled)`)
+              await Promise.allSettled(
+                batch.map((key) =>
+                  this.s3Client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
+                )
+              )
               continue
             }
 
@@ -271,7 +273,21 @@ export class S3Locker implements Locker {
               // fall back to individual deletes so zombie-lock cleanup still works.
               const code = error?.Code ?? error?.name
               if (code === 'NotImplemented') {
-                await this.deleteLocksIndividually(batch)
+                const results = await Promise.allSettled(
+                  batch.map((key) =>
+                    this.s3Client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
+                  )
+                )
+                for (const result of results) {
+                  if (result.status === 'rejected') {
+                    const errCode =
+                      (result.reason as { Code?: string })?.Code ??
+                      (result.reason as { name?: string })?.name
+                    if (errCode !== 'NoSuchKey') {
+                      this.logger.warn(`Failed to delete expired lock in fallback:`, result.reason)
+                    }
+                  }
+                }
                 this.logger.log(
                   `Cleaned up ${batch.length} expired locks in batch (individual fallback)`
                 )
@@ -300,28 +316,6 @@ export class S3Locker implements Locker {
       expiresAt: now + this.lockTtlMs,
       createdAt: now,
       renewedAt: now,
-    }
-  }
-
-  /**
-   * Deletes a batch of lock keys one-by-one in parallel.
-   * NoSuchKey is ignored (lock already gone). Other errors are logged as warnings.
-   */
-  private async deleteLocksIndividually(keys: string[]): Promise<void> {
-    const results = await Promise.allSettled(
-      keys.map((key) =>
-        this.s3Client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
-      )
-    )
-    for (const result of results) {
-      if (result.status === 'rejected') {
-        const errCode =
-          (result.reason as { Code?: string })?.Code ??
-          (result.reason as { name?: string })?.name
-        if (errCode !== 'NoSuchKey') {
-          this.logger.warn(`Failed to delete expired lock in fallback:`, result.reason)
-        }
-      }
     }
   }
 

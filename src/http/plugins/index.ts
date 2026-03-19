@@ -1,5 +1,6 @@
 export * from './apikey'
 export * from './db'
+export * from './header-validator'
 export * from './iceberg'
 export * from './jwt'
 export * from './log-request'

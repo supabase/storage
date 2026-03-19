@@ -69,6 +69,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   )
   app.register(plugins.tracing)
   app.register(plugins.logRequest({ excludeUrls: excludedRoutesFromMonitoring }))
+  app.register(plugins.headerValidator)
   app.register(routes.tus, { prefix: 'upload/resumable' })
   app.register(routes.bucket, { prefix: 'bucket' })
   app.register(routes.object, { prefix: 'object' })

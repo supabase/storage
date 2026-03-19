@@ -3,6 +3,7 @@ import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
+import { transformationOptionsSchema } from '../../schemas/transformations'
 import { AuthenticatedRangeRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
@@ -17,8 +18,14 @@ const getObjectParamsSchema = {
   required: ['bucketName', '*'],
 } as const
 
+const getObjectInfoQuerySchema = {
+  type: 'object',
+  properties: transformationOptionsSchema,
+} as const
+
 interface getObjectRequestInterface extends AuthenticatedRangeRequest {
   Params: FromSchema<typeof getObjectParamsSchema>
+  Querystring: FromSchema<typeof getObjectInfoQuerySchema>
 }
 
 type GetObjectInfoRequest = FastifyRequest<getObjectRequestInterface>
@@ -87,6 +94,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
     {
       schema: {
         params: getObjectParamsSchema,
+        querystring: getObjectInfoQuerySchema,
         summary: 'Get object info',
         description: 'returns object info',
         tags: ['object'],
@@ -107,6 +115,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
       exposeHeadRoute: false,
       schema: {
         params: getObjectParamsSchema,
+        querystring: getObjectInfoQuerySchema,
         summary: 'Get object info',
         description: 'returns object info',
         tags: ['object'],
@@ -129,6 +138,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
     {
       schema: {
         params: getObjectParamsSchema,
+        querystring: getObjectInfoQuerySchema,
         headers: { $ref: 'authSchema#' },
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
@@ -148,6 +158,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
     {
       schema: {
         params: getObjectParamsSchema,
+        querystring: getObjectInfoQuerySchema,
         headers: { $ref: 'authSchema#' },
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
@@ -167,6 +178,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
     {
       schema: {
         params: getObjectParamsSchema,
+        querystring: getObjectInfoQuerySchema,
         summary,
         description: 'Object Info',
         tags: ['object'],
@@ -187,6 +199,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
     {
       schema: {
         params: getObjectParamsSchema,
+        querystring: getObjectInfoQuerySchema,
         summary,
         description: 'Head object info',
         tags: ['object'],

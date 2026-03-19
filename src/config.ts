@@ -72,6 +72,7 @@ type StorageConfigType = {
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
   storageS3ClientTimeout: number
+  storageS3BatchDeleteEnabled: boolean
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: string
@@ -265,8 +266,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     tenantId: isMultitenant
       ? ''
       : getOptionalConfigFromEnv('PROJECT_REF') ||
-        getOptionalConfigFromEnv('TENANT_ID') ||
-        'storage-single-tenant',
+      getOptionalConfigFromEnv('TENANT_ID') ||
+      'storage-single-tenant',
 
     // Server
     region: getOptionalConfigFromEnv('SERVER_REGION', 'REGION') || 'not-specified',
@@ -376,6 +377,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'true',
     storageS3Region: getOptionalConfigFromEnv('STORAGE_S3_REGION', 'REGION') as string,
     storageS3ClientTimeout: Number(getOptionalConfigFromEnv('STORAGE_S3_CLIENT_TIMEOUT') || `0`),
+    storageS3BatchDeleteEnabled:
+      getOptionalConfigFromEnv('STORAGE_S3_BATCH_DELETE_ENABLED') !== 'false',
 
     // DB - Migrations
     dbAnonRole: getOptionalConfigFromEnv('DB_ANON_ROLE') || 'anon',
@@ -539,12 +542,12 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       size: {
         min: parseInt(
           getOptionalConfigFromEnv('IMAGE_TRANSFORMATION_LIMIT_MIN_SIZE', 'IMG_LIMITS_MIN_SIZE') ||
-            '1',
+          '1',
           10
         ),
         max: parseInt(
           getOptionalConfigFromEnv('IMAGE_TRANSFORMATION_LIMIT_MAX_SIZE', 'IMG_LIMITS_MAX_SIZE') ||
-            '2000',
+          '2000',
           10
         ),
       },

@@ -36,6 +36,7 @@ const {
   storageS3ForcePathStyle,
   storageS3Region,
   storageS3ClientTimeout,
+  storageS3BatchDeleteEnabled,
   tusUrlExpiryMs,
   tusPath,
   tusPartSize,
@@ -117,6 +118,7 @@ function createTusServer(
             maxRetries: 10,
             retryDelayMs: 250,
             renewalIntervalMs: 10 * 1000, // 10 seconds
+            batchDeleteEnabled: storageS3BatchDeleteEnabled,
             s3Client: new S3Client({
               requestHandler: new NodeHttpHandler({
                 ...agent,
@@ -256,14 +258,14 @@ const authenticatedRoutes = fastifyPlugin(
       })
 
       fastify.addHook('preHandler', async (req) => {
-        ;(req.raw as MultiPartRequest).log = req.log
-        ;(req.raw as MultiPartRequest).upload = {
-          storage: req.storage,
-          owner: req.owner,
-          tenantId: req.tenantId,
-          db: req.db,
-          isUpsert: req.headers['x-upsert'] === 'true',
-        }
+        ; (req.raw as MultiPartRequest).log = req.log
+          ; (req.raw as MultiPartRequest).upload = {
+            storage: req.storage,
+            owner: req.owner,
+            tenantId: req.tenantId,
+            db: req.db,
+            isUpsert: req.headers['x-upsert'] === 'true',
+          }
       })
 
       fastify.post(
@@ -358,14 +360,14 @@ const publicRoutes = fastifyPlugin(
       )
 
       fastify.addHook('preHandler', async (req) => {
-        ;(req.raw as MultiPartRequest).log = req.log
-        ;(req.raw as MultiPartRequest).upload = {
-          storage: req.storage,
-          owner: req.owner,
-          tenantId: req.tenantId,
-          db: req.db,
-          isUpsert: req.headers['x-upsert'] === 'true',
-        }
+        ; (req.raw as MultiPartRequest).log = req.log
+          ; (req.raw as MultiPartRequest).upload = {
+            storage: req.storage,
+            owner: req.owner,
+            tenantId: req.tenantId,
+            db: req.db,
+            isUpsert: req.headers['x-upsert'] === 'true',
+          }
       })
 
       fastify.options(

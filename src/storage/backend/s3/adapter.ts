@@ -330,7 +330,12 @@ export class S3Backend implements StorageBackendAdapter {
    * @param prefixes
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
+    const { storageS3BatchDeleteEnabled } = getConfig()
+
     try {
+      if (!storageS3BatchDeleteEnabled) {
+        throw Object.assign(new Error('NotImplemented'), { name: 'NotImplemented' })
+      }
       const s3Prefixes = prefixes.map((ele) => {
         return { Key: ele }
       })

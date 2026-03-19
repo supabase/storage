@@ -65,6 +65,7 @@ type StorageConfigType = {
   storageFileEtagAlgorithm: 'mtime' | 'md5'
   storageS3InternalTracesEnabled?: boolean
   storageS3MaxSockets: number
+  storageS3BatchDeleteEnabled: boolean
   storageS3DisableChecksum: boolean
   storageS3UploadQueueSize: number
   storageS3Bucket: string
@@ -365,6 +366,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('STORAGE_S3_MAX_SOCKETS', 'GLOBAL_S3_MAX_SOCKETS') || '200',
       10
     ),
+    storageS3BatchDeleteEnabled:
+      getOptionalConfigFromEnv('STORAGE_S3_BATCH_DELETE_ENABLED') !== 'false',
     storageS3DisableChecksum: getOptionalConfigFromEnv('STORAGE_S3_DISABLE_CHECKSUM') === 'true',
     storageS3UploadQueueSize:
       envNumber(getOptionalConfigFromEnv('STORAGE_S3_UPLOAD_QUEUE_SIZE')) ?? 2,

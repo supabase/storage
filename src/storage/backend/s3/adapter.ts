@@ -185,14 +185,14 @@ export class S3Backend implements StorageBackendAdapter {
       const metadata = hasUploadedBytes
         ? await this.headObject(bucketName, key, version)
         : {
-            httpStatusCode: 200,
-            eTag: data.ETag || '',
-            mimetype: contentType,
-            lastModified: new Date(),
-            size: 0,
-            contentLength: 0,
-            contentRange: undefined,
-          }
+          httpStatusCode: 200,
+          eTag: data.ETag || '',
+          mimetype: contentType,
+          lastModified: new Date(),
+          size: 0,
+          contentLength: 0,
+          contentRange: undefined,
+        }
 
       return {
         httpStatusCode: data.$metadata.httpStatusCode || metadata.httpStatusCode,
@@ -463,9 +463,9 @@ export class S3Backend implements StorageBackendAdapter {
       ContentType: contentType,
       Metadata: metadata
         ? {
-            ...metadata,
-            Version: version || '',
-          }
+          ...metadata,
+          Version: version || '',
+        }
         : undefined,
     })
 
@@ -544,8 +544,8 @@ export class S3Backend implements StorageBackendAdapter {
         parts.length === 0
           ? undefined
           : {
-              Parts: parts,
-            },
+            Parts: parts,
+          },
     })
 
     const response = await this.client.send(completeUpload)

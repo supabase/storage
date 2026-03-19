@@ -73,7 +73,6 @@ type StorageConfigType = {
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
   storageS3ClientTimeout: number
-  storageS3BatchDeleteEnabled: boolean
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: string
@@ -380,8 +379,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'true',
     storageS3Region: getOptionalConfigFromEnv('STORAGE_S3_REGION', 'REGION') as string,
     storageS3ClientTimeout: Number(getOptionalConfigFromEnv('STORAGE_S3_CLIENT_TIMEOUT') || `0`),
-    storageS3BatchDeleteEnabled:
-      getOptionalConfigFromEnv('STORAGE_S3_BATCH_DELETE_ENABLED') !== 'false',
 
     // DB - Migrations
     dbAnonRole: getOptionalConfigFromEnv('DB_ANON_ROLE') || 'anon',

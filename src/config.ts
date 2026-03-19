@@ -266,8 +266,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     tenantId: isMultitenant
       ? ''
       : getOptionalConfigFromEnv('PROJECT_REF') ||
-      getOptionalConfigFromEnv('TENANT_ID') ||
-      'storage-single-tenant',
+        getOptionalConfigFromEnv('TENANT_ID') ||
+        'storage-single-tenant',
 
     // Server
     region: getOptionalConfigFromEnv('SERVER_REGION', 'REGION') || 'not-specified',
@@ -542,12 +542,12 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       size: {
         min: parseInt(
           getOptionalConfigFromEnv('IMAGE_TRANSFORMATION_LIMIT_MIN_SIZE', 'IMG_LIMITS_MIN_SIZE') ||
-          '1',
+            '1',
           10
         ),
         max: parseInt(
           getOptionalConfigFromEnv('IMAGE_TRANSFORMATION_LIMIT_MAX_SIZE', 'IMG_LIMITS_MAX_SIZE') ||
-          '2000',
+            '2000',
           10
         ),
       },

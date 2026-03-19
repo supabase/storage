@@ -258,14 +258,14 @@ const authenticatedRoutes = fastifyPlugin(
       })
 
       fastify.addHook('preHandler', async (req) => {
-        ; (req.raw as MultiPartRequest).log = req.log
-          ; (req.raw as MultiPartRequest).upload = {
-            storage: req.storage,
-            owner: req.owner,
-            tenantId: req.tenantId,
-            db: req.db,
-            isUpsert: req.headers['x-upsert'] === 'true',
-          }
+        ;(req.raw as MultiPartRequest).log = req.log
+        ;(req.raw as MultiPartRequest).upload = {
+          storage: req.storage,
+          owner: req.owner,
+          tenantId: req.tenantId,
+          db: req.db,
+          isUpsert: req.headers['x-upsert'] === 'true',
+        }
       })
 
       fastify.post(
@@ -360,14 +360,14 @@ const publicRoutes = fastifyPlugin(
       )
 
       fastify.addHook('preHandler', async (req) => {
-        ; (req.raw as MultiPartRequest).log = req.log
-          ; (req.raw as MultiPartRequest).upload = {
-            storage: req.storage,
-            owner: req.owner,
-            tenantId: req.tenantId,
-            db: req.db,
-            isUpsert: req.headers['x-upsert'] === 'true',
-          }
+        ;(req.raw as MultiPartRequest).log = req.log
+        ;(req.raw as MultiPartRequest).upload = {
+          storage: req.storage,
+          owner: req.owner,
+          tenantId: req.tenantId,
+          db: req.db,
+          isUpsert: req.headers['x-upsert'] === 'true',
+        }
       })
 
       fastify.options(

@@ -247,25 +247,42 @@ export class S3Locker implements Locker {
           for (let i = 0; i < expiredLocks.length; i += 1000) {
             const batch = expiredLocks.slice(i, i + 1000)
 
-            if (!this.batchDeleteEnabled) {
-              await Promise.allSettled(
-                batch.map((key) =>
-                  this.s3Client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
-                )
+            try {
+              if (!this.batchDeleteEnabled) {
+                throw Object.assign(new Error('NotImplemented'), { name: 'NotImplemented' })
+              }
+              await this.s3Client.send(
+                new DeleteObjectsCommand({
+                  Bucket: this.bucket,
+                  Delete: {
+                    Objects: batch.map((key) => ({ Key: key })),
+                    Quiet: true,
+                  },
+                })
               )
-              continue
+              this.logger.log(`Cleaned up ${batch.length} expired locks in batch`)
+            } catch (error: any) {
+              const code = error?.Code ?? error?.name
+              if (code === 'NotImplemented') {
+                const results = await Promise.allSettled(
+                  batch.map((key) =>
+                    this.s3Client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
+                  )
+                )
+                for (const result of results) {
+                  if (result.status === 'rejected') {
+                    const errCode =
+                      (result.reason as { Code?: string })?.Code ??
+                      (result.reason as { name?: string })?.name
+                    if (errCode !== 'NoSuchKey') {
+                      this.logger.warn(`Failed to delete expired lock in fallback:`, result.reason)
+                    }
+                  }
+                }
+              } else {
+                this.logger.warn(`Failed to delete batch of expired locks:`, error)
+              }
             }
-
-            await this.s3Client.send(
-              new DeleteObjectsCommand({
-                Bucket: this.bucket,
-                Delete: {
-                  Objects: batch.map((key) => ({ Key: key })),
-                  Quiet: true,
-                },
-              })
-            )
-            this.logger.log(`Cleaned up ${batch.length} expired locks in batch`)
           }
         }
 

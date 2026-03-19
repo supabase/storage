@@ -375,7 +375,7 @@ export class S3Lock implements Lock {
     private readonly id: string,
     private readonly locker: S3Locker,
     private readonly notifier: LockNotifier
-  ) { }
+  ) {}
 
   async lock(stopSignal: AbortSignal, cancelReq: RequestRelease): Promise<void> {
     // Set up abort handler to clean up in case of abort

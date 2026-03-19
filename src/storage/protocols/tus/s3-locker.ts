@@ -19,7 +19,6 @@ export interface S3LockerOptions {
   renewalIntervalMs?: number
   maxRetries?: number
   retryDelayMs?: number
-  /** When false, skips DeleteObjectsCommand in zombie-lock cleanup and uses individual deletes. Default: true */
   batchDeleteEnabled?: boolean
   logger?: Pick<Console, 'log' | 'warn' | 'error'>
 }
@@ -257,44 +256,16 @@ export class S3Locker implements Locker {
               continue
             }
 
-            try {
-              await this.s3Client.send(
-                new DeleteObjectsCommand({
-                  Bucket: this.bucket,
-                  Delete: {
-                    Objects: batch.map((key) => ({ Key: key })),
-                    Quiet: true,
-                  },
-                })
-              )
-              this.logger.log(`Cleaned up ${batch.length} expired locks in batch`)
-            } catch (error: any) {
-              // Some S3-compatible backends (e.g. GCS) do not support DeleteObjects;
-              // fall back to individual deletes so zombie-lock cleanup still works.
-              const code = error?.Code ?? error?.name
-              if (code === 'NotImplemented') {
-                const results = await Promise.allSettled(
-                  batch.map((key) =>
-                    this.s3Client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
-                  )
-                )
-                for (const result of results) {
-                  if (result.status === 'rejected') {
-                    const errCode =
-                      (result.reason as { Code?: string })?.Code ??
-                      (result.reason as { name?: string })?.name
-                    if (errCode !== 'NoSuchKey') {
-                      this.logger.warn(`Failed to delete expired lock in fallback:`, result.reason)
-                    }
-                  }
-                }
-                this.logger.log(
-                  `Cleaned up ${batch.length} expired locks in batch (individual fallback)`
-                )
-              } else {
-                this.logger.warn(`Failed to delete batch of expired locks:`, error)
-              }
-            }
+            await this.s3Client.send(
+              new DeleteObjectsCommand({
+                Bucket: this.bucket,
+                Delete: {
+                  Objects: batch.map((key) => ({ Key: key })),
+                  Quiet: true,
+                },
+              })
+            )
+            this.logger.log(`Cleaned up ${batch.length} expired locks in batch`)
           }
         }
 

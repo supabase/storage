@@ -185,14 +185,14 @@ export class S3Backend implements StorageBackendAdapter {
       const metadata = hasUploadedBytes
         ? await this.headObject(bucketName, key, version)
         : {
-            httpStatusCode: 200,
-            eTag: data.ETag || '',
-            mimetype: contentType,
-            lastModified: new Date(),
-            size: 0,
-            contentLength: 0,
-            contentRange: undefined,
-          }
+          httpStatusCode: 200,
+          eTag: data.ETag || '',
+          mimetype: contentType,
+          lastModified: new Date(),
+          size: 0,
+          contentLength: 0,
+          contentRange: undefined,
+        }
 
       return {
         httpStatusCode: data.$metadata.httpStatusCode || metadata.httpStatusCode,
@@ -330,6 +330,13 @@ export class S3Backend implements StorageBackendAdapter {
    * @param prefixes
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
+    const { storageS3BatchDeleteEnabled } = getConfig()
+
+    if (!storageS3BatchDeleteEnabled) {
+      // Batch delete explicitly disabled (e.g. GCS S3-interop mode)
+      return this.deleteObjectsIndividually(bucket, prefixes)
+    }
+
     try {
       const s3Prefixes = prefixes.map((ele) => {
         return { Key: ele }
@@ -346,24 +353,33 @@ export class S3Backend implements StorageBackendAdapter {
       // Some S3-compatible backends (e.g. GCS) do not support DeleteObjects; fall back to individual deletes
       const code = (e as { Code?: string; name?: string })?.Code ?? (e as { name?: string })?.name
       if (code === 'NotImplemented') {
-        const results = await Promise.allSettled(
-          prefixes.map((key) =>
-            this.client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
-          )
-        )
-        for (const result of results) {
-          if (result.status === 'rejected') {
-            const errCode =
-              (result.reason as { Code?: string })?.Code ??
-              (result.reason as { name?: string })?.name
-            if (errCode !== 'NoSuchKey') {
-              throw StorageBackendError.fromError(result.reason)
-            }
-          }
-        }
-        return
+        return this.deleteObjectsIndividually(bucket, prefixes)
       }
       throw StorageBackendError.fromError(e)
+    }
+  }
+
+  /**
+   * Deletes objects one-by-one in parallel.
+   * Used when batch delete is disabled or when the S3 backend returns NotImplemented.
+   * NoSuchKey errors are silently ignored (object already gone).
+   * @param bucket
+   * @param prefixes
+   */
+  private async deleteObjectsIndividually(bucket: string, prefixes: string[]): Promise<void> {
+    const results = await Promise.allSettled(
+      prefixes.map((key) =>
+        this.client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+      )
+    )
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        const errCode =
+          (result.reason as { Code?: string })?.Code ?? (result.reason as { name?: string })?.name
+        if (errCode !== 'NoSuchKey') {
+          throw StorageBackendError.fromError(result.reason)
+        }
+      }
     }
   }
 
@@ -458,9 +474,9 @@ export class S3Backend implements StorageBackendAdapter {
       ContentType: contentType,
       Metadata: metadata
         ? {
-            ...metadata,
-            Version: version || '',
-          }
+          ...metadata,
+          Version: version || '',
+        }
         : undefined,
     })
 
@@ -539,8 +555,8 @@ export class S3Backend implements StorageBackendAdapter {
         parts.length === 0
           ? undefined
           : {
-              Parts: parts,
-            },
+            Parts: parts,
+          },
     })
 
     const response = await this.client.send(completeUpload)

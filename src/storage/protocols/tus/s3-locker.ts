@@ -19,6 +19,8 @@ export interface S3LockerOptions {
   renewalIntervalMs?: number
   maxRetries?: number
   retryDelayMs?: number
+  /** When false, skips DeleteObjectsCommand in zombie-lock cleanup and uses individual deletes. Default: true */
+  batchDeleteEnabled?: boolean
   logger?: Pick<Console, 'log' | 'warn' | 'error'>
 }
 
@@ -37,6 +39,7 @@ export class S3Locker implements Locker {
   private readonly renewalIntervalMs: number
   private readonly maxRetries: number
   private readonly retryDelayMs: number
+  private readonly batchDeleteEnabled: boolean
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>
   private readonly notifier: LockNotifier
 
@@ -49,6 +52,7 @@ export class S3Locker implements Locker {
     this.renewalIntervalMs = options.renewalIntervalMs || 10000 // 10 seconds
     this.maxRetries = options.maxRetries || 10
     this.retryDelayMs = options.retryDelayMs || 500
+    this.batchDeleteEnabled = options.batchDeleteEnabled !== false // default true
     this.logger = options.logger || console
 
     // Validate configuration
@@ -244,6 +248,13 @@ export class S3Locker implements Locker {
           for (let i = 0; i < expiredLocks.length; i += 1000) {
             const batch = expiredLocks.slice(i, i + 1000)
 
+            if (!this.batchDeleteEnabled) {
+              // Batch delete explicitly disabled — use individual deletes directly
+              await this.deleteLocksIndividually(batch)
+              this.logger.log(`Cleaned up ${batch.length} expired locks (individual, batch disabled)`)
+              continue
+            }
+
             try {
               await this.s3Client.send(
                 new DeleteObjectsCommand({
@@ -255,8 +266,18 @@ export class S3Locker implements Locker {
                 })
               )
               this.logger.log(`Cleaned up ${batch.length} expired locks in batch`)
-            } catch (error) {
-              this.logger.warn(`Failed to delete batch of expired locks:`, error)
+            } catch (error: any) {
+              // Some S3-compatible backends (e.g. GCS) do not support DeleteObjects;
+              // fall back to individual deletes so zombie-lock cleanup still works.
+              const code = error?.Code ?? error?.name
+              if (code === 'NotImplemented') {
+                await this.deleteLocksIndividually(batch)
+                this.logger.log(
+                  `Cleaned up ${batch.length} expired locks in batch (individual fallback)`
+                )
+              } else {
+                this.logger.warn(`Failed to delete batch of expired locks:`, error)
+              }
             }
           }
         }
@@ -279,6 +300,28 @@ export class S3Locker implements Locker {
       expiresAt: now + this.lockTtlMs,
       createdAt: now,
       renewedAt: now,
+    }
+  }
+
+  /**
+   * Deletes a batch of lock keys one-by-one in parallel.
+   * NoSuchKey is ignored (lock already gone). Other errors are logged as warnings.
+   */
+  private async deleteLocksIndividually(keys: string[]): Promise<void> {
+    const results = await Promise.allSettled(
+      keys.map((key) =>
+        this.s3Client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
+      )
+    )
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        const errCode =
+          (result.reason as { Code?: string })?.Code ??
+          (result.reason as { name?: string })?.name
+        if (errCode !== 'NoSuchKey') {
+          this.logger.warn(`Failed to delete expired lock in fallback:`, result.reason)
+        }
+      }
     }
   }
 
@@ -350,7 +393,7 @@ export class S3Lock implements Lock {
     private readonly id: string,
     private readonly locker: S3Locker,
     private readonly notifier: LockNotifier
-  ) {}
+  ) { }
 
   async lock(stopSignal: AbortSignal, cancelReq: RequestRelease): Promise<void> {
     // Set up abort handler to clean up in case of abort

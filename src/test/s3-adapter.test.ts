@@ -2,6 +2,7 @@
 
 import { S3Client } from '@aws-sdk/client-s3'
 import { Readable } from 'stream'
+import * as config from '../config'
 import { S3Backend } from '../storage/backend/s3/adapter'
 
 jest.mock('@aws-sdk/client-s3', () => {
@@ -139,6 +140,44 @@ describe('S3Backend', () => {
       const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
       await expect(backend.deleteObjects('test-bucket', ['file1.txt'])).rejects.toThrow()
       expect(mockSend).toHaveBeenCalledTimes(1)
+    })
+
+    test('should skip DeleteObjectsCommand and use individual deletes when batchDeleteEnabled is false', async () => {
+      const getConfigSpy = jest
+        .spyOn(config, 'getConfig')
+        .mockReturnValue({ storageS3BatchDeleteEnabled: false } as any)
+      mockSend.mockResolvedValue({ $metadata: { httpStatusCode: 204 } })
+
+      try {
+        const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+        await backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
+
+        // No DeleteObjectsCommand call — straight to individual deletes
+        expect(mockSend).toHaveBeenCalledTimes(2)
+        expect(mockSend.mock.calls[0][0].constructor.name).toBe('DeleteObjectCommand')
+        expect(mockSend.mock.calls[1][0].constructor.name).toBe('DeleteObjectCommand')
+      } finally {
+        getConfigSpy.mockRestore()
+      }
+    })
+
+    test('should ignore NoSuchKey when batchDeleteEnabled is false', async () => {
+      const getConfigSpy = jest
+        .spyOn(config, 'getConfig')
+        .mockReturnValue({ storageS3BatchDeleteEnabled: false } as any)
+      const noSuchKey = Object.assign(new Error('NoSuchKey'), { Code: 'NoSuchKey' })
+      mockSend
+        .mockResolvedValueOnce({ $metadata: { httpStatusCode: 204 } })
+        .mockRejectedValueOnce(noSuchKey)
+
+      try {
+        const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+        await expect(
+          backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
+        ).resolves.toBeUndefined()
+      } finally {
+        getConfigSpy.mockRestore()
+      }
     })
   })
 })

@@ -8,7 +8,7 @@ describe('header-validator plugin', () => {
 
   beforeEach(async () => {
     app = Fastify()
-    await app.register(headerValidator)
+    await app.register(headerValidator())
     setErrorHandler(app)
   })
 
@@ -66,6 +66,36 @@ describe('header-validator plugin', () => {
 
     expect(response.statusCode).toBe(200)
     expect(response.headers['x-transformations']).toBe('width:100,height:200,resize:cover')
+  })
+
+  it('should reject response with newline in array header value', async () => {
+    app.get('/test', async (_request, reply) => {
+      reply.header('x-test', ['blah', 'stuff', 'value\nwith\nnewlines', 'other'])
+      return { ok: true }
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/test' })
+
+    expect(response.statusCode).toBe(400)
+    const body = response.json()
+    expect(body.message).toContain('Invalid character in response header')
+    expect(body.message).toContain('x-test')
+  })
+
+  it('should allow normal ASCII array header values', async () => {
+    app.get('/test', async (_request, reply) => {
+      reply.header('x-transformations', ['width:100,height:200,resize:cover', 'blah', 'blah'])
+      return { ok: true }
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/test' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['x-transformations']).toEqual([
+      'width:100,height:200,resize:cover',
+      'blah',
+      'blah',
+    ])
   })
 })
 

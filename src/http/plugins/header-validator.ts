@@ -10,25 +10,39 @@ import fastifyPlugin from 'fastify-plugin'
  */
 const INVALID_HEADER_CHAR_PATTERN = /[^\t\x20-\x7e\x80-\xff]/
 
+interface HeaderValidatorOptions {
+  excludeUrls?: string[]
+}
+
 /**
  * Validates response headers before they're sent to prevent ERR_INVALID_CHAR crashes.
  *
  * Node.js throws ERR_INVALID_CHAR during writeHead() if headers contain control characters.
  * This hook validates headers in onSend (before writeHead) and throws InvalidHeaderChar error
  */
-export const headerValidator = fastifyPlugin(
-  async function headerValidatorPlugin(fastify: FastifyInstance) {
-    fastify.addHook('onSend', async (_request: FastifyRequest, reply: FastifyReply, payload) => {
-      const headers = reply.getHeaders()
-
-      for (const [key, value] of Object.entries(headers)) {
-        if (typeof value === 'string' && INVALID_HEADER_CHAR_PATTERN.test(value)) {
-          throw ERRORS.InvalidHeaderChar(key, value)
+export const headerValidator = (options: HeaderValidatorOptions = {}) =>
+  fastifyPlugin(
+    async function headerValidatorPlugin(fastify: FastifyInstance) {
+      fastify.addHook('onSend', async (request: FastifyRequest, reply: FastifyReply, payload) => {
+        if (options.excludeUrls?.includes(request.url.toLowerCase())) {
+          return payload
         }
-      }
 
-      return payload
-    })
-  },
-  { name: 'header-validator' }
-)
+        const headers = Object.entries(reply.getHeaders())
+        for (const [key, value] of headers) {
+          if (typeof value === 'string' && INVALID_HEADER_CHAR_PATTERN.test(value)) {
+            throw ERRORS.InvalidHeaderChar(key, value)
+          } else if (Array.isArray(value)) {
+            for (let item of value) {
+              if (typeof item === 'string' && INVALID_HEADER_CHAR_PATTERN.test(item)) {
+                throw ERRORS.InvalidHeaderChar(key, item)
+              }
+            }
+          }
+        }
+
+        return payload
+      })
+    },
+    { name: 'header-validator' }
+  )

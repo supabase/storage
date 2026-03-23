@@ -19,6 +19,7 @@ export interface S3LockerOptions {
   renewalIntervalMs?: number
   maxRetries?: number
   retryDelayMs?: number
+  batchDeleteEnabled?: boolean
   logger?: Pick<Console, 'log' | 'warn' | 'error'>
 }
 
@@ -37,6 +38,7 @@ export class S3Locker implements Locker {
   private readonly renewalIntervalMs: number
   private readonly maxRetries: number
   private readonly retryDelayMs: number
+  private readonly batchDeleteEnabled: boolean
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>
   private readonly notifier: LockNotifier
 
@@ -49,6 +51,7 @@ export class S3Locker implements Locker {
     this.renewalIntervalMs = options.renewalIntervalMs || 10000 // 10 seconds
     this.maxRetries = options.maxRetries || 10
     this.retryDelayMs = options.retryDelayMs || 500
+    this.batchDeleteEnabled = options.batchDeleteEnabled !== false // default true
     this.logger = options.logger || console
 
     // Validate configuration
@@ -245,6 +248,9 @@ export class S3Locker implements Locker {
             const batch = expiredLocks.slice(i, i + 1000)
 
             try {
+              if (!this.batchDeleteEnabled) {
+                throw Object.assign(new Error('NotImplemented'), { name: 'NotImplemented' })
+              }
               await this.s3Client.send(
                 new DeleteObjectsCommand({
                   Bucket: this.bucket,
@@ -255,8 +261,27 @@ export class S3Locker implements Locker {
                 })
               )
               this.logger.log(`Cleaned up ${batch.length} expired locks in batch`)
-            } catch (error) {
-              this.logger.warn(`Failed to delete batch of expired locks:`, error)
+            } catch (error: any) {
+              const code = error?.Code ?? error?.name
+              if (code === 'NotImplemented') {
+                const results = await Promise.allSettled(
+                  batch.map((key) =>
+                    this.s3Client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
+                  )
+                )
+                for (const result of results) {
+                  if (result.status === 'rejected') {
+                    const errCode =
+                      (result.reason as { Code?: string })?.Code ??
+                      (result.reason as { name?: string })?.name
+                    if (errCode !== 'NoSuchKey') {
+                      this.logger.warn(`Failed to delete expired lock in fallback:`, result.reason)
+                    }
+                  }
+                }
+              } else {
+                this.logger.warn(`Failed to delete batch of expired locks:`, error)
+              }
             }
           }
         }

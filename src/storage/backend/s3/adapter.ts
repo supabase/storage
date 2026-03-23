@@ -330,7 +330,12 @@ export class S3Backend implements StorageBackendAdapter {
    * @param prefixes
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
+    const { storageS3BatchDeleteEnabled } = getConfig()
+
     try {
+      if (!storageS3BatchDeleteEnabled) {
+        throw Object.assign(new Error('NotImplemented'), { name: 'NotImplemented' })
+      }
       const s3Prefixes = prefixes.map((ele) => {
         return { Key: ele }
       })
@@ -343,6 +348,26 @@ export class S3Backend implements StorageBackendAdapter {
       })
       await this.client.send(command)
     } catch (e) {
+      // Some S3-compatible backends (e.g. GCS) do not support DeleteObjects; fall back to individual deletes
+      const code = (e as { Code?: string; name?: string })?.Code ?? (e as { name?: string })?.name
+      if (code === 'NotImplemented') {
+        const results = await Promise.allSettled(
+          prefixes.map((key) =>
+            this.client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+          )
+        )
+        for (const result of results) {
+          if (result.status === 'rejected') {
+            const errCode =
+              (result.reason as { Code?: string })?.Code ??
+              (result.reason as { name?: string })?.name
+            if (errCode !== 'NoSuchKey') {
+              throw StorageBackendError.fromError(result.reason)
+            }
+          }
+        }
+        return
+      }
       throw StorageBackendError.fromError(e)
     }
   }

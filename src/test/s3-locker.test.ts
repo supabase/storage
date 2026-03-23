@@ -782,4 +782,163 @@ describe('S3Locker', () => {
       await lock.unlock()
     })
   })
+
+  describe('cleanupZombieLocks – NotImplemented fallback', () => {
+    // Helper: place a pre-expired lock object in S3
+    async function putExpiredLock(key: string) {
+      await s3Client.send(
+        new PutObjectCommand({
+          Bucket: testBucket,
+          Key: key,
+          Body: JSON.stringify({
+            lockId: key,
+            expiresAt: Date.now() - 10000,
+            createdAt: Date.now() - 20000,
+            renewedAt: Date.now() - 20000,
+          }),
+          ContentType: 'application/json',
+        })
+      )
+    }
+
+    test('falls back to individual deletes when DeleteObjectsCommand returns NotImplemented', async () => {
+      const lockKey = 'test-locks/not-impl-fallback-lock.lock'
+      await putExpiredLock(lockKey)
+
+      const originalSend = s3Client.send.bind(s3Client)
+      const sendSpy = jest.spyOn(s3Client, 'send').mockImplementation(async (command: any) => {
+        // Only reject the batch delete; let everything else through
+        if (command.constructor.name === 'DeleteObjectsCommand') {
+          const err: any = new Error('NotImplemented')
+          err.name = 'NotImplemented'
+          throw err
+        }
+        return originalSend(command)
+      })
+
+      try {
+        // Should not throw – fallback handles the error
+        await expect(locker.cleanupZombieLocks()).resolves.not.toThrow()
+      } finally {
+        sendSpy.mockRestore()
+        // Cleanup in case individual delete didn't run
+        try {
+          await originalSend(
+            // @ts-ignore - manual cleanup
+            new (await import('@aws-sdk/client-s3')).DeleteObjectCommand({
+              Bucket: testBucket,
+              Key: lockKey,
+            })
+          )
+        } catch {
+          // ignore
+        }
+      }
+    })
+
+    test('ignores NoSuchKey errors for individual deletes in NotImplemented fallback', async () => {
+      const lockKey = 'test-locks/not-impl-nosuchkey-lock.lock'
+      await putExpiredLock(lockKey)
+
+      const originalSend = s3Client.send.bind(s3Client)
+      const sendSpy = jest.spyOn(s3Client, 'send').mockImplementation(async (command: any) => {
+        if (command.constructor.name === 'DeleteObjectsCommand') {
+          const err: any = new Error('NotImplemented')
+          err.name = 'NotImplemented'
+          throw err
+        }
+        if (command.constructor.name === 'DeleteObjectCommand') {
+          const err: any = new Error('NoSuchKey')
+          err.name = 'NoSuchKey'
+          throw err
+        }
+        return originalSend(command)
+      })
+
+      try {
+        // NoSuchKey on individual deletes must be swallowed; method must not throw
+        await expect(locker.cleanupZombieLocks()).resolves.not.toThrow()
+      } finally {
+        sendSpy.mockRestore()
+      }
+    })
+
+    test('warns (but does not throw) on real individual-delete errors in fallback', async () => {
+      const lockKey = 'test-locks/not-impl-real-err-lock.lock'
+      await putExpiredLock(lockKey)
+
+      const mockWarn = jest.fn()
+      const warnLocker = new S3Locker({
+        s3Client,
+        bucket: testBucket,
+        notifier: mockNotifier,
+        keyPrefix: 'test-locks/',
+        lockTtlMs: 5000,
+        renewalIntervalMs: 1000,
+        logger: { log: jest.fn(), warn: mockWarn, error: jest.fn() },
+      })
+
+      const originalSend = s3Client.send.bind(s3Client)
+      const sendSpy = jest.spyOn(s3Client, 'send').mockImplementation(async (command: any) => {
+        if (command.constructor.name === 'DeleteObjectsCommand') {
+          const err: any = new Error('NotImplemented')
+          err.name = 'NotImplemented'
+          throw err
+        }
+        if (command.constructor.name === 'DeleteObjectCommand') {
+          const err: any = new Error('AccessDenied')
+          err.name = 'AccessDenied'
+          throw err
+        }
+        return originalSend(command)
+      })
+
+      try {
+        await expect(warnLocker.cleanupZombieLocks()).resolves.not.toThrow()
+        // The individual failure should be logged as a warning
+        expect(mockWarn).toHaveBeenCalledWith(
+          expect.stringContaining('Failed to delete expired lock in fallback:'),
+          expect.anything()
+        )
+      } finally {
+        sendSpy.mockRestore()
+      }
+    })
+
+    test('skips DeleteObjectsCommand entirely when batchDeleteEnabled is false', async () => {
+      const lockKey = 'test-locks/batch-disabled-lock.lock'
+      await putExpiredLock(lockKey)
+
+      const deletedKeys: string[] = []
+      const originalSend = s3Client.send.bind(s3Client)
+      const sendSpy = jest.spyOn(s3Client, 'send').mockImplementation(async (command: any) => {
+        if (command.constructor.name === 'DeleteObjectsCommand') {
+          throw new Error('Should not have called DeleteObjectsCommand when batch is disabled')
+        }
+        if (command.constructor.name === 'DeleteObjectCommand') {
+          deletedKeys.push(command.input.Key)
+        }
+        return originalSend(command)
+      })
+
+      const batchDisabledLocker = new S3Locker({
+        s3Client,
+        bucket: testBucket,
+        notifier: mockNotifier,
+        keyPrefix: 'test-locks/',
+        lockTtlMs: 5000,
+        renewalIntervalMs: 1000,
+        batchDeleteEnabled: false,
+        logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn() },
+      })
+
+      try {
+        await expect(batchDisabledLocker.cleanupZombieLocks()).resolves.not.toThrow()
+        // The expired lock should have been deleted via an individual DeleteObjectCommand
+        expect(deletedKeys).toContain(lockKey)
+      } finally {
+        sendSpy.mockRestore()
+      }
+    })
+  })
 })

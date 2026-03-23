@@ -36,6 +36,7 @@ const {
   storageS3ForcePathStyle,
   storageS3Region,
   storageS3ClientTimeout,
+  storageS3BatchDeleteEnabled,
   tusUrlExpiryMs,
   tusPath,
   tusPartSize,
@@ -117,6 +118,7 @@ function createTusServer(
             maxRetries: 10,
             retryDelayMs: 250,
             renewalIntervalMs: 10 * 1000, // 10 seconds
+            batchDeleteEnabled: storageS3BatchDeleteEnabled,
             s3Client: new S3Client({
               requestHandler: new NodeHttpHandler({
                 ...agent,

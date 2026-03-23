@@ -2,6 +2,7 @@
 
 import { S3Client } from '@aws-sdk/client-s3'
 import { Readable } from 'stream'
+import * as config from '../config'
 import { S3Backend } from '../storage/backend/s3/adapter'
 
 jest.mock('@aws-sdk/client-s3', () => {
@@ -20,9 +21,9 @@ describe('S3Backend', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     mockSend = jest.fn()
-    ;(S3Client as jest.Mock).mockImplementation(() => ({
-      send: mockSend,
-    }))
+      ; (S3Client as jest.Mock).mockImplementation(() => ({
+        send: mockSend,
+      }))
   })
 
   describe('getObject', () => {
@@ -72,6 +73,111 @@ describe('S3Backend', () => {
       const result = await backend.getObject('test-bucket', 'test-key', undefined)
 
       expect(result.metadata.mimetype).toBe('image/png')
+    })
+  })
+
+  describe('deleteObjects', () => {
+    test('should use batch DeleteObjectsCommand when backend supports it', async () => {
+      mockSend.mockResolvedValue({
+        Deleted: [{ Key: 'file1.txt' }, { Key: 'file2.txt' }],
+        $metadata: { httpStatusCode: 200 },
+      })
+
+      const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+      await backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
+
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      expect(mockSend.mock.calls[0][0].constructor.name).toBe('DeleteObjectsCommand')
+    })
+
+    test('should fall back to individual DeleteObjectCommands when backend returns NotImplemented', async () => {
+      const err = Object.assign(new Error('NotImplemented'), { Code: 'NotImplemented' })
+      mockSend
+        .mockRejectedValueOnce(err)
+        .mockResolvedValue({ $metadata: { httpStatusCode: 204 } })
+
+      const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+      await backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
+
+      expect(mockSend).toHaveBeenCalledTimes(3)
+      expect(mockSend.mock.calls[0][0].constructor.name).toBe('DeleteObjectsCommand')
+      expect(mockSend.mock.calls[1][0].constructor.name).toBe('DeleteObjectCommand')
+      expect(mockSend.mock.calls[2][0].constructor.name).toBe('DeleteObjectCommand')
+    })
+
+    test('should ignore NoSuchKey errors in the individual fallback', async () => {
+      const notImplemented = Object.assign(new Error('NotImplemented'), { Code: 'NotImplemented' })
+      const noSuchKey = Object.assign(new Error('NoSuchKey'), { Code: 'NoSuchKey' })
+      mockSend
+        .mockRejectedValueOnce(notImplemented)
+        .mockResolvedValueOnce({ $metadata: { httpStatusCode: 204 } })
+        .mockRejectedValueOnce(noSuchKey)
+
+      const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+      await expect(
+        backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
+      ).resolves.toBeUndefined()
+    })
+
+    test('should throw when an individual fallback delete fails with a real error', async () => {
+      const notImplemented = Object.assign(new Error('NotImplemented'), { Code: 'NotImplemented' })
+      const accessDenied = Object.assign(new Error('AccessDenied'), { Code: 'AccessDenied' })
+      mockSend
+        .mockRejectedValueOnce(notImplemented)
+        .mockResolvedValueOnce({ $metadata: { httpStatusCode: 204 } })
+        .mockRejectedValueOnce(accessDenied)
+
+      const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+      await expect(
+        backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
+      ).rejects.toThrow()
+    })
+
+    test('should rethrow errors that are not NotImplemented', async () => {
+      const err = Object.assign(new Error('AccessDenied'), { Code: 'AccessDenied' })
+      mockSend.mockRejectedValue(err)
+
+      const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+      await expect(backend.deleteObjects('test-bucket', ['file1.txt'])).rejects.toThrow()
+      expect(mockSend).toHaveBeenCalledTimes(1)
+    })
+
+    test('should skip DeleteObjectsCommand and use individual deletes when batchDeleteEnabled is false', async () => {
+      const getConfigSpy = jest
+        .spyOn(config, 'getConfig')
+        .mockReturnValue({ storageS3BatchDeleteEnabled: false } as any)
+      mockSend.mockResolvedValue({ $metadata: { httpStatusCode: 204 } })
+
+      try {
+        const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+        await backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
+
+        // No DeleteObjectsCommand call — straight to individual deletes
+        expect(mockSend).toHaveBeenCalledTimes(2)
+        expect(mockSend.mock.calls[0][0].constructor.name).toBe('DeleteObjectCommand')
+        expect(mockSend.mock.calls[1][0].constructor.name).toBe('DeleteObjectCommand')
+      } finally {
+        getConfigSpy.mockRestore()
+      }
+    })
+
+    test('should ignore NoSuchKey when batchDeleteEnabled is false', async () => {
+      const getConfigSpy = jest
+        .spyOn(config, 'getConfig')
+        .mockReturnValue({ storageS3BatchDeleteEnabled: false } as any)
+      const noSuchKey = Object.assign(new Error('NoSuchKey'), { Code: 'NoSuchKey' })
+      mockSend
+        .mockResolvedValueOnce({ $metadata: { httpStatusCode: 204 } })
+        .mockRejectedValueOnce(noSuchKey)
+
+      try {
+        const backend = new S3Backend({ region: 'us-east-1', endpoint: 'http://localhost:9000' })
+        await expect(
+          backend.deleteObjects('test-bucket', ['file1.txt', 'file2.txt'])
+        ).resolves.toBeUndefined()
+      } finally {
+        getConfigSpy.mockRestore()
+      }
     })
   })
 })

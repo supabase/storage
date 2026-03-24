@@ -710,7 +710,6 @@ export class S3ProtocolHandler {
         mimeType: command.ContentType!,
         contentLength: command.ContentLength,
         isTruncated: options.isTruncated,
-        contentLength: command.ContentLength,
       },
       objectName: command.Key as string,
       userMetadata: command.Metadata,

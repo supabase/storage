@@ -21,7 +21,6 @@ interface FileUpload {
   contentLength?: number
   isTruncated: () => boolean
   xRobotsTag?: string
-  contentLength?: number
 }
 
 export interface UploadRequest {
@@ -462,10 +461,6 @@ export async function fileUploadFromRequest(
     throw ERRORS.NoContentProvided(new Error('Request stream closed before upload could begin'))
   }
 
-  const contentLength = request.headers['content-length']
-    ? Number(request.headers['content-length'])
-    : undefined
-
   return {
     body,
     mimeType,
@@ -475,7 +470,6 @@ export async function fileUploadFromRequest(
     userMetadata,
     maxFileSize,
     xRobotsTag,
-    contentLength,
   }
 }
 

@@ -193,3 +193,7 @@ export const classInstrumentations = [
     ],
   }),
 ]
+
+export async function loadClassInstrumentations() {
+  return classInstrumentations
+}

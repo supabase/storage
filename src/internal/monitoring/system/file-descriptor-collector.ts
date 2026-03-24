@@ -114,6 +114,7 @@ export class FileDescriptorCollector extends BaseCollector {
       // Ignore errors
     })
     this._updateInterval = setInterval(() => this.updateMetrics().catch(() => {}), 5000)
+    this._updateInterval.unref()
   }
 
   protected internalDisable(): void {

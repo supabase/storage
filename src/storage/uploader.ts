@@ -19,6 +19,7 @@ interface FileUpload {
   mimeType: string
   cacheControl: string
   contentLength?: number
+  declaredContentLength?: number
   isTruncated: () => boolean
   xRobotsTag?: string
 }
@@ -115,7 +116,7 @@ export class Uploader {
       owner: request.owner,
       isUpsert: request.isUpsert,
       userMetadata: request.userMetadata,
-      metadata: { mimetype: request.file.mimeType, contentLength: request.file.contentLength },
+      metadata: { mimetype: request.file.mimeType, contentLength: request.file.declaredContentLength ?? request.file.contentLength },
       uploadType: request.uploadType,
     })
 
@@ -355,6 +356,7 @@ export async function fileUploadFromRequest(
     maxFileSize: number
     userMetadata: Record<string, unknown> | undefined
     contentLength: number | undefined
+    declaredContentLength: number | undefined
   }
 > {
   const contentType = request.headers['content-type']
@@ -454,6 +456,12 @@ export async function fileUploadFromRequest(
     isTruncated = () => false
   }
 
+  // Capture the declared content-length for RLS metadata purposes.
+  // For binary uploads fileContentLength is already set (with size enforcement applied above).
+  // For multipart, size enforcement is handled by the fileSize limit in form parsing, so we
+  // read the header separately and only use it for RLS — never for the actual S3 upload.
+  const declaredContentLength = fileContentLength ?? getKnownRequestContentLength(request)
+
   // Detect if the request stream closed before we could pass it to the storage backend
   // Without this check, the storage backend (S3) would throw a 500 "Premature close" error
   // when attempting to read from the closed stream. We catch this early and return 400.
@@ -466,6 +474,7 @@ export async function fileUploadFromRequest(
     mimeType,
     cacheControl,
     contentLength: fileContentLength,
+    declaredContentLength,
     isTruncated,
     userMetadata,
     maxFileSize,

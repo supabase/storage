@@ -4,13 +4,14 @@ import {
   resetMigrationsOnTenants,
   runMigrationsOnAllTenants,
 } from '@internal/database/migrations'
-import { Queue } from '@internal/queue'
+import { PG_BOSS_SCHEMA, Queue } from '@internal/queue'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
 import apiKey from '../../plugins/apikey'
 
 const { pgQueueEnable } = getConfig()
+const migrationQueueName = RunMigrationsOnTenants.getQueueName()
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
@@ -59,9 +60,9 @@ export default async function routes(fastify: FastifyInstance) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
     const data = await multitenantKnex
-      .table('pgboss_v10.job')
+      .table(`${PG_BOSS_SCHEMA}.job`)
       .where('state', 'active')
-      .where('name', 'tenants-migrations')
+      .where('name', migrationQueueName)
       .orderBy('created_on', 'desc')
       .limit(2000)
 
@@ -73,9 +74,9 @@ export default async function routes(fastify: FastifyInstance) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
     const data = await multitenantKnex
-      .table('pgboss_v10.job')
+      .table(`${PG_BOSS_SCHEMA}.job`)
       .where('state', 'active')
-      .where('name', 'tenants-migrations')
+      .where('name', migrationQueueName)
       .orderBy('created_on', 'desc')
       .update({ state: 'completed' })
       .limit(2000)

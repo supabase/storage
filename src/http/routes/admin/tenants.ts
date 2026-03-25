@@ -15,6 +15,8 @@ import {
   runMigrationsOnTenant,
 } from '@internal/database/migrations'
 import { StorageBackendError } from '@internal/errors'
+import { PG_BOSS_SCHEMA } from '@internal/queue'
+import { RunMigrationsOnTenants } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey } from '../../../config'
@@ -128,6 +130,7 @@ interface tenantDBInterface {
 }
 
 const { dbMigrationFreezeAt, icebergEnabled, vectorEnabled } = getConfig()
+const migrationQueueName = RunMigrationsOnTenants.getQueueName()
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
@@ -630,11 +633,11 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.get<tenantRequestInterface>('/:tenantId/migrations/jobs', async (req, reply) => {
     const data = await multitenantKnex
-      .table('pgboss.job')
+      .table(`${PG_BOSS_SCHEMA}.job`)
       .select('*')
       .whereRaw("data->'tenant'->>'ref' = ?", [req.params.tenantId])
-      .where('name', 'tenants-migrations')
-      .orderBy('createdon', 'desc')
+      .where('name', migrationQueueName)
+      .orderBy('created_on', 'desc')
       .limit(100)
 
     reply.send(data)
@@ -642,10 +645,10 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.delete<tenantRequestInterface>('/:tenantId/migrations/jobs', async (req, reply) => {
     const data = await multitenantKnex
-      .table('pgboss.job')
+      .table(`${PG_BOSS_SCHEMA}.job`)
       .whereRaw("data->'tenant'->>'ref' = ?", [req.params.tenantId])
-      .where('name', 'tenants-migrations')
-      .orderBy('createdon', 'desc')
+      .where('name', migrationQueueName)
+      .orderBy('created_on', 'desc')
       .limit(100)
       .delete()
 

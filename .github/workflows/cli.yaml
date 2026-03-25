@@ -47,12 +47,12 @@ jobs:
           GH_REF: ${{ github.ref_name }}
         run: |
           cd '${{ env.cli_repo }}'
-          git checkout -b '${{ env.service_to_update }}/${GH_REF}'
+          git checkout -b "${{ env.service_to_update }}/${GH_REF}"
 
       - name: Update file
         run: |
           cd '${{ env.cli_repo }}'
-          sed -i 's/${{ env.cli_repo_owner }}\/${{ env.service_to_update }}:v[0-9]*\.[0-9]*\.[0-9]*/${{ env.cli_repo_owner }}\/${{ env.service_to_update }}:${{ github.ref_name }}/' internal/utils/misc.go
+          sed -i "s/${{ env.cli_repo_owner }}\/${{ env.service_to_update }}:v[0-9]*\.[0-9]*\.[0-9]*/${{ env.cli_repo_owner }}\/${{ env.service_to_update }}:${GH_REF}/" internal/utils/misc.go
 
       - name: Commit changes
         env:
@@ -67,7 +67,7 @@ jobs:
           GH_REF: ${{ github.ref_name }}
         run: |
           cd '${{ env.cli_repo }}'
-          git push origin '${{ env.service_to_update }}/${GH_REF}'
+          git push origin "${{ env.service_to_update }}/${GH_REF}"
 
       - name: Create Pull Request
         env:

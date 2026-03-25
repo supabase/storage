@@ -116,7 +116,10 @@ export class Uploader {
       owner: request.owner,
       isUpsert: request.isUpsert,
       userMetadata: request.userMetadata,
-      metadata: { mimetype: request.file.mimeType, contentLength: request.file.declaredContentLength ?? request.file.contentLength },
+      metadata: {
+        mimetype: request.file.mimeType,
+        contentLength: request.file.declaredContentLength ?? request.file.contentLength,
+      },
       uploadType: request.uploadType,
     })
 

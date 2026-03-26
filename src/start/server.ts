@@ -64,8 +64,6 @@ async function main() {
     numWorkers,
   } = getConfig()
 
-  const effectiveNumWorkers = Math.max(numWorkers ?? 1, 1)
-
   // Queue
   if (pgQueueEnable) {
     await Queue.start({
@@ -123,7 +121,8 @@ async function main() {
     startAsyncMigrations(shutdownSignal.nextGroup.signal)
   }
 
-  // PoolManager Monitoring
+  // PoolManager
+  TenantConnection.poolManager.setNumWorkers(numWorkers)
   TenantConnection.poolManager.monitor()
 
   // Cluster information
@@ -138,7 +137,7 @@ async function main() {
       `[Cluster] Cluster size changed to ${data.size}`
     )
     TenantConnection.poolManager.rebalanceAll({
-      clusterSize: Math.max(Math.floor(data.size * effectiveNumWorkers), 1),
+      clusterSize: data.size,
     })
   })
 
@@ -205,11 +204,12 @@ async function httpAdminServer(
   app: FastifyInstance<Server, IncomingMessage, ServerResponse>,
   signal: AbortSignal
 ) {
-  const { adminRequestIdHeader, adminPort, host } = getConfig()
+  const { exposeDocs, adminRequestIdHeader, adminPort, host } = getConfig()
 
   const adminApp = buildAdmin({
     loggerInstance: logger,
     disableRequestLogging: true,
+    exposeDocs,
     requestIdHeader: adminRequestIdHeader,
   })
 

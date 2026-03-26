@@ -6,7 +6,7 @@ import { KnexQueueDB } from '@internal/queue/database'
 import { Knex } from 'knex'
 import PgBoss, { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../config'
-import { Queue } from './queue'
+import { PG_BOSS_SCHEMA, Queue } from './queue'
 
 export interface BasePayload {
   $version?: string
@@ -186,10 +186,10 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     }
 
     await Queue.getDb().executeSql(
-      `DELETE FROM pgboss_v10.job
+      `DELETE FROM ${PG_BOSS_SCHEMA}.job
        WHERE id = $1
        AND EXISTS(
-          SELECT 1 FROM pgboss_v10.job
+          SELECT 1 FROM ${PG_BOSS_SCHEMA}.job
              WHERE id != $2
              AND state < 'active'
              AND name = $3

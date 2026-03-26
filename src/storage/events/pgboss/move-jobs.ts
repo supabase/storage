@@ -1,6 +1,6 @@
 import { multitenantKnex } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload, Queue } from '@internal/queue'
+import { BasePayload, PG_BOSS_SCHEMA, Queue } from '@internal/queue'
 import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
 import { BaseEvent } from '../base-event'
 
@@ -46,7 +46,7 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
         return
       }
 
-      const schema = 'pgboss_v10'
+      const schema = PG_BOSS_SCHEMA
       const fromQueueName = job.data.fromQueue
       const toQueue = await Queue.getInstance().getQueue(job.data.toQueue)
 

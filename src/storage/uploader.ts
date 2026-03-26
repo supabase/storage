@@ -18,6 +18,7 @@ interface FileUpload {
   body: Readable
   mimeType: string
   cacheControl: string
+  contentLength?: number
   isTruncated: () => boolean
   xRobotsTag?: string
   userMetadata?: Record<string, unknown>
@@ -110,7 +111,8 @@ export class Uploader {
         file.body,
         file.mimeType,
         file.cacheControl,
-        request.signal
+        request.signal,
+        file.contentLength
       )
 
       if (request.file.xRobotsTag) {
@@ -335,6 +337,7 @@ export async function fileUploadFromRequest(
   let userMetadata: Record<string, unknown> | undefined
   let mimeType: string
   let isTruncated: () => boolean
+  let fileContentLength: number | undefined
   let maxFileSize = 0
 
   // When is an empty folder we restrict it to 0 bytes
@@ -357,6 +360,8 @@ export async function fileUploadFromRequest(
 
       const file = formData.file
       body = file
+      // multipart/form-data content-length includes boundary overhead and cannot be trusted as file size,
+      // so we intentionally leave fileContentLength undefined and let the backend stream via multipart upload.
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
       const customMd = formData.fields.metadata?.value ?? formData.fields.userMetadata?.value
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
@@ -407,11 +412,15 @@ export async function fileUploadFromRequest(
       userMetadata = parseUserMetadata(customMd)
     }
 
-    const contentLength = getKnownRequestContentLength(request)
-    isTruncated = () => {
-      // @todo more secure to get this from the stream or from s3 in the next step
-      return typeof contentLength === 'number' && contentLength > maxFileSize
+    fileContentLength = getKnownRequestContentLength(request)
+    if (typeof fileContentLength === 'number' && fileContentLength > maxFileSize) {
+      throw ERRORS.EntityTooLarge()
     }
+
+    // Known-size binary uploads are rejected before
+    // reaching the backend when they exceed the limit.
+    // Unknown-size binary uploads do not have a later truncation signal.
+    isTruncated = () => false
   }
 
   // Detect if the request stream closed before we could pass it to the storage backend
@@ -425,6 +434,7 @@ export async function fileUploadFromRequest(
     body,
     mimeType,
     cacheControl,
+    contentLength: fileContentLength,
     isTruncated,
     userMetadata,
     maxFileSize,

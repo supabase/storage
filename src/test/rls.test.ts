@@ -11,7 +11,6 @@ import FormData from 'form-data'
 import fs from 'fs'
 import yaml from 'js-yaml'
 import { Knex, knex } from 'knex'
-import Mustache from 'mustache'
 import path from 'path'
 import app from '../app'
 import { getConfig } from '../config'
@@ -62,6 +61,22 @@ interface TestCaseAssert {
 interface RlsTestSpec {
   policies: Policy[]
   tests: TestCase[]
+}
+
+function renderRlsTemplate(template: string, values: Record<string, string>) {
+  const rendered = template.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_match, key: string) => {
+    if (!Object.prototype.hasOwnProperty.call(values, key)) {
+      throw new Error(`Unknown RLS template variable: ${key}`)
+    }
+
+    return values[key]
+  })
+
+  if (rendered.includes('{{')) {
+    throw new Error('Unsupported template tag in rls_tests.yaml')
+  }
+
+  return rendered
 }
 
 const testSpec = yaml.load(
@@ -151,7 +166,7 @@ describe('RLS policies', () => {
       const originalBucketName = bucketName
 
       const testScopedSpec = yaml.load(
-        Mustache.render(content, {
+        renderRlsTemplate(content, {
           uid: userId,
           bucketName,
           objectName,

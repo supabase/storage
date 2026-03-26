@@ -13,6 +13,8 @@ type SubclassOfBaseClass = (new (
   [K in keyof typeof Event]: (typeof Event)[K]
 }
 
+export const PG_BOSS_SCHEMA = 'pgboss_v10'
+
 export abstract class Queue {
   protected static events: SubclassOfBaseClass[] = []
   private static pgBoss?: PgBoss
@@ -51,7 +53,7 @@ export abstract class Queue {
       connectionString: url,
       migrate,
       db: opts.db,
-      schema: 'pgboss_v10',
+      schema: PG_BOSS_SCHEMA,
       ...(pgQueueDeleteAfterHours
         ? { deleteAfterHours: pgQueueDeleteAfterHours }
         : { deleteAfterDays: pgQueueDeleteAfterDays }),

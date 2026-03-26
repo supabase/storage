@@ -2,8 +2,9 @@ import { getConfig, setEnvPaths } from './src/config'
 
 setEnvPaths(['.env.test', '.env'])
 
-interface OTelMetricsGlobalState {
+interface OTelGlobalState {
   __otelMetricsShutdown?: () => Promise<void>
+  __otelTracingShutdown?: () => Promise<void>
 }
 
 beforeEach(() => {
@@ -11,8 +12,13 @@ beforeEach(() => {
 })
 
 afterAll(async () => {
-  const shutdownOtelMetrics = (globalThis as typeof globalThis & OTelMetricsGlobalState)
-    .__otelMetricsShutdown
+  const otelGlobalState = globalThis as typeof globalThis & OTelGlobalState
+  const shutdownOtelTracing = otelGlobalState.__otelTracingShutdown
+  const shutdownOtelMetrics = otelGlobalState.__otelMetricsShutdown
+
+  if (shutdownOtelTracing) {
+    await shutdownOtelTracing()
+  }
 
   if (shutdownOtelMetrics) {
     await shutdownOtelMetrics()

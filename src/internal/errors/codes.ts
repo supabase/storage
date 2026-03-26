@@ -260,6 +260,14 @@ export const ERRORS = {
       message: `Invalid X-Robots-Tag header: ${message}`,
     }),
 
+  InvalidHeaderChar: (headerName: string, headerValue: string) =>
+    new StorageBackendError({
+      error: 'invalid_header_char',
+      code: ErrorCode.InvalidRequest,
+      httpStatusCode: 400,
+      message: `Invalid character in response header "${headerName}": ${headerValue.substring(0, 50)}`,
+    }),
+
   InvalidRange: () =>
     new StorageBackendError({
       error: 'invalid_range',

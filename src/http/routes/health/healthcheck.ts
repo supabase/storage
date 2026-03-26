@@ -8,6 +8,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       schema: {
         summary,
+        tags: ['health'],
       },
     },
     async (req, res) => {

@@ -50,6 +50,8 @@ jobs:
           git checkout -b "${{ env.service_to_update }}/${GH_REF}"
 
       - name: Update file
+        env:
+          GH_REF: ${{ github.ref_name }}
         run: |
           cd '${{ env.cli_repo }}'
           sed -i "s|${{ env.cli_repo_owner }}/${{ env.service_to_update }}:v[0-9]*\.[0-9]*\.[0-9]*|${{ env.cli_repo_owner }}/${{ env.service_to_update }}:${GH_REF}|" internal/utils/misc.go

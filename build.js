@@ -7,7 +7,7 @@ build({
   outdir: 'dist',
   platform: 'node',
   format: 'cjs',
-  target: 'node20',
+  target: 'node24',
   sourcemap: true,
   tsconfig: 'tsconfig.json',
   loader: { '.ts': 'ts' },

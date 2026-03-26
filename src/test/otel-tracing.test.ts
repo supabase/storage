@@ -1,5 +1,3 @@
-import { createDeferred } from './utils/promise'
-
 interface OTelGlobalState {
   __otelTracingShutdown?: () => Promise<void>
 }
@@ -110,7 +108,9 @@ describe('otel tracing bootstrap', () => {
       config,
     }))
     const OTLPTraceExporter = jest.fn().mockImplementation(() => ({}))
-    const classInstrumentationsDeferred = createDeferred<{ classInstrumentations: unknown[] }>()
+    const classInstrumentationsDeferred = Promise.withResolvers<{
+      classInstrumentations: unknown[]
+    }>()
 
     jest.doMock('@opentelemetry/sdk-node', () => ({
       NodeSDK,
@@ -176,7 +176,7 @@ describe('otel tracing bootstrap', () => {
       config,
     }))
     const OTLPTraceExporter = jest.fn().mockImplementation(() => ({}))
-    const classInstrumentationsDeferred = createDeferred<unknown[]>()
+    const classInstrumentationsDeferred = Promise.withResolvers<unknown[]>()
     const logSchema = {
       error: jest.fn(),
       info: jest.fn(),

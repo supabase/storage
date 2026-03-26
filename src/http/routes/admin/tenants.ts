@@ -5,7 +5,6 @@ import {
   getTenantConfig,
   jwksManager,
   multitenantKnex,
-  TenantMigrationStatus,
 } from '@internal/database'
 import {
   isDBMigrationName,
@@ -13,6 +12,7 @@ import {
   progressiveMigrations,
   resetMigration,
   runMigrationsOnTenant,
+  updateTenantMigrationsState,
 } from '@internal/database/migrations'
 import { StorageBackendError } from '@internal/errors'
 import { PG_BOSS_SCHEMA } from '@internal/queue'
@@ -344,12 +344,7 @@ export default async function routes(fastify: FastifyInstance) {
           tenantId,
           upToMigration: dbMigrationFreezeAt,
         })
-        await multitenantKnex('tenants')
-          .where('id', tenantId)
-          .update({
-            migrations_version: await lastLocalMigrationName(),
-            migrations_status: TenantMigrationStatus.COMPLETED,
-          })
+        await updateTenantMigrationsState(tenantId)
       } catch {
         progressiveMigrations.addTenant(tenantId)
       }
@@ -419,12 +414,7 @@ export default async function routes(fastify: FastifyInstance) {
             tenantId,
             upToMigration: dbMigrationFreezeAt,
           })
-          await multitenantKnex('tenants')
-            .where('id', tenantId)
-            .update({
-              migrations_version: await lastLocalMigrationName(),
-              migrations_status: TenantMigrationStatus.COMPLETED,
-            })
+          await updateTenantMigrationsState(tenantId)
         } catch (e) {
           if (e instanceof Error) {
             request.executionError = e
@@ -524,12 +514,7 @@ export default async function routes(fastify: FastifyInstance) {
           tenantId,
           upToMigration: dbMigrationFreezeAt,
         })
-        await multitenantKnex('tenants')
-          .where('id', tenantId)
-          .update({
-            migrations_version: await lastLocalMigrationName(),
-            migrations_status: TenantMigrationStatus.COMPLETED,
-          })
+        await updateTenantMigrationsState(tenantId)
       } catch (e) {
         request.executionError = e as Error
         progressiveMigrations.addTenant(tenantId)
@@ -600,6 +585,7 @@ export default async function routes(fastify: FastifyInstance) {
           tenantId,
           upToMigration: dbMigrationFreezeAt,
         })
+        await updateTenantMigrationsState(tenantId)
         return reply.send({
           migrated: true,
         })

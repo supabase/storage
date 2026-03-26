@@ -20,8 +20,14 @@ import { FastifyReply, FastifyRequest } from 'fastify'
 import * as os from 'os'
 import { getConfig } from '../../config'
 
-const { version, otelMetricsExportIntervalMs, otelMetricsEnabled, otelMetricsTemporality, region } =
-  getConfig()
+const {
+  version,
+  otelMetricsExportIntervalMs,
+  otelMetricsEnabled,
+  otelMetricsTemporality,
+  prometheusMetricsEnabled,
+  region,
+} = getConfig()
 
 let prometheusExporter: PrometheusExporter | undefined
 let meterProvider: MeterProvider | undefined
@@ -229,12 +235,14 @@ if (otelMetricsEnabled) {
     )
   }
 
-  prometheusExporter = new PrometheusExporter({
-    prefix: 'storage_api',
-    preventServerStart: true,
-    withResourceConstantLabels: /^(region|instance|metric\.version)$/,
-  })
-  readers.push(prometheusExporter)
+  if (prometheusMetricsEnabled) {
+    prometheusExporter = new PrometheusExporter({
+      prefix: 'storage_api',
+      preventServerStart: true,
+      withResourceConstantLabels: /^(region|instance|metric\.version)$/,
+    })
+    readers.push(prometheusExporter)
+  }
 
   meterProvider = new MeterProvider({
     resource,

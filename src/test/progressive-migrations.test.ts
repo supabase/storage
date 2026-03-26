@@ -1,3 +1,5 @@
+import { createDeferred } from './utils/promise'
+
 const mockBatchSend = jest.fn()
 const mockWarning = jest.fn()
 const mockError = jest.fn()
@@ -55,18 +57,6 @@ class TestProgressiveMigrations extends ProgressiveMigrations {
   flush(maxJobs: number) {
     return this.createJobs(maxJobs)
   }
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void
-  let reject!: (reason?: unknown) => void
-
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res
-    reject = rej
-  })
-
-  return { promise, resolve, reject }
 }
 
 const mockGetTenantConfig = jest.mocked(getTenantConfig)
@@ -133,7 +123,7 @@ describe('ProgressiveMigrations', () => {
   })
 
   it('keeps new tenants queued while a batch is in flight and ignores duplicate adds', async () => {
-    const deferredBatch = createDeferred<void>()
+    const deferredBatch = createDeferred()
     mockRunMigrationsBatchSend.mockReturnValueOnce(deferredBatch.promise as never)
 
     const migrations = new TestProgressiveMigrations({
@@ -155,7 +145,7 @@ describe('ProgressiveMigrations', () => {
 
     expect(migrations.pending()).toEqual(['tenant-a', 'tenant-b'])
 
-    deferredBatch.resolve(undefined)
+    deferredBatch.resolve()
 
     await expect(flushPromise).resolves.toBeUndefined()
     expect(migrations.pending()).toEqual(['tenant-b'])
@@ -163,7 +153,7 @@ describe('ProgressiveMigrations', () => {
   })
 
   it('serializes drain with an in-flight batch and drains the remaining tenants after it finishes', async () => {
-    const deferredBatch = createDeferred<void>()
+    const deferredBatch = createDeferred()
     mockRunMigrationsBatchSend
       .mockReturnValueOnce(deferredBatch.promise as never)
       .mockResolvedValueOnce(undefined as never)
@@ -184,7 +174,7 @@ describe('ProgressiveMigrations', () => {
     expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(1)
     expect(migrations.isEmitting()).toBe(true)
 
-    deferredBatch.resolve(undefined)
+    deferredBatch.resolve()
 
     await expect(Promise.all([flushPromise, drainPromise])).resolves.toEqual([undefined, undefined])
 

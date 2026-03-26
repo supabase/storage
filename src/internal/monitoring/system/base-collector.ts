@@ -30,11 +30,19 @@ export abstract class BaseCollector<T extends CollectorConfig = CollectorConfig>
   }
 
   enable(): void {
+    if (this._enabled) {
+      return
+    }
+
     this._enabled = true
     this.internalEnable()
   }
 
   disable(): void {
+    if (!this._enabled) {
+      return
+    }
+
     this._enabled = false
     this.internalDisable()
   }

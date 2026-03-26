@@ -115,7 +115,6 @@
     "resolve-tspaths": "^0.8.19",
     "stream-buffers": "^3.0.2",
     "ts-jest": "^29.4.6",
-    "ts-node-dev": "^1.1.8",
     "tsx": "^4.16.0",
     "tus-js-client": "^3.1.0",
     "typescript": "5.9.3"
@@ -129,9 +128,6 @@
     },
     "glob@7": {
       "minimatch": "^3.1.4"
-    },
-    "ts-node@9": {
-      "diff": "^4.0.4"
     }
   },
   "bin": "./dist/server.js"

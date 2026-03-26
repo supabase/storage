@@ -39,6 +39,37 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Generate API Specs for Release
+        if: steps.semantic.outputs.new_release_published == 'true'
+        run: |
+          npm run docs:export
+        env:
+          VERSION: ${{ steps.semantic.outputs.new_release_version }}
+          ANON_KEY: ${{ secrets.ANON_KEY }}
+          SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          REGION: ${{ secrets.REGION }}
+          POSTGREST_URL: ${{ secrets.POSTGREST_URL }}
+          GLOBAL_S3_BUCKET: ${{ secrets.GLOBAL_S3_BUCKET }}
+          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
+          AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
+          PGOPTIONS: -c search_path=storage,public
+          FILE_SIZE_LIMIT: "52428800"
+          STORAGE_BACKEND: s3
+          ENABLE_IMAGE_TRANSFORMATION: true
+
+      - name: Attach API Specs to Release
+        if: steps.semantic.outputs.new_release_published == 'true'
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+        with:
+          tag_name: v${{ steps.semantic.outputs.new_release_version }}
+          files: |
+            static/api.json
+            static/api-admin.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   publish:
     needs:
       - release

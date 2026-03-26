@@ -16,7 +16,7 @@ const migrationQueueName = RunMigrationsOnTenants.getQueueName()
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
 
-  fastify.post('/migrate/fleet', async (req, reply) => {
+  fastify.post('/migrate/fleet', { schema: { tags: ['migration'] } }, async (req, reply) => {
     if (!pgQueueEnable) {
       return reply.status(400).send({ message: 'Queue is not enabled' })
     }
@@ -26,7 +26,7 @@ export default async function routes(fastify: FastifyInstance) {
     return reply.send({ message: 'Migrations scheduled' })
   })
 
-  fastify.post('/reset/fleet', async (req, reply) => {
+  fastify.post('/reset/fleet', { schema: { tags: ['migration'] } }, async (req, reply) => {
     if (!pgQueueEnable) {
       return reply.status(400).send({ message: 'Queue is not enabled' })
     }
@@ -55,7 +55,7 @@ export default async function routes(fastify: FastifyInstance) {
     return reply.send({ message: 'Migrations scheduled' })
   })
 
-  fastify.get('/active', async (req, reply) => {
+  fastify.get('/active', { schema: { tags: ['migration'] } }, async (req, reply) => {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
@@ -69,7 +69,7 @@ export default async function routes(fastify: FastifyInstance) {
     return reply.send(data)
   })
 
-  fastify.delete('/active', async (req, reply) => {
+  fastify.delete('/active', { schema: { tags: ['migration'] } }, async (req, reply) => {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
@@ -84,7 +84,7 @@ export default async function routes(fastify: FastifyInstance) {
     return reply.send(data)
   })
 
-  fastify.get('/progress', async (req, reply) => {
+  fastify.get('/progress', { schema: { tags: ['migration'] } }, async (req, reply) => {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
@@ -92,7 +92,7 @@ export default async function routes(fastify: FastifyInstance) {
     return { remaining: queueSize }
   })
 
-  fastify.get('/failed', async (req, reply) => {
+  fastify.get('/failed', { schema: { tags: ['migration'] } }, async (req, reply) => {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }

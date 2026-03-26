@@ -30,7 +30,7 @@ interface UpdateMetricsConfigRequest extends RequestGenericInterface {
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
 
-  fastify.get('/config', async (_request, reply) => {
+  fastify.get('/config', { schema: { tags: ['metrics'] } }, async (_request, reply) => {
     return reply.send({
       metrics: getMetricsConfig(),
     })
@@ -38,7 +38,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.put<UpdateMetricsConfigRequest>(
     '/config',
-    { schema: updateMetricsConfigSchema },
+    { schema: { ...updateMetricsConfigSchema, tags: ['metrics'] } },
     async (request, reply) => {
       setMetricsEnabled(request.body.metrics)
       return reply.code(200).send({

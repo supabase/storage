@@ -18,15 +18,7 @@ import {
   VectorStore,
   VectorStoreManager,
 } from '@storage/protocols/vector'
-
-function deferred() {
-  let resolve!: () => void
-  const promise = new Promise<void>((res) => {
-    resolve = res
-  })
-
-  return { promise, resolve }
-}
+import { createDeferred } from './utils/promise'
 
 function createMockVectorStore(): jest.Mocked<VectorStore> {
   return {
@@ -194,8 +186,8 @@ function createDeterministicVectorDb(options: {
 
 describe('VectorStoreManager bucket lifecycle', () => {
   it('serializes concurrent creates for the final bucket slot', async () => {
-    const releaseFirstCreate = deferred()
-    const firstCreateStarted = deferred()
+    const releaseFirstCreate = createDeferred()
+    const firstCreateStarted = createDeferred()
 
     const db = createDeterministicVectorDb({
       bucketCount: 1,
@@ -250,8 +242,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
   })
 
   it('shares the bucket-count lock between delete and create so capacity is observed after delete commits', async () => {
-    const releaseDelete = deferred()
-    const deleteReachedRemoval = deferred()
+    const releaseDelete = createDeferred()
+    const deleteReachedRemoval = createDeferred()
 
     const db = createDeterministicVectorDb({
       bucketCount: 1,
@@ -281,8 +273,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
   })
 
   it('does not block unrelated creates while delete waits on the target bucket lock', async () => {
-    const releaseBucketLock = deferred()
-    const deleteWaitingOnBucketLock = deferred()
+    const releaseBucketLock = createDeferred()
+    const deleteWaitingOnBucketLock = createDeferred()
 
     const db = createDeterministicVectorDb({
       bucketCount: 1,

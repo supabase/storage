@@ -51,8 +51,8 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
-    expect(axiosSpy).toBeCalledWith(
+    expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
+    expect(axiosSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
@@ -69,8 +69,8 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
-    expect(axiosSpy).toBeCalledWith(
+    expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
+    expect(axiosSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
@@ -112,8 +112,8 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
-    expect(axiosSpy).toBeCalledWith(
+    expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
+    expect(axiosSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
@@ -159,8 +159,8 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
-    expect(axiosSpy).toBeCalledWith(
+    expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
+    expect(axiosSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
     )

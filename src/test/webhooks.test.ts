@@ -61,7 +61,7 @@ describe('Webhooks', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'webhooks',
@@ -112,7 +112,7 @@ describe('Webhooks', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
 
     expect(sendSpy).toHaveBeenNthCalledWith(
       1,
@@ -165,7 +165,7 @@ describe('Webhooks', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(3)
+    expect(sendSpy).toHaveBeenCalledTimes(3)
 
     expect(sendSpy).toHaveBeenNthCalledWith(
       2,
@@ -269,7 +269,7 @@ describe('Webhooks', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(3)
+    expect(sendSpy).toHaveBeenCalledTimes(3)
     expect(sendSpy).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
@@ -308,7 +308,7 @@ describe('Webhooks', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
 
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -370,7 +370,7 @@ describe('Webhooks', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({

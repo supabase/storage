@@ -94,12 +94,12 @@ describe('CDN Cache Manager', () => {
     await storageHook.storage.from(bucketName).uploadNewObject({
       isUpsert: true,
       objectName,
+      userMetadata: {},
       file: {
         body: Readable.from(Buffer.from('test')),
         cacheControl: 'public, max-age=31536000',
         mimeType: 'text/plain',
         isTruncated: () => false,
-        userMetadata: {},
       },
     })
 

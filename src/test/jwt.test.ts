@@ -3,6 +3,10 @@ import { SignJWT } from 'jose'
 import { JwksConfigKey } from '../config'
 import { generateHS512JWK, signJWT, verifyJWT } from '../internal/auth'
 
+type JwtTestPublicKey = {
+  export: (options?: { format: 'jwk' }) => crypto.JsonWebKey | Record<string, string>
+}
+
 describe('JWT', () => {
   describe('verifyJWT with JWKS', () => {
     const keys: {
@@ -10,8 +14,8 @@ describe('JWT', () => {
       options?: object
       alg: string
       kid?: string
-      publicKey: any
-      privateKey: any
+      publicKey: JwtTestPublicKey
+      privateKey: Buffer | crypto.KeyObject
     }[] = [
       { type: 'rsa', options: { modulusLength: 2048 }, alg: 'RS256' },
       { type: 'ec', options: { namedCurve: 'P-256' }, alg: 'ES256' },
@@ -57,7 +61,7 @@ describe('JWT', () => {
       keys: keys.map(
         ({ publicKey, kid, alg }) =>
           ({
-            ...(publicKey as unknown as crypto.KeyObject).export({ format: 'jwk' }),
+            ...publicKey.export({ format: 'jwk' }),
             kid,
             alg,
           }) as JwksConfigKey

@@ -8,7 +8,7 @@ interface ObjectCreatedEvent extends BasePayload {
   version: string
   bucketId: string
   metadata: ObjectMetadata
-  uploadType: 'standard' | 'resumable' | 's3'
+  uploadType?: 'standard' | 'resumable' | 's3'
 }
 
 abstract class ObjectCreated extends BaseEvent<ObjectCreatedEvent> {

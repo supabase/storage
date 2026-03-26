@@ -31,6 +31,7 @@ function getNodeRequest(rawReq: Request): MultiPartRequest {
   return req
 }
 export type MultiPartRequest = http.IncomingMessage & {
+  executionError?: Error
   log: BaseLogger
   upload: {
     storage: Storage
@@ -282,8 +283,9 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
     }
   } catch (e) {
     if (isRenderableError(e)) {
-      ;(e as any).status_code = parseInt(e.render().statusCode, 10)
-      ;(e as any).body = e.render().message
+      const renderableError = e as unknown as Error & Partial<TusError>
+      renderableError.status_code = parseInt(e.render().statusCode, 10)
+      renderableError.body = e.render().message
     }
     throw e
   }
@@ -298,9 +300,9 @@ export function onResponseError(rawReq: Request, e: TusError | Error) {
   const req = getNodeRequest(rawReq)
 
   if (e instanceof Error) {
-    ;(req as any).executionError = e
+    req.executionError = e
   } else {
-    ;(req as any).executionError = ERRORS.TusError(e.body, e.status_code).withMetadata(e)
+    req.executionError = ERRORS.TusError(e.body, e.status_code).withMetadata(e)
   }
 
   if (isRenderableError(e)) {

@@ -201,7 +201,7 @@ export class FileBackend implements StorageBackendAdapter {
         ...metadata,
         httpStatusCode: 200,
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof StorageBackendError) {
         throw err
       }
@@ -224,7 +224,7 @@ export class FileBackend implements StorageBackendAdapter {
       await this.cleanupEmptyDirectories(path.dirname(file))
     } catch (e) {
       if (e instanceof Error && 'code' in e) {
-        if ((e as any).code === 'ENOENT') {
+        if (e.code === 'ENOENT') {
           return
         }
         throw e

@@ -5,12 +5,18 @@ import { FastifyReply } from 'fastify/types/reply'
 import { FastifyRequest } from 'fastify/types/request'
 import { DatabaseError } from 'pg'
 
+type ValidationIssue = {
+  instancePath?: string
+  message?: string
+}
+
 export const s3ErrorHandler = (
   error: FastifyError | Error,
   request: FastifyRequest,
   reply: FastifyReply
 ) => {
   request.executionError = error
+  const validation = getValidationIssues(error)
 
   const resource = request.url
     .split('?')[0]
@@ -19,12 +25,12 @@ export const s3ErrorHandler = (
     .filter((e) => e)
     .join('/')
 
-  if ('validation' in error) {
+  if (validation) {
     return reply.status(400).send({
       Error: {
         Resource: resource,
         Code: ErrorCode.InvalidRequest,
-        Message: formatValidationError(error.validation).message,
+        Message: formatValidationError(validation).message,
       },
     })
   }
@@ -78,7 +84,20 @@ export const s3ErrorHandler = (
   })
 }
 
-function formatValidationError(errors: any) {
+function isValidationIssueArray(value: unknown): value is ValidationIssue[] {
+  return Array.isArray(value)
+}
+
+function getValidationIssues(error: FastifyError | Error): ValidationIssue[] | undefined {
+  if (!('validation' in error)) {
+    return undefined
+  }
+
+  const value = error.validation
+  return isValidationIssueArray(value) ? value : undefined
+}
+
+function formatValidationError(errors: readonly ValidationIssue[]) {
   let text = ''
   const separator = ', '
 

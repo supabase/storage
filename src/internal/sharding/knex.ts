@@ -35,11 +35,24 @@ export class KnexShardStoreFactory implements ShardStoreFactory<Knex.Transaction
   }
 }
 
+type RawQueryResult<Row> = {
+  rows: Row[]
+  rowCount?: number
+}
+
+type ShardStatsRow = {
+  shard_id: string | number
+  shard_key: string
+  capacity: string | number
+  used: string | number
+  free: string | number
+}
+
 class KnexShardStore implements ShardStore {
   constructor(private db: Knex | Knex.Transaction) {}
 
-  private q<T = any>(sql: string, params?: any[]) {
-    return this.db.raw<T>(sql, params as any)
+  private q<Row = unknown>(sql: string, params: readonly Knex.Value[] = []) {
+    return this.db.raw<RawQueryResult<Row>>(sql, params)
   }
 
   async findShardById(shardId: number): Promise<ShardRow | null> {
@@ -90,7 +103,7 @@ class KnexShardStore implements ShardStore {
   }
 
   async findShardWithLeastFreeCapacity(kind: ResourceKind): Promise<ShardRow | null> {
-    const result = await this.q<{ rows: ShardRow[] }>(
+    const result = await this.q<ShardRow>(
       `
       WITH candidates AS (
         SELECT s.*,
@@ -160,7 +173,7 @@ class KnexShardStore implements ShardStore {
    */
   async reserveOneSlotOnShard(shardId: string | number, tenantId: string): Promise<number | null> {
     // 1) Try to claim a free existing row
-    const claimed = await this.q<{ rows: { slot_no: number }[] }>(
+    const claimed = await this.q<{ slot_no: number }>(
       `
       WITH pick AS (
         SELECT ss.slot_no
@@ -189,7 +202,7 @@ class KnexShardStore implements ShardStore {
     if (claimed.rows.length) return claimed.rows[0].slot_no
 
     // 2) Mint a fresh slot_no by bumping shard.next_slot (bounded by capacity)
-    const minted = await this.q<{ rows: { slot_no: number }[] }>(
+    const minted = await this.q<{ slot_no: number }>(
       `
       WITH ok AS (
         SELECT id, capacity, next_slot
@@ -219,8 +232,8 @@ class KnexShardStore implements ShardStore {
         tenant_id: tenantId,
       })
       return slotNo
-    } catch (e: any) {
-      if (e?.code === '23505') {
+    } catch (e: unknown) {
+      if (hasErrorCode(e, '23505')) {
         // Extremely rare race if another tx inserted the same slot first. Let caller try another shard/attempt.
         return null
       }
@@ -248,13 +261,13 @@ class KnexShardStore implements ShardStore {
           shard_id: data.shardId,
           slot_no: data.slotNo,
           status: 'pending',
-          lease_expires_at: (this.db as any).raw(`now() + interval '${data.leaseMs} milliseconds'`),
+          lease_expires_at: this.db.raw(`now() + interval '${data.leaseMs} milliseconds'`),
         })
         .returning(['lease_expires_at'])
 
       return row[0]
-    } catch (e: any) {
-      if (e?.code === '23505') throw new UniqueViolationError()
+    } catch (e: unknown) {
+      if (hasErrorCode(e, '23505')) throw new UniqueViolationError()
       throw e
     }
   }
@@ -265,7 +278,7 @@ class KnexShardStore implements ShardStore {
     resourceId: string,
     tenantId: string
   ): Promise<number> {
-    const res = await this.q(
+    const res = await this.q<ShardStatsRow>(
       `
       WITH ok AS (
         SELECT r.shard_id, r.slot_no
@@ -291,7 +304,7 @@ class KnexShardStore implements ShardStore {
       `,
       [reservationId, tenantId, resourceId, reservationId]
     )
-    return (res as any).rowCount ?? (res as any).rows.length
+    return res.rowCount ?? res.rows.length
   }
 
   async updateReservationStatus(
@@ -379,7 +392,7 @@ class KnexShardStore implements ShardStore {
   }
 
   async shardStats(kind?: ResourceKind) {
-    const res = await this.q(
+    const res = await this.q<ShardStatsRow>(
       `
       SELECT s.id AS shard_id, s.shard_key, s.capacity, s.next_slot,
              -- confirmed allocations
@@ -409,7 +422,7 @@ class KnexShardStore implements ShardStore {
       kind ? [kind] : []
     )
 
-    return (res as any).rows.map((r: any) => ({
+    return res.rows.map((r: ShardStatsRow) => ({
       shardId: String(r.shard_id),
       shardKey: r.shard_key,
       capacity: Number(r.capacity),
@@ -417,4 +430,8 @@ class KnexShardStore implements ShardStore {
       free: Number(r.free),
     }))
   }
+}
+
+function hasErrorCode(error: unknown, code: string): error is { code: string } {
+  return !!error && typeof error === 'object' && 'code' in error && error.code === code
 }

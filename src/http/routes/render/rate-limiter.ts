@@ -13,7 +13,7 @@ const {
   rateLimiterRenderPathMaxReqSec,
 } = getConfig()
 
-export const rateLimiter = fp((fastify: FastifyInstance, ops: any, done: () => void) => {
+export const rateLimiter = fp((fastify: FastifyInstance, _ops: unknown, done: () => void) => {
   fastify.register(fastifyRateLimit, {
     global: true,
     max: rateLimiterRenderPathMaxReqSec * 4,

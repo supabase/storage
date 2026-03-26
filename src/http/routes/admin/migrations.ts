@@ -13,6 +13,15 @@ import apiKey from '../../plugins/apikey'
 const { pgQueueEnable } = getConfig()
 const migrationQueueName = RunMigrationsOnTenants.getQueueName()
 
+type ResetFleetBody = {
+  untilMigration?: unknown
+  markCompletedTillMigration?: unknown
+}
+
+type FailedQuery = {
+  cursor?: string
+}
+
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
 
@@ -31,7 +40,7 @@ export default async function routes(fastify: FastifyInstance) {
       return reply.status(400).send({ message: 'Queue is not enabled' })
     }
 
-    const { untilMigration, markCompletedTillMigration } = req.body as Record<string, unknown>
+    const { untilMigration, markCompletedTillMigration } = req.body as ResetFleetBody
 
     if (!isDBMigrationName(untilMigration)) {
       return reply.status(400).send({ message: 'Invalid migration' })
@@ -96,7 +105,8 @@ export default async function routes(fastify: FastifyInstance) {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
-    const offset = (req.query as any).cursor ? Number((req.query as any).cursor) : 0
+    const { cursor } = req.query as FailedQuery
+    const offset = cursor ? Number(cursor) : 0
 
     const failed = await multitenantKnex
       .table('tenants')

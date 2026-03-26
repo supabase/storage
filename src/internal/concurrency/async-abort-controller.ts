@@ -2,26 +2,40 @@
  * This special AbortController is used to wait for all the abort handlers to finish before resolving the promise.
  */
 export class AsyncAbortController extends AbortController {
-  protected promises: Promise<any>[] = []
+  protected promises: Promise<unknown>[] = []
   protected priority = 0
   protected groups = new Map<number, AsyncAbortController[]>()
 
   constructor() {
     super()
 
-    const originalEventListener = this.signal.addEventListener
+    const originalEventListener = this.signal.addEventListener.bind(this.signal)
 
     // Patch event addEventListener to keep track of listeners and their promises
-    this.signal.addEventListener = (type: string, listener: any, options: any) => {
-      if (type !== 'abort') {
-        return originalEventListener.call(this.signal, type, listener, options)
+    this.signal.addEventListener = (
+      type: string,
+      listener: EventListenerOrEventListenerObject | null,
+      options?: boolean | AddEventListenerOptions
+    ) => {
+      if (!listener) {
+        return
       }
 
+      if (type !== 'abort') {
+        return originalEventListener(type, listener, options)
+      }
+
+      const event = new Event('abort')
       let resolving: undefined | (() => Promise<void>) = undefined
       const promise = new Promise<void>((resolve, reject) => {
         resolving = async (): Promise<void> => {
           return Promise.resolve()
-            .then(() => listener())
+            .then(() => {
+              if (typeof listener === 'function') {
+                return listener.call(this.signal, event)
+              }
+              return listener.handleEvent(event)
+            })
             .then(() => {
               resolve()
             })
@@ -36,7 +50,7 @@ export class AsyncAbortController extends AbortController {
         throw new Error('resolve is undefined')
       }
 
-      return originalEventListener.call(this.signal, type, resolving, options)
+      return originalEventListener(type, resolving, options)
     }
   }
 

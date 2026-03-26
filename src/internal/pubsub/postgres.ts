@@ -62,11 +62,11 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
     })
   }
 
-  async publish(channel: string, payload: unknown): Promise<void> {
+  async publish<T>(channel: string, payload: T): Promise<void> {
     await this.subscriber.notify(channel, payload)
   }
 
-  async subscribe(channel: string, cb: (payload: any) => void): Promise<void> {
+  async subscribe<T>(channel: string, cb: (payload: T) => void): Promise<void> {
     const listenerCount = this.subscriber.notifications.listenerCount(channel)
     this.subscriber.notifications.on(channel, cb)
 
@@ -75,7 +75,7 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
     }
   }
 
-  async unsubscribe(channel: string, cb: (payload: any) => void): Promise<void> {
+  async unsubscribe<T>(channel: string, cb: (payload: T) => void): Promise<void> {
     this.subscriber.notifications.removeListener(channel, cb)
 
     const isListening = this.subscriber.notifications.listenerCount(channel) > 0

@@ -27,7 +27,7 @@ export class JWKSManager {
    * Keeps the in memory config cache up to date
    */
   async listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void> {
-    await pubSub.subscribe(TENANTS_JWKS_UPDATE_CHANNEL, (cacheKey) => {
+    await pubSub.subscribe<string>(TENANTS_JWKS_UPDATE_CHANNEL, (cacheKey) => {
       tenantJwksConfigCache.delete(cacheKey)
     })
   }

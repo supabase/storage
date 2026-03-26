@@ -36,7 +36,7 @@ const exporterHeaders = headersEnv
       all[name] = value
       return all
     },
-    {} as Record<string, any>
+    {} as Record<string, string>
   )
 
 const grpcMetadata = new grpc.Metadata()

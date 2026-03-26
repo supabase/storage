@@ -18,6 +18,7 @@ import {
   VectorStore,
   VectorStoreManager,
 } from '@storage/protocols/vector'
+import { VectorBucket } from '@storage/schemas'
 
 function deferred() {
   let resolve!: () => void
@@ -26,6 +27,14 @@ function deferred() {
   })
 
   return { promise, resolve }
+}
+
+function createVectorBucket(bucketName: string): VectorBucket {
+  return {
+    id: bucketName,
+    created_at: new Date(),
+    updated_at: new Date().toISOString(),
+  } as unknown as VectorBucket
 }
 
 function createMockVectorStore(): jest.Mocked<VectorStore> {
@@ -128,11 +137,7 @@ function createDeterministicVectorDb(options: {
         },
         findVectorBucket: async (bucketName: string) => {
           if (state.existingBuckets.has(bucketName)) {
-            return {
-              id: bucketName,
-              created_at: new Date(),
-              updated_at: new Date().toISOString(),
-            } as any
+            return createVectorBucket(bucketName)
           }
 
           throw ERRORS.S3VectorNotFoundException('vector bucket', bucketName)
@@ -340,11 +345,7 @@ describe('VectorStoreManager bucket lifecycle', () => {
     const vectorStore = createMockVectorStore()
 
     db.findVectorBucket
-      .mockResolvedValueOnce({
-        id: 'bucket-a',
-        created_at: new Date(),
-        updated_at: new Date().toISOString(),
-      } as any)
+      .mockResolvedValueOnce(createVectorBucket('bucket-a'))
       .mockRejectedValueOnce(ERRORS.S3VectorNotFoundException('vector bucket', 'bucket-a'))
     db.withTransaction.mockImplementation(async (fn) => fn(db as unknown as KnexVectorMetadataDB))
 

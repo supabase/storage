@@ -102,7 +102,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.post<JwksAddRequestInterface>(
     '/:tenantId/jwks',
-    { schema: addSchema },
+    { schema: { ...addSchema, tags: ['jwks'] } },
     async ({ body, params }, reply) => {
       const validationResult = validateAddJwkRequest(body)
       if (validationResult?.message) {
@@ -116,7 +116,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.put<JwksUpdateRequestInterface>(
     '/:tenantId/jwks/:kid',
-    { schema: updateSchema },
+    { schema: { ...updateSchema, tags: ['jwks'] } },
     async (request, reply) => {
       const {
         params: { tenantId, kid },
@@ -127,26 +127,30 @@ export default async function routes(fastify: FastifyInstance) {
     }
   )
 
-  fastify.post('/jwks/generate-all-missing', async (request, reply) => {
-    const { running, sent } = UrlSigningJwkGenerator.getGenerationStatus()
-    if (running) {
-      return reply
-        .status(400)
-        .send(`Generate missing jwks is already running, and has sent ${sent} items so far`)
-    }
+  fastify.post(
+    '/jwks/generate-all-missing',
+    { schema: { tags: ['jwks'] } },
+    async (request, reply) => {
+      const { running, sent } = UrlSigningJwkGenerator.getGenerationStatus()
+      if (running) {
+        return reply
+          .status(400)
+          .send(`Generate missing jwks is already running, and has sent ${sent} items so far`)
+      }
 
-    UrlSigningJwkGenerator.generateUrlSigningJwksOnAllTenants(
-      request.signals.disconnect.signal
-    ).catch((e) => {
-      logSchema.error(request.log, 'Error generating url signing jwks for all tenants', {
-        type: 'jwk-generator',
-        error: e,
+      UrlSigningJwkGenerator.generateUrlSigningJwksOnAllTenants(
+        request.signals.disconnect.signal
+      ).catch((e) => {
+        logSchema.error(request.log, 'Error generating url signing jwks for all tenants', {
+          type: 'jwk-generator',
+          error: e,
+        })
       })
-    })
-    return reply.send({ started: true })
-  })
+      return reply.send({ started: true })
+    }
+  )
 
-  fastify.get('/jwks/generate-all-missing', (request, reply) => {
+  fastify.get('/jwks/generate-all-missing', { schema: { tags: ['jwks'] } }, (request, reply) => {
     return reply.send(UrlSigningJwkGenerator.getGenerationStatus())
   })
 }

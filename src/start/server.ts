@@ -202,11 +202,12 @@ async function httpAdminServer(
   app: FastifyInstance<Server, IncomingMessage, ServerResponse>,
   signal: AbortSignal
 ) {
-  const { adminRequestIdHeader, adminPort, host } = getConfig()
+  const { exposeDocs, adminRequestIdHeader, adminPort, host } = getConfig()
 
   const adminApp = buildAdmin({
     loggerInstance: logger,
     disableRequestLogging: true,
+    exposeDocs,
     requestIdHeader: adminRequestIdHeader,
   })
 

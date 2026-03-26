@@ -87,7 +87,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.post<CreateCredentialsRequest>(
     '/:tenantId/credentials',
     {
-      schema: createCredentialsSchema,
+      schema: { ...createCredentialsSchema, tags: ['s3-credentials'] },
     },
     async (req, reply) => {
       const credentials = await s3CredentialsManager.createS3Credentials(req.params.tenantId, {
@@ -106,7 +106,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.get<ListCredentialsRequest>(
     '/:tenantId/credentials',
-    { schema: listCredentialsSchema },
+    { schema: { ...listCredentialsSchema, tags: ['s3-credentials'] } },
     async (req, reply) => {
       const credentials = await s3CredentialsManager.listS3Credentials(req.params.tenantId)
       return reply.send(credentials)
@@ -115,7 +115,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.delete<DeleteCredentialsRequest>(
     '/:tenantId/credentials',
-    { schema: deleteCredentialsSchema },
+    { schema: { ...deleteCredentialsSchema, tags: ['s3-credentials'] } },
     async (req, reply) => {
       if (!isUuid(req.body.id)) {
         throw ERRORS.InvalidParameter('id not uuid')

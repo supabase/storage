@@ -5,6 +5,7 @@ import { S3Router } from '../router'
 
 const HeadObjectInput = {
   summary: 'Head Object',
+  tags: ['s3'],
   Params: {
     type: 'object',
     properties: {

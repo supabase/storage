@@ -442,13 +442,11 @@ describe('Tenant configs', () => {
   })
 
   test('Get tenant config with invalid tenant id expected error', async () => {
-    await expect(getTenantConfig('')).rejects.toThrowError('Invalid tenant id')
+    await expect(getTenantConfig('')).rejects.toThrow('Invalid tenant id')
   })
 
   test('Get tenant config with unknown tenant id expected error', async () => {
-    await expect(getTenantConfig('zzz')).rejects.toThrowError(
-      'Missing tenant config for tenant zzz'
-    )
+    await expect(getTenantConfig('zzz')).rejects.toThrow('Missing tenant config for tenant zzz')
   })
 
   test('Get tenant config always retrieves concurrent requests from cache', async () => {

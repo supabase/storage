@@ -119,7 +119,7 @@ describe('CDN Cache Manager', () => {
 
     const body = await response.json()
     expect(body).toEqual({ message: 'success' })
-    expect(spy).toBeCalledWith('/purge', {
+    expect(spy).toHaveBeenCalledWith('/purge', {
       tenant: {
         ref: tenantId,
       },

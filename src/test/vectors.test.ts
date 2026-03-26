@@ -132,7 +132,7 @@ describe('Vectors API', () => {
 
       // Verify the CreateIndexCommand was called with correct parameters including tenantId prefix
       const createIndexCommand = mockVectorStore.createVectorIndex
-      expect(createIndexCommand).toBeCalledWith({
+      expect(createIndexCommand).toHaveBeenCalledWith({
         ...validCreateIndexRequest,
         vectorBucketName: vectorBucketS3,
         indexName: `${tenantId}-test-index`,

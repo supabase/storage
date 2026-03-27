@@ -11,6 +11,7 @@ import {
   HeadObjectCommand,
   ListObjectsV2Command,
   ListPartsCommand,
+  PutObjectCommand,
   S3Client,
   S3ClientConfig,
   UploadPartCommand,
@@ -40,6 +41,8 @@ const {
   tracingEnabled,
   storageS3DisableChecksum,
 } = getConfig()
+
+export const MAX_PUT_OBJECT_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
 
 export interface S3ClientOptions {
   endpoint?: string
@@ -126,6 +129,7 @@ export class S3Backend implements StorageBackendAdapter {
 
   /**
    * Uploads and store an object
+   * Max 5GB
    * @param bucketName
    * @param key
    * @param version
@@ -133,6 +137,7 @@ export class S3Backend implements StorageBackendAdapter {
    * @param contentType
    * @param cacheControl
    * @param signal
+   * @param contentLength
    */
   async uploadObject(
     bucketName: string,
@@ -141,12 +146,94 @@ export class S3Backend implements StorageBackendAdapter {
     body: Readable,
     contentType: string,
     cacheControl: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    contentLength?: number
   ): Promise<ObjectMetadata> {
     if (signal?.aborted) {
       throw ERRORS.Aborted('Upload was aborted')
     }
 
+    if (typeof contentLength !== 'number' || contentLength > MAX_PUT_OBJECT_SIZE) {
+      // Use multipart when the length is unknown or exceeds S3's 5GB single-request limit.
+      return this.bufferedMultipartUpload(
+        bucketName,
+        key,
+        version,
+        body,
+        contentType,
+        cacheControl,
+        signal
+      )
+    }
+
+    // Use PutObject directly when content-length is known and within S3's single-object limit (5GB).
+    // This avoids the buffering overhead of the Upload class which buffers each part in memory.
+    return this.putObject(
+      bucketName,
+      key,
+      version,
+      body,
+      contentType,
+      cacheControl,
+      signal,
+      contentLength
+    )
+  }
+
+  protected async putObject(
+    bucketName: string,
+    key: string,
+    version: string | undefined,
+    body: Readable,
+    contentType: string,
+    cacheControl: string,
+    signal: AbortSignal | undefined,
+    contentLength: number
+  ): Promise<ObjectMetadata> {
+    const dataStream = tracingFeatures?.upload ? monitorStream(body) : body
+
+    const command = new PutObjectCommand({
+      Bucket: bucketName,
+      Key: withOptionalVersion(key, version),
+      Body: dataStream,
+      ContentType: contentType,
+      CacheControl: cacheControl,
+      ContentLength: contentLength,
+    })
+
+    try {
+      const data = await this.client.send(command, {
+        abortSignal: signal,
+      })
+
+      return {
+        httpStatusCode: data.$metadata.httpStatusCode || 200,
+        cacheControl,
+        eTag: data.ETag || '',
+        mimetype: contentType,
+        contentLength,
+        // PutObject does not return LastModified; keep the fast path single-request and use the local completion time.
+        lastModified: new Date(),
+        size: contentLength,
+        contentRange: undefined,
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw ERRORS.AbortedTerminate('Upload was aborted', err)
+      }
+      throw StorageBackendError.fromError(err)
+    }
+  }
+
+  protected async bufferedMultipartUpload(
+    bucketName: string,
+    key: string,
+    version: string | undefined,
+    body: Readable,
+    contentType: string,
+    cacheControl: string,
+    signal?: AbortSignal
+  ): Promise<ObjectMetadata> {
     const dataStream = tracingFeatures?.upload ? monitorStream(body) : body
 
     const upload = new Upload({
@@ -177,15 +264,13 @@ export class S3Backend implements StorageBackendAdapter {
     try {
       const data = await upload.done()
 
-      // Remove event listener to allow GC of upload and dataStream references
       upload.off('httpUploadProgress', progressHandler)
 
-      // Only call head for objects that are > 0 bytes
-      // for some reason headObject can take a really long time to resolve on zero byte uploads, this was causing requests to timeout
-      const metadata = hasUploadedBytes
+      const metadata: ObjectMetadata = hasUploadedBytes
         ? await this.headObject(bucketName, key, version)
         : {
             httpStatusCode: 200,
+            cacheControl,
             eTag: data.ETag || '',
             mimetype: contentType,
             lastModified: new Date(),

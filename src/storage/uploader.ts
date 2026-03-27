@@ -18,19 +18,33 @@ interface FileUpload {
   body: Readable
   mimeType: string
   cacheControl: string
+  contentLength?: number
+  declaredContentLength?: number
   isTruncated: () => boolean
   xRobotsTag?: string
-  userMetadata?: Record<string, unknown>
 }
 
 export interface UploadRequest {
   bucketId: string
   objectName: string
   file: FileUpload
+  userMetadata?: Record<string, unknown>
   owner?: string
   isUpsert?: boolean
   uploadType?: 'standard' | 's3' | 'resumable'
   signal?: AbortSignal
+}
+
+export type CanUploadMetadata = Partial<Pick<ObjectMetadata, 'mimetype' | 'contentLength'>> &
+  Record<string, unknown>
+
+export interface CanUploadOptions {
+  bucketId: string
+  objectName: string
+  owner: string | undefined
+  isUpsert: boolean | undefined
+  userMetadata: Record<string, unknown> | undefined
+  metadata: CanUploadMetadata | undefined
 }
 
 const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
@@ -46,7 +60,7 @@ export class Uploader {
     private readonly location: StorageObjectLocator
   ) {}
 
-  async canUpload(options: Pick<UploadRequest, 'bucketId' | 'objectName' | 'isUpsert' | 'owner'>) {
+  async canUpload(options: CanUploadOptions) {
     const shouldCreateObject = !options.isUpsert
 
     if (shouldCreateObject) {
@@ -56,6 +70,8 @@ export class Uploader {
           name: options.objectName,
           version: '1',
           owner: options.owner,
+          metadata: options.metadata,
+          user_metadata: options.userMetadata,
         })
       })
     } else {
@@ -65,6 +81,8 @@ export class Uploader {
           name: options.objectName,
           version: '1',
           owner: options.owner,
+          metadata: options.metadata,
+          user_metadata: options.userMetadata,
         })
       })
     }
@@ -75,7 +93,7 @@ export class Uploader {
    * We check RLS policies before proceeding
    * @param options
    */
-  async prepareUpload(options: Omit<UploadRequest, 'file'>) {
+  async prepareUpload(options: CanUploadOptions & { uploadType?: string }) {
     await this.canUpload(options)
     fileUploadStarted.add(1, {
       uploadType: options.uploadType,
@@ -92,7 +110,18 @@ export class Uploader {
    * @param options
    */
   async upload(request: UploadRequest) {
-    const version = await this.prepareUpload(request)
+    const version = await this.prepareUpload({
+      bucketId: request.bucketId,
+      objectName: request.objectName,
+      owner: request.owner,
+      isUpsert: request.isUpsert,
+      userMetadata: request.userMetadata,
+      metadata: {
+        mimetype: request.file.mimeType,
+        contentLength: request.file.declaredContentLength ?? request.file.contentLength,
+      },
+      uploadType: request.uploadType,
+    })
 
     try {
       const file = request.file
@@ -110,7 +139,8 @@ export class Uploader {
         file.body,
         file.mimeType,
         file.cacheControl,
-        request.signal
+        request.signal,
+        file.contentLength
       )
 
       if (request.file.xRobotsTag) {
@@ -125,7 +155,7 @@ export class Uploader {
         ...request,
         version,
         objectMetadata,
-        userMetadata: { ...file.userMetadata },
+        userMetadata: { ...request.userMetadata },
       })
     } catch (e) {
       await ObjectAdminDelete.send({
@@ -323,7 +353,15 @@ export async function fileUploadFromRequest(
     allowedMimeTypes?: string[]
     objectName: string
   }
-): Promise<FileUpload & { maxFileSize: number }> {
+): Promise<
+  FileUpload & {
+    mimeType: string
+    maxFileSize: number
+    userMetadata: Record<string, unknown> | undefined
+    contentLength: number | undefined
+    declaredContentLength: number | undefined
+  }
+> {
   const contentType = request.headers['content-type']
   const xRobotsTag = request.headers['x-robots-tag'] as string | undefined
 
@@ -335,6 +373,7 @@ export async function fileUploadFromRequest(
   let userMetadata: Record<string, unknown> | undefined
   let mimeType: string
   let isTruncated: () => boolean
+  let fileContentLength: number | undefined
   let maxFileSize = 0
 
   // When is an empty folder we restrict it to 0 bytes
@@ -357,6 +396,8 @@ export async function fileUploadFromRequest(
 
       const file = formData.file
       body = file
+      // multipart/form-data content-length includes boundary overhead and cannot be trusted as file size,
+      // so we intentionally leave fileContentLength undefined and let the backend stream via multipart upload.
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
       const customMd = formData.fields.metadata?.value ?? formData.fields.userMetadata?.value
       /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
@@ -407,12 +448,22 @@ export async function fileUploadFromRequest(
       userMetadata = parseUserMetadata(customMd)
     }
 
-    const contentLength = getKnownRequestContentLength(request)
-    isTruncated = () => {
-      // @todo more secure to get this from the stream or from s3 in the next step
-      return typeof contentLength === 'number' && contentLength > maxFileSize
+    fileContentLength = getKnownRequestContentLength(request)
+    if (typeof fileContentLength === 'number' && fileContentLength > maxFileSize) {
+      throw ERRORS.EntityTooLarge()
     }
+
+    // Known-size binary uploads are rejected before
+    // reaching the backend when they exceed the limit.
+    // Unknown-size binary uploads do not have a later truncation signal.
+    isTruncated = () => false
   }
+
+  // Capture the declared content-length for RLS metadata purposes.
+  // For binary uploads fileContentLength is already set (with size enforcement applied above).
+  // For multipart, size enforcement is handled by the fileSize limit in form parsing, so we
+  // read the header separately and only use it for RLS — never for the actual S3 upload.
+  const declaredContentLength = fileContentLength ?? getKnownRequestContentLength(request)
 
   // Detect if the request stream closed before we could pass it to the storage backend
   // Without this check, the storage backend (S3) would throw a 500 "Premature close" error
@@ -425,6 +476,8 @@ export async function fileUploadFromRequest(
     body,
     mimeType,
     cacheControl,
+    contentLength: fileContentLength,
+    declaredContentLength,
     isTruncated,
     userMetadata,
     maxFileSize,

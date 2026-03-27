@@ -25,6 +25,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
 
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {
+      exposeHeadRoutes: true,
       openapi: {
         info: {
           title: 'Supabase Storage API',
@@ -37,6 +38,10 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
           { name: 's3', description: 'S3 end-points' },
           { name: 'transformation', description: 'Image transformation' },
           { name: 'resumable', description: 'Resumable Upload end-points' },
+          { name: 'cdn', description: 'CDN cache management' },
+          { name: 'health', description: 'Health check end-points' },
+          { name: 'iceberg', description: 'Apache Iceberg REST catalog' },
+          { name: 'vector', description: 'Vector storage and search' },
         ],
       },
     })
@@ -69,6 +74,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   )
   app.register(plugins.tracing)
   app.register(plugins.logRequest({ excludeUrls: excludedRoutesFromMonitoring }))
+  app.register(plugins.headerValidator({ excludeUrls: excludedRoutesFromMonitoring }))
   app.register(routes.tus, { prefix: 'upload/resumable' })
   app.register(routes.bucket, { prefix: 'bucket' })
   app.register(routes.object, { prefix: 'object' })

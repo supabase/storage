@@ -20,15 +20,37 @@ import { FastifyReply, FastifyRequest } from 'fastify'
 import * as os from 'os'
 import { getConfig } from '../../config'
 
-const { version, otelMetricsExportIntervalMs, otelMetricsEnabled, otelMetricsTemporality, region } =
-  getConfig()
+const {
+  version,
+  otelMetricsExportIntervalMs,
+  otelMetricsEnabled,
+  otelMetricsTemporality,
+  prometheusMetricsEnabled,
+  region,
+} = getConfig()
 
 let prometheusExporter: PrometheusExporter | undefined
 let meterProvider: MeterProvider | undefined
 let metricsShutdownPromise: Promise<void> | undefined
+let unregisterMetricInstrumentations: (() => void) | undefined
 
 interface OTelMetricsGlobalState {
   __otelMetricsShutdown?: () => Promise<void>
+}
+
+function unregisterMetricInstrumentation(unregister: (() => void) | undefined) {
+  if (!unregister) {
+    return
+  }
+
+  try {
+    unregister()
+  } catch (error) {
+    logSchema.error(logger, '[OTel Metrics] Failed to unregister metric instrumentations', {
+      type: 'otel-metrics',
+      error,
+    })
+  }
 }
 
 // =============================================================================
@@ -137,6 +159,10 @@ export async function shutdownOtelMetrics(): Promise<void> {
       type: 'otel-metrics',
     })
 
+    const unregister = unregisterMetricInstrumentations
+    unregisterMetricInstrumentations = undefined
+    unregisterMetricInstrumentation(unregister)
+
     try {
       await provider.shutdown()
       logSchema.info(logger, '[OTel Metrics] Shutdown complete', {
@@ -152,6 +178,7 @@ export async function shutdownOtelMetrics(): Promise<void> {
         meterProvider = undefined
       }
       prometheusExporter = undefined
+      metricsShutdownPromise = undefined
     }
   })()
 
@@ -208,12 +235,14 @@ if (otelMetricsEnabled) {
     )
   }
 
-  prometheusExporter = new PrometheusExporter({
-    prefix: 'storage_api',
-    preventServerStart: true,
-    withResourceConstantLabels: /^(region|instance|metric\.version)$/,
-  })
-  readers.push(prometheusExporter)
+  if (prometheusMetricsEnabled) {
+    prometheusExporter = new PrometheusExporter({
+      prefix: 'storage_api',
+      preventServerStart: true,
+      withResourceConstantLabels: /^(region|instance|metric\.version)$/,
+    })
+    readers.push(prometheusExporter)
+  }
 
   meterProvider = new MeterProvider({
     resource,
@@ -244,7 +273,7 @@ if (otelMetricsEnabled) {
   hostMetrics.start()
 
   // Register Node.js runtime instrumentations
-  registerInstrumentations({
+  unregisterMetricInstrumentations = registerInstrumentations({
     meterProvider,
     instrumentations: [
       new RuntimeNodeInstrumentation(),

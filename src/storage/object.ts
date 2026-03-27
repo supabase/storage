@@ -17,7 +17,7 @@ import {
   ObjectUpdatedMetadata,
 } from './events'
 import { mustBeValidKey } from './limits'
-import { fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
+import { CanUploadMetadata, fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
 
 const { requestUrlLengthLimit } = getConfig()
 
@@ -97,6 +97,7 @@ export class ObjectStorage {
       owner: file.owner,
       isUpsert: Boolean(file.isUpsert),
       signal: file.signal,
+      userMetadata: uploadRequest.userMetadata,
     })
   }
 
@@ -332,11 +333,15 @@ export class ObjectStorage {
           ...(fileMetadata || {}),
         }
 
+    const destinationUserMetadata = copyMetadata ? originObject.user_metadata : userMetadata
+
     await this.uploader.canUpload({
       bucketId: destinationBucket,
       objectName: destinationKey,
       owner,
       isUpsert: upsert,
+      userMetadata: destinationUserMetadata || undefined,
+      metadata: destinationMetadata,
     })
 
     try {
@@ -381,7 +386,7 @@ export class ObjectStorage {
             lastModified: copyResult.lastModified,
             eTag: copyResult.eTag,
           },
-          user_metadata: copyMetadata ? originObject.user_metadata : userMetadata,
+          user_metadata: destinationUserMetadata,
           version: newVersion,
         })
 
@@ -790,7 +795,11 @@ export class ObjectStorage {
     url: string,
     expiresIn: number,
     owner?: string,
-    options?: { upsert?: boolean }
+    options?: {
+      upsert?: boolean
+      userMetadata?: Record<string, unknown>
+      metadata?: CanUploadMetadata
+    }
   ) {
     // check if user has INSERT permissions
     await this.uploader.canUpload({
@@ -798,6 +807,8 @@ export class ObjectStorage {
       objectName,
       owner,
       isUpsert: options?.upsert ?? false,
+      userMetadata: options?.userMetadata,
+      metadata: options?.metadata,
     })
 
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)

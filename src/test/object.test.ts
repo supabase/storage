@@ -66,7 +66,7 @@ describe('testing GET object', () => {
     expect(response.headers['etag']).toBe('abc')
     expect(response.headers['x-robots-tag']).toBe('none')
     expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
-    expect(S3Backend.prototype.getObject).toBeCalled()
+    expect(S3Backend.prototype.getObject).toHaveBeenCalled()
   })
 
   test('check if RLS policies are respected: authenticated user is able to read authenticated resource without /authenticated prefix', async () => {
@@ -80,7 +80,7 @@ describe('testing GET object', () => {
     expect(response.statusCode).toBe(200)
     expect(response.headers['etag']).toBe('abc')
     expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
-    expect(S3Backend.prototype.getObject).toBeCalled()
+    expect(S3Backend.prototype.getObject).toHaveBeenCalled()
   })
 
   test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
@@ -182,7 +182,7 @@ describe('testing GET object', () => {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
     })
-    expect(S3Backend.prototype.getObject).toBeCalled()
+    expect(S3Backend.prototype.getObject).toHaveBeenCalled()
     expect(response.headers).toEqual(
       expect.objectContaining({
         'content-disposition': `attachment;`,
@@ -198,7 +198,7 @@ describe('testing GET object', () => {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
     })
-    expect(S3Backend.prototype.getObject).toBeCalled()
+    expect(S3Backend.prototype.getObject).toHaveBeenCalled()
     expect(response.headers).toEqual(
       expect.objectContaining({
         'content-disposition': `attachment; filename=testname.png; filename*=UTF-8''testname.png`,
@@ -293,7 +293,7 @@ describe('testing POST object via multipart upload', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.uploadObject).toBeCalled()
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
     expect(await response.json()).toEqual(
       expect.objectContaining({
         Id: expect.any(String),
@@ -801,7 +801,7 @@ describe('testing POST object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.uploadObject).toBeCalled()
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
     expect(await response.json()).toEqual(
       expect.objectContaining({
         Id: expect.any(String),
@@ -995,7 +995,8 @@ describe('testing POST object via binary upload', () => {
         message: 'The object exceeded the maximum allowed size',
       })
     )
-    expect(S3Backend.prototype.uploadObject).toHaveBeenCalledTimes(1)
+    // Early size check in fileUploadFromRequest rejects before reaching the backend
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
   test('return 400 when uploading to object with no file name', async () => {
@@ -1092,7 +1093,7 @@ describe('testing PUT object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.uploadObject).toBeCalled()
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
     expect(await response.json()).toEqual(
       expect.objectContaining({
         Id: expect.any(String),
@@ -1192,7 +1193,7 @@ describe('testing PUT object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.uploadObject).toBeCalled()
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
     expect(await response.json()).toEqual(
       expect.objectContaining({
         Id: expect.any(String),
@@ -1299,7 +1300,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     const jsonResponse = await response.json()
     expect(jsonResponse.Key).toBe(`bucket2/authenticated/casestudy11.png`)
   })
@@ -1319,7 +1320,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     const jsonResponse = await response.json()
 
     expect(jsonResponse.Key).toBe(`bucket3/authenticated/casestudy11.png`)
@@ -1341,7 +1342,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     const jsonResponse = response.json()
     expect(jsonResponse.Key).toBe(`bucket2/authenticated/${copiedKey}`)
 
@@ -1385,7 +1386,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     const parsedBody = JSON.parse(response.body)
 
     expect(parsedBody.Key).toBe(`bucket2/authenticated/${copiedKey}`)
@@ -1434,7 +1435,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     const jsonResponse = response.json()
     expect(jsonResponse.Key).toBe(`bucket2/authenticated/${copiedKey}`)
 
@@ -1546,7 +1547,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObject).toBeCalled()
+    expect(S3Backend.prototype.deleteObject).toHaveBeenCalled()
   })
 
   test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {
@@ -1611,7 +1612,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObjects).toBeCalled()
+    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
 
     const result = JSON.parse(response.body)
     expect(result).toHaveLength(10001)
@@ -1692,7 +1693,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObjects).toBeCalled()
+    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
     const results = JSON.parse(response.body)
     expect(results).toHaveLength(1)
     expect(results[0].name).toBe('authenticated/delete-multiple7.png')

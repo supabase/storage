@@ -180,7 +180,9 @@ export class FileBackend implements StorageBackendAdapter {
     version: string | undefined,
     body: NodeJS.ReadableStream,
     contentType: string,
-    cacheControl: string
+    cacheControl: string,
+    signal?: AbortSignal,
+    contentLength?: number
   ): Promise<ObjectMetadata> {
     try {
       const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))

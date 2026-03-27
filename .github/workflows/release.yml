@@ -16,10 +16,10 @@ jobs:
       published: ${{ steps.semantic.outputs.new_release_published }}
       version: ${{ steps.semantic.outputs.new_release_version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 24
 
@@ -29,13 +29,44 @@ jobs:
 
       - name: Semantic Release
         id: semantic
-        uses: cycjimmy/semantic-release-action@v6.0.0
+        uses: cycjimmy/semantic-release-action@b12c8f6015dc215fe37bc154d4ad456dd3833c90 # v6.0.0
         with:
           semantic_version: 24.1.0
           extra_plugins: |
             @semantic-release/commit-analyzer
             @semantic-release/release-notes-generator
             @semantic-release/github
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate API Specs for Release
+        if: steps.semantic.outputs.new_release_published == 'true'
+        run: |
+          npm run docs:export
+        env:
+          VERSION: ${{ steps.semantic.outputs.new_release_version }}
+          ANON_KEY: ${{ secrets.ANON_KEY }}
+          SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          REGION: ${{ secrets.REGION }}
+          POSTGREST_URL: ${{ secrets.POSTGREST_URL }}
+          GLOBAL_S3_BUCKET: ${{ secrets.GLOBAL_S3_BUCKET }}
+          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
+          AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
+          PGOPTIONS: -c search_path=storage,public
+          FILE_SIZE_LIMIT: "52428800"
+          STORAGE_BACKEND: s3
+          ENABLE_IMAGE_TRANSFORMATION: true
+
+      - name: Attach API Specs to Release
+        if: steps.semantic.outputs.new_release_published == 'true'
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+        with:
+          tag_name: v${{ steps.semantic.outputs.new_release_version }}
+          files: |
+            static/api.json
+            static/api-admin.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -50,7 +81,7 @@ jobs:
       id-token: write
     steps:
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: |
             supabase/storage-api
@@ -61,52 +92,52 @@ jobs:
           tags: |
             type=raw,value=v${{ needs.release.outputs.version }}
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         with:
           platforms: amd64,arm64
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Login to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: configure aws credentials - staging
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5.1.1
         with:
           role-to-assume: ${{ secrets.DEV_AWS_ROLE }}
           aws-region: "us-east-1"
 
       - name: Login to ECR account - staging
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: 436098097459.dkr.ecr.us-east-1.amazonaws.com
 
       - name: configure aws credentials - prod
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5.1.1
         with:
           role-to-assume: ${{ secrets.PROD_AWS_ROLE }}
           aws-region: "us-east-1"
 
       - name: Login to ECR - prod
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: public.ecr.aws
 
       - name: Login to ECR account - prod
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: 646182064048.dkr.ecr.us-east-1.amazonaws.com
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           push: true
           platforms: linux/amd64,linux/arm64
@@ -125,10 +156,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@818d4b7b91585d195f67373fd9cb0332e31a7175 # v4.6.0
         with:
           images: |
             436098097459.dkr.ecr.us-east-1.amazonaws.com/storage-pgbouncer
@@ -136,31 +167,31 @@ jobs:
           tags: |
             type=raw,value=v${{ needs.release.outputs.version }}
 
-      - uses: docker/setup-buildx-action@v2
+      - uses: docker/setup-buildx-action@885d1462b80bc1c1c7f0b00334ad271f09369c55 # v2.10.0
 
       - name: configure aws credentials - staging
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@67fbcbb121271f7775d2e7715933280b06314838 # v1.7.0
         with:
           role-to-assume: ${{ secrets.DEV_AWS_ROLE }}
           aws-region: "us-east-1"
 
       - name: Login to ECR account - staging
-        uses: docker/login-action@v2
+        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc # v2.2.0
         with:
           registry: 436098097459.dkr.ecr.us-east-1.amazonaws.com
 
       - name: configure aws credentials - prod
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@67fbcbb121271f7775d2e7715933280b06314838 # v1.7.0
         with:
           role-to-assume: ${{ secrets.PROD_AWS_ROLE }}
           aws-region: "us-east-1"
 
       - name: Login to ECR account - prod
-        uses: docker/login-action@v2
+        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc # v2.2.0
         with:
           registry: 646182064048.dkr.ecr.us-east-1.amazonaws.com
 
-      - uses: docker/build-push-action@v3
+      - uses: docker/build-push-action@1104d471370f9806843c095c1db02b5a90c5f8b6 # v3.3.1
         with:
           push: true
           context: .docker/pgbouncer
@@ -180,24 +211,24 @@ jobs:
       id-token: write
     steps:
       - name: Login to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
       - name: configure aws credentials
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5.1.1
         with:
           role-to-assume: ${{ secrets.PROD_AWS_ROLE }}
           aws-region: "us-east-1"
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: public.ecr.aws
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: akhilerm/tag-push-action@v2.2.0
+      - uses: akhilerm/tag-push-action@f35ff2cb99d407368b5c727adbcc14a2ed81d509 # v2.2.0
         with:
           src: docker.io/supabase/storage-api:v${{ needs.release.outputs.version }}
           dst: |

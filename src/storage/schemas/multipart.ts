@@ -15,6 +15,9 @@ export const multipartUploadSchema = {
     user_metadata: {
       anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }],
     },
+    metadata: {
+      anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }],
+    },
   },
   required: [
     'id',

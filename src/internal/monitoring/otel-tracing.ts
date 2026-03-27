@@ -46,6 +46,34 @@ Object.keys(exporterHeaders).forEach((key) => {
 
 const endpoint = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
 let traceExporter: SpanExporter | undefined = undefined
+let tracingSdk: NodeSDK | undefined
+let tracingShutdownPromise: Promise<void> | undefined
+let unregisterTracingInstrumentations: (() => void) | undefined
+let unregisterClassInstrumentations: (() => void) | undefined
+let classInstrumentationsImportPromise: Promise<void> | undefined
+let tracingShutdownRequested = false
+
+interface OTelTracingGlobalState {
+  __otelTracingShutdown?: () => Promise<void>
+}
+
+function unregisterTracingInstrumentation(
+  unregister: (() => void) | undefined,
+  name: 'class' | 'tracing'
+) {
+  if (!unregister) {
+    return
+  }
+
+  try {
+    unregister()
+  } catch (error) {
+    logSchema.error(logger, `[Otel] Failed to unregister ${name} instrumentations`, {
+      type: 'otel',
+      error,
+    })
+  }
+}
 
 if (tracingEnabled && endpoint) {
   // Create an OTLP trace exporter
@@ -73,114 +101,175 @@ if (tracingEnabled && traceExporter) {
 }
 
 if (tracingEnabled && traceExporter && spanProcessors.length > 0) {
-  const ignoreRoutes = ['/metrics', '/status', '/health', '/healthcheck']
-
   // Configure the OpenTelemetry Node SDK
-  const sdk = new NodeSDK({
+  tracingSdk = new NodeSDK({
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: 'storage',
       [ATTR_SERVICE_VERSION]: version,
     }),
     spanProcessors,
-    traceExporter,
-    instrumentations: [
-      // @fastify/otel replaces @opentelemetry/instrumentation-fastify
-      // It auto-sets http.route, http.request.method, url.path on spans.
-      // Other attributes (tenant.ref, trace.mode, http.operation) are set
-      // in Fastify hooks via request.opentelemetry().span.
-      new FastifyOtelInstrumentation({
-        enabled: true,
-        registerOnInitialization: true,
-        ignorePaths: (routeOpts) => {
-          return ignoreRoutes.includes(routeOpts.url)
-        },
-      }),
-      getNodeAutoInstrumentations({
-        '@opentelemetry/instrumentation-http': {
-          enabled: true,
-          ignoreIncomingRequestHook: (req) => {
-            return ignoreRoutes.some((url) => req.url?.includes(url)) ?? false
-          },
-          ignoreOutgoingRequestHook: (req) => {
-            // Skip OTEL instrumentation for S3 Tables requests to avoid injecting
-            // unsupported headers (baggage, traceparent, tracestate)
-            const host = req.hostname || req.host || ''
-            return host.includes('.s3tables.') || host.includes('--table-s3')
-          },
-          startIncomingSpanHook: (req) => {
-            let tenantId = ''
-            if (isMultitenant) {
-              if (requestXForwardedHostRegExp) {
-                const serverRequest = req
-                const xForwardedHost = serverRequest.headers['x-forwarded-host']
-                if (typeof xForwardedHost !== 'string') return {}
-                const result = xForwardedHost.match(requestXForwardedHostRegExp)
-                if (!result) return {}
-                tenantId = result[1]
-              }
-            } else {
-              tenantId = defaultTenantId
-            }
-
-            return {
-              'tenant.ref': tenantId,
-              region,
-            }
-          },
-          headersToSpanAttributes: {
-            client: {
-              requestHeaders: requestTraceHeader ? [requestTraceHeader] : [],
-            },
-            server: {
-              requestHeaders: requestTraceHeader ? [requestTraceHeader] : [],
-            },
-          },
-        },
-        '@opentelemetry/instrumentation-fs': {
-          enabled: false,
-        },
-        '@opentelemetry/instrumentation-aws-sdk': {
-          enabled: storageS3InternalTracesEnabled,
-        },
-        '@opentelemetry/instrumentation-pg': {
-          enabled: true,
-          requireParentSpan: true,
-        },
-        '@opentelemetry/instrumentation-knex': {
-          enabled: true,
-        },
-      }),
-    ],
+    metricReaders: [],
   })
 
   // Initialize the OpenTelemetry Node SDK
-  sdk.start()
+  tracingSdk.start()
+  tracingShutdownRequested = false
 
-  // Load class instrumentations after SDK starts to avoid loading http/metrics.ts too early
-  void import('./otel-class-instrumentations').then(({ classInstrumentations }) => {
-    registerInstrumentations({
-      tracerProvider: trace.getTracerProvider(),
-      instrumentations: classInstrumentations,
-    })
+  const ignoreRoutes = ['/metrics', '/status', '/health', '/healthcheck']
+  const tracingInstrumentations = [
+    // @fastify/otel replaces @opentelemetry/instrumentation-fastify
+    // It auto-sets http.route, http.request.method, url.path on spans.
+    // Other attributes (tenant.ref, trace.mode, http.operation) are set
+    // in Fastify hooks via request.opentelemetry().span.
+    new FastifyOtelInstrumentation({
+      enabled: true,
+      registerOnInitialization: true,
+      ignorePaths: (routeOpts) => {
+        return ignoreRoutes.includes(routeOpts.url)
+      },
+    }),
+    getNodeAutoInstrumentations({
+      '@opentelemetry/instrumentation-http': {
+        enabled: true,
+        ignoreIncomingRequestHook: (req) => {
+          return ignoreRoutes.some((url) => req.url?.includes(url)) ?? false
+        },
+        ignoreOutgoingRequestHook: (req) => {
+          // Skip OTEL instrumentation for S3 Tables requests to avoid injecting
+          // unsupported headers (baggage, traceparent, tracestate)
+          const host = req.hostname || req.host || ''
+          return host.includes('.s3tables.') || host.includes('--table-s3')
+        },
+        startIncomingSpanHook: (req) => {
+          let tenantId = ''
+          if (isMultitenant) {
+            if (requestXForwardedHostRegExp) {
+              const serverRequest = req
+              const xForwardedHost = serverRequest.headers['x-forwarded-host']
+              if (typeof xForwardedHost !== 'string') return {}
+              const result = xForwardedHost.match(requestXForwardedHostRegExp)
+              if (!result) return {}
+              tenantId = result[1]
+            }
+          } else {
+            tenantId = defaultTenantId
+          }
+
+          return {
+            'tenant.ref': tenantId,
+            region,
+          }
+        },
+        headersToSpanAttributes: {
+          client: {
+            requestHeaders: requestTraceHeader ? [requestTraceHeader] : [],
+          },
+          server: {
+            requestHeaders: requestTraceHeader ? [requestTraceHeader] : [],
+          },
+        },
+      },
+      '@opentelemetry/instrumentation-fs': {
+        enabled: false,
+      },
+      '@opentelemetry/instrumentation-aws-sdk': {
+        enabled: storageS3InternalTracesEnabled,
+      },
+      '@opentelemetry/instrumentation-pg': {
+        enabled: true,
+        requireParentSpan: true,
+      },
+      '@opentelemetry/instrumentation-knex': {
+        enabled: true,
+      },
+      '@opentelemetry/instrumentation-runtime-node': {
+        enabled: false,
+      },
+    }),
+  ]
+
+  unregisterTracingInstrumentations = registerInstrumentations({
+    tracerProvider: trace.getTracerProvider(),
+    instrumentations: tracingInstrumentations,
   })
 
-  // Gracefully shutdown the SDK on process exit
-  process.once('SIGTERM', () => {
-    logSchema.info(logger, '[Otel] Stopping', {
-      type: 'otel',
+  const sdk = tracingSdk
+
+  // Load class instrumentations after SDK starts to avoid loading http/metrics.ts too early
+  classInstrumentationsImportPromise = import('./otel-class-instrumentations')
+    .then(({ loadClassInstrumentations }) => loadClassInstrumentations())
+    .then((classInstrumentations) => {
+      if (tracingShutdownRequested || tracingSdk !== sdk) {
+        return
+      }
+
+      unregisterClassInstrumentations = registerInstrumentations({
+        tracerProvider: trace.getTracerProvider(),
+        instrumentations: classInstrumentations,
+      })
     })
-    sdk
-      .shutdown()
-      .then(() => {
+    .catch((error) => {
+      logSchema.error(logger, '[Otel] Failed to load class instrumentations', {
+        type: 'otel',
+        error,
+      })
+    })
+
+  const shutdownOtelTracing = async () => {
+    if (tracingShutdownPromise) {
+      await tracingShutdownPromise
+      return
+    }
+
+    const sdk = tracingSdk
+    if (!sdk) {
+      return
+    }
+
+    tracingShutdownRequested = true
+
+    tracingShutdownPromise = (async () => {
+      logSchema.info(logger, '[Otel] Stopping', {
+        type: 'otel',
+      })
+
+      try {
+        await classInstrumentationsImportPromise
+        classInstrumentationsImportPromise = undefined
+
+        unregisterTracingInstrumentation(unregisterClassInstrumentations, 'class')
+        unregisterClassInstrumentations = undefined
+        unregisterTracingInstrumentation(unregisterTracingInstrumentations, 'tracing')
+        unregisterTracingInstrumentations = undefined
+
+        await sdk.shutdown()
+
         logSchema.info(logger, '[Otel] Exited', {
           type: 'otel',
         })
-      })
-      .catch((error) =>
+      } catch (error) {
         logSchema.error(logger, '[Otel] Shutdown error', {
           type: 'otel',
           error,
         })
-      )
+      } finally {
+        if (tracingSdk === sdk) {
+          tracingSdk = undefined
+        }
+        tracingShutdownRequested = false
+        classInstrumentationsImportPromise = undefined
+        tracingShutdownPromise = undefined
+      }
+    })()
+
+    await tracingShutdownPromise
+  }
+
+  ;(globalThis as typeof globalThis & OTelTracingGlobalState).__otelTracingShutdown =
+    shutdownOtelTracing
+
+  // Gracefully shutdown the SDK on process exit
+  process.once('SIGTERM', () => {
+    void shutdownOtelTracing()
   })
 }

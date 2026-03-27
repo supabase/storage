@@ -8,13 +8,15 @@ import {
   TenantMigrationStatus,
 } from '@internal/database'
 import {
-  DBMigration,
+  isDBMigrationName,
   lastLocalMigrationName,
   progressiveMigrations,
   resetMigration,
   runMigrationsOnTenant,
 } from '@internal/database/migrations'
 import { StorageBackendError } from '@internal/errors'
+import { PG_BOSS_SCHEMA } from '@internal/queue'
+import { RunMigrationsOnTenants } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey } from '../../../config'
@@ -128,11 +130,12 @@ interface tenantDBInterface {
 }
 
 const { dbMigrationFreezeAt, icebergEnabled, vectorEnabled } = getConfig()
+const migrationQueueName = RunMigrationsOnTenants.getQueueName()
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
 
-  fastify.get('/', async () => {
+  fastify.get('/', { schema: { tags: ['tenant'] } }, async () => {
     const tenants = await multitenantKnex('tenants').select()
     return tenants.map(
       ({
@@ -203,153 +206,161 @@ export default async function routes(fastify: FastifyInstance) {
     )
   })
 
-  fastify.get<tenantRequestInterface>('/:tenantId', async (request, reply) => {
-    const tenant = await multitenantKnex('tenants').first().where('id', request.params.tenantId)
-    if (!tenant) {
-      return reply.code(404).send()
-    }
-    const {
-      anon_key,
-      database_url,
-      database_pool_url,
-      database_pool_mode,
-      max_connections,
-      file_size_limit,
-      jwt_secret,
-      jwks,
-      service_key,
-      feature_purge_cache,
-      feature_s3_protocol,
-      feature_image_transformation,
-      feature_iceberg_catalog,
-      feature_iceberg_catalog_max_catalogs,
-      feature_iceberg_catalog_max_namespaces,
-      feature_iceberg_catalog_max_tables,
-      feature_vector_buckets,
-      feature_vector_buckets_max_buckets,
-      feature_vector_buckets_max_indexes,
-      image_transformation_max_resolution,
-      migrations_version,
-      migrations_status,
-      tracing_mode,
-      disable_events,
-    } = tenant
-
-    const capabilities = await getTenantCapabilities(request.params.tenantId)
-
-    return {
-      anonKey: decrypt(anon_key),
-      databaseUrl: decrypt(database_url),
-      databasePoolUrl:
-        database_pool_url === null
-          ? null
-          : database_pool_url
-            ? decrypt(database_pool_url)
-            : undefined,
-      databasePoolMode: database_pool_mode,
-      maxConnections: max_connections ? Number(max_connections) : undefined,
-      fileSizeLimit: Number(file_size_limit),
-      jwtSecret: decrypt(jwt_secret),
-      jwks,
-      serviceKey: decrypt(service_key),
-      capabilities,
-      features: {
-        imageTransformation: {
-          enabled: feature_image_transformation,
-          maxResolution: image_transformation_max_resolution,
-        },
-        purgeCache: {
-          enabled: feature_purge_cache,
-        },
-        s3Protocol: {
-          enabled: feature_s3_protocol,
-        },
-        icebergCatalog: {
-          enabled: icebergEnabled || feature_iceberg_catalog,
-          maxNamespaces: feature_iceberg_catalog_max_namespaces,
-          maxTables: feature_iceberg_catalog_max_tables,
-          maxCatalogs: feature_iceberg_catalog_max_catalogs,
-        },
-        vectorBuckets: {
-          enabled: vectorEnabled || feature_vector_buckets,
-          maxBuckets: feature_vector_buckets_max_buckets,
-          maxIndexes: feature_vector_buckets_max_indexes,
-        },
-      },
-      migrationVersion: migrations_version,
-      migrationStatus: migrations_status,
-      tracingMode: tracing_mode,
-      disableEvents: disable_events,
-    }
-  })
-
-  fastify.post<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
-    const { tenantId } = request.params
-    const {
-      anonKey,
-      databaseUrl,
-      databasePoolMode,
-      fileSizeLimit,
-      jwtSecret,
-      jwks,
-      serviceKey,
-      features,
-      databasePoolUrl,
-      maxConnections,
-      tracingMode,
-    } = request.body
-
-    await multitenantKnex.transaction(async (trx) => {
-      await multitenantKnex('tenants').insert({
-        id: tenantId,
-        anon_key: encrypt(anonKey),
-        database_url: encrypt(databaseUrl),
-        database_pool_url: databasePoolUrl ? encrypt(databasePoolUrl) : undefined,
-        database_pool_mode: databasePoolMode,
-        max_connections: maxConnections ? Number(maxConnections) : undefined,
-        file_size_limit: fileSizeLimit,
-        jwt_secret: encrypt(jwtSecret),
+  fastify.get<tenantRequestInterface>(
+    '/:tenantId',
+    { schema: { tags: ['tenant'] } },
+    async (request, reply) => {
+      const tenant = await multitenantKnex('tenants').first().where('id', request.params.tenantId)
+      if (!tenant) {
+        return reply.code(404).send()
+      }
+      const {
+        anon_key,
+        database_url,
+        database_pool_url,
+        database_pool_mode,
+        max_connections,
+        file_size_limit,
+        jwt_secret,
         jwks,
-        service_key: encrypt(serviceKey),
-        feature_image_transformation: features?.imageTransformation?.enabled ?? false,
-        feature_purge_cache: features?.purgeCache?.enabled ?? false,
-        feature_s3_protocol: features?.s3Protocol?.enabled ?? true,
-        feature_iceberg_catalog: features?.icebergCatalog?.enabled ?? false,
-        feature_iceberg_catalog_max_catalogs: features?.icebergCatalog?.maxCatalogs,
-        feature_iceberg_catalog_max_namespaces: features?.icebergCatalog?.maxNamespaces,
-        feature_iceberg_catalog_max_tables: features?.icebergCatalog?.maxTables,
-        feature_vector_buckets: features?.vectorBuckets?.enabled ?? false,
-        feature_vector_buckets_max_buckets: features?.vectorBuckets?.maxBuckets,
-        feature_vector_buckets_max_indexes: features?.vectorBuckets?.maxIndexes,
-        migrations_version: null,
-        migrations_status: null,
-        tracing_mode: tracingMode,
-      })
-      await jwksManager.generateUrlSigningJwk(tenantId, trx)
-    })
+        service_key,
+        feature_purge_cache,
+        feature_s3_protocol,
+        feature_image_transformation,
+        feature_iceberg_catalog,
+        feature_iceberg_catalog_max_catalogs,
+        feature_iceberg_catalog_max_namespaces,
+        feature_iceberg_catalog_max_tables,
+        feature_vector_buckets,
+        feature_vector_buckets_max_buckets,
+        feature_vector_buckets_max_indexes,
+        image_transformation_max_resolution,
+        migrations_version,
+        migrations_status,
+        tracing_mode,
+        disable_events,
+      } = tenant
 
-    try {
-      await runMigrationsOnTenant({
-        databaseUrl,
-        tenantId,
-        upToMigration: dbMigrationFreezeAt,
-      })
-      await multitenantKnex('tenants')
-        .where('id', tenantId)
-        .update({
-          migrations_version: await lastLocalMigrationName(),
-          migrations_status: TenantMigrationStatus.COMPLETED,
-        })
-    } catch {
-      progressiveMigrations.addTenant(tenantId)
+      const capabilities = await getTenantCapabilities(request.params.tenantId)
+
+      return {
+        anonKey: decrypt(anon_key),
+        databaseUrl: decrypt(database_url),
+        databasePoolUrl:
+          database_pool_url === null
+            ? null
+            : database_pool_url
+              ? decrypt(database_pool_url)
+              : undefined,
+        databasePoolMode: database_pool_mode,
+        maxConnections: max_connections ? Number(max_connections) : undefined,
+        fileSizeLimit: Number(file_size_limit),
+        jwtSecret: decrypt(jwt_secret),
+        jwks,
+        serviceKey: decrypt(service_key),
+        capabilities,
+        features: {
+          imageTransformation: {
+            enabled: feature_image_transformation,
+            maxResolution: image_transformation_max_resolution,
+          },
+          purgeCache: {
+            enabled: feature_purge_cache,
+          },
+          s3Protocol: {
+            enabled: feature_s3_protocol,
+          },
+          icebergCatalog: {
+            enabled: icebergEnabled || feature_iceberg_catalog,
+            maxNamespaces: feature_iceberg_catalog_max_namespaces,
+            maxTables: feature_iceberg_catalog_max_tables,
+            maxCatalogs: feature_iceberg_catalog_max_catalogs,
+          },
+          vectorBuckets: {
+            enabled: vectorEnabled || feature_vector_buckets,
+            maxBuckets: feature_vector_buckets_max_buckets,
+            maxIndexes: feature_vector_buckets_max_indexes,
+          },
+        },
+        migrationVersion: migrations_version,
+        migrationStatus: migrations_status,
+        tracingMode: tracing_mode,
+        disableEvents: disable_events,
+      }
     }
+  )
 
-    reply.code(201).send()
-  })
+  fastify.post<tenantRequestInterface>(
+    '/:tenantId',
+    { schema: { ...schema, tags: ['tenant'] } },
+    async (request, reply) => {
+      const { tenantId } = request.params
+      const {
+        anonKey,
+        databaseUrl,
+        databasePoolMode,
+        fileSizeLimit,
+        jwtSecret,
+        jwks,
+        serviceKey,
+        features,
+        databasePoolUrl,
+        maxConnections,
+        tracingMode,
+      } = request.body
+
+      await multitenantKnex.transaction(async (trx) => {
+        await multitenantKnex('tenants').insert({
+          id: tenantId,
+          anon_key: encrypt(anonKey),
+          database_url: encrypt(databaseUrl),
+          database_pool_url: databasePoolUrl ? encrypt(databasePoolUrl) : undefined,
+          database_pool_mode: databasePoolMode,
+          max_connections: maxConnections ? Number(maxConnections) : undefined,
+          file_size_limit: fileSizeLimit,
+          jwt_secret: encrypt(jwtSecret),
+          jwks,
+          service_key: encrypt(serviceKey),
+          feature_image_transformation: features?.imageTransformation?.enabled ?? false,
+          feature_purge_cache: features?.purgeCache?.enabled ?? false,
+          feature_s3_protocol: features?.s3Protocol?.enabled ?? true,
+          feature_iceberg_catalog: features?.icebergCatalog?.enabled ?? false,
+          feature_iceberg_catalog_max_catalogs: features?.icebergCatalog?.maxCatalogs,
+          feature_iceberg_catalog_max_namespaces: features?.icebergCatalog?.maxNamespaces,
+          feature_iceberg_catalog_max_tables: features?.icebergCatalog?.maxTables,
+          feature_vector_buckets: features?.vectorBuckets?.enabled ?? false,
+          feature_vector_buckets_max_buckets: features?.vectorBuckets?.maxBuckets,
+          feature_vector_buckets_max_indexes: features?.vectorBuckets?.maxIndexes,
+          migrations_version: null,
+          migrations_status: null,
+          tracing_mode: tracingMode,
+        })
+        await jwksManager.generateUrlSigningJwk(tenantId, trx)
+      })
+
+      try {
+        await runMigrationsOnTenant({
+          databaseUrl,
+          tenantId,
+          upToMigration: dbMigrationFreezeAt,
+        })
+        await multitenantKnex('tenants')
+          .where('id', tenantId)
+          .update({
+            migrations_version: await lastLocalMigrationName(),
+            migrations_status: TenantMigrationStatus.COMPLETED,
+          })
+      } catch {
+        progressiveMigrations.addTenant(tenantId)
+      }
+
+      reply.code(201).send()
+    }
+  )
 
   fastify.patch<tenantPatchRequestInterface>(
     '/:tenantId',
-    { schema: patchSchema },
+    { schema: { ...patchSchema, tags: ['tenant'] } },
     async (request, reply) => {
       const {
         anonKey,
@@ -426,234 +437,259 @@ export default async function routes(fastify: FastifyInstance) {
     }
   )
 
-  fastify.put<tenantRequestInterface>('/:tenantId', { schema }, async (request, reply) => {
-    const {
-      anonKey,
-      databaseUrl,
-      fileSizeLimit,
-      jwtSecret,
-      jwks,
-      serviceKey,
-      features,
-      databasePoolUrl,
-      databasePoolMode,
-      maxConnections,
-      tracingMode,
-    } = request.body
-    const { tenantId } = request.params
-
-    const tenantInfo: tenantDBInterface & {
-      tracing_mode?: string
-    } = {
-      id: tenantId,
-      anon_key: encrypt(anonKey),
-      database_url: encrypt(databaseUrl),
-      jwt_secret: encrypt(jwtSecret),
-      jwks: jwks || null,
-      service_key: encrypt(serviceKey),
-    }
-
-    if (fileSizeLimit) {
-      tenantInfo.file_size_limit = fileSizeLimit
-    }
-
-    if (typeof features?.imageTransformation?.enabled !== 'undefined') {
-      tenantInfo.feature_image_transformation = features?.imageTransformation?.enabled
-    }
-
-    if (typeof features?.purgeCache?.enabled !== 'undefined') {
-      tenantInfo.feature_purge_cache = features?.purgeCache?.enabled
-    }
-
-    if (typeof features?.imageTransformation?.maxResolution !== 'undefined') {
-      tenantInfo.image_transformation_max_resolution = features?.imageTransformation
-        ?.image_transformation_max_resolution as number | undefined
-    }
-
-    if (typeof features?.s3Protocol?.enabled !== 'undefined') {
-      tenantInfo.feature_s3_protocol = features?.s3Protocol?.enabled
-    }
-
-    if (databasePoolUrl) {
-      tenantInfo.database_pool_url = encrypt(databasePoolUrl)
-    }
-
-    if (maxConnections) {
-      tenantInfo.max_connections = Number(maxConnections)
-    }
-
-    if (databasePoolMode) {
-      tenantInfo.database_pool_mode = databasePoolMode
-    }
-
-    if (tracingMode) {
-      tenantInfo.tracing_mode = tracingMode
-    }
-
-    tenantInfo.feature_iceberg_catalog = features?.icebergCatalog?.enabled
-    tenantInfo.feature_iceberg_catalog_max_namespaces = features?.icebergCatalog?.maxNamespaces
-    tenantInfo.feature_iceberg_catalog_max_tables = features?.icebergCatalog?.maxTables
-    tenantInfo.feature_iceberg_catalog_max_catalogs = features?.icebergCatalog?.maxCatalogs
-
-    tenantInfo.feature_vector_buckets = features?.vectorBuckets?.enabled
-    tenantInfo.feature_vector_buckets_max_buckets = features?.vectorBuckets?.maxBuckets
-    tenantInfo.feature_vector_buckets_max_indexes = features?.vectorBuckets?.maxIndexes
-
-    await multitenantKnex.transaction(async (trx) => {
-      await trx('tenants').insert(tenantInfo).onConflict('id').merge()
-      await jwksManager.generateUrlSigningJwk(tenantId, trx)
-    })
-
-    try {
-      await runMigrationsOnTenant({
+  fastify.put<tenantRequestInterface>(
+    '/:tenantId',
+    { schema: { ...schema, tags: ['tenant'] } },
+    async (request, reply) => {
+      const {
+        anonKey,
         databaseUrl,
-        tenantId,
-        upToMigration: dbMigrationFreezeAt,
-      })
-      await multitenantKnex('tenants')
-        .where('id', tenantId)
-        .update({
-          migrations_version: await lastLocalMigrationName(),
-          migrations_status: TenantMigrationStatus.COMPLETED,
-        })
-    } catch (e) {
-      request.executionError = e as Error
-      progressiveMigrations.addTenant(tenantId)
-    }
+        fileSizeLimit,
+        jwtSecret,
+        jwks,
+        serviceKey,
+        features,
+        databasePoolUrl,
+        databasePoolMode,
+        maxConnections,
+        tracingMode,
+      } = request.body
+      const { tenantId } = request.params
 
-    reply.code(204).send()
-  })
-
-  fastify.delete<tenantRequestInterface>('/:tenantId', async (request, reply) => {
-    await multitenantKnex('tenants').del().where('id', request.params.tenantId)
-    deleteTenantConfig(request.params.tenantId)
-    reply.code(204).send()
-  })
-
-  fastify.get<tenantRequestInterface>('/:tenantId/migrations', async (req, reply) => {
-    const migrationsInfo = await multitenantKnex
-      .table<{ migrations_version?: string; migrations_status?: string }>('tenants')
-      .select('migrations_version', 'migrations_status')
-      .where('id', req.params.tenantId)
-      .first()
-
-    if (!migrationsInfo) {
-      reply.status(404).send({
-        error: 'Tenant not found',
-      })
-      return
-    }
-
-    reply.send({
-      isLatest: (await lastLocalMigrationName()) === migrationsInfo?.migrations_version,
-      migrationsVersion: migrationsInfo?.migrations_version,
-      migrationsStatus: migrationsInfo?.migrations_status,
-    })
-  })
-
-  fastify.post<tenantRequestInterface>('/:tenantId/migrations', async (req, reply) => {
-    const tenantId = req.params.tenantId
-    const migrationsInfo = await multitenantKnex
-      .table<{ databaseUrl: string }>('tenants')
-      .select('database_url')
-      .where('id', req.params.tenantId)
-      .first()
-
-    if (!migrationsInfo) {
-      reply.status(404).send({
-        error: 'Tenant not found',
-      })
-      return
-    }
-
-    const databaseUrl = decrypt(migrationsInfo.database_url)
-
-    try {
-      await runMigrationsOnTenant({
-        databaseUrl,
-        tenantId,
-        upToMigration: dbMigrationFreezeAt,
-      })
-      return reply.send({
-        migrated: true,
-      })
-    } catch (e) {
-      req.executionError = e as Error
-
-      if (e instanceof StorageBackendError) {
-        return reply.status(e.httpStatusCode || 400).send({
-          migrated: false,
-          metadata: e.metadata,
-          ...e.render(),
-        })
+      const tenantInfo: tenantDBInterface & {
+        tracing_mode?: string
+      } = {
+        id: tenantId,
+        anon_key: encrypt(anonKey),
+        database_url: encrypt(databaseUrl),
+        jwt_secret: encrypt(jwtSecret),
+        jwks: jwks || null,
+        service_key: encrypt(serviceKey),
       }
 
-      return reply.status(400).send({
-        migrated: false,
-        error: JSON.stringify(e),
+      if (fileSizeLimit) {
+        tenantInfo.file_size_limit = fileSizeLimit
+      }
+
+      if (typeof features?.imageTransformation?.enabled !== 'undefined') {
+        tenantInfo.feature_image_transformation = features?.imageTransformation?.enabled
+      }
+
+      if (typeof features?.purgeCache?.enabled !== 'undefined') {
+        tenantInfo.feature_purge_cache = features?.purgeCache?.enabled
+      }
+
+      if (typeof features?.imageTransformation?.maxResolution !== 'undefined') {
+        tenantInfo.image_transformation_max_resolution = features?.imageTransformation
+          ?.image_transformation_max_resolution as number | undefined
+      }
+
+      if (typeof features?.s3Protocol?.enabled !== 'undefined') {
+        tenantInfo.feature_s3_protocol = features?.s3Protocol?.enabled
+      }
+
+      if (databasePoolUrl) {
+        tenantInfo.database_pool_url = encrypt(databasePoolUrl)
+      }
+
+      if (maxConnections) {
+        tenantInfo.max_connections = Number(maxConnections)
+      }
+
+      if (databasePoolMode) {
+        tenantInfo.database_pool_mode = databasePoolMode
+      }
+
+      if (tracingMode) {
+        tenantInfo.tracing_mode = tracingMode
+      }
+
+      tenantInfo.feature_iceberg_catalog = features?.icebergCatalog?.enabled
+      tenantInfo.feature_iceberg_catalog_max_namespaces = features?.icebergCatalog?.maxNamespaces
+      tenantInfo.feature_iceberg_catalog_max_tables = features?.icebergCatalog?.maxTables
+      tenantInfo.feature_iceberg_catalog_max_catalogs = features?.icebergCatalog?.maxCatalogs
+
+      tenantInfo.feature_vector_buckets = features?.vectorBuckets?.enabled
+      tenantInfo.feature_vector_buckets_max_buckets = features?.vectorBuckets?.maxBuckets
+      tenantInfo.feature_vector_buckets_max_indexes = features?.vectorBuckets?.maxIndexes
+
+      await multitenantKnex.transaction(async (trx) => {
+        await trx('tenants').insert(tenantInfo).onConflict('id').merge()
+        await jwksManager.generateUrlSigningJwk(tenantId, trx)
+      })
+
+      try {
+        await runMigrationsOnTenant({
+          databaseUrl,
+          tenantId,
+          upToMigration: dbMigrationFreezeAt,
+        })
+        await multitenantKnex('tenants')
+          .where('id', tenantId)
+          .update({
+            migrations_version: await lastLocalMigrationName(),
+            migrations_status: TenantMigrationStatus.COMPLETED,
+          })
+      } catch (e) {
+        request.executionError = e as Error
+        progressiveMigrations.addTenant(tenantId)
+      }
+
+      reply.code(204).send()
+    }
+  )
+
+  fastify.delete<tenantRequestInterface>(
+    '/:tenantId',
+    { schema: { tags: ['tenant'] } },
+    async (request, reply) => {
+      await multitenantKnex('tenants').del().where('id', request.params.tenantId)
+      deleteTenantConfig(request.params.tenantId)
+      reply.code(204).send()
+    }
+  )
+
+  fastify.get<tenantRequestInterface>(
+    '/:tenantId/migrations',
+    { schema: { tags: ['tenant'] } },
+    async (req, reply) => {
+      const migrationsInfo = await multitenantKnex
+        .table<{ migrations_version?: string; migrations_status?: string }>('tenants')
+        .select('migrations_version', 'migrations_status')
+        .where('id', req.params.tenantId)
+        .first()
+
+      if (!migrationsInfo) {
+        reply.status(404).send({
+          error: 'Tenant not found',
+        })
+        return
+      }
+
+      reply.send({
+        isLatest: (await lastLocalMigrationName()) === migrationsInfo?.migrations_version,
+        migrationsVersion: migrationsInfo?.migrations_version,
+        migrationsStatus: migrationsInfo?.migrations_status,
       })
     }
-  })
+  )
 
-  fastify.post<tenantRequestInterface>('/:tenantId/migrations/reset', async (req, reply) => {
-    const { untilMigration, markCompletedTillMigration } = req.body
+  fastify.post<tenantRequestInterface>(
+    '/:tenantId/migrations',
+    { schema: { tags: ['tenant'] } },
+    async (req, reply) => {
+      const tenantId = req.params.tenantId
+      const migrationsInfo = await multitenantKnex
+        .table<{ databaseUrl: string }>('tenants')
+        .select('database_url')
+        .where('id', req.params.tenantId)
+        .first()
 
-    const { databaseUrl } = await getTenantConfig(req.params.tenantId)
+      if (!migrationsInfo) {
+        reply.status(404).send({
+          error: 'Tenant not found',
+        })
+        return
+      }
 
-    if (
-      typeof untilMigration !== 'string' ||
-      !DBMigration[untilMigration as keyof typeof DBMigration]
-    ) {
-      return reply.status(400).send({ message: 'Invalid migration' })
+      const databaseUrl = decrypt(migrationsInfo.database_url)
+
+      try {
+        await runMigrationsOnTenant({
+          databaseUrl,
+          tenantId,
+          upToMigration: dbMigrationFreezeAt,
+        })
+        return reply.send({
+          migrated: true,
+        })
+      } catch (e) {
+        req.executionError = e as Error
+
+        if (e instanceof StorageBackendError) {
+          return reply.status(e.httpStatusCode || 400).send({
+            migrated: false,
+            metadata: e.metadata,
+            ...e.render(),
+          })
+        }
+
+        return reply.status(400).send({
+          migrated: false,
+          error: JSON.stringify(e),
+        })
+      }
     }
+  )
 
-    if (
-      typeof markCompletedTillMigration === 'string' &&
-      !DBMigration[untilMigration as keyof typeof DBMigration]
-    ) {
-      return reply.status(400).send({ message: 'Invalid migration' })
+  fastify.post<tenantRequestInterface>(
+    '/:tenantId/migrations/reset',
+    { schema: { tags: ['tenant'] } },
+    async (req, reply) => {
+      const { untilMigration, markCompletedTillMigration } = req.body as Record<string, unknown>
+
+      const { databaseUrl } = await getTenantConfig(req.params.tenantId)
+
+      if (!isDBMigrationName(untilMigration)) {
+        return reply.status(400).send({ message: 'Invalid migration' })
+      }
+
+      if (
+        typeof markCompletedTillMigration === 'string' &&
+        !isDBMigrationName(markCompletedTillMigration)
+      ) {
+        return reply.status(400).send({ message: 'Invalid migration' })
+      }
+
+      try {
+        await resetMigration({
+          tenantId: req.params.tenantId,
+          databaseUrl,
+          untilMigration,
+          markCompletedTillMigration: isDBMigrationName(markCompletedTillMigration)
+            ? markCompletedTillMigration
+            : undefined,
+        })
+
+        return reply.send({ message: 'Migrations reset' })
+      } catch (e) {
+        req.executionError = e as Error
+        return reply.status(400).send({ message: 'Failed to reset migration' })
+      }
     }
+  )
 
-    try {
-      await resetMigration({
-        tenantId: req.params.tenantId,
-        databaseUrl,
-        untilMigration: untilMigration as keyof typeof DBMigration,
-        markCompletedTillMigration: markCompletedTillMigration
-          ? (markCompletedTillMigration as keyof typeof DBMigration)
-          : undefined,
-      })
+  fastify.get<tenantRequestInterface>(
+    '/:tenantId/migrations/jobs',
+    { schema: { tags: ['tenant'] } },
+    async (req, reply) => {
+      const data = await multitenantKnex
+        .table(`${PG_BOSS_SCHEMA}.job`)
+        .select('*')
+        .whereRaw("data->'tenant'->>'ref' = ?", [req.params.tenantId])
+        .where('name', migrationQueueName)
+        .orderBy('created_on', 'desc')
+        .limit(100)
 
-      return reply.send({ message: 'Migrations reset' })
-    } catch (e) {
-      req.executionError = e as Error
-      return reply.status(400).send({ message: 'Failed to reset migration' })
+      reply.send(data)
     }
-  })
+  )
 
-  fastify.get<tenantRequestInterface>('/:tenantId/migrations/jobs', async (req, reply) => {
-    const data = await multitenantKnex
-      .table('pgboss.job')
-      .select('*')
-      .whereRaw("data->'tenant'->>'ref' = ?", [req.params.tenantId])
-      .where('name', 'tenants-migrations')
-      .orderBy('createdon', 'desc')
-      .limit(100)
+  fastify.delete<tenantRequestInterface>(
+    '/:tenantId/migrations/jobs',
+    { schema: { tags: ['tenant'] } },
+    async (req, reply) => {
+      const data = await multitenantKnex
+        .table(`${PG_BOSS_SCHEMA}.job`)
+        .whereRaw("data->'tenant'->>'ref' = ?", [req.params.tenantId])
+        .where('name', migrationQueueName)
+        .orderBy('created_on', 'desc')
+        .limit(100)
+        .delete()
 
-    reply.send(data)
-  })
-
-  fastify.delete<tenantRequestInterface>('/:tenantId/migrations/jobs', async (req, reply) => {
-    const data = await multitenantKnex
-      .table('pgboss.job')
-      .whereRaw("data->'tenant'->>'ref' = ?", [req.params.tenantId])
-      .where('name', 'tenants-migrations')
-      .orderBy('createdon', 'desc')
-      .limit(100)
-      .delete()
-
-    reply.send(data)
-  })
+      reply.send(data)
+    }
+  )
 
   fastify.register(async (fastify) => {
     fastify.register(dbSuperUser, {
@@ -661,16 +697,20 @@ export default async function routes(fastify: FastifyInstance) {
     })
     fastify.register(storage)
 
-    fastify.get<tenantRequestInterface>('/:tenantId/health', async (req, res) => {
-      try {
-        await req.storage.healthcheck()
-        return res.send({ healthy: true })
-      } catch (e) {
-        if (e instanceof Error) {
-          req.executionError = e
+    fastify.get<tenantRequestInterface>(
+      '/:tenantId/health',
+      { schema: { tags: ['tenant'] } },
+      async (req, res) => {
+        try {
+          await req.storage.healthcheck()
+          return res.send({ healthy: true })
+        } catch (e) {
+          if (e instanceof Error) {
+            req.executionError = e
+          }
+          return res.send({ healthy: false })
         }
-        return res.send({ healthy: false })
       }
-    })
+    )
   })
 }

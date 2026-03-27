@@ -39,7 +39,7 @@ function main() {
 
   const template = `export const DBMigration = {
 ${migrationsEnum.join('\n')}
-}
+} as const
 `
 
   const destinationPath = path.resolve(

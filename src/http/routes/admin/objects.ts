@@ -80,7 +80,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.get<ListOrphanObjectsRequest>(
     '/:tenantId/buckets/:bucketId/orphan-objects',
     {
-      schema: listOrphanedObjects,
+      schema: { ...listOrphanedObjects, tags: ['object'] },
     },
     async (req, reply) => {
       const bucket = req.params.bucketId
@@ -133,7 +133,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.delete<SyncOrphanObjectsRequest>(
     '/:tenantId/buckets/:bucketId/orphan-objects',
     {
-      schema: syncOrphanedObjects,
+      schema: { ...syncOrphanedObjects, tags: ['object'] },
     },
     async (req, reply) => {
       if (!req.body.deleteDbKeys && !req.body.deleteS3Keys) {

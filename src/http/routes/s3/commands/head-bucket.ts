@@ -3,6 +3,8 @@ import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
 
 const HeadBucketInput = {
+  summary: 'Head Bucket',
+  tags: ['s3'],
   Params: {
     type: 'object',
     properties: {

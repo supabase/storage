@@ -8,18 +8,45 @@ mergeConfig({
 })
 
 import { encrypt, signJWT } from '@internal/auth'
+import { TENANT_S3_CREDENTIALS_CACHE_NAME } from '@internal/cache'
 import { listenForTenantUpdate, s3CredentialsManager } from '@internal/database'
+import { cacheRequestsTotal } from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
+import objectSizeOf from 'object-sizeof'
 import * as migrate from '../internal/database/migrations/migrate'
 import { multitenantKnex } from '../internal/database/multitenant-db'
 import { adminApp } from './common'
+import { assertLogicalLookupMetrics } from './utils/cache-metrics'
+import { mockCreateLruCache } from './utils/cache-mock'
 
 dotenv.config({ path: '.env.test' })
 
 const tenantId = 'abc123s3'
 
 const pubSub = new PostgresPubSub(multitenantDatabaseUrl!)
+
+type S3CredentialsManagerType = typeof s3CredentialsManager
+
+async function loadS3CredentialsManager(maxSizeBytes: number): Promise<S3CredentialsManagerType> {
+  jest.resetModules()
+
+  const configModule = await import('../config')
+  configModule.getConfig({ reload: true })
+  configModule.mergeConfig({
+    pgQueueEnable: true,
+    isMultitenant: true,
+  })
+
+  mockCreateLruCache({ maxSize: maxSizeBytes })
+
+  const managerModule = await import('../storage/protocols/s3/credentials/manager')
+  const storeModule = await import('../storage/protocols/s3/credentials/store-knex')
+
+  return new managerModule.S3CredentialsManager(
+    new storeModule.S3CredentialsManagerStoreKnex(multitenantKnex)
+  ) as S3CredentialsManagerType
+}
 
 // returns a promise that resolves the next time the jwk cache is invalidated
 function createS3CredentialsChangeAwaiter(): Promise<string> {
@@ -61,6 +88,7 @@ afterEach(async () => {
       apikey: process.env.ADMIN_API_KEYS,
     },
   })
+  jest.dontMock('@internal/cache')
 })
 
 afterAll(async () => {
@@ -462,6 +490,95 @@ describe('Tenant S3 credentials', () => {
       expect(cacheResult2).toEqual({ ...keyResult, secretKey })
     } finally {
       knexTableSpy.mockRestore()
+    }
+  })
+
+  test('Config evicts oversized cold credentials from cache', async () => {
+    const credentialBlob = 'x'.repeat(256)
+    const templateCredential = {
+      accessKey: 'template-access-key',
+      secretKey: encrypt('secret-template-access-key'),
+      claims: {
+        issuer: `supabase.storage.${tenantId}`,
+        role: 'service_role',
+        blob: credentialBlob,
+      },
+    }
+    const s3CredentialsManagerWithSmallCache = await loadS3CredentialsManager(
+      objectSizeOf(templateCredential) + 1
+    )
+    const getByKeySpy = jest.spyOn(
+      s3CredentialsManagerWithSmallCache['storage'],
+      'getOneByAccessKey'
+    )
+
+    try {
+      getByKeySpy.mockImplementation(async (requestTenantId, accessKey) => {
+        return {
+          accessKey,
+          secretKey: encrypt(`secret-${accessKey}`),
+          claims: {
+            issuer: `supabase.storage.${requestTenantId}`,
+            role: 'service_role',
+            blob: credentialBlob,
+          },
+        }
+      })
+
+      await s3CredentialsManagerWithSmallCache.getS3CredentialsByAccessKey(tenantId, 'small-key-1')
+      await s3CredentialsManagerWithSmallCache.getS3CredentialsByAccessKey(tenantId, 'small-key-2')
+
+      expect(getByKeySpy).toHaveBeenCalledTimes(2)
+
+      await s3CredentialsManagerWithSmallCache.getS3CredentialsByAccessKey(tenantId, 'small-key-1')
+
+      expect(getByKeySpy).toHaveBeenCalledTimes(3)
+    } finally {
+      getByKeySpy.mockRestore()
+    }
+  })
+
+  test('Config records one cache request per logical lookup', async () => {
+    const getByKeySpy = jest.spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
+    const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+    const lookupTenantId = 's3-cache-metrics-lookup'
+    const lookupAccessKey = 's3-cache-metrics-access-key'
+    const credentials = {
+      accessKey: lookupAccessKey,
+      secretKey: encrypt('metric-secret'),
+      claims: {
+        issuer: `supabase.storage.${lookupTenantId}`,
+        role: 'service_role',
+      },
+    }
+
+    const credentialsLookup = Promise.withResolvers<typeof credentials>()
+
+    try {
+      getByKeySpy.mockImplementation(() => credentialsLookup.promise)
+
+      await assertLogicalLookupMetrics({
+        addSpy,
+        backendCallSpy: getByKeySpy,
+        cacheName: TENANT_S3_CREDENTIALS_CACHE_NAME,
+        startLookups: () => [
+          s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, lookupAccessKey),
+          s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, lookupAccessKey),
+          s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, lookupAccessKey),
+        ],
+        resolveBackend: () => credentialsLookup.resolve(credentials),
+        assertCachedHit: async () => {
+          await expect(
+            s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, lookupAccessKey)
+          ).resolves.toMatchObject({
+            accessKey: lookupAccessKey,
+            secretKey: 'metric-secret',
+          })
+        },
+      })
+    } finally {
+      getByKeySpy.mockRestore()
+      addSpy.mockRestore()
     }
   })
 })

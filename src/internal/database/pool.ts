@@ -1,3 +1,4 @@
+import { createTtlCache } from '@internal/cache'
 import { wait } from '@internal/concurrency'
 import { getSslSettings } from '@internal/database/ssl'
 import { logger, logSchema } from '@internal/monitoring'
@@ -8,7 +9,6 @@ import {
   isMetricEnabled,
   meter,
 } from '@internal/monitoring/metrics'
-import TTLCache from '@isaacs/ttlcache'
 import { JWTPayload } from 'jose'
 import { Knex, knex } from 'knex'
 import { getConfig } from '../../config'
@@ -64,24 +64,41 @@ export const searchPath = ['storage', 'public', 'extensions', ...dbSearchPath.sp
   Boolean
 )
 
-const multiTenantLRUConfig = {
+const multiTenantTtlConfig = {
   ttl: 1000 * 10,
   updateAgeOnGet: true,
   checkAgeOnGet: true,
 }
 
-const tenantPools = new TTLCache<string, PoolStrategy>({
-  ...(isMultitenant ? multiTenantLRUConfig : { max: 1, ttl: Infinity }),
+const manuallyDestroyedPools = new WeakSet<PoolStrategy>()
+
+function logPoolDestroyError(error: unknown): void {
+  logSchema.error(logger, 'pool was not able to be destroyed', {
+    type: 'db',
+    error,
+  })
+}
+
+async function destroyPool(pool: PoolStrategy): Promise<void> {
+  await pool.destroy()
+}
+
+async function destroyPoolSafely(pool: PoolStrategy): Promise<void> {
+  try {
+    await destroyPool(pool)
+  } catch (e) {
+    logPoolDestroyError(e)
+  }
+}
+
+const tenantPools = createTtlCache<string, PoolStrategy>({
+  ...(isMultitenant ? multiTenantTtlConfig : { max: 1, ttl: Infinity }),
   dispose: async (pool) => {
-    if (!pool) return
-    try {
-      await pool.destroy()
-    } catch (e) {
-      logSchema.error(logger, 'pool was not able to be destroyed', {
-        type: 'db',
-        error: e,
-      })
+    if (!pool || manuallyDestroyedPools.has(pool)) {
+      return
     }
+
+    await destroyPoolSafely(pool)
   },
 })
 
@@ -206,8 +223,11 @@ export class PoolManager {
   destroy(tenantId: string) {
     const pool = tenantPools.get(tenantId)
     if (pool) {
+      manuallyDestroyedPools.add(pool)
       tenantPools.delete(tenantId)
-      return pool.destroy()
+      return destroyPool(pool).finally(() => {
+        manuallyDestroyedPools.delete(pool)
+      })
     }
     return Promise.resolve()
   }
@@ -216,8 +236,13 @@ export class PoolManager {
     const promises: Promise<void>[] = []
 
     for (const [connectionString, pool] of tenantPools) {
-      promises.push(pool.destroy())
+      manuallyDestroyedPools.add(pool)
       tenantPools.delete(connectionString)
+      promises.push(
+        destroyPool(pool).finally(() => {
+          manuallyDestroyedPools.delete(pool)
+        })
+      )
     }
     return Promise.allSettled(promises)
   }

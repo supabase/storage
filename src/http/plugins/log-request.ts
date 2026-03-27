@@ -1,7 +1,10 @@
 import { logger, logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
+import { FastifyInstance } from 'fastify'
 import { FastifyReply } from 'fastify/types/reply'
 import { FastifyRequest } from 'fastify/types/request'
 import fastifyPlugin from 'fastify-plugin'
+import { Socket } from 'net'
+import { getConfig } from '../../config'
 
 interface RequestLoggerOptions {
   excludeUrls?: string[]
@@ -23,6 +26,8 @@ declare module 'fastify' {
   }
 }
 
+const { version } = getConfig()
+
 /**
  * Request logger plugin
  * @param options
@@ -30,6 +35,70 @@ declare module 'fastify' {
 export const logRequest = (options: RequestLoggerOptions) =>
   fastifyPlugin(
     async (fastify) => {
+      // Used to track cleanup functions per socket
+      const socketCleanupMap = new WeakMap<Socket, () => void>()
+      const cleanupSocketListeners = (socket: Socket) => {
+        const cleanup = socketCleanupMap.get(socket)
+        if (cleanup) {
+          socketCleanupMap.delete(socket)
+          cleanup()
+        }
+      }
+
+      // Watch for connections that timeout or disconnect before complete HTTP headers are received
+      // For keep-alive connections, track each potential request independently
+      const onConnection = (socket: Socket) => {
+        const connectionStart = Date.now()
+        let currentRequestStart = connectionStart
+        let hasReceivedData = false
+        let requestLogged = false
+
+        // Store cleanup function so hooks can mark requests as logged
+        socketCleanupMap.set(socket, () => {
+          requestLogged = true
+        })
+
+        // Track when data arrives for a potential request
+        const onData = () => {
+          // Reset tracking for each new request on keep-alive connections
+          if (!hasReceivedData || requestLogged) {
+            hasReceivedData = true
+            currentRequestStart = Date.now()
+            requestLogged = false
+          }
+        }
+        socket.on('data', onData)
+
+        // Remove data listener on socket error to prevent listener leak
+        socket.once('error', () => {
+          socket.removeListener('data', onData)
+        })
+
+        socket.once('close', () => {
+          socket.removeListener('data', onData)
+          socketCleanupMap.delete(socket)
+
+          // Log if connection closed without a logged request
+          // This covers: idle timeouts, partial data, malformed requests
+          if (!requestLogged) {
+            const req = createPartialLogRequest(fastify, socket, currentRequestStart)
+
+            doRequestLog(req, {
+              excludeUrls: options.excludeUrls,
+              statusCode: 'ABORTED CONN',
+              responseTime: (Date.now() - req.startTime) / 1000,
+            })
+          }
+        })
+      }
+
+      fastify.server.on('connection', onConnection)
+
+      // Clean up on close
+      fastify.addHook('onClose', async () => {
+        fastify.server.removeListener('connection', onConnection)
+      })
+
       fastify.addHook('onRequest', async (req, res) => {
         req.startTime = Date.now()
 
@@ -40,6 +109,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
               statusCode: 'ABORTED REQ',
               responseTime: (Date.now() - req.startTime) / 1000,
             })
+            cleanupSocketListeners(req.raw.socket)
             return
           }
 
@@ -49,6 +119,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
               statusCode: 'ABORTED RES',
               responseTime: (Date.now() - req.startTime) / 1000,
             })
+            cleanupSocketListeners(req.raw.socket)
           }
         })
       })
@@ -94,6 +165,9 @@ export const logRequest = (options: RequestLoggerOptions) =>
           responseTime: reply.elapsedTime,
           executionTime: req.executionTime,
         })
+
+        // Mark request as logged so socket close handler doesn't log it again
+        cleanupSocketListeners(req.raw.socket)
       })
     },
     { name: 'log-request' }
@@ -102,7 +176,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
 interface LogRequestOptions {
   reply?: FastifyReply
   excludeUrls?: string[]
-  statusCode: number | 'ABORTED REQ' | 'ABORTED RES'
+  statusCode: number | 'ABORTED REQ' | 'ABORTED RES' | 'ABORTED CONN'
   responseTime: number
   executionTime?: number
 }
@@ -178,4 +252,30 @@ function getFirstDefined<T>(...values: any[]): T | undefined {
     }
   }
   return undefined
+}
+
+/**
+ * Creates a minimal FastifyRequest for logging aborted connections.
+ * Used when connection closes before a complete HTTP request is received.
+ */
+export function createPartialLogRequest(
+  fastify: FastifyInstance,
+  socket: Socket,
+  startTime: number
+) {
+  return {
+    method: 'UNKNOWN',
+    headers: {},
+    url: '/',
+    ip: socket.remoteAddress || 'unknown',
+    id: 'no-request',
+    log: fastify.log.child({
+      reqId: 'no-request',
+      appVersion: version,
+    }),
+    startTime,
+    raw: {},
+    routeOptions: { config: {} },
+    resources: [],
+  } as unknown as FastifyRequest
 }

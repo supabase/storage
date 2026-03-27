@@ -65,6 +65,18 @@ policies:
     permissions: ["insert"]
     content: "WITH CHECK((metadata->>'contentLength')::int <= 100000)"
 
+  - name: read_only_list_objects
+    tables: ["storage.objects"]
+    roles: ["authenticated"]
+    permissions: ["select"]
+    content: "USING(storage.allow_only_operation('object.list') AND owner = '{{uid}}')"
+
+  - name: read_list_or_get_objects
+    tables: ["storage.objects"]
+    roles: ["authenticated"]
+    permissions: ["select"]
+    content: "USING(storage.allow_any_operation(ARRAY['object.list', 'storage.object.get_authenticated']) AND owner = '{{uid}}')"
+
 tests:
   - description: "Will only able to read objects"
     policies:
@@ -618,3 +630,42 @@ tests:
         contentLength: 200000
         status: 403
         error: "new row violates row-level security policy"
+
+  - description: "Operation helper list-only policies only allow object listing"
+    policies:
+      - read_only_list_objects
+    asserts:
+      - operation: upload
+        policies:
+          - insert_only_all_objects
+        status: 200
+
+      - operation: object.list
+        status: 200
+
+      - operation: object.get
+        status: 400
+        error: "Object not found"
+
+      - operation: object.delete
+        status: 400
+        error: "Object not found"
+
+  - description: "Operation helper any-of policies allow both list and get"
+    policies:
+      - read_list_or_get_objects
+    asserts:
+      - operation: upload
+        policies:
+          - insert_only_all_objects
+        status: 200
+
+      - operation: object.list
+        status: 200
+
+      - operation: object.get
+        status: 200
+
+      - operation: object.delete
+        status: 400
+        error: "Object not found"

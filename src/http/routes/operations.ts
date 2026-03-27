@@ -1,3 +1,6 @@
+// This file defines all the operation names used in the application for better maintainability and to avoid typos.
+// This file is linked from the docs to provide a list of all available operations.
+// Any change to this file should be reflected in the docs if applicable.
 export const ROUTE_OPERATIONS = {
   // Bucket
   CREATE_BUCKET: 'storage.bucket.create',
@@ -14,8 +17,10 @@ export const ROUTE_OPERATIONS = {
   DELETE_OBJECTS: 'storage.object.delete_many',
   GET_PUBLIC_OBJECT: 'storage.object.get_public',
   GET_AUTH_OBJECT: 'storage.object.get_authenticated',
-  INFO_AUTH_OBJECT: 'storage.object.info_authenticated',
+  INFO_AUTH_OBJECT: 'storage.object.info_authenticated', // not used
   INFO_PUBLIC_OBJECT: 'storage.object.info_public',
+  GET_AUTH_OBJECT_INFO: 'object.get_authenticated_info', // legacy
+  HEAD_AUTH_OBJECT_INFO: 'object.head_authenticated_info', // legacy
   GET_SIGNED_OBJECT: 'storage.object.get_signed',
   SIGN_UPLOAD_URL: 'storage.object.sign_upload_url',
   SIGN_OBJECT_URL: 'storage.object.sign',

@@ -145,7 +145,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         tags: ['object'],
       },
       config: {
-        operation: { type: 'object.head_authenticated_info' },
+        operation: { type: ROUTE_OPERATIONS.HEAD_AUTH_OBJECT_INFO },
       },
     },
     async (request, response) => {
@@ -165,7 +165,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         tags: ['object'],
       },
       config: {
-        operation: { type: 'object.get_authenticated_info' },
+        operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT_INFO },
       },
     },
     async (request, response) => {
@@ -185,7 +185,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#' } },
       },
       config: {
-        operation: { type: 'object.get_authenticated_info' },
+        operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT_INFO },
         allowInvalidJwt: true,
       },
     },
@@ -206,7 +206,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#' } },
       },
       config: {
-        operation: { type: 'object.head_authenticated_info' },
+        operation: { type: ROUTE_OPERATIONS.HEAD_AUTH_OBJECT_INFO },
         allowInvalidJwt: true,
       },
     },

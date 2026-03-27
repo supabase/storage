@@ -84,14 +84,14 @@ export class UpgradePgBossV10 extends BaseEvent<UpgradePgBossV10Payload> {
                 createdOn,
                 keepUntil,
                 output jsonb,
-                '${queue.policy}' as policy
+                ? as policy
             FROM ${sourceSchema}.job
-            WHERE name = '${queue.name}'
+            WHERE name = ?
                 AND state = 'created'
             ON CONFLICT DO NOTHING
         `
 
-          await multitenantKnex.raw(sql)
+          await tnx.raw(sql, [queue.policy, queue.name])
         } catch (error) {
           logSchema.error(logger, '[PgBoss] Error while copying jobs', {
             type: 'pgboss',

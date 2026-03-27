@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schemas.platformatic.dev/@platformatic/node/3.41.0.json",
+  "node": {
+    "main": "./dist/start/server.js"
+  },
+  "runtime": {
+    "exitOnUnhandledErrors": false,
+    "workers": "{WORKERS_NUM}",
+    "logger": {
+      "level": "{LOG_LEVEL}"
+    },
+    "health": {
+      "enabled": "{WATT_HEALTH_ENABLED}",
+      "maxELU": "{WATT_HEALTH_MAX_ELU}",
+      "gracePeriod": "{WATT_HEALTH_GRACE_PERIOD}",
+      "maxUnhealthyChecks": "{WATT_HEALTH_MAX_UNHEALTHY_CHECKS}",
+      "interval": "{WATT_HEALTH_INTERVAL}"
+    },
+    "managementApi": "{PLT_MANAGEMENT_API}"
+  }
+}

@@ -202,12 +202,7 @@ export abstract class Queue {
       wait: true,
     })
 
-    await new Promise((resolve) => {
-      boss.once('stopped', async () => {
-        await this.callClose()
-        resolve(null)
-      })
-    })
+    await this.callClose()
 
     Queue.pgBoss = undefined
   }

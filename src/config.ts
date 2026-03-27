@@ -53,6 +53,7 @@ export interface JwksConfig {
 type StorageConfigType = {
   isProduction: boolean
   version: string
+  numWorkers: number
   exposeDocs: boolean
   keepAliveTimeout: number
   headersTimeout: number
@@ -259,6 +260,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
 
   config = {
+    numWorkers: envNumber(getOptionalConfigFromEnv('WORKERS_NUM'), 1),
     isProduction: process.env.NODE_ENV === 'production',
     exposeDocs: getOptionalConfigFromEnv('EXPOSE_DOCS') !== 'false',
     isMultitenant,

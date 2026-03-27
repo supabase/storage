@@ -61,6 +61,7 @@ async function main() {
     dbMigrationFreezeAt,
     vectorS3Buckets,
     icebergShards,
+    numWorkers,
   } = getConfig()
 
   // Queue
@@ -120,7 +121,8 @@ async function main() {
     startAsyncMigrations(shutdownSignal.nextGroup.signal)
   }
 
-  // PoolManager Monitoring
+  // PoolManager
+  TenantConnection.poolManager.setNumWorkers(numWorkers)
   TenantConnection.poolManager.monitor()
 
   // Cluster information

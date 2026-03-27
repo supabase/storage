@@ -53,6 +53,7 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
   }
 
   async close(): Promise<void> {
+    this.isConnected = false
     this.subscriber.notifications.eventNames().forEach((event) => {
       this.subscriber.notifications.removeAllListeners(event)
     })
@@ -80,7 +81,7 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
 
     const isListening = this.subscriber.notifications.listenerCount(channel) > 0
 
-    if (!isListening) {
+    if (!isListening && this.isConnected) {
       await this.subscriber.unlisten(channel)
     }
   }

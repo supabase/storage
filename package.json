@@ -1,8 +1,5 @@
 {
   "name": "supa-storage",
-  "version": "1.11.2",
-  "description": "Supabase Storage Service",
-  "main": "index.js",
   "scripts": {
     "postinstall": "patch-package",
     "dev": "tsx watch src/start/server.ts | pino-pretty",
@@ -23,11 +20,6 @@
     "infra:start:oriole": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml -f ./.docker/docker-compose-infra-oriole-override.yml up -d && sleep 5 && npm run migration:run",
     "infra:restart": "npm run infra:stop && npm run infra:start",
     "infra:restart:oriole": "npm run infra:stop && npm run infra:start:oriole"
-  },
-  "author": "Supabase",
-  "license": "ISC",
-  "engines": {
-    "node": ">= 22.0.0"
   },
   "dependencies": {
     "@aws-sdk/client-ecs": "^3.979.0",
@@ -55,6 +47,8 @@
     "@opentelemetry/instrumentation-runtime-node": "^0.25.0",
     "@opentelemetry/sdk-metrics": "^2.6.0",
     "@opentelemetry/sdk-node": "^0.213.0",
+    "@platformatic/node": "^3.45.0",
+    "@platformatic/wattpm-pprof-capture": "^3.45.0",
     "@shopify/semaphore": "^3.0.2",
     "@smithy/node-http-handler": "^2.3.1",
     "@tus/file-store": "2.0.0",
@@ -84,7 +78,9 @@
     "pg-listen": "^1.7.0",
     "pino": "^10.3.1",
     "pino-logflare": "^0.5.2",
+    "platformatic": "^3.45.0",
     "postgres-migrations": "^5.3.0",
+    "wattpm": "^3.45.0",
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
@@ -99,7 +95,7 @@
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.5",
     "@types/json-bigint": "^1.0.4",
-    "@types/node": "^22.18.8",
+    "@types/node": "^22.19.0",
     "@types/pg": "^8.6.4",
     "@types/stream-buffers": "^3.0.7",
     "@types/xml2js": "^0.4.14",
@@ -119,6 +115,11 @@
     "tus-js-client": "^3.1.0",
     "typescript": "5.9.3"
   },
+  "version": "1.11.2",
+  "description": "Supabase Storage Service",
+  "main": "index.js",
+  "author": "Supabase",
+  "license": "ISC",
   "overrides": {
     "@aws-sdk/xml-builder": {
       "fast-xml-parser": "5.5.7"
@@ -130,5 +131,8 @@
       "minimatch": "^3.1.4"
     }
   },
-  "bin": "./dist/server.js"
+  "bin": "./dist/server.js",
+  "engines": {
+    "node": ">=22.19.0"
+  }
 }

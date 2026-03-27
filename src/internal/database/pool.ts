@@ -36,6 +36,7 @@ export interface TenantConnectionOptions {
   reapIntervalMillis?: number
   maxConnections: number
   clusterSize?: number
+  numWorkers?: number
   headers?: Record<string, string | undefined | string[]>
   method?: string
   path?: string
@@ -141,6 +142,12 @@ async function collectPoolStats() {
  * It creates a new pool for each tenant and reuses existing pools.
  */
 export class PoolManager {
+  protected numWorkers: number = 1
+
+  setNumWorkers(numWorkers: number) {
+    this.numWorkers = Math.max(numWorkers ?? 1, 1)
+  }
+
   monitor() {
     // Periodically collect stats in a non-blocking way
     const interval = setInterval(() => {
@@ -188,7 +195,7 @@ export class PoolManager {
       return existingPool
     }
 
-    const newPool = this.newPool(settings)
+    const newPool = this.newPool({ ...settings, numWorkers: this.numWorkers })
 
     if ((settings.isSingleUse && !settings.isExternalPool) || !settings.isSingleUse) {
       tenantPools.set(settings.tenantId, newPool)
@@ -261,11 +268,13 @@ class TenantPool implements PoolStrategy {
   getSettings() {
     const isSingleUseExternalPool = this.options.isSingleUse && this.options.isExternalPool
 
+    const numWorkers = Math.max(this.options.numWorkers ?? 1, 1)
     const clusterSize = this.options.clusterSize || 0
     let maxConnection = this.options.maxConnections || databaseMaxConnections
 
-    if (clusterSize > 0) {
-      maxConnection = Math.ceil(maxConnection / clusterSize) || 2
+    const divisor = Math.max(clusterSize, 1) * numWorkers
+    if (divisor > 1) {
+      maxConnection = Math.ceil(maxConnection / divisor) || 1
     }
 
     if (isSingleUseExternalPool) {

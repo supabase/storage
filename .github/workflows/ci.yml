@@ -40,6 +40,7 @@ jobs:
 
   test_postgres:
     name: Test / Postgres
+    needs: lint_build
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     env: &test_env
@@ -115,6 +116,7 @@ jobs:
 
   test_oriole:
     name: Test / OrioleDB
+    needs: lint_build
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     env: *test_env

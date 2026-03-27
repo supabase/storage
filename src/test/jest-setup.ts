@@ -1,4 +1,4 @@
-import { getConfig, setEnvPaths } from './src/config'
+import { getConfig, setEnvPaths } from '../config'
 
 setEnvPaths(['.env.test', '.env'])
 

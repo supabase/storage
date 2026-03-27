@@ -9,7 +9,15 @@ module.exports = {
     '^.+/node_modules/@kubernetes/client-node/.+\\.[jt]s$': 'babel-jest',
     '^.+/node_modules/oauth4webapi/.+\\.[jt]s$': 'babel-jest',
     '^.+\\.mjs$': 'babel-jest',
-    '^.+\\.(t|j)sx?$': 'ts-jest',
+    '^.+\\.(t|j)sx?$': [
+      'ts-jest',
+      {
+        diagnostics: false,
+        tsconfig: {
+          isolatedModules: true,
+        },
+      },
+    ],
   },
   transformIgnorePatterns: [
     'node_modules/(?!(jose|@tus|srvx|cookie-es|@kubernetes|openid-client|oauth4webapi)/)',

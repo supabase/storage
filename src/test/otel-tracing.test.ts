@@ -1,19 +1,7 @@
+import { createDeferred } from './utils/promise'
+
 interface OTelGlobalState {
   __otelTracingShutdown?: () => Promise<void>
-}
-
-interface Deferred<T> {
-  promise: Promise<T>
-  resolve: (value: T) => void
-}
-
-function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise
-  })
-
-  return { promise, resolve }
 }
 
 describe('otel tracing bootstrap', () => {
@@ -188,6 +176,7 @@ describe('otel tracing bootstrap', () => {
       config,
     }))
     const OTLPTraceExporter = jest.fn().mockImplementation(() => ({}))
+    const classInstrumentationsDeferred = createDeferred<unknown[]>()
     const logSchema = {
       error: jest.fn(),
       info: jest.fn(),
@@ -214,7 +203,7 @@ describe('otel tracing bootstrap', () => {
       logSchema,
     }))
     jest.doMock('../internal/monitoring/otel-class-instrumentations', () => ({
-      loadClassInstrumentations: jest.fn(async () => []),
+      loadClassInstrumentations: jest.fn(() => classInstrumentationsDeferred.promise),
     }))
 
     let shutdownOtelTracing: (() => Promise<void>) | undefined
@@ -224,6 +213,10 @@ describe('otel tracing bootstrap', () => {
       shutdownOtelTracing = (globalThis as typeof globalThis & OTelGlobalState)
         .__otelTracingShutdown
     })
+
+    classInstrumentationsDeferred.resolve([])
+    await classInstrumentationsDeferred.promise
+    await Promise.resolve()
 
     await expect(shutdownOtelTracing?.()).resolves.toBeUndefined()
 

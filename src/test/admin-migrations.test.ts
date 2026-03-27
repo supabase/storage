@@ -12,6 +12,7 @@ jest.mock('@internal/database/migrations', () => {
 import * as migrations from '@internal/database/migrations'
 import { DBMigration } from '@internal/database/migrations'
 import { randomUUID } from 'crypto'
+import type { FastifyInstance } from 'fastify'
 import { mergeConfig } from '../config'
 import { multitenantKnex } from '../internal/database/multitenant-db'
 import { PG_BOSS_SCHEMA, Queue } from '../internal/queue/queue'
@@ -152,6 +153,128 @@ describe('Admin migrations routes', () => {
       markCompletedTillMigration: undefined,
       signal: expect.any(AbortSignal),
     })
+  })
+
+  test('manual tenant migration updates the tenant migration state', async () => {
+    const migrationTenantId = `admin-migrations-state-${randomUUID().slice(0, 8)}`
+    const latestMigration = await migrations.lastLocalMigrationName()
+
+    await createTenant(migrationTenantId)
+
+    await multitenantKnex('tenants').where({ id: migrationTenantId }).update({
+      migrations_version: null,
+      migrations_status: null,
+    })
+
+    const migrateResponse = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/${migrationTenantId}/migrations`,
+      headers,
+    })
+
+    expect(migrateResponse.statusCode).toBe(200)
+    expect(JSON.parse(migrateResponse.body)).toEqual({ migrated: true })
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/${migrationTenantId}/migrations`,
+      headers,
+    })
+
+    expect(getResponse.statusCode).toBe(200)
+    expect(JSON.parse(getResponse.body)).toEqual({
+      isLatest: true,
+      migrationsVersion: latestMigration,
+      migrationsStatus: 'COMPLETED',
+    })
+
+    await expect(
+      multitenantKnex('tenants')
+        .select('migrations_version', 'migrations_status')
+        .where({ id: migrationTenantId })
+        .first()
+    ).resolves.toEqual({
+      migrations_version: latestMigration,
+      migrations_status: 'COMPLETED',
+    })
+  })
+
+  test('manual tenant migration records the frozen migration target', async () => {
+    const migrationTenantId = `admin-migrations-freeze-${randomUUID().slice(0, 8)}`
+    const frozenMigration = 'create-migrations-table' satisfies keyof typeof DBMigration
+    let isolatedAdminApp: FastifyInstance | undefined
+    let isolatedMultitenantKnex: typeof multitenantKnex | undefined
+
+    await createTenant(migrationTenantId)
+
+    await multitenantKnex('tenants').where({ id: migrationTenantId }).update({
+      migrations_version: null,
+      migrations_status: null,
+    })
+
+    jest.resetModules()
+
+    try {
+      await jest.isolateModulesAsync(async () => {
+        const config = await import('../config')
+        config.getConfig({ reload: true })
+        config.mergeConfig({
+          pgQueueEnable: true,
+          dbMigrationFreezeAt: frozenMigration,
+        })
+
+        const isolatedMigrations = await import('@internal/database/migrations')
+        jest.mocked(isolatedMigrations.runMigrationsOnTenant).mockResolvedValue(undefined)
+
+        const multitenantDb = await import('../internal/database/multitenant-db')
+        isolatedMultitenantKnex = multitenantDb.multitenantKnex
+
+        const adminAppModule = await import('../admin-app')
+        isolatedAdminApp = adminAppModule.default({})
+      })
+
+      if (!isolatedAdminApp) {
+        throw new Error('Failed to build isolated admin app')
+      }
+
+      const migrateResponse = await isolatedAdminApp.inject({
+        method: 'POST',
+        url: `/tenants/${migrationTenantId}/migrations`,
+        headers,
+      })
+
+      expect(migrateResponse.statusCode).toBe(200)
+      expect(JSON.parse(migrateResponse.body)).toEqual({ migrated: true })
+
+      const getResponse = await isolatedAdminApp.inject({
+        method: 'GET',
+        url: `/tenants/${migrationTenantId}/migrations`,
+        headers,
+      })
+
+      expect(getResponse.statusCode).toBe(200)
+      expect(JSON.parse(getResponse.body)).toEqual({
+        isLatest: true,
+        migrationsVersion: frozenMigration,
+        migrationsStatus: 'COMPLETED',
+      })
+
+      await expect(
+        multitenantKnex('tenants')
+          .select('migrations_version', 'migrations_status')
+          .where({ id: migrationTenantId })
+          .first()
+      ).resolves.toEqual({
+        migrations_version: frozenMigration,
+        migrations_status: 'COMPLETED',
+      })
+    } finally {
+      await isolatedAdminApp?.close()
+      if (isolatedMultitenantKnex && isolatedMultitenantKnex !== multitenantKnex) {
+        await isolatedMultitenantKnex.destroy()
+      }
+      jest.resetModules()
+    }
   })
 
   test('lists active fleet migration jobs from the current pg-boss queue name', async () => {

@@ -15,6 +15,7 @@ import { adminApp } from './common'
 dotenv.config({ path: '.env.test' })
 
 const serviceKeyPayload = { abc: 123 }
+const testTenantIds = ['abc', 'cache-test-abc'] as const
 
 const migrationVersion = Object.entries(DBMigration).sort(([_, a], [__, b]) => b - a)[0][0]
 
@@ -110,14 +111,24 @@ beforeAll(async () => {
   payload.serviceKey = await signJWT(serviceKeyPayload, payload.jwtSecret, 100)
 })
 
+async function cleanupTestTenants() {
+  for (const tenantId of testTenantIds) {
+    await adminApp.inject({
+      method: 'DELETE',
+      url: `/tenants/${tenantId}`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+  }
+}
+
+beforeEach(async () => {
+  await cleanupTestTenants()
+})
+
 afterEach(async () => {
-  await adminApp.inject({
-    method: 'DELETE',
-    url: '/tenants/abc',
-    headers: {
-      apikey: process.env.ADMIN_API_KEYS,
-    },
-  })
+  await cleanupTestTenants()
 })
 
 afterAll(async () => {
@@ -450,18 +461,18 @@ describe('Tenant configs', () => {
   })
 
   test('Get tenant config always retrieves concurrent requests from cache', async () => {
+    const tenantId = 'cache-test-abc'
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/${tenantId}`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
     const knexTableSpy = jest.spyOn(multitenantKnex, 'table')
     try {
-      const tenantId = 'cache-test-abc'
-      await adminApp.inject({
-        method: 'POST',
-        url: `/tenants/${tenantId}`,
-        payload,
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-
       await getTenantConfig(tenantId)
       expect(knexTableSpy).toHaveBeenCalledTimes(1)
       expect(knexTableSpy).toHaveBeenCalledWith('tenants')

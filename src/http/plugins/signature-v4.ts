@@ -29,7 +29,10 @@ const {
   s3ProtocolAccessKeyId,
   s3ProtocolAccessKeySecret,
   s3ProtocolNonCanonicalHostHeader,
+  storagePublicUrl,
 } = getConfig()
+
+const parsedPublicUrl = storagePublicUrl ? new URL(storagePublicUrl) : undefined
 
 type AWSRequest = FastifyRequest<{ Querystring: { 'X-Amz-Credential'?: string } }>
 
@@ -258,6 +261,7 @@ async function createServerSignature(
       allowForwardedHeader: s3ProtocolAllowForwardedHeader,
       allowBodyHashing: allowBodyHash,
       nonCanonicalForwardedHost: s3ProtocolNonCanonicalHostHeader,
+      publicUrl: parsedPublicUrl,
       credentials: {
         accessKey: tenantId,
         secretKey: tenantAnonKey,
@@ -280,6 +284,7 @@ async function createServerSignature(
       allowForwardedHeader: s3ProtocolAllowForwardedHeader,
       allowBodyHashing: allowBodyHash,
       nonCanonicalForwardedHost: s3ProtocolNonCanonicalHostHeader,
+      publicUrl: parsedPublicUrl,
       credentials: {
         accessKey: credential.accessKey,
         secretKey: credential.secretKey,
@@ -302,6 +307,7 @@ async function createServerSignature(
     allowForwardedHeader: s3ProtocolAllowForwardedHeader,
     allowBodyHashing: allowBodyHash,
     nonCanonicalForwardedHost: s3ProtocolNonCanonicalHostHeader,
+    publicUrl: parsedPublicUrl,
     credentials: {
       accessKey: s3ProtocolAccessKeyId,
       secretKey: s3ProtocolAccessKeySecret,

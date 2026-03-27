@@ -160,6 +160,8 @@ export function generateUrl(
     host = parsedPublicUrl.host
   }
 
+  // Force https in production. This overrides both forwarded headers and
+  // STORAGE_PUBLIC_URL - production deployments must use HTTPS.
   proto = process.env.NODE_ENV === 'production' ? 'https' : proto
 
   let basePath = path

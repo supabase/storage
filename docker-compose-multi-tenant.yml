@@ -23,11 +23,13 @@ services:
       # Auth
       AUTH_JWT_SECRET: f023d3db-39dc-4ac9-87b2-b2be72e9162b
       AUTH_JWT_ALGORITHM: HS256
-      AUTH_ENCRYPTION_KEY: encryptionkey
+      # change this value to a unique, strong value
+      AUTH_ENCRYPTION_KEY: encryptionkey_Value:shouldBe_A_long_random_string
       # Multi tenant Mode
       MULTI_TENANT: true
       DATABASE_MULTITENANT_URL: postgresql://postgres:postgres@multitenant_db:5432/postgres
-      SERVER_ADMIN_API_KEYS: apikey
+      # change this value to a strong API key
+      SERVER_ADMIN_API_KEYS: this-value-should-be-changed-to-a-random-string
       SERVER_ADMIN_PORT: 5001
       REQUEST_X_FORWARDED_HOST_REGEXP: "^([a-z]{20}).local.(?:com|dev)$"
       # Migrations

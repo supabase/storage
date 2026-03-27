@@ -1,5 +1,3 @@
-import { createDeferred } from './utils/promise'
-
 const mockBatchSend = jest.fn()
 const mockWarning = jest.fn()
 const mockError = jest.fn()
@@ -123,7 +121,7 @@ describe('ProgressiveMigrations', () => {
   })
 
   it('keeps new tenants queued while a batch is in flight and ignores duplicate adds', async () => {
-    const deferredBatch = createDeferred()
+    const deferredBatch = Promise.withResolvers<void>()
     mockRunMigrationsBatchSend.mockReturnValueOnce(deferredBatch.promise as never)
 
     const migrations = new TestProgressiveMigrations({
@@ -153,7 +151,7 @@ describe('ProgressiveMigrations', () => {
   })
 
   it('serializes drain with an in-flight batch and drains the remaining tenants after it finishes', async () => {
-    const deferredBatch = createDeferred()
+    const deferredBatch = Promise.withResolvers<void>()
     mockRunMigrationsBatchSend
       .mockReturnValueOnce(deferredBatch.promise as never)
       .mockResolvedValueOnce(undefined as never)

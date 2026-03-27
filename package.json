@@ -95,7 +95,7 @@
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.5",
     "@types/json-bigint": "^1.0.4",
-    "@types/node": "^22.19.0",
+    "@types/node": "^24.12.0",
     "@types/pg": "^8.6.4",
     "@types/stream-buffers": "^3.0.7",
     "@types/xml2js": "^0.4.14",
@@ -133,6 +133,6 @@
   },
   "bin": "./dist/server.js",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.0.0"
   }
 }

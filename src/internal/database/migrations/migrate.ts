@@ -717,9 +717,9 @@ function runMigrations({
       return completedMigrations
     } catch (e) {
       if (e instanceof MigrationError) {
-        const error: MigrationError = new Error(`Migration failed. Reason: ${(e as Error).message}`)
-        error.cause = e + ''
-        throw error
+        throw new MigrationError(`Migration failed. Reason: ${(e as Error).message}`, {
+          cause: e,
+        })
       }
 
       throw e

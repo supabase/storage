@@ -2,6 +2,14 @@
 -- Each function's RETURNS TABLE gains a user_metadata jsonb column,
 -- and the query bodies include user_metadata in selects.
 -- Folders return NULL for user_metadata.
+--
+-- DROP is required because CREATE OR REPLACE cannot change return types.
+
+-- Drop old function signatures (return type is changing)
+DO $$ BEGIN DROP FUNCTION IF EXISTS storage.list_objects_with_delimiter(text,text,text,integer,text,text,text); EXCEPTION WHEN OTHERS THEN NULL; END; $$;
+DO $$ BEGIN DROP FUNCTION IF EXISTS storage.search(text,text,integer,integer,integer,text,text,text); EXCEPTION WHEN OTHERS THEN NULL; END; $$;
+DO $$ BEGIN DROP FUNCTION IF EXISTS storage.search_v2(text,text,integer,integer,text,text,text,text); EXCEPTION WHEN OTHERS THEN NULL; END; $$;
+DO $$ BEGIN DROP FUNCTION IF EXISTS storage.search_by_timestamp(text,text,integer,integer,text,text,text,text); EXCEPTION WHEN OTHERS THEN NULL; END; $$;
 
 -- ============================================================================
 -- list_objects_with_delimiter: Add user_metadata support

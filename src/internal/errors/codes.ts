@@ -19,6 +19,10 @@ export enum ErrorCode {
   KeyAlreadyExists = 'KeyAlreadyExists',
   BucketAlreadyExists = 'BucketAlreadyExists',
   DatabaseTimeout = 'DatabaseTimeout',
+  DatabaseConnectionLimit = 'DatabaseConnectionLimit',
+  DatabaseReadOnly = 'DatabaseReadOnly',
+  InvalidObjectDefinition = 'InvalidObjectDefinition',
+  DatabaseSchemaMismatch = 'DatabaseSchemaMismatch',
   InvalidSignature = 'InvalidSignature',
   ExpiredToken = 'ExpiredToken',
   SignatureDoesNotMatch = 'SignatureDoesNotMatch',
@@ -276,12 +280,12 @@ export const ERRORS = {
       message: `invalid range provided`,
     }),
 
-  EntityTooLarge: (e?: Error, entity = 'object') =>
+  EntityTooLarge: (e?: Error, entity = 'object', limit = 'the maximum allowed size') =>
     new StorageBackendError({
       error: 'Payload too large',
       code: ErrorCode.EntityTooLarge,
       httpStatusCode: 413,
-      message: `The ${entity} exceeded the maximum allowed size`,
+      message: `The ${entity} exceeded ${limit}`,
       originalError: e,
     }),
 
@@ -369,6 +373,39 @@ export const ERRORS = {
       code: ErrorCode.DatabaseTimeout,
       httpStatusCode: 544,
       message: 'The connection to the database timed out',
+      originalError: e,
+    }),
+
+  DatabaseConnectionLimit: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.DatabaseConnectionLimit,
+      httpStatusCode: 503,
+      message:
+        'The database has reached its maximum number of connections. Please try again later.',
+      originalError: e,
+    }),
+
+  DatabaseReadOnly: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.DatabaseReadOnly,
+      httpStatusCode: 503,
+      message: 'The database is currently in read-only mode. Please try again later.',
+      originalError: e,
+    }),
+
+  InvalidObjectDefinition: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidObjectDefinition,
+      httpStatusCode: 503,
+      message: 'The database schema is invalid or incompatible.',
+      originalError: e,
+    }),
+
+  DatabaseSchemaMismatch: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.DatabaseSchemaMismatch,
+      httpStatusCode: 503,
+      message: 'The database schema is out of sync. Please run migrations or contact support.',
       originalError: e,
     }),
 
@@ -517,10 +554,20 @@ export function isStorageError(errorType: ErrorCode, error: any): error is Stora
   return error instanceof StorageBackendError && error.code === errorType
 }
 
+function hasStatusCode(error: Error): error is Error & { statusCode: number } {
+  return 'statusCode' in error && typeof (error as any).statusCode === 'number'
+}
+
 export function normalizeRawError(error: any) {
   if (error instanceof Error) {
-    const statusCode =
-      error instanceof StorageBackendError && error.httpStatusCode ? error.httpStatusCode : 0
+    let statusCode = 0
+    if (error instanceof StorageBackendError && error.httpStatusCode) {
+      statusCode = error.httpStatusCode
+    } else if (hasStatusCode(error)) {
+      // Fastify validation errors include statusCode we can use
+      statusCode = error.statusCode
+    }
+
     return {
       raw: JSON.stringify(error),
       name: error.name,

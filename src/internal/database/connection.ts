@@ -135,6 +135,15 @@ export class TenantConnection {
         throw ERRORS.DatabaseTimeout(e)
       }
 
+      // Handle database connection limit errors
+      if (
+        e instanceof DatabaseError &&
+        ((e.code === '08P01' && e.message.includes('no more connections allowed')) ||
+          e.message.includes('Max client connections reached'))
+      ) {
+        throw ERRORS.DatabaseConnectionLimit(e)
+      }
+
       throw e
     }
   }

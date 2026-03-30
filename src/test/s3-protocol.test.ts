@@ -148,16 +148,68 @@ async function sendAwsChunkedRequest(options: {
   payload: Buffer
   query?: Record<string, string>
 }) {
+  const signedRequest = await createSignedS3Request({
+    baseUrl: options.baseUrl,
+    path: options.path,
+    method: 'PUT',
+    query: options.query,
+    contentSha: STREAMING_PAYLOAD_ALGORITHM,
+    headers: {
+      'content-encoding': 'aws-chunked',
+      'x-amz-decoded-content-length': options.payload.length.toString(),
+    },
+  })
+  const chunk = createSignedChunk(options.payload, signedRequest.signature, {
+    longDate: signedRequest.longDate,
+    shortDate: signedRequest.shortDate,
+    region: storageS3Region,
+    service: signedRequest.service,
+    secretKey: s3ProtocolAccessKeySecret!,
+  })
+  const endChunk = createSignedChunk(Buffer.alloc(0), chunk.signature, {
+    longDate: signedRequest.longDate,
+    shortDate: signedRequest.shortDate,
+    region: storageS3Region,
+    service: signedRequest.service,
+    secretKey: s3ProtocolAccessKeySecret!,
+  })
+  const encodedBody = Buffer.concat([chunk.encoded, endChunk.encoded])
+
+  const response = await fetch(signedRequest.requestUrl, {
+    method: 'PUT',
+    headers: {
+      ...signedRequest.headers,
+      'content-length': encodedBody.length.toString(),
+    },
+    body: encodedBody,
+  })
+
+  return {
+    status: response.status,
+    data: await response.text(),
+  }
+}
+
+async function createSignedS3Request(options: {
+  baseUrl: string
+  path: string
+  method: 'POST' | 'PUT' | 'GET' | 'DELETE'
+  body?: string | Buffer
+  query?: Record<string, string>
+  headers?: Record<string, string>
+  contentSha?: string
+  includeContentLength?: boolean
+}) {
   const longDate = formatAwsDate()
   const shortDate = longDate.slice(0, 8)
   const host = new URL(options.baseUrl).host
-  const signedHeaders = [
-    'host',
-    'x-amz-content-sha256',
-    'x-amz-date',
-    'x-amz-decoded-content-length',
-  ]
   const service = SignatureV4Service.S3
+  const payload = options.body ?? Buffer.alloc(0)
+  const payloadBuffer = typeof payload === 'string' ? Buffer.from(payload) : payload
+  const payloadHash = options.contentSha || sha256Hex(payloadBuffer)
+  const normalizedHeaders = Object.fromEntries(
+    Object.entries(options.headers || {}).map(([key, value]) => [key.toLowerCase(), value])
+  )
   const signer = new SignatureV4({
     enforceRegion: false,
     credentials: {
@@ -167,13 +219,19 @@ async function sendAwsChunkedRequest(options: {
       service,
     },
   })
-  const headers = {
+
+  const headers: Record<string, string> = {
     host,
-    'content-encoding': 'aws-chunked',
-    'x-amz-content-sha256': STREAMING_PAYLOAD_ALGORITHM,
+    'x-amz-content-sha256': payloadHash,
     'x-amz-date': longDate,
-    'x-amz-decoded-content-length': options.payload.length.toString(),
+    ...(options.includeContentLength ? { 'content-length': payloadBuffer.length.toString() } : {}),
+    ...normalizedHeaders,
   }
+
+  const signedHeaders = Object.keys(headers)
+    .map((header) => header.toLowerCase())
+    .sort()
+
   const clientSignature = {
     credentials: {
       accessKey: s3ProtocolAccessKeyId!,
@@ -184,29 +242,17 @@ async function sendAwsChunkedRequest(options: {
     signedHeaders,
     signature: '',
     longDate,
-    contentSha: STREAMING_PAYLOAD_ALGORITHM,
+    contentSha: payloadHash,
   }
+
   const { signature } = await signer.sign(clientSignature, {
     url: options.path,
-    method: 'PUT',
+    method: options.method,
     headers,
     query: options.query,
+    body: options.body,
   })
-  const chunk = createSignedChunk(options.payload, signature, {
-    longDate,
-    shortDate,
-    region: storageS3Region,
-    service,
-    secretKey: s3ProtocolAccessKeySecret!,
-  })
-  const endChunk = createSignedChunk(Buffer.alloc(0), chunk.signature, {
-    longDate,
-    shortDate,
-    region: storageS3Region,
-    service,
-    secretKey: s3ProtocolAccessKeySecret!,
-  })
-  const encodedBody = Buffer.concat([chunk.encoded, endChunk.encoded])
+
   const requestUrl = new URL(`${options.baseUrl}${options.path}`)
 
   if (options.query) {
@@ -215,23 +261,82 @@ async function sendAwsChunkedRequest(options: {
     }
   }
 
-  const response = await fetch(requestUrl, {
-    method: 'PUT',
+  return {
     headers: {
       ...headers,
       authorization:
         `AWS4-HMAC-SHA256 Credential=${s3ProtocolAccessKeyId}/${shortDate}/` +
         `${storageS3Region}/${service}/aws4_request, SignedHeaders=${signedHeaders.join(';')}, ` +
         `Signature=${signature}`,
-      'content-length': encodedBody.length.toString(),
     },
-    body: encodedBody,
+    requestUrl,
+    service,
+    shortDate,
+    longDate,
+    signature,
+  }
+}
+
+async function sendSignedS3Request(options: {
+  baseUrl: string
+  path: string
+  method: 'POST' | 'PUT' | 'GET' | 'DELETE'
+  body?: string
+  query?: Record<string, string>
+  headers?: Record<string, string>
+}) {
+  const payload = options.body || ''
+  const signedRequest = await createSignedS3Request({
+    ...options,
+    body: payload,
+    includeContentLength: true,
+  })
+
+  const response = await fetch(signedRequest.requestUrl, {
+    method: options.method,
+    headers: signedRequest.headers,
+    body: payload,
   })
 
   return {
     status: response.status,
     data: await response.text(),
   }
+}
+
+async function expectMultipartUploadToRemainPending(
+  client: S3Client,
+  options: {
+    bucket: string
+    key: string
+    uploadId: string
+    partETag: string
+  }
+) {
+  try {
+    await client.send(
+      new HeadObjectCommand({
+        Bucket: options.bucket,
+        Key: options.key,
+      })
+    )
+    throw new Error('Should not reach here')
+  } catch (e) {
+    expect((e as Error).message).not.toBe('Should not reach here')
+    expect((e as S3ServiceException).$metadata.httpStatusCode).toBe(404)
+  }
+
+  const listPartsResp = await client.send(
+    new ListPartsCommand({
+      Bucket: options.bucket,
+      Key: options.key,
+      UploadId: options.uploadId,
+    })
+  )
+
+  expect(listPartsResp.Parts).toHaveLength(1)
+  expect(listPartsResp.Parts?.[0].PartNumber).toBe(1)
+  expect(listPartsResp.Parts?.[0].ETag).toBe(options.partETag)
 }
 
 jest.setTimeout(10 * 1000)
@@ -730,6 +835,19 @@ describe('S3 Protocol', () => {
         expect(resp.UploadId).toBeTruthy()
       })
 
+      it('creates a multi part upload for a json object', async () => {
+        const bucketName = await createBucket(client)
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: 'test-1.json',
+          ContentType: 'application/json',
+          CacheControl: 'max-age=2000',
+        })
+
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+      })
+
       it('upload a part', async () => {
         const bucketName = await createBucket(client)
         const createMultiPartUpload = new CreateMultipartUploadCommand({
@@ -796,6 +914,249 @@ describe('S3 Protocol', () => {
         const completeResp = await client.send(completeMultiPartUpload)
         expect(completeResp.$metadata.httpStatusCode).toBe(200)
         expect(completeResp.Key).toEqual('test-1.jpg')
+      })
+
+      it('does not complete multipart upload on malformed xml body', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-explicit-parts.xml'
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: key,
+          ContentType: 'application/xml',
+          CacheControl: 'max-age=2000',
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+
+        const part1Body = Buffer.alloc(5 * 1024 * 1024, 'a')
+
+        const part1 = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentLength: part1Body.length,
+            UploadId: resp.UploadId,
+            Body: part1Body,
+            PartNumber: 1,
+          })
+        )
+
+        const malformedCompleteResp = await sendSignedS3Request({
+          baseUrl,
+          method: 'POST',
+          path: `/s3/${bucketName}/${key}`,
+          query: {
+            uploadId: resp.UploadId!,
+          },
+          headers: {
+            'Content-Type': 'application/xml',
+          },
+          body: '<CompleteMultipartUpload><Part></CompleteMultipartUpload>',
+        })
+
+        expect(malformedCompleteResp.status).toBe(400)
+        expect(malformedCompleteResp.data).toContain('<Error>')
+        expect(malformedCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
+        expect(malformedCompleteResp.data).toContain('<Message>Invalid XML payload:')
+
+        await expectMultipartUploadToRemainPending(client, {
+          bucket: bucketName,
+          key,
+          uploadId: resp.UploadId!,
+          partETag: part1.ETag!,
+        })
+
+        const completeResp = await client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: resp.UploadId,
+            MultipartUpload: {
+              Parts: [
+                {
+                  PartNumber: 1,
+                  ETag: part1.ETag,
+                },
+              ],
+            },
+          })
+        )
+
+        expect(completeResp.$metadata.httpStatusCode).toBe(200)
+
+        const getResp = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+          })
+        )
+
+        const data = await getResp.Body?.transformToByteArray()
+        expect(Buffer.from(data || [])).toEqual(part1Body)
+        expect(part1.ETag).toBeTruthy()
+      })
+
+      it('does not complete multipart upload on malformed json body', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-invalid-json-complete.bin'
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: key,
+          ContentType: 'application/octet-stream',
+          CacheControl: 'max-age=2000',
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+
+        const part1Body = Buffer.alloc(5 * 1024 * 1024, 'b')
+
+        const part1 = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentLength: part1Body.length,
+            UploadId: resp.UploadId,
+            Body: part1Body,
+            PartNumber: 1,
+          })
+        )
+
+        const malformedCompleteResp = await sendSignedS3Request({
+          baseUrl,
+          method: 'POST',
+          path: `/s3/${bucketName}/${key}`,
+          query: {
+            uploadId: resp.UploadId!,
+          },
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: '{"Parts":',
+        })
+
+        expect(malformedCompleteResp.status).toBe(400)
+        expect(malformedCompleteResp.data).toContain('<Error>')
+        expect(malformedCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
+        expect(malformedCompleteResp.data).toContain(
+          "<Message>Body is not valid JSON but content-type is set to 'application/json'</Message>"
+        )
+
+        await expectMultipartUploadToRemainPending(client, {
+          bucket: bucketName,
+          key,
+          uploadId: resp.UploadId!,
+          partETag: part1.ETag!,
+        })
+
+        const completeResp = await client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: resp.UploadId,
+            MultipartUpload: {
+              Parts: [
+                {
+                  PartNumber: 1,
+                  ETag: part1.ETag,
+                },
+              ],
+            },
+          })
+        )
+
+        expect(completeResp.$metadata.httpStatusCode).toBe(200)
+
+        const getResp = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+          })
+        )
+
+        const data = await getResp.Body?.transformToByteArray()
+        expect(Buffer.from(data || [])).toEqual(part1Body)
+        expect(part1.ETag).toBeTruthy()
+      })
+
+      it('does not complete multipart upload on empty json body', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-empty-json-complete.bin'
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: key,
+          ContentType: 'application/octet-stream',
+          CacheControl: 'max-age=2000',
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+
+        const part1Body = Buffer.alloc(5 * 1024 * 1024, 'c')
+
+        const part1 = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentLength: part1Body.length,
+            UploadId: resp.UploadId,
+            Body: part1Body,
+            PartNumber: 1,
+          })
+        )
+
+        const emptyJsonCompleteResp = await sendSignedS3Request({
+          baseUrl,
+          method: 'POST',
+          path: `/s3/${bucketName}/${key}`,
+          query: {
+            uploadId: resp.UploadId!,
+          },
+          headers: {
+            'content-type': 'application/json',
+          },
+        })
+
+        expect(emptyJsonCompleteResp.status).toBe(400)
+        expect(emptyJsonCompleteResp.data).toContain('<Error>')
+        expect(emptyJsonCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
+        expect(emptyJsonCompleteResp.data).toContain(
+          "<Message>Body cannot be empty when content-type is set to 'application/json'</Message>"
+        )
+
+        await expectMultipartUploadToRemainPending(client, {
+          bucket: bucketName,
+          key,
+          uploadId: resp.UploadId!,
+          partETag: part1.ETag!,
+        })
+
+        const completeResp = await client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: resp.UploadId,
+            MultipartUpload: {
+              Parts: [
+                {
+                  PartNumber: 1,
+                  ETag: part1.ETag,
+                },
+              ],
+            },
+          })
+        )
+
+        expect(completeResp.$metadata.httpStatusCode).toBe(200)
+
+        const getResp = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+          })
+        )
+
+        const data = await getResp.Body?.transformToByteArray()
+        expect(Buffer.from(data || [])).toEqual(part1Body)
+        expect(part1.ETag).toBeTruthy()
       })
 
       it('aborts a multipart upload', async () => {
@@ -1079,7 +1440,7 @@ describe('S3 Protocol', () => {
         canUpload is called beforehand or else it can cause issues for valid uploads.
 
         This test sets the fileSizeLimit to 10kb and each part at 5kb. It simulates
-        first request successful, second failed, third passes. If the in_progress_size 
+        first request successful, second failed, third passes. If the in_progress_size
         was mutated on the second request it would be at 10kb causing the third to fail.
         */
         const bucketName = await createBucket(client)

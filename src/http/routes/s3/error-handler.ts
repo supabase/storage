@@ -69,6 +69,19 @@ export const s3ErrorHandler = (
     })
   }
 
+  const statusCode =
+    'statusCode' in error && typeof error.statusCode === 'number' ? error.statusCode : undefined
+
+  if (statusCode && statusCode >= 400 && statusCode < 500) {
+    return reply.status(statusCode).send({
+      Error: {
+        Resource: resource,
+        Code: ErrorCode.InvalidRequest,
+        Message: error.message,
+      },
+    })
+  }
+
   return reply.status(500).send({
     Error: {
       Resource: resource,

@@ -109,6 +109,7 @@ type Route<S extends Schema, Context> = {
   handler?: Handler<S, Context>
   schema: S
   disableContentTypeParser?: boolean
+  allowEmptyJsonBody?: boolean
   acceptMultiformData?: boolean
   operation: string
   compiledSchema: () => ValidateFunction<JTDDataType<S>>
@@ -116,6 +117,7 @@ type Route<S extends Schema, Context> = {
 
 interface RouteOptions<S extends JSONSchema> {
   disableContentTypeParser?: boolean
+  allowEmptyJsonBody?: boolean
   acceptMultiformData?: boolean
   operation: string
   schema: S
@@ -151,7 +153,8 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       Body?: JSONSchema
     } = {}
 
-    const { schema, disableContentTypeParser, acceptMultiformData, operation } = options
+    const { schema, disableContentTypeParser, allowEmptyJsonBody, acceptMultiformData, operation } =
+      options
 
     if (schema.Params) {
       schemaToCompile.Params = schema.Params
@@ -203,6 +206,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       compiledSchema: () => this.ajv.getSchema(method + url) as ValidateFunction<JTDDataType<R>>,
       handler: handler as Handler<R, Context>,
       disableContentTypeParser,
+      allowEmptyJsonBody,
       acceptMultiformData,
       operation,
       type: options.type,

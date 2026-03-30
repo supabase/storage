@@ -40,6 +40,7 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
     {
       type: 'iceberg',
       schema: CreateMultiPartUploadInput,
+      allowEmptyJsonBody: true,
       operation: ROUTE_OPERATIONS.S3_CREATE_MULTIPART,
     },
     async (req, ctx) => {
@@ -71,7 +72,11 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
 
   s3Router.post(
     '/:Bucket/*?uploads',
-    { schema: CreateMultiPartUploadInput, operation: ROUTE_OPERATIONS.S3_CREATE_MULTIPART },
+    {
+      schema: CreateMultiPartUploadInput,
+      allowEmptyJsonBody: true,
+      operation: ROUTE_OPERATIONS.S3_CREATE_MULTIPART,
+    },
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 

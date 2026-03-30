@@ -380,7 +380,15 @@ export class StorageKnexDB implements Database {
         const query = knex
           .table('objects')
           .where('bucket_id', bucketId)
-          .select(['id', 'name', 'metadata', 'updated_at', 'created_at', 'last_accessed_at'])
+          .select([
+            'id',
+            'name',
+            'metadata',
+            'user_metadata',
+            'updated_at',
+            'created_at',
+            'last_accessed_at',
+          ])
           .limit(options?.maxKeys || 100)
 
         // only allow these values for sort columns, "name" is excluded intentionally as it is the default and used as tie breaker when sorting by other columns

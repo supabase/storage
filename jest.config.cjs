@@ -21,5 +21,6 @@ module.exports = {
   setupFilesAfterEnv: ['<rootDir>/jest-setup.ts'],
   testEnvironment: 'node',
   testPathIgnorePatterns: ['node_modules', 'dist'],
+  coverageReporters: ['lcovonly', 'text-summary'],
   coverageProvider: 'v8',
 }

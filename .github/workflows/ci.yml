@@ -93,6 +93,8 @@ jobs:
         uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2.3.7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          file: coverage/lcov.info
+          format: lcov
           fail-on-error: false
         continue-on-error: true
       - name: Verify migration idempotency

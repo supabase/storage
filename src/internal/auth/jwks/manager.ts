@@ -9,9 +9,9 @@ import { PubSubAdapter } from '@internal/pubsub'
 import { Knex } from 'knex'
 import objectSizeOf from 'object-sizeof'
 import { JwksConfig, JwksConfigKeyOCT } from '../../../config'
+import { TENANTS_JWKS_UPDATE_CHANNEL } from './channels'
 import { JWKSManagerStore } from './store'
 
-const TENANTS_JWKS_UPDATE_CHANNEL = 'tenants_jwks_update'
 const JWK_KIND_STORAGE_URL_SIGNING = 'storage-url-signing-key'
 const JWK_KID_SEPARATOR = '_'
 

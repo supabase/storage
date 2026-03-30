@@ -8,6 +8,7 @@ mergeConfig({
 })
 
 import { encrypt, signJWT } from '@internal/auth'
+import { TENANTS_JWKS_UPDATE_CHANNEL } from '@internal/auth/jwks/channels'
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
 import { JWKSManagerStoreKnex } from '@internal/auth/jwks/store-knex'
 import { TENANT_JWKS_CACHE_NAME } from '@internal/cache'
@@ -26,10 +27,17 @@ import { adminApp, mockQueue } from './common'
 import { createMockKnexReturning } from './mocks/knex-mock'
 import { assertLogicalLookupMetrics } from './utils/cache-metrics'
 import { mockCreateLruCache } from './utils/cache-mock'
+import { waitForEventually } from './utils/promise'
 
 dotenv.config({ path: '.env.test' })
 
+const TENANT_JWKS_TEST_TIMEOUT_MS = 10000
+// Keep helper-level waits shorter than the per-test timeout
+// so helper errors surface first.
+const TENANT_JWKS_HELPER_TIMEOUT_MS = 4000
 const tenantId = 'abc123'
+
+jest.setTimeout(TENANT_JWKS_TEST_TIMEOUT_MS)
 
 const testJwks = {
   oct: {
@@ -83,18 +91,31 @@ async function loadJwksModules(
 }
 
 // returns a promise that resolves the next time the jwk cache is invalidated
-function createJwkConfigChangeAwaiter(expectedCacheKey = tenantId): Promise<string> {
-  return new Promise<string>((resolve) => {
+function createJwkConfigChangeAwaiter(
+  expectedCacheKey = tenantId,
+  timeoutMs = TENANT_JWKS_HELPER_TIMEOUT_MS
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pubSub.subscriber.notifications.removeListener(TENANTS_JWKS_UPDATE_CHANNEL, onNotification)
+      reject(
+        new Error(
+          `Timed out after ${timeoutMs}ms waiting for ${TENANTS_JWKS_UPDATE_CHANNEL}:${expectedCacheKey}`
+        )
+      )
+    }, timeoutMs)
+
     const onNotification = (cacheKey: string) => {
       if (cacheKey !== expectedCacheKey) {
         return
       }
 
-      pubSub.subscriber.notifications.removeListener('tenants_jwks_update', onNotification)
+      clearTimeout(timeout)
+      pubSub.subscriber.notifications.removeListener(TENANTS_JWKS_UPDATE_CHANNEL, onNotification)
       resolve(cacheKey)
     }
 
-    pubSub.subscriber.notifications.on('tenants_jwks_update', onNotification)
+    pubSub.subscriber.notifications.on(TENANTS_JWKS_UPDATE_CHANNEL, onNotification)
   })
 }
 
@@ -148,12 +169,12 @@ describe('Tenant jwks configs', () => {
       resolved = true
     })
 
-    pubSub.subscriber.notifications.emit('tenants_jwks_update', 'other-jwks-tenant')
+    pubSub.subscriber.notifications.emit(TENANTS_JWKS_UPDATE_CHANNEL, 'other-jwks-tenant')
     await new Promise((resolve) => setImmediate(resolve))
 
     expect(resolved).toBe(false)
 
-    pubSub.subscriber.notifications.emit('tenants_jwks_update', expectedTenantId)
+    pubSub.subscriber.notifications.emit(TENANTS_JWKS_UPDATE_CHANNEL, expectedTenantId)
 
     await expect(awaiter).resolves.toBe(expectedTenantId)
   })
@@ -225,10 +246,13 @@ describe('Tenant jwks configs', () => {
       expect(data.kid).toBeTruthy()
       expect(data.kid.startsWith(kind)).toBe(true)
 
-      const cacheKey = await configAwaiter
-      expect(cacheKey).toBe(tenantId)
+      await expect(configAwaiter).resolves.toBe(tenantId)
 
-      const config = await jwksManager.getJwksTenantConfig(tenantId)
+      const config = await waitForEventually(
+        () => jwksManager.getJwksTenantConfig(tenantId),
+        (value) => value.keys.some((key) => key.kid === data.kid),
+        `tenant ${tenantId} JWKS to include ${data.kid}`
+      )
       expect(config.keys.length - keysBefore.length).toBe(1)
       expect(config.keys.find((v) => v.kid === data.kid)).toBeTruthy()
     })
@@ -307,10 +331,13 @@ describe('Tenant jwks configs', () => {
     let data = response.json<{ result: boolean }>()
     expect(data.result).toBe(true)
 
-    let cacheKey = await configAwaiter
-    expect(cacheKey).toBe(tenantId)
+    await expect(configAwaiter).resolves.toBe(tenantId)
 
-    config = await jwksManager.getJwksTenantConfig(tenantId)
+    config = await waitForEventually(
+      () => jwksManager.getJwksTenantConfig(tenantId),
+      (value) => value.keys.length === 0,
+      `tenant ${tenantId} JWKS to clear after deactivation`
+    )
     expect(config.keys.length).toBe(0)
 
     configAwaiter = createJwkConfigChangeAwaiter()
@@ -326,10 +353,13 @@ describe('Tenant jwks configs', () => {
     data = response.json<{ result: boolean }>()
     expect(data.result).toBe(true)
 
-    cacheKey = await configAwaiter
-    expect(cacheKey).toBe(tenantId)
+    await expect(configAwaiter).resolves.toBe(tenantId)
 
-    const config2 = await jwksManager.getJwksTenantConfig(tenantId)
+    const config2 = await waitForEventually(
+      () => jwksManager.getJwksTenantConfig(tenantId),
+      (value) => value.keys.some((key) => key.kid === kid),
+      `tenant ${tenantId} JWKS to restore ${kid}`
+    )
     expect(config2.keys.length).toBe(1)
     expect(config2.keys[0]).toMatchObject({ kid })
   })
@@ -549,9 +579,15 @@ describe('Tenant jwks configs', () => {
       },
     })
 
-    await configAwaiter
+    await expect(configAwaiter).resolves.toBe(tenantId)
 
-    const secretWithoutJwk = await getJwtSecret(tenantId)
+    deleteTenantConfig(tenantId)
+
+    const secretWithoutJwk = await waitForEventually(
+      () => getJwtSecret(tenantId),
+      (value) => value.urlSigningKey === value.secret && value.jwks.keys.length === 0,
+      `tenant ${tenantId} url signing fallback to jwtSecret`
+    )
     expect(secretWithoutJwk.urlSigningKey).toBe(secretWithoutJwk.secret)
     expect(secretWithoutJwk.jwks.keys.length).toBe(0)
   })

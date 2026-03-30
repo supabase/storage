@@ -21,7 +21,7 @@ export enum ErrorCode {
   DatabaseTimeout = 'DatabaseTimeout',
   DatabaseConnectionLimit = 'DatabaseConnectionLimit',
   DatabaseReadOnly = 'DatabaseReadOnly',
-  InvalidObjectDefinition = 'InvalidObjectDefinition',
+  DatabaseInvalidObjectDefinition = 'DatabaseInvalidObjectDefinition',
   DatabaseSchemaMismatch = 'DatabaseSchemaMismatch',
   InvalidSignature = 'InvalidSignature',
   ExpiredToken = 'ExpiredToken',
@@ -395,7 +395,7 @@ export const ERRORS = {
 
   InvalidObjectDefinition: (e?: Error) =>
     new StorageBackendError({
-      code: ErrorCode.InvalidObjectDefinition,
+      code: ErrorCode.DatabaseInvalidObjectDefinition,
       httpStatusCode: 503,
       message: 'The database schema is invalid or incompatible.',
       originalError: e,

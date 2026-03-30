@@ -76,9 +76,12 @@ export default async function routes(fastify: FastifyInstance) {
                 const isValid = compiler(data)
 
                 if (!isValid) {
-                  const validationError = new Error('Invalid request')
-                  ;(validationError as Error & { validation?: unknown }).validation =
-                    compiler.errors
+                  const validationError = new Error('Invalid request') as Error & {
+                    validation?: unknown
+                    statusCode?: number
+                  }
+                  validationError.validation = compiler.errors
+                  validationError.statusCode = 400
                   throw validationError
                 }
 

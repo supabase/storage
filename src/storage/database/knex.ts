@@ -1171,6 +1171,34 @@ export class DBError extends StorageBackendError implements RenderableError {
           query,
           code: pgError.code,
         })
+      case '25006': // read only sql transaction
+        return ERRORS.DatabaseReadOnly(pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
+      case '42P17': // invalid object definition
+        return ERRORS.InvalidObjectDefinition(pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
+      case '22P02': // invalid text representation
+        return ERRORS.InvalidParameter('value', {
+          error: pgError,
+          message: pgError.message || 'Invalid value format or type conversion failed',
+        }).withMetadata({
+          query,
+          code: pgError.code,
+        })
+      case '42703': // undefined column
+        return ERRORS.DatabaseSchemaMismatch(pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
+      case '42P01': // relation does not exist
+        return ERRORS.DatabaseSchemaMismatch(pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
       default:
         return ERRORS.DatabaseError(`database error, code: ${pgError.code}`, pgError).withMetadata({
           query,

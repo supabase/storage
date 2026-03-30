@@ -1,6 +1,6 @@
+import { ensureFile } from '@internal/fs'
 import { Configstore, FileStore as TusFileStore } from '@tus/file-store'
 import { Upload } from '@tus/server'
-import fsExtra from 'fs-extra'
 import path from 'path'
 import { FileBackend } from '../../backend'
 
@@ -20,7 +20,7 @@ export class FileStore extends TusFileStore {
 
   async create(file: Upload): Promise<Upload> {
     const filePath = path.join(this.options.directory, file.id)
-    await fsExtra.ensureFile(filePath)
+    await ensureFile(filePath)
 
     await this.fileAdapter.setFileMetadata(filePath, {
       cacheControl: file.metadata?.cacheControl || '',

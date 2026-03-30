@@ -1,7 +1,9 @@
+import type { Stats } from 'node:fs'
+import fs from 'node:fs'
+import * as fsp from 'node:fs/promises'
 import { ERRORS, StorageBackendError } from '@internal/errors'
+import { ensureDir, ensureFile, pathExists, removePath } from '@internal/fs'
 import { createHash, randomUUID } from 'crypto'
-import fs from 'fs-extra'
-import fsExtra from 'fs-extra'
 import * as xattr from 'fs-xattr'
 import path from 'path'
 import stream from 'stream'
@@ -84,7 +86,7 @@ export class FileBackend implements StorageBackendAdapter {
   ): Promise<ObjectResponse> {
     // 'Range: bytes=#######-######
     const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
-    const data = await fs.stat(file)
+    const data = await fsp.stat(file)
     const eTag = await this.etag(file, data)
     const fileSize = data.size
     const { cacheControl, contentType } = await this.getFileMetadata(file)
@@ -186,7 +188,7 @@ export class FileBackend implements StorageBackendAdapter {
   ): Promise<ObjectMetadata> {
     try {
       const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
-      await fs.ensureFile(file)
+      await ensureFile(file)
       const destFile = fs.createWriteStream(file)
       await pipeline(body, destFile)
 
@@ -218,7 +220,7 @@ export class FileBackend implements StorageBackendAdapter {
   async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
     try {
       const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
-      await fs.remove(file)
+      await removePath(file)
 
       // Clean up empty parent directories
       await this.cleanupEmptyDirectories(path.dirname(file))
@@ -254,13 +256,13 @@ export class FileBackend implements StorageBackendAdapter {
       withOptionalVersion(`${bucket}/${destination}`, destinationVersion)
     )
 
-    await fs.ensureFile(destFile)
-    await fs.copyFile(srcFile, destFile)
+    await ensureFile(destFile)
+    await fsp.copyFile(srcFile, destFile)
 
     const originalMetadata = await this.getFileMetadata(srcFile)
     await this.setFileMetadata(destFile, Object.assign({}, originalMetadata, metadata))
 
-    const fileStat = await fs.lstat(destFile)
+    const fileStat = await fsp.lstat(destFile)
     const eTag = await this.etag(destFile, fileStat)
 
     return {
@@ -277,7 +279,7 @@ export class FileBackend implements StorageBackendAdapter {
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
     const promises = prefixes.map((prefix) => {
-      return fs.rm(this.resolveSecurePath(`${bucket}/${prefix}`))
+      return removePath(this.resolveSecurePath(`${bucket}/${prefix}`))
     })
     const results = await Promise.allSettled(promises)
 
@@ -286,9 +288,6 @@ export class FileBackend implements StorageBackendAdapter {
 
     results.forEach((result, index) => {
       if (result.status === 'rejected') {
-        if (result.reason.code === 'ENOENT') {
-          return
-        }
         throw result.reason
       } else {
         // Add parent directory of successfully deleted file
@@ -320,7 +319,7 @@ export class FileBackend implements StorageBackendAdapter {
   ): Promise<ObjectMetadata> {
     const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
 
-    const data = await fs.stat(file)
+    const data = await fsp.stat(file)
     const { cacheControl, contentType } = await this.getFileMetadata(file)
     const lastModified = data.mtime
     const eTag = await this.etag(file, data)
@@ -356,8 +355,8 @@ export class FileBackend implements StorageBackendAdapter {
         'metadata.json'
       )
     )
-    await fsExtra.ensureDir(multiPartFolder)
-    await fsExtra.writeFile(multipartFile, JSON.stringify({ contentType, cacheControl }))
+    await ensureDir(multiPartFolder)
+    await fsp.writeFile(multipartFile, JSON.stringify({ contentType, cacheControl }))
 
     return uploadId
   }
@@ -380,7 +379,7 @@ export class FileBackend implements StorageBackendAdapter {
       )
     )
 
-    const writeStream = fsExtra.createWriteStream(partPath)
+    const writeStream = fs.createWriteStream(partPath)
 
     await pipeline(body, writeStream)
 
@@ -415,7 +414,7 @@ export class FileBackend implements StorageBackendAdapter {
           `part-${part.PartNumber}`
         )
       )
-      const partExists = await fsExtra.pathExists(partFilePath)
+      const partExists = await pathExists(partFilePath)
 
       if (partExists) {
         const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
@@ -433,7 +432,7 @@ export class FileBackend implements StorageBackendAdapter {
     finalParts.sort((a, b) => parseInt(a.split('-')[1]) - parseInt(b.split('-')[1]))
 
     const multipartStream = this.mergePartStreams(finalParts)
-    const metadataContent = await fsExtra.readFile(
+    const metadataContent = await fsp.readFile(
       this.resolveSecurePath(
         path.join(
           'multiparts',
@@ -457,7 +456,7 @@ export class FileBackend implements StorageBackendAdapter {
       metadata.cacheControl
     )
 
-    fsExtra.remove(this.resolveSecurePath(path.join('multiparts', uploadId))).catch(() => {
+    removePath(this.resolveSecurePath(path.join('multiparts', uploadId))).catch(() => {
       // no-op
     })
 
@@ -477,7 +476,7 @@ export class FileBackend implements StorageBackendAdapter {
   ): Promise<void> {
     const multiPartFolder = this.resolveSecurePath(path.join('multiparts', uploadId))
 
-    await fsExtra.remove(multiPartFolder)
+    await removePath(multiPartFolder)
 
     // Clean up empty parent directories
     try {
@@ -523,7 +522,7 @@ export class FileBackend implements StorageBackendAdapter {
     const etag = await this.computeMd5(partFilePath)
     await this.setMetadataAttr(partFilePath, METADATA_ATTR_KEYS[platform]['etag'], etag)
 
-    const fileStat = await fs.lstat(partFilePath)
+    const fileStat = await fsp.lstat(partFilePath)
 
     return {
       eTag: etag,
@@ -607,7 +606,7 @@ export class FileBackend implements StorageBackendAdapter {
    */
   protected async isEmptyDirectory(dirPath: string): Promise<boolean> {
     try {
-      const directory = await fs.opendir(dirPath)
+      const directory = await fsp.opendir(dirPath)
       const entry = await directory.read()
       await directory.close()
 
@@ -629,7 +628,7 @@ export class FileBackend implements StorageBackendAdapter {
       }
 
       // Check if directory exists
-      const exists = await fs.pathExists(dirPath)
+      const exists = await pathExists(dirPath)
       if (!exists) {
         return
       }
@@ -638,7 +637,7 @@ export class FileBackend implements StorageBackendAdapter {
       const isEmpty = await this.isEmptyDirectory(dirPath)
       if (isEmpty) {
         // Remove empty directory - using fs.remove for better cross-platform compatibility
-        await fs.remove(dirPath)
+        await removePath(dirPath)
 
         // Recursively check parent directory
         const parentDir = path.dirname(dirPath)
@@ -694,7 +693,7 @@ export class FileBackend implements StorageBackendAdapter {
     return normalizedPath
   }
 
-  private async etag(file: string, stats: fs.Stats): Promise<string> {
+  private async etag(file: string, stats: Stats): Promise<string> {
     if (this.etagAlgorithm === 'md5') {
       const checksum = await this.computeMd5(file)
       return `"${checksum}"`

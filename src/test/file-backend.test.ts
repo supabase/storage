@@ -1,4 +1,5 @@
-import fs from 'fs-extra'
+import * as fsp from 'node:fs/promises'
+import { removePath } from '@internal/fs'
 import * as xattr from 'fs-xattr'
 import os from 'os'
 import path from 'path'
@@ -18,7 +19,7 @@ describe('FileBackend xattr metadata', () => {
   })
 
   it('uses a distinct linux xattr key for etag', async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
     const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
     const originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
     const originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
@@ -62,12 +63,12 @@ describe('FileBackend xattr metadata', () => {
       } else {
         process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
       }
-      await fs.remove(tmpDir)
+      await removePath(tmpDir)
     }
   })
 
   it('reads linux etag xattr during multipart completion', async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
     const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
     const originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
     const originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
@@ -99,8 +100,8 @@ describe('FileBackend xattr metadata', () => {
         withOptionalVersion('key', 'v1')
       )
       const partPath = path.join(partDir, 'part-1')
-      await fs.ensureDir(partDir)
-      await fs.writeFile(partPath, 'hello')
+      await fsp.mkdir(partDir, { recursive: true })
+      await fsp.writeFile(partPath, 'hello')
 
       const xattrGet = xattr.get as jest.Mock
       xattrGet.mockImplementation((_file: string, attribute: string) => {
@@ -153,7 +154,7 @@ describe('FileBackend xattr metadata', () => {
       } else {
         process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
       }
-      await fs.remove(tmpDir)
+      await removePath(tmpDir)
     }
   })
 })
@@ -172,7 +173,7 @@ describe('FileBackend resolveSecurePath unit', () => {
     ).resolveSecurePath(relativePath)
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
     originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
     originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
     process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
@@ -193,7 +194,7 @@ describe('FileBackend resolveSecurePath unit', () => {
       process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
     }
 
-    await fs.remove(tmpDir)
+    await removePath(tmpDir)
   })
 
   it('resolves safe paths under storage root', () => {
@@ -270,7 +271,7 @@ describe('FileBackend traversal protection', () => {
   let escapePrefix: string
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
     originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
     originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
     process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
@@ -292,8 +293,8 @@ describe('FileBackend traversal protection', () => {
       process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
     }
 
-    await fs.remove(tmpDir)
-    await fs.remove(path.join('/tmp', escapePrefix))
+    await removePath(tmpDir)
+    await removePath(path.join('/tmp', escapePrefix))
   })
 
   it('rejects traversal key in multipart create with InvalidKey', async () => {
@@ -417,7 +418,7 @@ describe('FileBackend lastModified', () => {
   let originalFilePath: string | undefined
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
     originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
     originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
     process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
@@ -437,7 +438,7 @@ describe('FileBackend lastModified', () => {
     } else {
       process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
     }
-    await fs.remove(tmpDir)
+    await removePath(tmpDir)
   })
 
   it('headObject/getObject should return mtime as lastModified', async () => {
@@ -455,9 +456,9 @@ describe('FileBackend lastModified', () => {
     )
 
     const filePath = path.join(tmpDir, withOptionalVersion(`${bucket}/${key}`, version))
-    const stat = await fs.stat(filePath)
+    const stat = await fsp.stat(filePath)
     const knownMtime = new Date(stat.birthtimeMs + 60_000) // mtime must be in the future
-    await fs.utimes(filePath, knownMtime, knownMtime)
+    await fsp.utimes(filePath, knownMtime, knownMtime)
 
     const headResult = await backend.headObject(bucket, key, version)
     expect(headResult.lastModified).toEqual(knownMtime)

@@ -299,15 +299,15 @@ export class ObjectScanner {
         beforeDate: options.before,
       })
 
-      if (result.keys.length === 0) {
-        break
-      }
-
       nextToken = result.nextToken
 
-      yield result.keys.filter((k) => {
+      const keys = result.keys.filter((k) => {
         return k.name && !k.name.endsWith('.info')
       })
+
+      if (keys.length > 0) {
+        yield keys
+      }
 
       if (!nextToken) {
         break

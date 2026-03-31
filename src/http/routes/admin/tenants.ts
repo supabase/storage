@@ -524,15 +524,33 @@ export default async function routes(fastify: FastifyInstance) {
     }
   )
 
-  fastify.delete<tenantRequestInterface>(
-    '/:tenantId',
-    { schema: { tags: ['tenant'] } },
-    async (request, reply) => {
-      await multitenantKnex('tenants').del().where('id', request.params.tenantId)
-      deleteTenantConfig(request.params.tenantId)
-      reply.code(204).send()
-    }
-  )
+  fastify.register(async (f) => {
+    const defaultJsonParser = f.getDefaultJsonParser(
+      f.initialConfig.onProtoPoisoning ?? 'error',
+      f.initialConfig.onConstructorPoisoning ?? 'error'
+    )
+
+    f.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
+      if (!body) {
+        done(null, null)
+        return
+      }
+
+      const jsonBody = typeof body === 'string' ? body : body.toString('utf8')
+
+      defaultJsonParser(request, jsonBody, done)
+    })
+
+    f.delete<tenantRequestInterface>(
+      '/:tenantId',
+      { schema: { tags: ['tenant'] } },
+      async (request, reply) => {
+        await multitenantKnex('tenants').del().where('id', request.params.tenantId)
+        deleteTenantConfig(request.params.tenantId)
+        reply.code(204).send()
+      }
+    )
+  })
 
   fastify.get<tenantRequestInterface>(
     '/:tenantId/migrations',

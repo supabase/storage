@@ -132,12 +132,36 @@ export default async function routes(fastify: FastifyInstance) {
           const disableContentParser = routesByMethod?.some(
             (route) => route.disableContentTypeParser
           )
+          const allowEmptyJsonBody = routesByMethod?.some((route) => route.allowEmptyJsonBody)
 
           if (disableContentParser) {
             localFastify.addContentTypeParser(
               ['application/json', 'text/plain', 'application/xml'],
               function (request, payload, done) {
                 done(null)
+              }
+            )
+          } else if (allowEmptyJsonBody) {
+            const defaultJsonParser = localFastify.getDefaultJsonParser(
+              localFastify.initialConfig.onProtoPoisoning ?? 'error',
+              localFastify.initialConfig.onConstructorPoisoning ?? 'error'
+            )
+
+            localFastify.addContentTypeParser(
+              'application/json',
+              { parseAs: 'string' },
+              (request, body, done) => {
+                const requestUrl = new URL(request.url, 'http://storage.local')
+                const allowsEmptyBody = requestUrl.searchParams.has('uploads')
+
+                if (!body && allowsEmptyBody) {
+                  done(null, null)
+                  return
+                }
+
+                const jsonBody = typeof body === 'string' ? body : body.toString('utf8')
+
+                defaultJsonParser(request, jsonBody, done)
               }
             )
           }

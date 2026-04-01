@@ -91,6 +91,7 @@ export abstract class Queue {
       pgQueueReadWriteTimeout,
       pgQueueConcurrentTasksPerQueue,
       pgQueueMaxConnections,
+      databaseApplicationName,
     } = getConfig()
 
     let url = pgQueueConnectionURL || databaseURL
@@ -108,6 +109,7 @@ export abstract class Queue {
       min: 0,
       max: pgQueueMaxConnections,
       connectionString: url,
+      application_name: databaseApplicationName,
       statement_timeout: pgQueueReadWriteTimeout > 0 ? pgQueueReadWriteTimeout : undefined,
     })
 

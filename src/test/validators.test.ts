@@ -1,6 +1,7 @@
 import Fastify, { FastifyInstance } from 'fastify'
 import { setErrorHandler } from '../http/error-handler'
 import { headerValidator } from '../http/plugins/header-validator'
+import { StorageBackendError } from '../internal/errors'
 import { validateXRobotsTag } from '../storage/validators/x-robots-tag'
 
 describe('header-validator plugin', () => {
@@ -96,6 +97,17 @@ describe('header-validator plugin', () => {
       'blah',
       'blah',
     ])
+  })
+
+  it('should close the connection when a renderable error requests it', async () => {
+    app.get('/test-close-connection', async () => {
+      throw StorageBackendError.fromError(new Error('socket hang up')).withConnectionClose()
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/test-close-connection' })
+
+    expect(response.statusCode).toBe(500)
+    expect(response.headers.connection).toBe('close')
   })
 })
 

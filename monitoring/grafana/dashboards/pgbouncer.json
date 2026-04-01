@@ -3743,12 +3743,7 @@
   "preload": false,
   "refresh": "30s",
   "schemaVersion": 41,
-  "tags": [
-    "pgbouncer",
-    "postgresql",
-    "database",
-    "connection-pooling"
-  ],
+  "tags": ["pgbouncer", "postgresql", "database", "connection-pooling"],
   "templating": {
     "list": [
       {

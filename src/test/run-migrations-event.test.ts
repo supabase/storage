@@ -1,4 +1,5 @@
 const mockGetTenantConfig = jest.fn()
+const mockDeleteTenantConfig = jest.fn()
 const mockAreMigrationsUpToDate = jest.fn()
 const mockRunMigrationsOnTenant = jest.fn()
 const mockUpdateTenantMigrationsState = jest.fn()
@@ -7,6 +8,7 @@ const mockInfo = jest.fn()
 const mockError = jest.fn()
 
 jest.mock('@internal/database', () => ({
+  deleteTenantConfig: mockDeleteTenantConfig,
   getTenantConfig: mockGetTenantConfig,
   TenantMigrationStatus: {
     COMPLETED: 'COMPLETED',
@@ -79,6 +81,10 @@ describe('RunMigrationsOnTenants.handle', () => {
   it('runs migrations and marks the tenant completed on success', async () => {
     await expect(RunMigrationsOnTenants.handle(makeJob() as never)).resolves.toBeUndefined()
 
+    expect(mockDeleteTenantConfig).toHaveBeenCalledWith('tenant-a')
+    expect(mockDeleteTenantConfig.mock.invocationCallOrder[0]).toBeLessThan(
+      mockGetTenantConfig.mock.invocationCallOrder[0]
+    )
     expect(mockRunMigrationsOnTenant).toHaveBeenCalledWith({
       databaseUrl: 'postgres://tenant-db',
       tenantId: 'tenant-a',

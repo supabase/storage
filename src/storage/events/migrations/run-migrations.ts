@@ -1,4 +1,4 @@
-import { getTenantConfig, TenantMigrationStatus } from '@internal/database'
+import { deleteTenantConfig, getTenantConfig, TenantMigrationStatus } from '@internal/database'
 import {
   areMigrationsUpToDate,
   DBMigration,
@@ -46,6 +46,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
 
   static async handle(job: JobWithMetadata<RunMigrationsPayload>) {
     const tenantId = job.data.tenant.ref
+    deleteTenantConfig(tenantId)
     const tenant = await getTenantConfig(tenantId)
 
     const migrationsUpToDate = await areMigrationsUpToDate(tenantId)

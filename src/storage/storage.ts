@@ -285,8 +285,12 @@ export class Storage {
     }
 
     // ensure delete permissions
-    await this.db.testPermission((db) => {
-      return db.deleteObject(bucketId, objects[0].id!)
+    await this.db.testPermission(async (db) => {
+      const deleted = await db.deleteObject(bucketId, objects[0].name)
+
+      if (!deleted) {
+        throw ERRORS.NoSuchKey(objects[0].name)
+      }
     })
 
     // use queue to recursively delete all objects created before the specified time

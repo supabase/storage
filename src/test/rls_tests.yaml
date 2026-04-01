@@ -182,6 +182,18 @@ tests:
         status: 400
         message: "Object not found"
 
+  - description: "Will not empty a bucket without delete permission on objects"
+    policies:
+      - read_only_all_buckets
+      - read_only_all_objects
+    asserts:
+      - operation: object.seed
+        status: 200
+
+      - operation: bucket.empty
+        status: 400
+        error: "Object not found"
+
   - description: "Will only able to insert objects when authenticated"
     policies:
       - insert_only_all_objects

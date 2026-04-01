@@ -555,7 +555,9 @@ describe('Tenant configs', () => {
     }
 
     try {
-      knexTableSpy.mockReturnValue(queryBuilder as any)
+      knexTableSpy.mockReturnValue(
+        queryBuilder as unknown as ReturnType<typeof multitenantKnex.table>
+      )
 
       for (const tenantId of tenantIds) {
         await tenantModule.getTenantConfig(tenantId)
@@ -615,7 +617,9 @@ describe('Tenant configs', () => {
     }
 
     try {
-      knexTableSpy.mockReturnValue(queryBuilder as any)
+      knexTableSpy.mockReturnValue(
+        queryBuilder as unknown as ReturnType<typeof multitenantKnex.table>
+      )
       await assertLogicalLookupMetrics({
         addSpy,
         backendCallSpy: queryBuilder.abortOnSignal,

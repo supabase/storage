@@ -39,6 +39,11 @@ interface PingObject {
   event: 'ping'
 }
 
+interface ErrorObject {
+  event: 'error'
+  error: string
+}
+
 async function main() {
   const action = process.argv[2]
 
@@ -163,9 +168,14 @@ async function writeStreamToJsonArray(
   return new Promise((resolve, reject) => {
     let receivedAnyData = false
 
-    stream.on('data', (data: OrphanObject | PingObject) => {
+    stream.on('data', (data: OrphanObject | PingObject | ErrorObject) => {
       if (data.event === 'ping') {
         console.log('Received ping event, ignoring')
+        return
+      }
+
+      if (data.event === 'error') {
+        console.error('Server error:', data.error)
         return
       }
 

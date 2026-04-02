@@ -370,43 +370,63 @@ export class S3Backend implements StorageBackendAdapter {
       beforeDate?: Date
     }
   ): Promise<{ keys: { name: string; size: number }[]; nextToken?: string }> {
-    try {
-      const command = new ListObjectsV2Command({
-        Bucket: bucket,
-        Prefix: options?.prefix,
-        Delimiter: options?.delimiter,
-        ContinuationToken: options?.nextToken || undefined,
-        StartAfter: options?.startAfter,
-      })
-      const data = await this.client.send(command)
-      const keys =
-        data.Contents?.filter((ele) => {
-          if (options?.beforeDate) {
-            if (ele.LastModified && ele.LastModified < options.beforeDate) {
-              return ele.Key as string
-            }
-            return false
-          }
-          return ele.Key
-        }).map((ele) => {
-          if (options?.prefix) {
-            return {
-              // remove prefix and leading slash if present
-              name: (ele.Key as string).replace(options.prefix, '').replace(/^\//, ''),
-              size: ele.Size as number,
-            }
-          }
+    // Fast-xml-parser 5.5.7 has an entity expansion limit of 1000.
+    // S3's ETag fields contain 2 literal quotes each (counted as 2 entities),
+    // plus any special XML characters in object keys (&, <, >, ", ').
+    // We start at 500 objects (= 1000 entity limit / 2 quotes per ETag)
+    // and reduce by 100 on each retry if we hit the limit.
+    let maxKeys = 500
 
-          return { name: ele.Key as string, size: ele.Size as number }
-        }) || []
+    while (maxKeys >= 100) {
+      try {
+        const command = new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: options?.prefix,
+          Delimiter: options?.delimiter,
+          ContinuationToken: options?.nextToken || undefined,
+          StartAfter: options?.startAfter,
+          MaxKeys: maxKeys,
+        })
+        const data = await this.client.send(command)
+        const keys =
+          data.Contents?.filter((ele) => {
+            if (options?.beforeDate) {
+              if (ele.LastModified && ele.LastModified < options.beforeDate) {
+                return ele.Key as string
+              }
+              return false
+            }
+            return ele.Key
+          }).map((ele) => {
+            if (options?.prefix) {
+              return {
+                // remove prefix and leading slash if present
+                name: (ele.Key as string).replace(options.prefix, '').replace(/^\//, ''),
+                size: ele.Size as number,
+              }
+            }
 
-      return {
-        keys,
-        nextToken: data.NextContinuationToken,
+            return { name: ele.Key as string, size: ele.Size as number }
+          }) || []
+
+        return {
+          keys,
+          nextToken: data.NextContinuationToken,
+        }
+      } catch (e) {
+        // Check if this is an entity expansion limit error from fast-xml-parser
+        if ((e as Error).message?.includes('Entity expansion limit exceeded')) {
+          maxKeys -= 100
+          if (maxKeys > 0) {
+            continue
+          }
+        }
+        throw StorageBackendError.fromError(e)
       }
-    } catch (e) {
-      throw StorageBackendError.fromError(e)
     }
+
+    // This should never be reached due to the check above, but TypeScript needs it
+    throw new Error('Unexpected error in S3 list operation')
   }
 
   /**

@@ -51,6 +51,7 @@ interface TestCaseAssert {
     | 'upload.signed'
     | 'upload.s3.multipart'
     | 'bucket.create'
+    | 'bucket.empty'
     | 'bucket.get'
     | 'bucket.list'
     | 'bucket.delete'
@@ -58,6 +59,7 @@ interface TestCaseAssert {
     | 'object.delete'
     | 'object.get'
     | 'object.list'
+    | 'object.seed'
     | 'object.move'
     | 'object.copy'
 
@@ -113,6 +115,8 @@ const {
 const backend = createStorageBackend(storageBackendType)
 const client = backend.client
 let appInstance: FastifyInstance
+let currentUserId: string
+let currentStorage: Storage
 
 jest.setTimeout(10000)
 
@@ -138,20 +142,18 @@ describe('RLS policies', () => {
     })
   })
 
-  let userId: string
   let jwt: string
-  let storage: Storage
   beforeEach(async () => {
     appInstance = app()
-    userId = randomUUID()
-    jwt = (await signJWT({ sub: userId, role: 'authenticated' }, jwtSecret, '1h')) as string
+    currentUserId = randomUUID()
+    jwt = (await signJWT({ sub: currentUserId, role: 'authenticated' }, jwtSecret, '1h')) as string
 
     await db.table('auth.users').insert({
       instance_id: '00000000-0000-0000-0000-000000000000',
-      id: userId,
+      id: currentUserId,
       aud: 'authenticated',
       role: 'authenticated',
-      email: userId + '@supabase.io',
+      email: currentUserId + '@supabase.io',
     })
 
     const adminUser = await getServiceKeyUser(tenantId)
@@ -168,7 +170,7 @@ describe('RLS policies', () => {
       tenantId,
     })
 
-    storage = new Storage(backend, knexDB, new TenantLocation(storageS3Bucket))
+    currentStorage = new Storage(backend, knexDB, new TenantLocation(storageS3Bucket))
   })
 
   afterEach(async () => {
@@ -178,7 +180,7 @@ describe('RLS policies', () => {
 
   afterAll(async () => {
     await db.destroy()
-    await (storage.db as StorageKnexDB).connection.dispose()
+    await (currentStorage.db as StorageKnexDB).connection.dispose()
   })
 
   testSpec.tests.forEach((_test, index) => {
@@ -192,7 +194,7 @@ describe('RLS policies', () => {
 
       const testScopedSpec = yaml.load(
         renderRlsTemplate(content, {
-          uid: userId,
+          uid: currentUserId,
           bucketName,
           objectName,
           runId,
@@ -217,11 +219,11 @@ describe('RLS policies', () => {
 
       // Prepare
       if (test.setup?.create_bucket !== false) {
-        await storage.createBucket({
+        await currentStorage.createBucket({
           name: bucketName,
           id: bucketName,
           public: false,
-          owner: userId,
+          owner: currentUserId,
         })
         console.log(`Created bucket ${bucketName}`)
       }
@@ -231,11 +233,11 @@ describe('RLS policies', () => {
         for (const assert of test.asserts) {
           if (assert.bucketName) {
             bucketName = assert.bucketName
-            await storage.createBucket({
+            await currentStorage.createBucket({
               name: bucketName,
               id: bucketName,
               public: false,
-              owner: userId,
+              owner: currentUserId,
             })
             console.log(`Created bucket ${bucketName}`)
           }
@@ -398,6 +400,14 @@ async function runOperation(
           name: bucket,
         },
       })
+    case 'bucket.empty':
+      return appInstance.inject({
+        method: 'POST',
+        url: `/bucket/${bucket}/empty`,
+        headers: {
+          authorization: `Bearer ${jwt}`,
+        },
+      })
     case 'bucket.update':
       console.log(`updating bucket ${bucket}`)
       return appInstance.inject({
@@ -449,6 +459,17 @@ async function runOperation(
           },
         },
       })
+    case 'object.seed':
+      await currentStorage.db.createObject({
+        bucket_id: bucket,
+        name: objectName,
+        owner: currentUserId,
+        metadata: { size: 1 },
+        user_metadata: null,
+        version: randomUUID(),
+      })
+
+      return { statusCode: 200, body: '{}', json: () => ({}) }
     case 'object.move':
       return appInstance.inject({
         method: 'POST',

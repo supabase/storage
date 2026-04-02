@@ -491,7 +491,7 @@ export const ERRORS = {
       httpStatusCode: 500,
       message,
       originalError,
-    }),
+    }).withConnectionClose(),
   NoSuchCatalog: (name: string) => {
     return new StorageBackendError({
       code: ErrorCode.NoSuchCatalog,

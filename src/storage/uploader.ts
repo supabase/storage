@@ -1,10 +1,10 @@
-import { ERRORS } from '@internal/errors'
+import { ERRORS, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { fileUploadedSuccess, fileUploadStarted } from '@internal/monitoring/metrics'
 import { StorageObjectLocator } from '@storage/locator'
 import { randomUUID } from 'crypto'
 import { FastifyRequest } from 'fastify'
-import { Readable } from 'stream'
+import { PassThrough, Readable } from 'stream'
 import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database } from './database'
@@ -48,6 +48,13 @@ export interface CanUploadOptions {
 }
 
 const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
+const CLOSE_CONNECTION_ON_ERROR = Symbol('closeConnectionOnError')
+
+type UploadBodyProxy = PassThrough & {
+  [CLOSE_CONNECTION_ON_ERROR]?: boolean
+}
+
+type UploadBodySource = FastifyRequest['raw']
 
 /**
  * Uploader
@@ -110,6 +117,7 @@ export class Uploader {
    * @param options
    */
   async upload(request: UploadRequest) {
+    const file = request.file
     const version = await this.prepareUpload({
       bucketId: request.bucketId,
       objectName: request.objectName,
@@ -117,15 +125,13 @@ export class Uploader {
       isUpsert: request.isUpsert,
       userMetadata: request.userMetadata,
       metadata: {
-        mimetype: request.file.mimeType,
-        contentLength: request.file.declaredContentLength ?? request.file.contentLength,
+        mimetype: file.mimeType,
+        contentLength: file.declaredContentLength ?? file.contentLength,
       },
       uploadType: request.uploadType,
     })
 
     try {
-      const file = request.file
-
       const s3Key = this.location.getKeyLocation({
         tenantId: this.db.tenantId,
         bucketId: request.bucketId,
@@ -165,7 +171,7 @@ export class Uploader {
         version,
         reqId: this.db.reqId,
       })
-      throw e
+      throw shouldCloseConnectionAfterResponse(file.body) ? withConnectionClose(e) : e
     }
   }
 
@@ -341,6 +347,72 @@ function getKnownRequestContentLength(request: FastifyRequest): number | undefin
   return contentLength
 }
 
+function createUploadBodyProxy(body: UploadBodySource) {
+  const proxy = new PassThrough() as UploadBodyProxy
+  let bodyEnded = false
+  const destroy = proxy.destroy.bind(proxy)
+
+  proxy.destroy = ((error?: Error) => {
+    if (error) {
+      proxy[CLOSE_CONNECTION_ON_ERROR] = true
+    }
+
+    return destroy(error)
+  }) as typeof proxy.destroy
+
+  const onBodyError = (err: Error) => {
+    if (!proxy.destroyed) {
+      proxy.destroy(err)
+    }
+  }
+
+  const onBodyEnd = () => {
+    bodyEnded = true
+  }
+
+  const onBodyClose = () => {
+    if (!bodyEnded && !body.readableEnded && !proxy.destroyed) {
+      proxy.destroy(new Error('Request stream closed before upload could complete'))
+    }
+  }
+
+  const onProxyError = () => {
+    body.unpipe(proxy)
+  }
+
+  const cleanup = () => {
+    body.unpipe(proxy)
+    body.off('aborted', onBodyClose)
+    body.off('close', onBodyClose)
+    body.off('end', onBodyEnd)
+    body.off('error', onBodyError)
+    proxy.off('error', onProxyError)
+    proxy.off('close', cleanup)
+  }
+
+  body.on('aborted', onBodyClose)
+  body.on('close', onBodyClose)
+  body.on('end', onBodyEnd)
+  body.on('error', onBodyError)
+  proxy.on('error', onProxyError)
+  proxy.on('close', cleanup)
+  body.pipe(proxy)
+
+  return proxy
+}
+
+function shouldCloseConnectionAfterResponse(body: Readable) {
+  return Boolean((body as UploadBodyProxy)[CLOSE_CONNECTION_ON_ERROR])
+}
+
+function withConnectionClose(error: unknown) {
+  if (error instanceof StorageBackendError) {
+    return error.withConnectionClose()
+  }
+
+  return StorageBackendError.fromError(error).withConnectionClose()
+}
+
 /**
  * Extracts the file information from the request
  * @param request
@@ -430,7 +502,10 @@ export async function fileUploadFromRequest(
     }
   } else {
     // just assume it's a binary file
-    body = request.raw
+    if (!request.raw || request.raw.closed || request.raw.destroyed || request.raw.readableEnded) {
+      throw ERRORS.NoContentProvided(new Error('Request stream closed before upload could begin'))
+    }
+
     mimeType = request.headers['content-type'] || 'application/octet-stream'
     cacheControl = request.headers['cache-control'] ?? 'no-cache'
 
@@ -457,6 +532,7 @@ export async function fileUploadFromRequest(
     // reaching the backend when they exceed the limit.
     // Unknown-size binary uploads do not have a later truncation signal.
     isTruncated = () => false
+    body = createUploadBodyProxy(request.raw)
   }
 
   // Capture the declared content-length for RLS metadata purposes.

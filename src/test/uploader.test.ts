@@ -39,6 +39,7 @@ describe('fileUploadFromRequest', () => {
     expect(requestFile).toHaveBeenCalledWith({ limits: { fileSize: 150 } })
     expect(upload.body).toBe(file)
     expect(upload.contentLength).toBeUndefined()
+    expect(upload.declaredContentLength).toBe(5 * 1024 * 1024 * 1024 + 512)
     expect(upload.mimeType).toBe('image/png')
     expect(upload.cacheControl).toBe('max-age=3600')
     expect(upload.userMetadata).toEqual({ source: 'multipart' })
@@ -66,6 +67,8 @@ describe('fileUploadFromRequest', () => {
       }
     )
 
+    expect(upload.contentLength).toBeUndefined()
+    expect(upload.declaredContentLength).toBe(123)
     expect(upload.isTruncated()).toBe(false)
   })
 
@@ -139,6 +142,8 @@ describe('fileUploadFromRequest', () => {
     )
 
     expect(upload.body).not.toBe(raw)
+    expect(upload.contentLength).toBeUndefined()
+    expect(upload.declaredContentLength).toBe(7)
 
     const proxyError = once(upload.body, 'error')
     upload.body.destroy(new Error('downstream failed'))
@@ -305,5 +310,63 @@ describe('fileUploadFromRequest', () => {
     } finally {
       objectAdminDeleteSendSpy.mockRestore()
     }
+  })
+
+  test('keeps declared request size for permission checks but omits backend size for request-backed uploads', async () => {
+    const capturedWrites: Array<{ metadata?: { contentLength?: number } }> = []
+    const backend = {
+      uploadObject: jest.fn().mockResolvedValue({
+        httpStatusCode: 200,
+        cacheControl: 'no-cache',
+        eTag: '"etag"',
+        mimetype: 'text/plain',
+        contentLength: 7,
+        lastModified: new Date(),
+        size: 7,
+        contentRange: undefined,
+      }),
+    }
+    const uploader = new Uploader(
+      backend as any,
+      {
+        tenantId: 'stub-tenant',
+        reqId: 'req-1',
+        tenant: () => ({ ref: 'stub-tenant' }),
+        testPermission: jest.fn(async (fn) =>
+          fn({
+            createObject: jest.fn(async (payload: { metadata?: { contentLength?: number } }) => {
+              capturedWrites.push(payload)
+            }),
+            upsertObject: jest.fn(async (payload: { metadata?: { contentLength?: number } }) => {
+              capturedWrites.push(payload)
+            }),
+          })
+        ),
+      } as any,
+      new TenantLocation('test-bucket')
+    )
+    const completeUploadSpy = jest.spyOn(uploader, 'completeUpload').mockResolvedValue({
+      metadata: { eTag: '"etag"' },
+      obj: { id: 'obj-id' },
+    } as any)
+
+    await uploader.upload({
+      bucketId: 'bucket',
+      objectName: 'test.txt',
+      uploadType: 'standard',
+      file: {
+        body: Readable.from(['payload']),
+        mimeType: 'text/plain',
+        cacheControl: 'no-cache',
+        declaredContentLength: 7,
+        isTruncated: () => false,
+      },
+    })
+
+    expect(capturedWrites[0]?.metadata?.contentLength).toBe(7)
+    expect(backend.uploadObject).toHaveBeenCalledTimes(1)
+    expect(backend.uploadObject.mock.calls[0][7]).toBeUndefined()
+
+    completeUploadSpy.mockRestore()
   })
 })

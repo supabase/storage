@@ -531,15 +531,18 @@ export async function fileUploadFromRequest(
     // Known-size binary uploads are rejected before
     // reaching the backend when they exceed the limit.
     // Unknown-size binary uploads do not have a later truncation signal.
+    //
+    // Keep the declared request size separate from the backend upload size:
+    // request-backed uploads should continue using multipart upstream writes
+    // instead of direct PutObject, even when the client sent Content-Length.
     isTruncated = () => false
     body = createUploadBodyProxy(request.raw)
+    fileContentLength = undefined
   }
 
   // Capture the declared content-length for RLS metadata purposes.
-  // For binary uploads fileContentLength is already set (with size enforcement applied above).
-  // For multipart, size enforcement is handled by the fileSize limit in form parsing, so we
-  // read the header separately and only use it for RLS — never for the actual S3 upload.
-  const declaredContentLength = fileContentLength ?? getKnownRequestContentLength(request)
+  // Request-backed uploads never forward this value to the backend upload path.
+  const declaredContentLength = getKnownRequestContentLength(request)
 
   // Detect if the request stream closed before we could pass it to the storage backend
   // Without this check, the storage backend (S3) would throw a 500 "Premature close" error

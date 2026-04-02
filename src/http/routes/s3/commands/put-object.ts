@@ -183,7 +183,11 @@ export default function PutObject(s3Router: S3Router) {
               ContentEncoding: req.Headers?.['content-encoding'],
               Metadata: metadata,
             },
-            { signal: ctx.signals.body, isTruncated: uploadRequest.isTruncated }
+            {
+              signal: ctx.signals.body,
+              isTruncated: uploadRequest.isTruncated,
+              declaredContentLength: uploadRequest.declaredContentLength,
+            }
           )
         }
       )

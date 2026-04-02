@@ -22,11 +22,11 @@
     "infra:restart:oriole": "npm run infra:stop && npm run infra:start:oriole"
   },
   "dependencies": {
-    "@aws-sdk/client-ecs": "^3.979.0",
-    "@aws-sdk/client-s3": "^3.979.0",
-    "@aws-sdk/client-s3vectors": "^3.979.0",
-    "@aws-sdk/lib-storage": "^3.979.0",
-    "@aws-sdk/s3-request-presigner": "^3.979.0",
+    "@aws-sdk/client-ecs": "^3.1022.0",
+    "@aws-sdk/client-s3": "^3.1022.0",
+    "@aws-sdk/client-s3vectors": "^3.1022.0",
+    "@aws-sdk/lib-storage": "^3.1022.0",
+    "@aws-sdk/s3-request-presigner": "^3.1022.0",
     "@fastify/accepts": "^5.0.4",
     "@fastify/multipart": "^9.4.0",
     "@fastify/otel": "^0.17.1",
@@ -83,7 +83,7 @@
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
-    "@aws-sdk/s3-presigned-post": "^3.979.0",
+    "@aws-sdk/s3-presigned-post": "^3.1022.0",
     "@babel/preset-env": "^7.26.9",
     "@babel/preset-typescript": "^7.27.0",
     "@biomejs/biome": "^2.4.4",
@@ -119,9 +119,6 @@
   "author": "Supabase",
   "license": "ISC",
   "overrides": {
-    "@aws-sdk/xml-builder": {
-      "fast-xml-parser": "5.5.7"
-    },
     "filelist@1": {
       "minimatch": "^5.1.8"
     },

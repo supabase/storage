@@ -1,3 +1,4 @@
+import { StorageBackendError } from '@internal/errors'
 import { ObjectScanner } from '@storage/scanner/scanner'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FastifyReply } from 'fastify/types/reply'
@@ -122,6 +123,12 @@ export default async function routes(fastify: FastifyInstance) {
           }
         }
       } catch (e) {
+        reply.raw.write(
+          JSON.stringify({
+            event: 'error',
+            error: StorageBackendError.fromError(e),
+          }) + '\n'
+        )
         throw e
       } finally {
         respPing.clear()
@@ -174,6 +181,12 @@ export default async function routes(fastify: FastifyInstance) {
           )
         }
       } catch (e) {
+        reply.raw.write(
+          JSON.stringify({
+            event: 'error',
+            error: StorageBackendError.fromError(e),
+          }) + '\n'
+        )
         throw e
       } finally {
         respPing.clear()

@@ -17,13 +17,15 @@ describe('ObjectScanner', () => {
       name: bucketId,
     })
 
-    const maxUploads = 20
+    const maxUploads = 1100
 
-    // Create uploads
+    // Create uploads with special XML characters that contribute to entity expansion
     const result = await eachParallel(maxUploads, async (i) => {
+      // Add special XML characters to object names to increase entity count
+      const specialChars = i % 5 === 0 ? `&'<>"` : ''
       const upload = await storage.uploader.upload({
         bucketId: bucket.id,
-        objectName: randomUUID() + `-test-${i}.text`,
+        objectName: randomUUID() + `-test${specialChars}-${i}.text`,
         uploadType: 'standard',
         file: {
           body: Readable.from(Buffer.from('test')),
@@ -83,13 +85,16 @@ describe('ObjectScanner', () => {
       signal: new AbortController().signal,
     }
 
-    const maxUploads = 300
+    const maxUploads = 1100
 
-    // Create uploads
+    // Create uploads with special XML characters that contribute to entity expansion
     const result = await eachParallel(maxUploads, async (i) => {
+      // Add special XML characters to object names to increase entity count
+      // These characters (&, <, >, ", ') are escaped as XML entities in S3 responses
+      const specialChars = i % 5 === 0 ? `&'<>"` : ''
       const upload = await storage.uploader.upload({
         bucketId: bucket.id,
-        objectName: randomUUID() + `-test-${i}.text`,
+        objectName: randomUUID() + `-test${specialChars}-${i}.text`,
         uploadType: 'standard',
         file: {
           body: Readable.from(Buffer.from('test')),

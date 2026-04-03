@@ -1,6 +1,8 @@
 module.exports = {
   testSequencer: './jest.sequencer.cjs',
   transform: {
+    '^.+/node_modules/@aws-sdk/.+\\.[jt]s$': 'babel-jest',
+    '^.+/node_modules/@smithy/.+\\.[jt]s$': 'babel-jest',
     '^.+/node_modules/jose/.+\\.[jt]s$': 'babel-jest',
     '^.+/node_modules/@tus/.+\\.[jt]s$': 'babel-jest',
     '^.+/node_modules/srvx/.+\\.[jt]s$': 'babel-jest',
@@ -17,7 +19,7 @@ module.exports = {
     ],
   },
   transformIgnorePatterns: [
-    'node_modules/(?!(jose|@tus|srvx|cookie-es|@kubernetes|openid-client|oauth4webapi)/)',
+    'node_modules/(?!(jose|@tus|srvx|cookie-es|@kubernetes|openid-client|oauth4webapi|@aws-sdk|@smithy)/)',
   ],
   moduleNameMapper: {
     '^@storage/(.*)$': '<rootDir>/src/storage/$1',

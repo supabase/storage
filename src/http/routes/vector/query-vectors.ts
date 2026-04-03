@@ -112,7 +112,7 @@ export default async function routes(fastify: FastifyInstance) {
     coerceTypes: false,
   })
 
-  const perRouteValidator: FastifySchemaCompiler<any> = ({ schema }) => {
+  const perRouteValidator: FastifySchemaCompiler<unknown> = ({ schema }) => {
     const validate = ajvNoRemoval.compile(schema as object)
     return (data) => {
       const ok = validate(data)

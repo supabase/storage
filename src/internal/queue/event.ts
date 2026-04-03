@@ -21,16 +21,22 @@ export interface BasePayload {
 
 const { pgQueueEnable, region, isMultitenant } = getConfig()
 
-export type StaticThis<T extends Event<any>> = BaseEventConstructor<T>
+export type EventPayload = Omit<BasePayload, '$version'>
+type EventInstance = Event<EventPayload>
+type EventClass = abstract new (...args: never[]) => EventInstance
+type EventInput<T extends EventInstance> = Partial<Omit<T['payload'], '$version'>> & {
+  $version?: string
+}
+export type StaticThis<TPayload extends EventPayload> = BaseEventConstructor<TPayload>
 
-interface BaseEventConstructor<Base extends Event<any>> {
+interface BaseEventConstructor<TPayload extends EventPayload> {
   version: string
 
-  new (...args: any): Base
+  new (...args: never[]): Event<TPayload>
 
   send(
-    this: StaticThis<Base>,
-    payload: Omit<Base['payload'], '$version'>
+    this: StaticThis<TPayload>,
+    payload: EventInput<Event<TPayload>>
   ): Promise<string | void | null>
 
   eventName(): string
@@ -40,7 +46,7 @@ interface BaseEventConstructor<Base extends Event<any>> {
 /**
  * Base class for all events that are sent to the queue
  */
-export class Event<T extends Omit<BasePayload, '$version'>> {
+export class Event<T extends EventPayload> {
   public static readonly version: string = 'v1'
   protected static queueName = ''
   protected static allowSync = true
@@ -67,7 +73,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     return undefined
   }
 
-  static getSendOptions<T extends Event<any>>(payload: T['payload']): SendOptions | undefined {
+  static getSendOptions(payload: unknown): SendOptions | undefined {
     return undefined
   }
 
@@ -83,15 +89,20 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     // no-op
   }
 
-  static batchSend<T extends Event<any>[]>(messages: T) {
+  static batchSend<TThis extends EventClass>(
+    this: TThis & { version: string },
+    messages: Array<InstanceType<TThis>>
+  ) {
+    const eventClass = this as unknown as typeof Event
+
     if (!pgQueueEnable) {
-      if (this.allowSync) {
+      if (eventClass.allowSync) {
         return Promise.all(messages.map((message) => message.send()))
       } else {
         logger.warn(
           {
             type: 'queue',
-            eventType: this.eventName(),
+            eventType: eventClass.eventName(),
           },
           '[Queue] skipped sending batch messages'
         )
@@ -101,7 +112,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
 
     return Queue.getInstance().insert(
       messages.map((message) => {
-        const sendOptions = (this.getSendOptions(message.payload) as PgBoss.JobInsert) || {}
+        const sendOptions = (eventClass.getSendOptions(message.payload) as PgBoss.JobInsert) || {}
         if (!message.payload.$version) {
           ;(message.payload as (typeof message)['payload']).$version = this.version
         }
@@ -112,57 +123,66 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
 
         return {
           ...sendOptions,
-          name: this.getQueueName(),
+          name: eventClass.getQueueName(),
           data: message.payload,
-          deadLetter: this.deadLetterQueueName(),
+          deadLetter: eventClass.deadLetterQueueName(),
         }
       })
     )
   }
 
-  static send<T extends Event<any>>(
-    this: StaticThis<T>,
-    payload: Omit<T['payload'], '$version'>,
+  static send<TThis extends EventClass>(
+    this: TThis & { version: string },
+    payload: EventInput<InstanceType<TThis>>,
     opts?: SendOptions & { tnx?: Knex }
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
+    const payloadWithVersion = {
+      ...payload,
+      $version: payload.$version ?? this.version,
+    } as InstanceType<TThis>['payload']
+    const EventCtor = this as unknown as new (
+      payload: InstanceType<TThis>['payload']
+    ) => InstanceType<TThis>
+    const that = new EventCtor(payloadWithVersion)
     return that.send(opts)
   }
 
-  static invoke<T extends Event<any>>(
-    this: StaticThis<T>,
-    payload: Omit<T['payload'], '$version'>
+  static invoke<TThis extends EventClass>(
+    this: TThis & { version: string },
+    payload: EventInput<InstanceType<TThis>>
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
+    const payloadWithVersion = {
+      ...payload,
+      $version: payload.$version ?? this.version,
+    } as InstanceType<TThis>['payload']
+    const EventCtor = this as unknown as new (
+      payload: InstanceType<TThis>['payload']
+    ) => InstanceType<TThis>
+    const that = new EventCtor(payloadWithVersion)
     return that.invoke()
   }
 
-  static invokeOrSend<T extends Event<any>>(
-    this: StaticThis<T>,
-    payload: Omit<T['payload'], '$version'>,
+  static invokeOrSend<TThis extends EventClass>(
+    this: TThis & { version: string },
+    payload: EventInput<InstanceType<TThis>>,
     options?: SendOptions & { sendWhenError?: (error: unknown) => boolean }
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
+    const payloadWithVersion = {
+      ...payload,
+      $version: payload.$version ?? this.version,
+    } as InstanceType<TThis>['payload']
+    const EventCtor = this as unknown as new (
+      payload: InstanceType<TThis>['payload']
+    ) => InstanceType<TThis>
+    const that = new EventCtor(payloadWithVersion)
     return that.invokeOrSend(options)
   }
 
-  static handle(
-    job: Job<Event<any>['payload']> | Job<Event<any>['payload']>[],
-    opts?: { signal?: AbortSignal }
-  ) {
+  static handle(job: Job<unknown> | Job<unknown>[], opts?: { signal?: AbortSignal }) {
     throw new Error('not implemented')
   }
 
-  static async shouldSend(payload: any) {
+  static async shouldSend(payload: { tenant?: { ref?: string } } | null | undefined) {
     if (isMultitenant && payload?.tenant?.ref) {
       // Do not send an event if disabled for this specific tenant
       const tenant = await getTenantConfig(payload.tenant.ref)

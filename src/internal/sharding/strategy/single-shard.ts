@@ -1,4 +1,4 @@
-import { ResourceKind, ShardRow, ShardStatus } from '@internal/sharding/store'
+import { ResourceKind, ShardRow, ShardStats, ShardStatus } from '@internal/sharding/store'
 import { Sharder, ShardResource } from '../sharder'
 
 export class SingleShard implements Sharder {
@@ -23,14 +23,16 @@ export class SingleShard implements Sharder {
     ])
   }
 
-  shardStats(): Promise<any> {
-    return Promise.resolve({
-      shardId: 1,
-      shardKey: this.singleShard.shardKey,
-      capacity: this.singleShard.capacity,
-      used: -1,
-      free: -1,
-    })
+  shardStats(): Promise<ShardStats> {
+    return Promise.resolve([
+      {
+        shardId: '1',
+        shardKey: this.singleShard.shardKey,
+        capacity: this.singleShard.capacity,
+        used: -1,
+        free: -1,
+      },
+    ])
   }
 
   withTnx(): Sharder {
@@ -109,7 +111,7 @@ export class SingleShard implements Sharder {
     return Promise.resolve(undefined)
   }
 
-  shardStatsByKind(): Promise<any> {
-    return Promise.resolve(undefined)
+  shardStatsByKind(): Promise<ShardStats> {
+    return this.shardStats()
   }
 }

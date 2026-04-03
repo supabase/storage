@@ -25,6 +25,14 @@ export type ReservationRow = {
   created_at: string
 }
 
+export type ShardStats = Array<{
+  shardId: string
+  shardKey: string
+  capacity: number
+  used: number
+  free: number
+}>
+
 /** Factory that opens a transaction and passes a store bound to that tx */
 export interface ShardStoreFactory<Tnx = unknown> {
   withTransaction<T>(fn: (store: ShardStore) => Promise<T>): Promise<T>
@@ -101,11 +109,7 @@ export interface ShardStore {
   findShardByResourceId(tenantId: string, resourceId: string): Promise<ShardRow | null>
 
   // Stats
-  shardStats(
-    kind?: ResourceKind
-  ): Promise<
-    Array<{ shardId: string; shardKey: string; capacity: number; used: number; free: number }>
-  >
+  shardStats(kind?: ResourceKind): Promise<ShardStats>
 
   findShardById(shardId: number): Promise<ShardRow | null>
 }

@@ -46,7 +46,7 @@ export class S3CredentialsManager {
    * Keeps the in memory config cache up to date
    */
   async listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void> {
-    await pubSub.subscribe(TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL, (cacheKey) => {
+    await pubSub.subscribe<string>(TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL, (cacheKey) => {
       tenantS3CredentialsCache.delete(cacheKey)
     })
   }

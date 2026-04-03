@@ -14,7 +14,7 @@ export const setErrorHandler = (
   app: FastifyInstance,
   options?: {
     respectStatusCode?: boolean
-    formatter?: (error: StorageError) => Record<string, any>
+    formatter?: (error: StorageError) => unknown
   }
 ) => {
   app.setErrorHandler<Error>(function (error, request, reply) {

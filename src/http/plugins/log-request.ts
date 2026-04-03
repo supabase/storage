@@ -1,10 +1,16 @@
 import { logger, logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
+import { RouteGenericInterface } from 'fastify'
 import { FastifyReply } from 'fastify/types/reply'
 import { FastifyRequest } from 'fastify/types/request'
 import fastifyPlugin from 'fastify-plugin'
 
 interface RequestLoggerOptions {
   excludeUrls?: string[]
+}
+
+type RawRequestMetadata = FastifyRequest['raw'] & {
+  executionError?: Error
+  resources?: string[]
 }
 
 declare module 'fastify' {
@@ -18,8 +24,8 @@ declare module 'fastify' {
 
   interface FastifyContextConfig {
     operation?: { type: string }
-    resources?: (req: FastifyRequest<any>) => string[]
-    logMetadata?: (req: FastifyRequest<any>) => Record<string, unknown>
+    resources?(req: FastifyRequest<RouteGenericInterface>): string[]
+    logMetadata?(req: FastifyRequest<RouteGenericInterface>): Record<string, unknown>
   }
 }
 
@@ -58,11 +64,12 @@ export const logRequest = (options: RequestLoggerOptions) =>
        */
       fastify.addHook('preHandler', async (req) => {
         const resourceFromParams = Object.values(req.params || {}).join('/')
+        const rawReq = getRawRequest(req)
         const resources = getFirstDefined<string[]>(
           req.resources,
           req.routeOptions.config.resources?.(req),
-          (req.raw as any).resources,
-          resourceFromParams ? [resourceFromParams] : ([] as string[])
+          rawReq.resources,
+          resourceFromParams ? [resourceFromParams] : []
         )
 
         if (resources && resources.length > 0) {
@@ -123,7 +130,7 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
   const rId = req.id
   const cIP = req.ip
   const statusCode = options.statusCode
-  const error = (req.raw as any).executionError || req.executionError
+  const error = getRawRequest(req).executionError || req.executionError
   const tenantId = req.tenantId
 
   let reqMetadata: Record<string, unknown> = {}
@@ -171,7 +178,11 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
   })
 }
 
-function getFirstDefined<T>(...values: any[]): T | undefined {
+function getRawRequest(req: FastifyRequest): RawRequestMetadata {
+  return req.raw as RawRequestMetadata
+}
+
+function getFirstDefined<T>(...values: (T | undefined)[]): T | undefined {
   for (const value of values) {
     if (value !== undefined) {
       return value

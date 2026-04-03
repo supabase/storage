@@ -106,7 +106,9 @@ export class StorageBackendError extends Error implements RenderableError {
  * @param error
  */
 export function isRenderableError(error: unknown): error is RenderableError {
-  return !!error && typeof error === 'object' && 'render' in error
+  return (
+    !!error && typeof error === 'object' && 'render' in error && typeof error.render === 'function'
+  )
 }
 
 /**

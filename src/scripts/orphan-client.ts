@@ -1,8 +1,8 @@
 import { NdJsonTransform } from '@internal/streams/ndjson'
 import axios from 'axios'
-import fs from 'fs'
 import path from 'path'
 import { Transform, TransformCallback } from 'stream'
+import { OrphanStreamEvent, writeStreamToJsonArray } from './orphan-client-stream'
 
 const ADMIN_URL = process.env.ADMIN_URL
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY
@@ -24,20 +24,6 @@ const client = axios.create({
     ApiKey: ADMIN_API_KEY,
   },
 })
-
-interface OrphanObject {
-  event: 'data'
-  type: 's3Orphans'
-  value: {
-    name: string
-    version: string
-    size: number
-  }[]
-}
-
-interface PingObject {
-  event: 'ping'
-}
 
 async function main() {
   const action = process.argv[2]
@@ -90,7 +76,7 @@ async function listOrphans(tenantId: string, bucketId: string) {
 
   const jsonStream = request.data.pipe(transformStream)
 
-  await writeStreamToJsonArray(jsonStream, FILE_PATH('list', bucketId))
+  await writeStreamToJsonArray(jsonStream, path.resolve(__dirname, FILE_PATH('list', bucketId)))
 }
 
 /**
@@ -118,7 +104,7 @@ async function deleteS3Orphans(tenantId: string, bucketId: string) {
   let itemCount = 0
   const limitedStream = new Transform({
     objectMode: true,
-    transform(chunk: OrphanObject | PingObject, _encoding: string, callback: TransformCallback) {
+    transform(chunk: OrphanStreamEvent, _encoding: string, callback: TransformCallback) {
       if (chunk.event === 'data' && chunk.value && Array.isArray(chunk.value)) {
         itemCount += chunk.value.length
 
@@ -141,88 +127,10 @@ async function deleteS3Orphans(tenantId: string, bucketId: string) {
     },
   })
 
-  await writeStreamToJsonArray(jsonStream.pipe(limitedStream), FILE_PATH('delete', bucketId))
-}
-
-/**
- * Writes the output to a JSON array
- * @param stream
- * @param relativePath
- */
-async function writeStreamToJsonArray(
-  stream: NodeJS.ReadableStream,
-  relativePath: string
-): Promise<void> {
-  const filePath = path.resolve(__dirname, relativePath)
-  const localFile = fs.createWriteStream(filePath)
-
-  // Start with an empty array
-  localFile.write('[\n')
-  let isFirstItem = true
-
-  return new Promise((resolve, reject) => {
-    let receivedAnyData = false
-
-    stream.on('data', (data: OrphanObject | PingObject) => {
-      if (data.event === 'ping') {
-        console.log('Received ping event, ignoring')
-        return
-      }
-
-      if (data.event === 'data' && data.value && Array.isArray(data.value)) {
-        receivedAnyData = true
-        console.log(`Processing ${data.value.length} objects`)
-
-        for (const item of data.value) {
-          if (!isFirstItem) {
-            localFile.write(',\n')
-          } else {
-            isFirstItem = false
-          }
-
-          localFile.write(JSON.stringify({ ...item, orphanType: data.type }, null, 2))
-        }
-      } else {
-        console.warn(
-          'Received data with invalid format:',
-          JSON.stringify(data).substring(0, 100) + '...'
-        )
-      }
-    })
-
-    stream.on('error', (err) => {
-      // Handle DELETE_LIMIT_REACHED as a graceful stop, not an error
-      if (err.message === 'DELETE_LIMIT_REACHED') {
-        localFile.write('\n]')
-        localFile.end(() => {
-          if (receivedAnyData) {
-            console.log(`Finished writing data to ${filePath}. Delete limit reached, data saved.`)
-          }
-          resolve()
-        })
-        return
-      }
-
-      console.error('Stream error:', err)
-      localFile.end('\n]', () => {
-        reject(err)
-      })
-    })
-
-    stream.on('end', () => {
-      localFile.write('\n]')
-      localFile.end(() => {
-        resolve()
-      })
-
-      if (!receivedAnyData) {
-        console.warn(`No data was received! File might be empty: ${filePath}`)
-      } else {
-        // Check if the file exists and has content
-        console.log(`Finished writing data to ${filePath}. Data was received and saved.`)
-      }
-    })
-  })
+  await writeStreamToJsonArray(
+    jsonStream.pipe(limitedStream),
+    path.resolve(__dirname, FILE_PATH('delete', bucketId))
+  )
 }
 
 main()
@@ -230,5 +138,6 @@ main()
     console.log('Done')
   })
   .catch((e) => {
+    process.exitCode = 1
     console.error('Error:', e)
   })

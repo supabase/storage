@@ -4,6 +4,7 @@
       "@internal/*": ["./src/internal/*"],
       "@storage/*": ["./src/storage/*"]
     },
+    "types": ["node", "jest"],
     "downlevelIteration": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,

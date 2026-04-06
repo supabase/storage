@@ -473,7 +473,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (typeof features?.imageTransformation?.maxResolution !== 'undefined') {
         tenantInfo.image_transformation_max_resolution = features?.imageTransformation
-          ?.image_transformation_max_resolution as number | undefined
+          ?.maxResolution as number | undefined
       }
 
       if (typeof features?.s3Protocol?.enabled !== 'undefined') {

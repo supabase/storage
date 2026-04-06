@@ -546,7 +546,7 @@ export class S3ProtocolHandler {
           Bucket,
           Key,
           ChecksumCRC32: resp.ChecksumCRC32,
-          ChecksumCRC32C: resp.ChecksumCRC32,
+          ChecksumCRC32C: resp.ChecksumCRC32C,
           ChecksumSHA1: resp.ChecksumSHA1,
           ChecksumSHA256: resp.ChecksumSHA256,
           ETag: resp.ETag,
@@ -791,7 +791,7 @@ export class S3ProtocolHandler {
     }
 
     if (!Key) {
-      throw ERRORS.MissingParameter('Bucket')
+      throw ERRORS.MissingParameter('Key')
     }
 
     const r = await this.storage.backend.headObject(Bucket, Key, undefined)
@@ -823,7 +823,7 @@ export class S3ProtocolHandler {
     }
 
     if (!Key) {
-      throw ERRORS.MissingParameter('Bucket')
+      throw ERRORS.MissingParameter('Key')
     }
 
     const object = await this.storage

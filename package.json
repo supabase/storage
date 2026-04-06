@@ -26,7 +26,7 @@
     "@aws-sdk/client-s3": "^3.1023.0",
     "@aws-sdk/client-s3vectors": "^3.1023.0",
     "@aws-sdk/lib-storage": "^3.1023.0",
-    "@aws-sdk/s3-request-presigner": "^3.1023.0",
+    "@aws-sdk/s3-request-presigner": "^3.1024.0",
     "@fastify/accepts": "^5.0.4",
     "@fastify/multipart": "^9.4.0",
     "@fastify/otel": "^0.17.1",

@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
+import { registerJsonParserAllowingEmptyBody } from '../../plugins/empty-json-body'
 import { createDefaultSchema, createResponse } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
@@ -31,22 +32,27 @@ export default async function routes(fastify: FastifyInstance) {
     summary,
     tags: ['bucket'],
   })
-  fastify.post<emptyBucketRequestInterface>(
-    '/:bucketId/empty',
-    {
-      schema,
-      config: {
-        operation: { type: ROUTE_OPERATIONS.EMPTY_BUCKET },
+
+  fastify.register(async (f) => {
+    registerJsonParserAllowingEmptyBody(f)
+
+    f.post<emptyBucketRequestInterface>(
+      '/:bucketId/empty',
+      {
+        schema,
+        config: {
+          operation: { type: ROUTE_OPERATIONS.EMPTY_BUCKET },
+        },
       },
-    },
-    async (request, response) => {
-      const { bucketId } = request.params
+      async (request, response) => {
+        const { bucketId } = request.params
 
-      await request.storage.emptyBucket(bucketId)
+        await request.storage.emptyBucket(bucketId)
 
-      return response
-        .status(200)
-        .send(createResponse('Empty bucket has been queued. Completion may take up to an hour.'))
-    }
-  )
+        return response
+          .status(200)
+          .send(createResponse('Empty bucket has been queued. Completion may take up to an hour.'))
+      }
+    )
+  })
 }

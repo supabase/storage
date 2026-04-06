@@ -577,9 +577,151 @@ describe('testing DELETE bucket', () => {
     })
     expect(response.statusCode).toBe(400)
   })
+
+  test('user is not able to delete a non-existent bucket with an empty json body', async () => {
+    const bucketId = `delete-empty-json-${randomUUID()}`
+
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: `/bucket/${bucketId}`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        'content-type': 'application/json',
+      },
+      payload: '',
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'Bucket not found',
+      message: 'Bucket not found',
+    })
+  })
+
+  test('user is able to delete a bucket with an empty json body', async () => {
+    const bucketId = `delete-empty-json-success-${randomUUID()}`
+    let created = false
+    let deleted = false
+
+    try {
+      const createResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/bucket',
+        headers: {
+          authorization: `Bearer ${process.env.SERVICE_KEY}`,
+        },
+        payload: {
+          name: bucketId,
+        },
+      })
+
+      expect(createResponse.statusCode).toBe(200)
+      expect(createResponse.json()).toEqual({
+        name: bucketId,
+      })
+      created = true
+
+      const response = await appInstance.inject({
+        method: 'DELETE',
+        url: `/bucket/${bucketId}`,
+        headers: {
+          authorization: `Bearer ${process.env.SERVICE_KEY}`,
+          'content-type': 'application/json',
+        },
+        payload: '',
+      })
+
+      expect(response.statusCode).toBe(200)
+      deleted = true
+      expect(response.json()).toEqual({
+        message: 'Successfully deleted',
+      })
+    } finally {
+      if (created && !deleted) {
+        await appInstance.inject({
+          method: 'DELETE',
+          url: `/bucket/${bucketId}`,
+          headers: {
+            authorization: `Bearer ${process.env.SERVICE_KEY}`,
+          },
+        })
+      }
+    }
+  })
 })
 
 describe('testing EMPTY bucket', () => {
+  test('user is not able to empty a non existent bucket with an empty json body', async () => {
+    const bucketId = `empty-empty-json-${randomUUID()}`
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/bucket/${bucketId}/empty`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        'content-type': 'application/json',
+      },
+      payload: '',
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'Bucket not found',
+      message: 'Bucket not found',
+    })
+  })
+
+  test('user is able to empty a bucket with an empty json body', async () => {
+    const bucketId = `empty-empty-json-success-${randomUUID()}`
+    let created = false
+
+    try {
+      const createResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/bucket',
+        headers: {
+          authorization: `Bearer ${process.env.SERVICE_KEY}`,
+        },
+        payload: {
+          name: bucketId,
+        },
+      })
+
+      expect(createResponse.statusCode).toBe(200)
+      expect(createResponse.json()).toEqual({
+        name: bucketId,
+      })
+      created = true
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/bucket/${bucketId}/empty`,
+        headers: {
+          authorization: `Bearer ${process.env.SERVICE_KEY}`,
+          'content-type': 'application/json',
+        },
+        payload: '',
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({
+        message: 'Empty bucket has been queued. Completion may take up to an hour.',
+      })
+    } finally {
+      if (created) {
+        await appInstance.inject({
+          method: 'DELETE',
+          url: `/bucket/${bucketId}`,
+          headers: {
+            authorization: `Bearer ${process.env.SERVICE_KEY}`,
+          },
+        })
+      }
+    }
+  })
+
   test('user is able to empty a bucket', async () => {
     const bucketId = 'bucket3'
     const response = await appInstance.inject({

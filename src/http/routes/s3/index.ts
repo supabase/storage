@@ -12,7 +12,7 @@ import {
   xmlParser,
 } from '../../plugins'
 import { s3ErrorHandler } from './error-handler'
-import { findArrayPathsInSchemas, getRouter, RequestInput } from './router'
+import { findArrayPathsInSchemas, getRouter, RequestInput, RouteQuery } from './router'
 
 const { s3ProtocolEnabled } = getConfig()
 
@@ -41,7 +41,7 @@ export default async function routes(fastify: FastifyInstance) {
             if (
               s3Router.matchRoute(route, {
                 type: req.isIcebergBucket ? 'iceberg' : undefined,
-                query: (req.query as Record<string, string>) || {},
+                query: (req.query as RouteQuery) || {},
                 headers: (req.headers as Record<string, string>) || {},
               })
             ) {

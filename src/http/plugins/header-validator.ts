@@ -28,12 +28,16 @@ export const headerValidator = (options: HeaderValidatorOptions = {}) =>
           return payload
         }
 
-        const headers = Object.entries(reply.getHeaders())
-        for (const [key, value] of headers) {
+        const headers = reply.getHeaders()
+        for (const key in headers) {
+          if (!Object.prototype.hasOwnProperty.call(headers, key)) {
+            continue
+          }
+          const value = headers[key]
           if (typeof value === 'string' && INVALID_HEADER_CHAR_PATTERN.test(value)) {
             throw ERRORS.InvalidHeaderChar(key, value)
           } else if (Array.isArray(value)) {
-            for (let item of value) {
+            for (const item of value) {
               if (typeof item === 'string' && INVALID_HEADER_CHAR_PATTERN.test(item)) {
                 throw ERRORS.InvalidHeaderChar(key, item)
               }

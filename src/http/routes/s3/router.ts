@@ -100,11 +100,18 @@ type Handler<Req extends Schema, Context = unknown> = (
   ctx: Context
 ) => Promise<ResponseType>
 
+export type QuerystringMatch = {
+  key: string
+  value: string | undefined
+}
+
+export type RouteQuery = Record<string, string | undefined>
+
 type Route<S extends Schema, Context> = {
   method: HTTPMethod
   type?: string
   path: string
-  querystringMatches: { key: string; value: string }[]
+  querystringMatches: QuerystringMatch[]
   headersMatches: string[]
   handler?: Handler<S, Context>
   schema: S
@@ -241,7 +248,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     this.registerRoute('head', url, options, handler as any)
   }
 
-  parseQueryMatch(query: string) {
+  parseQueryMatch(query: string): QuerystringMatch {
     const [key, value] = query.split('=')
     return { key, value }
   }
@@ -262,7 +269,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
 
   matchRoute(
     route: Route<S, Context>,
-    match: { query: Record<string, string>; headers: Record<string, string>; type?: string }
+    match: { query: RouteQuery; headers: Record<string, string>; type?: string }
   ) {
     const isOfType = match.type ? match.type === route.type : route.type === undefined
 
@@ -294,31 +301,46 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     })
   }
 
-  protected matchQueryString(
-    matches: { key: string; value: string }[],
-    received?: Record<string, string>
-  ) {
-    const keys = Object.keys(received || {})
-    if (keys.length === 0 || !received) {
-      return matches.find((m) => m.key === '*')
+  protected matchQueryString(matches: QuerystringMatch[], received?: RouteQuery) {
+    let hasWildcard = false
+    for (const match of matches) {
+      if (match.key === '*') {
+        hasWildcard = true
+        break
+      }
     }
 
-    const foundMatches = matches.every((m) => {
-      const key = Object.keys(received).find((k) => k === m.key)
-      return (
-        (m.key === key && m.value !== undefined && m.value === received[m.key]) ||
-        (m.key === key && m.value === undefined)
-      )
-    })
-
-    if (foundMatches) {
-      return true
+    if (!received) {
+      return hasWildcard
     }
 
-    if (!foundMatches && matches.find((m) => m.key === '*')) {
-      return true
+    let hasReceivedQuery = false
+    for (const key in received) {
+      if (Object.prototype.hasOwnProperty.call(received, key)) {
+        hasReceivedQuery = true
+        break
+      }
     }
-    return false
+
+    if (!hasReceivedQuery) {
+      return hasWildcard
+    }
+
+    for (const match of matches) {
+      if (match.key === '*') {
+        continue
+      }
+
+      if (!Object.prototype.hasOwnProperty.call(received, match.key)) {
+        return hasWildcard
+      }
+
+      if (match.value !== undefined && match.value !== received[match.key]) {
+        return hasWildcard
+      }
+    }
+
+    return true
   }
 }
 

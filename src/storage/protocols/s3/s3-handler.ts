@@ -1319,14 +1319,29 @@ export class S3ProtocolHandler {
   }
 
   parseMetadataHeaders(headers: Record<string, unknown>): Record<string, string> | undefined {
-    let metadata: Record<string, unknown> | undefined = undefined
+    let metadata: Record<string, string> | undefined
+    const metadataPrefix = 'x-amz-meta-'
 
-    Object.keys(headers)
-      .filter((key) => key.startsWith('x-amz-meta-'))
-      .forEach((key) => {
-        if (!metadata) metadata = {}
-        metadata[key.replace('x-amz-meta-', '')] = headers[key]
-      })
+    for (const key in headers) {
+      if (!key.startsWith(metadataPrefix)) {
+        continue
+      }
+
+      if (!Object.prototype.hasOwnProperty.call(headers, key)) {
+        continue
+      }
+
+      const value = headers[key]
+      if (typeof value !== 'string') {
+        continue
+      }
+
+      if (!metadata) {
+        metadata = {}
+      }
+
+      metadata[key.slice(metadataPrefix.length)] = value
+    }
 
     return metadata
   }

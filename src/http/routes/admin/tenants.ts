@@ -127,6 +127,7 @@ interface tenantDBInterface {
   feature_vector_buckets?: boolean
   feature_vector_buckets_max_buckets?: number
   feature_vector_buckets_max_indexes?: number
+  disable_events?: string[] | null
 }
 
 const { dbMigrationFreezeAt, icebergEnabled, vectorEnabled } = getConfig()
@@ -443,6 +444,7 @@ export default async function routes(fastify: FastifyInstance) {
         databasePoolMode,
         maxConnections,
         tracingMode,
+        disableEvents,
       } = request.body
       const { tenantId } = request.params
 
@@ -502,6 +504,10 @@ export default async function routes(fastify: FastifyInstance) {
       tenantInfo.feature_vector_buckets = features?.vectorBuckets?.enabled
       tenantInfo.feature_vector_buckets_max_buckets = features?.vectorBuckets?.maxBuckets
       tenantInfo.feature_vector_buckets_max_indexes = features?.vectorBuckets?.maxIndexes
+
+      if (disableEvents !== undefined) {
+        tenantInfo.disable_events = disableEvents
+      }
 
       await multitenantKnex.transaction(async (trx) => {
         await trx('tenants').insert(tenantInfo).onConflict('id').merge()

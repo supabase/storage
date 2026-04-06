@@ -406,6 +406,72 @@ describe('Tenant configs', () => {
     })
   })
 
+  test('Upsert tenant config updates disableEvents and image transformation maxResolution', async () => {
+    const firstPayload = {
+      ...payload,
+      disableEvents: ['ObjectCreated:*', 'ObjectRemoved:*'],
+      features: {
+        ...payload.features,
+        imageTransformation: {
+          ...payload.features.imageTransformation,
+          maxResolution: 1024,
+        },
+      },
+    }
+
+    const firstPutResponse = await adminApp.inject({
+      method: 'PUT',
+      url: `/tenants/abc`,
+      payload: firstPayload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(firstPutResponse.statusCode).toBe(204)
+
+    const firstGetResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(firstGetResponse.statusCode).toBe(200)
+    expect(JSON.parse(firstGetResponse.body)).toEqual(firstPayload)
+
+    const secondPayload = {
+      ...payload2,
+      disableEvents: ['ObjectCreated:*'],
+      features: {
+        ...payload2.features,
+        imageTransformation: {
+          ...payload2.features.imageTransformation,
+          maxResolution: 2048,
+        },
+      },
+    }
+
+    const secondPutResponse = await adminApp.inject({
+      method: 'PUT',
+      url: `/tenants/abc`,
+      payload: secondPayload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(secondPutResponse.statusCode).toBe(204)
+
+    const secondGetResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(secondGetResponse.statusCode).toBe(200)
+    expect(JSON.parse(secondGetResponse.body)).toEqual(secondPayload)
+  })
+
   test('Upsert tenant config', async () => {
     const firstPutResponse = await adminApp.inject({
       method: 'PUT',

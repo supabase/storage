@@ -1,3 +1,4 @@
+import { render } from '@internal/errors'
 import { ObjectScanner } from '@storage/scanner/scanner'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FastifyReply } from 'fastify/types/reply'
@@ -113,19 +114,22 @@ export default async function routes(fastify: FastifyInstance) {
         for await (const result of orphanObjects) {
           if (result.value.length > 0) {
             respPing.update()
-            reply.raw.write(
-              JSON.stringify({
-                ...result,
-                event: 'data',
-              }) + '\n'
-            )
+            writeNdjson(reply, {
+              ...result,
+              event: 'data',
+            })
           }
         }
       } catch (e) {
-        throw e
+        req.log.error({ err: e, bucket }, 'list orphaned objects stream failed')
+        writeNdjson(reply, {
+          event: 'error',
+          error: render(e),
+        })
+        return
       } finally {
         respPing.clear()
-        reply.raw.end()
+        endNdjson(reply)
       }
     }
   )
@@ -166,21 +170,51 @@ export default async function routes(fastify: FastifyInstance) {
 
         for await (const deleted of result) {
           respPing.update()
-          reply.raw.write(
-            JSON.stringify({
-              ...deleted,
-              event: 'data',
-            }) + '\n'
-          )
+          writeNdjson(reply, {
+            ...deleted,
+            event: 'data',
+          })
         }
       } catch (e) {
-        throw e
+        req.log.error({ err: e, bucket }, 'delete orphaned objects stream failed')
+        writeNdjson(reply, {
+          event: 'error',
+          error: render(e),
+        })
+        return
       } finally {
         respPing.clear()
-        reply.raw.end()
+        endNdjson(reply)
       }
     }
   )
+}
+
+function canWriteNdjson(reply: FastifyReply) {
+  return !reply.raw.destroyed && !reply.raw.writableEnded
+}
+
+function writeNdjson(reply: FastifyReply, payload: unknown) {
+  if (!canWriteNdjson(reply)) {
+    return false
+  }
+
+  try {
+    reply.raw.write(JSON.stringify(payload) + '\n')
+    return true
+  } catch {
+    return false
+  }
+}
+
+function endNdjson(reply: FastifyReply) {
+  if (!canWriteNdjson(reply)) {
+    return
+  }
+
+  try {
+    reply.raw.end()
+  } catch {}
 }
 
 // Occasionally write a ping message to the response stream
@@ -192,11 +226,9 @@ function ping(reply: FastifyReply) {
 
     if (!lastSend || (lastSend && lastSend < fiveSecondsEarly)) {
       lastSend = new Date()
-      reply.raw.write(
-        JSON.stringify({
-          event: 'ping',
-        }) + '\n'
-      )
+      writeNdjson(reply, {
+        event: 'ping',
+      })
     }
   }, 1000 * 10)
 

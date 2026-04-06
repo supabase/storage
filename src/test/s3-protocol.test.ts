@@ -711,6 +711,56 @@ describe('S3 Protocol', () => {
         expect(objectsPage3.Contents?.[0].Key).toBe('test-1.jpg')
         expect(objectsPage3.IsTruncated).toBe(false)
       })
+
+      it('lists an entity-heavy first page without XML expansion failure', async () => {
+        const bucket = await createBucket(client)
+        const minEntityExpansions = 2000
+        const pageSize = 10
+        const entityRefsPerKey = Math.ceil(minEntityExpansions / pageSize)
+        const entityRun = '&'.repeat(entityRefsPerKey)
+        const names = Array.from({ length: pageSize + 1 }, (_, i) => {
+          return `key-${String(i).padStart(2, '0')}-${entityRun}.txt`
+        })
+
+        for (let i = 0; i < names.length; i += pageSize) {
+          await Promise.all(
+            names.slice(i, i + pageSize).map((name) =>
+              client.send(
+                new PutObjectCommand({
+                  Bucket: bucket,
+                  Key: name,
+                  Body: Buffer.alloc(1),
+                  ContentType: 'text/plain',
+                })
+              )
+            )
+          )
+        }
+
+        const page1 = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+            MaxKeys: pageSize,
+          })
+        )
+
+        expect(page1.Contents).toHaveLength(pageSize)
+        expect(page1.IsTruncated).toBe(true)
+        expect(page1.NextContinuationToken).toBeTruthy()
+        expect(page1.Contents?.map((entry) => entry.Key)).toEqual(names.slice(0, pageSize))
+
+        const page2 = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+            ContinuationToken: page1.NextContinuationToken,
+            MaxKeys: pageSize,
+          })
+        )
+
+        expect(page2.Contents).toHaveLength(1)
+        expect(page2.IsTruncated).toBe(false)
+        expect(page2.Contents?.map((entry) => entry.Key)).toEqual(names.slice(pageSize))
+      }, 60000)
     })
 
     for (const urlEncode of [true, false]) {

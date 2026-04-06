@@ -308,6 +308,7 @@ export default async function routes(fastify: FastifyInstance) {
         databasePoolUrl,
         maxConnections,
         tracingMode,
+        disableEvents,
       } = request.body
 
       await multitenantKnex.transaction(async (trx) => {
@@ -332,9 +333,14 @@ export default async function routes(fastify: FastifyInstance) {
           feature_vector_buckets: features?.vectorBuckets?.enabled ?? false,
           feature_vector_buckets_max_buckets: features?.vectorBuckets?.maxBuckets,
           feature_vector_buckets_max_indexes: features?.vectorBuckets?.maxIndexes,
+          image_transformation_max_resolution:
+            features?.imageTransformation?.maxResolution === null
+              ? null
+              : features?.imageTransformation?.maxResolution,
           migrations_version: null,
           migrations_status: null,
           tracing_mode: tracingMode,
+          disable_events: disableEvents,
         })
         await jwksManager.generateUrlSigningJwk(tenantId, trx)
       })

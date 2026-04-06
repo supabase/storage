@@ -220,6 +220,40 @@ describe('Tenant configs', () => {
     await expect(getFeatures('abc')).resolves.toEqual(payload.features)
   })
 
+  test('Create tenant config preserves disableEvents and image transformation maxResolution', async () => {
+    const createPayload = {
+      ...payload,
+      disableEvents: ['ObjectCreated:*', 'ObjectRemoved:*'],
+      features: {
+        ...payload.features,
+        imageTransformation: {
+          ...payload.features.imageTransformation,
+          maxResolution: 1024,
+        },
+      },
+    }
+
+    const createResponse = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload: createPayload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(createResponse.statusCode).toBe(201)
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(JSON.parse(getResponse.body)).toEqual(createPayload)
+  })
+
   test('Insert tenant config without required properties', async () => {
     const response = await adminApp.inject({
       method: 'POST',

@@ -22,6 +22,7 @@ import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey } from '../../../config'
 import { dbSuperUser, storage } from '../../plugins'
 import apiKey from '../../plugins/apikey'
+import { registerJsonParserAllowingEmptyBody } from '../../plugins/empty-json-body'
 
 const patchSchema = {
   body: {
@@ -537,21 +538,7 @@ export default async function routes(fastify: FastifyInstance) {
   )
 
   fastify.register(async (f) => {
-    const defaultJsonParser = f.getDefaultJsonParser(
-      f.initialConfig.onProtoPoisoning ?? 'error',
-      f.initialConfig.onConstructorPoisoning ?? 'error'
-    )
-
-    f.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
-      if (!body) {
-        done(null, null)
-        return
-      }
-
-      const jsonBody = typeof body === 'string' ? body : body.toString('utf8')
-
-      defaultJsonParser(request, jsonBody, done)
-    })
+    registerJsonParserAllowingEmptyBody(f)
 
     f.delete<tenantRequestInterface>(
       '/:tenantId',

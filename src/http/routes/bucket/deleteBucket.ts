@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
+import { registerJsonParserAllowingEmptyBody } from '../../plugins/empty-json-body'
 import { createDefaultSchema, createResponse } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
@@ -29,19 +30,24 @@ export default async function routes(fastify: FastifyInstance) {
     summary,
     tags: ['bucket'],
   })
-  fastify.delete<deleteBucketRequestInterface>(
-    '/:bucketId',
-    {
-      schema,
-      config: {
-        operation: { type: ROUTE_OPERATIONS.DELETE_BUCKET },
-      },
-    },
-    async (request, response) => {
-      const { bucketId } = request.params
-      await request.storage.deleteBucket(bucketId)
 
-      return response.status(200).send(createResponse('Successfully deleted'))
-    }
-  )
+  fastify.register(async (f) => {
+    registerJsonParserAllowingEmptyBody(f)
+
+    f.delete<deleteBucketRequestInterface>(
+      '/:bucketId',
+      {
+        schema,
+        config: {
+          operation: { type: ROUTE_OPERATIONS.DELETE_BUCKET },
+        },
+      },
+      async (request, response) => {
+        const { bucketId } = request.params
+        await request.storage.deleteBucket(bucketId)
+
+        return response.status(200).send(createResponse('Successfully deleted'))
+      }
+    )
+  })
 }

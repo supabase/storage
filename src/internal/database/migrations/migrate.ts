@@ -806,7 +806,7 @@ async function doesSchemaExists(client: BasicPgClient, schemaName: string) {
       WHERE schema_name = ${schemaName}
   );`)
 
-  return result.rows.length > 0 && result.rows[0].exists === 'true'
+  return result.rows.length > 0 && result.rows[0].exists
 }
 
 /**

@@ -57,20 +57,47 @@ export const logRequest = (options: RequestLoggerOptions) =>
        * Adds req.resources and req.operation to the request object
        */
       fastify.addHook('preHandler', async (req) => {
-        const resourceFromParams = Object.values(req.params || {}).join('/')
-        const resources = getFirstDefined<string[]>(
-          req.resources,
-          req.routeOptions.config.resources?.(req),
-          (req.raw as any).resources,
-          resourceFromParams ? [resourceFromParams] : ([] as string[])
-        )
+        let resources = req.resources
+
+        if (resources === undefined) {
+          resources = req.routeOptions.config.resources?.(req)
+        }
+
+        if (resources === undefined) {
+          resources = (req.raw as any).resources
+        }
+
+        if (resources === undefined) {
+          const params = req.params as Record<string, unknown> | undefined
+          let resourceFromParams = ''
+
+          if (params) {
+            let first = true
+            for (const key in params) {
+              if (!Object.prototype.hasOwnProperty.call(params, key)) {
+                continue
+              }
+
+              if (!first) {
+                resourceFromParams += '/'
+              }
+
+              const value = params[key]
+              resourceFromParams += value == null ? '' : String(value)
+              first = false
+            }
+          }
+
+          resources = resourceFromParams ? [resourceFromParams] : []
+        }
 
         if (resources && resources.length > 0) {
-          resources.map((resource, index) => {
+          for (let index = 0; index < resources.length; index++) {
+            const resource = resources[index]
             if (!resource.startsWith('/')) {
               resources[index] = `/${resource}`
             }
-          })
+          }
         }
 
         req.resources = resources
@@ -169,13 +196,4 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     operation: req.operation?.type ?? req.routeOptions.config.operation?.type,
     serverTimes: req.serverTimings,
   })
-}
-
-function getFirstDefined<T>(...values: any[]): T | undefined {
-  for (const value of values) {
-    if (value !== undefined) {
-      return value
-    }
-  }
-  return undefined
 }

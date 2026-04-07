@@ -313,7 +313,7 @@ export default async function routes(fastify: FastifyInstance) {
       } = request.body
 
       await multitenantKnex.transaction(async (trx) => {
-        await multitenantKnex('tenants').insert({
+        await trx('tenants').insert({
           id: tenantId,
           anon_key: encrypt(anonKey),
           database_url: encrypt(databaseUrl),

@@ -84,7 +84,7 @@ export const ERRORS = {
     }),
   FeatureNotEnabled: (resource: string, feature: string, e?: Error) =>
     new StorageBackendError({
-      code: ErrorCode.InvalidRequest,
+      code: ErrorCode.FeatureNotEnabled,
       resource,
       httpStatusCode: 409,
       message: `The feature ${feature} is not enabled for this resource`,
@@ -92,7 +92,7 @@ export const ERRORS = {
     }),
   NotSupported: (feature: string, e?: Error) =>
     new StorageBackendError({
-      code: ErrorCode.InvalidRequest,
+      code: ErrorCode.NotSupported,
       httpStatusCode: 409,
       message: `The feature ${feature} is not enabled for this resource`,
       originalError: e,
@@ -141,7 +141,7 @@ export const ERRORS = {
 
   InvalidParameter: (parameter: string, opts?: { error?: Error; message?: string }) =>
     new StorageBackendError({
-      code: ErrorCode.MissingParameter,
+      code: ErrorCode.InvalidParameter,
       httpStatusCode: 400,
       message: opts?.message || `Invalid Parameter ${parameter}`,
       originalError: opts?.error,

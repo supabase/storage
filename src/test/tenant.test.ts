@@ -1,6 +1,7 @@
 'use strict'
 import { encrypt, signJWT } from '@internal/auth'
 import { TENANT_CONFIG_CACHE_NAME } from '@internal/cache'
+import { jwksManager } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import {
   deleteTenantConfig,
@@ -287,6 +288,36 @@ describe('Tenant configs', () => {
     expect(secondInsertResponse.statusCode).toBe(500)
   })
 
+  test('Create tenant config rolls back when jwk generation fails', async () => {
+    const generateUrlSigningJwkSpy = jest
+      .spyOn(jwksManager, 'generateUrlSigningJwk')
+      .mockRejectedValueOnce(new Error('jwk insert failed'))
+    const runMigrationsOnTenantMock = jest.mocked(migrate.runMigrationsOnTenant)
+    runMigrationsOnTenantMock.mockClear()
+
+    try {
+      const response = await adminApp.inject({
+        method: 'POST',
+        url: `/tenants/abc`,
+        payload,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      expect(response.statusCode).toBe(500)
+      expect(generateUrlSigningJwkSpy).toHaveBeenCalledWith('abc', expect.anything())
+      expect(runMigrationsOnTenantMock).not.toHaveBeenCalled()
+
+      await expect(multitenantKnex('tenants').where({ id: 'abc' }).first()).resolves.toBeUndefined()
+      await expect(
+        multitenantKnex('tenants_jwks').where({ tenant_id: 'abc' }).select('id')
+      ).resolves.toEqual([])
+    } finally {
+      generateUrlSigningJwkSpy.mockRestore()
+    }
+  })
+
   test('Update tenant config', async () => {
     await adminApp.inject({
       method: 'POST',
@@ -314,6 +345,63 @@ describe('Tenant configs', () => {
     })
     const getResponseJSON = JSON.parse(getResponse.body)
     expect(getResponseJSON).toEqual(payload2)
+  })
+
+  test('Update tenant config keeps changes when tenant migrations fail', async () => {
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    const runMigrationsOnTenantMock = jest.mocked(migrate.runMigrationsOnTenant)
+    const updateTenantMigrationsStateSpy = jest.spyOn(migrate, 'updateTenantMigrationsState')
+    const addTenantSpy = jest
+      .spyOn(migrate.progressiveMigrations, 'addTenant')
+      .mockImplementation(() => undefined)
+
+    runMigrationsOnTenantMock.mockClear()
+    updateTenantMigrationsStateSpy.mockClear()
+
+    try {
+      runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
+
+      const patchResponse = await adminApp.inject({
+        method: 'PATCH',
+        url: `/tenants/abc`,
+        payload: payload2,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      expect(patchResponse.statusCode).toBe(204)
+      expect(runMigrationsOnTenantMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          databaseUrl: payload2.databaseUrl,
+          tenantId: 'abc',
+        })
+      )
+      expect(updateTenantMigrationsStateSpy).not.toHaveBeenCalled()
+      expect(addTenantSpy).toHaveBeenCalledWith('abc')
+
+      const getResponse = await adminApp.inject({
+        method: 'GET',
+        url: `/tenants/abc`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      expect(getResponse.statusCode).toBe(200)
+      expect(JSON.parse(getResponse.body)).toEqual(payload2)
+    } finally {
+      addTenantSpy.mockRestore()
+      updateTenantMigrationsStateSpy.mockRestore()
+    }
   })
 
   test('Update tenant config partially', async () => {

@@ -283,24 +283,52 @@ describe('Vectors API', () => {
     })
 
     it('should handle vector service not configured', async () => {
-      // Mock app without s3Vector service
-      const appWithoutVector = app()
       mergeConfig({ vectorEnabled: false })
 
-      const response = await appWithoutVector.inject({
-        method: 'POST',
-        url: '/vector/CreateIndex',
-        headers: {
-          authorization: `Bearer ${serviceToken}`,
-        },
-        payload: validCreateIndexRequest,
-      })
+      const appWithoutVector = app()
 
-      expect(response.statusCode).toBe(404)
-      const body = JSON.parse(response.body)
-      expect(body.error).toBe('Not Found')
+      try {
+        const response = await appWithoutVector.inject({
+          method: 'POST',
+          url: '/vector/CreateIndex',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: validCreateIndexRequest,
+        })
 
-      await appWithoutVector.close()
+        expect(response.statusCode).toBe(404)
+        const body = JSON.parse(response.body)
+        expect(body.error).toBe('Not Found')
+      } finally {
+        await appWithoutVector.close()
+      }
+    })
+
+    it('should return FeatureNotEnabled when the vector backend is not configured', async () => {
+      mergeConfig({ vectorEnabled: true, vectorS3Buckets: [] })
+
+      const appWithoutVector = app()
+
+      try {
+        const response = await appWithoutVector.inject({
+          method: 'POST',
+          url: '/vector/CreateIndex',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: validCreateIndexRequest,
+        })
+
+        expect(response.statusCode).toBe(409)
+        expect(JSON.parse(response.body)).toMatchObject({
+          statusCode: '409',
+          code: 'FeatureNotEnabled',
+          error: 'FeatureNotEnabled',
+        })
+      } finally {
+        await appWithoutVector.close()
+      }
     })
 
     it('should handle S3Vector service errors', async () => {

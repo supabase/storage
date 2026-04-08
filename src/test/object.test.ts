@@ -35,6 +35,14 @@ async function getSuperuserPostgrestClient() {
   return tnx
 }
 
+async function commitSharedTestTransaction(tx: Knex.Transaction) {
+  if (tnx === tx) {
+    tnx = undefined
+  }
+
+  await tx.commit()
+}
+
 useMockObject()
 useMockQueue()
 
@@ -44,8 +52,11 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
-  if (tnx) {
-    await tnx.commit()
+  const currentTx = tnx
+  tnx = undefined
+
+  if (currentTx) {
+    await currentTx.commit()
   }
   await appInstance.close()
 })
@@ -2338,8 +2349,7 @@ describe('testing move object', () => {
       version: `rollback-version-${runId}`,
       metadata: { mimetype: 'image/png', size: 1234 },
     })
-    await seedTx.commit()
-    tnx = undefined
+    await commitSharedTestTransaction(seedTx)
 
     jest
       .spyOn(S3Backend.prototype, 'headObject')
@@ -2541,6 +2551,544 @@ describe('testing list objects', () => {
     expect(responseJSON).toHaveLength(0)
   })
 
+  test('list-v1 should skip empty path segments for name and non-name sorting', async () => {
+    const runId = randomUUID()
+    const bucketName = `list-v1-empty-segment-${runId}`
+    const basePrefix = `service-bulletins-${runId}/pdfs/`
+    const objectNames = [
+      `${basePrefix}/whirlpool-washer.pdf`,
+      `${basePrefix}/nested/whirlpool-washer-nested.pdf`,
+    ]
+
+    try {
+      const createBucketResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/bucket',
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+        payload: {
+          name: bucketName,
+        },
+      })
+
+      expect(createBucketResponse.statusCode).toBe(200)
+
+      for (const objectName of objectNames) {
+        const uploadResponse = await appInstance.inject({
+          method: 'POST',
+          url: `/object/${bucketName}/${encodeURIComponent(objectName)}`,
+          payload: new File(['test'], 'file.txt'),
+          headers: {
+            authorization: `Bearer ${await serviceKeyAsync}`,
+          },
+        })
+
+        expect(uploadResponse.statusCode).toBe(200)
+      }
+
+      const listNames = async (options?: {
+        column: string
+        order: 'asc' | 'desc'
+        prefixOverride?: string
+      }) => {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: `/object/list/${bucketName}`,
+          payload: {
+            prefix: options?.prefixOverride ?? basePrefix,
+            limit: 100,
+            offset: 0,
+            sortBy: options
+              ? {
+                  column: options.column,
+                  order: options.order,
+                }
+              : undefined,
+          },
+          headers: {
+            authorization: `Bearer ${await serviceKeyAsync}`,
+          },
+        })
+
+        expect(response.statusCode).toBe(200)
+        return response.json<{ name: string }[]>().map((obj) => obj.name)
+      }
+
+      expect(await listNames()).toEqual(['nested', 'whirlpool-washer.pdf'])
+      expect(await listNames({ column: 'created_at', order: 'asc' })).toEqual([
+        'nested',
+        'whirlpool-washer.pdf',
+      ])
+      expect(
+        await listNames({
+          column: 'created_at',
+          order: 'asc',
+          prefixOverride: basePrefix.toUpperCase(),
+        })
+      ).toEqual(['nested', 'whirlpool-washer.pdf'])
+      expect(await listNames({ column: 'updated_at', order: 'asc' })).toEqual([
+        'nested',
+        'whirlpool-washer.pdf',
+      ])
+    } finally {
+      await appInstance.inject({
+        method: 'POST',
+        url: `/bucket/${bucketName}/empty`,
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      await appInstance.inject({
+        method: 'DELETE',
+        url: `/bucket/${bucketName}`,
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+    }
+  })
+
+  test('list-v1 should skip multiple empty path segments for name and non-name sorting', async () => {
+    const runId = randomUUID()
+    const bucketName = `list-v1-multi-empty-segment-${runId}`
+    const basePrefix = `service-bulletins-${runId}/pdfs/`
+    const objectNames = [
+      `${basePrefix}//whirlpool-washer.pdf`,
+      `${basePrefix}//nested/whirlpool-washer-nested.pdf`,
+    ]
+
+    try {
+      const createBucketResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/bucket',
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+        payload: {
+          name: bucketName,
+        },
+      })
+
+      expect(createBucketResponse.statusCode).toBe(200)
+
+      for (const objectName of objectNames) {
+        const uploadResponse = await appInstance.inject({
+          method: 'POST',
+          url: `/object/${bucketName}/${encodeURIComponent(objectName)}`,
+          payload: new File(['test'], 'file.txt'),
+          headers: {
+            authorization: `Bearer ${await serviceKeyAsync}`,
+          },
+        })
+
+        expect(uploadResponse.statusCode).toBe(200)
+      }
+
+      const listNames = async (options?: { column: string; order: 'asc' | 'desc' }) => {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: `/object/list/${bucketName}`,
+          payload: {
+            prefix: basePrefix,
+            limit: 100,
+            offset: 0,
+            sortBy: options
+              ? {
+                  column: options.column,
+                  order: options.order,
+                }
+              : undefined,
+          },
+          headers: {
+            authorization: `Bearer ${await serviceKeyAsync}`,
+          },
+        })
+
+        expect(response.statusCode).toBe(200)
+        return response.json<{ name: string }[]>().map((obj) => obj.name)
+      }
+
+      expect(await listNames()).toEqual(['nested', 'whirlpool-washer.pdf'])
+      expect(await listNames({ column: 'created_at', order: 'asc' })).toEqual([
+        'nested',
+        'whirlpool-washer.pdf',
+      ])
+      expect(await listNames({ column: 'updated_at', order: 'asc' })).toEqual([
+        'nested',
+        'whirlpool-washer.pdf',
+      ])
+    } finally {
+      await appInstance.inject({
+        method: 'POST',
+        url: `/bucket/${bucketName}/empty`,
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      await appInstance.inject({
+        method: 'DELETE',
+        url: `/bucket/${bucketName}`,
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+    }
+  })
+
+  test('list-v1 should keep mixed normal and repeated-delimiter folders stable when listed together', async () => {
+    const runId = randomUUID()
+    const bucketName = `list-v1-mixed-empty-segment-${runId}`
+    const prefix = `mixed-ordering-${runId}/a/`
+    const objectRows = [
+      {
+        bucket_id: bucketName,
+        name: `${prefix}//b/repeated-leaf.txt`,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-repeated-b`,
+        created_at: '2024-01-01T00:00:00.000Z',
+        updated_at: '2024-01-06T00:00:00.000Z',
+        metadata: {
+          eTag: `${runId}-repeated-b`,
+          size: 1,
+          mimetype: 'text/plain',
+        },
+      },
+      {
+        bucket_id: bucketName,
+        name: `${prefix}//c/repeated-second-leaf.txt`,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-repeated-c`,
+        created_at: '2024-01-02T00:00:00.000Z',
+        updated_at: '2024-01-05T00:00:00.000Z',
+        metadata: {
+          eTag: `${runId}-repeated-c`,
+          size: 2,
+          mimetype: 'text/plain',
+        },
+      },
+      {
+        bucket_id: bucketName,
+        name: `${prefix}b/normal-leaf.txt`,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-normal-b`,
+        created_at: '2024-01-03T00:00:00.000Z',
+        updated_at: '2024-01-04T00:00:00.000Z',
+        metadata: {
+          eTag: `${runId}-normal-b`,
+          size: 3,
+          mimetype: 'text/plain',
+        },
+      },
+      {
+        bucket_id: bucketName,
+        name: `${prefix}c/normal-second-leaf.txt`,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-normal-c`,
+        created_at: '2024-01-04T00:00:00.000Z',
+        updated_at: '2024-01-03T00:00:00.000Z',
+        metadata: {
+          eTag: `${runId}-normal-c`,
+          size: 4,
+          mimetype: 'text/plain',
+        },
+      },
+      {
+        bucket_id: bucketName,
+        name: `${prefix}leaf-a.txt`,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-leaf-a`,
+        created_at: '2024-01-05T00:00:00.000Z',
+        updated_at: '2024-01-02T00:00:00.000Z',
+        metadata: {
+          eTag: `${runId}-leaf-a`,
+          size: 5,
+          mimetype: 'text/plain',
+        },
+      },
+      {
+        bucket_id: bucketName,
+        name: `${prefix}leaf-z.txt`,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-leaf-z`,
+        created_at: '2024-01-06T00:00:00.000Z',
+        updated_at: '2024-01-01T00:00:00.000Z',
+        metadata: {
+          eTag: `${runId}-leaf-z`,
+          size: 6,
+          mimetype: 'text/plain',
+        },
+      },
+    ]
+
+    try {
+      const createBucketResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/bucket',
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+        payload: {
+          name: bucketName,
+        },
+      })
+
+      expect(createBucketResponse.statusCode).toBe(200)
+
+      const seedTx = await getSuperuserPostgrestClient()
+      await seedTx.from<Obj>('objects').insert(objectRows)
+      await commitSharedTestTransaction(seedTx)
+
+      const listNames = async (options?: {
+        column: 'created_at' | 'updated_at'
+        order: 'asc' | 'desc'
+      }) => {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: `/object/list/${bucketName}`,
+          payload: {
+            prefix,
+            limit: 100,
+            offset: 0,
+            sortBy: options
+              ? {
+                  column: options.column,
+                  order: options.order,
+                }
+              : undefined,
+          },
+          headers: {
+            authorization: `Bearer ${await serviceKeyAsync}`,
+          },
+        })
+
+        expect(response.statusCode).toBe(200)
+        return response.json<{ name: string }[]>().map((obj) => obj.name)
+      }
+
+      expect(await listNames()).toEqual(['b', 'c', 'leaf-a.txt', 'leaf-z.txt'])
+      expect(await listNames({ column: 'created_at', order: 'asc' })).toEqual([
+        'b',
+        'c',
+        'leaf-a.txt',
+        'leaf-z.txt',
+      ])
+      expect(await listNames({ column: 'updated_at', order: 'desc' })).toEqual([
+        'c',
+        'b',
+        'leaf-a.txt',
+        'leaf-z.txt',
+      ])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await db
+          .from<Obj>('objects')
+          .where({ bucket_id: bucketName })
+          .whereIn(
+            'name',
+            objectRows.map((row) => row.name)
+          )
+          .delete()
+      })
+      await commitSharedTestTransaction(cleanupTx)
+
+      await appInstance.inject({
+        method: 'DELETE',
+        url: `/bucket/${bucketName}`,
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+    }
+  })
+
+  test('sql prefix helpers should return null for non-matching prefixes', async () => {
+    const db = await getSuperuserPostgrestClient()
+
+    const result = await db.raw<{
+      rows: Array<{
+        common_prefix: string | null
+        child_name: string | null
+      }>
+    }>(
+      `
+        select
+          storage.get_common_prefix(?, ?, '/') as common_prefix,
+          storage.get_prefix_child_name(?, ?, '/') as child_name
+      `,
+      ['foo/bar/baz.txt', 'qux/', 'foo/bar/baz.txt', 'qux/']
+    )
+
+    expect(result.rows[0]).toEqual({
+      common_prefix: null,
+      child_name: null,
+    })
+
+    await commitSharedTestTransaction(db)
+  })
+
+  test('afterEach auto-commit should leave shared transaction state cleared for the next test', async () => {
+    const tx = await getSuperuserPostgrestClient()
+    const result = await tx.raw<{ rows: Array<{ value: number }> }>('select 1 as value')
+
+    expect(result.rows[0].value).toBe(1)
+  })
+
+  test('afterEach auto-commit should clear shared transaction state between tests', () => {
+    expect(tnx).toBeUndefined()
+  })
+
+  test('list-v1 should keep folders first for non-name sorting with stable pagination', async () => {
+    const runId = randomUUID()
+    const bucketName = `list-v1-non-name-order-${runId}`
+    const prefix = `non-name-ordering-${runId}/`
+    const objectRows = [
+      {
+        bucket_id: bucketName,
+        name: `${prefix}zeta-folder/file.txt`,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-folder-zeta`,
+        created_at: '2024-01-03T00:00:00.000Z',
+        updated_at: '2024-01-03T00:00:00.000Z',
+        metadata: {
+          eTag: `${runId}-folder-zeta`,
+          size: 1,
+          mimetype: 'text/plain',
+        },
+      },
+      {
+        bucket_id: bucketName,
+        name: `${prefix}alpha-folder/file.txt`,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-folder-alpha`,
+        created_at: '2024-01-02T00:00:00.000Z',
+        updated_at: '2024-01-02T00:00:00.000Z',
+        metadata: {
+          eTag: `${runId}-folder-alpha`,
+          size: 2,
+          mimetype: 'text/plain',
+        },
+      },
+      {
+        bucket_id: bucketName,
+        name: `${prefix}oldest-file.txt`,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-file-oldest`,
+        created_at: '2024-01-01T00:00:00.000Z',
+        updated_at: '2024-01-01T00:00:00.000Z',
+        metadata: {
+          eTag: `${runId}-file-oldest`,
+          size: 3,
+          mimetype: 'text/plain',
+        },
+      },
+      {
+        bucket_id: bucketName,
+        name: `${prefix}newest-file.txt`,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-file-newest`,
+        created_at: '2024-01-04T00:00:00.000Z',
+        updated_at: '2024-01-05T00:00:00.000Z',
+        metadata: {
+          eTag: `${runId}-file-newest`,
+          size: 4,
+          mimetype: 'text/plain',
+        },
+      },
+    ]
+
+    try {
+      const createBucketResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/bucket',
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+        payload: {
+          name: bucketName,
+        },
+      })
+
+      expect(createBucketResponse.statusCode).toBe(200)
+
+      const seedTx = await getSuperuserPostgrestClient()
+      await seedTx.from<Obj>('objects').insert(objectRows)
+      await commitSharedTestTransaction(seedTx)
+
+      const listNames = async (options: {
+        column: 'created_at' | 'updated_at'
+        order: 'asc' | 'desc'
+        offset?: number
+        limit?: number
+      }) => {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: `/object/list/${bucketName}`,
+          payload: {
+            prefix,
+            limit: options.limit ?? 100,
+            offset: options.offset ?? 0,
+            sortBy: {
+              column: options.column,
+              order: options.order,
+            },
+          },
+          headers: {
+            authorization: `Bearer ${await serviceKeyAsync}`,
+          },
+        })
+
+        expect(response.statusCode).toBe(200)
+        return response.json<{ name: string }[]>().map((obj) => obj.name)
+      }
+
+      expect(await listNames({ column: 'created_at', order: 'asc' })).toEqual([
+        'alpha-folder',
+        'zeta-folder',
+        'oldest-file.txt',
+        'newest-file.txt',
+      ])
+      expect(await listNames({ column: 'created_at', order: 'asc', offset: 1, limit: 2 })).toEqual([
+        'zeta-folder',
+        'oldest-file.txt',
+      ])
+      expect(await listNames({ column: 'updated_at', order: 'desc' })).toEqual([
+        'zeta-folder',
+        'alpha-folder',
+        'newest-file.txt',
+        'oldest-file.txt',
+      ])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await db
+          .from<Obj>('objects')
+          .where({ bucket_id: bucketName })
+          .whereIn(
+            'name',
+            objectRows.map((row) => row.name)
+          )
+          .delete()
+      })
+      await commitSharedTestTransaction(cleanupTx)
+
+      await appInstance.inject({
+        method: 'DELETE',
+        url: `/bucket/${bucketName}`,
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+    }
+  })
+
+  test('manual superuser transaction cleanup should not leak shared transaction state between tests', () => {
+    expect(tnx).toBeUndefined()
+  })
+
   test('checking if limit works', async () => {
     const response = await appInstance.inject({
       method: 'POST',
@@ -2673,8 +3221,7 @@ describe('testing list objects', () => {
         },
       }))
     )
-    await seedTx.commit()
-    tnx = undefined
+    await commitSharedTestTransaction(seedTx)
 
     try {
       const response = await appInstance.inject({
@@ -2706,8 +3253,7 @@ describe('testing list objects', () => {
           .whereIn('name', objectNames)
           .delete()
       })
-      await cleanupTx.commit()
-      tnx = undefined
+      await commitSharedTestTransaction(cleanupTx)
     }
   })
 
@@ -2742,8 +3288,7 @@ describe('testing list objects', () => {
         },
       },
     ])
-    await seedTx.commit()
-    tnx = undefined
+    await commitSharedTestTransaction(seedTx)
 
     try {
       const response = await appInstance.inject({
@@ -2775,8 +3320,7 @@ describe('testing list objects', () => {
           .whereIn('name', [literalMatch, wildcardOnlyMatch])
           .delete()
       })
-      await cleanupTx.commit()
-      tnx = undefined
+      await commitSharedTestTransaction(cleanupTx)
     }
   })
 })

@@ -94,6 +94,8 @@ export const ALWAYS_UNSIGNABLE_QUERY_PARAMS = {
   'X-Amz-Signature': true,
 }
 
+export const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+
 export class SignatureV4 {
   public readonly serverCredentials: SignatureV4Options['credentials']
   enforceRegion: boolean
@@ -101,6 +103,7 @@ export class SignatureV4 {
   allowBodyHashing?: boolean
   nonCanonicalForwardedHost?: string
   publicUrl?: URL
+  private readonly signingKeyCache = new Map<string, Buffer>()
 
   constructor(options: SignatureV4Options) {
     this.serverCredentials = options.credentials
@@ -299,11 +302,8 @@ export class SignatureV4 {
     chunkSignature: string,
     prevSignature: string = clientSignature.signature
   ): boolean {
-    const { secretKey } = this.serverCredentials
     const { shortDate, region, service } = clientSignature.credentials
-    const signingKey = this.signingKey(secretKey, shortDate, region, service)
-
-    const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+    const signingKey = this.getCachedSigningKey(shortDate, region, service)
 
     // Build the “String to Sign” for this chunk exactly per AWS:
     //    AWS4-HMAC-SHA256-PAYLOAD
@@ -318,7 +318,7 @@ export class SignatureV4 {
       clientSignature.longDate,
       scope,
       prevSignature,
-      emptyHash,
+      EMPTY_SHA256_HASH,
       chunkHash,
     ].join('\n')
 
@@ -334,8 +334,7 @@ export class SignatureV4 {
     this.validateCredentials(clientSignature.credentials)
     const selectedRegion = this.getSelectedRegion(clientSignature.credentials.region)
 
-    const signingKey = this.signingKey(
-      serverCredentials.secretKey,
+    const signingKey = this.getCachedSigningKey(
       clientSignature.credentials.shortDate,
       selectedRegion,
       serverCredentials.service
@@ -374,8 +373,7 @@ export class SignatureV4 {
       canonicalRequest
     )
 
-    const signingKey = this.signingKey(
-      serverCredentials.secretKey,
+    const signingKey = this.getCachedSigningKey(
       clientSignature.credentials.shortDate,
       selectedRegion,
       serverCredentials.service
@@ -399,7 +397,7 @@ export class SignatureV4 {
 
     // If the body is undefined, use the hash of an empty string
     if (body === null || body === undefined) {
-      return 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+      return EMPTY_SHA256_HASH
     }
 
     // Calculate the SHA256 hash of the body
@@ -588,6 +586,23 @@ export class SignatureV4 {
     const kRegion = this.hmac(kDate, regionName)
     const kService = this.hmac(kRegion, serviceName)
     return this.hmac(kService, 'aws4_request')
+  }
+
+  private getCachedSigningKey(dateStamp: string, regionName: string, serviceName: string) {
+    const cacheKey = `${dateStamp}\0${regionName}\0${serviceName}`
+    let signingKey = this.signingKeyCache.get(cacheKey)
+
+    if (!signingKey) {
+      signingKey = this.signingKey(
+        this.serverCredentials.secretKey,
+        dateStamp,
+        regionName,
+        serviceName
+      )
+      this.signingKeyCache.set(cacheKey, signingKey)
+    }
+
+    return signingKey
   }
 
   protected async sha256OfRequest(req: Readable) {

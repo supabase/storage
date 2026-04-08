@@ -39,12 +39,10 @@ import { FastifyInstance } from 'fastify'
 import { ReadableStreamBuffer } from 'stream-buffers'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
-import { SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
+import { EMPTY_SHA256_HASH, SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
 
 const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
 const STREAMING_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
-const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
   let bucketName: string
   if (!name) {

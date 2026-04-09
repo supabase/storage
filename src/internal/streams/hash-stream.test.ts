@@ -6,7 +6,8 @@ import path from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { HashSpillWritable } from '@internal/streams/hash-stream'
-import { waitForEventually } from './utils/promise'
+import { vi } from 'vitest'
+import { waitForEventually } from '../../test/utils/promise'
 
 function randBuf(size: number): Buffer {
   const b = Buffer.allocUnsafe(size)
@@ -314,7 +315,7 @@ describe('HashSpillWritable', () => {
     const sink = new HashSpillWritable({ limitInMemoryBytes: limit, tmpRoot })
 
     // Stub createWriteStream to fail on creation
-    const spy = jest.spyOn(fs, 'createWriteStream').mockImplementation(() => {
+    const spy = vi.spyOn(fs, 'createWriteStream').mockImplementation(() => {
       throw Object.assign(new Error('simulated createWriteStream failure'), { code: 'EACCES' })
     })
 
@@ -417,7 +418,7 @@ describe('HashSpillWritable', () => {
 
     // Mock Date.now to return same timestamp for all instances
     const fixedTimestamp = 1234567890123
-    jest.spyOn(Date, 'now').mockReturnValue(fixedTimestamp)
+    vi.spyOn(Date, 'now').mockReturnValue(fixedTimestamp)
 
     try {
       const jobs = Array.from({ length: N }, async (_, idx) => {
@@ -439,7 +440,7 @@ describe('HashSpillWritable', () => {
 
       await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
     } finally {
-      jest.restoreAllMocks()
+      vi.restoreAllMocks()
     }
   })
 

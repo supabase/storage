@@ -1,4 +1,5 @@
 module.exports = {
+  roots: ['<rootDir>/src/test'],
   testSequencer: './jest.sequencer.cjs',
   transform: {
     '^.+/node_modules/@aws-sdk/.+\\.[jt]s$': 'babel-jest',
@@ -27,6 +28,7 @@ module.exports = {
   },
   setupFilesAfterEnv: ['<rootDir>/src/test/jest-setup.ts'],
   testEnvironment: 'node',
+  testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['node_modules', 'dist'],
   coverageReporters: ['lcovonly', 'text-summary'],
   coverageProvider: 'v8',

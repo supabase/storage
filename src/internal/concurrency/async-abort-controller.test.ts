@@ -1,4 +1,5 @@
 import { AsyncAbortController } from '@internal/concurrency'
+import { vi } from 'vitest'
 
 describe('AsyncAbortController', () => {
   it('reuses nextGroup when accessed repeatedly', () => {
@@ -25,7 +26,7 @@ describe('AsyncAbortController', () => {
   it('aborts a nextGroup child only once even after repeated access', async () => {
     const controller = new AsyncAbortController()
     const childGroup = controller.nextGroup
-    const abortSpy = jest.spyOn(childGroup, 'abortAsync').mockResolvedValue(undefined)
+    const abortSpy = vi.spyOn(childGroup, 'abortAsync').mockResolvedValue(undefined)
 
     void controller.nextGroup
     void controller.nextGroup
@@ -140,7 +141,7 @@ describe('AsyncAbortController', () => {
 
   it('does not invoke or wait on explicitly removed abort listeners', async () => {
     const controller = new AsyncAbortController()
-    const listener = jest.fn()
+    const listener = vi.fn()
 
     controller.signal.addEventListener('abort', listener)
     controller.signal.removeEventListener('abort', listener)
@@ -152,7 +153,7 @@ describe('AsyncAbortController', () => {
   it('does not invoke or wait on abort listeners removed by a registration signal', async () => {
     const controller = new AsyncAbortController()
     const registration = new AbortController()
-    const listener = jest.fn()
+    const listener = vi.fn()
 
     controller.signal.addEventListener('abort', listener, {
       signal: registration.signal,
@@ -167,7 +168,7 @@ describe('AsyncAbortController', () => {
   it('ignores abort listeners registered with an already aborted signal', async () => {
     const controller = new AsyncAbortController()
     const registration = new AbortController()
-    const listener = jest.fn()
+    const listener = vi.fn()
 
     registration.abort()
     controller.signal.addEventListener('abort', listener, {

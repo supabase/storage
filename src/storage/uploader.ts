@@ -498,6 +498,9 @@ export async function fileUploadFromRequest(
         }
       }
     } catch (e) {
+      if (e instanceof StorageBackendError) {
+        throw e
+      }
       throw ERRORS.NoContentProvided(e as Error)
     }
   } else {

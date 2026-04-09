@@ -592,13 +592,37 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  test('return 400 when uploading an object with a not allowed mime-type', async () => {
+  test('return 400 when uploading an object with a not allowed mime-type (binary path)', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
       authorization: `Bearer ${await serviceKeyAsync}`,
       'x-upsert': 'true',
       'content-type': 'image/png',
+    })
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/public-limit-mime-types/sadcat-upload23.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(await response.json()).toEqual({
+      error: 'invalid_mime_type',
+      message: `mime type image/png is not supported`,
+      statusCode: '415',
+    })
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 400 when uploading a multipart form-data object with a not allowed mime-type', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    form.append('contentType', 'image/png')
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${await serviceKeyAsync}`,
+      'x-upsert': 'true',
     })
 
     const response = await appInstance.inject({

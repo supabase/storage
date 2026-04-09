@@ -322,7 +322,7 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
     return {
       headers: {
         'Tus-Complete': '1',
-        'x-supabase-id': result.obj.id,
+        ...(result.obj.id ? { 'x-supabase-id': result.obj.id } : {}),
       },
     }
   } catch (e) {

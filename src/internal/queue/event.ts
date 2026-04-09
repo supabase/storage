@@ -21,6 +21,16 @@ export interface BasePayload {
 
 const { pgQueueEnable, region, isMultitenant } = getConfig()
 
+function withPayloadVersion<TPayload extends BasePayload>(
+  payload: TPayload,
+  version: string
+): TPayload {
+  return {
+    ...payload,
+    $version: payload.$version ?? version,
+  }
+}
+
 export type StaticThis<T extends Event<any>> = BaseEventConstructor<T>
 
 interface BaseEventConstructor<Base extends Event<any>> {
@@ -101,19 +111,20 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
 
     return Queue.getInstance().insert(
       messages.map((message) => {
-        const sendOptions = (this.getSendOptions(message.payload) as PgBoss.JobInsert) || {}
-        if (!message.payload.$version) {
-          ;(message.payload as (typeof message)['payload']).$version = this.version
-        }
+        const payloadWithVersion = withPayloadVersion(
+          message.payload as (typeof message)['payload'],
+          this.version
+        )
+        const sendOptions = (this.getSendOptions(payloadWithVersion) as PgBoss.JobInsert) || {}
 
-        if (message.payload.scheduleAt) {
-          sendOptions.startAfter = new Date(message.payload.scheduleAt)
+        if (payloadWithVersion.scheduleAt) {
+          sendOptions.startAfter = new Date(payloadWithVersion.scheduleAt)
         }
 
         return {
           ...sendOptions,
           name: this.getQueueName(),
-          data: message.payload,
+          data: payloadWithVersion,
           deadLetter: this.deadLetterQueueName(),
         }
       })
@@ -125,10 +136,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     payload: Omit<T['payload'], '$version'>,
     opts?: SendOptions & { tnx?: Knex }
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
+    const that = new this(withPayloadVersion(payload as T['payload'], this.version))
     return that.send(opts)
   }
 
@@ -136,10 +144,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     this: StaticThis<T>,
     payload: Omit<T['payload'], '$version'>
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
+    const that = new this(withPayloadVersion(payload as T['payload'], this.version))
     return that.invoke()
   }
 
@@ -148,10 +153,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     payload: Omit<T['payload'], '$version'>,
     options?: SendOptions & { sendWhenError?: (error: unknown) => boolean }
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
+    const that = new this(withPayloadVersion(payload as T['payload'], this.version))
     return that.invokeOrSend(options)
   }
 

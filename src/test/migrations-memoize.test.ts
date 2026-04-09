@@ -4,7 +4,7 @@
 describe('memoizePromise helper', () => {
   it('should cache promise results correctly', async () => {
     // Create a simple memoized function for testing
-    const memoizePromise = <T extends any[], R>(
+    const memoizePromise = <T extends unknown[], R>(
       fn: (...args: T) => Promise<R>
     ): ((...args: T) => Promise<R>) => {
       const cache = new Map<string, Promise<R>>()
@@ -48,7 +48,7 @@ describe('memoizePromise helper', () => {
   })
 
   it('should handle different argument combinations', async () => {
-    const memoizePromise = <T extends any[], R>(
+    const memoizePromise = <T extends unknown[], R>(
       fn: (...args: T) => Promise<R>
     ): ((...args: T) => Promise<R>) => {
       const cache = new Map<string, Promise<R>>()
@@ -86,7 +86,7 @@ describe('memoizePromise helper', () => {
   })
 
   it('should generate keys for objects and primitives', async () => {
-    const memoizePromise = <T extends any[], R>(
+    const memoizePromise = <T extends unknown[], R>(
       fn: (...args: T) => Promise<R>
     ): ((...args: T) => Promise<R>) => {
       const cache = new Map<string, Promise<R>>()
@@ -125,7 +125,7 @@ describe('memoizePromise helper', () => {
   })
 
   it('should handle promise rejections correctly', async () => {
-    const memoizePromise = <T extends any[], R>(
+    const memoizePromise = <T extends unknown[], R>(
       fn: (...args: T) => Promise<R>
     ): ((...args: T) => Promise<R>) => {
       const cache = new Map<string, Promise<R>>()

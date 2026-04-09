@@ -244,5 +244,12 @@ async function httpAdminServer(
 }
 
 async function upgrades() {
-  return Promise.all([SyncCatalogIds.invoke({})])
+  return Promise.all([
+    SyncCatalogIds.invoke({
+      tenant: {
+        ref: '',
+        host: '',
+      },
+    }),
+  ])
 }

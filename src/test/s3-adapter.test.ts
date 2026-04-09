@@ -26,9 +26,9 @@ jest.mock('@aws-sdk/lib-storage', () => {
 })
 
 type MockUploadInstance = {
-  options: any
+  options: ConstructorParameters<typeof Upload>[0]
   abort: jest.Mock
-  done: jest.Mock<Promise<any>, []>
+  done: jest.Mock<Promise<unknown>, []>
   on: jest.Mock
   off: jest.Mock
   emit: (event: string, payload: unknown) => void
@@ -36,7 +36,7 @@ type MockUploadInstance = {
 
 describe('S3Backend', () => {
   let mockSend: jest.Mock
-  let mockUploadDone: jest.Mock<Promise<any>, [MockUploadInstance]>
+  let mockUploadDone: jest.Mock<Promise<unknown>, [MockUploadInstance]>
   let uploadInstances: MockUploadInstance[]
 
   beforeEach(() => {

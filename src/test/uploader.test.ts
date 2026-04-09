@@ -6,6 +6,10 @@ import { ObjectAdminDelete } from '../storage/events'
 import { TenantLocation } from '../storage/locator'
 import { fileUploadFromRequest, Uploader } from '../storage/uploader'
 
+type UploaderBackend = ConstructorParameters<typeof Uploader>[0]
+type UploaderDatabase = ConstructorParameters<typeof Uploader>[1]
+type CompleteUploadResult = Awaited<ReturnType<Uploader['completeUpload']>>
+
 describe('fileUploadFromRequest', () => {
   test('keeps multipart/form-data file size undefined even when the request content-length exceeds 5GB', async () => {
     const file = Readable.from(['payload']) as Readable & { truncated: boolean }
@@ -279,19 +283,21 @@ describe('fileUploadFromRequest', () => {
       .spyOn(ObjectAdminDelete, 'send')
       .mockResolvedValue(undefined)
 
+    const backend = {
+      uploadObject: jest.fn(async (_bucket, _key, _version, body: Readable) => {
+        body.destroy(new Error('stream pipeline failed'))
+        throw StorageBackendError.fromError(new Error('socket hang up'))
+      }),
+    }
+    const db = {
+      tenantId: 'stub-tenant',
+      reqId: 'req-1',
+      tenant: () => ({ ref: 'stub-tenant' }),
+      testPermission: jest.fn().mockResolvedValue(undefined),
+    }
     const uploader = new Uploader(
-      {
-        uploadObject: jest.fn(async (_bucket, _key, _version, body: Readable) => {
-          body.destroy(new Error('stream pipeline failed'))
-          throw StorageBackendError.fromError(new Error('socket hang up'))
-        }),
-      } as any,
-      {
-        tenantId: 'stub-tenant',
-        reqId: 'req-1',
-        tenant: () => ({ ref: 'stub-tenant' }),
-        testPermission: jest.fn().mockResolvedValue(undefined),
-      } as any,
+      backend as unknown as UploaderBackend,
+      db as unknown as UploaderDatabase,
       new TenantLocation('test-bucket')
     )
 
@@ -326,29 +332,30 @@ describe('fileUploadFromRequest', () => {
         contentRange: undefined,
       }),
     }
+    const db = {
+      tenantId: 'stub-tenant',
+      reqId: 'req-1',
+      tenant: () => ({ ref: 'stub-tenant' }),
+      testPermission: jest.fn(async (fn) =>
+        fn({
+          createObject: jest.fn(async (payload: { metadata?: { contentLength?: number } }) => {
+            capturedWrites.push(payload)
+          }),
+          upsertObject: jest.fn(async (payload: { metadata?: { contentLength?: number } }) => {
+            capturedWrites.push(payload)
+          }),
+        })
+      ),
+    }
     const uploader = new Uploader(
-      backend as any,
-      {
-        tenantId: 'stub-tenant',
-        reqId: 'req-1',
-        tenant: () => ({ ref: 'stub-tenant' }),
-        testPermission: jest.fn(async (fn) =>
-          fn({
-            createObject: jest.fn(async (payload: { metadata?: { contentLength?: number } }) => {
-              capturedWrites.push(payload)
-            }),
-            upsertObject: jest.fn(async (payload: { metadata?: { contentLength?: number } }) => {
-              capturedWrites.push(payload)
-            }),
-          })
-        ),
-      } as any,
+      backend as unknown as UploaderBackend,
+      db as unknown as UploaderDatabase,
       new TenantLocation('test-bucket')
     )
     const completeUploadSpy = jest.spyOn(uploader, 'completeUpload').mockResolvedValue({
       metadata: { eTag: '"etag"' },
       obj: { id: 'obj-id' },
-    } as any)
+    } as unknown as CompleteUploadResult)
 
     await uploader.upload({
       bucketId: 'bucket',

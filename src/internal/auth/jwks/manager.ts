@@ -15,6 +15,10 @@ import { JWKSManagerStore } from './store'
 const JWK_KIND_STORAGE_URL_SIGNING = 'storage-url-signing-key'
 const JWK_KID_SEPARATOR = '_'
 
+function isTenantCacheKeyMessage(message: unknown): message is string {
+  return typeof message === 'string'
+}
+
 const tenantJwksMutex = createMutexByKey<JwksConfig>()
 export const TENANT_JWKS_CACHE_MAX_ITEMS = 16384
 export const TENANT_JWKS_CACHE_MAX_SIZE_BYTES = 1024 * 1024 * 50 // 50 MiB
@@ -50,6 +54,10 @@ export class JWKSManager {
    */
   async listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void> {
     await pubSub.subscribe(TENANTS_JWKS_UPDATE_CHANNEL, (cacheKey) => {
+      if (!isTenantCacheKeyMessage(cacheKey)) {
+        return
+      }
+
       tenantJwksConfigCache.delete(cacheKey)
     })
   }

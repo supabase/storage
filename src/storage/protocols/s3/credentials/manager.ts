@@ -19,6 +19,10 @@ export const TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS = 16384
 export const TENANT_S3_CREDENTIALS_CACHE_MAX_SIZE_BYTES = 1024 * 1024 * 50 // 50 MiB
 export const TENANT_S3_CREDENTIALS_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 
+function isTenantCacheKeyMessage(message: unknown): message is string {
+  return typeof message === 'string'
+}
+
 const tenantS3CredentialsCache = createLruCache<string, S3Credentials>(
   TENANT_S3_CREDENTIALS_CACHE_NAME,
   {
@@ -47,6 +51,10 @@ export class S3CredentialsManager {
    */
   async listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void> {
     await pubSub.subscribe(TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL, (cacheKey) => {
+      if (!isTenantCacheKeyMessage(cacheKey)) {
+        return
+      }
+
       tenantS3CredentialsCache.delete(cacheKey)
     })
   }

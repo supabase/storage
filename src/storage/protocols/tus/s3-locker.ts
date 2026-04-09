@@ -29,6 +29,14 @@ interface LockMetadata {
   renewedAt: number
 }
 
+type LockerError = {
+  name?: string
+  message?: string
+  $metadata?: {
+    httpStatusCode?: number
+  }
+}
+
 export class S3Locker implements Locker {
   private readonly s3Client: S3Client
   private readonly bucket: string
@@ -91,13 +99,13 @@ export class S3Locker implements Locker {
           })
         )
         return true
-      } catch (error: any) {
+      } catch (error: unknown) {
         if (signal.aborted) {
           return false
         }
 
         // If lock already exists, check if it's expired or zombie
-        if (error.name === 'PreconditionFailed' || error.$metadata?.httpStatusCode === 412) {
+        if (hasErrorName(error, 'PreconditionFailed') || getHttpStatusCode(error) === 412) {
           const isExpired = await this.checkAndCleanupExpiredLock(lockKey, signal)
           await this.notifier.release(id)
 
@@ -112,7 +120,7 @@ export class S3Locker implements Locker {
           continue
         }
 
-        this.logger.error(`Lock acquisition failed for ${id}:`, error.message)
+        this.logger.error(`Lock acquisition failed for ${id}:`, getErrorMessage(error))
         throw error
       }
     }
@@ -165,8 +173,8 @@ export class S3Locker implements Locker {
         })
       )
       return true
-    } catch (error: any) {
-      if (error.name === 'NoSuchKey' || error.name === 'PreconditionFailed') {
+    } catch (error: unknown) {
+      if (hasErrorName(error, 'NoSuchKey') || hasErrorName(error, 'PreconditionFailed')) {
         return false
       }
       throw error
@@ -184,9 +192,9 @@ export class S3Locker implements Locker {
           Key: lockKey,
         })
       )
-    } catch (error: any) {
+    } catch (error: unknown) {
       // If lock doesn't exist, that's fine
-      if (error.name !== 'NoSuchKey') {
+      if (!hasErrorName(error, 'NoSuchKey')) {
         throw error
       }
     }
@@ -230,12 +238,15 @@ export class S3Locker implements Locker {
                   expiredLocks.push(object.Key)
                 }
               }
-            } catch (error: any) {
+            } catch (error: unknown) {
               // If we can't read the lock, it might be corrupted - clean it up
-              if (error.name === 'NoSuchKey') {
+              if (hasErrorName(error, 'NoSuchKey')) {
                 continue
               }
-              console.warn(`Failed to read lock ${object.Key}, marking for cleanup:`, error.message)
+              console.warn(
+                `Failed to read lock ${object.Key}, marking for cleanup:`,
+                getErrorMessage(error)
+              )
               expiredLocks.push(object.Key)
             }
           }
@@ -315,8 +326,8 @@ export class S3Locker implements Locker {
       }
 
       return false // Lock is still valid
-    } catch (error: any) {
-      if (error.name === 'NoSuchKey') {
+    } catch (error: unknown) {
+      if (hasErrorName(error, 'NoSuchKey')) {
         return true // Lock doesn't exist
       }
       throw error
@@ -339,6 +350,30 @@ export class S3Locker implements Locker {
       signal.addEventListener('abort', onAbort, { once: true })
     })
   }
+}
+
+function hasErrorName(error: unknown, name: string): error is LockerError {
+  return !!error && typeof error === 'object' && 'name' in error && error.name === name
+}
+
+function getHttpStatusCode(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') {
+    return undefined
+  }
+
+  return (error as LockerError).$metadata?.httpStatusCode
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  if (error && typeof error === 'object' && typeof (error as LockerError).message === 'string') {
+    return (error as LockerError).message as string
+  }
+
+  return String(error)
 }
 
 export class S3Lock implements Lock {

@@ -118,6 +118,7 @@ export class Uploader {
    */
   async upload(request: UploadRequest) {
     const file = request.file
+    const uploadType = request.uploadType ?? 'standard'
     const version = await this.prepareUpload({
       bucketId: request.bucketId,
       objectName: request.objectName,
@@ -128,7 +129,7 @@ export class Uploader {
         mimetype: file.mimeType,
         contentLength: file.declaredContentLength ?? file.contentLength,
       },
-      uploadType: request.uploadType,
+      uploadType,
     })
 
     try {
@@ -204,6 +205,7 @@ export class Uploader {
   }) {
     try {
       const db = this.db.asSuperUser()
+      const effectiveUploadType = uploadType ?? 'standard'
       // Since we have finished uploading the file,
       // even if the request is aborted now, we want to complete the DB transaction
       const abController = new AbortController()
@@ -257,7 +259,7 @@ export class Uploader {
               bucketId,
               metadata: objectMetadata,
               reqId: this.db.reqId,
-              uploadType,
+              uploadType: effectiveUploadType,
             })
             .catch((e) => {
               logSchema.error(logger, 'Failed to send webhook', {
@@ -269,7 +271,7 @@ export class Uploader {
                   bucketId,
                   metadata: objectMetadata,
                   reqId: this.db.reqId,
-                  uploadType,
+                  uploadType: effectiveUploadType,
                 }),
               })
             })
@@ -278,7 +280,7 @@ export class Uploader {
         await Promise.all(events)
 
         fileUploadedSuccess.add(1, {
-          uploadType,
+          uploadType: effectiveUploadType,
           tenantId: this.db.tenantId,
         })
 

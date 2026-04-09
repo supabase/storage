@@ -295,7 +295,7 @@ export class Storage {
 
     // use queue to recursively delete all objects created before the specified time
     await ObjectAdminDeleteAllBefore.send({
-      before,
+      before: before.toISOString(),
       bucketId,
       tenant: this.db.tenant(),
       reqId: this.db.reqId,

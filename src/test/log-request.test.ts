@@ -56,4 +56,39 @@ describe('log-request plugin', () => {
       resources: ['/bucket/demo', '/object/demo'],
     })
   })
+
+  it('does not evaluate configured resources when request resources already exist', async () => {
+    const configuredResources = jest.fn(() => {
+      throw new Error('resources config should not run')
+    })
+
+    app.addHook('onRequest', async (request) => {
+      request.resources = ['/preset/resource']
+    })
+
+    app.get(
+      '/bucket/:bucket',
+      {
+        config: {
+          resources: configuredResources,
+        },
+      },
+      async (request) => {
+        return {
+          resources: request.resources,
+        }
+      }
+    )
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/bucket/demo',
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(configuredResources).not.toHaveBeenCalled()
+    expect(response.json()).toEqual({
+      resources: ['/preset/resource'],
+    })
+  })
 })

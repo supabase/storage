@@ -518,12 +518,10 @@ export default async function routes(fastify: FastifyInstance) {
       try {
         if (typeof payload === 'string') return done(null, JSONBigint.parse(payload))
         if (Buffer.isBuffer(payload)) return done(null, JSONBigint.parse(payload.toString('utf8')))
-        if (payload && typeof (payload as any).on === 'function') {
+        if (isReadablePayload(payload)) {
           const chunks: Buffer[] = []
-          ;(payload as NodeJS.ReadableStream).on('data', (c) =>
-            chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c)))
-          )
-          ;(payload as NodeJS.ReadableStream).on('end', () => {
+          payload.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c))))
+          payload.on('end', () => {
             try {
               done(null, JSONBigint.parse(Buffer.concat(chunks).toString('utf8')))
             } catch (err) {
@@ -573,4 +571,10 @@ export default async function routes(fastify: FastifyInstance) {
       }
     )
   })
+}
+
+function isReadablePayload(payload: unknown): payload is NodeJS.ReadableStream {
+  return (
+    !!payload && typeof payload === 'object' && 'on' in payload && typeof payload.on === 'function'
+  )
 }

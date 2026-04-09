@@ -2,31 +2,44 @@
  * This special AbortController is used to wait for all the abort handlers to finish before resolving the promise.
  */
 export class AsyncAbortController extends AbortController {
-  protected promises: Promise<any>[] = []
+  protected promises: Promise<unknown>[] = []
   protected _nextGroup?: AsyncAbortController
 
   constructor() {
     super()
 
-    const originalEventListener = this.signal.addEventListener
+    const originalEventListener = this.signal.addEventListener.bind(this.signal)
 
     // Patch event addEventListener to keep track of listeners and their promises
-    this.signal.addEventListener = (type: string, listener: any, options: any) => {
-      if (type !== 'abort') {
-        return originalEventListener.call(this.signal, type, listener, options)
+    this.signal.addEventListener = (
+      type: string,
+      listener: EventListenerOrEventListenerObject | null,
+      options?: boolean | AddEventListenerOptions
+    ) => {
+      if (!listener) {
+        return
       }
 
-      let resolving: undefined | (() => Promise<void>) = undefined
+      if (type !== 'abort') {
+        return originalEventListener(type, listener, options)
+      }
+
+      let resolving: ((event: Event) => Promise<void>) | undefined
       const promise = new Promise<void>((resolve, reject) => {
-        resolving = async (): Promise<void> => {
-          return Promise.resolve()
-            .then(() => listener())
-            .then(() => {
+        resolving = (event: Event): Promise<void> => {
+          try {
+            const result =
+              typeof listener === 'function'
+                ? listener.call(this.signal, event)
+                : listener.handleEvent(event)
+
+            return Promise.resolve(result).then(() => {
               resolve()
-            })
-            .catch((error) => {
-              reject(error)
-            })
+            }, reject)
+          } catch (error) {
+            reject(error)
+            return Promise.resolve()
+          }
         }
       })
       this.promises.push(promise)
@@ -35,7 +48,7 @@ export class AsyncAbortController extends AbortController {
         throw new Error('resolve is undefined')
       }
 
-      return originalEventListener.call(this.signal, type, resolving, options)
+      return originalEventListener(type, resolving as EventListener, options)
     }
   }
 

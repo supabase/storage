@@ -13,7 +13,7 @@ export class StorageBackendError extends Error implements RenderableError {
   userStatusCode: number
   resource?: string
   code: ErrorCode
-  metadata?: Record<string, any> = {}
+  metadata?: Record<string, unknown> = {}
   error?: string // backwards compatible error
 
   constructor(options: StorageErrorOptions) {
@@ -71,7 +71,7 @@ export class StorageBackendError extends Error implements RenderableError {
     return this
   }
 
-  withMetadata(metadata: Record<string, any>) {
+  withMetadata(metadata: Record<string, unknown>) {
     this.metadata = metadata
     return this
   }

@@ -1,5 +1,3 @@
-'use strict'
-
 // Simple test for memoizePromise helper function
 describe('memoizePromise helper', () => {
   it('should cache promise results correctly', async () => {

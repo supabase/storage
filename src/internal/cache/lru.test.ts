@@ -1,15 +1,14 @@
-'use strict'
-
 import { createLruCache } from '@internal/cache'
+import { vi } from 'vitest'
 
 describe('lru cache wrapper', () => {
   beforeEach(() => {
-    jest.useFakeTimers()
+    vi.useFakeTimers()
   })
 
   afterEach(() => {
-    jest.restoreAllMocks()
-    jest.useRealTimers()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
   })
 
   test('reports hit miss and stale outcomes', () => {
@@ -34,7 +33,7 @@ describe('lru cache wrapper', () => {
       outcome: 'hit',
     })
 
-    jest.advanceTimersByTime(11)
+    vi.advanceTimersByTime(11)
 
     expect(cache.getWithOutcome('entry')).toEqual({
       value: { bytes: 1 },
@@ -58,7 +57,7 @@ describe('lru cache wrapper', () => {
 
     expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 1 })
 
-    jest.advanceTimersByTime(20)
+    vi.advanceTimersByTime(20)
 
     expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
     expect(cache.get('stale')).toBeUndefined()
@@ -88,7 +87,7 @@ describe('lru cache wrapper', () => {
 
     expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 7 })
 
-    jest.advanceTimersByTime(16)
+    vi.advanceTimersByTime(16)
 
     expect(cache.get('a')).toBeUndefined()
     expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
@@ -109,7 +108,7 @@ describe('lru cache wrapper', () => {
     cache.set('stale', { bytes: 1 })
     cache.dispose()
 
-    jest.advanceTimersByTime(20)
+    vi.advanceTimersByTime(20)
 
     expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 1 })
 

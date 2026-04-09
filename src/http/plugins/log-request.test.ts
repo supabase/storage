@@ -1,5 +1,5 @@
 import Fastify, { FastifyInstance } from 'fastify'
-import { logRequest } from '../http/plugins/log-request'
+import { logRequest } from './log-request'
 
 describe('log-request plugin', () => {
   let app: FastifyInstance

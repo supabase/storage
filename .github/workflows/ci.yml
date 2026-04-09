@@ -38,6 +38,42 @@ jobs:
       - name: Build
         run: npm run build
 
+  test_unit:
+    name: Test / Unit
+    needs: lint_build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      - name: Set up Node
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: npm ci
+      - name: Prepare env files
+        run: |
+          cp .env.sample .env
+          cp .env.test.sample .env.test
+      - name: Unit tests pass
+        run: npm run test:unit:coverage
+      - name: Upload coverage results to Coveralls
+        uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2.3.7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          file: coverage/lcov.info
+          format: lcov
+          parallel: true
+          flag-name: unit
+          fail-on-error: false
+        continue-on-error: true
+
   test_postgres:
     name: Test / Postgres
     needs: lint_build
@@ -71,6 +107,8 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           file: coverage/lcov.info
           format: lcov
+          parallel: true
+          flag-name: rest
           fail-on-error: false
         continue-on-error: true
       - name: Verify migration idempotency
@@ -142,3 +180,20 @@ jobs:
             > after-oriole.sql
 
           diff before-oriole.sql after-oriole.sql || (echo 'Oriole schema mismatch!'; exit 1)
+
+  coveralls_finish:
+    name: Coveralls / Finalize
+    needs:
+      - test_unit
+      - test_postgres
+    if: ${{ always() }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - name: Finalize parallel Coveralls build
+        uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2.3.7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          parallel-finished: true
+          fail-on-error: false
+        continue-on-error: true

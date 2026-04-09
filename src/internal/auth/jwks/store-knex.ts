@@ -7,6 +7,10 @@ const { multitenantDatabaseQueryTimeout } = getConfig()
 export class JWKSManagerStoreKnex implements JWKSManagerStore<Knex.Transaction> {
   constructor(private knex: Knex) {}
 
+  async transaction<T>(callback: (trx: Knex.Transaction) => Promise<T>): Promise<T> {
+    return this.knex.transaction(callback)
+  }
+
   async insert(
     tenant_id: string,
     content: string,
@@ -49,8 +53,14 @@ export class JWKSManagerStoreKnex implements JWKSManagerStore<Knex.Transaction> 
     }
   }
 
-  async toggleActive(tenantId: string, id: string, newState: boolean): Promise<boolean> {
-    const updated = await this.knex
+  async toggleActive(
+    tenantId: string,
+    id: string,
+    newState: boolean,
+    trx?: Knex.Transaction
+  ): Promise<boolean> {
+    const db = trx || this.knex
+    const updated = await db
       .table('tenants_jwks')
       .where('id', id)
       .where('tenant_id', tenantId)
@@ -60,13 +70,18 @@ export class JWKSManagerStoreKnex implements JWKSManagerStore<Knex.Transaction> 
     return updated > 0
   }
 
-  listActive(tenantId: string): Promise<JWKStoreItem[]> {
-    return this.knex
+  listActive(tenantId: string, kind?: string): Promise<JWKStoreItem[]> {
+    const query = this.knex
       .table<JWKStoreItem>('tenants_jwks')
       .select('id', 'kind', 'content')
       .where('tenant_id', tenantId)
       .where('active', true)
-      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
+
+    if (kind) {
+      query.where('kind', kind)
+    }
+
+    return query.abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
   }
 
   async listTenantsWithoutKindPaginated(

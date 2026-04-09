@@ -1,6 +1,7 @@
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
 import { jwksManager } from '@internal/database'
 import { logSchema } from '@internal/monitoring'
+import { JwksRollUrlSigningKey } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import apiKey from '../../plugins/apikey'
@@ -48,6 +49,12 @@ interface JwksUpdateRequestInterface extends RequestGenericInterface {
   Params: {
     tenantId: string
     kid: string
+  }
+}
+
+interface JwksRollRequestInterface extends RequestGenericInterface {
+  Params: {
+    tenantId: string
   }
 }
 
@@ -124,6 +131,23 @@ export default async function routes(fastify: FastifyInstance) {
       } = request
       const result = await jwksManager.toggleJwkActive(tenantId, kid, active)
       return reply.send({ result })
+    }
+  )
+
+  fastify.post<JwksRollRequestInterface>(
+    '/:tenantId/jwks/url-signing/roll',
+    { schema: { tags: ['jwks'] } },
+    async (request, reply) => {
+      const { tenantId } = request.params
+
+      await JwksRollUrlSigningKey.send({
+        tenantId,
+        tenant: {
+          ref: tenantId,
+        },
+      })
+
+      return reply.send({ started: true })
     }
   )
 

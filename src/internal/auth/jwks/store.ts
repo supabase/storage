@@ -11,6 +11,12 @@ export interface PaginatedTenantItem {
 
 export interface JWKSManagerStore<TRX> {
   /**
+   * Run operations in a transaction
+   * @param callback
+   */
+  transaction<T>(callback: (trx: TRX) => Promise<T>): Promise<T>
+
+  /**
    * Adds a jwk to the database
    * @param tenant_id owning tenant
    * @param content serialized and encrypted jwk content
@@ -31,14 +37,16 @@ export interface JWKSManagerStore<TRX> {
    * @param tenantId
    * @param id
    * @param newState
+   * @param trx optional transaction to use for this query
    */
-  toggleActive(tenantId: string, id: string, newState: boolean): Promise<boolean>
+  toggleActive(tenantId: string, id: string, newState: boolean, trx?: TRX): Promise<boolean>
 
   /**
    * Lists all active jwks for the specified tenant
    * @param tenantId
+   * @param kind optional filter by kind
    */
-  listActive(tenantId: string): Promise<JWKStoreItem[]>
+  listActive(tenantId: string, kind?: string): Promise<JWKStoreItem[]>
 
   /**
    * Lists tenants that do not have a jwk of the specified kind

@@ -3370,7 +3370,7 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "description": "Current number of live entries stored in each monitored cache across the selected instances. Use this to track occupancy against configured item-count limits and catch unexpected growth.",
+          "description": "Maximum live entries in a single monitored cache instance across the selected instances. Compare this directly against per-process item-count limits; use an ad hoc sum query instead when you want fleet-wide totals.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -3452,13 +3452,13 @@
                 "uid": "local_prometheus"
               },
               "editorMode": "code",
-              "expr": "sum(storage_api_otel_cache_entries{region=~\"$region\", instance=~\"$instance\"}) by (cache)",
+              "expr": "max(storage_api_otel_cache_entries{region=~\"$region\", instance=~\"$instance\"}) by (cache)",
               "legendFormat": "{{ cache }}",
               "range": true,
               "refId": "A"
             }
           ],
-          "title": "Cache Entries",
+          "title": "Cache Entries (Max Instance)",
           "type": "timeseries"
         },
         {
@@ -3466,7 +3466,7 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "description": "Current estimated memory footprint of each monitored cache. Rising cache size without better hit behavior can indicate oversized items or TTLs that are too generous.",
+          "description": "Maximum estimated memory footprint of a single monitored cache instance across the selected instances. Compare this directly against per-process cache size limits; use an ad hoc sum query instead when you want fleet-wide totals.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -3548,13 +3548,13 @@
                 "uid": "local_prometheus"
               },
               "editorMode": "code",
-              "expr": "sum(storage_api_otel_cache_size_bytes{region=~\"$region\", instance=~\"$instance\"}) by (cache)",
+              "expr": "max(storage_api_otel_cache_size_bytes{region=~\"$region\", instance=~\"$instance\"}) by (cache)",
               "legendFormat": "{{ cache }}",
               "range": true,
               "refId": "A"
             }
           ],
-          "title": "Cache Size",
+          "title": "Cache Size (Max Instance)",
           "type": "timeseries"
         }
       ],

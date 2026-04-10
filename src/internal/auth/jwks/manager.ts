@@ -67,6 +67,30 @@ export class JWKSManager {
   }
 
   /**
+   * Atomically rolls the URL signing JWK by deactivating the current key and creating a new one
+   * @param tenantId
+   */
+  async rollUrlSigningJwk(tenantId: string): Promise<{ oldKid: string | null; newKid: string }> {
+    return this.storage.transaction(async (trx) => {
+      const currentKeys = await this.storage.listActive(tenantId, JWK_KIND_STORAGE_URL_SIGNING, trx)
+      const currentKey = currentKeys[0]
+
+      if (currentKey) {
+        await this.storage.toggleActive(tenantId, currentKey.id, false, trx)
+      }
+
+      const { kid: newKid } = await this.generateUrlSigningJwk(tenantId, trx)
+
+      return {
+        oldKid: currentKey
+          ? createJwkKid({ kind: JWK_KIND_STORAGE_URL_SIGNING, id: currentKey.id })
+          : null,
+        newKid,
+      }
+    })
+  }
+
+  /**
    * Adds a new jwk that can be used for signing urls
    * @param tenantId
    * @param jwk jwk content

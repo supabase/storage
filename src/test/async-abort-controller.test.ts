@@ -69,4 +69,112 @@ describe('AsyncAbortController', () => {
 
     expect(order).toEqual(['root:start', 'root:end', 'child', 'grandchild'])
   })
+
+  it('forwards the real abort event to function listeners with the signal as context', async () => {
+    const controller = new AsyncAbortController()
+    const seen: {
+      target: EventTarget | null
+      currentTarget: EventTarget | null
+      context: unknown
+    } = {
+      target: null,
+      currentTarget: null,
+      context: undefined,
+    }
+
+    controller.signal.addEventListener('abort', function (event) {
+      seen.target = event.target
+      seen.currentTarget = event.currentTarget
+      seen.context = this
+    })
+
+    await controller.abortAsync()
+
+    expect(seen.target).toBe(controller.signal)
+    expect(seen.currentTarget).toBe(controller.signal)
+    expect(seen.context).toBe(controller.signal)
+  })
+
+  it('waits for handleEvent listeners before aborting nested groups', async () => {
+    const controller = new AsyncAbortController()
+    const childGroup = controller.nextGroup
+    const order: string[] = []
+    let releaseRootAbort!: () => void
+    const rootAbortDone = new Promise<void>((resolve) => {
+      releaseRootAbort = resolve
+    })
+    const listener = {
+      target: null as EventTarget | null,
+      async handleEvent(event: Event) {
+        this.target = event.target
+        order.push('root:start')
+        await rootAbortDone
+        order.push('root:end')
+      },
+    }
+
+    controller.signal.addEventListener('abort', listener)
+    childGroup.signal.addEventListener('abort', () => {
+      order.push('child')
+    })
+
+    const abortPromise = controller.abortAsync()
+
+    await Promise.resolve()
+    expect(order).toEqual(['root:start'])
+
+    releaseRootAbort()
+    await abortPromise
+
+    expect(listener.target).toBe(controller.signal)
+    expect(order).toEqual(['root:start', 'root:end', 'child'])
+  })
+
+  it('ignores null abort listeners', async () => {
+    const controller = new AsyncAbortController()
+    const nullListener = null as unknown as EventListenerOrEventListenerObject
+
+    expect(() => controller.signal.addEventListener('abort', nullListener)).not.toThrow()
+    await expect(controller.abortAsync()).resolves.toBeUndefined()
+  })
+
+  it('does not invoke or wait on explicitly removed abort listeners', async () => {
+    const controller = new AsyncAbortController()
+    const listener = jest.fn()
+
+    controller.signal.addEventListener('abort', listener)
+    controller.signal.removeEventListener('abort', listener)
+
+    await expect(controller.abortAsync()).resolves.toBeUndefined()
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('does not invoke or wait on abort listeners removed by a registration signal', async () => {
+    const controller = new AsyncAbortController()
+    const registration = new AbortController()
+    const listener = jest.fn()
+
+    controller.signal.addEventListener('abort', listener, {
+      signal: registration.signal,
+    })
+
+    registration.abort()
+
+    await expect(controller.abortAsync()).resolves.toBeUndefined()
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('ignores abort listeners registered with an already aborted signal', async () => {
+    const controller = new AsyncAbortController()
+    const registration = new AbortController()
+    const listener = jest.fn()
+
+    registration.abort()
+    controller.signal.addEventListener('abort', listener, {
+      signal: registration.signal,
+    })
+
+    await expect(controller.abortAsync()).resolves.toBeUndefined()
+    expect(listener).not.toHaveBeenCalled()
+  })
 })

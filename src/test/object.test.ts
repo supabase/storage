@@ -2803,6 +2803,49 @@ describe('testing list objects', () => {
       tnx = undefined
     }
   })
+
+  test('list returns user_metadata for files uploaded with custom metadata', async () => {
+    // Upload a file with custom user_metadata
+    const file = fs.createReadStream(`./src/test/assets/sadcat.jpg`)
+    const uploadResponse = await appInstance.inject({
+      method: 'POST',
+      url: '/object/bucket2/metadata-list-test.jpg',
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+        'x-upsert': 'true',
+        'x-metadata': Buffer.from(
+          JSON.stringify({ custom_field: 'hello', another: 'world' })
+        ).toString('base64'),
+      },
+      payload: file,
+    })
+    expect(uploadResponse.statusCode).toBe(200)
+
+    // List files and find our uploaded file
+    const listResponse = await appInstance.inject({
+      method: 'POST',
+      url: '/object/list/bucket2',
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+      payload: {
+        prefix: '',
+        limit: 100,
+        offset: 0,
+      },
+    })
+    expect(listResponse.statusCode).toBe(200)
+    const results = JSON.parse(listResponse.body) as any[]
+    const found = results.find((r: any) => r.name === 'metadata-list-test.jpg')
+    expect(found).toBeDefined()
+    expect(found.user_metadata).toEqual({ custom_field: 'hello', another: 'world' })
+
+    // Folders should have null user_metadata
+    const folder = results.find((r: any) => r.id === null)
+    if (folder) {
+      expect(folder.user_metadata).toBeNull()
+    }
+  })
 })
 
 describe('x-robots-tag header', () => {

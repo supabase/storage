@@ -10,11 +10,11 @@ const deterministicCiphertext =
 process.env.AUTH_ENCRYPTION_KEY = testEncryptionKey
 process.env.ENCRYPTION_KEY = testEncryptionKey
 
-let encrypt: typeof import('../internal/auth/crypto').encrypt
-let decrypt: typeof import('../internal/auth/crypto').decrypt
+let encrypt: typeof import('./crypto').encrypt
+let decrypt: typeof import('./crypto').decrypt
 
 beforeAll(async () => {
-  ;({ encrypt, decrypt } = await import('../internal/auth/crypto'))
+  ;({ encrypt, decrypt } = await import('./crypto'))
 })
 
 afterAll(() => {

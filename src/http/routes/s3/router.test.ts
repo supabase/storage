@@ -1,10 +1,11 @@
-import CompleteMultipartUpload from '../http/routes/s3/commands/complete-multipart-upload'
-import { Router, type S3Router } from '../http/routes/s3/router'
-import { S3ProtocolHandler } from '../storage/protocols/s3/s3-handler'
-import { Uploader } from '../storage/uploader'
+import { vi } from 'vitest'
+import { S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
+import { Uploader } from '../../../storage/uploader'
+import CompleteMultipartUpload from './commands/complete-multipart-upload'
+import { Router, type S3Router } from './router'
 
 afterEach(() => {
-  jest.restoreAllMocks()
+  vi.restoreAllMocks()
 })
 
 describe('S3 router query matching', () => {
@@ -169,7 +170,7 @@ describe('S3ProtocolHandler.parseMetadataHeaders', () => {
 describe('CompleteMultipartUpload route mapping', () => {
   it('maps ChecksumCRC32C from the backend response on iceberg routes', async () => {
     const router = new Router()
-    const completeMultipartUpload = jest.fn().mockResolvedValue({
+    const completeMultipartUpload = vi.fn().mockResolvedValue({
       ChecksumCRC32: 'crc32-value',
       ChecksumCRC32C: 'crc32c-value',
       ChecksumSHA1: 'sha1-value',
@@ -237,7 +238,7 @@ describe('CompleteMultipartUpload route mapping', () => {
 describe('S3ProtocolHandler multipart completion regressions', () => {
   it('preserves ChecksumCRC32C when completing multipart uploads', async () => {
     const backend = {
-      completeMultipartUpload: jest.fn().mockResolvedValue({
+      completeMultipartUpload: vi.fn().mockResolvedValue({
         version: 'version-1',
         ChecksumCRC32: 'crc32-value',
         ChecksumCRC32C: 'crc32c-value',
@@ -245,7 +246,7 @@ describe('S3ProtocolHandler multipart completion regressions', () => {
         ChecksumSHA256: 'sha256-value',
         ETag: 'etag-value',
       }),
-      headObject: jest.fn().mockResolvedValue({
+      headObject: vi.fn().mockResolvedValue({
         cacheControl: '',
         contentLength: 1,
         size: 1,
@@ -255,27 +256,27 @@ describe('S3ProtocolHandler multipart completion regressions', () => {
       }),
     }
     const superUserDb = {
-      findMultipartUpload: jest.fn().mockResolvedValue({
+      findMultipartUpload: vi.fn().mockResolvedValue({
         version: 'version-1',
         user_metadata: null,
         metadata: null,
       }),
-      deleteMultipartUpload: jest.fn().mockResolvedValue(undefined),
+      deleteMultipartUpload: vi.fn().mockResolvedValue(undefined),
     }
     const storage = {
       backend,
       db: {
-        asSuperUser: jest.fn(() => superUserDb),
+        asSuperUser: vi.fn(() => superUserDb),
       },
       location: {
-        getKeyLocation: jest.fn().mockReturnValue('tenant-id/bucket/object.txt'),
+        getKeyLocation: vi.fn().mockReturnValue('tenant-id/bucket/object.txt'),
       },
     }
 
     const completeUploadResult = {} as Awaited<ReturnType<Uploader['completeUpload']>>
 
-    jest.spyOn(Uploader.prototype, 'canUpload').mockResolvedValue(undefined)
-    jest.spyOn(Uploader.prototype, 'completeUpload').mockResolvedValue(completeUploadResult)
+    vi.spyOn(Uploader.prototype, 'canUpload').mockResolvedValue(undefined)
+    vi.spyOn(Uploader.prototype, 'completeUpload').mockResolvedValue(completeUploadResult)
 
     const handler = new S3ProtocolHandler(storage as never, 'tenant-id', 'owner-id')
     const response = await handler.completeMultiPartUpload({

@@ -12,6 +12,9 @@
     "migrations:types": "tsx src/scripts/migrations-types.ts",
     "docs:export": "tsx ./src/scripts/export-docs.ts",
     "test:dummy-data": "tsx -r dotenv/config ./src/test/db/import-dummy-data.ts",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:unit:watch": "vitest --config vitest.config.ts",
+    "test:unit:coverage": "vitest run --coverage --config vitest.config.ts",
     "test": "npm run infra:restart && npm run test:dummy-data && jest --no-cache --runInBand",
     "test:oriole": "npm run infra:restart:oriole && npm run test:dummy-data && jest --no-cache --runInBand",
     "test:coverage": "npm run infra:restart && npm run test:dummy-data && jest --no-cache --runInBand --coverage",
@@ -97,6 +100,7 @@
     "@types/pg": "^8.6.4",
     "@types/stream-buffers": "^3.0.7",
     "@types/xml2js": "^0.4.14",
+    "@vitest/coverage-v8": "^4.1.4",
     "babel-jest": "^30.3.0",
     "esbuild": "^0.25.8",
     "form-data": "^4.0.0",
@@ -111,7 +115,8 @@
     "ts-jest": "^29.4.6",
     "tsx": "^4.16.0",
     "tus-js-client": "^3.1.0",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vitest": "^4.1.4"
   },
   "version": "1.11.2",
   "description": "Supabase Storage Service",

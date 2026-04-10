@@ -1,4 +1,5 @@
 import { AsyncAbortController } from '@internal/concurrency'
+import { vi } from 'vitest'
 
 describe('AsyncAbortController', () => {
   it('reuses nextGroup when accessed repeatedly', () => {
@@ -25,7 +26,7 @@ describe('AsyncAbortController', () => {
   it('aborts a nextGroup child only once even after repeated access', async () => {
     const controller = new AsyncAbortController()
     const childGroup = controller.nextGroup
-    const abortSpy = jest.spyOn(childGroup, 'abortAsync').mockResolvedValue(undefined)
+    const abortSpy = vi.spyOn(childGroup, 'abortAsync').mockResolvedValue(undefined)
 
     void controller.nextGroup
     void controller.nextGroup

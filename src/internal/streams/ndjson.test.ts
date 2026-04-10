@@ -1,5 +1,3 @@
-// NdJsonTransform.test.ts
-
 import { NdJsonTransform } from '@internal/streams/ndjson'
 import { Buffer } from 'buffer'
 

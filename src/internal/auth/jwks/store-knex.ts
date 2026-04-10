@@ -70,8 +70,9 @@ export class JWKSManagerStoreKnex implements JWKSManagerStore<Knex.Transaction> 
     return updated > 0
   }
 
-  listActive(tenantId: string, kind?: string): Promise<JWKStoreItem[]> {
-    const query = this.knex
+  listActive(tenantId: string, kind?: string, trx?: Knex.Transaction): Promise<JWKStoreItem[]> {
+    const db = trx || this.knex
+    const query = db
       .table<JWKStoreItem>('tenants_jwks')
       .select('id', 'kind', 'content')
       .where('tenant_id', tenantId)

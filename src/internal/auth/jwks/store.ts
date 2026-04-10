@@ -46,7 +46,7 @@ export interface JWKSManagerStore<TRX> {
    * @param tenantId
    * @param kind optional filter by kind
    */
-  listActive(tenantId: string, kind?: string): Promise<JWKStoreItem[]>
+  listActive(tenantId: string, kind?: string, trx?: TRX): Promise<JWKStoreItem[]>
 
   /**
    * Lists tenants that do not have a jwk of the specified kind

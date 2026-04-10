@@ -72,7 +72,7 @@ export class JWKSManager {
    */
   async rollUrlSigningJwk(tenantId: string): Promise<{ oldKid: string | null; newKid: string }> {
     return this.storage.transaction(async (trx) => {
-      const currentKeys = await this.storage.listActive(tenantId, JWK_KIND_STORAGE_URL_SIGNING)
+      const currentKeys = await this.storage.listActive(tenantId, JWK_KIND_STORAGE_URL_SIGNING, trx)
       const currentKey = currentKeys[0]
 
       if (currentKey) {

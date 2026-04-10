@@ -1,27 +1,28 @@
-import { FastifyRequest } from 'fastify'
-import { FromSchema, JSONSchema } from 'json-schema-to-ts'
+import { Storage } from '@storage/storage'
 import type { ValidateFunction } from 'ajv'
 import Ajv from 'ajv'
-import { Storage } from '@storage/storage'
-import { default as CreateBucket } from './commands/create-bucket'
-import { default as ListBucket } from './commands/list-buckets'
-import { default as ListObjects } from './commands/list-objects'
-import { default as GetObject } from './commands/get-object'
-import { default as CompleteMultipartUpload } from './commands/complete-multipart-upload'
-import { default as DeleteBucket } from './commands/delete-bucket'
-import { default as CreateMultipartUpload } from './commands/create-multipart-upload'
-import { default as UploadPart } from './commands/upload-part'
-import { default as PutObject } from './commands/put-object'
-import { default as HeadObject } from './commands/head-object'
-import { default as DeleteObject } from './commands/delete-object'
-import { default as AbortMultiPartUpload } from './commands/abort-multipart-upload'
-import { default as GetBucket } from './commands/get-bucket'
-import { default as HeadBucket } from './commands/head-bucket'
-import { default as CopyObject } from './commands/copy-object'
-import { default as ListMultipartUploads } from './commands/list-multipart-uploads'
-import { default as ListParts } from './commands/list-parts'
-import { default as UploadPartCopy } from './commands/upload-part-copy'
 import { JTDDataType } from 'ajv/dist/jtd'
+import fastUri from 'fast-uri'
+import { FastifyRequest } from 'fastify'
+import { FromSchema, JSONSchema } from 'json-schema-to-ts'
+import { default as AbortMultiPartUpload } from './commands/abort-multipart-upload'
+import { default as CompleteMultipartUpload } from './commands/complete-multipart-upload'
+import { default as CopyObject } from './commands/copy-object'
+import { default as CreateBucket } from './commands/create-bucket'
+import { default as CreateMultipartUpload } from './commands/create-multipart-upload'
+import { default as DeleteBucket } from './commands/delete-bucket'
+import { default as DeleteObject } from './commands/delete-object'
+import { default as GetBucket } from './commands/get-bucket'
+import { default as GetObject } from './commands/get-object'
+import { default as HeadBucket } from './commands/head-bucket'
+import { default as HeadObject } from './commands/head-object'
+import { default as ListBucket } from './commands/list-buckets'
+import { default as ListMultipartUploads } from './commands/list-multipart-uploads'
+import { default as ListObjects } from './commands/list-objects'
+import { default as ListParts } from './commands/list-parts'
+import { default as PutObject } from './commands/put-object'
+import { default as UploadPart } from './commands/upload-part'
+import { default as UploadPartCopy } from './commands/upload-part-copy'
 
 export type Context = {
   storage: Storage
@@ -65,7 +66,7 @@ export type Schema<
   Q extends JSONSchema = JSONSchema,
   H extends JSONSchema = JSONSchema,
   P extends JSONSchema = JSONSchema,
-  B extends JSONSchema = JSONSchema
+  B extends JSONSchema = JSONSchema,
 > = {
   summary?: string
   Querystring?: Q
@@ -86,7 +87,7 @@ export type RequestInput<
     [key in keyof S]: S[key] extends JSONSchema ? FromSchema<S[key]> : undefined
   } = {
     [key in keyof S]: S[key] extends JSONSchema ? FromSchema<S[key]> : undefined
-  }
+  },
 > = {
   Querystring: A['Querystring']
   Headers: A['Headers']
@@ -99,15 +100,23 @@ type Handler<Req extends Schema, Context = unknown> = (
   ctx: Context
 ) => Promise<ResponseType>
 
+export type QuerystringMatch = {
+  key: string
+  value: string | undefined
+}
+
+export type RouteQuery = Record<string, string | undefined>
+
 type Route<S extends Schema, Context> = {
   method: HTTPMethod
   type?: string
   path: string
-  querystringMatches: { key: string; value: string }[]
+  querystringMatches: QuerystringMatch[]
   headersMatches: string[]
   handler?: Handler<S, Context>
   schema: S
   disableContentTypeParser?: boolean
+  allowEmptyJsonBody?: boolean
   acceptMultiformData?: boolean
   operation: string
   compiledSchema: () => ValidateFunction<JTDDataType<S>>
@@ -115,6 +124,7 @@ type Route<S extends Schema, Context> = {
 
 interface RouteOptions<S extends JSONSchema> {
   disableContentTypeParser?: boolean
+  allowEmptyJsonBody?: boolean
   acceptMultiformData?: boolean
   operation: string
   schema: S
@@ -128,7 +138,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     coerceTypes: 'array',
     useDefaults: true,
     removeAdditional: true,
-    uriResolver: require('fast-uri'),
+    uriResolver: fastUri,
     addUsedSchema: false,
     allErrors: false,
   })
@@ -150,7 +160,8 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       Body?: JSONSchema
     } = {}
 
-    const { schema, disableContentTypeParser, acceptMultiformData, operation } = options
+    const { schema, disableContentTypeParser, allowEmptyJsonBody, acceptMultiformData, operation } =
+      options
 
     if (schema.Params) {
       schemaToCompile.Params = schema.Params
@@ -198,10 +209,11 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       path: normalizedUrl,
       querystringMatches: query,
       headersMatches: headers,
-      schema: schema,
+      schema,
       compiledSchema: () => this.ajv.getSchema(method + url) as ValidateFunction<JTDDataType<R>>,
       handler: handler as Handler<R, Context>,
       disableContentTypeParser,
+      allowEmptyJsonBody,
       acceptMultiformData,
       operation,
       type: options.type,
@@ -236,7 +248,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     this.registerRoute('head', url, options, handler as any)
   }
 
-  parseQueryMatch(query: string) {
+  parseQueryMatch(query: string): QuerystringMatch {
     const [key, value] = query.split('=')
     return { key, value }
   }
@@ -246,9 +258,9 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     const headers = queryString.split('|').splice(1)
 
     if (queries.length === 0) {
-      return { query: [{ key: '*', value: '*' }], headers: headers }
+      return { query: [{ key: '*', value: '*' }], headers }
     }
-    return { query: queries.map(this.parseQueryMatch), headers: headers }
+    return { query: queries.map(this.parseQueryMatch), headers }
   }
 
   routes() {
@@ -257,7 +269,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
 
   matchRoute(
     route: Route<S, Context>,
-    match: { query: Record<string, string>; headers: Record<string, string>; type?: string }
+    match: { query: RouteQuery; headers: Record<string, string>; type?: string }
   ) {
     const isOfType = match.type ? match.type === route.type : route.type === undefined
 
@@ -289,31 +301,46 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     })
   }
 
-  protected matchQueryString(
-    matches: { key: string; value: string }[],
-    received?: Record<string, string>
-  ) {
-    const keys = Object.keys(received || {})
-    if (keys.length === 0 || !received) {
-      return matches.find((m) => m.key === '*')
+  protected matchQueryString(matches: QuerystringMatch[], received?: RouteQuery) {
+    let hasWildcard = false
+    for (const match of matches) {
+      if (match.key === '*') {
+        hasWildcard = true
+        break
+      }
     }
 
-    const foundMatches = matches.every((m) => {
-      const key = Object.keys(received).find((k) => k === m.key)
-      return (
-        (m.key === key && m.value !== undefined && m.value === received[m.key]) ||
-        (m.key === key && m.value === undefined)
-      )
-    })
-
-    if (foundMatches) {
-      return true
+    if (!received) {
+      return hasWildcard
     }
 
-    if (!foundMatches && matches.find((m) => m.key === '*')) {
-      return true
+    let hasReceivedQuery = false
+    for (const key in received) {
+      if (Object.prototype.hasOwnProperty.call(received, key)) {
+        hasReceivedQuery = true
+        break
+      }
     }
-    return false
+
+    if (!hasReceivedQuery) {
+      return hasWildcard
+    }
+
+    for (const match of matches) {
+      if (match.key === '*') {
+        continue
+      }
+
+      if (!Object.prototype.hasOwnProperty.call(received, match.key)) {
+        return hasWildcard
+      }
+
+      if (match.value !== undefined && match.value !== received[match.key]) {
+        return hasWildcard
+      }
+    }
+
+    return true
   }
 }
 

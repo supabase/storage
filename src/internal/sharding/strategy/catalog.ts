@@ -1,11 +1,12 @@
-import { randomUUID } from 'crypto'
+import { ERRORS } from '@internal/errors'
 import {
   ExpiredReservationError,
   InvalidReservationStatusError,
   NoActiveShardError,
   ReservationNotFoundError,
 } from '@internal/sharding/errors'
-
+import { randomUUID } from 'crypto'
+import { Sharder, ShardResource } from '../sharder'
 import {
   ResourceKind,
   ShardRow,
@@ -13,8 +14,6 @@ import {
   ShardStoreFactory,
   UniqueViolationError,
 } from '../store'
-import { Sharder, ShardResource } from '../sharder'
-import { ERRORS } from '@internal/errors'
 
 /**
  * Represents the configuration options for a shard in a distributed system or database.
@@ -175,7 +174,7 @@ export class ShardCatalog implements Sharder {
         const { lease_expires_at } = await store.insertReservation({
           id: reservationId,
           kind: opts.kind,
-          resourceId: resourceId,
+          resourceId,
           tenantId: opts.tenantId,
           shardId: shard.id,
           shardKey: shard.shard_key,

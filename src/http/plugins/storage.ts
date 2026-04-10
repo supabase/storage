@@ -1,10 +1,10 @@
-import fastifyPlugin from 'fastify-plugin'
-import { StorageBackendAdapter, createStorageBackend } from '@storage/backend'
-import { Storage } from '@storage/storage'
-import { StorageKnexDB } from '@storage/database'
-import { getConfig } from '../../config'
+import { createStorageBackend, StorageBackendAdapter } from '@storage/backend'
 import { CdnCacheManager } from '@storage/cdn/cdn-cache-manager'
+import { StorageKnexDB } from '@storage/database'
 import { PassThroughLocation, TenantLocation } from '@storage/locator'
+import { Storage } from '@storage/storage'
+import fastifyPlugin from 'fastify-plugin'
+import { getConfig } from '../../config'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -20,7 +20,7 @@ const storageBackend = createStorageBackend(storageBackendType)
 
 export const storage = fastifyPlugin(
   async function storagePlugin(fastify) {
-    fastify.decorateRequest('storage', null)
+    fastify.decorateRequest('storage')
     fastify.addHook('preHandler', async (request) => {
       const database = new StorageKnexDB(request.db, {
         tenantId: request.tenantId,

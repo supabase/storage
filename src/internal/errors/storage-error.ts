@@ -1,6 +1,8 @@
+import type { S3ServiceException } from '@aws-sdk/client-s3'
 import { ErrorCode } from './codes'
 import { RenderableError, StorageErrorOptions } from './renderable'
-import { S3ServiceException } from '@aws-sdk/client-s3'
+
+const CLOSE_CONNECTION_METADATA_KEY = 'closeConnection'
 
 /**
  * A generic error that should be always thrown for generic exceptions
@@ -57,7 +59,7 @@ export class StorageBackendError extends Error implements RenderableError {
 
     return new StorageBackendError({
       error: oldErrorMessage,
-      code: code,
+      code,
       httpStatusCode,
       message,
       originalError: error,
@@ -72,6 +74,17 @@ export class StorageBackendError extends Error implements RenderableError {
   withMetadata(metadata: Record<string, any>) {
     this.metadata = metadata
     return this
+  }
+
+  withConnectionClose() {
+    return this.withMetadata({
+      ...this.metadata,
+      [CLOSE_CONNECTION_METADATA_KEY]: true,
+    })
+  }
+
+  shouldCloseConnection() {
+    return Boolean(this.metadata?.[CLOSE_CONNECTION_METADATA_KEY])
   }
 
   render() {
@@ -93,7 +106,9 @@ export class StorageBackendError extends Error implements RenderableError {
  * @param error
  */
 export function isRenderableError(error: unknown): error is RenderableError {
-  return !!error && typeof error === 'object' && 'render' in error
+  return (
+    !!error && typeof error === 'object' && 'render' in error && typeof error.render === 'function'
+  )
 }
 
 /**

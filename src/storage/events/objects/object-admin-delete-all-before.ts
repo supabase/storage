@@ -1,10 +1,10 @@
-import { BaseEvent } from '../base-event'
-import { getConfig } from '../../../config'
-import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { logger, logSchema } from '@internal/monitoring'
-import { Storage } from '../../index'
 import { BasePayload } from '@internal/queue'
 import { withOptionalVersion } from '@storage/backend'
+import { Job, SendOptions, WorkOptions } from 'pg-boss'
+import { getConfig } from '../../../config'
+import { Storage } from '../../index'
+import { BaseEvent } from '../base-event'
 
 const DELETE_JOB_TIME_LIMIT_MS = 10_000
 

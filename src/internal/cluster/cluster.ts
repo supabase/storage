@@ -1,7 +1,6 @@
+import { EventEmitter } from 'node:events'
 import { ClusterDiscoveryECS } from '@internal/cluster/ecs'
 import { ClusterDiscoveryEKS } from '@internal/cluster/eks'
-
-import { EventEmitter } from 'node:events'
 import { logger } from '@internal/monitoring'
 
 const clusterEvent = new EventEmitter()
@@ -26,11 +25,14 @@ export class Cluster {
     if (cluster) {
       Cluster.size = await cluster.getClusterSize()
 
-      logger.info(`[Cluster] Initial cluster size ${Cluster.size}`, {
-        type: 'cluster',
-        clusterSize: Cluster.size,
-        discoveryType: process.env.CLUSTER_DISCOVERY,
-      })
+      logger.info(
+        {
+          type: 'cluster',
+          clusterSize: Cluster.size,
+          discoveryType: process.env.CLUSTER_DISCOVERY,
+        },
+        `[Cluster] Initial cluster size ${Cluster.size}`
+      )
 
       Cluster.watcher = setInterval(() => {
         cluster!

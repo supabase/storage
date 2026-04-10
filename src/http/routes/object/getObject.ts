@@ -1,11 +1,10 @@
+import { ERRORS } from '@internal/errors'
+import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { IncomingMessage, Server, ServerResponse } from 'http'
 import { getConfig } from '../../../config'
 import { AuthenticatedRangeRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
-import { ERRORS } from '@internal/errors'
-import { Obj } from '@storage/schemas'
 
 const { storageS3Bucket } = getConfig()
 
@@ -30,16 +29,9 @@ interface getObjectRequestInterface extends AuthenticatedRangeRequest {
   Querystring: FromSchema<typeof getObjectQuerySchema>
 }
 
-async function requestHandler(
-  request: FastifyRequest<getObjectRequestInterface, Server, IncomingMessage>,
-  response: FastifyReply<
-    Server,
-    IncomingMessage,
-    ServerResponse,
-    getObjectRequestInterface,
-    unknown
-  >
-) {
+type GetObjectRequest = FastifyRequest<getObjectRequestInterface>
+
+async function requestHandler(request: GetObjectRequest, response: FastifyReply) {
   const { bucketName } = request.params
   const { download } = request.query
   const objectName = request.params['*']

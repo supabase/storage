@@ -1,22 +1,23 @@
+import type { Stats } from 'node:fs'
+import fs from 'node:fs'
+import * as fsp from 'node:fs/promises'
+import { ERRORS, StorageBackendError } from '@internal/errors'
+import { ensureDir, ensureFile, pathExists, removePath } from '@internal/fs'
+import { createHash, randomUUID } from 'crypto'
 import * as xattr from 'fs-xattr'
-import fs from 'fs-extra'
 import path from 'path'
-import fileChecksum from 'md5-file'
-import { promisify } from 'util'
 import stream from 'stream'
-import MultiStream from 'multistream'
+import { promisify } from 'util'
 import { getConfig } from '../../config'
 import {
-  StorageBackendAdapter,
+  BrowserCacheHeaders,
   ObjectMetadata,
   ObjectResponse,
-  withOptionalVersion,
-  BrowserCacheHeaders,
+  StorageBackendAdapter,
   UploadPart,
+  withOptionalVersion,
 } from './adapter'
-import { ERRORS, StorageBackendError } from '@internal/errors'
-import { randomUUID } from 'crypto'
-import fsExtra from 'fs-extra'
+
 const pipeline = promisify(stream.pipeline)
 
 interface FileMetadata {
@@ -34,7 +35,7 @@ const METADATA_ATTR_KEYS = {
   linux: {
     'cache-control': 'user.supabase.cache-control',
     'content-type': 'user.supabase.content-type',
-    etag: 'user.supabase.content-type',
+    etag: 'user.supabase.etag',
   },
 }
 
@@ -85,19 +86,18 @@ export class FileBackend implements StorageBackendAdapter {
   ): Promise<ObjectResponse> {
     // 'Range: bytes=#######-######
     const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
-    const data = await fs.stat(file)
+    const data = await fsp.stat(file)
     const eTag = await this.etag(file, data)
     const fileSize = data.size
     const { cacheControl, contentType } = await this.getFileMetadata(file)
-    const lastModified = new Date(0)
-    lastModified.setUTCMilliseconds(data.mtimeMs)
+    const lastModified = data.mtime
 
     if (headers?.ifNoneMatch && headers.ifNoneMatch === eTag) {
       return {
         metadata: {
           cacheControl: cacheControl || 'no-cache',
           mimetype: contentType || 'application/octet-stream',
-          lastModified: lastModified,
+          lastModified,
           httpStatusCode: 304,
           size: data.size,
           eTag,
@@ -115,7 +115,7 @@ export class FileBackend implements StorageBackendAdapter {
           metadata: {
             cacheControl: cacheControl || 'no-cache',
             mimetype: contentType || 'application/octet-stream',
-            lastModified: lastModified,
+            lastModified,
             httpStatusCode: 304,
             size: data.size,
             eTag,
@@ -139,10 +139,10 @@ export class FileBackend implements StorageBackendAdapter {
         metadata: {
           cacheControl: cacheControl || 'no-cache',
           mimetype: contentType || 'application/octet-stream',
-          lastModified: lastModified,
+          lastModified,
           contentRange: `bytes ${startRange}-${endRange}/${fileSize}`,
           httpStatusCode: 206,
-          size: size,
+          size,
           eTag,
           contentLength: chunkSize,
         },
@@ -155,7 +155,7 @@ export class FileBackend implements StorageBackendAdapter {
         metadata: {
           cacheControl: cacheControl || 'no-cache',
           mimetype: contentType || 'application/octet-stream',
-          lastModified: lastModified,
+          lastModified,
           httpStatusCode: 200,
           size: data.size,
           eTag,
@@ -182,11 +182,13 @@ export class FileBackend implements StorageBackendAdapter {
     version: string | undefined,
     body: NodeJS.ReadableStream,
     contentType: string,
-    cacheControl: string
+    cacheControl: string,
+    signal?: AbortSignal,
+    contentLength?: number
   ): Promise<ObjectMetadata> {
     try {
       const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
-      await fs.ensureFile(file)
+      await ensureFile(file)
       const destFile = fs.createWriteStream(file)
       await pipeline(body, destFile)
 
@@ -202,6 +204,9 @@ export class FileBackend implements StorageBackendAdapter {
         httpStatusCode: 200,
       }
     } catch (err: any) {
+      if (err instanceof StorageBackendError) {
+        throw err
+      }
       throw StorageBackendError.fromError(err)
     }
   }
@@ -215,7 +220,7 @@ export class FileBackend implements StorageBackendAdapter {
   async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
     try {
       const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
-      await fs.remove(file)
+      await removePath(file)
 
       // Clean up empty parent directories
       await this.cleanupEmptyDirectories(path.dirname(file))
@@ -251,13 +256,13 @@ export class FileBackend implements StorageBackendAdapter {
       withOptionalVersion(`${bucket}/${destination}`, destinationVersion)
     )
 
-    await fs.ensureFile(destFile)
-    await fs.copyFile(srcFile, destFile)
+    await ensureFile(destFile)
+    await fsp.copyFile(srcFile, destFile)
 
     const originalMetadata = await this.getFileMetadata(srcFile)
     await this.setFileMetadata(destFile, Object.assign({}, originalMetadata, metadata))
 
-    const fileStat = await fs.lstat(destFile)
+    const fileStat = await fsp.lstat(destFile)
     const eTag = await this.etag(destFile, fileStat)
 
     return {
@@ -274,7 +279,7 @@ export class FileBackend implements StorageBackendAdapter {
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
     const promises = prefixes.map((prefix) => {
-      return fs.rm(this.resolveSecurePath(`${bucket}/${prefix}`))
+      return removePath(this.resolveSecurePath(`${bucket}/${prefix}`))
     })
     const results = await Promise.allSettled(promises)
 
@@ -283,9 +288,6 @@ export class FileBackend implements StorageBackendAdapter {
 
     results.forEach((result, index) => {
       if (result.status === 'rejected') {
-        if (result.reason.code === 'ENOENT') {
-          return
-        }
         throw result.reason
       } else {
         // Add parent directory of successfully deleted file
@@ -317,10 +319,9 @@ export class FileBackend implements StorageBackendAdapter {
   ): Promise<ObjectMetadata> {
     const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
 
-    const data = await fs.stat(file)
+    const data = await fsp.stat(file)
     const { cacheControl, contentType } = await this.getFileMetadata(file)
-    const lastModified = new Date(0)
-    lastModified.setUTCMilliseconds(data.mtimeMs)
+    const lastModified = data.mtime
     const eTag = await this.etag(file, data)
 
     return {
@@ -329,7 +330,7 @@ export class FileBackend implements StorageBackendAdapter {
       cacheControl: cacheControl || 'no-cache',
       mimetype: contentType || 'application/octet-stream',
       eTag,
-      lastModified: data.birthtime,
+      lastModified,
       contentLength: data.size,
     }
   }
@@ -342,17 +343,20 @@ export class FileBackend implements StorageBackendAdapter {
     cacheControl: string
   ): Promise<string | undefined> {
     const uploadId = randomUUID()
-    const multiPartFolder = path.join(
-      this.filePath,
-      'multiparts',
-      uploadId,
-      bucketName,
-      withOptionalVersion(key, version)
+    const multiPartFolder = this.resolveSecurePath(
+      path.join('multiparts', uploadId, bucketName, withOptionalVersion(key, version))
     )
-
-    const multipartFile = path.join(multiPartFolder, 'metadata.json')
-    await fsExtra.ensureDir(multiPartFolder)
-    await fsExtra.writeFile(multipartFile, JSON.stringify({ contentType, cacheControl }))
+    const multipartFile = this.resolveSecurePath(
+      path.join(
+        'multiparts',
+        uploadId,
+        bucketName,
+        withOptionalVersion(key, version),
+        'metadata.json'
+      )
+    )
+    await ensureDir(multiPartFolder)
+    await fsp.writeFile(multipartFile, JSON.stringify({ contentType, cacheControl }))
 
     return uploadId
   }
@@ -365,23 +369,23 @@ export class FileBackend implements StorageBackendAdapter {
     partNumber: number,
     body: stream.Readable
   ): Promise<{ ETag?: string }> {
-    const multiPartFolder = path.join(
-      this.filePath,
-      'multiparts',
-      uploadId,
-      bucketName,
-      withOptionalVersion(key, version)
+    const partPath = this.resolveSecurePath(
+      path.join(
+        'multiparts',
+        uploadId,
+        bucketName,
+        withOptionalVersion(key, version),
+        `part-${partNumber}`
+      )
     )
 
-    const partPath = path.join(multiPartFolder, `part-${partNumber}`)
-
-    const writeStream = fsExtra.createWriteStream(partPath)
+    const writeStream = fs.createWriteStream(partPath)
 
     await pipeline(body, writeStream)
 
-    const etag = await fileChecksum(partPath)
+    const etag = await this.computeMd5(partPath)
 
-    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+    const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
     await this.setMetadataAttr(partPath, METADATA_ATTR_KEYS[platform]['etag'], etag)
 
     return { ETag: etag }
@@ -400,20 +404,20 @@ export class FileBackend implements StorageBackendAdapter {
       version: string
     }
   > {
-    const multiPartFolder = path.join(
-      this.filePath,
-      'multiparts',
-      uploadId,
-      bucketName,
-      withOptionalVersion(key, version)
-    )
-
     const partsByEtags = parts.map(async (part) => {
-      const partFilePath = path.join(multiPartFolder, `part-${part.PartNumber}`)
-      const partExists = await fsExtra.pathExists(partFilePath)
+      const partFilePath = this.resolveSecurePath(
+        path.join(
+          'multiparts',
+          uploadId,
+          bucketName,
+          withOptionalVersion(key, version),
+          `part-${part.PartNumber}`
+        )
+      )
+      const partExists = await pathExists(partFilePath)
 
       if (partExists) {
-        const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+        const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
         const etag = await this.getMetadataAttr(partFilePath, METADATA_ATTR_KEYS[platform]['etag'])
         if (etag === part.ETag) {
           return partFilePath
@@ -427,13 +431,17 @@ export class FileBackend implements StorageBackendAdapter {
     const finalParts = await Promise.all(partsByEtags)
     finalParts.sort((a, b) => parseInt(a.split('-')[1]) - parseInt(b.split('-')[1]))
 
-    const fileStreams = finalParts.map((partPath) => {
-      return fs.createReadStream(partPath)
-    })
-
-    const multistream = new MultiStream(fileStreams)
-    const metadataContent = await fsExtra.readFile(
-      path.join(multiPartFolder, 'metadata.json'),
+    const multipartStream = this.mergePartStreams(finalParts)
+    const metadataContent = await fsp.readFile(
+      this.resolveSecurePath(
+        path.join(
+          'multiparts',
+          uploadId,
+          bucketName,
+          withOptionalVersion(key, version),
+          'metadata.json'
+        )
+      ),
       'utf-8'
     )
 
@@ -443,17 +451,17 @@ export class FileBackend implements StorageBackendAdapter {
       bucketName,
       key,
       version,
-      multistream,
+      multipartStream,
       metadata.contentType,
       metadata.cacheControl
     )
 
-    fsExtra.remove(path.join(this.filePath, 'multiparts', uploadId)).catch(() => {
+    removePath(this.resolveSecurePath(path.join('multiparts', uploadId))).catch(() => {
       // no-op
     })
 
     return {
-      version: version,
+      version,
       ETag: uploaded.eTag,
       bucket: bucketName,
       location: `${bucketName}/${key}`,
@@ -466,9 +474,9 @@ export class FileBackend implements StorageBackendAdapter {
     uploadId: string,
     version?: string
   ): Promise<void> {
-    const multiPartFolder = path.join(this.filePath, 'multiparts', uploadId)
+    const multiPartFolder = this.resolveSecurePath(path.join('multiparts', uploadId))
 
-    await fsExtra.remove(multiPartFolder)
+    await removePath(multiPartFolder)
 
     // Clean up empty parent directories
     try {
@@ -488,20 +496,20 @@ export class FileBackend implements StorageBackendAdapter {
     sourceVersion?: string,
     rangeBytes?: { fromByte: number; toByte: number }
   ): Promise<{ eTag?: string; lastModified?: Date }> {
-    const multiPartFolder = path.join(
-      this.filePath,
-      'multiparts',
-      UploadId,
-      storageS3Bucket,
-      withOptionalVersion(key, version)
+    const partFilePath = this.resolveSecurePath(
+      path.join(
+        'multiparts',
+        UploadId,
+        storageS3Bucket,
+        withOptionalVersion(key, version),
+        `part-${PartNumber}`
+      )
     )
-
-    const partFilePath = path.join(multiPartFolder, `part-${PartNumber}`)
     const sourceFilePath = this.resolveSecurePath(
       `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceVersion)}`
     )
 
-    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+    const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
 
     const readStreamOptions = rangeBytes
       ? { start: rangeBytes.fromByte, end: rangeBytes.toByte }
@@ -511,15 +519,39 @@ export class FileBackend implements StorageBackendAdapter {
     const writePart = fs.createWriteStream(partFilePath)
     await pipeline(partStream, writePart)
 
-    const etag = await fileChecksum(partFilePath)
+    const etag = await this.computeMd5(partFilePath)
     await this.setMetadataAttr(partFilePath, METADATA_ATTR_KEYS[platform]['etag'], etag)
 
-    const fileStat = await fs.lstat(partFilePath)
+    const fileStat = await fsp.lstat(partFilePath)
 
     return {
       eTag: etag,
       lastModified: fileStat.mtime,
     }
+  }
+
+  private mergePartStreams(partPaths: string[]): stream.Readable {
+    return stream.Readable.from(this.iteratePartChunks(partPaths))
+  }
+
+  private async *iteratePartChunks(partPaths: string[]): AsyncGenerator<Buffer> {
+    for (const partPath of partPaths) {
+      const partStream = fs.createReadStream(partPath)
+      for await (const chunk of partStream) {
+        yield chunk as Buffer
+      }
+    }
+  }
+
+  private async computeMd5(filePath: string): Promise<string> {
+    const hash = createHash('md5')
+    const readStream = fs.createReadStream(filePath)
+
+    for await (const chunk of readStream) {
+      hash.update(chunk)
+    }
+
+    return hash.digest('hex')
   }
 
   /**
@@ -533,7 +565,7 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   async setFileMetadata(file: string, { contentType, cacheControl }: FileMetadata) {
-    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+    const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
     await Promise.all([
       this.setMetadataAttr(file, METADATA_ATTR_KEYS[platform]['cache-control'], cacheControl),
       this.setMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type'], contentType),
@@ -545,7 +577,7 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   protected async getFileMetadata(file: string) {
-    const platform = process.platform == 'darwin' ? 'darwin' : 'linux'
+    const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
     const [cacheControl, contentType] = await Promise.all([
       this.getMetadataAttr(file, METADATA_ATTR_KEYS[platform]['cache-control']),
       this.getMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type']),
@@ -574,7 +606,7 @@ export class FileBackend implements StorageBackendAdapter {
    */
   protected async isEmptyDirectory(dirPath: string): Promise<boolean> {
     try {
-      const directory = await fs.opendir(dirPath)
+      const directory = await fsp.opendir(dirPath)
       const entry = await directory.read()
       await directory.close()
 
@@ -596,7 +628,7 @@ export class FileBackend implements StorageBackendAdapter {
       }
 
       // Check if directory exists
-      const exists = await fs.pathExists(dirPath)
+      const exists = await pathExists(dirPath)
       if (!exists) {
         return
       }
@@ -605,7 +637,7 @@ export class FileBackend implements StorageBackendAdapter {
       const isEmpty = await this.isEmptyDirectory(dirPath)
       if (isEmpty) {
         // Remove empty directory - using fs.remove for better cross-platform compatibility
-        await fs.remove(dirPath)
+        await removePath(dirPath)
 
         // Recursively check parent directory
         const parentDir = path.dirname(dirPath)
@@ -625,6 +657,29 @@ export class FileBackend implements StorageBackendAdapter {
    * @throws {StorageBackendError} If the resolved path escapes the storage directory
    */
   private resolveSecurePath(relativePath: string): string {
+    if (relativePath.includes('\0')) {
+      throw ERRORS.InvalidKey(`Invalid key: ${relativePath} contains null byte`)
+    }
+
+    if (path.isAbsolute(relativePath)) {
+      throw ERRORS.InvalidKey(`Invalid key: ${relativePath} must be a relative path`)
+    }
+
+    const isWindowsDriveAbsolutePath = /^[a-zA-Z]:[\\/]/.test(relativePath)
+    const isWindowsUncPath = /^\\\\[^\\/]+[\\/][^\\/]+/.test(relativePath)
+    if (isWindowsDriveAbsolutePath || isWindowsUncPath) {
+      throw ERRORS.InvalidKey(`Invalid key: ${relativePath} must not be an absolute Windows path`)
+    }
+
+    const hasDotTraversalSegment = relativePath
+      .split(/[\\/]+/)
+      .filter(Boolean)
+      .some((segment) => segment === '.' || segment === '..')
+
+    if (hasDotTraversalSegment) {
+      throw ERRORS.InvalidKey(`Path traversal detected: ${relativePath} contains dot path segment`)
+    }
+
     const resolvedPath = path.resolve(this.filePath, relativePath)
     const normalizedPath = path.normalize(resolvedPath)
 
@@ -638,9 +693,9 @@ export class FileBackend implements StorageBackendAdapter {
     return normalizedPath
   }
 
-  private async etag(file: string, stats: fs.Stats): Promise<string> {
+  private async etag(file: string, stats: Stats): Promise<string> {
     if (this.etagAlgorithm === 'md5') {
-      const checksum = await fileChecksum(file)
+      const checksum = await this.computeMd5(file)
       return `"${checksum}"`
     } else if (this.etagAlgorithm === 'mtime') {
       return `"${stats.mtimeMs.toString(16)}-${stats.size.toString(16)}"`

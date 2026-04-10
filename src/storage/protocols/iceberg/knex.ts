@@ -1,8 +1,8 @@
-import { Knex } from 'knex'
 import { ERRORS } from '@internal/errors'
-import { IcebergCatalog } from '@storage/schemas'
-import { DBError } from '@storage/database'
 import { hashStringToInt } from '@internal/hashing'
+import { DBError } from '@storage/database'
+import { IcebergCatalog } from '@storage/schemas'
+import { Knex } from 'knex'
 
 export interface CreateNamespaceParams {
   name: string

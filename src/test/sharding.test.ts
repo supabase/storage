@@ -1,16 +1,16 @@
 'use strict'
 
-import { Knex } from 'knex'
-import { KnexShardStoreFactory, ShardCatalog } from '@internal/sharding'
-import { useStorage } from './utils/storage'
+import { multitenantKnex } from '@internal/database'
+import { runMultitenantMigrations } from '@internal/database/migrations'
+import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 import {
   ExpiredReservationError,
   NoActiveShardError,
   ReservationNotFoundError,
 } from '@internal/sharding/errors'
-import { multitenantKnex } from '@internal/database'
 import { randomUUID } from 'crypto'
-import { runMultitenantMigrations } from '@internal/database/migrations'
+import { Knex } from 'knex'
+import { useStorage } from './utils/storage'
 
 describe('Sharding System', () => {
   const storageTest = useStorage()
@@ -796,5 +796,24 @@ describe('Sharding System', () => {
 
       expect(foundShard?.shard_key).toBe('test-shard-1')
     })
+  })
+})
+
+describe('SingleShard', () => {
+  it('returns shard stats in the canonical array shape', async () => {
+    const sharder = new SingleShard({
+      shardKey: 'single-shard-key',
+      capacity: 25,
+    })
+
+    await expect(sharder.shardStats()).resolves.toEqual([
+      {
+        shardId: '1',
+        shardKey: 'single-shard-key',
+        capacity: 25,
+        used: -1,
+        free: -1,
+      },
+    ])
   })
 })

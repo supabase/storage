@@ -1,19 +1,18 @@
-import { FastifyInstance, RouteHandlerMethod } from 'fastify'
 import fastifyMultipart from '@fastify/multipart'
+import { FastifyInstance, RouteHandlerMethod } from 'fastify'
 import { JSONSchema } from 'json-schema-to-ts'
-import { trace } from '@opentelemetry/api'
+import { getConfig } from '../../../config'
 import {
   db,
-  xmlParser,
+  detectS3IcebergBucket,
+  icebergRestCatalog,
   requireTenantFeature,
   signatureV4,
   storage,
-  detectS3IcebergBucket,
-  icebergRestCatalog,
+  xmlParser,
 } from '../../plugins'
-import { findArrayPathsInSchemas, getRouter, RequestInput } from './router'
 import { s3ErrorHandler } from './error-handler'
-import { getConfig } from '../../../config'
+import { findArrayPathsInSchemas, getRouter, RequestInput, RouteQuery } from './router'
 
 const { s3ProtocolEnabled } = getConfig()
 
@@ -32,8 +31,6 @@ export default async function routes(fastify: FastifyInstance) {
         return
       }
 
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
       const methods = new Set(routes.map((e) => e.method))
 
       methods.forEach((method) => {
@@ -44,7 +41,7 @@ export default async function routes(fastify: FastifyInstance) {
             if (
               s3Router.matchRoute(route, {
                 type: req.isIcebergBucket ? 'iceberg' : undefined,
-                query: (req.query as Record<string, string>) || {},
+                query: (req.query as RouteQuery) || {},
                 headers: (req.headers as Record<string, string>) || {},
               })
             ) {
@@ -65,8 +62,8 @@ export default async function routes(fastify: FastifyInstance) {
 
                 req.operation = { type: operation }
 
-                if (req.operation.type) {
-                  trace.getActiveSpan()?.setAttribute('http.operation', req.operation.type)
+                if (req.operation.type && typeof req.opentelemetry === 'function') {
+                  req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)
                 }
 
                 const data: RequestInput<any> = {
@@ -79,11 +76,17 @@ export default async function routes(fastify: FastifyInstance) {
                 const isValid = compiler(data)
 
                 if (!isValid) {
-                  throw { validation: compiler.errors }
+                  const validationError = new Error('Invalid request') as Error & {
+                    validation?: unknown
+                    statusCode?: number
+                  }
+                  validationError.validation = compiler.errors
+                  validationError.statusCode = 400
+                  throw validationError
                 }
 
                 const output = await route.handler(data, {
-                  req: req,
+                  req,
                   storage: req.storage,
                   tenantId: req.tenantId,
                   owner: req.owner,
@@ -129,12 +132,36 @@ export default async function routes(fastify: FastifyInstance) {
           const disableContentParser = routesByMethod?.some(
             (route) => route.disableContentTypeParser
           )
+          const allowEmptyJsonBody = routesByMethod?.some((route) => route.allowEmptyJsonBody)
 
           if (disableContentParser) {
             localFastify.addContentTypeParser(
               ['application/json', 'text/plain', 'application/xml'],
               function (request, payload, done) {
                 done(null)
+              }
+            )
+          } else if (allowEmptyJsonBody) {
+            const defaultJsonParser = localFastify.getDefaultJsonParser(
+              localFastify.initialConfig.onProtoPoisoning ?? 'error',
+              localFastify.initialConfig.onConstructorPoisoning ?? 'error'
+            )
+
+            localFastify.addContentTypeParser(
+              'application/json',
+              { parseAs: 'string' },
+              (request, body, done) => {
+                const requestUrl = new URL(request.url, 'http://storage.local')
+                const allowsEmptyBody = requestUrl.searchParams.has('uploads')
+
+                if (!body && allowsEmptyBody) {
+                  done(null, null)
+                  return
+                }
+
+                const jsonBody = typeof body === 'string' ? body : body.toString('utf8')
+
+                defaultJsonParser(request, jsonBody, done)
               }
             )
           }
@@ -149,7 +176,7 @@ export default async function routes(fastify: FastifyInstance) {
 
           localFastify.register(signatureV4)
           localFastify.register(xmlParser, {
-            disableContentParser: disableContentParser,
+            disableContentParser,
             parseAsArray: findArrayPathsInSchemas(
               routesByMethod.filter((r) => r.schema.Body).map((r) => r.schema.Body as JSONSchema)
             ),

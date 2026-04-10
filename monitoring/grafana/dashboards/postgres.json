@@ -84,15 +84,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -105,9 +101,7 @@
           "select": [
             [
               {
-                "params": [
-                  "tup_fetched"
-                ],
+                "params": ["tup_fetched"],
                 "type": "field"
               },
               {
@@ -115,9 +109,7 @@
                 "type": "mean"
               },
               {
-                "params": [
-                  "10s"
-                ],
+                "params": ["10s"],
                 "type": "non_negative_derivative"
               }
             ]
@@ -138,15 +130,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -159,9 +147,7 @@
           "select": [
             [
               {
-                "params": [
-                  "tup_fetched"
-                ],
+                "params": ["tup_fetched"],
                 "type": "field"
               },
               {
@@ -169,9 +155,7 @@
                 "type": "mean"
               },
               {
-                "params": [
-                  "10s"
-                ],
+                "params": ["10s"],
                 "type": "non_negative_derivative"
               }
             ]
@@ -192,15 +176,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -213,9 +193,7 @@
           "select": [
             [
               {
-                "params": [
-                  "tup_fetched"
-                ],
+                "params": ["tup_fetched"],
                 "type": "field"
               },
               {
@@ -223,9 +201,7 @@
                 "type": "mean"
               },
               {
-                "params": [
-                  "10s"
-                ],
+                "params": ["10s"],
                 "type": "non_negative_derivative"
               }
             ]
@@ -246,15 +222,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -267,9 +239,7 @@
           "select": [
             [
               {
-                "params": [
-                  "tup_fetched"
-                ],
+                "params": ["tup_fetched"],
                 "type": "field"
               },
               {
@@ -277,9 +247,7 @@
                 "type": "mean"
               },
               {
-                "params": [
-                  "10s"
-                ],
+                "params": ["10s"],
                 "type": "non_negative_derivative"
               }
             ]
@@ -300,15 +268,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -321,9 +285,7 @@
           "select": [
             [
               {
-                "params": [
-                  "tup_fetched"
-                ],
+                "params": ["tup_fetched"],
                 "type": "field"
               },
               {
@@ -331,9 +293,7 @@
                 "type": "mean"
               },
               {
-                "params": [
-                  "10s"
-                ],
+                "params": ["10s"],
                 "type": "non_negative_derivative"
               }
             ]
@@ -394,11 +354,7 @@
       "cacheTimeout": null,
       "colorBackground": false,
       "colorValue": false,
-      "colors": [
-        "rgba(245, 54, 54, 0.9)",
-        "rgba(237, 129, 40, 0.89)",
-        "rgba(50, 172, 45, 0.97)"
-      ],
+      "colors": ["rgba(245, 54, 54, 0.9)", "rgba(237, 129, 40, 0.89)", "rgba(50, 172, 45, 0.97)"],
       "datasource": "$datasource",
       "decimals": 0,
       "editable": true,
@@ -467,15 +423,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -487,9 +439,7 @@
           "select": [
             [
               {
-                "params": [
-                  "xact_commit"
-                ],
+                "params": ["xact_commit"],
                 "type": "field"
               },
               {
@@ -497,9 +447,7 @@
                 "type": "mean"
               },
               {
-                "params": [
-                  "10s"
-                ],
+                "params": ["10s"],
                 "type": "non_negative_derivative"
               }
             ]
@@ -591,15 +539,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -612,9 +556,7 @@
           "select": [
             [
               {
-                "params": [
-                  "buffers_alloc"
-                ],
+                "params": ["buffers_alloc"],
                 "type": "field"
               },
               {
@@ -643,15 +585,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -664,9 +602,7 @@
           "select": [
             [
               {
-                "params": [
-                  "buffers_alloc"
-                ],
+                "params": ["buffers_alloc"],
                 "type": "field"
               },
               {
@@ -695,15 +631,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -716,9 +648,7 @@
           "select": [
             [
               {
-                "params": [
-                  "buffers_alloc"
-                ],
+                "params": ["buffers_alloc"],
                 "type": "field"
               },
               {
@@ -747,15 +677,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -768,9 +694,7 @@
           "select": [
             [
               {
-                "params": [
-                  "buffers_alloc"
-                ],
+                "params": ["buffers_alloc"],
                 "type": "field"
               },
               {
@@ -799,15 +723,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -820,9 +740,7 @@
           "select": [
             [
               {
-                "params": [
-                  "buffers_alloc"
-                ],
+                "params": ["buffers_alloc"],
                 "type": "field"
               },
               {
@@ -946,15 +864,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -967,9 +881,7 @@
           "select": [
             [
               {
-                "params": [
-                  "conflicts"
-                ],
+                "params": ["conflicts"],
                 "type": "field"
               },
               {
@@ -998,15 +910,11 @@
           "format": "time_series",
           "groupBy": [
             {
-              "params": [
-                "$interval"
-              ],
+              "params": ["$interval"],
               "type": "time"
             },
             {
-              "params": [
-                "null"
-              ],
+              "params": ["null"],
               "type": "fill"
             }
           ],
@@ -1019,9 +927,7 @@
           "select": [
             [
               {
-                "params": [
-                  "deadlocks"
-                ],
+                "params": ["deadlocks"],
                 "type": "field"
               },
               {
@@ -1296,9 +1202,7 @@
   "refresh": false,
   "schemaVersion": 26,
   "style": "dark",
-  "tags": [
-    "postgres"
-  ],
+  "tags": ["postgres"],
   "templating": {
     "list": [
       {
@@ -1384,29 +1288,8 @@
     "to": "now"
   },
   "timepicker": {
-    "refresh_intervals": [
-      "5s",
-      "10s",
-      "30s",
-      "1m",
-      "5m",
-      "15m",
-      "30m",
-      "1h",
-      "2h",
-      "1d"
-    ],
-    "time_options": [
-      "5m",
-      "15m",
-      "1h",
-      "6h",
-      "12h",
-      "24h",
-      "2d",
-      "7d",
-      "30d"
-    ]
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"],
+    "time_options": ["5m", "15m", "1h", "6h", "12h", "24h", "2d", "7d", "30d"]
   },
   "timezone": "browser",
   "title": "Postgres Overview",

@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
+import { getConfig } from '../../../config'
 import { db, jwt, requireTenantFeature, storage } from '../../plugins'
 import purgeCache from './purgeCache'
-import { getConfig } from '../../../config'
 
 const { dbServiceRole } = getConfig()
 

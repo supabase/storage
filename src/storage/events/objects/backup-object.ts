@@ -1,9 +1,9 @@
-import { BaseEvent } from '../base-event'
-import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
+import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import { S3Backend } from '@storage/backend'
+import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
-import { logger, logSchema } from '@internal/monitoring'
+import { BaseEvent } from '../base-event'
 
 const { storageS3Bucket } = getConfig()
 

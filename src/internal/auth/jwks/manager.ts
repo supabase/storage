@@ -1,16 +1,38 @@
-import { createMutexByKey } from '@internal/concurrency'
-import { JwksConfig, JwksConfigKeyOCT } from '../../../config'
-import { JWKSManagerStore } from './store'
-import { PubSubAdapter } from '@internal/pubsub'
 import { decrypt, encrypt, generateHS512JWK } from '@internal/auth'
+import {
+  createLruCache,
+  DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
+  TENANT_JWKS_CACHE_NAME,
+} from '@internal/cache'
+import { createMutexByKey } from '@internal/concurrency'
+import { PubSubAdapter } from '@internal/pubsub'
 import { Knex } from 'knex'
+import objectSizeOf from 'object-sizeof'
+import { JwksConfig, JwksConfigKeyOCT } from '../../../config'
+import { TENANTS_JWKS_UPDATE_CHANNEL } from './channels'
+import { JWKSManagerStore } from './store'
 
-const TENANTS_JWKS_UPDATE_CHANNEL = 'tenants_jwks_update'
 const JWK_KIND_STORAGE_URL_SIGNING = 'storage-url-signing-key'
 const JWK_KID_SEPARATOR = '_'
 
 const tenantJwksMutex = createMutexByKey<JwksConfig>()
-const tenantJwksConfigCache = new Map<string, JwksConfig>()
+export const TENANT_JWKS_CACHE_MAX_ITEMS = 16384
+export const TENANT_JWKS_CACHE_MAX_SIZE_BYTES = 1024 * 1024 * 50 // 50 MiB
+export const TENANT_JWKS_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
+
+const tenantJwksConfigCache = createLruCache<string, JwksConfig>(TENANT_JWKS_CACHE_NAME, {
+  max: TENANT_JWKS_CACHE_MAX_ITEMS,
+  maxSize: TENANT_JWKS_CACHE_MAX_SIZE_BYTES,
+  ttl: TENANT_JWKS_CACHE_TTL_MS,
+  sizeCalculation: (value) => objectSizeOf(value),
+  updateAgeOnGet: true,
+  allowStale: false,
+  purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
+})
+
+export function deleteTenantJwksConfig(tenantId: string): void {
+  tenantJwksConfigCache.delete(tenantId)
+}
 
 function createJwkKid({ kind, id }: { id: string; kind: string }): string {
   return kind + JWK_KID_SEPARATOR + id
@@ -45,6 +67,30 @@ export class JWKSManager {
   }
 
   /**
+   * Atomically rolls the URL signing JWK by deactivating the current key and creating a new one
+   * @param tenantId
+   */
+  async rollUrlSigningJwk(tenantId: string): Promise<{ oldKid: string | null; newKid: string }> {
+    return this.storage.transaction(async (trx) => {
+      const currentKeys = await this.storage.listActive(tenantId, JWK_KIND_STORAGE_URL_SIGNING, trx)
+      const currentKey = currentKeys[0]
+
+      if (currentKey) {
+        await this.storage.toggleActive(tenantId, currentKey.id, false, trx)
+      }
+
+      const { kid: newKid } = await this.generateUrlSigningJwk(tenantId, trx)
+
+      return {
+        oldKid: currentKey
+          ? createJwkKid({ kind: JWK_KIND_STORAGE_URL_SIGNING, id: currentKey.id })
+          : null,
+        newKid,
+      }
+    })
+  }
+
+  /**
    * Adds a new jwk that can be used for signing urls
    * @param tenantId
    * @param jwk jwk content
@@ -72,14 +118,14 @@ export class JWKSManager {
   async getJwksTenantConfig(tenantId: string): Promise<JwksConfig> {
     const cachedJwks = tenantJwksConfigCache.get(tenantId)
 
-    if (cachedJwks) {
+    if (cachedJwks !== undefined) {
       return cachedJwks
     }
 
     return tenantJwksMutex(tenantId, async () => {
-      const cachedJwks = tenantJwksConfigCache.get(tenantId)
+      const cachedJwks = tenantJwksConfigCache.get(tenantId, { recordMetrics: false })
 
-      if (cachedJwks) {
+      if (cachedJwks !== undefined) {
         return cachedJwks
       }
 

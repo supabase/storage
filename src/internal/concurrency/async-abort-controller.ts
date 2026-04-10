@@ -3,8 +3,7 @@
  */
 export class AsyncAbortController extends AbortController {
   protected promises: Promise<any>[] = []
-  protected priority = 0
-  protected groups = new Map<number, AsyncAbortController[]>()
+  protected _nextGroup?: AsyncAbortController
 
   constructor() {
     super()
@@ -18,14 +17,16 @@ export class AsyncAbortController extends AbortController {
       }
 
       let resolving: undefined | (() => Promise<void>) = undefined
-      const promise = new Promise<void>(async (resolve, reject) => {
+      const promise = new Promise<void>((resolve, reject) => {
         resolving = async (): Promise<void> => {
-          try {
-            const result = await listener()
-            resolve(result)
-          } catch (e) {
-            reject(e)
-          }
+          return Promise.resolve()
+            .then(() => listener())
+            .then(() => {
+              resolve()
+            })
+            .catch((error) => {
+              reject(error)
+            })
         }
       })
       this.promises.push(promise)
@@ -38,21 +39,12 @@ export class AsyncAbortController extends AbortController {
     }
   }
 
-  protected _nextGroup?: AsyncAbortController
-
   get nextGroup() {
-    if (!this._nextGroup) {
-      this._nextGroup = new AsyncAbortController()
-      this._nextGroup.priority = this.priority + 1
+    if (this._nextGroup) {
+      return this._nextGroup
     }
 
-    let existingGroups = this.groups.get(this._nextGroup.priority)
-    if (!existingGroups) {
-      existingGroups = []
-    }
-
-    existingGroups.push(this._nextGroup)
-    this.groups.set(this._nextGroup.priority, existingGroups)
+    this._nextGroup = new AsyncAbortController()
     return this._nextGroup
   }
 
@@ -62,12 +54,12 @@ export class AsyncAbortController extends AbortController {
       const promises = this.promises.splice(0, 100)
       await Promise.allSettled(promises)
     }
-    await this.abortGroups()
+    await this.abortNextGroup()
   }
 
-  protected async abortGroups() {
-    for (const [, group] of this.groups) {
-      await Promise.allSettled(group.map((g) => g.abortAsync()))
+  protected async abortNextGroup() {
+    if (this._nextGroup) {
+      await this._nextGroup.abortAsync()
     }
   }
 }

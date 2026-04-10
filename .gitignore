@@ -5,8 +5,10 @@ dist/
 .env.*
 !.*.sample
 static/api.json
+static/api-admin.json
 data/
 bin/
 coverage/
 .idea/
 src/scripts/*.py
+.claude/

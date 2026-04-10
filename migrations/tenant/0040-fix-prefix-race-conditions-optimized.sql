@@ -1,3 +1,4 @@
+-- postgres-migrations ignore
 -- Drop old prefix-related triggers that conflict with new GC system
 DROP TRIGGER IF EXISTS prefixes_delete_hierarchy ON storage.prefixes;
 DROP TRIGGER IF EXISTS objects_delete_delete_prefix ON storage.objects;

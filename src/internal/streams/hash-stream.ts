@@ -1,11 +1,12 @@
 // HashSpillWritable.ts
+
+import { createHash, randomUUID } from 'node:crypto'
 import fs, { WriteStream } from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { Readable, Writable, WritableOptions } from 'node:stream'
 import { finished } from 'node:stream/promises'
-import { createHash, randomUUID } from 'node:crypto'
 
 export interface HashSpillWritableOptions {
   /** Max bytes to keep in memory before spilling to disk (required, > 0). */
@@ -194,15 +195,20 @@ export class HashSpillWritable extends Writable {
   }
 
   private writeToFile(buf: Buffer): Promise<void> {
-    return new Promise<void>(async (resolve, reject) => {
-      try {
-        await this.ensureFile()
-        const ok = this.fileStream!.write(buf)
-        if (ok) return resolve()
-        this.fileStream!.once('drain', resolve)
-      } catch (e) {
-        reject(e)
-      }
+    return new Promise<void>((resolve, reject) => {
+      void this.ensureFile()
+        .then(() => {
+          const ok = this.fileStream!.write(buf)
+          if (ok) {
+            resolve()
+            return
+          }
+
+          this.fileStream!.once('drain', resolve)
+        })
+        .catch((error) => {
+          reject(error)
+        })
     })
   }
 

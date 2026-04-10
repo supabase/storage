@@ -1,7 +1,7 @@
-import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
-import { S3Router } from '../router'
-import { ROUTE_OPERATIONS } from '../../operations'
 import { ERRORS } from '@internal/errors'
+import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { ROUTE_OPERATIONS } from '../../operations'
+import { S3Router } from '../router'
 
 const CompletedMultipartUpload = {
   summary: 'Complete multipart upload',
@@ -82,7 +82,7 @@ export default function CompleteMultipartUpload(s3Router: S3Router) {
             Bucket: req.Params.Bucket,
             Key: req.Params['*'],
             ChecksumCRC32: resp.ChecksumCRC32,
-            ChecksumCRC32C: resp.ChecksumCRC32,
+            ChecksumCRC32C: resp.ChecksumCRC32C,
             ChecksumSHA1: resp.ChecksumSHA1,
             ChecksumSHA256: resp.ChecksumSHA256,
             ETag: resp.ETag,

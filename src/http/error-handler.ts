@@ -1,7 +1,7 @@
-import { FastifyInstance } from 'fastify'
 import { FastifyError } from '@fastify/error'
+import { ErrorCode, isRenderableError, StorageBackendError, StorageError } from '@internal/errors'
+import { FastifyInstance } from 'fastify'
 import { DatabaseError } from 'pg'
-import { ErrorCode, isRenderableError, StorageError } from '@internal/errors'
 
 /**
  * The global error handler for all the uncaught exceptions within a request.
@@ -50,12 +50,15 @@ export const setErrorHandler = (
       const statusCode = options?.respectStatusCode
         ? parseInt(renderableError.statusCode, 10)
         : error.userStatusCode
-        ? error.userStatusCode
-        : renderableError.statusCode === '500'
-        ? 500
-        : 400
+          ? error.userStatusCode
+          : renderableError.statusCode === '500'
+            ? 500
+            : 400
 
-      if (renderableError.code === ErrorCode.AbortedTerminate) {
+      if (
+        renderableError.code === ErrorCode.AbortedTerminate ||
+        (error instanceof StorageBackendError && error.shouldCloseConnection())
+      ) {
         reply.header('Connection', 'close')
 
         reply.raw.once('finish', () => {
@@ -78,6 +81,18 @@ export const setErrorHandler = (
     // Fastify errors
     if ('statusCode' in error) {
       const err = error as FastifyError
+
+      if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') {
+        return reply.status(400).send(
+          formatter({
+            statusCode: '415',
+            code: ErrorCode.InvalidMimeType,
+            error: 'invalid_mime_type',
+            message: 'Invalid Content-Type header',
+          })
+        )
+      }
+
       return reply.status(err.statusCode || 500).send(
         formatter({
           statusCode: `${err.statusCode}`,

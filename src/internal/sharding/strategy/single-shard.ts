@@ -1,5 +1,5 @@
-import { Sharder, ShardResource } from '../sharder'
-import { ResourceKind, ShardRow, ShardStatus } from '@internal/sharding/store'
+import { ResourceKind, ShardRow, ShardStats, ShardStatus } from '@internal/sharding/store'
+import { ReservationResult, Sharder, ShardResource } from '../sharder'
 
 export class SingleShard implements Sharder {
   constructor(
@@ -9,7 +9,7 @@ export class SingleShard implements Sharder {
     }
   ) {}
 
-  listShardByKind(): Promise<ShardRow[]> {
+  listShardByKind(_kind: ResourceKind): Promise<ShardRow[]> {
     return Promise.resolve([
       {
         id: 1,
@@ -23,32 +23,34 @@ export class SingleShard implements Sharder {
     ])
   }
 
-  shardStats(): Promise<any> {
-    return Promise.resolve({
-      shardId: 1,
-      shardKey: this.singleShard.shardKey,
-      capacity: this.singleShard.capacity,
-      used: -1,
-      free: -1,
-    })
+  shardStats(_kind?: ResourceKind): Promise<ShardStats> {
+    return Promise.resolve([
+      {
+        shardId: '1',
+        shardKey: this.singleShard.shardKey,
+        capacity: this.singleShard.capacity,
+        used: -1,
+        free: -1,
+      },
+    ])
   }
 
-  withTnx(): Sharder {
+  withTnx(_tnx: unknown): Sharder {
     return new SingleShard({
       shardKey: this.singleShard.shardKey,
       capacity: this.singleShard.capacity,
     })
   }
 
-  freeByResource(): Promise<void> {
+  freeByResource(_shardId: string | number, _resource: ShardResource): Promise<void> {
     return Promise.resolve()
   }
 
-  cancel(): Promise<void> {
+  cancel(_reservationId: string): Promise<void> {
     return Promise.resolve(undefined)
   }
 
-  confirm(): Promise<void> {
+  confirm(_reservationId: string, _resource: ShardResource): Promise<void> {
     return Promise.resolve(undefined)
   }
 
@@ -85,31 +87,21 @@ export class SingleShard implements Sharder {
     })
   }
 
-  freeByLocation(): Promise<void> {
+  freeByLocation(_shardId: string | number, _slotNo: number): Promise<void> {
     return Promise.resolve(undefined)
   }
 
-  reserve(): Promise<{
-    reservationId: string
-    shardId: string
-    shardKey: string
-    slotNo: number
-    leaseExpiresAt: string
-  }> {
+  reserve(_opts: ShardResource): Promise<ReservationResult> {
     return Promise.resolve({
       leaseExpiresAt: '',
       reservationId: '',
-      shardId: this.singleShard.shardKey,
+      shardId: '1',
       shardKey: this.singleShard.shardKey,
       slotNo: 0,
     })
   }
 
-  setShardStatus(): Promise<void> {
-    return Promise.resolve(undefined)
-  }
-
-  shardStatsByKind(): Promise<any> {
+  setShardStatus(_shardId: string | number, _status: ShardStatus): Promise<void> {
     return Promise.resolve(undefined)
   }
 }

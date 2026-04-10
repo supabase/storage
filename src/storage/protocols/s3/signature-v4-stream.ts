@@ -1,6 +1,8 @@
 // ChunkSignatureParser.ts
-import { Transform, TransformCallback, TransformOptions } from 'stream'
+
+import { ERRORS } from '@internal/errors'
 import crypto from 'crypto'
+import { Transform, TransformCallback, TransformOptions } from 'stream'
 
 type ParserState = 'HEADER' | 'DATA' | 'FOOTER' | 'TRAILER'
 
@@ -117,7 +119,14 @@ export class ChunkSignatureV4Parser extends Transform {
 
       cb()
     } catch (err) {
-      cb(err as Error)
+      const error = err as Error
+      // Convert chunk size errors to 400 instead of 500
+      if (error.message && error.message.includes('Chunk size exceeds')) {
+        const limit = error.message.replace('Chunk size exceeds', '').trim()
+        cb(ERRORS.EntityTooLarge(error, 'chunk', limit))
+      } else {
+        cb(error)
+      }
     }
   }
 

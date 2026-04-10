@@ -1,9 +1,5 @@
 'use strict'
 
-import app from '../app'
-import { getConfig, mergeConfig } from '../config'
-import { FastifyInstance } from 'fastify'
-import { useMockObject, useMockQueue } from './common'
 import {
   CreateIndexCommandOutput,
   DeleteVectorsOutput,
@@ -12,10 +8,14 @@ import {
   PutVectorsOutput,
   QueryVectorsOutput,
 } from '@aws-sdk/client-s3vectors'
-import { KnexVectorMetadataDB, VectorStore, VectorStoreManager } from '@storage/protocols/vector'
-import { useStorage } from './utils/storage'
 import { signJWT } from '@internal/auth'
 import { SingleShard } from '@internal/sharding'
+import { KnexVectorMetadataDB, VectorStore, VectorStoreManager } from '@storage/protocols/vector'
+import { FastifyInstance } from 'fastify'
+import app from '../app'
+import { getConfig, mergeConfig } from '../config'
+import { useMockObject, useMockQueue } from './common'
+import { useStorage } from './utils/storage'
 
 const { serviceKeyAsync, vectorS3Buckets, tenantId, jwtSecret } = getConfig()
 
@@ -111,7 +111,7 @@ describe('Vectors API', () => {
         dimension: 1536,
         distanceMetric: 'cosine',
         indexName: 'test-index',
-        vectorBucketName: vectorBucketName,
+        vectorBucketName,
         metadataConfiguration: {
           nonFilterableMetadataKeys: ['key1', 'key2'],
         },
@@ -132,7 +132,7 @@ describe('Vectors API', () => {
 
       // Verify the CreateIndexCommand was called with correct parameters including tenantId prefix
       const createIndexCommand = mockVectorStore.createVectorIndex
-      expect(createIndexCommand).toBeCalledWith({
+      expect(createIndexCommand).toHaveBeenCalledWith({
         ...validCreateIndexRequest,
         vectorBucketName: vectorBucketS3,
         indexName: `${tenantId}-test-index`,
@@ -283,24 +283,52 @@ describe('Vectors API', () => {
     })
 
     it('should handle vector service not configured', async () => {
-      // Mock app without s3Vector service
-      const appWithoutVector = app()
       mergeConfig({ vectorEnabled: false })
 
-      const response = await appWithoutVector.inject({
-        method: 'POST',
-        url: '/vector/CreateIndex',
-        headers: {
-          authorization: `Bearer ${serviceToken}`,
-        },
-        payload: validCreateIndexRequest,
-      })
+      const appWithoutVector = app()
 
-      expect(response.statusCode).toBe(404)
-      const body = JSON.parse(response.body)
-      expect(body.error).toBe('Not Found')
+      try {
+        const response = await appWithoutVector.inject({
+          method: 'POST',
+          url: '/vector/CreateIndex',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: validCreateIndexRequest,
+        })
 
-      await appWithoutVector.close()
+        expect(response.statusCode).toBe(404)
+        const body = JSON.parse(response.body)
+        expect(body.error).toBe('Not Found')
+      } finally {
+        await appWithoutVector.close()
+      }
+    })
+
+    it('should return FeatureNotEnabled when the vector backend is not configured', async () => {
+      mergeConfig({ vectorEnabled: true, vectorS3Buckets: [] })
+
+      const appWithoutVector = app()
+
+      try {
+        const response = await appWithoutVector.inject({
+          method: 'POST',
+          url: '/vector/CreateIndex',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: validCreateIndexRequest,
+        })
+
+        expect(response.statusCode).toBe(409)
+        expect(JSON.parse(response.body)).toMatchObject({
+          statusCode: '409',
+          code: 'FeatureNotEnabled',
+          error: 'FeatureNotEnabled',
+        })
+      } finally {
+        await appWithoutVector.close()
+      }
     })
 
     it('should handle S3Vector service errors', async () => {
@@ -327,7 +355,7 @@ describe('Vectors API', () => {
         dimension: 1536,
         distanceMetric: 'euclidean' as const,
         indexName: 'test-index-2',
-        vectorBucketName: vectorBucketName,
+        vectorBucketName,
       }
 
       const response = await appInstance.inject({
@@ -463,7 +491,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -492,7 +520,7 @@ describe('Vectors API', () => {
           dimension: 1536,
           distanceMetric: 'cosine',
           indexName: 'test-index',
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -504,7 +532,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -518,7 +546,7 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/DeleteVectorBucket',
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -666,6 +694,152 @@ describe('Vectors API', () => {
       })
     })
 
+    it('supports prefix filtering with nextToken for buckets', async () => {
+      const runId = Date.now().toString(36)
+      const prefix = `page-bucket-${runId}`
+      const firstBucket = `${prefix}-a`
+      const secondBucket = `${prefix}-b`
+
+      await s3Vector.createBucket(firstBucket)
+      await s3Vector.createBucket(secondBucket)
+      await s3Vector.createBucket(`other-${runId}-bucket`)
+
+      const page1Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          prefix,
+          maxResults: 1,
+        },
+      })
+
+      expect(page1Response.statusCode).toBe(200)
+      const page1 = JSON.parse(page1Response.body)
+      expect(page1.vectorBuckets).toHaveLength(1)
+      expect(page1.vectorBuckets[0].vectorBucketName.startsWith(prefix)).toBe(true)
+      expect(page1.nextToken).toBeDefined()
+
+      const page2Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          prefix,
+          maxResults: 1,
+          nextToken: page1.nextToken,
+        },
+      })
+
+      expect(page2Response.statusCode).toBe(200)
+      const page2 = JSON.parse(page2Response.body)
+      expect(page2.vectorBuckets).toHaveLength(1)
+      expect(page2.vectorBuckets[0].vectorBucketName.startsWith(prefix)).toBe(true)
+      expect(page2.vectorBuckets[0].vectorBucketName).not.toBe(
+        page1.vectorBuckets[0].vectorBucketName
+      )
+    })
+
+    it('returns nextToken only on truncated bucket pages', async () => {
+      const runId = Date.now().toString(36)
+      const prefix = `terminal-bucket-${runId}`
+
+      await s3Vector.createBucket(`${prefix}-a`)
+      await s3Vector.createBucket(`${prefix}-b`)
+
+      const page1Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          prefix,
+          maxResults: 1,
+        },
+      })
+
+      expect(page1Response.statusCode).toBe(200)
+      const page1 = JSON.parse(page1Response.body)
+      expect(page1.nextToken).toBeDefined()
+
+      const page2Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          prefix,
+          maxResults: 1,
+          nextToken: page1.nextToken,
+        },
+      })
+
+      expect(page2Response.statusCode).toBe(200)
+      const page2 = JSON.parse(page2Response.body)
+      expect(page2.vectorBuckets).toHaveLength(1)
+      expect(page2.nextToken).toBeUndefined()
+    })
+
+    it('treats % as a literal character in bucket prefix filtering', async () => {
+      const runId = Date.now().toString(36)
+      const prefix = `%literal-${runId}`
+      const matchingBucket = `${prefix}-bucket`
+      const nonMatchingBucket = `x${prefix}-bucket`
+
+      await s3Vector.createBucket(matchingBucket)
+      await s3Vector.createBucket(nonMatchingBucket)
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          prefix,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const body = JSON.parse(response.body)
+      const names = body.vectorBuckets.map((bucket: any) => bucket.vectorBucketName)
+      expect(names).toContain(matchingBucket)
+      expect(names).not.toContain(nonMatchingBucket)
+    })
+
+    it('treats _ as a literal character in bucket prefix filtering', async () => {
+      const runId = Date.now().toString(36)
+      const prefix = `_literal-${runId}`
+      const matchingBucket = `${prefix}-bucket`
+      const nonMatchingBucket = `aliteral-${runId}-bucket`
+
+      await s3Vector.createBucket(matchingBucket)
+      await s3Vector.createBucket(nonMatchingBucket)
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          prefix,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const body = JSON.parse(response.body)
+      const names = body.vectorBuckets.map((bucket: any) => bucket.vectorBucketName)
+      expect(names).toContain(matchingBucket)
+      expect(names).not.toContain(nonMatchingBucket)
+    })
+
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
@@ -686,7 +860,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -703,7 +877,7 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/GetVectorBucket',
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -753,8 +927,8 @@ describe('Vectors API', () => {
         dataType: 'float32',
         dimension: 1536,
         distanceMetric: 'cosine',
-        indexName: indexName,
-        vectorBucketName: vectorBucketName,
+        indexName,
+        vectorBucketName,
       })
     })
 
@@ -766,8 +940,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -797,8 +971,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/DeleteIndex',
         payload: {
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -813,7 +987,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          indexName: indexName,
+          indexName,
         },
       })
 
@@ -829,7 +1003,7 @@ describe('Vectors API', () => {
         },
         payload: {
           indexName: 'INVALID_NAME',
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -845,7 +1019,7 @@ describe('Vectors API', () => {
         },
         payload: {
           indexName: 'non-existent-index',
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -867,7 +1041,7 @@ describe('Vectors API', () => {
           dimension: 1536,
           distanceMetric: 'cosine',
           indexName: `index-a-${Date.now()}`,
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -882,7 +1056,7 @@ describe('Vectors API', () => {
           dimension: 768,
           distanceMetric: 'euclidean',
           indexName: `index-b-${Date.now()}`,
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
     })
@@ -895,7 +1069,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -922,7 +1096,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           maxResults: 1,
         },
       })
@@ -930,6 +1104,43 @@ describe('Vectors API', () => {
       expect(response.statusCode).toBe(200)
       const body = JSON.parse(response.body)
       expect(body.indexes.length).toBeLessThanOrEqual(1)
+    })
+
+    it('supports pagination with nextToken for indexes', async () => {
+      const page1Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          maxResults: 1,
+        },
+      })
+
+      expect(page1Response.statusCode).toBe(200)
+      const page1 = JSON.parse(page1Response.body)
+      expect(page1.indexes).toHaveLength(1)
+      expect(page1.nextToken).toBeDefined()
+
+      const page2Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          maxResults: 1,
+          nextToken: page1.nextToken,
+        },
+      })
+
+      expect(page2Response.statusCode).toBe(200)
+      const page2 = JSON.parse(page2Response.body)
+      expect(page2.indexes).toHaveLength(1)
+      expect(page2.indexes[0].indexName).not.toBe(page1.indexes[0].indexName)
     })
 
     it('should support prefix filtering', async () => {
@@ -941,7 +1152,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           prefix,
         },
       })
@@ -953,12 +1164,197 @@ describe('Vectors API', () => {
       })
     })
 
+    it('supports prefix filtering with nextToken for indexes', async () => {
+      const runId = Date.now().toString(36)
+      const prefix = `page-index-${runId}`
+
+      const createFirstResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/CreateIndex',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          dataType: 'float32',
+          dimension: 128,
+          distanceMetric: 'cosine',
+          indexName: `${prefix}-a`,
+          vectorBucketName,
+        },
+      })
+      expect(createFirstResponse.statusCode).toBe(200)
+
+      const createSecondResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/CreateIndex',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          dataType: 'float32',
+          dimension: 128,
+          distanceMetric: 'cosine',
+          indexName: `${prefix}-b`,
+          vectorBucketName,
+        },
+      })
+      expect(createSecondResponse.statusCode).toBe(200)
+
+      const page1Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          prefix,
+          maxResults: 1,
+        },
+      })
+
+      expect(page1Response.statusCode).toBe(200)
+      const page1 = JSON.parse(page1Response.body)
+      expect(page1.indexes).toHaveLength(1)
+      expect(page1.indexes[0].indexName.startsWith(prefix)).toBe(true)
+      expect(page1.nextToken).toBeDefined()
+
+      const page2Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          prefix,
+          maxResults: 1,
+          nextToken: page1.nextToken,
+        },
+      })
+
+      expect(page2Response.statusCode).toBe(200)
+      const page2 = JSON.parse(page2Response.body)
+      expect(page2.indexes).toHaveLength(1)
+      expect(page2.indexes[0].indexName.startsWith(prefix)).toBe(true)
+      expect(page2.indexes[0].indexName).not.toBe(page1.indexes[0].indexName)
+    })
+
+    it('returns nextToken only on truncated index pages', async () => {
+      const runId = Date.now().toString(36)
+      const prefix = `terminal-index-${runId}`
+
+      const createFirstResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/CreateIndex',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          dataType: 'float32',
+          dimension: 128,
+          distanceMetric: 'cosine',
+          indexName: `${prefix}-a`,
+          vectorBucketName,
+        },
+      })
+      expect(createFirstResponse.statusCode).toBe(200)
+
+      const createSecondResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/CreateIndex',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          dataType: 'float32',
+          dimension: 128,
+          distanceMetric: 'cosine',
+          indexName: `${prefix}-b`,
+          vectorBucketName,
+        },
+      })
+      expect(createSecondResponse.statusCode).toBe(200)
+
+      const page1Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          prefix,
+          maxResults: 1,
+        },
+      })
+
+      expect(page1Response.statusCode).toBe(200)
+      const page1 = JSON.parse(page1Response.body)
+      expect(page1.nextToken).toBeDefined()
+
+      const page2Response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          prefix,
+          maxResults: 1,
+          nextToken: page1.nextToken,
+        },
+      })
+
+      expect(page2Response.statusCode).toBe(200)
+      const page2 = JSON.parse(page2Response.body)
+      expect(page2.indexes).toHaveLength(1)
+      expect(page2.nextToken).toBeUndefined()
+    })
+
+    it('treats % as a literal character in index prefix filtering', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          prefix: '%',
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const body = JSON.parse(response.body)
+      expect(body.indexes).toHaveLength(0)
+    })
+
+    it('treats _ as a literal character in index prefix filtering', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          prefix: '_',
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const body = JSON.parse(response.body)
+      expect(body.indexes).toHaveLength(0)
+    })
+
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
         url: '/vector/ListIndexes',
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -994,8 +1390,8 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 1536,
           distanceMetric: 'cosine',
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
           metadataConfiguration: {
             nonFilterableMetadataKeys: ['key1'],
           },
@@ -1011,8 +1407,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1036,8 +1432,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/GetIndex',
         payload: {
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1052,7 +1448,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          indexName: indexName,
+          indexName,
         },
       })
 
@@ -1068,7 +1464,7 @@ describe('Vectors API', () => {
         },
         payload: {
           indexName: 'INVALID_NAME',
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -1084,7 +1480,7 @@ describe('Vectors API', () => {
         },
         payload: {
           indexName: 'non-existent-index',
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -1107,8 +1503,8 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 3,
           distanceMetric: 'cosine',
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1125,8 +1521,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           vectors: [
             {
               key: 'vec1',
@@ -1177,8 +1573,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/PutVectors',
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           vector: [
             {
               data: {
@@ -1200,8 +1596,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
         },
       })
 
@@ -1216,8 +1612,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           vector: [
             {
               data: {
@@ -1245,8 +1641,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           vector: tooManyVectors,
         },
       })
@@ -1262,7 +1658,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           indexName: 'non-existent-index',
           vectors: [
             {
@@ -1293,8 +1689,8 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 3,
           distanceMetric: 'cosine',
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1316,8 +1712,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           queryVector: {
             float32: [1.0, 2.0, 3.0],
           },
@@ -1354,8 +1750,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           queryVector: {
             float32: [1.0, 2.0, 3.0],
           },
@@ -1384,8 +1780,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           queryVector: {
             float32: [1.0, 2.0, 3.0],
           },
@@ -1411,8 +1807,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/QueryVectors',
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           queryVector: {
             float32: [1.0, 2.0, 3.0],
           },
@@ -1431,8 +1827,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           queryVector: {
             float32: [1.0, 2.0, 3.0],
           },
@@ -1450,8 +1846,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           queryVector: {
             // missing float32
           },
@@ -1470,7 +1866,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           indexName: 'non-existent-index',
           queryVector: {
             float32: [1.0, 2.0, 3.0],
@@ -1498,8 +1894,8 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 3,
           distanceMetric: 'cosine',
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1514,8 +1910,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           keys: ['vec1', 'vec2', 'vec3'],
         },
       })
@@ -1535,8 +1931,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/DeleteVectors',
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           keys: ['vec1'],
         },
       })
@@ -1552,8 +1948,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
         },
       })
 
@@ -1568,7 +1964,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           indexName: 'non-existent-index',
           keys: ['vec1'],
         },
@@ -1593,8 +1989,8 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 3,
           distanceMetric: 'cosine',
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1612,8 +2008,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
         },
       })
 
@@ -1639,8 +2035,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           maxResults: 10,
         },
       })
@@ -1661,8 +2057,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           returnData: true,
           returnMetadata: true,
         },
@@ -1685,8 +2081,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           nextToken: 'some-token',
         },
       })
@@ -1707,8 +2103,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           segmentCount: 4,
           segmentIndex: 2,
         },
@@ -1728,8 +2124,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/ListVectors',
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
         },
       })
 
@@ -1744,7 +2140,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
         },
       })
 
@@ -1759,8 +2155,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           maxResults: 501,
         },
       })
@@ -1776,8 +2172,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           segmentCount: 4,
           segmentIndex: 16,
         },
@@ -1794,7 +2190,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           indexName: 'non-existent-index',
         },
       })
@@ -1818,8 +2214,8 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 3,
           distanceMetric: 'cosine',
-          indexName: indexName,
-          vectorBucketName: vectorBucketName,
+          indexName,
+          vectorBucketName,
         },
       })
 
@@ -1850,8 +2246,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           keys: ['vec1', 'vec2'],
           returnData: true,
           returnMetadata: true,
@@ -1881,8 +2277,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           keys: ['vec1'],
         },
       })
@@ -1901,8 +2297,8 @@ describe('Vectors API', () => {
         method: 'POST',
         url: '/vector/GetVectors',
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
           keys: ['vec1'],
         },
       })
@@ -1918,8 +2314,8 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
-          indexName: indexName,
+          vectorBucketName,
+          indexName,
         },
       })
 
@@ -1934,7 +2330,7 @@ describe('Vectors API', () => {
           authorization: `Bearer ${serviceToken}`,
         },
         payload: {
-          vectorBucketName: vectorBucketName,
+          vectorBucketName,
           indexName: 'non-existent-index',
           keys: ['vec1'],
         },

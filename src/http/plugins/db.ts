@@ -1,13 +1,10 @@
-import fastifyPlugin from 'fastify-plugin'
-import { getConfig, MultitenantMigrationStrategy } from '../../config'
+import { createMutexByKey } from '@internal/concurrency'
 import {
+  getPostgresConnection,
   getServiceKeyUser,
   getTenantConfig,
   TenantConnection,
-  getPostgresConnection,
 } from '@internal/database'
-import { logSchema } from '@internal/monitoring'
-import { createMutexByKey } from '@internal/concurrency'
 import {
   areMigrationsUpToDate,
   DBMigration,
@@ -17,6 +14,9 @@ import {
   updateTenantMigrationsState,
 } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
+import { logSchema } from '@internal/monitoring'
+import fastifyPlugin from 'fastify-plugin'
+import { getConfig, MultitenantMigrationStrategy } from '../../config'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -25,13 +25,14 @@ declare module 'fastify' {
   }
 }
 
-const { dbMigrationStrategy, isMultitenant, dbMigrationFreezeAt } = getConfig()
+const { databaseEnableQueryCancellation, dbMigrationStrategy, isMultitenant, dbMigrationFreezeAt } =
+  getConfig()
 
 export const db = fastifyPlugin(
   async function db(fastify) {
     fastify.register(migrations)
 
-    fastify.decorateRequest('db', null)
+    fastify.decorateRequest('db')
 
     fastify.addHook('preHandler', async (request) => {
       const adminUser = await getServiceKeyUser(request.tenantId)
@@ -54,6 +55,11 @@ export const db = fastifyPlugin(
         method: request.method,
         operation: () => request.operation?.type,
       })
+
+      // Connect abort signal to DB connection for query cancellation
+      if (request.signals?.disconnect?.signal && databaseEnableQueryCancellation) {
+        request.db.setAbortSignal(request.signals.disconnect.signal)
+      }
     })
 
     fastify.addHook('onSend', async (request, reply, payload) => {
@@ -101,7 +107,7 @@ interface DbSuperUserPluginOptions {
 export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
   async function dbSuperUser(fastify, opts) {
     fastify.register(migrations)
-    fastify.decorateRequest('db', null)
+    fastify.decorateRequest('db')
 
     fastify.addHook('preHandler', async (request) => {
       const adminUser = await getServiceKeyUser(request.tenantId)
@@ -118,6 +124,11 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
         maxConnections: opts.maxConnections,
         operation: () => request.operation?.type,
       })
+
+      // Connect abort signal to DB connection for query cancellation
+      if (request.signals?.disconnect?.signal && databaseEnableQueryCancellation) {
+        request.db.setAbortSignal(request.signals.disconnect.signal)
+      }
     })
 
     fastify.addHook('onSend', async (request, reply, payload) => {

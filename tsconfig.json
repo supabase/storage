@@ -1,9 +1,10 @@
 {
   "compilerOptions": {
     "paths": {
-        "@internal/*": ["./src/internal/*"],
-        "@storage/*": ["./src/storage/*"],
+      "@internal/*": ["./src/internal/*"],
+      "@storage/*": ["./src/storage/*"]
     },
+    "types": ["node", "jest"],
     "downlevelIteration": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
@@ -13,16 +14,12 @@
     "rootDir": "src",
     "moduleResolution": "node",
     "module": "commonjs",
-    "target": "ES2021",
+    "target": "ES2024",
     "outDir": "dist",
     "sourceMap": true,
     "strict": true,
     "skipLibCheck": true
   },
   "include": ["./src/**/*"],
-  "exclude": ["node_modules", "dist"],
-  "parserOptions": {
-    "ecmaVersion": "2020", // Allows for the parsing of modern ECMAScript features
-    "sourceType": "module" // Allows for the use of imports
-  }
+  "exclude": ["node_modules", "dist"]
 }

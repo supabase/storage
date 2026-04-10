@@ -1,6 +1,6 @@
+import fastifyRateLimit from '@fastify/rate-limit'
 import { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
-import fastifyRateLimit from '@fastify/rate-limit'
 import Redis from 'ioredis'
 import { getConfig } from '../../../config'
 
@@ -28,7 +28,7 @@ export const rateLimiter = fp((fastify: FastifyInstance, ops: any, done: () => v
             commandTimeout: rateLimiterRedisCommandTimeout * 1000,
           })
         : undefined,
-    keyGenerator: function (request) {
+    keyGenerator(request) {
       const tenant = request.tenantId
       const ip = request.headers['x-real-ip'] || request.headers['x-client-ip'] || request.ip
 

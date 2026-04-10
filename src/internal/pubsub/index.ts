@@ -1,2 +1,2 @@
-export * from './postgres'
 export * from './adapter'
+export * from './postgres'

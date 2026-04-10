@@ -1,8 +1,7 @@
-import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
-import { S3Router } from '../router'
-import { ROUTE_OPERATIONS } from '../../operations'
-import { S3Backend } from '@storage/backend'
 import { ERRORS } from '@internal/errors'
+import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { ROUTE_OPERATIONS } from '../../operations'
+import { S3Router } from '../router'
 
 const CreateMultiPartUploadInput = {
   summary: 'Create multipart upload',
@@ -41,12 +40,10 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
     {
       type: 'iceberg',
       schema: CreateMultiPartUploadInput,
+      allowEmptyJsonBody: true,
       operation: ROUTE_OPERATIONS.S3_CREATE_MULTIPART,
     },
     async (req, ctx) => {
-      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
-
-      const metadata = s3Protocol.parseMetadataHeaders(req.Headers)
       const icebergBucketName = ctx.req.internalIcebergBucketName
 
       if (!icebergBucketName) {
@@ -58,8 +55,7 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
         req.Params['*'],
         undefined,
         req.Headers?.['content-type'] || 'application/octet-stream',
-        req.Headers?.['cache-control'] || 'no-cache',
-        metadata
+        req.Headers?.['cache-control'] || 'no-cache'
       )
 
       return {
@@ -76,7 +72,11 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
 
   s3Router.post(
     '/:Bucket/*?uploads',
-    { schema: CreateMultiPartUploadInput, operation: ROUTE_OPERATIONS.S3_CREATE_MULTIPART },
+    {
+      schema: CreateMultiPartUploadInput,
+      allowEmptyJsonBody: true,
+      operation: ROUTE_OPERATIONS.S3_CREATE_MULTIPART,
+    },
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
@@ -89,7 +89,7 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
         CacheControl: req.Headers?.['cache-control'],
         ContentDisposition: req.Headers?.['content-disposition'],
         ContentEncoding: req.Headers?.['content-encoding'],
-        Metadata: metadata,
+        Metadata: metadata || {},
       })
     }
   )

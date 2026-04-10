@@ -1,11 +1,9 @@
-import { FromSchema } from 'json-schema-to-ts'
-import { FastifyInstance } from 'fastify'
-
 import { SignedToken, verifyJWT } from '@internal/auth'
 import { getJwtSecret, getTenantConfig } from '@internal/database'
 import { ERRORS } from '@internal/errors'
-
 import { ImageRenderer } from '@storage/renderer'
+import { FastifyInstance } from 'fastify'
+import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
 import { ROUTE_OPERATIONS } from '../operations'
 

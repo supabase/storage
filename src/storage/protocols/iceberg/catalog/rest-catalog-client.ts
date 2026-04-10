@@ -1,6 +1,6 @@
-import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 import { ERRORS } from '@internal/errors'
 import { signRequest } from 'aws-sigv4-sign'
+import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 import JSONBigint from 'json-bigint'
 import {
   createAlreadyExistsError,
@@ -760,13 +760,16 @@ export class SignV4Auth {
   constructor(private readonly opts: { region: string }) {}
 
   async authorize(req: InternalAxiosRequestConfig<string>) {
-    const queryParams = Object.keys(req.params || {}).reduce((acc, name) => {
-      if (req.params[name]) {
-        acc[name] = req.params[name]
-      }
+    const queryParams = Object.keys(req.params || {}).reduce(
+      (acc, name) => {
+        if (req.params[name]) {
+          acc[name] = req.params[name]
+        }
 
-      return acc
-    }, {} as Record<string, string>)
+        return acc
+      },
+      {} as Record<string, string>
+    )
 
     const queryString = new URLSearchParams(queryParams).toString()
 

@@ -1,11 +1,10 @@
-import { Queue } from '@internal/queue'
-import { logger, logSchema, setLogger } from '@internal/monitoring'
-import { listenForTenantUpdate, PubSub } from '@internal/database'
 import { AsyncAbortController } from '@internal/concurrency'
+import { listenForTenantUpdate, PubSub } from '@internal/database'
+import { logger, logSchema, setLogger } from '@internal/monitoring'
+import { Queue } from '@internal/queue'
 import { registerWorkers } from '@storage/events'
-
-import { getConfig } from '../config'
 import adminApp from '../admin-app'
+import { getConfig } from '../config'
 import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 
 const workerLogger = logger.child({ service: 'worker' })
@@ -49,10 +48,13 @@ export async function main() {
       signal: shutdownSignal.signal,
       registerWorkers,
       onMessage: (job) =>
-        logger.info(`[Worker] Job Received ${job.name} ${job.id}`, {
-          type: 'worker',
-          job: JSON.stringify(job),
-        }),
+        logger.info(
+          {
+            type: 'worker',
+            job: JSON.stringify(job),
+          },
+          `[Worker] Job Received ${job.name} ${job.id}`
+        ),
     }),
     PubSub.start({
       signal: shutdownSignal.nextGroup.nextGroup.signal,
@@ -60,7 +62,7 @@ export async function main() {
   ])
 
   const server = adminApp({
-    logger,
+    loggerInstance: logger,
     disableRequestLogging: true,
     requestIdHeader: requestTraceHeader,
   })

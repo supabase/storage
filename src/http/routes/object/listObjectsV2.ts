@@ -1,10 +1,11 @@
-import { FastifyInstance } from 'fastify'
-import { FromSchema } from 'json-schema-to-ts'
-import { AuthenticatedRequest } from '../../types'
-import { ROUTE_OPERATIONS } from '../operations'
-import { getConfig } from '../../../config'
 import { getTenantConfig } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
+import { FastifyInstance } from 'fastify'
+import { FastifyRequest } from 'fastify/types/request'
+import { FromSchema } from 'json-schema-to-ts'
+import { getConfig } from '../../../config'
+import { AuthenticatedRequest } from '../../types'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const { isMultitenant } = getConfig()
 
@@ -37,7 +38,6 @@ interface searchRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof searchRequestBodySchema>
   Params: FromSchema<typeof searchRequestParamsSchema>
 }
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Search for objects under a prefix'
 
@@ -52,6 +52,13 @@ export default async function routes(fastify: FastifyInstance) {
       },
       config: {
         operation: { type: ROUTE_OPERATIONS.LIST_OBJECTS_V2 },
+        logMetadata: (req: FastifyRequest<searchRequestInterface>) => ({
+          prefix: req.body.prefix,
+          limit: req.body.limit,
+          cursor: req.body.cursor,
+          sortBy: req.body.sortBy,
+          with_delimiter: req.body.with_delimiter,
+        }),
       },
     },
     async (request, response) => {

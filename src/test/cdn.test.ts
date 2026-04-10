@@ -27,11 +27,11 @@ jest.mock('axios', () => {
   }
 })
 
-import { useStorage } from './utils/storage'
 import axios from 'axios'
-import { Readable } from 'stream'
-import { SignJWT } from 'jose'
 import { FastifyInstance } from 'fastify'
+import { SignJWT } from 'jose'
+import { Readable } from 'stream'
+import { useStorage } from './utils/storage'
 
 const { serviceKeyAsync, anonKeyAsync, tenantId, jwtSecret } = getConfig()
 
@@ -94,12 +94,12 @@ describe('CDN Cache Manager', () => {
     await storageHook.storage.from(bucketName).uploadNewObject({
       isUpsert: true,
       objectName,
+      userMetadata: {},
       file: {
         body: Readable.from(Buffer.from('test')),
         cacheControl: 'public, max-age=31536000',
         mimeType: 'text/plain',
         isTruncated: () => false,
-        userMetadata: {},
       },
     })
 
@@ -119,12 +119,12 @@ describe('CDN Cache Manager', () => {
 
     const body = await response.json()
     expect(body).toEqual({ message: 'success' })
-    expect(spy).toBeCalledWith('/purge', {
+    expect(spy).toHaveBeenCalledWith('/purge', {
       tenant: {
         ref: tenantId,
       },
       bucketId: bucketName,
-      objectName: objectName,
+      objectName,
     })
   })
 })

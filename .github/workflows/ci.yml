@@ -15,117 +15,130 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test / OS ${{ matrix.platform }} / Node ${{ matrix.node }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ubuntu-24.04]
-        node: ['20']
-
-    runs-on: ${{ matrix.platform }}
-    timeout-minutes: 15
-
+  lint_build:
+    name: Lint & Build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ~/.npm
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: ${{ matrix.node }}
-
+          node-version: "24"
       - name: Install dependencies
-        run: |
-          npm ci
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
 
-      - name: Prettier checks
+  test_postgres:
+    name: Test / Postgres
+    needs: lint_build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      - name: Set up Node
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: npm ci
+      - name: Prepare env files
         run: |
-          npm run lint
-
-      - name: ESLint checks
-        run: |
-          npm run eslint:check
-
-      - name: Builds successfully
-        run: |
-          npm run build
-
+          cp .env.sample .env
+          cp .env.test.sample .env.test
       - name: Tests pass
         run: |
-          mkdir data && chmod -R 777 data && \
+          mkdir -p data && chmod -R 777 data && \
           npm run test:coverage
-        env:
-          ANON_KEY: ${{ secrets.ANON_KEY }}
-          SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
-          TENANT_ID: ${{ secrets.TENANT_ID }}
-          REGION: ${{ secrets.REGION }}
-          GLOBAL_S3_BUCKET: ${{ secrets.GLOBAL_S3_BUCKET }}
-          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
-          AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
-          FILE_SIZE_LIMIT: '52428800'
-          STORAGE_BACKEND: s3
-          MULTITENANT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5433/postgres
-          ADMIN_API_KEYS: apikey
-          ENABLE_IMAGE_TRANSFORMATION: true
-          IMGPROXY_URL: http://127.0.0.1:50020
-          AWS_ACCESS_KEY_ID: supa-storage
-          AWS_SECRET_ACCESS_KEY: secret1234
-          AWS_DEFAULT_REGION: ap-southeast-1
-          GLOBAL_S3_ENDPOINT: http://127.0.0.1:9000
-          GLOBAL_S3_PROTOCOL: http
-          GLOBAL_S3_FORCE_PATH_STYLE: true
-          DB_INSTALL_ROLES: true
-          ENABLE_DEFAULT_METRICS: false
-          PG_QUEUE_ENABLE: false
-          MULTI_TENANT: false
-          S3_PROTOCOL_ACCESS_KEY_ID: ${{ secrets.TENANT_ID }}
-          S3_PROTOCOL_ACCESS_KEY_SECRET: ${{ secrets.SERVICE_KEY }}
-          VECTOR_S3_BUCKETS: supa-test-local-dev
-          VECTOR_ENABLED: true
-          ICEBERG_ENABLED: true
-
       - name: Upload coverage results to Coveralls
-        uses: coverallsapp/github-action@master
+        uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2.3.7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-
+          file: coverage/lcov.info
+          format: lcov
+          fail-on-error: false
+        continue-on-error: true
       - name: Verify migration idempotency
+        env: &migration_idempotency_env
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
         run: |
           pg_dump "$DATABASE_URL" \
             --exclude-table-data=storage.migrations \
             --restrict-key=test \
             > before.sql
-          
+
           npm run migration:test-idempotency
-          
+
           pg_dump "$DATABASE_URL" \
             --exclude-table-data=storage.migrations \
             --restrict-key=test \
             > after.sql
-          
+
           diff before.sql after.sql || (echo 'Schema mismatch!'; exit 1)
 
-        env:
-          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
-          DB_INSTALL_ROLES: true
-          ENABLE_DEFAULT_METRICS: false
-          PG_QUEUE_ENABLE: false
-          MULTI_TENANT: false
-
-      - name: Ensure OrioleDB migration compatibility
+  test_oriole:
+    name: Test / OrioleDB
+    needs: lint_build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      - name: Set up Node
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: npm ci
+      - name: Prepare env files
         run: |
-          npm run infra:restart:oriole
-        env:
-          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
-          DB_INSTALL_ROLES: true
-          ENABLE_DEFAULT_METRICS: false
-          PG_QUEUE_ENABLE: false
-          MULTI_TENANT: false
+          cp .env.sample .env
+          cp .env.test.sample .env.test
+      - name: Tests pass with OrioleDB
+        run: |
+          mkdir -p data && chmod -R 777 data && \
+          npm run test:oriole
+      - name: Verify OrioleDB migration idempotency
+        env: *migration_idempotency_env
+        run: |
+          docker compose --project-directory . \
+            -f ./.docker/docker-compose-infra.yml \
+            -f ./.docker/docker-compose-infra-oriole-override.yml \
+            exec -T tenant_db \
+            pg_dump -U postgres -d postgres \
+            --exclude-table-data=storage.migrations \
+            --restrict-key=test \
+            > before-oriole.sql
+
+          npm run migration:test-idempotency
+
+          docker compose --project-directory . \
+            -f ./.docker/docker-compose-infra.yml \
+            -f ./.docker/docker-compose-infra-oriole-override.yml \
+            exec -T tenant_db \
+            pg_dump -U postgres -d postgres \
+            --exclude-table-data=storage.migrations \
+            --restrict-key=test \
+            > after-oriole.sql
+
+          diff before-oriole.sql after-oriole.sql || (echo 'Oriole schema mismatch!'; exit 1)

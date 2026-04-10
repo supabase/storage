@@ -1,7 +1,14 @@
+import { tenantHasFeature } from '@internal/database'
+import { tenantHasMigrations } from '@internal/database/migrations'
+import { ERRORS, StorageBackendError } from '@internal/errors'
+import { logger, logSchema } from '@internal/monitoring'
+import { BucketCreatedEvent, BucketDeleted } from '@storage/events'
+import { StorageObjectLocator } from '@storage/locator'
+import { InfoRenderer } from '@storage/renderer/info'
+import { getConfig } from '../config'
 import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters, ListBucketOptions } from './database'
-import { ERRORS, StorageBackendError } from '@internal/errors'
-import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
+import { ObjectAdminDeleteAllBefore } from './events'
 import {
   BucketType,
   getFileSizeLimit,
@@ -9,15 +16,8 @@ import {
   mustBeValidBucketName,
   parseFileSizeToBytes,
 } from './limits'
-import { getConfig } from '../config'
 import { ObjectStorage } from './object'
-import { InfoRenderer } from '@storage/renderer/info'
-import { StorageObjectLocator } from '@storage/locator'
-import { BucketCreatedEvent, BucketDeleted } from '@storage/events'
-import { tenantHasMigrations } from '@internal/database/migrations'
-import { tenantHasFeature } from '@internal/database'
-import { ObjectAdminDeleteAllBefore } from './events'
-import { logger, logSchema } from '@internal/monitoring'
+import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 
 const { emptyBucketMax } = getConfig()
 
@@ -56,18 +56,14 @@ export class Storage {
    * @param type
    */
   renderer(type: 'asset' | 'head' | 'image' | 'info') {
-    switch (type) {
-      case 'asset':
-        return new AssetRenderer(this.backend)
-      case 'head':
-        return new HeadRenderer()
-      case 'image':
-        return new ImageRenderer(this.backend)
-      case 'info':
-        return new InfoRenderer()
+    const renderers = {
+      asset: () => new AssetRenderer(this.backend),
+      head: () => new HeadRenderer(),
+      image: () => new ImageRenderer(this.backend),
+      info: () => new InfoRenderer(),
     }
 
-    throw new Error(`renderer of type "${type}" not supported`)
+    return renderers[type]()
   }
 
   /**
@@ -171,7 +167,7 @@ export class Storage {
             logSchema.error(logger, 'Failed to invoke BucketCreatedEvent handler', {
               project: db.tenantId,
               type: 'event',
-              error: error,
+              error,
             })
             return true
           },
@@ -289,8 +285,12 @@ export class Storage {
     }
 
     // ensure delete permissions
-    await this.db.testPermission((db) => {
-      return db.deleteObject(bucketId, objects[0].id!)
+    await this.db.testPermission(async (db) => {
+      const deleted = await db.deleteObject(bucketId, objects[0].name)
+
+      if (!deleted) {
+        throw ERRORS.NoSuchKey(objects[0].name)
+      }
     })
 
     // use queue to recursively delete all objects created before the specified time

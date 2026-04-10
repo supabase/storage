@@ -1,5 +1,52 @@
+import {
+  Context,
+  MeterProvider,
+  Span,
+  SpanStatusCode,
+  TracerProvider,
+  trace,
+} from '@opentelemetry/api'
 import { Instrumentation, InstrumentationConfig } from '@opentelemetry/instrumentation'
-import { trace, Span, SpanStatusCode, TracerProvider, MeterProvider } from '@opentelemetry/api'
+import { ReadableSpan, Span as SdkSpan, SpanProcessor } from '@opentelemetry/sdk-trace-base'
+
+export class TenantSpanProcessor implements SpanProcessor {
+  private readonly attributesToPropagate: string[]
+
+  constructor(attributesToPropagate: string[] = ['tenant.ref', 'region']) {
+    this.attributesToPropagate = attributesToPropagate
+  }
+
+  onStart(span: SdkSpan, parentContext: Context): void {
+    const parentSpan = trace.getSpan(parentContext)
+    if (!parentSpan) return
+
+    // Cast to ReadableSpan to access attributes
+    const parentReadable = parentSpan as unknown as ReadableSpan
+    const parentAttributes = parentReadable.attributes
+
+    if (!parentAttributes) return
+
+    // Copy specified attributes from parent to child span
+    for (const attr of this.attributesToPropagate) {
+      const value = parentAttributes[attr]
+      if (value !== undefined) {
+        span.setAttribute(attr, value)
+      }
+    }
+  }
+
+  onEnd(_span: ReadableSpan): void {
+    // No-op
+  }
+
+  shutdown(): Promise<void> {
+    return Promise.resolve()
+  }
+
+  forceFlush(): Promise<void> {
+    return Promise.resolve()
+  }
+}
 
 interface GenericInstrumentationConfig extends InstrumentationConfig {
   targetClass: new (...args: any[]) => any
@@ -77,8 +124,7 @@ class ClassInstrumentation implements Instrumentation {
   private patchMethod(proto: any, methodName: string): void {
     const original = proto[methodName]
     const instrumentationName = this.instrumentationName
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const _this = this
+    const instrumentation = this
 
     proto[methodName] = function (...args: any[]) {
       const tracer = trace.getTracer(instrumentationName)
@@ -92,10 +138,11 @@ class ClassInstrumentation implements Instrumentation {
         },
         async (span: Span) => {
           try {
-            const customAttrs = _this._config.setAttributes?.[methodName]?.apply(this, args) || {}
+            const customAttrs =
+              instrumentation._config.setAttributes?.[methodName]?.apply(this, args) || {}
             span.setAttributes(customAttrs)
 
-            const spanName = _this._config.setName?.(
+            const spanName = instrumentation._config.setName?.(
               `${instrumentationName}.${methodName}`,
               customAttrs,
               this
@@ -109,9 +156,11 @@ class ClassInstrumentation implements Instrumentation {
             return result
           } catch (error) {
             if (error instanceof Error) {
+              // Avoid JSON.stringify of full error/stack - just capture message
+              // Stack traces can be 50KB+ and cause significant GC pressure
               span.setAttributes({
-                error: JSON.stringify({ message: error.message, stack: error.stack }),
-                stack: error.stack,
+                'error.message': error.message,
+                'error.name': error.name,
               })
             }
 

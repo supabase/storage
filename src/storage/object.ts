@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
-import { ERRORS } from '@internal/errors'
 import { getJwtSecret } from '@internal/database'
-
+import { ERRORS } from '@internal/errors'
+import { StorageObjectLocator } from '@storage/locator'
+import { Obj } from '@storage/schemas'
+import { FastifyRequest } from 'fastify/types/request'
+import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
-import { mustBeValidKey } from './limits'
-import { fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
-import { getConfig } from '../config'
 import {
   ObjectAdminDelete,
   ObjectCreatedCopyEvent,
@@ -16,9 +16,8 @@ import {
   ObjectRemovedMove,
   ObjectUpdatedMetadata,
 } from './events'
-import { FastifyRequest } from 'fastify/types/request'
-import { Obj } from '@storage/schemas'
-import { StorageObjectLocator } from '@storage/locator'
+import { mustBeValidKey } from './limits'
+import { CanUploadMetadata, fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
 
 const { requestUrlLengthLimit } = getConfig()
 
@@ -98,6 +97,7 @@ export class ObjectStorage {
       owner: file.owner,
       isUpsert: Boolean(file.isUpsert),
       signal: file.signal,
+      userMetadata: uploadRequest.userMetadata,
     })
   }
 
@@ -325,7 +325,6 @@ export class ObjectStorage {
       'bucket_id,metadata,user_metadata,version'
     )
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const baseMetadata = originObject.metadata || {}
     const destinationMetadata = copyMetadata
       ? baseMetadata
@@ -334,11 +333,15 @@ export class ObjectStorage {
           ...(fileMetadata || {}),
         }
 
+    const destinationUserMetadata = copyMetadata ? originObject.user_metadata : userMetadata
+
     await this.uploader.canUpload({
       bucketId: destinationBucket,
       objectName: destinationKey,
       owner,
       isUpsert: upsert,
+      userMetadata: destinationUserMetadata || undefined,
+      metadata: destinationMetadata,
     })
 
     try {
@@ -383,7 +386,7 @@ export class ObjectStorage {
             lastModified: copyResult.lastModified,
             eTag: copyResult.eTag,
           },
-          user_metadata: copyMetadata ? originObject.user_metadata : userMetadata,
+          user_metadata: destinationUserMetadata,
           version: newVersion,
         })
 
@@ -404,7 +407,7 @@ export class ObjectStorage {
         tenant: this.db.tenant(),
         name: destinationKey,
         version: newVersion,
-        bucketId: this.bucketId,
+        bucketId: destinationBucket,
         metadata,
         reqId: this.db.reqId,
       })
@@ -511,7 +514,7 @@ export class ObjectStorage {
           name: destinationObjectName,
           bucket_id: destinationBucket,
           version: newVersion,
-          owner: owner,
+          owner,
           metadata,
           user_metadata: sourceObj.user_metadata,
         })
@@ -537,8 +540,8 @@ export class ObjectStorage {
             tenant: this.db.tenant(),
             name: destinationObjectName,
             version: newVersion,
-            bucketId: this.bucketId,
-            metadata: metadata,
+            bucketId: destinationBucket,
+            metadata,
             oldObject: {
               name: sourceObjectName,
               bucketId: this.bucketId,
@@ -555,7 +558,7 @@ export class ObjectStorage {
             name: destinationObjectName,
             bucket_id: destinationBucket,
             version: newVersion,
-            owner: owner,
+            owner,
             metadata,
           },
         }
@@ -563,7 +566,7 @@ export class ObjectStorage {
     } catch (e) {
       await ObjectAdminDelete.send({
         name: destinationObjectName,
-        bucketId: this.bucketId,
+        bucketId: destinationBucket,
         tenant: this.db.tenant(),
         version: newVersion,
         reqId: this.db.reqId,
@@ -687,8 +690,8 @@ export class ObjectStorage {
       hasNext: isTruncated,
       nextCursor: nextContinuationToken,
       nextCursorKey,
-      folders: folders,
-      objects: objects,
+      folders,
+      objects,
     }
   }
 
@@ -792,7 +795,11 @@ export class ObjectStorage {
     url: string,
     expiresIn: number,
     owner?: string,
-    options?: { upsert?: boolean }
+    options?: {
+      upsert?: boolean
+      userMetadata?: Record<string, unknown>
+      metadata?: CanUploadMetadata
+    }
   ) {
     // check if user has INSERT permissions
     await this.uploader.canUpload({
@@ -800,6 +807,8 @@ export class ObjectStorage {
       objectName,
       owner,
       isUpsert: options?.upsert ?? false,
+      userMetadata: options?.userMetadata,
+      metadata: options?.metadata,
     })
 
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)

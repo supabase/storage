@@ -1,32 +1,33 @@
+import * as https from 'node:https'
+import { S3Client } from '@aws-sdk/client-s3'
+import { PubSub, TenantConnection } from '@internal/database'
+import { ERRORS } from '@internal/errors'
+import { createAgent } from '@internal/http'
+import { logSchema } from '@internal/monitoring'
+import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { getFileSizeLimit } from '@storage/limits'
+import { AlsMemoryKV, FileStore, LockNotifier, PgLocker, UploadId } from '@storage/protocols/tus'
+import { S3Locker } from '@storage/protocols/tus/s3-locker'
+import { Storage } from '@storage/storage'
+import { S3Store } from '@tus/s3-store'
+import { DataStore, Server, ServerOptions } from '@tus/server'
 import { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 import * as http from 'http'
-import { ServerOptions, DataStore, Server } from '@tus/server'
-import { getFileSizeLimit } from '@storage/limits'
-import { Storage } from '@storage/storage'
-import { jwt, storage, db, dbSuperUser } from '../../plugins'
+import type { ServerRequest as Request } from 'srvx'
 import { getConfig } from '../../../config'
-import { FileStore, LockNotifier, PgLocker, UploadId, AlsMemoryKV } from '@storage/protocols/tus'
+import { db, dbSuperUser, jwt, storage } from '../../plugins'
+import { ROUTE_OPERATIONS } from '../operations'
 import {
-  namingFunction,
-  onCreate,
-  onResponseError,
-  onIncomingRequest,
-  onUploadFinish,
   generateUrl,
   getFileIdFromRequest,
+  namingFunction,
+  onCreate,
+  onIncomingRequest,
+  onResponseError,
+  onUploadFinish,
   SIGNED_URL_SUFFIX,
 } from './lifecycle'
-import { TenantConnection, PubSub } from '@internal/database'
-import { S3Store } from '@tus/s3-store'
-import { NodeHttpHandler } from '@smithy/node-http-handler'
-import { ROUTE_OPERATIONS } from '../operations'
-import * as https from 'node:https'
-import { createAgent } from '@internal/http'
-import type { ServerRequest as Request } from 'srvx'
-import { S3Locker } from '@storage/protocols/tus/s3-locker'
-import { S3Client } from '@aws-sdk/client-s3'
-import { ERRORS } from '@internal/errors'
 
 const {
   storageS3MaxSockets,
@@ -94,7 +95,7 @@ function createTusServer(
     datastore: DataStore
   } = {
     path: tusPath,
-    datastore: datastore,
+    datastore,
     disableTerminationForFinishedUploads: true,
     locker: (rawReq: Request) => {
       const req = rawReq.node?.req as MultiPartRequest
@@ -133,13 +134,13 @@ function createTusServer(
           throw ERRORS.InternalError(undefined, 'Unsupported TUS locker type')
       }
     },
-    namingFunction: namingFunction,
+    namingFunction,
     onUploadCreate: onCreate,
-    onUploadFinish: onUploadFinish,
-    onIncomingRequest: onIncomingRequest,
-    generateUrl: generateUrl,
-    getFileIdFromRequest: getFileIdFromRequest,
-    onResponseError: onResponseError,
+    onUploadFinish,
+    onIncomingRequest: (req, id) => onIncomingRequest(req, id, datastore),
+    generateUrl,
+    getFileIdFromRequest,
+    onResponseError,
     respectForwardedHeaders: true,
     allowedHeaders: ['Authorization', 'X-Upsert', 'Upload-Expires', 'ApiKey', 'x-signature'],
     maxSize: async (rawReq, uploadId) => {
@@ -174,15 +175,22 @@ function createTusServer(
 
 export default async function routes(fastify: FastifyInstance) {
   const lockNotifier = new LockNotifier(PubSub)
-  await lockNotifier.subscribe()
+  await lockNotifier.start()
 
   const agent = createAgent('s3_tus', {
     maxSockets: storageS3MaxSockets,
   })
   agent.monitor()
 
-  fastify.addHook('onClose', () => {
+  fastify.addHook('onClose', async () => {
     agent.close()
+
+    await lockNotifier.stop().catch((e) => {
+      logSchema.error(fastify.log, 'Failed to stop TUS lock notifier', {
+        type: 'tus',
+        error: e,
+      })
+    })
   })
 
   const tusServer = createTusServer(lockNotifier, agent)

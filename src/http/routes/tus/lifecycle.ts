@@ -1,17 +1,18 @@
-import http from 'http'
-import { BaseLogger } from 'pino'
-import { Upload } from '@tus/server'
-import { randomUUID } from 'crypto'
 import { TenantConnection } from '@internal/database'
 import { ERRORS, isRenderableError } from '@internal/errors'
+import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
 import { Uploader, validateMimeType } from '@storage/uploader'
-import { UploadId } from '@storage/protocols/tus'
+import { DataStore, Metadata, Upload } from '@tus/server'
+import { randomUUID } from 'crypto'
+import http from 'http'
+import { BaseLogger } from 'pino'
 import type { ServerRequest as Request } from 'srvx'
 
 import { getConfig } from '../../../config'
 
-const { storageS3Bucket, tusPath, requestAllowXForwardedPrefix } = getConfig()
+const { storageS3Bucket, tusPath, requestAllowXForwardedPrefix, storagePublicUrl } = getConfig()
+const parsedPublicUrl = storagePublicUrl ? new URL(storagePublicUrl) : undefined
 const reExtractFileID = /([^/]+)\/?$/
 
 export const SIGNED_URL_SUFFIX = '/sign'
@@ -44,7 +45,7 @@ export type MultiPartRequest = http.IncomingMessage & {
 /**
  * Runs on every TUS incoming request
  */
-export async function onIncomingRequest(rawReq: Request, id: string) {
+export async function onIncomingRequest(rawReq: Request, id: string, datastore: DataStore) {
   const req = getNodeRequest(rawReq)
   const res = rawReq.node?.res as http.ServerResponse
 
@@ -52,12 +53,7 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
     throw ERRORS.InternalError(undefined, 'Response object is missing')
   }
 
-  if (!res) {
-    throw ERRORS.InternalError(undefined, 'Response object is missing')
-  }
-
   res.on('finish', () => {
-    console.log('Tus request finished')
     req.upload.db.dispose().catch((e) => {
       req.log.error({ error: e }, 'Error disposing db connection')
     })
@@ -96,11 +92,53 @@ export async function onIncomingRequest(rawReq: Request, id: string) {
     req.upload.storage.location
   )
 
+  let contentType: string | undefined
+  let contentLength: number | undefined
+  let rawMetadata: string | null | undefined
+
+  if (req.method === 'POST') {
+    const uploadMetadataHeader = req.headers['upload-metadata']
+    if (uploadMetadataHeader && typeof uploadMetadataHeader === 'string') {
+      try {
+        const parsedMetadata = Metadata.parse(uploadMetadataHeader)
+        contentType = parsedMetadata?.contentType ?? undefined
+        rawMetadata = parsedMetadata?.metadata
+      } catch (e) {
+        req.log.warn({ error: e }, 'Failed to parse upload metadata')
+        throw ERRORS.InvalidParameter('upload-metadata', {
+          error: e as Error,
+          message: 'Invalid Upload-Metadata header',
+        })
+      }
+    }
+    const uploadLength = req.headers['upload-length']
+    contentLength = uploadLength ? Number(uploadLength) : undefined
+  } else {
+    const upload = await datastore.getUpload(id)
+    contentType = upload.metadata?.contentType ?? undefined
+    contentLength = upload.size ?? undefined
+    rawMetadata = upload.metadata?.metadata
+  }
+
+  let customMd: Record<string, string> | undefined
+  if (rawMetadata) {
+    try {
+      customMd = JSON.parse(rawMetadata)
+    } catch (e) {
+      req.log.warn({ error: e }, 'Failed to parse user metadata')
+    }
+  }
+
   await uploader.canUpload({
     owner: req.upload.owner,
     bucketId: uploadID.bucket,
     objectName: uploadID.objectName,
-    isUpsert: isUpsert,
+    isUpsert,
+    userMetadata: customMd,
+    metadata: {
+      mimetype: contentType,
+      contentLength,
+    },
   })
 }
 
@@ -117,9 +155,13 @@ export function generateUrl(
     throw ERRORS.InvalidParameter('url')
   }
 
-  if (!req.url) {
-    throw ERRORS.InvalidParameter('url')
+  if (parsedPublicUrl) {
+    proto = parsedPublicUrl.protocol.replace(':', '')
+    host = parsedPublicUrl.host
   }
+
+  // Force https in production. This overrides both forwarded headers and
+  // STORAGE_PUBLIC_URL - production deployments must use HTTPS.
   proto = process.env.NODE_ENV === 'production' ? 'https' : proto
 
   let basePath = path
@@ -133,7 +175,7 @@ export function generateUrl(
   const isSigned = req.url?.endsWith(SIGNED_URL_SUFFIX)
   const fullPath = isSigned ? `${basePath}${SIGNED_URL_SUFFIX}` : basePath
 
-  if (req.headers['x-forwarded-host']) {
+  if (!parsedPublicUrl && req.headers['x-forwarded-host']) {
     const port = req.headers['x-forwarded-port']
 
     if (typeof port === 'string' && port && !['443', '80'].includes(port)) {
@@ -180,10 +222,6 @@ export function namingFunction(rawReq: Request, metadata?: Record<string, string
     throw new Error('no url set')
   }
 
-  if (!req.url) {
-    throw new Error('no url set')
-  }
-
   if (!metadata) {
     throw ERRORS.MetadataRequired()
   }
@@ -225,7 +263,7 @@ export async function onCreate(
 
   if (/^-?\d+$/.test(metadata.cacheControl || '')) {
     metadata.cacheControl = `max-age=${metadata.cacheControl}`
-  } else if (metadata) {
+  } else {
     metadata.cacheControl = 'no-cache'
   }
 

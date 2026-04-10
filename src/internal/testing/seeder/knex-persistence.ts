@@ -1,6 +1,7 @@
 // src/persistence/KnexPersistence.ts
-import { Persistence } from './persistence'
+
 import knex, { Knex } from 'knex'
+import { Persistence } from './persistence'
 
 export class KnexPersistence implements Persistence {
   private knex: Knex

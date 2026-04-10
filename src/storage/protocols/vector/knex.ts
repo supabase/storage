@@ -1,13 +1,15 @@
-import { Knex } from 'knex'
-import { VectorIndex } from '@storage/schemas/vector'
-import { ERRORS } from '@internal/errors'
-import { VectorBucket } from '@storage/schemas'
 import { ListVectorBucketsInput } from '@aws-sdk/client-s3vectors'
-import { DatabaseError } from 'pg'
 import { wait } from '@internal/concurrency'
+import { ERRORS } from '@internal/errors'
 import { hashStringToInt } from '@internal/hashing'
+import { escapeLike } from '@storage/database'
+import { VectorBucket } from '@storage/schemas'
+import { VectorIndex } from '@storage/schemas/vector'
+import { Knex } from 'knex'
+import { DatabaseError } from 'pg'
 
 type DBVectorIndex = VectorIndex & { id: string; created_at: Date; updated_at: Date }
+export type VectorLockResourceType = 'bucket' | 'index' | 'global'
 
 interface CreateVectorIndexParams {
   dataType: string
@@ -43,7 +45,7 @@ export interface VectorMetadataDB {
     config?: Knex.TransactionConfig
   ): Promise<T>
 
-  lockResource(resourceType: 'bucket' | 'index', resourceId: string): Promise<void>
+  lockResource(resourceType: VectorLockResourceType, resourceId: string): Promise<void>
 
   findVectorBucket(vectorBucketName: string): Promise<VectorBucket>
   createVectorBucket(bucketName: string): Promise<void>
@@ -62,7 +64,7 @@ export interface VectorMetadataDB {
 export class KnexVectorMetadataDB implements VectorMetadataDB {
   constructor(protected readonly knex: Knex) {}
 
-  lockResource(resourceType: 'bucket' | 'index', resourceId: string): Promise<void> {
+  lockResource(resourceType: VectorLockResourceType, resourceId: string): Promise<void> {
     const lockId = hashStringToInt(`vector:${resourceType}:${resourceId}`)
     return this.knex.raw('SELECT pg_advisory_xact_lock(?::bigint)', [lockId])
   }
@@ -90,7 +92,7 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
   async listBuckets(param: ListVectorBucketsInput): Promise<ListBucketResult> {
     const query = this.knex.withSchema('storage').table<VectorBucket>('buckets_vectors')
     if (param.prefix) {
-      query.where('id', 'like', `${param.prefix}%`)
+      query.where('id', 'like', `${escapeLike(param.prefix)}%`)
     }
 
     if (param.nextToken) {
@@ -169,11 +171,11 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
       .table('vector_indexes')
 
     if (command.prefix) {
-      query.andWhere('name', 'like', `${command.prefix}%`)
+      query.andWhere('name', 'like', `${escapeLike(command.prefix)}%`)
     }
 
     if (command.nextToken) {
-      query.andWhere('id', '>', command.nextToken)
+      query.andWhere('name', '>', command.nextToken)
     }
 
     const result = await query.limit(maxResults + 1)
@@ -192,7 +194,7 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
       .withSchema('storage')
       .select('*')
       .table('vector_indexes')
-      .where({ bucket_id: bucketId, name: name })
+      .where({ bucket_id: bucketId, name })
       .first<DBVectorIndex>()
 
     if (!index) {

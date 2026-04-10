@@ -1,4 +1,4 @@
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// biome-ignore lint/style/noCommonJs: build script runs as CommonJS
 const { build } = require('esbuild')
 
 build({
@@ -7,7 +7,7 @@ build({
   outdir: 'dist',
   platform: 'node',
   format: 'cjs',
-  target: 'node20',
+  target: 'node24',
   sourcemap: true,
   tsconfig: 'tsconfig.json',
   loader: { '.ts': 'ts' },

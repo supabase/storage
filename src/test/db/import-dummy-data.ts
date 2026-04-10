@@ -4,7 +4,7 @@ import { Client } from 'pg'
 
 const migrations = ['01-auth-schema.sql', '02-dummy-data.sql']
 
-;(async () => {
+void (async () => {
   const dbConfig = {
     connectionString: process.env.DATABASE_URL,
   }

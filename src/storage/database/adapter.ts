@@ -1,7 +1,7 @@
-import { Bucket, S3MultipartUpload, Obj, S3PartUpload, IcebergCatalog } from '../schemas'
-import { ObjectMetadata } from '../backend'
 import { TenantConnection } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
+import { ObjectMetadata } from '../backend'
+import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
 
 export interface SearchObjectOption {
   search?: string
@@ -32,6 +32,7 @@ export interface TransactionOptions {
   isolation?: string
   retry?: number
   readOnly?: boolean
+  timeout?: number
 }
 
 export interface DatabaseOptions<TNX> {
@@ -87,7 +88,7 @@ export interface Database {
 
   countObjectsInBucket(bucketId: string, limit?: number): Promise<number>
 
-  deleteBucket(bucketId: string | string[]): Promise<Bucket[]>
+  deleteBucket(bucketId: string | string[]): Promise<number>
 
   listObjects(
     bucketId: string,
@@ -194,7 +195,8 @@ export interface Database {
     version: string,
     signature: string,
     owner?: string,
-    metadata?: Record<string, string | null>
+    userMetadata?: Record<string, string | null>,
+    metadata?: Partial<ObjectMetadata>
   ): Promise<S3MultipartUpload>
 
   findMultipartUpload(

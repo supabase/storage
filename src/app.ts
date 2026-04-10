@@ -1,8 +1,8 @@
-import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
-import { routes, schemas, plugins, setErrorHandler } from './http'
+import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
+import { plugins, routes, schemas, setErrorHandler } from './http'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -25,11 +25,12 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
 
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {
+      exposeHeadRoutes: true,
       openapi: {
         info: {
           title: 'Supabase Storage API',
           description: 'API documentation for Supabase Storage',
-          version: version,
+          version,
         },
         tags: [
           { name: 'object', description: 'Object end-points' },
@@ -37,6 +38,10 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
           { name: 's3', description: 'S3 end-points' },
           { name: 'transformation', description: 'Image transformation' },
           { name: 'resumable', description: 'Resumable Upload end-points' },
+          { name: 'cdn', description: 'CDN cache management' },
+          { name: 'health', description: 'Health check end-points' },
+          { name: 'iceberg', description: 'Apache Iceberg REST catalog' },
+          { name: 'vector', description: 'Vector storage and search' },
         ],
       },
     })
@@ -46,15 +51,30 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
     })
   }
 
+  const excludedRoutesFromMonitoring = [
+    '/status',
+    '/metrics',
+    '/health',
+    '/healthcheck',
+    '/version',
+    '/documentation',
+  ]
+
   // add in common schemas
   app.addSchema(schemas.authSchema)
   app.addSchema(schemas.errorSchema)
 
   app.register(plugins.signals)
   app.register(plugins.tenantId)
-  app.register(plugins.metrics({ enabledEndpoint: !isMultitenant }))
+  app.register(
+    plugins.metrics({
+      enabledEndpoint: !isMultitenant,
+      excludeRoutes: excludedRoutesFromMonitoring,
+    })
+  )
   app.register(plugins.tracing)
-  app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health', '/version'] }))
+  app.register(plugins.logRequest({ excludeUrls: excludedRoutesFromMonitoring }))
+  app.register(plugins.headerValidator({ excludeUrls: excludedRoutesFromMonitoring }))
   app.register(routes.tus, { prefix: 'upload/resumable' })
   app.register(routes.bucket, { prefix: 'bucket' })
   app.register(routes.object, { prefix: 'object' })

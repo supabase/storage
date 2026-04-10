@@ -1,16 +1,16 @@
-import { createBucketIfNotExists, useStorage } from './utils/storage'
-import makeApp from '../app'
-import { getConfig, mergeConfig } from '../config'
+import assert from 'node:assert'
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { isS3Error } from '@internal/errors'
 import {
   CreateTableResponse,
   LoadTableResult,
   RestCatalogClient,
 } from '@storage/protocols/iceberg/catalog'
-import { FastifyInstance } from 'fastify'
 import { KnexMetastore, Metastore } from '@storage/protocols/iceberg/knex'
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
-import assert from 'node:assert'
-import { isS3Error } from '@internal/errors'
+import { FastifyInstance } from 'fastify'
+import makeApp from '../app'
+import { getConfig, mergeConfig } from '../config'
+import { createBucketIfNotExists, useStorage } from './utils/storage'
 
 const {
   serviceKeyAsync,
@@ -206,6 +206,34 @@ describe('Iceberg Catalog', () => {
         namespace: [namespaceName],
         properties: {
           test: 'hello',
+        },
+      })
+    })
+
+    it('returns InvalidParameter for invalid namespace names', async () => {
+      const bucketName = t.random.name('ice-bucket')
+      await t.storage.createIcebergBucket({
+        name: bucketName,
+      })
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/iceberg/v1/${bucketName}/namespaces`,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+        payload: {
+          namespace: 'awsnamespace',
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(await response.json()).toEqual({
+        error: {
+          code: 400,
+          message: 'Resource name must not start with the reserved prefix "aws"',
+          type: 'InvalidParameter',
         },
       })
     })

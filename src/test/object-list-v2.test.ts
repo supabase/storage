@@ -1,11 +1,12 @@
 'use strict'
 
+import { randomUUID } from 'node:crypto'
+import { ListObjectsV2Result } from '@storage/object'
+import { FastifyInstance } from 'fastify'
+import { Knex } from 'knex'
 import app from '../app'
 import { getConfig } from '../config'
 import { useMockObject, useMockQueue } from './common'
-import { Knex } from 'knex'
-import { FastifyInstance } from 'fastify'
-import { ListObjectsV2Result } from '@storage/object'
 
 const { serviceKeyAsync } = getConfig()
 let appInstance: FastifyInstance
@@ -30,13 +31,17 @@ afterEach(async () => {
 
 const LIST_V2_BUCKET = 'list-v2-sorting-test-bucket'
 
-// Helper to convert a number into a 3-letter string (aaa ... zzz)
+// Helper to convert a number into a 3-letter string (aaa ... zzz with some uppercase)
 function toName(n: number): string {
   const a = 97 // 'a'
   const first = String.fromCharCode(a + (Math.floor(n / (26 * 26)) % 26))
   const second = String.fromCharCode(a + (Math.floor(n / 26) % 26))
   const third = String.fromCharCode(a + (n % 26))
-  return first + second + third
+  const name = first + second + third
+  if (n >= 1 && n <= 3) {
+    return name.toUpperCase()
+  }
+  return name
 }
 
 function createUpload(name: string, content: string) {
@@ -77,6 +82,13 @@ for (let i = 0; i < 30; i++) {
       PREFIX_OBJECTS[folder].sorted.push(objectPath)
     }
   }
+}
+
+// Sort the arrays since uppercase letters may have changed the order
+SORTED_OBJECTS.sort()
+SORTED_FOLDERS.sort()
+for (const folder of Object.keys(PREFIX_OBJECTS)) {
+  PREFIX_OBJECTS[folder].sorted.sort()
 }
 
 // Combine all paths for creation
@@ -512,13 +524,14 @@ describe('objects - list v2 sorting tests', () => {
   for (const { desc, options, expected } of TEST_CASES) {
     test(desc + ' in correct order with pagination', async () => {
       const limit = 5
-      let cursor: string | undefined = undefined
+      let cursor: string | undefined
       let pageCount = 0
       let lastObjectIdx = -1
       let lastFolderIdx = -1
+      let hasNext = false
 
       // Paginate through all results
-      while (true) {
+      do {
         const response = await appInstance.inject({
           method: 'POST',
           url: '/object/list-v2/' + LIST_V2_BUCKET,
@@ -548,14 +561,14 @@ describe('objects - list v2 sorting tests', () => {
         })
         pageCount++
 
-        if (!data.hasNext) {
+        hasNext = data.hasNext ?? false
+        if (!hasNext) {
           expect(data.nextCursor).toBeUndefined()
-          break
+        } else {
+          cursor = data.nextCursor as string
+          expect(cursor).toBeDefined()
         }
-
-        cursor = data.nextCursor as string
-        expect(cursor).toBeDefined()
-      }
+      } while (hasNext)
 
       // Verify we processed all expected items
       expect(lastObjectIdx).toBe(expected.objects.length - 1)
@@ -563,4 +576,128 @@ describe('objects - list v2 sorting tests', () => {
       expect(pageCount).toBe(Math.ceil((expected.objects.length + expected.folders.length) / limit))
     })
   }
+})
+
+const LIST_V2_WILDCARD_BUCKET = `list-v2-wildcard-${randomUUID()}`
+
+describe('objects - list v2 prefix wildcard handling', () => {
+  beforeAll(async () => {
+    appInstance = app()
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        name: LIST_V2_WILDCARD_BUCKET,
+      },
+    })
+    await appInstance.close()
+  })
+
+  afterAll(async () => {
+    appInstance = app()
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket/${LIST_V2_WILDCARD_BUCKET}/empty`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    await appInstance.inject({
+      method: 'DELETE',
+      url: `/bucket/${LIST_V2_WILDCARD_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    await appInstance.close()
+  })
+
+  test('treats % as a literal character in list-v2 prefix filters', async () => {
+    const runId = Date.now().toString(36)
+    const firstObject = `percent-${runId}/first.txt`
+    const secondObject = `percent-${runId}/second.txt`
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/object/${LIST_V2_WILDCARD_BUCKET}/${firstObject}`,
+      payload: createUpload('first.txt', 'first'),
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/object/${LIST_V2_WILDCARD_BUCKET}/${secondObject}`,
+      payload: createUpload('second.txt', 'second'),
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_WILDCARD_BUCKET}`,
+      payload: {
+        with_delimiter: false,
+        prefix: '%',
+        limit: 100,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const data = response.json<ListObjectsV2Result>()
+    expect(data.folders).toHaveLength(0)
+    expect(data.objects).toHaveLength(0)
+  })
+
+  test('treats _ as a literal character in list-v2 prefix filters', async () => {
+    const runId = randomUUID()
+    const literalMatch = `wild_${runId}/hit.txt`
+    const wildcardOnlyMatch = `wildX${runId}/miss.txt`
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/object/${LIST_V2_WILDCARD_BUCKET}/${literalMatch}`,
+      payload: createUpload('hit.txt', 'hit'),
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/object/${LIST_V2_WILDCARD_BUCKET}/${wildcardOnlyMatch}`,
+      payload: createUpload('miss.txt', 'miss'),
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_WILDCARD_BUCKET}`,
+      payload: {
+        with_delimiter: false,
+        prefix: `wild_${runId}/`,
+        limit: 100,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const data = response.json<ListObjectsV2Result>()
+    expect(data.folders).toHaveLength(0)
+    expect(data.objects.map((obj) => obj.name)).toEqual([literalMatch])
+  })
 })

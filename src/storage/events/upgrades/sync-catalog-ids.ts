@@ -1,9 +1,9 @@
-import { getConfig } from '../../../config'
 import { getTenantConfig } from '@internal/database'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
-import { UpgradeBaseEvent, UpgradeBaseEventPayload } from './base-event'
-import { Knex } from 'knex'
 import { logger, logSchema } from '@internal/monitoring'
+import { Knex } from 'knex'
+import { getConfig } from '../../../config'
+import { UpgradeBaseEvent, UpgradeBaseEventPayload } from './base-event'
 
 type SyncCatalogIdsPayload = UpgradeBaseEventPayload
 

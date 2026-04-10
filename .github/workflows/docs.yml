@@ -17,20 +17,20 @@ jobs:
       fail-fast: false
       matrix:
         platform: [ubuntu-24.04]
-        node: ['20']
+        node: ["24"]
 
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ~/.npm
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: ${{ matrix.node }}
 
@@ -49,19 +49,19 @@ jobs:
           AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
           PGOPTIONS: -c search_path=storage,public
-          FILE_SIZE_LIMIT: '52428800'
+          FILE_SIZE_LIMIT: "52428800"
           STORAGE_BACKEND: s3
           ENABLE_IMAGE_TRANSFORMATION: true
 
       - name: Generate Swagger UI
-        uses: Legion2/swagger-ui-action@v1
+        uses: Legion2/swagger-ui-action@eff65dc3f193f0a749872be82f74baa35be0797d # v1.3.0
         with:
           output: swagger-ui
           spec-file: static/api.json
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+        uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e # v4.0.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: swagger-ui

@@ -1,6 +1,6 @@
 import { logger } from '@internal/monitoring'
-import { ConnectionOptions } from 'tls'
 import * as ipAddr from 'ip-address'
+import { ConnectionOptions } from 'tls'
 
 export function getSslSettings({
   connectionString,

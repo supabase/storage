@@ -1,16 +1,19 @@
-import PgBoss, { Db, Job, JobWithMetadata } from 'pg-boss'
 import { ERRORS } from '@internal/errors'
 import { QueueDB } from '@internal/queue/database'
+import { Semaphore } from '@shopify/semaphore'
+import PgBoss, { Db, Job, JobWithMetadata } from 'pg-boss'
 import { getConfig } from '../../config'
 import { logger, logSchema } from '../monitoring'
-import { QueueJobRetryFailed, QueueJobCompleted, QueueJobError } from '../monitoring/metrics'
+import { queueJobCompleted, queueJobError, queueJobRetryFailed } from '../monitoring/metrics'
 import { Event } from './event'
-import { Semaphore } from '@shopify/semaphore'
 
-//eslint-disable-next-line @typescript-eslint/no-explicit-any
-type SubclassOfBaseClass = (new (payload: any) => Event<any>) & {
+type SubclassOfBaseClass = (new (
+  payload: any
+) => Event<any>) & {
   [K in keyof typeof Event]: (typeof Event)[K]
 }
+
+export const PG_BOSS_SCHEMA = 'pgboss_v10'
 
 export abstract class Queue {
   protected static events: SubclassOfBaseClass[] = []
@@ -21,6 +24,7 @@ export abstract class Queue {
     const {
       isMultitenant,
       databaseURL,
+      multitenantDatabasePoolUrl,
       multitenantDatabaseUrl,
       pgQueueConnectionURL,
       pgQueueArchiveCompletedAfterSeconds,
@@ -30,6 +34,7 @@ export abstract class Queue {
     } = getConfig()
 
     let url = pgQueueConnectionURL ?? databaseURL
+    let migrate = true
 
     if (isMultitenant && !pgQueueConnectionURL) {
       if (!multitenantDatabaseUrl) {
@@ -37,15 +42,18 @@ export abstract class Queue {
           'running storage in multi-tenant but DB_MULTITENANT_DATABASE_URL is not set'
         )
       }
-      url = multitenantDatabaseUrl
+      url = multitenantDatabasePoolUrl || multitenantDatabaseUrl
+
+      if (multitenantDatabasePoolUrl) {
+        migrate = false
+      }
     }
 
     return new PgBoss({
       connectionString: url,
-      migrate: true,
+      migrate,
       db: opts.db,
-      schema: 'pgboss_v10',
-      application_name: 'storage-pgboss',
+      schema: PG_BOSS_SCHEMA,
       ...(pgQueueDeleteAfterHours
         ? { deleteAfterHours: pgQueueDeleteAfterHours }
         : { deleteAfterDays: pgQueueDeleteAfterDays }),
@@ -77,6 +85,7 @@ export abstract class Queue {
       isMultitenant,
       databaseURL,
       multitenantDatabaseUrl,
+      multitenantDatabasePoolUrl,
       pgQueueConnectionURL,
       pgQueueEnableWorkers,
       pgQueueReadWriteTimeout,
@@ -87,12 +96,12 @@ export abstract class Queue {
     let url = pgQueueConnectionURL || databaseURL
 
     if (isMultitenant && !pgQueueConnectionURL) {
-      if (!multitenantDatabaseUrl) {
+      if (!multitenantDatabaseUrl && !multitenantDatabasePoolUrl) {
         throw new Error(
           'running storage in multi-tenant but DB_MULTITENANT_DATABASE_URL is not set'
         )
       }
-      url = multitenantDatabaseUrl
+      url = (multitenantDatabasePoolUrl || multitenantDatabaseUrl) as string
     }
 
     Queue.pgBossDb = new QueueDB({
@@ -193,12 +202,7 @@ export abstract class Queue {
       wait: true,
     })
 
-    await new Promise((resolve) => {
-      boss.once('stopped', async () => {
-        await this.callClose()
-        resolve(null)
-      })
-    })
+    await this.callClose()
 
     Queue.pgBoss = undefined
   }
@@ -289,8 +293,8 @@ export abstract class Queue {
       type: 'queue',
       metadata: JSON.stringify({
         queueName: event.getQueueName(),
-        batchSize: batchSize,
-        pollingInterval: pollingInterval,
+        batchSize,
+        pollingInterval,
       }),
     })
 
@@ -340,18 +344,17 @@ export abstract class Queue {
         await Promise.allSettled(
           jobs.map(async (job) => {
             const lock = await semaphore.acquire()
-            const opts = event.getQueueOptions()
             try {
               queueOpts.onMessage?.(job as Job)
 
               await event.handle(job, { signal: queueOpts.signal })
 
               await this.pgBoss?.complete(event.getQueueName(), job.id)
-              QueueJobCompleted.inc({
+              queueJobCompleted.add(1, {
                 name: event.getQueueName(),
               })
             } catch (e) {
-              QueueJobRetryFailed.inc({
+              queueJobRetryFailed.add(1, {
                 name: event.getQueueName(),
               })
 
@@ -367,7 +370,7 @@ export abstract class Queue {
                   return
                 }
                 if (dbJob.retryCount >= dbJob.retryLimit) {
-                  QueueJobError.inc({
+                  queueJobError.add(1, {
                     name: event.getQueueName(),
                   })
                 }

@@ -1,8 +1,8 @@
-import { BaseEvent } from '../base-event'
-import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
-import { BasePayload, Queue } from '@internal/queue'
 import { multitenantKnex } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
+import { BasePayload, PG_BOSS_SCHEMA, Queue } from '@internal/queue'
+import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
+import { BaseEvent } from '../base-event'
 
 type UpgradePgBossV10Payload = BasePayload
 
@@ -42,7 +42,7 @@ export class UpgradePgBossV10 extends BaseEvent<UpgradePgBossV10Payload> {
         return
       }
 
-      const targetSchema = 'pgboss_v10'
+      const targetSchema = PG_BOSS_SCHEMA
       const sourceSchema = 'pgboss'
 
       const queues = await Queue.getInstance().getQueues()
@@ -84,14 +84,14 @@ export class UpgradePgBossV10 extends BaseEvent<UpgradePgBossV10Payload> {
                 createdOn,
                 keepUntil,
                 output jsonb,
-                '${queue.policy}' as policy
+                ? as policy
             FROM ${sourceSchema}.job
-            WHERE name = '${queue.name}'
+            WHERE name = ?
                 AND state = 'created'
             ON CONFLICT DO NOTHING
         `
 
-          await multitenantKnex.raw(sql)
+          await tnx.raw(sql, [queue.policy, queue.name])
         } catch (error) {
           logSchema.error(logger, '[PgBoss] Error while copying jobs', {
             type: 'pgboss',

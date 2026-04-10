@@ -1,9 +1,10 @@
-import { FastifyInstance, RequestGenericInterface } from 'fastify'
-import apiKey from '../../plugins/apikey'
-import { jwksManager } from '@internal/database'
-import { FromSchema } from 'json-schema-to-ts'
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
+import { jwksManager } from '@internal/database'
 import { logSchema } from '@internal/monitoring'
+import { JwksRollUrlSigningKey } from '@storage/events'
+import { FastifyInstance, RequestGenericInterface } from 'fastify'
+import { FromSchema } from 'json-schema-to-ts'
+import apiKey from '../../plugins/apikey'
 
 const addSchema = {
   body: {
@@ -48,6 +49,12 @@ interface JwksUpdateRequestInterface extends RequestGenericInterface {
   Params: {
     tenantId: string
     kid: string
+  }
+}
+
+interface JwksRollRequestInterface extends RequestGenericInterface {
+  Params: {
+    tenantId: string
   }
 }
 
@@ -102,7 +109,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.post<JwksAddRequestInterface>(
     '/:tenantId/jwks',
-    { schema: addSchema },
+    { schema: { ...addSchema, tags: ['jwks'] } },
     async ({ body, params }, reply) => {
       const validationResult = validateAddJwkRequest(body)
       if (validationResult?.message) {
@@ -116,7 +123,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.put<JwksUpdateRequestInterface>(
     '/:tenantId/jwks/:kid',
-    { schema: updateSchema },
+    { schema: { ...updateSchema, tags: ['jwks'] } },
     async (request, reply) => {
       const {
         params: { tenantId, kid },
@@ -127,26 +134,47 @@ export default async function routes(fastify: FastifyInstance) {
     }
   )
 
-  fastify.post('/jwks/generate-all-missing', async (request, reply) => {
-    const { running, sent } = UrlSigningJwkGenerator.getGenerationStatus()
-    if (running) {
-      return reply
-        .status(400)
-        .send(`Generate missing jwks is already running, and has sent ${sent} items so far`)
-    }
+  fastify.post<JwksRollRequestInterface>(
+    '/:tenantId/jwks/url-signing/roll',
+    { schema: { tags: ['jwks'] } },
+    async (request, reply) => {
+      const { tenantId } = request.params
 
-    UrlSigningJwkGenerator.generateUrlSigningJwksOnAllTenants(
-      request.signals.disconnect.signal
-    ).catch((e) => {
-      logSchema.error(request.log, 'Error generating url signing jwks for all tenants', {
-        type: 'jwk-generator',
-        error: e,
+      await JwksRollUrlSigningKey.send({
+        tenantId,
+        tenant: {
+          ref: tenantId,
+        },
       })
-    })
-    return reply.send({ started: true })
-  })
 
-  fastify.get('/jwks/generate-all-missing', (request, reply) => {
+      return reply.send({ started: true })
+    }
+  )
+
+  fastify.post(
+    '/jwks/generate-all-missing',
+    { schema: { tags: ['jwks'] } },
+    async (request, reply) => {
+      const { running, sent } = UrlSigningJwkGenerator.getGenerationStatus()
+      if (running) {
+        return reply
+          .status(400)
+          .send(`Generate missing jwks is already running, and has sent ${sent} items so far`)
+      }
+
+      UrlSigningJwkGenerator.generateUrlSigningJwksOnAllTenants(
+        request.signals.disconnect.signal
+      ).catch((e) => {
+        logSchema.error(request.log, 'Error generating url signing jwks for all tenants', {
+          type: 'jwk-generator',
+          error: e,
+        })
+      })
+      return reply.send({ started: true })
+    }
+  )
+
+  fastify.get('/jwks/generate-all-missing', { schema: { tags: ['jwks'] } }, (request, reply) => {
     return reply.send(UrlSigningJwkGenerator.getGenerationStatus())
   })
 }

@@ -1,10 +1,10 @@
+import { objectSchema } from '@storage/schemas'
+import { parseUserMetadata } from '@storage/uploader'
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
-import { parseUserMetadata } from '@storage/uploader'
-import { objectSchema } from '@storage/schemas'
 
 const copyRequestBodySchema = {
   type: 'object',
@@ -71,7 +71,7 @@ export default async function routes(fastify: FastifyInstance) {
         owner: request.owner,
         userMetadata:
           typeof userMetadata === 'string' ? parseUserMetadata(userMetadata) : undefined,
-        metadata: metadata,
+        metadata,
         copyMetadata: request.body.copyMetadata ?? true,
         upsert: request.headers['x-upsert'] === 'true',
       })

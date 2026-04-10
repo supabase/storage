@@ -1,11 +1,11 @@
 import { FastifyInstance } from 'fastify'
+import { getConfig } from '../../../config'
+import { setErrorHandler } from '../../error-handler'
 import { db, icebergRestCatalog, jwt, requireTenantFeature, storage } from '../../plugins'
+import bucket from './bucket'
 import catalogue from './catalog'
 import namespace from './namespace'
 import table from './table'
-import bucket from './bucket'
-import { setErrorHandler } from '../../error-handler'
-import { getConfig } from '../../../config'
 
 const { dbServiceRole, icebergEnabled, isMultitenant } = getConfig()
 

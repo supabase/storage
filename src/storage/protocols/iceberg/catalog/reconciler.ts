@@ -1,10 +1,10 @@
-import { TableIndex } from '@storage/protocols/iceberg/knex'
+import { multitenantKnex } from '@internal/database'
+import { KnexShardStoreFactory, ShardCatalog, ShardRow } from '@internal/sharding'
 import {
   ListTableResponse,
   RestCatalogClient,
 } from '@storage/protocols/iceberg/catalog/rest-catalog-client'
-import { multitenantKnex } from '@internal/database'
-import { KnexShardStoreFactory, ShardCatalog, ShardRow } from '@internal/sharding'
+import { TableIndex } from '@storage/protocols/iceberg/knex'
 import { IcebergCatalog } from '@storage/schemas'
 
 type NamespaceWithShardInfo = TableIndex & { shard_id?: string; shard_key?: string }
@@ -241,41 +241,29 @@ export class IcebergCatalogReconciler {
   }
 
   private async *listNamespaces(shardKey: string) {
-    let restToken: string | undefined = undefined
-    while (true) {
+    let restToken: string | undefined
+    do {
       const resp = await this.restCatalog.listNamespaces({
         warehouse: shardKey,
         pageSize: 1000,
         pageToken: restToken,
       })
-
       yield resp.namespaces
-
-      if (!resp['next-page-token']) {
-        break
-      }
-
       restToken = resp['next-page-token']
-    }
+    } while (restToken)
   }
 
   private async *listTables(namespaceName: string, shardKey: string) {
-    let restToken: string | undefined = undefined
-    while (true) {
+    let restToken: string | undefined
+    do {
       const resp = await this.restCatalog.listTables({
         warehouse: shardKey,
         namespace: namespaceName,
         pageSize: 1000,
         pageToken: restToken,
       })
-
       yield resp.identifiers
-
-      if (!resp['next-page-token']) {
-        break
-      }
-
       restToken = resp['next-page-token']
-    }
+    } while (restToken)
   }
 }

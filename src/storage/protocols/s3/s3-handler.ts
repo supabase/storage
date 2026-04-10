@@ -1,6 +1,3 @@
-import { Storage } from '../../storage'
-import { getConfig } from '../../../config'
-import { Uploader, validateMimeType } from '../../uploader'
 import {
   AbortMultipartUploadCommandInput,
   CompleteMultipartUploadCommandInput,
@@ -20,16 +17,21 @@ import {
   UploadPartCommandInput,
   UploadPartCopyCommandInput,
 } from '@aws-sdk/client-s3'
+import { decrypt, encrypt } from '@internal/auth'
+import { ERRORS } from '@internal/errors'
+import { logger, logSchema } from '@internal/monitoring'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
+import { getConfig } from '../../../config'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
-import { ERRORS } from '@internal/errors'
 import { S3MultipartUpload } from '../../schemas'
-import { decrypt, encrypt } from '@internal/auth'
+import { Storage } from '../../storage'
+import { Uploader, validateMimeType } from '../../uploader'
 import { ByteLimitTransformStream } from './byte-limit-stream'
-import { logger, logSchema } from '@internal/monitoring'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
+
+export const MAX_PART_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
 
 export class S3ProtocolHandler {
   constructor(
@@ -210,10 +212,10 @@ export class S3ProtocolHandler {
 
     const results = await this.storage.from(bucket).listObjectsV2({
       prefix,
-      delimiter: delimiter,
+      delimiter,
       maxKeys: limit,
       cursor: continuationToken,
-      startAfter: startAfter,
+      startAfter,
       encodingType: command.EncodingType,
     })
 
@@ -230,7 +232,7 @@ export class S3ProtocolHandler {
           | Date
           | undefined,
         ETag: o.metadata?.eTag as string,
-        Size: o.metadata?.size as number,
+        Size: (o.metadata?.size as number) || 0,
         StorageClass: 'STANDARD' as const,
       })) || []
 
@@ -411,6 +413,10 @@ export class S3ProtocolHandler {
       objectName: command.Key as string,
       isUpsert: true,
       owner: this.owner,
+      userMetadata: command.Metadata,
+      metadata: {
+        mimetype: command.ContentType,
+      },
     })
 
     const uploadId = await this.storage.backend.createMultiPartUpload(
@@ -439,7 +445,8 @@ export class S3ProtocolHandler {
         version,
         signature,
         this.owner,
-        command.Metadata
+        command.Metadata,
+        { mimetype: command.ContentType }
       )
 
     return {
@@ -468,16 +475,18 @@ export class S3ProtocolHandler {
       throw ERRORS.InvalidUploadId()
     }
 
+    const multiPartUpload = await this.storage.db
+      .asSuperUser()
+      .findMultipartUpload(UploadId, 'id,version,user_metadata,metadata')
+
     await uploader.canUpload({
       bucketId: Bucket as string,
       objectName: Key as string,
       isUpsert: true,
       owner: this.owner,
+      userMetadata: multiPartUpload.user_metadata || undefined,
+      metadata: multiPartUpload.metadata || undefined,
     })
-
-    const multiPartUpload = await this.storage.db
-      .asSuperUser()
-      .findMultipartUpload(UploadId, 'id,version,user_metadata')
 
     const parts = command.MultipartUpload?.Parts || []
 
@@ -534,10 +543,10 @@ export class S3ProtocolHandler {
       responseBody: {
         CompleteMultipartUploadResult: {
           Location: `${Bucket}/${Key}`,
-          Bucket: Bucket,
-          Key: Key,
+          Bucket,
+          Key,
           ChecksumCRC32: resp.ChecksumCRC32,
-          ChecksumCRC32C: resp.ChecksumCRC32,
+          ChecksumCRC32C: resp.ChecksumCRC32C,
           ChecksumSHA1: resp.ChecksumSHA1,
           ChecksumSHA256: resp.ChecksumSHA256,
           ETag: resp.ETag,
@@ -576,11 +585,18 @@ export class S3ProtocolHandler {
     const maxFileSize = await getFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
+
+    const multipartData = await this.storage.db
+      .asSuperUser()
+      .findMultipartUpload(UploadId, 'version,user_metadata,metadata')
+
     await uploader.canUpload({
       bucketId: Bucket as string,
       objectName: Key as string,
       owner: this.owner,
       isUpsert: true,
+      userMetadata: multipartData.user_metadata || undefined,
+      metadata: multipartData.metadata || undefined,
     })
 
     const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize)
@@ -679,7 +695,11 @@ export class S3ProtocolHandler {
    */
   async putObject(
     command: PutObjectCommandInput,
-    options: { signal?: AbortSignal; isTruncated: () => boolean }
+    options: {
+      signal?: AbortSignal
+      isTruncated: () => boolean
+      declaredContentLength?: number
+    }
   ) {
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
 
@@ -692,10 +712,12 @@ export class S3ProtocolHandler {
         body: command.Body as Readable,
         cacheControl: command.CacheControl!,
         mimeType: command.ContentType!,
+        contentLength: command.ContentLength,
+        declaredContentLength: options.declaredContentLength,
         isTruncated: options.isTruncated,
-        userMetadata: command.Metadata,
       },
       objectName: command.Key as string,
+      userMetadata: command.Metadata,
       owner: this.owner,
       isUpsert: true,
       uploadType: 's3',
@@ -733,7 +755,7 @@ export class S3ProtocolHandler {
 
     const multipart = await this.storage.db
       .asSuperUser()
-      .findMultipartUpload(UploadId, 'id,version')
+      .findMultipartUpload(UploadId, 'id,version,user_metadata,metadata')
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     await uploader.canUpload({
@@ -741,6 +763,8 @@ export class S3ProtocolHandler {
       objectName: Key,
       owner: this.owner,
       isUpsert: true,
+      userMetadata: multipart.user_metadata || undefined,
+      metadata: multipart.metadata || undefined,
     })
 
     await this.storage.backend.abortMultipartUpload(
@@ -767,7 +791,7 @@ export class S3ProtocolHandler {
     }
 
     if (!Key) {
-      throw ERRORS.MissingParameter('Bucket')
+      throw ERRORS.MissingParameter('Key')
     }
 
     const r = await this.storage.backend.headObject(Bucket, Key, undefined)
@@ -799,7 +823,7 @@ export class S3ProtocolHandler {
     }
 
     if (!Key) {
-      throw ERRORS.MissingParameter('Bucket')
+      throw ERRORS.MissingParameter('Key')
     }
 
     const object = await this.storage
@@ -914,19 +938,31 @@ export class S3ProtocolHandler {
     }
 
     // Handle response header overrides
-    if (command.ResponseContentDisposition) {
+    if (
+      command.ResponseContentDisposition &&
+      isValidHeader('content-disposition', command.ResponseContentDisposition)
+    ) {
       headers['content-disposition'] = command.ResponseContentDisposition
     }
-    if (command.ResponseContentType) {
+    if (command.ResponseContentType && isValidHeader('content-type', command.ResponseContentType)) {
       headers['content-type'] = command.ResponseContentType
     }
-    if (command.ResponseCacheControl) {
+    if (
+      command.ResponseCacheControl &&
+      isValidHeader('cache-control', command.ResponseCacheControl)
+    ) {
       headers['cache-control'] = command.ResponseCacheControl
     }
-    if (command.ResponseContentEncoding) {
+    if (
+      command.ResponseContentEncoding &&
+      isValidHeader('content-encoding', command.ResponseContentEncoding)
+    ) {
       headers['content-encoding'] = command.ResponseContentEncoding
     }
-    if (command.ResponseContentLanguage) {
+    if (
+      command.ResponseContentLanguage &&
+      isValidHeader('content-language', command.ResponseContentLanguage)
+    ) {
       headers['content-language'] = command.ResponseContentLanguage
     }
     if (command.ResponseExpires) {
@@ -1001,7 +1037,7 @@ export class S3ProtocolHandler {
       (o) => ({
         Key: o.Key,
         Code: 'AccessDenied',
-        Message: "You do not have permission to delete this object or the object doesn't exists",
+        Message: "You do not have permission to delete this object or the object doesn't exist",
       })
     )
 
@@ -1219,13 +1255,6 @@ export class S3ProtocolHandler {
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
 
-    await uploader.canUpload({
-      bucketId: Bucket,
-      objectName: Key,
-      owner: this.owner,
-      isUpsert: true,
-    })
-
     const [destinationBucket] = await this.storage.db.asSuperUser().withTransaction(async (db) => {
       return Promise.all([
         db.findBucketById(Bucket, 'file_size_limit'),
@@ -1236,6 +1265,19 @@ export class S3ProtocolHandler {
       this.storage.db.tenantId,
       destinationBucket?.file_size_limit
     )
+
+    const multipartData = await this.storage.db
+      .asSuperUser()
+      .findMultipartUpload(UploadId, 'version,user_metadata,metadata')
+
+    await uploader.canUpload({
+      bucketId: Bucket,
+      objectName: Key,
+      owner: this.owner,
+      isUpsert: true,
+      userMetadata: multipartData.user_metadata || undefined,
+      metadata: multipartData.metadata || undefined,
+    })
 
     const multipart = await this.shouldAllowPartUpload(UploadId, Number(copySize), maxFileSize)
 
@@ -1277,14 +1319,29 @@ export class S3ProtocolHandler {
   }
 
   parseMetadataHeaders(headers: Record<string, unknown>): Record<string, string> | undefined {
-    let metadata: Record<string, unknown> | undefined = undefined
+    let metadata: Record<string, string> | undefined
+    const metadataPrefix = 'x-amz-meta-'
 
-    Object.keys(headers)
-      .filter((key) => key.startsWith('x-amz-meta-'))
-      .forEach((key) => {
-        if (!metadata) metadata = {}
-        metadata[key.replace('x-amz-meta-', '')] = headers[key]
-      })
+    for (const key in headers) {
+      if (!key.startsWith(metadataPrefix)) {
+        continue
+      }
+
+      if (!Object.prototype.hasOwnProperty.call(headers, key)) {
+        continue
+      }
+
+      const value = headers[key]
+      if (typeof value !== 'string') {
+        continue
+      }
+
+      if (!metadata) {
+        metadata = {}
+      }
+
+      metadata[key.slice(metadataPrefix.length)] = value
+    }
 
     return metadata
   }
@@ -1310,7 +1367,7 @@ export class S3ProtocolHandler {
     return this.storage.db.asSuperUser().withTransaction(async (db) => {
       const multipart = await db.findMultipartUpload(
         uploadId,
-        'in_progress_size,version,upload_signature',
+        'in_progress_size,version,upload_signature,user_metadata,metadata',
         {
           forUpdate: true,
         }
@@ -1360,18 +1417,16 @@ function toAwsMeatadataHeaders(records: Record<string, unknown>) {
   const metadataHeaders: Record<string, unknown> = {}
   let missingCount = 0
 
-  if (records) {
-    Object.keys(records).forEach((key) => {
-      const value = records[key]
-      if (value && typeof value === 'string' && isUSASCII(value) && isValidHeader(key, value)) {
-        metadataHeaders['x-amz-meta-' + key.toLowerCase()] = value
-      } else {
-        missingCount++
-      }
-    })
-  }
+  Object.keys(records).forEach((key) => {
+    const value = records[key]
+    if (value && typeof value === 'string' && isUSASCII(value) && isValidHeader(key, value)) {
+      metadataHeaders['x-amz-meta-' + key.toLowerCase()] = value
+    } else {
+      missingCount++
+    }
+  })
 
-  if (missingCount) {
+  if (missingCount > 0) {
     metadataHeaders['x-amz-missing-meta'] = missingCount
   }
 

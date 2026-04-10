@@ -1,22 +1,22 @@
 import dotenv from 'dotenv'
 import path from 'path'
+
 dotenv.config({ path: path.resolve(__dirname, '..', '..', '.env.test') })
 
-import fs from 'fs'
-import { FastifyInstance } from 'fastify'
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import { wait } from '@internal/concurrency'
+import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
+import { logger } from '@internal/monitoring'
+import { TenantLocation } from '@storage/locator'
 import { randomUUID } from 'crypto'
+import { FastifyInstance } from 'fastify'
+import fs from 'fs'
 import * as tus from 'tus-js-client'
 import { DetailedError } from 'tus-js-client'
-import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
-
-import { logger } from '@internal/monitoring'
-import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
-import { getConfig } from '../config'
 import app from '../app'
+import { getConfig } from '../config'
+import { backends, Storage, StorageKnexDB } from '../storage'
 import { checkBucketExists } from './common'
-import { Storage, backends, StorageKnexDB } from '../storage'
-import { wait } from '@internal/concurrency'
-import { TenantLocation } from '@storage/locator'
 
 const { serviceKeyAsync, tenantId, storageS3Bucket, storageBackendType } = getConfig()
 const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
@@ -33,7 +33,7 @@ describe('Tus multipart', () => {
 
   beforeAll(async () => {
     server = await app({
-      logger: logger,
+      loggerInstance: logger,
     })
 
     await server.listen({
@@ -61,7 +61,7 @@ describe('Tus multipart', () => {
     const pg = await getPostgresConnection({
       superUser,
       user: superUser,
-      tenantId: tenantId,
+      tenantId,
       host: 'localhost',
     })
 
@@ -95,8 +95,8 @@ describe('Tus multipart', () => {
           'x-upsert': 'true',
         },
         metadata: {
-          bucketName: bucketName,
-          objectName: objectName,
+          bucketName,
+          objectName,
           contentType: 'image/jpeg',
           cacheControl: '3600',
           metadata: JSON.stringify({
@@ -104,7 +104,7 @@ describe('Tus multipart', () => {
             test2: 'test2',
           }),
         },
-        onError: function (error) {
+        onError(error) {
           console.log('Failed because: ' + error)
           reject(error)
         },
@@ -124,7 +124,6 @@ describe('Tus multipart', () => {
       created_at: expect.any(Date),
       id: expect.any(String),
       last_accessed_at: expect.any(Date),
-      level: 1,
       metadata: {
         cacheControl: 'max-age=3600',
         contentLength: 29526,
@@ -171,11 +170,11 @@ describe('Tus multipart', () => {
             },
             metadata: {
               bucketName: 'doesn-exist',
-              objectName: objectName,
+              objectName,
               contentType: 'image/jpeg',
               cacheControl: '3600',
             },
-            onError: function (error) {
+            onError(error) {
               console.log('Failed because: ' + error)
               reject(error)
             },
@@ -219,12 +218,12 @@ describe('Tus multipart', () => {
               'x-upsert': 'true',
             },
             metadata: {
-              bucketName: bucketName,
-              objectName: objectName,
+              bucketName,
+              objectName,
               contentType: 'image/jpeg',
               cacheControl: '3600',
             },
-            onError: function (error) {
+            onError(error) {
               console.log('Failed because: ' + error)
               reject(error)
             },
@@ -270,8 +269,8 @@ describe('Tus multipart', () => {
             'x-signature': signedUpload.token,
           },
           metadata: {
-            bucketName: bucketName,
-            objectName: objectName,
+            bucketName,
+            objectName,
             contentType: 'image/jpeg',
             cacheControl: '3600',
             metadata: JSON.stringify({
@@ -279,7 +278,7 @@ describe('Tus multipart', () => {
               test3: 'test3',
             }),
           },
-          onError: function (error) {
+          onError(error) {
             console.log('Failed because: ' + error)
             reject(error)
           },
@@ -298,7 +297,6 @@ describe('Tus multipart', () => {
         bucket_id: bucket.id,
         created_at: expect.any(Date),
         id: expect.any(String),
-        level: 1,
         last_accessed_at: expect.any(Date),
         metadata: {
           cacheControl: 'max-age=3600',
@@ -344,12 +342,12 @@ describe('Tus multipart', () => {
             'x-signature': signedUpload.token,
           },
           metadata: {
-            bucketName: bucketName,
-            objectName: objectName,
+            bucketName,
+            objectName,
             contentType: 'image/jpeg',
             cacheControl: '3600',
           },
-          onError: function (error) {
+          onError(error) {
             console.log('Failed because: ' + error)
             reject(error)
           },
@@ -369,7 +367,6 @@ describe('Tus multipart', () => {
         created_at: expect.any(Date),
         id: expect.any(String),
         last_accessed_at: expect.any(Date),
-        level: 1,
         metadata: {
           cacheControl: 'max-age=3600',
           contentLength: 29526,
@@ -414,12 +411,12 @@ describe('Tus multipart', () => {
               'x-signature': signedUpload.token,
             },
             metadata: {
-              bucketName: bucketName,
-              objectName: objectName,
+              bucketName,
+              objectName,
               contentType: 'image/jpeg',
               cacheControl: '3600',
             },
-            onError: function (error) {
+            onError(error) {
               console.log('Failed because: ' + error)
               reject(error)
             },
@@ -462,12 +459,12 @@ describe('Tus multipart', () => {
               'x-signature': 'invalid-token',
             },
             metadata: {
-              bucketName: bucketName,
-              objectName: objectName,
+              bucketName,
+              objectName,
               contentType: 'image/jpeg',
               cacheControl: '3600',
             },
-            onError: function (error) {
+            onError(error) {
               console.log('Failed because: ' + error)
               reject(error)
             },
@@ -507,12 +504,12 @@ describe('Tus multipart', () => {
             onShouldRetry: () => false,
             uploadDataDuringCreation: false,
             metadata: {
-              bucketName: bucketName,
-              objectName: objectName,
+              bucketName,
+              objectName,
               contentType: 'image/jpeg',
               cacheControl: '3600',
             },
-            onError: function (error) {
+            onError(error) {
               console.log('Failed because: ' + error)
               reject(error)
             },

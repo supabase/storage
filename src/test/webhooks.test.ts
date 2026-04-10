@@ -7,16 +7,14 @@ mergeConfig({
   pgQueueEnable: true,
 })
 
-import { mockQueue, useMockObject } from './common'
-import FormData from 'form-data'
-
-import fs from 'fs'
-import app from '../app'
-import { getPostgresConnection } from '@internal/database'
+import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { Obj } from '@storage/schemas'
 import { randomUUID } from 'crypto'
-import { getServiceKeyUser } from '@internal/database'
 import { FastifyInstance } from 'fastify'
+import FormData from 'form-data'
+import fs from 'fs'
+import app from '../app'
+import { mockQueue, useMockObject } from './common'
 
 describe('Webhooks', () => {
   useMockObject()
@@ -63,7 +61,7 @@ describe('Webhooks', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'webhooks',
@@ -114,7 +112,7 @@ describe('Webhooks', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
 
     expect(sendSpy).toHaveBeenNthCalledWith(
       1,
@@ -167,7 +165,7 @@ describe('Webhooks', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(3)
+    expect(sendSpy).toHaveBeenCalledTimes(3)
 
     expect(sendSpy).toHaveBeenNthCalledWith(
       2,
@@ -251,6 +249,47 @@ describe('Webhooks', () => {
     )
   })
 
+  it('will emit destination bucket in ObjectCreated:Move payload for cross-bucket moves', async () => {
+    const obj = await createObject(pg, 'bucket6')
+    const destinationKey = `${obj.name}-moved-${randomUUID()}`
+
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/move`,
+      headers: {
+        authorization,
+      },
+      payload: {
+        bucketId: 'bucket6',
+        sourceKey: obj.name,
+        destinationBucket: 'bucket2',
+        destinationKey,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(sendSpy).toHaveBeenCalledTimes(3)
+    expect(sendSpy).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          event: expect.objectContaining({
+            type: 'ObjectCreated:Move',
+            payload: expect.objectContaining({
+              bucketId: 'bucket2',
+              name: destinationKey,
+              oldObject: expect.objectContaining({
+                bucketId: 'bucket6',
+                name: obj.name,
+              }),
+            }),
+          }),
+        }),
+      })
+    )
+  })
+
   it('will emit a webhook upon object copied', async () => {
     const obj = await createObject(pg, 'bucket6')
 
@@ -269,7 +308,7 @@ describe('Webhooks', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toBeCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
 
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -306,6 +345,42 @@ describe('Webhooks', () => {
             host: undefined,
             ref: 'bjhaohmqunupljrqypxz',
           },
+        }),
+      })
+    )
+  })
+
+  it('will emit destination bucket in ObjectCreated:Copy payload for cross-bucket copies', async () => {
+    const obj = await createObject(pg, 'bucket6')
+    const destinationKey = `${obj.name}-copied-${randomUUID()}`
+
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/copy`,
+      headers: {
+        authorization,
+      },
+      payload: {
+        bucketId: 'bucket6',
+        sourceKey: obj.name,
+        destinationBucket: 'bucket2',
+        destinationKey,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          event: expect.objectContaining({
+            type: 'ObjectCreated:Copy',
+            payload: expect.objectContaining({
+              bucketId: 'bucket2',
+              name: destinationKey,
+            }),
+          }),
         }),
       })
     )

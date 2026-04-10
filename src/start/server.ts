@@ -1,30 +1,30 @@
-import '@internal/monitoring/otel'
-import { FastifyInstance } from 'fastify'
-import { IncomingMessage, Server, ServerResponse } from 'node:http'
+import '@internal/monitoring/otel-tracing'
+import '@internal/monitoring/otel-metrics'
 
-import build from '../app'
-import buildAdmin from '../admin-app'
-import { getConfig } from '../config'
+import { IncomingMessage, Server, ServerResponse } from 'node:http'
+import { Cluster } from '@internal/cluster/cluster'
+import { AsyncAbortController } from '@internal/concurrency'
 import {
   listenForTenantUpdate,
   multitenantKnex,
   PubSub,
   TenantConnection,
 } from '@internal/database'
-import { logger, logSchema } from '@internal/monitoring'
-import { Queue } from '@internal/queue'
-import { registerWorkers } from '@storage/events'
-import { AsyncAbortController } from '@internal/concurrency'
-
-import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 import {
   runMigrationsOnTenant,
   runMultitenantMigrations,
   startAsyncMigrations,
 } from '@internal/database/migrations'
-import { Cluster } from '@internal/cluster/cluster'
+import { logger, logSchema } from '@internal/monitoring'
+import { Queue } from '@internal/queue'
 import { KnexShardStoreFactory, ShardCatalog } from '@internal/sharding'
+import { registerWorkers } from '@storage/events'
 import { SyncCatalogIds } from '@storage/events/upgrades/sync-catalog-ids'
+import { FastifyInstance } from 'fastify'
+import buildAdmin from '../admin-app'
+import build from '../app'
+import { getConfig } from '../config'
+import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 
 const shutdownSignal = new AsyncAbortController()
 
@@ -61,13 +61,14 @@ async function main() {
     dbMigrationFreezeAt,
     vectorS3Buckets,
     icebergShards,
+    numWorkers,
   } = getConfig()
 
   // Queue
   if (pgQueueEnable) {
     await Queue.start({
       signal: shutdownSignal.nextGroup.signal,
-      registerWorkers: registerWorkers,
+      registerWorkers,
     })
 
     logSchema.info(logger, '[Queue] Started', {
@@ -120,17 +121,21 @@ async function main() {
     startAsyncMigrations(shutdownSignal.nextGroup.signal)
   }
 
-  // PoolManager Monitoring
-  TenantConnection.poolManager.monitor(shutdownSignal.nextGroup.signal)
+  // PoolManager
+  TenantConnection.poolManager.setNumWorkers(numWorkers)
+  TenantConnection.poolManager.monitor()
 
   // Cluster information
   await Cluster.init(shutdownSignal.nextGroup.signal)
 
   Cluster.on('change', (data) => {
-    logger.info(`[Cluster] Cluster size changed to ${data.size}`, {
-      type: 'cluster',
-      clusterSize: data.size,
-    })
+    logger.info(
+      {
+        type: 'cluster',
+        clusterSize: data.size,
+      },
+      `[Cluster] Cluster size changed to ${data.size}`
+    )
     TenantConnection.poolManager.rebalanceAll({
       clusterSize: data.size,
     })
@@ -153,11 +158,11 @@ async function httpServer(signal: AbortSignal) {
   const { exposeDocs, requestTraceHeader, port, host } = getConfig()
 
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
-    logger,
+    loggerInstance: logger,
     disableRequestLogging: true,
     exposeDocs,
     requestIdHeader: requestTraceHeader,
-    maxParamLength: 2500,
+    routerOptions: { maxParamLength: 2500 },
   })
 
   const closePromise = createServerClosedPromise(app.server, () => {
@@ -199,16 +204,14 @@ async function httpAdminServer(
   app: FastifyInstance<Server, IncomingMessage, ServerResponse>,
   signal: AbortSignal
 ) {
-  const { adminRequestIdHeader, adminPort, host } = getConfig()
+  const { exposeDocs, adminRequestIdHeader, adminPort, host } = getConfig()
 
-  const adminApp = buildAdmin(
-    {
-      logger,
-      disableRequestLogging: true,
-      requestIdHeader: adminRequestIdHeader,
-    },
-    app
-  )
+  const adminApp = buildAdmin({
+    loggerInstance: logger,
+    disableRequestLogging: true,
+    exposeDocs,
+    requestIdHeader: adminRequestIdHeader,
+  })
 
   const closePromise = createServerClosedPromise(adminApp.server, () => {
     logSchema.info(logger, '[Admin Server] Exited', {

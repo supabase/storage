@@ -1,8 +1,9 @@
+import { objectSchema } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
+import { FastifyRequest } from 'fastify/types/request'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
-import { objectSchema } from '@storage/schemas'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const searchRequestParamsSchema = {
@@ -40,7 +41,6 @@ interface searchRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof searchRequestBodySchema>
   Params: FromSchema<typeof searchRequestParamsSchema>
 }
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export default async function routes(fastify: FastifyInstance) {
   const summary = 'Search for objects under a prefix'
 
@@ -57,6 +57,12 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
       config: {
         operation: { type: ROUTE_OPERATIONS.LIST_OBJECTS },
+        logMetadata: (req: FastifyRequest<searchRequestInterface>) => ({
+          prefix: req.body.prefix,
+          limit: req.body.limit,
+          offset: req.body.offset,
+          sortBy: req.body.sortBy,
+        }),
       },
     },
     async (request, response) => {

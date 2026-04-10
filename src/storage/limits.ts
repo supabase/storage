@@ -1,9 +1,9 @@
+import { ERRORS } from '@internal/errors'
 import { getConfig } from '../config'
 import {
-  getFileSizeLimit as getFileSizeLimitForTenant,
   getFeatures,
+  getFileSizeLimit as getFileSizeLimitForTenant,
 } from '../internal/database/tenant'
-import { ERRORS } from '@internal/errors'
 
 const { isMultitenant, imageTransformationEnabled, icebergBucketDetectionSuffix } = getConfig()
 
@@ -113,7 +113,6 @@ export function parseFileSizeToBytes(valueWithUnit: string) {
     throw ERRORS.InvalidFileSizeLimit()
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
   const [, valueS, unit] = valueWithUnit.match(valuesRegex)!
   const value = +parseFloat(valueS).toPrecision(3)
 

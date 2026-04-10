@@ -3,8 +3,8 @@ import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
 import { SignedToken, verifyJWT } from '../../../internal/auth'
 import { getJwtSecret } from '../../../internal/database'
-import { ROUTE_OPERATIONS } from '../operations'
 import { ERRORS } from '../../../internal/errors'
+import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
 

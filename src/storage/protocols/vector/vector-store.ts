@@ -1,31 +1,34 @@
 import {
+  ConflictException,
   CreateIndexInput,
   DeleteIndexInput,
+  DeleteVectorsInput,
   DistanceMetric,
   GetIndexCommandInput,
-  ListIndexesInput,
-  MetadataConfiguration,
   GetIndexOutput,
-  PutVectorsInput,
-  ListVectorsInput,
-  ListVectorBucketsInput,
-  QueryVectorsInput,
-  DeleteVectorsInput,
   GetVectorBucketInput,
   GetVectorsCommandInput,
-  ConflictException,
+  ListIndexesInput,
+  ListVectorBucketsInput,
+  ListVectorsInput,
+  MetadataConfiguration,
+  PutVectorsInput,
+  QueryVectorsInput,
 } from '@aws-sdk/client-s3vectors'
-import { VectorMetadataDB } from './knex'
-import { VectorStore } from './adapter/s3-vector'
 import { ERRORS } from '@internal/errors'
-import { Sharder } from '@internal/sharding/sharder'
+import { ErrorCode } from '@internal/errors/codes'
 import { logger, logSchema } from '@internal/monitoring'
+import { Sharder } from '@internal/sharding/sharder'
+import { VectorStore } from './adapter/s3-vector'
+import { VectorMetadataDB } from './knex'
 
 interface VectorStoreConfig {
   tenantId: string
   maxBucketCount: number
   maxIndexCount: number
 }
+
+export const VECTOR_BUCKET_COUNT_LOCK = '__vector_bucket_count__'
 
 export class VectorStoreManager {
   constructor(
@@ -40,39 +43,47 @@ export class VectorStoreManager {
   }
 
   async createBucket(bucketName: string): Promise<void> {
-    await this.db.withTransaction(
-      async (tnx) => {
-        const bucketCount = await tnx.countBuckets()
-        if (bucketCount >= this.config.maxBucketCount) {
-          throw ERRORS.S3VectorMaxBucketsExceeded(this.config.maxBucketCount)
+    await this.db.withTransaction(async (tnx) => {
+      await tnx.lockResource('global', VECTOR_BUCKET_COUNT_LOCK)
+
+      const bucketCount = await tnx.countBuckets()
+      if (bucketCount >= this.config.maxBucketCount) {
+        try {
+          await tnx.findVectorBucket(bucketName)
+          return
+        } catch (e) {
+          if ((e as { code?: string }).code !== ErrorCode.S3VectorNotFoundException) {
+            throw e
+          }
         }
 
-        try {
-          await tnx.createVectorBucket(bucketName)
-        } catch (e) {
-          if (e instanceof ConflictException) {
-            return
-          }
-          throw e
+        throw ERRORS.S3VectorMaxBucketsExceeded(this.config.maxBucketCount)
+      }
+
+      try {
+        await tnx.createVectorBucket(bucketName)
+      } catch (e) {
+        if (e instanceof ConflictException) {
+          return
         }
-      },
-      { isolationLevel: 'serializable' }
-    )
+        throw e
+      }
+    })
   }
 
   async deleteBucket(bucketName: string): Promise<void> {
-    await this.db.withTransaction(
-      async (tx) => {
-        const indexes = await tx.listIndexes({ bucketId: bucketName, maxResults: 1 })
+    await this.db.withTransaction(async (tx) => {
+      await tx.lockResource('bucket', bucketName)
+      await tx.lockResource('global', VECTOR_BUCKET_COUNT_LOCK)
 
-        if (indexes.indexes.length > 0) {
-          throw ERRORS.S3VectorBucketNotEmpty(bucketName)
-        }
+      const indexes = await tx.listIndexes({ bucketId: bucketName, maxResults: 1 })
 
-        await tx.deleteVectorBucket(bucketName)
-      },
-      { isolationLevel: 'serializable' }
-    )
+      if (indexes.indexes.length > 0) {
+        throw ERRORS.S3VectorBucketNotEmpty(bucketName)
+      }
+
+      await tx.deleteVectorBucket(bucketName)
+    })
   }
 
   async getBucket(command: GetVectorBucketInput) {
@@ -134,6 +145,7 @@ export class VectorStoreManager {
     try {
       await this.db.withTransaction(async (tx) => {
         await tx.lockResource('bucket', command.vectorBucketName!)
+        await tx.findVectorBucket(command.vectorBucketName!)
 
         const indexCount = await tx.countIndexes(command.vectorBucketName!)
 
@@ -203,7 +215,7 @@ export class VectorStoreManager {
     } catch (error) {
       logSchema.error(logger, 'Create vector index transaction failed', {
         type: 'vector',
-        error: error,
+        error,
         project: this.config.tenantId,
       })
       if (shardReservation) {
@@ -297,6 +309,7 @@ export class VectorStoreManager {
         vectorBucketName: i.bucket_id,
         creationTime: Math.floor(i.created_at.getTime() / 1000),
       })),
+      nextToken: result.nextToken,
     }
   }
 

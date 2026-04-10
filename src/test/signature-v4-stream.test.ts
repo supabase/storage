@@ -1,9 +1,9 @@
 import {
-  ChunkSignatureV4Parser,
   ChunkSignatureParserOptions,
+  ChunkSignatureV4Parser,
 } from '@storage/protocols/s3/signature-v4-stream'
-import crypto from 'crypto'
 import { Buffer } from 'buffer'
+import crypto from 'crypto'
 
 describe('ChunkSignatureV4Parser', () => {
   const makeParser = (opts: Partial<ChunkSignatureParserOptions> = {}) => {
@@ -66,7 +66,7 @@ describe('ChunkSignatureV4Parser', () => {
     const sig = 'f'.repeat(64)
     return new Promise<void>((resolve) => {
       parser.on('error', (err) => {
-        expect(err.message).toMatch(/Chunk size exceeds 1 bytes/)
+        expect(err.message).toEqual('The chunk exceeded 1 bytes')
         resolve()
       })
       parser.write(`2;chunk-signature=${sig}\r\n`)
@@ -161,7 +161,7 @@ describe('ChunkSignatureV4Parser', () => {
     const parser = makeParser({ maxChunkSize: 1 })
     return new Promise<void>((resolve) => {
       parser.on('error', (err) => {
-        expect(err.message).toMatch(/Chunk size exceeds 1 bytes/)
+        expect(err.message).toEqual('The chunk exceeded 1 bytes')
         resolve()
       })
       parser.write(`2;chunk-signature=${sig}\r\n`)

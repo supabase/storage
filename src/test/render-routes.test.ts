@@ -1,14 +1,14 @@
-import dotenv from 'dotenv'
-import fs from 'fs/promises'
-import { getConfig, JwksConfig, mergeConfig } from '../config'
-import app from '../app'
-import { S3Backend } from '../storage/backend'
-import path from 'path'
-import { ImageRenderer } from '../storage/renderer'
-import axios from 'axios'
-import { useMockObject } from './common'
 import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
+import axios from 'axios'
+import dotenv from 'dotenv'
 import { FastifyInstance } from 'fastify'
+import fs from 'fs/promises'
+import path from 'path'
+import app from '../app'
+import { getConfig, JwksConfig, mergeConfig } from '../config'
+import { S3Backend } from '../storage/backend'
+import { ImageRenderer } from '../storage/renderer'
+import { useMockObject } from './common'
 
 dotenv.config({ path: '.env.test' })
 const { imgProxyURL, jwtSecret } = getConfig()
@@ -51,8 +51,8 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
-    expect(axiosSpy).toBeCalledWith(
+    expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
+    expect(axiosSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
@@ -69,8 +69,8 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
-    expect(axiosSpy).toBeCalledWith(
+    expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
+    expect(axiosSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
@@ -112,8 +112,8 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
-    expect(axiosSpy).toBeCalledWith(
+    expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
+    expect(axiosSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
@@ -159,8 +159,8 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.privateAssetUrl).toBeCalledTimes(1)
-    expect(axiosSpy).toBeCalledWith(
+    expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
+    expect(axiosSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
       { responseType: 'stream', signal: expect.any(AbortSignal) }
     )
@@ -193,5 +193,37 @@ describe('image rendering routes', () => {
     expect(response.statusCode).toBe(400)
     const body = response.json<{ error: string }>()
     expect(body.error).toBe('InvalidSignature')
+  })
+
+  describe('transformation parameter validation', () => {
+    it('rejects format parameter with newline character in info route', async () => {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: '/object/info/public/public-bucket-2/favicon.ico?format=avif%0Amalicious',
+      })
+
+      expect(response.statusCode).toBe(400)
+      const body = response.json<{ error: string; message: string }>()
+      expect(body.message).toContain('format')
+      expect(body.message).toContain('must be equal to one of the allowed values')
+    })
+
+    it('rejects resize parameter with newline character in HEAD route', async () => {
+      const response = await appInstance.inject({
+        method: 'HEAD',
+        url: '/object/public/public-bucket-2/favicon.ico?resize=cover%0Amalicious',
+      })
+
+      expect(response.statusCode).toBe(400)
+    })
+
+    it('accepts valid transformation parameters in info route', async () => {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: '/object/info/public/public-bucket-2/favicon.ico?width=100&height=200',
+      })
+
+      expect(response.statusCode).toBe(200)
+    })
   })
 })

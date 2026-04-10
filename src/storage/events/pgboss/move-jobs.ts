@@ -1,8 +1,8 @@
-import { BaseEvent } from '../base-event'
-import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
-import { BasePayload, Queue } from '@internal/queue'
 import { multitenantKnex } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
+import { BasePayload, PG_BOSS_SCHEMA, Queue } from '@internal/queue'
+import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
+import { BaseEvent } from '../base-event'
 
 interface MoveJobsPayload extends BasePayload {
   fromQueue: string
@@ -46,7 +46,7 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
         return
       }
 
-      const schema = 'pgboss_v10'
+      const schema = PG_BOSS_SCHEMA
       const fromQueueName = job.data.fromQueue
       const toQueue = await Queue.getInstance().getQueue(job.data.toQueue)
 
@@ -78,9 +78,9 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
                 policy,
                 state
             )
-            SELECT 
+            SELECT
                 id,
-                '${toQueue.name}' as name,
+                ? as name,
                 priority,
                 data,
                 retry_limit,
@@ -94,23 +94,23 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
                 created_on,
                 keep_until,
                 output,
-                '${toQueue.policy}' as policy,
+                ? as policy,
                 'created' as state
             FROM ${schema}.job
-            WHERE name = '${fromQueueName}'
+            WHERE name = ?
                 AND state IN ('created', 'active', 'retry')
             ON CONFLICT DO NOTHING
         `
 
-        await tnx.raw(sql)
+        await tnx.raw(sql, [toQueue.name, toQueue.policy, fromQueueName])
 
         if (job.data.deleteJobsFromOriginalQueue) {
           const deleteSql = `
                 DELETE FROM ${schema}.job
-                WHERE name = '${fromQueueName}'
+                WHERE name = ?
                     AND state IN ('created', 'active', 'retry')
             `
-          await tnx.raw(deleteSql)
+          await tnx.raw(deleteSql, [fromQueueName])
         }
       } catch (error) {
         logSchema.error(logger, '[PgBoss] Error while copying jobs', {

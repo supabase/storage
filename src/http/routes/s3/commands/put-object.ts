@@ -1,12 +1,12 @@
-import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
-import { S3Router } from '../router'
-import { ROUTE_OPERATIONS } from '../../operations'
 import { MultipartFields } from '@fastify/multipart'
-import { fileUploadFromRequest, getStandardMaxFileSizeLimit } from '@storage/uploader'
 import { ERRORS } from '@internal/errors'
-import { pipeline } from 'stream/promises'
 import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
-import stream, { PassThrough, Readable } from 'stream'
+import { MAX_PART_SIZE, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { fileUploadFromRequest, getStandardMaxFileSizeLimit } from '@storage/uploader'
+import stream, { Readable, Transform } from 'stream'
+import { pipeline } from 'stream/promises'
+import { ROUTE_OPERATIONS } from '../../operations'
+import { S3Router } from '../router'
 
 const PutObjectInput = {
   summary: 'Put Object',
@@ -49,6 +49,36 @@ const PostFormInput = {
   },
 } as const
 
+type PipelineBody = NodeJS.ReadableStream
+type PipelineHandlerInput = AsyncIterable<unknown>
+
+function withReadableStreamHandler<T>(handler: (fileStream: Readable) => Promise<T>) {
+  return async (fileStream: PipelineHandlerInput) => {
+    // stream/promises exposes the final stream to the destination callback
+    // as a generic async iterable. In these handlers the upstream is always
+    // a Node readable, so narrow once here.
+    return handler(fileStream as Readable)
+  }
+}
+
+function pipelineWithOptionalStreamingSignature<T>(
+  body: PipelineBody,
+  limit: number,
+  streamingSignatureV4: Transform | undefined,
+  handler: (fileStream: Readable) => Promise<T>
+) {
+  if (streamingSignatureV4) {
+    return pipeline(
+      body,
+      streamingSignatureV4,
+      new ByteLimitTransformStream(limit),
+      withReadableStreamHandler(handler)
+    )
+  }
+
+  return pipeline(body, new ByteLimitTransformStream(limit), withReadableStreamHandler(handler))
+}
+
 export default function PutObject(s3Router: S3Router) {
   s3Router.put(
     '/:Bucket/*',
@@ -81,19 +111,20 @@ export default function PutObject(s3Router: S3Router) {
         throw ERRORS.InvalidParameter('internalIcebergBucketName')
       }
 
-      return pipeline(
+      return pipelineWithOptionalStreamingSignature(
         uploadRequest.body,
-        new ByteLimitTransformStream(uploadRequest.maxFileSize),
-        ctx.req.streamingSignatureV4 || new PassThrough(),
+        MAX_PART_SIZE,
+        ctx.req.streamingSignatureV4,
         async (fileStream) => {
           const u = await ctx.req.storage.backend.uploadObject(
             icebergBucket,
             key,
             undefined,
-            fileStream as Readable,
+            fileStream,
             uploadRequest.mimeType,
             uploadRequest.cacheControl,
-            ctx.signals.body
+            ctx.signals.body,
+            uploadRequest.contentLength
           )
 
           return {
@@ -135,23 +166,28 @@ export default function PutObject(s3Router: S3Router) {
         fileSizeLimit: bucket.file_size_limit || undefined,
       })
 
-      return pipeline(
+      return pipelineWithOptionalStreamingSignature(
         uploadRequest.body,
-        new ByteLimitTransformStream(uploadRequest.maxFileSize),
-        ctx.req.streamingSignatureV4 || new PassThrough(),
+        uploadRequest.maxFileSize,
+        ctx.req.streamingSignatureV4,
         async (fileStream) => {
           return s3Protocol.putObject(
             {
-              Body: fileStream as Readable,
+              Body: fileStream,
               Bucket: req.Params.Bucket,
               Key: key,
               CacheControl: uploadRequest.cacheControl,
               ContentType: uploadRequest.mimeType,
+              ContentLength: uploadRequest.contentLength,
               Expires: req.Headers?.['expires'] ? new Date(req.Headers?.['expires']) : undefined,
               ContentEncoding: req.Headers?.['content-encoding'],
               Metadata: metadata,
             },
-            { signal: ctx.signals.body, isTruncated: uploadRequest.isTruncated }
+            {
+              signal: ctx.signals.body,
+              isTruncated: uploadRequest.isTruncated,
+              declaredContentLength: uploadRequest.declaredContentLength,
+            }
           )
         }
       )
@@ -204,23 +240,26 @@ export default function PutObject(s3Router: S3Router) {
 }
 
 function fieldsToObject(fields: MultipartFields) {
-  return Object.keys(fields).reduce((acc, key) => {
-    const field = fields[key]
-    if (Array.isArray(field)) {
+  return Object.keys(fields).reduce(
+    (acc, key) => {
+      const field = fields[key]
+      if (Array.isArray(field)) {
+        return acc
+      }
+
+      if (!field) {
+        return acc
+      }
+
+      if (
+        field.type === 'field' &&
+        (typeof field.value === 'string' || field.value === 'number' || field.value === 'boolean')
+      ) {
+        acc[field.fieldname.toLowerCase()] = field.value
+      }
+
       return acc
-    }
-
-    if (!field) {
-      return acc
-    }
-
-    if (
-      field.type === 'field' &&
-      (typeof field.value === 'string' || field.value === 'number' || field.value === 'boolean')
-    ) {
-      acc[field.fieldname.toLowerCase()] = field.value
-    }
-
-    return acc
-  }, {} as Record<string, string>)
+    },
+    {} as Record<string, string>
+  )
 }

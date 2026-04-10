@@ -1,8 +1,9 @@
-import { useStorage } from './utils/storage'
-import { Readable } from 'stream'
 import { eachParallel } from '@internal/testing/generators/array'
-import { getConfig } from '../config'
+import { withOptionalVersion } from '@storage/backend'
 import { randomUUID } from 'crypto'
+import { Readable } from 'stream'
+import { getConfig } from '../config'
+import { useStorage } from './utils/storage'
 
 const { storageS3Bucket, tenantId } = getConfig()
 
@@ -28,7 +29,6 @@ describe('ObjectScanner', () => {
           body: Readable.from(Buffer.from('test')),
           mimeType: 'text/plain',
           cacheControl: 'no-cache',
-          userMetadata: {},
           isTruncated: () => false,
         },
       })
@@ -95,12 +95,11 @@ describe('ObjectScanner', () => {
           body: Readable.from(Buffer.from('test')),
           mimeType: 'text/plain',
           cacheControl: 'no-cache',
-          userMetadata: {},
           isTruncated: () => false,
         },
       })
 
-      return { name: upload.obj.name }
+      return { name: upload.obj.name, version: upload.obj.version }
     })
 
     const numToDelete = 10
@@ -133,22 +132,21 @@ describe('ObjectScanner', () => {
     const s3ObjectAll = []
     let nextToken = ''
 
-    while (true) {
+    do {
       const s3Objects = await storage.adapter.list(storageS3Bucket, {
         prefix: `${tenantId}/${bucket.id}`,
-        nextToken: nextToken,
+        nextToken,
       })
       s3ObjectAll.push(...s3Objects.keys)
-      if (!s3Objects.nextToken) {
-        break
-      }
-      nextToken = s3Objects.nextToken
-    }
+      nextToken = s3Objects.nextToken ?? ''
+    } while (nextToken)
 
     // Check s3 files are deleted
     expect(s3ObjectAll).toHaveLength(maxUploads - numToDelete)
     // Compare the keys names
-    expect(s3ObjectAll.length).not.toContain(objectsToDelete.map((o) => `${bucket.id}/${o.name}`))
+    expect(s3ObjectAll.map((o) => o.name)).not.toEqual(
+      expect.arrayContaining(objectsToDelete.map((o) => withOptionalVersion(o.name, o.version)))
+    )
 
     // Check files are backed-up
     const backupFiles = await storage.adapter.list(storageS3Bucket, {

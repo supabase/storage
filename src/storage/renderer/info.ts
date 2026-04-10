@@ -1,8 +1,8 @@
-import { Obj } from '@storage/schemas'
-import { HeadRenderer } from './head'
-import { FastifyRequest, FastifyReply } from 'fastify'
-import { AssetResponse, RenderOptions } from './renderer'
 import { ImageRenderer, TransformOptions } from '@storage/renderer/image'
+import { Obj } from '@storage/schemas'
+import { FastifyReply, FastifyRequest } from 'fastify'
+import { HeadRenderer } from './head'
+import { AssetResponse, RenderOptions } from './renderer'
 
 /**
  * HeadRenderer

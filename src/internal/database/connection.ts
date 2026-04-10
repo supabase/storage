@@ -1,14 +1,20 @@
-import pg, { DatabaseError } from 'pg'
-import { Knex, knex } from 'knex'
 import retry from 'async-retry'
+import { Knex, knex } from 'knex'
+import pg, { DatabaseError } from 'pg'
+
 import KnexTimeoutError = knex.KnexTimeoutError
-import { ERRORS } from '@internal/errors'
+
 import {
-  PoolStrategy,
   PoolManager,
+  PoolStrategy,
   searchPath,
   TenantConnectionOptions,
 } from '@internal/database/pool'
+import { ERRORS } from '@internal/errors'
+import { TransactionOptions } from '@storage/database'
+import { getConfig } from '../../config'
+
+const { databaseStatementTimeout } = getConfig()
 
 // https://github.com/knex/knex/issues/387#issuecomment-51554522
 pg.types.setTypeParser(20, 'text', parseInt)
@@ -16,12 +22,21 @@ pg.types.setTypeParser(20, 'text', parseInt)
 export class TenantConnection {
   static poolManager = new PoolManager()
   public readonly role: string
+  private abortSignal?: AbortSignal
 
   constructor(
     public readonly pool: PoolStrategy,
     protected readonly options: TenantConnectionOptions
   ) {
     this.role = options.user.payload.role || 'anon'
+  }
+
+  setAbortSignal(signal: AbortSignal) {
+    this.abortSignal = signal
+  }
+
+  getAbortSignal(): AbortSignal | undefined {
+    return this.abortSignal
   }
 
   static stop() {
@@ -41,7 +56,7 @@ export class TenantConnection {
     return Promise.resolve()
   }
 
-  async transaction(instance?: Knex) {
+  async transaction(instance?: Knex, opts?: TransactionOptions): Promise<Knex.Transaction> {
     try {
       const tnx = await retry(
         async (bail) => {
@@ -92,6 +107,22 @@ export class TenantConnection {
         }
       }
 
+      // Apply statement timeout at start of transaction (PgBouncer-compatible)
+      // SET LOCAL scopes the timeout to the current transaction only
+      if (typeof opts?.timeout !== 'undefined' || databaseStatementTimeout > 0) {
+        const statementTimeout = opts?.timeout ?? databaseStatementTimeout
+
+        // Apply statement timeout if set
+        if (statementTimeout > 0) {
+          try {
+            await tnx.raw(`SET LOCAL statement_timeout TO '${statementTimeout}ms'`)
+          } catch (e) {
+            await tnx.rollback()
+            throw e
+          }
+        }
+      }
+
       return tnx
     } catch (e) {
       if (e instanceof KnexTimeoutError) {
@@ -104,21 +135,36 @@ export class TenantConnection {
         throw ERRORS.DatabaseTimeout(e)
       }
 
+      // Handle database connection limit errors
+      if (
+        e instanceof DatabaseError &&
+        ((e.code === '08P01' && e.message.includes('no more connections allowed')) ||
+          e.message.includes('Max client connections reached'))
+      ) {
+        throw ERRORS.DatabaseConnectionLimit(e)
+      }
+
       throw e
     }
   }
 
-  transactionProvider(instance?: Knex): Knex.TransactionProvider {
+  transactionProvider(instance?: Knex, opts?: TransactionOptions): Knex.TransactionProvider {
     return async () => {
-      return this.transaction(instance)
+      return this.transaction(instance, opts)
     }
   }
 
   asSuperUser() {
-    return new TenantConnection(this.pool, {
+    const tenantConnection = new TenantConnection(this.pool, {
       ...this.options,
       user: this.options.superUser,
     })
+
+    if (this.abortSignal) {
+      tenantConnection.setAbortSignal(this.abortSignal)
+    }
+
+    return tenantConnection
   }
 
   async setScope(tnx: Knex) {
@@ -134,7 +180,8 @@ export class TenantConnection {
           set_config('request.headers', ?, true),
           set_config('request.method', ?, true),
           set_config('request.path', ?, true),
-          set_config('storage.operation', ?, true);
+          set_config('storage.operation', ?, true),
+          set_config('storage.allow_delete_query', 'true', true);
     `,
       [
         this.role,

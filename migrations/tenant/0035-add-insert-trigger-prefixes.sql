@@ -1,4 +1,4 @@
-
+-- postgres-migrations ignore
 -- This trigger is used to create the hierarchy of prefixes
 -- When writing directly in the prefixes table
 CREATE OR REPLACE TRIGGER "prefixes_create_hierarchy"

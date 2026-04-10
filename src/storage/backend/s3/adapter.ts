@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream'
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
@@ -10,30 +11,38 @@ import {
   HeadObjectCommand,
   ListObjectsV2Command,
   ListPartsCommand,
+  PutObjectCommand,
   S3Client,
   S3ClientConfig,
   UploadPartCommand,
   UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
 import { Progress, Upload } from '@aws-sdk/lib-storage'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { ERRORS, StorageBackendError } from '@internal/errors'
+import { createAgent, InstrumentedAgent } from '@internal/http'
+import { monitorStream } from '@internal/streams'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
+import { getConfig } from '../../../config'
 import {
-  StorageBackendAdapter,
   BrowserCacheHeaders,
   ObjectMetadata,
   ObjectResponse,
-  withOptionalVersion,
+  StorageBackendAdapter,
   UploadPart,
+  withOptionalVersion,
 } from './../adapter'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { ERRORS, StorageBackendError } from '@internal/errors'
-import { getConfig } from '../../../config'
-import { Readable } from 'node:stream'
-import { createAgent, InstrumentedAgent } from '@internal/http'
-import { monitorStream } from '@internal/streams'
-import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
 
-const { tracingFeatures, storageS3MaxSockets, tracingEnabled } = getConfig()
+const {
+  storageS3UploadQueueSize,
+  tracingFeatures,
+  storageS3MaxSockets,
+  tracingEnabled,
+  storageS3DisableChecksum,
+} = getConfig()
+
+export const MAX_PUT_OBJECT_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
 
 export interface S3ClientOptions {
   endpoint?: string
@@ -105,7 +114,7 @@ export class S3Backend implements StorageBackendAdapter {
     return {
       metadata: {
         cacheControl: data.CacheControl || 'no-cache',
-        mimetype: data.ContentType || 'application/octa-stream',
+        mimetype: data.ContentType || 'application/octet-stream',
         eTag: data.ETag || '',
         lastModified: data.LastModified,
         contentRange: data.ContentRange,
@@ -120,6 +129,7 @@ export class S3Backend implements StorageBackendAdapter {
 
   /**
    * Uploads and store an object
+   * Max 5GB
    * @param bucketName
    * @param key
    * @param version
@@ -127,6 +137,7 @@ export class S3Backend implements StorageBackendAdapter {
    * @param contentType
    * @param cacheControl
    * @param signal
+   * @param contentLength
    */
   async uploadObject(
     bucketName: string,
@@ -135,16 +146,99 @@ export class S3Backend implements StorageBackendAdapter {
     body: Readable,
     contentType: string,
     cacheControl: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    contentLength?: number
   ): Promise<ObjectMetadata> {
     if (signal?.aborted) {
       throw ERRORS.Aborted('Upload was aborted')
     }
 
+    if (typeof contentLength !== 'number' || contentLength > MAX_PUT_OBJECT_SIZE) {
+      // Use multipart when the length is unknown or exceeds S3's 5GB single-request limit.
+      return this.bufferedMultipartUpload(
+        bucketName,
+        key,
+        version,
+        body,
+        contentType,
+        cacheControl,
+        signal
+      )
+    }
+
+    // Use PutObject directly when content-length is known and within S3's single-object limit (5GB).
+    // This avoids the buffering overhead of the Upload class which buffers each part in memory.
+    return this.putObject(
+      bucketName,
+      key,
+      version,
+      body,
+      contentType,
+      cacheControl,
+      signal,
+      contentLength
+    )
+  }
+
+  protected async putObject(
+    bucketName: string,
+    key: string,
+    version: string | undefined,
+    body: Readable,
+    contentType: string,
+    cacheControl: string,
+    signal: AbortSignal | undefined,
+    contentLength: number
+  ): Promise<ObjectMetadata> {
+    const dataStream = tracingFeatures?.upload ? monitorStream(body) : body
+
+    const command = new PutObjectCommand({
+      Bucket: bucketName,
+      Key: withOptionalVersion(key, version),
+      Body: dataStream,
+      ContentType: contentType,
+      CacheControl: cacheControl,
+      ContentLength: contentLength,
+    })
+
+    try {
+      const data = await this.client.send(command, {
+        abortSignal: signal,
+      })
+
+      return {
+        httpStatusCode: data.$metadata.httpStatusCode || 200,
+        cacheControl,
+        eTag: data.ETag || '',
+        mimetype: contentType,
+        contentLength,
+        // PutObject does not return LastModified; keep the fast path single-request and use the local completion time.
+        lastModified: new Date(),
+        size: contentLength,
+        contentRange: undefined,
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw ERRORS.AbortedTerminate('Upload was aborted', err)
+      }
+      throw StorageBackendError.fromError(err)
+    }
+  }
+
+  protected async bufferedMultipartUpload(
+    bucketName: string,
+    key: string,
+    version: string | undefined,
+    body: Readable,
+    contentType: string,
+    cacheControl: string,
+    signal?: AbortSignal
+  ): Promise<ObjectMetadata> {
     const dataStream = tracingFeatures?.upload ? monitorStream(body) : body
 
     const upload = new Upload({
       client: this.client,
+      queueSize: storageS3UploadQueueSize,
       params: {
         Bucket: bucketName,
         Key: withOptionalVersion(key, version),
@@ -157,24 +251,26 @@ export class S3Backend implements StorageBackendAdapter {
     signal?.addEventListener('abort', () => upload.abort(), { once: true })
 
     let hasUploadedBytes = false
-    upload.on('httpUploadProgress', (progress: Progress) => {
+    const progressHandler = (progress: Progress) => {
       if (!hasUploadedBytes && progress.loaded && progress.loaded > 0) {
         hasUploadedBytes = true
       }
       if (tracingFeatures?.upload) {
         dataStream.emit('s3_progress', JSON.stringify(progress))
       }
-    })
+    }
+    upload.on('httpUploadProgress', progressHandler)
 
     try {
       const data = await upload.done()
 
-      // Only call head for objects that are > 0 bytes
-      // for some reason headObject can take a really long time to resolve on zero byte uploads, this was causing requests to timeout
-      const metadata = hasUploadedBytes
+      upload.off('httpUploadProgress', progressHandler)
+
+      const metadata: ObjectMetadata = hasUploadedBytes
         ? await this.headObject(bucketName, key, version)
         : {
             httpStatusCode: 200,
+            cacheControl,
             eTag: data.ETag || '',
             mimetype: contentType,
             lastModified: new Date(),
@@ -185,7 +281,7 @@ export class S3Backend implements StorageBackendAdapter {
 
       return {
         httpStatusCode: data.$metadata.httpStatusCode || metadata.httpStatusCode,
-        cacheControl: cacheControl,
+        cacheControl,
         eTag: metadata.eTag,
         mimetype: metadata.mimetype,
         contentLength: metadata.contentLength,
@@ -194,6 +290,8 @@ export class S3Backend implements StorageBackendAdapter {
         contentRange: metadata.contentRange,
       }
     } catch (err) {
+      upload.off('httpUploadProgress', progressHandler)
+
       if (err instanceof Error && err.name === 'AbortError') {
         throw ERRORS.AbortedTerminate('Upload was aborted', err)
       }
@@ -293,7 +391,8 @@ export class S3Backend implements StorageBackendAdapter {
         }).map((ele) => {
           if (options?.prefix) {
             return {
-              name: (ele.Key as string).replace(options.prefix, '').replace('/', ''),
+              // remove prefix and leading slash if present
+              name: (ele.Key as string).replace(options.prefix, '').replace(/^\//, ''),
               size: ele.Size as number,
             }
           }
@@ -422,10 +521,12 @@ export class S3Backend implements StorageBackendAdapter {
       Key: withOptionalVersion(key, version),
       CacheControl: cacheControl,
       ContentType: contentType,
-      Metadata: {
-        ...metadata,
-        Version: version || '',
-      },
+      Metadata: metadata
+        ? {
+            ...metadata,
+            Version: version || '',
+          }
+        : undefined,
     })
 
     const resp = await this.client.send(createMultiPart)
@@ -522,7 +623,7 @@ export class S3Backend implements StorageBackendAdapter {
 
     return {
       version,
-      location: location,
+      location,
       bucket,
       ...response,
     }
@@ -576,6 +677,7 @@ export class S3Backend implements StorageBackendAdapter {
     const params: S3ClientConfig = {
       region: options.region,
       runtime: 'node',
+      requestStreamBufferSize: 32 * 1024,
       requestHandler: new NodeHttpHandler({
         httpAgent: options.httpAgent?.httpAgent,
         httpsAgent: options.httpAgent?.httpsAgent,
@@ -588,6 +690,11 @@ export class S3Backend implements StorageBackendAdapter {
     }
     if (options.forcePathStyle) {
       params.forcePathStyle = true
+    }
+
+    if (storageS3DisableChecksum) {
+      params.requestChecksumCalculation = 'WHEN_REQUIRED'
+      params.responseChecksumValidation = 'WHEN_REQUIRED'
     }
     return new S3Client(params)
   }

@@ -1,14 +1,13 @@
-import { BaseEvent } from '../base-event'
-import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
-import { BasePayload } from '@internal/queue'
-import { getConfig } from '../../../config'
-
-import { KnexMetastore } from '@storage/protocols/iceberg/knex'
 import { multitenantKnex } from '@internal/database'
 import { ERRORS } from '@internal/errors'
-import { getCatalogAuthStrategy, RestCatalogClient } from '@storage/protocols/iceberg/catalog'
+import { BasePayload } from '@internal/queue'
 import { KnexShardStoreFactory, ShardCatalog } from '@internal/sharding'
+import { getCatalogAuthStrategy, RestCatalogClient } from '@storage/protocols/iceberg/catalog'
 import { IcebergError } from '@storage/protocols/iceberg/catalog/errors'
+import { KnexMetastore } from '@storage/protocols/iceberg/knex'
+import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
+import { getConfig } from '../../../config'
+import { BaseEvent } from '../base-event'
 
 const { icebergCatalogUrl, icebergCatalogAuthType, isMultitenant } = getConfig()
 

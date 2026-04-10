@@ -7,7 +7,7 @@ export default fastifyPlugin(
     const apiKeys = new Set(adminApiKeys.split(','))
     fastify.addHook('onRequest', async (request, reply) => {
       if (typeof request.headers.apikey !== 'string' || !apiKeys.has(request.headers.apikey)) {
-        reply.status(401).send()
+        return reply.status(401).send()
       }
     })
   },

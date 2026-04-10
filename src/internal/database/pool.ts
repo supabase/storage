@@ -1,14 +1,20 @@
-import { getConfig } from '../../config'
-import TTLCache from '@isaacs/ttlcache'
-import { knex, Knex } from 'knex'
-import { logger, logSchema } from '@internal/monitoring'
-import { getSslSettings } from '@internal/database/ssl'
+import { createTtlCache, TENANT_POOL_CACHE_NAME } from '@internal/cache'
 import { wait } from '@internal/concurrency'
+import { getSslSettings } from '@internal/database/ssl'
+import { logger, logSchema } from '@internal/monitoring'
+import {
+  cacheRequestsTotal,
+  dbActiveConnection,
+  dbActivePool,
+  dbInUseConnection,
+  isMetricEnabled,
+  meter,
+} from '@internal/monitoring/metrics'
 import { JWTPayload } from 'jose'
-import { DbActivePool } from '@internal/monitoring/metrics'
+import { Knex, knex } from 'knex'
+import { getConfig } from '../../config'
 
 const {
-  region,
   isMultitenant,
   databaseSSLRootCert,
   databaseMaxConnections,
@@ -16,6 +22,7 @@ const {
   databaseConnectionTimeout,
   dbSearchPath,
   dbPostgresVersion,
+  databaseApplicationName,
 } = getConfig()
 
 export interface TenantConnectionOptions {
@@ -30,6 +37,7 @@ export interface TenantConnectionOptions {
   reapIntervalMillis?: number
   maxConnections: number
   clusterSize?: number
+  numWorkers?: number
   headers?: Record<string, string | undefined | string[]>
   method?: string
   path?: string
@@ -41,58 +49,144 @@ export interface User {
   payload: { role?: string } & JWTPayload
 }
 
+export interface PoolStats {
+  used: number
+  total: number
+}
+
 export interface PoolStrategy {
   acquire(): Knex
   rebalance(options: { clusterSize: number }): void
   destroy(): Promise<void>
+  getPoolStats(): PoolStats | null
 }
 
 export const searchPath = ['storage', 'public', 'extensions', ...dbSearchPath.split(',')].filter(
   Boolean
 )
 
-const multiTenantLRUConfig = {
+const multiTenantTtlConfig = {
   ttl: 1000 * 10,
   updateAgeOnGet: true,
   checkAgeOnGet: true,
 }
 
-const tenantPools = new TTLCache<string, PoolStrategy>({
-  ...(isMultitenant ? multiTenantLRUConfig : { max: 1, ttl: Infinity }),
+const manuallyDestroyedPools = new WeakSet<PoolStrategy>()
+
+function logPoolDestroyError(error: unknown): void {
+  logSchema.error(logger, 'pool was not able to be destroyed', {
+    type: 'db',
+    error,
+  })
+}
+
+async function destroyPool(pool: PoolStrategy): Promise<void> {
+  await pool.destroy()
+}
+
+async function destroyPoolSafely(pool: PoolStrategy): Promise<void> {
+  try {
+    await destroyPool(pool)
+  } catch (e) {
+    logPoolDestroyError(e)
+  }
+}
+
+const tenantPools = createTtlCache<string, PoolStrategy>({
+  ...(isMultitenant ? multiTenantTtlConfig : { max: 1, ttl: Infinity }),
   dispose: async (pool) => {
-    if (!pool) return
-    try {
-      await pool.destroy()
-    } catch (e) {
-      logSchema.error(logger, 'pool was not able to be destroyed', {
-        type: 'db',
-        error: e,
-      })
+    if (!pool || manuallyDestroyedPools.has(pool)) {
+      return
     }
+
+    await destroyPoolSafely(pool)
   },
 })
+
+// ============================================================================
+// Pool stats collection — chunked to avoid blocking the event loop
+// ============================================================================
+interface PoolStatsSnapshot {
+  poolCount: number
+  totalConnections: number
+  totalInUse: number
+}
+
+const STATS_CHUNK_SIZE = 100
+const STATS_INTERVAL_MS = 5_000
+
+let cachedPoolStats: PoolStatsSnapshot = {
+  poolCount: 0,
+  totalConnections: 0,
+  totalInUse: 0,
+}
+let collectInProgress = false
+
+async function collectPoolStats() {
+  if (collectInProgress) return
+  collectInProgress = true
+
+  try {
+    let poolCount = 0
+    let totalConnections = 0
+    let totalInUse = 0
+    let chunkCount = 0
+
+    for (const [, pool] of tenantPools.entries()) {
+      poolCount++
+      const stats = pool.getPoolStats()
+      if (stats) {
+        totalConnections += stats.total
+        totalInUse += stats.used
+      }
+      // Yield to the event loop between chunks
+      if (++chunkCount % STATS_CHUNK_SIZE === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    }
+
+    cachedPoolStats = {
+      poolCount,
+      totalConnections,
+      totalInUse,
+    }
+  } finally {
+    collectInProgress = false
+  }
+}
 
 /**
  * PoolManager is a class that manages a pool of Knex connections.
  * It creates a new pool for each tenant and reuses existing pools.
  */
 export class PoolManager {
-  monitor(signal: AbortSignal) {
-    const monitorInterval = setInterval(() => {
-      DbActivePool.set(
-        {
-          region,
-        },
-        tenantPools.size
-      )
-    }, 2000)
+  protected numWorkers: number = 1
 
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearInterval(monitorInterval)
+  setNumWorkers(numWorkers: number) {
+    this.numWorkers = Math.max(numWorkers ?? 1, 1)
+  }
+
+  monitor() {
+    // Periodically collect stats in a non-blocking way
+    const interval = setInterval(() => {
+      void collectPoolStats()
+    }, STATS_INTERVAL_MS)
+    interval.unref()
+
+    // Observable callback reads the cached snapshot — O(1)
+    meter.addBatchObservableCallback(
+      (observer) => {
+        if (isMetricEnabled('db_active_local_pools')) {
+          observer.observe(dbActivePool, cachedPoolStats.poolCount)
+        }
+        if (isMetricEnabled('db_connections')) {
+          observer.observe(dbActiveConnection, cachedPoolStats.totalConnections)
+        }
+        if (isMetricEnabled('db_connections_in_use')) {
+          observer.observe(dbInUseConnection, cachedPoolStats.totalInUse)
+        }
       },
-      { once: true }
+      [dbActivePool, dbActiveConnection, dbInUseConnection]
     )
   }
 
@@ -114,24 +208,41 @@ export class PoolManager {
   }
 
   getPool(settings: TenantConnectionOptions) {
-    const existingPool = tenantPools.get(settings.tenantId)
+    const isCacheable = (settings.isSingleUse && !settings.isExternalPool) || !settings.isSingleUse
+    const { value: existingPool, outcome } = tenantPools.getWithOutcome(settings.tenantId)
+
     if (existingPool) {
+      cacheRequestsTotal.add(1, {
+        cache: TENANT_POOL_CACHE_NAME,
+        outcome,
+      })
+
       return existingPool
     }
 
-    const newPool = this.newPool(settings)
-
-    if ((settings.isSingleUse && !settings.isExternalPool) || !settings.isSingleUse) {
-      tenantPools.set(settings.tenantId, newPool)
+    if (!isCacheable) {
+      return this.newPool({ ...settings, numWorkers: this.numWorkers })
     }
+
+    cacheRequestsTotal.add(1, {
+      cache: TENANT_POOL_CACHE_NAME,
+      outcome,
+    })
+
+    const newPool = this.newPool({ ...settings, numWorkers: this.numWorkers })
+
+    tenantPools.set(settings.tenantId, newPool)
     return newPool
   }
 
   destroy(tenantId: string) {
     const pool = tenantPools.get(tenantId)
     if (pool) {
+      manuallyDestroyedPools.add(pool)
       tenantPools.delete(tenantId)
-      return pool.destroy()
+      return destroyPool(pool).finally(() => {
+        manuallyDestroyedPools.delete(pool)
+      })
     }
     return Promise.resolve()
   }
@@ -140,8 +251,13 @@ export class PoolManager {
     const promises: Promise<void>[] = []
 
     for (const [connectionString, pool] of tenantPools) {
-      promises.push(pool.destroy())
+      manuallyDestroyedPools.add(pool)
       tenantPools.delete(connectionString)
+      promises.push(
+        destroyPool(pool).finally(() => {
+          manuallyDestroyedPools.delete(pool)
+        })
+      )
     }
     return Promise.allSettled(promises)
   }
@@ -180,14 +296,25 @@ class TenantPool implements PoolStrategy {
     return this.drainPool(originalPool)
   }
 
+  getPoolStats(): PoolStats | null {
+    const tarnPool = this.pool?.client?.pool
+    if (!tarnPool) return null
+    return {
+      used: tarnPool.numUsed(),
+      total: tarnPool.numUsed() + tarnPool.numFree(),
+    }
+  }
+
   getSettings() {
     const isSingleUseExternalPool = this.options.isSingleUse && this.options.isExternalPool
 
+    const numWorkers = Math.max(this.options.numWorkers ?? 1, 1)
     const clusterSize = this.options.clusterSize || 0
     let maxConnection = this.options.maxConnections || databaseMaxConnections
 
-    if (clusterSize > 0) {
-      maxConnection = Math.ceil(maxConnection / clusterSize)
+    const divisor = Math.max(clusterSize, 1) * numWorkers
+    if (divisor > 1) {
+      maxConnection = Math.ceil(maxConnection / divisor) || 1
     }
 
     if (isSingleUseExternalPool) {
@@ -221,17 +348,7 @@ class TenantPool implements PoolStrategy {
   }
 
   protected async drainPool(pool: Knex) {
-    if (!pool?.client?.pool) {
-      if (pool) return pool.destroy()
-      return
-    }
-
-    while (true) {
-      if (!pool?.client?.pool) {
-        if (pool) return pool.destroy()
-        return
-      }
-
+    for (; pool?.client?.pool; ) {
       let waiting = 0
       waiting += pool.client.pool.numPendingAcquires()
       waiting += pool.client.pool.numPendingValidations()
@@ -271,6 +388,7 @@ class TenantPool implements PoolStrategy {
         connectionString: settings.dbUrl,
         connectionTimeoutMillis: databaseConnectionTimeout,
         ssl: sslSettings ? { ...sslSettings } : undefined,
+        application_name: databaseApplicationName,
       },
       acquireConnectionTimeout: databaseConnectionTimeout,
     })

@@ -1,12 +1,12 @@
-import { BaseEvent } from '../base-event'
+import { getTenantConfig, multitenantKnex } from '@internal/database'
 import { BasePayload } from '@internal/queue'
+import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 import { BucketType } from '@storage/limits'
-import { Job } from 'pg-boss'
 import { getCatalogAuthStrategy, TenantAwareRestCatalog } from '@storage/protocols/iceberg/catalog'
 import { KnexMetastore } from '@storage/protocols/iceberg/knex'
-import { getTenantConfig, multitenantKnex } from '@internal/database'
+import { Job } from 'pg-boss'
 import { getConfig } from '../../../config'
-import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
+import { BaseEvent } from '../base-event'
 
 interface ObjectCreatedEvent extends BasePayload {
   bucketId: string

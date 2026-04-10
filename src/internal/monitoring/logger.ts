@@ -1,9 +1,9 @@
-import pino, { BaseLogger, Logger } from 'pino'
-import { getConfig } from '../../config'
-import { FastifyReply, FastifyRequest } from 'fastify'
+import { resolve } from 'node:path'
 import { URL } from 'node:url'
 import { normalizeRawError } from '@internal/errors'
-import { resolve } from 'node:path'
+import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from 'fastify'
+import pino, { Logger } from 'pino'
+import { getConfig } from '../../config'
 
 const {
   logLevel,
@@ -24,6 +24,17 @@ export const baseLogger = pino({
       return {
         statusCode: reply.statusCode,
         headers: whitelistHeaders(reply.getHeaders()),
+      }
+    },
+    reqMetadata(metadata?: Record<string, unknown>) {
+      if (!metadata) {
+        return undefined
+      }
+
+      try {
+        return JSON.stringify(metadata)
+      } catch {
+        // no-op
       }
     },
     req(request) {
@@ -58,7 +69,9 @@ export interface RequestLog {
   type: 'request'
   req: FastifyRequest
   res?: FastifyReply
+  reqMetadata?: Record<string, unknown>
   responseTime: number
+  executionTime?: number
   error?: Error | unknown
   role?: string
   owner?: string
@@ -93,10 +106,10 @@ interface InfoLog {
 }
 
 export const logSchema = {
-  info: (logger: BaseLogger, message: string, log: InfoLog) => logger.info(log, message),
-  warning: (logger: BaseLogger, message: string, log: InfoLog | ErrorLog) =>
+  info: (logger: FastifyBaseLogger, message: string, log: InfoLog) => logger.info(log, message),
+  warning: (logger: FastifyBaseLogger, message: string, log: InfoLog | ErrorLog) =>
     logger.warn(log, message),
-  request: (logger: BaseLogger, message: string, log: RequestLog) => {
+  request: (logger: FastifyBaseLogger, message: string, log: RequestLog) => {
     if (!log.res) {
       logger.warn(log, message)
       return
@@ -108,8 +121,8 @@ export const logSchema = {
     const logLevel = is4xxResponse ? 'warn' : is5xxResponse ? 'error' : 'info'
     logger[logLevel](log, message)
   },
-  error: (logger: BaseLogger, message: string, log: ErrorLog) => logger.error(log, message),
-  event: (logger: BaseLogger, message: string, log: EventLog) => logger.info(log, message),
+  error: (logger: FastifyBaseLogger, message: string, log: ErrorLog) => logger.error(log, message),
+  event: (logger: FastifyBaseLogger, message: string, log: EventLog) => logger.info(log, message),
 }
 
 export function buildTransport(): pino.TransportMultiOptions {
@@ -152,70 +165,74 @@ export function buildTransport(): pino.TransportMultiOptions {
   }
 }
 
+const allowlistedHeaders = new Set([
+  'accept',
+  'cf-connecting-ip',
+  'cf-ipcountry',
+  'host',
+  'user-agent',
+  'x-forwarded-proto',
+  'x-forwarded-host',
+  'x-forwarded-port',
+  'x-forwarded-prefix',
+  'referer',
+  'content-length',
+  'x-real-ip',
+  'x-client-info',
+  'x-forwarded-user-agent',
+  'x-client-trace-id',
+  'x-upsert',
+  'content-type',
+  'if-none-match',
+  'if-modified-since',
+  'upload-metadata',
+  'upload-length',
+  'upload-offset',
+  'tus-resumable',
+  'range',
+  'cf-cache-status',
+  'cf-ray',
+  'location',
+  'cache-control',
+  'content-location',
+  'content-range',
+  'date',
+  'transfer-encoding',
+  'x-kong-proxy-latency',
+  'x-kong-upstream-latency',
+  'sb-gateway-mode',
+  'sb-gateway-version',
+  'x-transformations',
+  'expires',
+  'etag',
+  'content-disposition',
+  'last-modified',
+])
+
 const whitelistHeaders = (headers: Record<string, unknown>) => {
   const responseMetadata: Record<string, unknown> = {}
-  const allowlistedRequestHeaders = [
-    'accept',
-    'cf-connecting-ip',
-    'cf-ipcountry',
-    'host',
-    'user-agent',
-    'x-forwarded-proto',
-    'x-forwarded-host',
-    'x-forwarded-port',
-    'x-forwarded-prefix',
-    'referer',
-    'content-length',
-    'x-real-ip',
-    'x-client-info',
-    'x-forwarded-user-agent',
-    'x-client-trace-id',
-    'x-upsert',
-    'content-type',
-    'if-none-match',
-    'if-modified-since',
-    'upload-metadata',
-    'upload-length',
-    'upload-offset',
-    'tus-resumable',
-    'range',
-  ]
-  const allowlistedResponseHeaders = [
-    'cf-cache-status',
-    'cf-ray',
-    'location',
-    'cache-control',
-    'content-location',
-    'content-range',
-    'content-type',
-    'content-length',
-    'date',
-    'transfer-encoding',
-    'x-kong-proxy-latency',
-    'x-kong-upstream-latency',
-    'sb-gateway-mode',
-    'sb-gateway-version',
-    'x-transformations',
-    'expires',
-    'etag',
-    'content-disposition',
-    'last-modified',
-  ]
-  Object.keys(headers)
-    .filter(
-      (header) =>
-        allowlistedRequestHeaders.includes(header) || allowlistedResponseHeaders.includes(header)
-    )
-    .forEach((header) => {
-      responseMetadata[header.replace(/-/g, '_')] = `${headers[header]}`
-    })
+
+  for (const header in headers) {
+    if (allowlistedHeaders.has(header)) {
+      responseMetadata[header.replaceAll('-', '_')] = `${headers[header]}`
+    }
+  }
 
   return responseMetadata
 }
 
 export function redactQueryParamFromRequest(req: FastifyRequest, params: string[]) {
-  const lUrl = new URL(req.url, `${req.protocol}://${req.hostname}`)
+  const url = req.url
+  const qIdx = url.indexOf('?')
 
+  // Fast path: no query string, nothing to redact
+  if (qIdx === -1) return url
+
+  const query = url.slice(qIdx + 1)
+  // Fast path: no sensitive params present
+  if (!params.some((p) => query.includes(p))) return url
+
+  const lUrl = new URL(url, `${req.protocol}://${req.hostname}`)
   params.forEach((param) => {
     if (lUrl.searchParams.has(param)) {
       lUrl.searchParams.set(param, 'redacted')

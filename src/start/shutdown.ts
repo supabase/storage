@@ -1,6 +1,6 @@
-import { logger, logSchema } from '@internal/monitoring'
 import { AsyncAbortController } from '@internal/concurrency'
 import { multitenantKnex, TenantConnection } from '@internal/database'
+import { logger, logSchema } from '@internal/monitoring'
 import http from 'http'
 
 /**
@@ -18,23 +18,36 @@ export function bindShutdownSignals(serverSignal: AsyncAbortController) {
   })
 
   // Shutdown handler
-  process.on('SIGTERM', async () => {
-    logSchema.info(logger, '[Server] Received SIGTERM, shutting down', {
+  let isShuttingDown = false
+  const gracefulShutdown = async (signal: string) => {
+    if (isShuttingDown) {
+      logSchema.info(logger, `[Server] Received ${signal} again, forcing exit`, {
+        type: 'shutdown',
+      })
+      process.exit(1)
+    }
+    isShuttingDown = true
+
+    logSchema.info(logger, `[Server] Received ${signal}, shutting down`, {
       type: 'shutdown',
     })
     try {
       await shutdown(serverSignal)
-      logSchema.info(logger, '[Server] SIGTERM Shutdown successfully', {
+      logSchema.info(logger, `[Server] ${signal} Shutdown successfully`, {
         type: 'shutdown',
       })
+      process.exit(0)
     } catch (e) {
-      logSchema.error(logger, '[Server] SIGTERM Shutdown with error', {
+      logSchema.error(logger, `[Server] ${signal} Shutdown with error`, {
         type: 'shutdown',
         error: e,
       })
       process.exit(1)
     }
-  })
+  }
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'))
 }
 
 /**

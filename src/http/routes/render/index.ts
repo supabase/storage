@@ -1,10 +1,10 @@
 import { FastifyInstance } from 'fastify'
-import renderPublicImage from './renderPublicImage'
-import renderAuthenticatedImage from './renderAuthenticatedImage'
-import renderSignedImage from './renderSignedImage'
-import { jwt, storage, requireTenantFeature, db, dbSuperUser } from '../../plugins'
 import { getConfig } from '../../../config'
+import { db, dbSuperUser, jwt, requireTenantFeature, storage } from '../../plugins'
 import { rateLimiter } from './rate-limiter'
+import renderAuthenticatedImage from './renderAuthenticatedImage'
+import renderPublicImage from './renderPublicImage'
+import renderSignedImage from './renderSignedImage'
 
 const { imageTransformationEnabled, rateLimiterEnabled } = getConfig()
 

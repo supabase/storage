@@ -1,4 +1,5 @@
 -- postgres-migrations disable-transaction
+-- postgres-migrations ignore
 -- Backfill prefixes table records
 -- We run this with 50k batch size to avoid long running transaction
 DO $$

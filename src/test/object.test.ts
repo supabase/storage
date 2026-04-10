@@ -1,16 +1,19 @@
 'use strict'
 
+import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
+import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
+import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { randomUUID } from 'crypto'
+import { FastifyInstance } from 'fastify'
 import FormData from 'form-data'
 import fs from 'fs'
+import { Knex } from 'knex'
 import app from '../app'
 import { getConfig, JwksConfig, JwksConfigKeyOCT, mergeConfig } from '../config'
-import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
-import { Obj, backends } from '../storage'
+import { backends, Obj } from '../storage'
+import { ObjectAdminDelete } from '../storage/events'
 import { useMockObject, useMockQueue } from './common'
-import { getServiceKeyUser, getPostgresConnection } from '@internal/database'
-import { Knex } from 'knex'
-import { ErrorCode, StorageBackendError } from '@internal/errors'
-import { FastifyInstance } from 'fastify'
+import { withDeleteEnabled } from './utils/storage'
 
 const { jwtSecret, serviceKeyAsync, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
@@ -63,7 +66,7 @@ describe('testing GET object', () => {
     expect(response.headers['etag']).toBe('abc')
     expect(response.headers['x-robots-tag']).toBe('none')
     expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
-    expect(S3Backend.prototype.getObject).toBeCalled()
+    expect(S3Backend.prototype.getObject).toHaveBeenCalled()
   })
 
   test('check if RLS policies are respected: authenticated user is able to read authenticated resource without /authenticated prefix', async () => {
@@ -77,7 +80,7 @@ describe('testing GET object', () => {
     expect(response.statusCode).toBe(200)
     expect(response.headers['etag']).toBe('abc')
     expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
-    expect(S3Backend.prototype.getObject).toBeCalled()
+    expect(S3Backend.prototype.getObject).toHaveBeenCalled()
   })
 
   test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
@@ -179,7 +182,7 @@ describe('testing GET object', () => {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
     })
-    expect(S3Backend.prototype.getObject).toBeCalled()
+    expect(S3Backend.prototype.getObject).toHaveBeenCalled()
     expect(response.headers).toEqual(
       expect.objectContaining({
         'content-disposition': `attachment;`,
@@ -195,7 +198,7 @@ describe('testing GET object', () => {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
     })
-    expect(S3Backend.prototype.getObject).toBeCalled()
+    expect(S3Backend.prototype.getObject).toHaveBeenCalled()
     expect(response.headers).toEqual(
       expect.objectContaining({
         'content-disposition': `attachment; filename=testname.png; filename*=UTF-8''testname.png`,
@@ -290,7 +293,7 @@ describe('testing POST object via multipart upload', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.uploadObject).toBeCalled()
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
     expect(await response.json()).toEqual(
       expect.objectContaining({
         Id: expect.any(String),
@@ -552,30 +555,6 @@ describe('testing POST object via multipart upload', () => {
     })
   })
 
-  test('return 422 when uploading an object with a not allowed mime-type', async () => {
-    const form = new FormData()
-    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
-    const headers = Object.assign({}, form.getHeaders(), {
-      authorization: `Bearer ${await serviceKeyAsync}`,
-      'x-upsert': 'true',
-      'content-type': 'image/png',
-    })
-
-    const response = await appInstance.inject({
-      method: 'POST',
-      url: '/object/public-limit-mime-types/sadcat-upload23.png',
-      headers,
-      payload: form,
-    })
-    expect(response.statusCode).toBe(400)
-    expect(await response.json()).toEqual({
-      error: 'invalid_mime_type',
-      message: `mime type image/png is not supported`,
-      statusCode: '415',
-    })
-    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
-  })
-
   test('can create an empty folder when mime-type is set', async () => {
     const form = new FormData()
     const headers = Object.assign({}, form.getHeaders(), {
@@ -613,7 +592,55 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  test('return 422 when uploading an object with a malformed mime-type', async () => {
+  test('return 400 when uploading an object with a not allowed mime-type (binary path)', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${await serviceKeyAsync}`,
+      'x-upsert': 'true',
+      'content-type': 'image/png',
+    })
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/public-limit-mime-types/sadcat-upload23.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(await response.json()).toEqual({
+      error: 'invalid_mime_type',
+      message: `mime type image/png is not supported`,
+      statusCode: '415',
+    })
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 400 when uploading a multipart form-data object with a not allowed mime-type', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    form.append('contentType', 'image/png')
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${await serviceKeyAsync}`,
+      'x-upsert': 'true',
+    })
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/public-limit-mime-types/sadcat-upload23.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(await response.json()).toEqual({
+      error: 'invalid_mime_type',
+      message: `mime type image/png is not supported`,
+      statusCode: '415',
+    })
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 400 when uploading an object with a malformed mime-type', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
@@ -631,7 +658,31 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
     expect(await response.json()).toEqual({
       error: 'invalid_mime_type',
-      message: `mime type thisisnotarealmimetype is not supported`,
+      message: 'Invalid Content-Type header',
+      statusCode: '415',
+    })
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 400 when uploading an object with a content-type header containing tabs', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${await serviceKeyAsync}`,
+      'x-upsert': 'true',
+      'content-type': 'image/\tjpg',
+    })
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/public-limit-mime-types/sadcat-upload23.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(await response.json()).toEqual({
+      error: 'invalid_mime_type',
+      message: 'Invalid Content-Type header',
       statusCode: '415',
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
@@ -774,7 +825,7 @@ describe('testing POST object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.uploadObject).toBeCalled()
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
     expect(await response.json()).toEqual(
       expect.objectContaining({
         Id: expect.any(String),
@@ -919,6 +970,59 @@ describe('testing POST object via binary upload', () => {
     )
   })
 
+  test('return 400 when a binary upload spoofs x-amz-decoded-content-length', async () => {
+    mergeConfig({
+      uploadFileSizeLimit: 1,
+    })
+
+    const bucketId = `spoof-decoded-${randomUUID()}`
+    const superUser = await getServiceKeyUser(tenantId)
+    const db = await getPostgresConnection({
+      superUser,
+      user: superUser,
+      tenantId,
+      host: 'localhost',
+    })
+    const setupTx = await db.transaction()
+    await setupTx.table('buckets').insert({
+      id: bucketId,
+      name: bucketId,
+      public: true,
+      file_size_limit: null,
+      allowed_mime_types: null,
+      type: 'STANDARD',
+    })
+    await setupTx.commit()
+    await db.dispose()
+
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+
+    const headers = {
+      authorization: `Bearer ${await serviceKeyAsync}`,
+      'Content-Length': size,
+      'Content-Type': 'image/jpeg',
+      'x-amz-decoded-content-length': '1',
+    }
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/${bucketId}/public/sadcat-spoofed-decoded-length.jpg`,
+      headers,
+      payload: fs.createReadStream(path),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.body).toBe(
+      JSON.stringify({
+        statusCode: '413',
+        error: 'Payload too large',
+        message: 'The object exceeded the maximum allowed size',
+      })
+    )
+    // Early size check in fileUploadFromRequest rejects before reaching the backend
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
   test('return 400 when uploading to object with no file name', async () => {
     const path = './src/test/assets/sadcat.jpg'
     const { size } = fs.statSync(path)
@@ -1013,7 +1117,7 @@ describe('testing PUT object', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.uploadObject).toBeCalled()
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
     expect(await response.json()).toEqual(
       expect.objectContaining({
         Id: expect.any(String),
@@ -1113,7 +1217,7 @@ describe('testing PUT object via binary upload', () => {
       payload: fs.createReadStream(path),
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.uploadObject).toBeCalled()
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
     expect(await response.json()).toEqual(
       expect.objectContaining({
         Id: expect.any(String),
@@ -1220,7 +1324,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     const jsonResponse = await response.json()
     expect(jsonResponse.Key).toBe(`bucket2/authenticated/casestudy11.png`)
   })
@@ -1240,7 +1344,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     const jsonResponse = await response.json()
 
     expect(jsonResponse.Key).toBe(`bucket3/authenticated/casestudy11.png`)
@@ -1262,7 +1366,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     const jsonResponse = response.json()
     expect(jsonResponse.Key).toBe(`bucket2/authenticated/${copiedKey}`)
 
@@ -1306,7 +1410,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     const parsedBody = JSON.parse(response.body)
 
     expect(parsedBody.Key).toBe(`bucket2/authenticated/${copiedKey}`)
@@ -1355,7 +1459,7 @@ describe('testing copy object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.copyObject).toBeCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     const jsonResponse = response.json()
     expect(jsonResponse.Key).toBe(`bucket2/authenticated/${copiedKey}`)
 
@@ -1467,7 +1571,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObject).toBeCalled()
+    expect(S3Backend.prototype.deleteObject).toHaveBeenCalled()
   })
 
   test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {
@@ -1532,7 +1636,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObjects).toBeCalled()
+    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
 
     const result = JSON.parse(response.body)
     expect(result).toHaveLength(10001)
@@ -1613,7 +1717,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObjects).toBeCalled()
+    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
     const results = JSON.parse(response.body)
     expect(results).toHaveLength(1)
     expect(results[0].name).toBe('authenticated/delete-multiple7.png')
@@ -1873,13 +1977,15 @@ describe('testing uploading with generated signed upload URL', () => {
     expect(objectResponse?.owner).toBe(owner)
 
     // remove row to not to break other tests
-    await db
-      .from<Obj>('objects')
-      .where({
-        name: OBJECT_NAME,
-        bucket_id: BUCKET_ID,
-      })
-      .delete()
+    await withDeleteEnabled(db, async (db) => {
+      await db
+        .from<Obj>('objects')
+        .where({
+          name: OBJECT_NAME,
+          bucket_id: BUCKET_ID,
+        })
+        .delete()
+    })
   })
 
   test('upload object without a token', async () => {
@@ -2241,6 +2347,52 @@ describe('testing move object', () => {
     expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
   })
 
+  test('cross-bucket move rollback should cleanup destination bucket object', async () => {
+    const runId = randomUUID()
+    const sourceKey = `authenticated/move-orig-rollback-${runId}.png`
+    const destinationKey = `authenticated/move-new-rollback-${runId}.png`
+    const destinationBucket = 'bucket3'
+    const objectAdminDeleteSendSpy = jest.spyOn(ObjectAdminDelete, 'send')
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await seedTx.from<Obj>('objects').insert({
+      bucket_id: 'bucket2',
+      name: sourceKey,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: `rollback-version-${runId}`,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    jest
+      .spyOn(S3Backend.prototype, 'headObject')
+      .mockRejectedValueOnce(new Error('forced move failure'))
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/move`,
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey,
+        destinationBucket,
+        destinationKey,
+      },
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+
+    expect(response.statusCode).toBeGreaterThanOrEqual(400)
+    expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+    expect(objectAdminDeleteSendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: destinationKey,
+        bucketId: destinationBucket,
+      })
+    )
+  })
+
   test('cannot move objects across buckets because RLS checks', async () => {
     const response = await appInstance.inject({
       method: 'POST',
@@ -2388,10 +2540,11 @@ describe('testing list objects', () => {
     })
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body) as { name: string }[]
-    expect(responseJSON).toHaveLength(2)
+    expect(responseJSON).toHaveLength(3)
     const names = responseJSON.map((ele) => ele.name)
     expect(names).toContain('only_uid.jpg')
     expect(names).toContain('subfolder')
+    expect(names).toContain('UPPER-folder')
   })
 
   test('searching a non existent prefix', async () => {
@@ -2497,8 +2650,9 @@ describe('testing list objects', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON).toHaveLength(2)
-    expect(responseJSON[0].name).toBe('sadcat-upload23.png')
-    expect(responseJSON[1].name).toBe('sadcat-upload.png')
+    // Byte order (COLLATE "C"): '.' (46) < '2' (50), so sadcat-upload.png < sadcat-upload23.png
+    expect(responseJSON[0].name).toBe('sadcat-upload.png')
+    expect(responseJSON[1].name).toBe('sadcat-upload23.png')
   })
 
   test('test descending search sorting', async () => {
@@ -2519,8 +2673,135 @@ describe('testing list objects', () => {
     expect(response.statusCode).toBe(200)
     const responseJSON = JSON.parse(response.body)
     expect(responseJSON).toHaveLength(2)
-    expect(responseJSON[0].name).toBe('sadcat-upload.png')
-    expect(responseJSON[1].name).toBe('sadcat-upload23.png')
+    // Byte order (COLLATE "C"): sadcat-upload23.png > sadcat-upload.png
+    expect(responseJSON[0].name).toBe('sadcat-upload23.png')
+    expect(responseJSON[1].name).toBe('sadcat-upload.png')
+  })
+
+  test('list-v1 should treat % as a literal character when using non-name sorting', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectNames = [`percent-${runId}/first.txt`, `percent-${runId}/second.txt`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await seedTx.from<Obj>('objects').insert(
+      objectNames.map((name, idx) => ({
+        bucket_id: bucketName,
+        name,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-${idx}`,
+        metadata: {
+          eTag: `${runId}-${idx}`,
+          size: idx + 1,
+          mimetype: 'text/plain',
+        },
+      }))
+    )
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: '%',
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'created_at',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json()
+      expect(responseJSON).toHaveLength(0)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await db
+          .from<Obj>('objects')
+          .where({ bucket_id: bucketName })
+          .whereIn('name', objectNames)
+          .delete()
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('list-v1 should treat _ as a literal character when using non-name sorting', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const literalMatch = `wild_${runId}/hit.txt`
+    const wildcardOnlyMatch = `wildX${runId}/miss.txt`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await seedTx.from<Obj>('objects').insert([
+      {
+        bucket_id: bucketName,
+        name: literalMatch,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-literal`,
+        metadata: {
+          eTag: `${runId}-literal`,
+          size: 1,
+          mimetype: 'text/plain',
+        },
+      },
+      {
+        bucket_id: bucketName,
+        name: wildcardOnlyMatch,
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        version: `${runId}-wildcard`,
+        metadata: {
+          eTag: `${runId}-wildcard`,
+          size: 2,
+          mimetype: 'text/plain',
+        },
+      },
+    ])
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: `wild_${runId}/`,
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'created_at',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json<{ name: string }[]>()
+      expect(responseJSON.map((obj) => obj.name)).toEqual(['hit.txt'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await db
+          .from<Obj>('objects')
+          .where({ bucket_id: bucketName })
+          .whereIn('name', [literalMatch, wildcardOnlyMatch])
+          .delete()
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
   })
 })
 

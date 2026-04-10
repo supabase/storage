@@ -47,6 +47,7 @@ jest.mock('@storage/database', () => ({
 }))
 
 // Access the mock after it's been created by the Jest runtime
+// biome-ignore lint/style/noCommonJs: build script runs as CommonJS
 const storageDbMock = require('@storage/database').StorageKnexDB
 
 // Use this reference in tests
@@ -57,11 +58,11 @@ mergeConfig({
   requestXForwardedHostRegExp: '^([a-z]{20})\\.supabase\\.(?:co|in|net)$',
 })
 
-import { adminApp } from './common'
+import { FastifyInstance } from 'fastify'
+import app from '../app'
 import * as migrate from '../internal/database/migrations/migrate'
 import { multitenantKnex } from '../internal/database/multitenant-db'
-import app from '../app'
-import { FastifyInstance } from 'fastify'
+import { adminApp } from './common'
 
 let appInstance: FastifyInstance
 

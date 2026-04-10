@@ -1,8 +1,15 @@
 import { Knex } from 'knex'
-import { JWKStoreItem, JWKSManagerStore, PaginatedTenantItem } from './store'
+import { getConfig } from '../../../config'
+import { JWKSManagerStore, JWKStoreItem, PaginatedTenantItem } from './store'
+
+const { multitenantDatabaseQueryTimeout } = getConfig()
 
 export class JWKSManagerStoreKnex implements JWKSManagerStore<Knex.Transaction> {
   constructor(private knex: Knex) {}
+
+  async transaction<T>(callback: (trx: Knex.Transaction) => Promise<T>): Promise<T> {
+    return this.knex.transaction(callback)
+  }
 
   async insert(
     tenant_id: string,
@@ -46,22 +53,36 @@ export class JWKSManagerStoreKnex implements JWKSManagerStore<Knex.Transaction> 
     }
   }
 
-  async toggleActive(tenantId: string, id: string, newState: boolean): Promise<boolean> {
-    const updated = await this.knex
+  async toggleActive(
+    tenantId: string,
+    id: string,
+    newState: boolean,
+    trx?: Knex.Transaction
+  ): Promise<boolean> {
+    const db = trx || this.knex
+    const updated = await db
       .table('tenants_jwks')
       .where('id', id)
       .where('tenant_id', tenantId)
       .where('active', !newState)
       .update({ active: newState })
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
     return updated > 0
   }
 
-  listActive(tenantId: string): Promise<JWKStoreItem[]> {
-    return this.knex
+  listActive(tenantId: string, kind?: string, trx?: Knex.Transaction): Promise<JWKStoreItem[]> {
+    const db = trx || this.knex
+    const query = db
       .table<JWKStoreItem>('tenants_jwks')
       .select('id', 'kind', 'content')
       .where('tenant_id', tenantId)
       .where('active', true)
+
+    if (kind) {
+      query.where('kind', kind)
+    }
+
+    return query.abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
   }
 
   async listTenantsWithoutKindPaginated(
@@ -81,5 +102,6 @@ export class JWKSManagerStoreKnex implements JWKSManagerStore<Knex.Transaction> 
       })
       .orderBy('cursor_id', 'asc')
       .limit(batchSize)
+      .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
   }
 }

@@ -1,10 +1,10 @@
-import { getConfig } from '../../../config'
-import { FromSchema } from 'json-schema-to-ts'
-import { FastifyInstance } from 'fastify'
+import { getTenantConfig } from '@internal/database'
 import { ImageRenderer } from '@storage/renderer'
+import { FastifyInstance } from 'fastify'
+import { FromSchema } from 'json-schema-to-ts'
+import { getConfig } from '../../../config'
 import { transformationOptionsSchema } from '../../schemas/transformations'
 import { ROUTE_OPERATIONS } from '../operations'
-import { getTenantConfig } from '@internal/database'
 
 const { storageS3Bucket, isMultitenant } = getConfig()
 

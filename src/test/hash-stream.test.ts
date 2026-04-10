@@ -1,11 +1,12 @@
-import { Readable, Writable } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
-import * as fsp from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
+import * as fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
+import { Readable, Writable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { HashSpillWritable } from '@internal/streams/hash-stream'
+import { waitForEventually } from './utils/promise'
 
 function randBuf(size: number): Buffer {
   const b = Buffer.allocUnsafe(size)
@@ -43,6 +44,16 @@ async function findSpillFilePath(root: string): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+async function waitForHashspillDirs(root: string, expected: number): Promise<number> {
+  return waitForEventually(
+    () => countHashspillDirs(root),
+    (count) => count === expected,
+    `${expected} hashspill dirs under ${root}`,
+    5000,
+    20
+  )
 }
 
 class SlowWritable extends Writable {
@@ -133,11 +144,8 @@ describe('HashSpillWritable', () => {
       })
     )
 
-    // Allow event loop to process cleanup
-    await new Promise((r) => setTimeout(r, 10))
-
     // The hashspill dir should be gone
-    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
   })
 
   test('spill: multiple readers, autoCleanup waits for the last reader', async () => {
@@ -164,10 +172,7 @@ describe('HashSpillWritable', () => {
     const p2 = pipeline(r2, slowConsumer)
     await Promise.all([p1, p2])
 
-    // wait a tick for cleanup to run
-    await new Promise((r) => setTimeout(r, 10))
-
-    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
   })
 
   test('manual cleanup: delete after readers close (call cleanup after reading)', async () => {
@@ -204,7 +209,6 @@ describe('HashSpillWritable', () => {
 
     // Write into sink, then read out to a slow consumer to ensure stream semantics hold
     await pipeline(Readable.from(pieces), sink)
-    const outPieces: Buffer[] = []
     await pipeline(
       sink.toReadable(),
       new SlowWritable(2).on('pipe', function () {})
@@ -237,9 +241,7 @@ describe('HashSpillWritable', () => {
 
     await Promise.all(jobs)
 
-    // Allow cleanup to finish
-    await new Promise((r) => setTimeout(r, 10))
-    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
   })
 
   test('size() tracks total bytes written', async () => {
@@ -324,9 +326,7 @@ describe('HashSpillWritable', () => {
       spy.mockRestore()
     }
 
-    // Ensure no lingering temp dirs/files (best-effort)
-    await new Promise((r) => setTimeout(r, 10))
-    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
   })
 
   test('spill: spilled file exists before read and is deleted after autoCleanup', async () => {
@@ -351,16 +351,21 @@ describe('HashSpillWritable', () => {
       })
     )
 
-    // Give the event loop a tick for cleanup
-    await new Promise((r) => setTimeout(r, 15))
+    const cleanupState = await waitForEventually(
+      async () => ({
+        postPath: await findSpillFilePath(tmpRoot),
+        prePathExists: fs.existsSync(prePath!),
+        dirCount: await countHashspillDirs(tmpRoot),
+      }),
+      (state) => state.postPath === null && !state.prePathExists && state.dirCount === 0,
+      `spill artifacts for ${prePath} to be removed`,
+      5000,
+      20
+    )
 
-    // The specific spilled file AND directory should be gone
-    const postPath = await findSpillFilePath(tmpRoot)
-    expect(postPath).toBeNull()
-    expect(fs.existsSync(prePath!)).toBe(false)
-
-    // And no hashspill dirs remain
-    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+    expect(cleanupState.postPath).toBeNull()
+    expect(cleanupState.prePathExists).toBe(false)
+    expect(cleanupState.dirCount).toBe(0)
   })
   test('concurrent spill operations: no temp file name collisions with rapid creation', async () => {
     const limit = 4 * 1024
@@ -402,9 +407,8 @@ describe('HashSpillWritable', () => {
     )
 
     await Promise.all(readPromises)
-    await new Promise((r) => setTimeout(r, 20)) // Allow cleanup
 
-    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
   })
 
   test('concurrent spill with identical timestamps: UUID ensures uniqueness', async () => {
@@ -412,7 +416,6 @@ describe('HashSpillWritable', () => {
     const N = 10
 
     // Mock Date.now to return same timestamp for all instances
-    const originalDateNow = Date.now
     const fixedTimestamp = 1234567890123
     jest.spyOn(Date, 'now').mockReturnValue(fixedTimestamp)
 
@@ -434,9 +437,7 @@ describe('HashSpillWritable', () => {
       const digests = await Promise.all(jobs)
       expect(digests).toHaveLength(N)
 
-      // All temp dirs should be cleaned up
-      await new Promise((r) => setTimeout(r, 10))
-      expect(await countHashspillDirs(tmpRoot)).toBe(0)
+      await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
     } finally {
       jest.restoreAllMocks()
     }
@@ -467,14 +468,11 @@ describe('HashSpillWritable', () => {
 
     await Promise.all(readPromises)
 
-    // Even though some had autoCleanup=true, cleanup should be deferred
-    // because other readers existed. Only manual cleanup should work now.
-    expect(await countHashspillDirs(tmpRoot)).toBe(1)
+    // Cleanup should happen once the final autoCleanup reader finishes,
+    // even if some concurrent readers did not request autoCleanup.
+    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
 
-    await new Promise((r) => setTimeout(r, 200))
-    // Manual cleanup should now succeed
-    await sink.cleanup()
-    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+    await expect(sink.cleanup()).resolves.toBeUndefined()
   })
 
   test('rapid spill/cleanup cycles: no resource leaks or race conditions', async () => {
@@ -496,14 +494,9 @@ describe('HashSpillWritable', () => {
           },
         })
       )
-
-      // Brief pause to allow cleanup
-      await new Promise((r) => setTimeout(r, 2))
     }
 
-    // All temp artifacts should be cleaned up
-    await new Promise((r) => setTimeout(r, 20))
-    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
   })
 
   test('spill during concurrent writes to different tmp roots: isolation verified', async () => {
@@ -591,8 +584,6 @@ describe('HashSpillWritable', () => {
     expect(results1).toHaveLength(batchSize)
     expect(results2).toHaveLength(batchSize)
 
-    // Allow all cleanup to complete
-    await new Promise((r) => setTimeout(r, 50))
-    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
   })
 })

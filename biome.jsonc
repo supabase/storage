@@ -1,0 +1,67 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.4/schema.json",
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "**/*.ts",
+      "**/*.js",
+      "**/*.cjs",
+      "**/*.mjs",
+      "**/*.json",
+      "**/*.jsonc",
+      "!!package-lock.json",
+      "!!build/**",
+      "!!coverage/**",
+      "!!dist/**",
+      "!!static/**",
+      "!!data/**",
+      "!!node_modules/**",
+      "!!.claude/**"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": false,
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error"
+      },
+      "style": {
+        "noCommonJs": "error",
+        "useConsistentObjectDefinitions": "error",
+        "useThrowOnlyError": "error"
+      },
+      "suspicious": {
+        "noAssignInExpressions": "error",
+        "noAsyncPromiseExecutor": "error",
+        "noDoubleEquals": "error",
+        "noExplicitAny": "warn",
+        "noFocusedTests": "error",
+        "noImplicitAnyLet": "error",
+        "noShadowRestrictedNames": "error",
+        "noTsIgnore": "error"
+      },
+      "nursery": {
+        "noFloatingPromises": "error",
+        "noUnnecessaryConditions": "error"
+      }
+    }
+  },
+  "assist": {
+    "enabled": true
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "asNeeded",
+      "trailingCommas": "es5"
+    }
+  }
+}

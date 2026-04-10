@@ -1,11 +1,11 @@
+import { ERRORS } from '@internal/errors'
+import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { IncomingMessage, Server, ServerResponse } from 'http'
 import { getConfig } from '../../../config'
+import { transformationOptionsSchema } from '../../schemas/transformations'
 import { AuthenticatedRangeRequest } from '../../types'
-import { Obj } from '@storage/schemas'
 import { ROUTE_OPERATIONS } from '../operations'
-import { ERRORS } from '@internal/errors'
 
 const { storageS3Bucket } = getConfig()
 
@@ -18,19 +18,21 @@ const getObjectParamsSchema = {
   required: ['bucketName', '*'],
 } as const
 
+const getObjectInfoQuerySchema = {
+  type: 'object',
+  properties: transformationOptionsSchema,
+} as const
+
 interface getObjectRequestInterface extends AuthenticatedRangeRequest {
   Params: FromSchema<typeof getObjectParamsSchema>
+  Querystring: FromSchema<typeof getObjectInfoQuerySchema>
 }
 
+type GetObjectInfoRequest = FastifyRequest<getObjectRequestInterface>
+
 async function requestHandler(
-  request: FastifyRequest<getObjectRequestInterface, Server, IncomingMessage>,
-  response: FastifyReply<
-    Server,
-    IncomingMessage,
-    ServerResponse,
-    getObjectRequestInterface,
-    unknown
-  >,
+  request: GetObjectInfoRequest,
+  response: FastifyReply,
   publicRoute = false,
   method: 'head' | 'info' = 'head'
 ) {
@@ -92,6 +94,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
     {
       schema: {
         params: getObjectParamsSchema,
+        querystring: getObjectInfoQuerySchema,
         summary: 'Get object info',
         description: 'returns object info',
         tags: ['object'],
@@ -112,6 +115,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
       exposeHeadRoute: false,
       schema: {
         params: getObjectParamsSchema,
+        querystring: getObjectInfoQuerySchema,
         summary: 'Get object info',
         description: 'returns object info',
         tags: ['object'],
@@ -134,13 +138,14 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
     {
       schema: {
         params: getObjectParamsSchema,
+        querystring: getObjectInfoQuerySchema,
         headers: { $ref: 'authSchema#' },
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },
       config: {
-        operation: { type: 'object.head_authenticated_info' },
+        operation: { type: ROUTE_OPERATIONS.HEAD_AUTH_OBJECT_INFO },
       },
     },
     async (request, response) => {
@@ -153,13 +158,14 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
     {
       schema: {
         params: getObjectParamsSchema,
+        querystring: getObjectInfoQuerySchema,
         headers: { $ref: 'authSchema#' },
         summary,
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },
       config: {
-        operation: { type: 'object.get_authenticated_info' },
+        operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT_INFO },
       },
     },
     async (request, response) => {
@@ -172,13 +178,14 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
     {
       schema: {
         params: getObjectParamsSchema,
+        querystring: getObjectInfoQuerySchema,
         summary,
         description: 'Object Info',
         tags: ['object'],
         response: { '4xx': { $ref: 'errorSchema#' } },
       },
       config: {
-        operation: { type: 'object.get_authenticated_info' },
+        operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT_INFO },
         allowInvalidJwt: true,
       },
     },
@@ -192,13 +199,14 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
     {
       schema: {
         params: getObjectParamsSchema,
+        querystring: getObjectInfoQuerySchema,
         summary,
         description: 'Head object info',
         tags: ['object'],
         response: { '4xx': { $ref: 'errorSchema#' } },
       },
       config: {
-        operation: { type: 'object.head_authenticated_info' },
+        operation: { type: ROUTE_OPERATIONS.HEAD_AUTH_OBJECT_INFO },
         allowInvalidJwt: true,
       },
     },

@@ -1,3 +1,4 @@
+-- postgres-migrations ignore
 CREATE OR REPLACE FUNCTION "storage"."objects_update_level_trigger"()
     RETURNS trigger
 AS $func$

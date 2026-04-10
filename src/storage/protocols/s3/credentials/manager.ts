@@ -1,22 +1,36 @@
 import crypto from 'node:crypto'
-import { LRUCache } from 'lru-cache'
-import objectSizeOf from 'object-sizeof'
-import { S3Credentials, S3CredentialsManagerStore, S3CredentialsRaw } from './store'
+import { decrypt, encrypt } from '@internal/auth'
+import {
+  createLruCache,
+  DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
+  TENANT_S3_CREDENTIALS_CACHE_NAME,
+} from '@internal/cache'
 import { createMutexByKey } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
-import { getConfig } from '../../../../config'
-import { decrypt, encrypt } from '@internal/auth'
 import { PubSubAdapter } from '@internal/pubsub'
+import objectSizeOf from 'object-sizeof'
+import { getConfig } from '../../../../config'
+import { S3Credentials, S3CredentialsManagerStore, S3CredentialsRaw } from './store'
 
 const TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL = 'tenants_s3_credentials_update'
+// S3 credential entries are heavier and have a lower expected working-set
+// cardinality than JWT payloads, so keep a tighter entry-count guardrail.
+export const TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS = 16384
+export const TENANT_S3_CREDENTIALS_CACHE_MAX_SIZE_BYTES = 1024 * 1024 * 50 // 50 MiB
+export const TENANT_S3_CREDENTIALS_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 
-const tenantS3CredentialsCache = new LRUCache<string, S3Credentials>({
-  maxSize: 1024 * 1024 * 50, // 50MB
-  ttl: 1000 * 60 * 60, // 1 hour
-  sizeCalculation: (value) => objectSizeOf(value),
-  updateAgeOnGet: true,
-  allowStale: false,
-})
+const tenantS3CredentialsCache = createLruCache<string, S3Credentials>(
+  TENANT_S3_CREDENTIALS_CACHE_NAME,
+  {
+    max: TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS,
+    maxSize: TENANT_S3_CREDENTIALS_CACHE_MAX_SIZE_BYTES,
+    ttl: TENANT_S3_CREDENTIALS_CACHE_TTL_MS,
+    sizeCalculation: (value) => objectSizeOf(value),
+    updateAgeOnGet: true,
+    allowStale: false,
+    purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
+  }
+)
 
 const s3CredentialsMutex = createMutexByKey<S3Credentials>()
 
@@ -87,14 +101,16 @@ export class S3CredentialsManager {
     const cacheKey = `${tenantId}:${accessKey}`
     const cachedCredentials = tenantS3CredentialsCache.get(cacheKey)
 
-    if (cachedCredentials) {
+    if (cachedCredentials !== undefined) {
       return cachedCredentials
     }
 
     return s3CredentialsMutex(cacheKey, async () => {
-      const cachedCredentials = tenantS3CredentialsCache.get(cacheKey)
+      const cachedCredentials = tenantS3CredentialsCache.get(cacheKey, {
+        recordMetrics: false,
+      })
 
-      if (cachedCredentials) {
+      if (cachedCredentials !== undefined) {
         return cachedCredentials
       }
 

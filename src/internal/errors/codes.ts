@@ -19,6 +19,10 @@ export enum ErrorCode {
   KeyAlreadyExists = 'KeyAlreadyExists',
   BucketAlreadyExists = 'BucketAlreadyExists',
   DatabaseTimeout = 'DatabaseTimeout',
+  DatabaseConnectionLimit = 'DatabaseConnectionLimit',
+  DatabaseReadOnly = 'DatabaseReadOnly',
+  DatabaseInvalidObjectDefinition = 'DatabaseInvalidObjectDefinition',
+  DatabaseSchemaMismatch = 'DatabaseSchemaMismatch',
   InvalidSignature = 'InvalidSignature',
   ExpiredToken = 'ExpiredToken',
   SignatureDoesNotMatch = 'SignatureDoesNotMatch',
@@ -80,15 +84,15 @@ export const ERRORS = {
     }),
   FeatureNotEnabled: (resource: string, feature: string, e?: Error) =>
     new StorageBackendError({
-      code: ErrorCode.InvalidRequest,
-      resource: resource,
+      code: ErrorCode.FeatureNotEnabled,
+      resource,
       httpStatusCode: 409,
       message: `The feature ${feature} is not enabled for this resource`,
       originalError: e,
     }),
   NotSupported: (feature: string, e?: Error) =>
     new StorageBackendError({
-      code: ErrorCode.InvalidRequest,
+      code: ErrorCode.NotSupported,
       httpStatusCode: 409,
       message: `The feature ${feature} is not enabled for this resource`,
       originalError: e,
@@ -137,7 +141,7 @@ export const ERRORS = {
 
   InvalidParameter: (parameter: string, opts?: { error?: Error; message?: string }) =>
     new StorageBackendError({
-      code: ErrorCode.MissingParameter,
+      code: ErrorCode.InvalidParameter,
       httpStatusCode: 400,
       message: opts?.message || `Invalid Parameter ${parameter}`,
       originalError: opts?.error,
@@ -234,7 +238,7 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.TusError,
       httpStatusCode: statusCode,
-      message: message,
+      message,
     }),
 
   MissingTenantConfig: (tenantId: string) =>
@@ -260,6 +264,14 @@ export const ERRORS = {
       message: `Invalid X-Robots-Tag header: ${message}`,
     }),
 
+  InvalidHeaderChar: (headerName: string, headerValue: string) =>
+    new StorageBackendError({
+      error: 'invalid_header_char',
+      code: ErrorCode.InvalidRequest,
+      httpStatusCode: 400,
+      message: `Invalid character in response header "${headerName}": ${headerValue.substring(0, 50)}`,
+    }),
+
   InvalidRange: () =>
     new StorageBackendError({
       error: 'invalid_range',
@@ -268,12 +280,12 @@ export const ERRORS = {
       message: `invalid range provided`,
     }),
 
-  EntityTooLarge: (e?: Error, entity = 'object') =>
+  EntityTooLarge: (e?: Error, entity = 'object', limit = 'the maximum allowed size') =>
     new StorageBackendError({
       error: 'Payload too large',
       code: ErrorCode.EntityTooLarge,
       httpStatusCode: 413,
-      message: `The ${entity} exceeded the maximum allowed size`,
+      message: `The ${entity} exceeded ${limit}`,
       originalError: e,
     }),
 
@@ -289,7 +301,7 @@ export const ERRORS = {
     new StorageBackendError({
       code: statusCode > 499 ? ErrorCode.InternalError : ErrorCode.InvalidRequest,
       httpStatusCode: statusCode,
-      message: message,
+      message,
       originalError: e,
     }),
 
@@ -364,6 +376,39 @@ export const ERRORS = {
       originalError: e,
     }),
 
+  DatabaseConnectionLimit: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.DatabaseConnectionLimit,
+      httpStatusCode: 503,
+      message:
+        'The database has reached its maximum number of connections. Please try again later.',
+      originalError: e,
+    }),
+
+  DatabaseReadOnly: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.DatabaseReadOnly,
+      httpStatusCode: 503,
+      message: 'The database is currently in read-only mode. Please try again later.',
+      originalError: e,
+    }),
+
+  InvalidObjectDefinition: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.DatabaseInvalidObjectDefinition,
+      httpStatusCode: 503,
+      message: 'The database schema is invalid or incompatible.',
+      originalError: e,
+    }),
+
+  DatabaseSchemaMismatch: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.DatabaseSchemaMismatch,
+      httpStatusCode: 503,
+      message: 'The database schema is out of sync. Please run migrations or contact support.',
+      originalError: e,
+    }),
+
   ResourceLocked: (e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.ResourceLocked,
@@ -384,7 +429,7 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.TransactionError,
       httpStatusCode: 409,
-      message: message,
+      message,
       originalError: err,
     }),
 
@@ -392,7 +437,7 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.DatabaseError,
       httpStatusCode: 500,
-      message: message,
+      message,
       originalError: err,
     }),
 
@@ -423,7 +468,7 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.InvalidChecksum,
       httpStatusCode: 400,
-      message: message,
+      message,
     }),
 
   MissingPart: (partNumber: number, uploadId: string) =>
@@ -437,16 +482,16 @@ export const ERRORS = {
     new StorageBackendError({
       code: ErrorCode.Aborted,
       httpStatusCode: 500,
-      message: message,
+      message,
       originalError,
     }),
   AbortedTerminate: (message: string, originalError?: unknown) =>
     new StorageBackendError({
       code: ErrorCode.AbortedTerminate,
       httpStatusCode: 500,
-      message: message,
+      message,
       originalError,
-    }),
+    }).withConnectionClose(),
   NoSuchCatalog: (name: string) => {
     return new StorageBackendError({
       code: ErrorCode.NoSuchCatalog,
@@ -509,10 +554,20 @@ export function isStorageError(errorType: ErrorCode, error: any): error is Stora
   return error instanceof StorageBackendError && error.code === errorType
 }
 
+function hasStatusCode(error: Error): error is Error & { statusCode: number } {
+  return 'statusCode' in error && typeof (error as any).statusCode === 'number'
+}
+
 export function normalizeRawError(error: any) {
   if (error instanceof Error) {
-    const statusCode =
-      error instanceof StorageBackendError && error.httpStatusCode ? error.httpStatusCode : 0
+    let statusCode = 0
+    if (error instanceof StorageBackendError && error.httpStatusCode) {
+      statusCode = error.httpStatusCode
+    } else if (hasStatusCode(error)) {
+      // Fastify validation errors include statusCode we can use
+      statusCode = error.statusCode
+    }
+
     return {
       raw: JSON.stringify(error),
       name: error.name,
@@ -526,7 +581,7 @@ export function normalizeRawError(error: any) {
     return {
       raw: JSON.stringify(error),
     }
-  } catch (e) {
+  } catch {
     return {
       raw: 'Failed to stringify error',
     }

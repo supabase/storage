@@ -1,11 +1,11 @@
+import { getConfig, StorageBackendType } from '../../config'
 import { StorageBackendAdapter } from './adapter'
 import { FileBackend } from './file'
 import { S3Backend, S3ClientOptions } from './s3/adapter'
-import { getConfig, StorageBackendType } from '../../config'
 
-export * from './s3'
-export * from './file'
 export * from './adapter'
+export * from './file'
+export * from './s3'
 
 const { storageS3Region, storageS3Endpoint, storageS3ForcePathStyle, storageS3ClientTimeout } =
   getConfig()

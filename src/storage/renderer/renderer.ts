@@ -1,9 +1,9 @@
+import { validateXRobotsTag } from '@storage/validators/x-robots-tag'
 import { FastifyReply, FastifyRequest } from 'fastify'
-import { ObjectMetadata } from '../backend'
 import { Readable } from 'stream'
 import { getConfig } from '../../config'
+import { ObjectMetadata } from '../backend'
 import { Obj } from '../schemas'
-import { validateXRobotsTag } from '@storage/validators/x-robots-tag'
 
 export interface RenderOptions {
   bucket: string

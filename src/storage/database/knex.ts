@@ -1,31 +1,44 @@
-import { Bucket, S3MultipartUpload, Obj, S3PartUpload, IcebergCatalog } from '../schemas'
+import { TenantConnection } from '@internal/database'
+import { DBMigration, tenantHasMigrations } from '@internal/database/migrations'
 import {
-  ErrorCode,
   ERRORS,
+  ErrorCode,
   isStorageError,
   RenderableError,
   StorageBackendError,
   StorageErrorOptions,
 } from '@internal/errors'
-import { ObjectMetadata } from '../backend'
+import { hashStringToInt } from '@internal/hashing'
+import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { Knex } from 'knex'
+import { DatabaseError } from 'pg'
+import { getConfig } from '../../config'
+import { ObjectMetadata } from '../backend'
+import { isUuid } from '../limits'
+import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
 import {
   Database,
   DatabaseOptions,
   FindBucketFilters,
   FindObjectFilters,
-  SearchObjectOption,
   ListBucketOptions,
+  SearchObjectOption,
+  TransactionOptions,
 } from './adapter'
-import { DatabaseError } from 'pg'
-import { TenantConnection } from '@internal/database'
-import { DbQueryPerformance } from '@internal/monitoring/metrics'
-import { hashStringToInt } from '@internal/hashing'
-import { DBMigration, tenantHasMigrations } from '@internal/database/migrations'
-import { getConfig } from '../../config'
-import { isUuid } from '../limits'
 
 const { isMultitenant } = getConfig()
+
+export function escapeLike(str: string) {
+  return str.replace(/([%_])/g, '\\$1')
+}
+
+class TestPermissionRollbackError extends Error {
+  constructor() {
+    super('Rollback test permission transaction')
+    this.name = 'TestPermissionRollbackError'
+    Object.setPrototypeOf(this, TestPermissionRollbackError.prototype)
+  }
+}
 
 /**
  * Database
@@ -49,9 +62,11 @@ export class StorageKnexDB implements Database {
     this.latestMigration = options.latestMigration
   }
 
-  //eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async withTransaction<T extends (db: Database) => Promise<any>>(fn: T) {
-    const tnx = await this.connection.transactionProvider(this.options.tnx)()
+  async withTransaction<T extends (db: Database) => Promise<any>>(
+    fn: T,
+    opts?: TransactionOptions
+  ) {
+    const tnx = await this.connection.transactionProvider(this.options.tnx, opts)()
 
     try {
       await this.connection.setScope(tnx)
@@ -92,10 +107,10 @@ export class StorageKnexDB implements Database {
     try {
       await this.withTransaction(async (db) => {
         result = await fn(db)
-        throw true
+        throw new TestPermissionRollbackError()
       })
     } catch (e) {
-      if (e === true) {
+      if (e instanceof TestPermissionRollbackError) {
         return result
       }
       throw e
@@ -103,16 +118,15 @@ export class StorageKnexDB implements Database {
   }
 
   deleteAnalyticsBucket(id: string, opts?: { soft: boolean }): Promise<IcebergCatalog> {
-    return this.runQuery('DeleteAnalyticsBucket', async (knex) => {
+    return this.runQuery('DeleteAnalyticsBucket', async (knex, signal) => {
       if (opts?.soft) {
         const softDeleted = await knex
           .from<IcebergCatalog>('buckets_analytics')
           .where('id', id)
           .whereNull('deleted_at')
-          .update({
-            deleted_at: new Date(),
-          })
+          .update({ deleted_at: new Date() })
           .returning('*')
+          .abortOnSignal(signal)
 
         if (softDeleted.length === 0) {
           throw ERRORS.NoSuchBucket(id)
@@ -126,6 +140,7 @@ export class StorageKnexDB implements Database {
         .where('id', id)
         .delete()
         .returning('*')
+        .abortOnSignal(signal)
 
       if (deleted.length === 0) {
         throw ERRORS.NoSuchBucket(id)
@@ -139,14 +154,14 @@ export class StorageKnexDB implements Database {
     columns: string,
     options: ListBucketOptions | undefined
   ): Promise<IcebergCatalog[]> {
-    return this.runQuery('ListIcebergBuckets', async (knex) => {
+    return this.runQuery('ListIcebergBuckets', async (knex, signal) => {
       const query = knex
         .from<IcebergCatalog>('buckets_analytics')
         .select(columns.split(',').map((c) => c.trim()))
         .whereNull('deleted_at')
 
       if (options?.search !== undefined && options.search.length > 0) {
-        query.where('name', 'like', `%${options.search}%`)
+        query.where('name', 'like', `%${escapeLike(options.search)}%`)
       }
 
       if (options?.sortColumn !== undefined) {
@@ -163,18 +178,19 @@ export class StorageKnexDB implements Database {
         query.offset(options.offset)
       }
 
-      return query
+      return query.abortOnSignal(signal)
     })
   }
 
   findAnalyticsBucketByName(name: string) {
-    return this.runQuery('FindAnalyticsBucketByName', async (knex) => {
+    return this.runQuery('FindAnalyticsBucketByName', async (knex, signal) => {
       const icebergBucket = await knex
         .from<IcebergCatalog>('buckets_analytics')
         .select('*')
         .where('name', name)
         .whereNull('deleted_at')
         .first()
+        .abortOnSignal(signal)
 
       if (!icebergBucket) {
         throw ERRORS.NoSuchBucket(name)
@@ -189,13 +205,14 @@ export class StorageKnexDB implements Database {
       name: data.name,
     }
 
-    return this.runQuery('CreateAnalyticsBucket', async (knex) => {
+    return this.runQuery('CreateAnalyticsBucket', async (knex, signal) => {
       const icebergBucket = await knex
         .from<IcebergCatalog>('buckets_analytics')
         .insert(bucketData)
         .onConflict(knex.raw('(name) WHERE deleted_at IS NULL'))
         .ignore()
         .returning('*')
+        .abortOnSignal(signal)
 
       if (icebergBucket.length === 0) {
         throw ERRORS.ResourceAlreadyExists()
@@ -226,11 +243,11 @@ export class StorageKnexDB implements Database {
     }
 
     try {
-      const bucket = await this.runQuery('CreateBucket', async (knex) => {
-        return knex.from<Bucket>('buckets').insert(bucketData) as Promise<{ rowCount: number }>
+      const rowCount = await this.runQuery('CreateBucket', async (knex, signal) => {
+        return knex.from<Bucket>('buckets').insert(bucketData).abortOnSignal(signal)
       })
 
-      if (bucket.rowCount === 0) {
+      if (!rowCount || rowCount[0] === 0) {
         throw ERRORS.NoSuchBucket(data.id)
       }
 
@@ -244,7 +261,7 @@ export class StorageKnexDB implements Database {
   }
 
   async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
-    const result = await this.runQuery('FindBucketById', async (knex) => {
+    const result = await this.runQuery('FindBucketById', async (knex, signal) => {
       let columnNames = columns.split(',')
 
       if (!(await tenantHasMigrations(this.tenantId, 'iceberg-catalog-flag-on-buckets'))) {
@@ -267,7 +284,7 @@ export class StorageKnexDB implements Database {
         query.forShare()
       }
 
-      return query.first() as Promise<Bucket>
+      return query.abortOnSignal(signal).first() as Promise<Bucket>
     })
 
     if (!result && !filters?.dontErrorOnEmpty) {
@@ -280,25 +297,36 @@ export class StorageKnexDB implements Database {
   async countObjectsInBucket(bucketId: string, limit?: number): Promise<number> {
     // if we have a limit use select to only scan up to that limit
     if (limit !== undefined) {
-      const result = await this.runQuery('CountObjectsInBucketWithLimit', (knex) => {
-        return knex.from('objects').where('bucket_id', bucketId).limit(limit).select(knex.raw('1'))
+      const result = await this.runQuery('CountObjectsInBucketWithLimit', (knex, signal) => {
+        return knex
+          .from('objects')
+          .where('bucket_id', bucketId)
+          .limit(limit)
+          .select(knex.raw('1'))
+          .abortOnSignal(signal)
       })
       return result.length
     }
 
     // do full count if there is no limit
-    const result = await this.runQuery('CountObjectsInBucket', (knex) => {
-      return knex.from('objects').where('bucket_id', bucketId).count().first<{ count: number }>()
+    const result = await this.runQuery('CountObjectsInBucket', (knex, signal) => {
+      return knex
+        .from('objects')
+        .where('bucket_id', bucketId)
+        .count()
+        .abortOnSignal(signal)
+        .first<{ count: number }>()
     })
 
     return result?.count || 0
   }
 
   async deleteBucket(bucketId: string | string[]) {
-    return await this.runQuery('DeleteBucket', (knex) => {
+    return await this.runQuery('DeleteBucket', (knex, signal) => {
       return knex<Bucket>('buckets')
         .whereIn('id', Array.isArray(bucketId) ? bucketId : [bucketId])
         .delete()
+        .abortOnSignal(signal)
     })
   }
 
@@ -309,7 +337,7 @@ export class StorageKnexDB implements Database {
     before?: Date,
     nextToken?: string
   ) {
-    const data = await this.runQuery('ListObjects', (knex) => {
+    const data = await this.runQuery('ListObjects', (knex, signal) => {
       const query = knex
         .from<Obj>('objects')
         .select(columns.split(','))
@@ -326,7 +354,7 @@ export class StorageKnexDB implements Database {
         query.andWhere(knex.raw('name COLLATE "C" > ?', [nextToken]))
       }
 
-      return query as Promise<Obj[]>
+      return query.abortOnSignal(signal) as Promise<Obj[]>
     })
 
     return data
@@ -347,7 +375,7 @@ export class StorageKnexDB implements Database {
       }
     }
   ) {
-    return this.runQuery('ListObjectsV2', async (knex) => {
+    return this.runQuery('ListObjectsV2', async (knex, signal) => {
       if (!options?.delimiter) {
         const query = knex
           .table('objects')
@@ -371,12 +399,11 @@ export class StorageKnexDB implements Database {
           query.orderBy(sortColumn, sortOrder)
         }
         // knex typing is wrong, it doesn't accept a knex.raw on orderBy, even though is totally legit
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
+        // @ts-expect-error
         query.orderBy(knex.raw(`name COLLATE "C"`), sortOrder)
 
         if (options?.prefix) {
-          query.where('name', 'like', `${options.prefix}%`)
+          query.where('name', 'like', `${escapeLike(options.prefix)}%`)
         }
 
         if (options?.startAfter && !options?.nextToken) {
@@ -397,7 +424,7 @@ export class StorageKnexDB implements Database {
           }
         }
 
-        return query
+        return query.abortOnSignal(signal)
       }
 
       let useNewSearchVersion2 = true
@@ -410,7 +437,11 @@ export class StorageKnexDB implements Database {
         let paramPlaceholders = '?,?,?,?,?'
         const sortParams: (string | null)[] = []
         // this migration adds 3 more parameters to search v2 support sorting
-        if (await tenantHasMigrations(this.tenantId, 'add-search-v2-sort-support')) {
+        // 'search-v2-optimised' also implies sort support (it's a newer migration)
+        const hasSortSupport =
+          (await tenantHasMigrations(this.tenantId, 'add-search-v2-sort-support')) ||
+          (await tenantHasMigrations(this.tenantId, 'search-v2-optimised'))
+        if (hasSortSupport) {
           paramPlaceholders += ',?,?,?'
           sortParams.push(
             options?.sortBy?.order || 'asc',
@@ -427,32 +458,28 @@ export class StorageKnexDB implements Database {
           options?.startAfter || '',
           ...sortParams,
         ]
-        const query = await knex.raw(
-          `select * from storage.search_v2(${paramPlaceholders})`,
-          searchParams
-        )
-
-        return query.rows
+        const result = await knex
+          .raw(`select * from storage.search_v2(${paramPlaceholders})`, searchParams)
+          .abortOnSignal(signal)
+        return result.rows
       }
 
-      const query = await knex.raw(
-        'select * from storage.list_objects_with_delimiter(?,?,?,?,?,?)',
-        [
+      const result = await knex
+        .raw('select * from storage.list_objects_with_delimiter(?,?,?,?,?,?)', [
           bucketId,
           options?.prefix,
           options?.delimiter,
           options?.maxKeys,
           options?.startAfter || '',
           options?.nextToken || '',
-        ]
-      )
-
-      return query.rows
+        ])
+        .abortOnSignal(signal)
+      return result.rows
     })
   }
 
   async listBuckets(columns = 'id', options?: ListBucketOptions) {
-    const data = await this.runQuery('ListBuckets', async (knex) => {
+    const data = await this.runQuery('ListBuckets', async (knex, signal) => {
       const columnNames = columns.split(',').map((c) => c.trim())
 
       const selectColumns = columnNames.filter((name) => {
@@ -466,7 +493,7 @@ export class StorageKnexDB implements Database {
       const query = knex.from<Bucket>('buckets').select(selectColumns)
 
       if (options?.search !== undefined && options.search.length > 0) {
-        query.where('name', 'ilike', `%${options.search}%`)
+        query.where('name', 'ilike', `%${escapeLike(options.search)}%`)
       }
 
       if (options?.sortColumn !== undefined) {
@@ -481,7 +508,7 @@ export class StorageKnexDB implements Database {
         query.offset(options.offset)
       }
 
-      return query
+      return query.abortOnSignal(signal)
     })
 
     return data as Bucket[]
@@ -497,7 +524,7 @@ export class StorageKnexDB implements Database {
       maxKeys?: number
     }
   ) {
-    return this.runQuery('ListMultipartsUploads', async (knex) => {
+    return this.runQuery('ListMultipartsUploads', async (knex, signal) => {
       if (!options?.deltimeter) {
         const query = knex
           .table('s3_multipart_uploads')
@@ -506,12 +533,11 @@ export class StorageKnexDB implements Database {
           .limit(options?.maxKeys || 100)
 
         // knex typing is wrong, it doesn't accept a knex.raw on orderBy, even though is totally legit
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
+        // @ts-expect-error
         query.orderBy(knex.raw('key COLLATE "C", created_at'))
 
         if (options?.prefix) {
-          query.where('key', 'ilike', `${options.prefix}%`)
+          query.where('key', 'ilike', `${escapeLike(options.prefix)}%`)
         }
 
         if (options?.nextUploadKeyToken && !options.nextUploadToken) {
@@ -522,22 +548,20 @@ export class StorageKnexDB implements Database {
           query.andWhere(knex.raw('id COLLATE "C" > ?', [options?.nextUploadToken]))
         }
 
-        return query
+        return query.abortOnSignal(signal)
       }
 
-      const query = await knex.raw(
-        'select * from storage.list_multipart_uploads_with_delimiter(?,?,?,?,?,?)',
-        [
+      const result = await knex
+        .raw('select * from storage.list_multipart_uploads_with_delimiter(?,?,?,?,?,?)', [
           bucketId,
-          options?.prefix,
+          options?.prefix ? escapeLike(options.prefix) : options?.prefix,
           options?.deltimeter,
           options?.maxKeys,
           options?.nextUploadKeyToken || '',
           options.nextUploadToken || '',
-        ]
-      )
-
-      return query.rows
+        ])
+        .abortOnSignal(signal)
+      return result.rows
     })
   }
 
@@ -545,12 +569,16 @@ export class StorageKnexDB implements Database {
     bucketId: string,
     fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
   ) {
-    const bucket = await this.runQuery('UpdateBucket', (knex) => {
-      return knex.from('buckets').where('id', bucketId).update({
-        public: fields.public,
-        file_size_limit: fields.file_size_limit,
-        allowed_mime_types: fields.allowed_mime_types,
-      })
+    const bucket = await this.runQuery('UpdateBucket', (knex, signal) => {
+      return knex
+        .from('buckets')
+        .where('id', bucketId)
+        .update({
+          public: fields.public,
+          file_size_limit: fields.file_size_limit,
+          allowed_mime_types: fields.allowed_mime_types,
+        })
+        .abortOnSignal(signal)
     })
 
     if (bucket === 0) {
@@ -572,7 +600,7 @@ export class StorageKnexDB implements Database {
       user_metadata: data.user_metadata,
       version: data.version,
     })
-    const [object] = await this.runQuery('UpsertObject', (knex) => {
+    const [object] = await this.runQuery('UpsertObject', (knex, signal) => {
       return knex
         .from<Obj>('objects')
         .insert(objectData)
@@ -587,6 +615,7 @@ export class StorageKnexDB implements Database {
           })
         )
         .returning('*')
+        .abortOnSignal(signal)
     })
 
     return object
@@ -597,7 +626,7 @@ export class StorageKnexDB implements Database {
     name: string,
     data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>
   ) {
-    const [object] = await this.runQuery('UpdateObject', (knex) => {
+    const [object] = await this.runQuery('UpdateObject', (knex, signal) => {
       return knex
         .from<Obj>('objects')
         .where('bucket_id', bucketId)
@@ -614,6 +643,7 @@ export class StorageKnexDB implements Database {
           }),
           '*'
         )
+        .abortOnSignal(signal)
     })
 
     if (!object) {
@@ -636,8 +666,8 @@ export class StorageKnexDB implements Database {
         version: data.version,
         user_metadata: data.user_metadata,
       })
-      await this.runQuery('CreateObject', (knex) => {
-        return knex.from<Obj>('objects').insert(object)
+      await this.runQuery('CreateObject', (knex, signal) => {
+        return knex.from<Obj>('objects').insert(object).abortOnSignal(signal)
       })
 
       return object
@@ -650,7 +680,7 @@ export class StorageKnexDB implements Database {
   }
 
   async deleteObject(bucketId: string, objectName: string, version?: string) {
-    const [data] = await this.runQuery('Delete Object', (knex) => {
+    const [data] = await this.runQuery('Delete Object', (knex, signal) => {
       return knex
         .from<Obj>('objects')
         .delete()
@@ -660,26 +690,26 @@ export class StorageKnexDB implements Database {
           ...(version ? { version } : {}),
         })
         .returning('*')
+        .abortOnSignal(signal)
     })
 
     return data
   }
 
   async deleteObjects(bucketId: string, objectNames: string[], by: keyof Obj = 'name') {
-    const objects = await this.runQuery('DeleteObjects', (knex) => {
+    return this.runQuery('DeleteObjects', (knex, signal) => {
       return knex
         .from<Obj>('objects')
         .delete()
         .where('bucket_id', bucketId)
         .whereIn(by, objectNames)
         .returning('*')
+        .abortOnSignal(signal)
     })
-
-    return objects
   }
 
   async deleteObjectVersions(bucketId: string, objectNames: { name: string; version: string }[]) {
-    const objects = await this.runQuery('DeleteObjects', (knex) => {
+    return this.runQuery('DeleteObjects', (knex, signal) => {
       const placeholders = objectNames.map(() => '(?, ?)').join(', ')
 
       // Step 2: Flatten the array of tuples into a single array of values
@@ -691,27 +721,25 @@ export class StorageKnexDB implements Database {
         .where('bucket_id', bucketId)
         .whereRaw(`(name, version) IN (${placeholders})`, flatParams)
         .returning('*')
+        .abortOnSignal(signal)
     })
-
-    return objects
   }
 
   async updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata) {
-    const [object] = await this.runQuery('UpdateObjectMetadata', (knex) => {
+    const [object] = await this.runQuery('UpdateObjectMetadata', (knex, signal) => {
       return knex
         .from<Obj>('objects')
-        .update({
-          metadata,
-        })
+        .update({ metadata })
         .where({ bucket_id: bucketId, name: objectName })
         .returning('*')
+        .abortOnSignal(signal)
     })
 
     return object
   }
 
   async updateObjectOwner(bucketId: string, objectName: string, owner?: string) {
-    const [object] = await this.runQuery('UpdateObjectOwner', (knex) => {
+    const [object] = await this.runQuery('UpdateObjectOwner', (knex, signal) => {
       return knex
         .from<Obj>('objects')
         .update({
@@ -721,6 +749,7 @@ export class StorageKnexDB implements Database {
         })
         .returning('*')
         .where({ bucket_id: bucketId, name: objectName })
+        .abortOnSignal(signal)
     })
 
     if (!object) {
@@ -736,7 +765,7 @@ export class StorageKnexDB implements Database {
     columns = 'id',
     filters?: FindObjectFilters
   ) {
-    const object = await this.runQuery('FindObject', (knex) => {
+    const object = await this.runQuery('FindObject', (knex, signal) => {
       const query = knex
         .from<Obj>('objects')
         .select(this.normalizeColumns(columns).split(','))
@@ -761,7 +790,7 @@ export class StorageKnexDB implements Database {
         query.noWait()
       }
 
-      return query.first() as Promise<Obj | undefined>
+      return query.abortOnSignal(signal).first() as Promise<Obj | undefined>
     })
 
     if (!object && !filters?.dontErrorOnEmpty) {
@@ -776,19 +805,18 @@ export class StorageKnexDB implements Database {
   }
 
   async findObjects(bucketId: string, objectNames: string[], columns = 'id') {
-    const objects = await this.runQuery('FindObjects', (knex) => {
+    return this.runQuery('FindObjects', (knex, signal) => {
       return knex
         .from<Obj>('objects')
         .select(columns)
         .where('bucket_id', bucketId)
         .whereIn('name', objectNames)
+        .abortOnSignal(signal)
     })
-
-    return objects
   }
 
   async findObjectVersions(bucketId: string, obj: { name: string; version: string }[]) {
-    const objects = await this.runQuery('FindObjectVersions', (knex) => {
+    return this.runQuery('FindObjectVersions', (knex, signal) => {
       // Step 1: Generate placeholders for each tuple
       const placeholders = obj.map(() => '(?, ?)').join(', ')
 
@@ -800,18 +828,19 @@ export class StorageKnexDB implements Database {
         .select('objects.name', 'objects.version')
         .where('bucket_id', bucketId)
         .whereRaw(`(name, version) IN (${placeholders})`, flatParams)
+        .abortOnSignal(signal)
     })
-
-    return objects
   }
 
   async mustLockObject(bucketId: string, objectName: string, version?: string) {
-    return this.runQuery('MustLockObject', async (knex) => {
+    return this.runQuery('MustLockObject', async (knex, signal) => {
       const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
-      const result = await knex.raw<{ rows: { pg_try_advisory_xact_lock: boolean }[] }>(
-        `SELECT pg_try_advisory_xact_lock(?);`,
-        [hash]
-      )
+      const result = await knex
+        .raw<{ rows: { pg_try_advisory_xact_lock: boolean }[] }>(
+          `SELECT pg_try_advisory_xact_lock(?);`,
+          [hash]
+        )
+        .abortOnSignal(signal)
       const lockAcquired = result.rows.shift()?.pg_try_advisory_xact_lock || false
 
       if (!lockAcquired) {
@@ -828,9 +857,9 @@ export class StorageKnexDB implements Database {
     version?: string,
     opts?: { timeout: number }
   ) {
-    return this.runQuery('WaitObjectLock', async (knex) => {
+    return this.runQuery('WaitObjectLock', async (knex, signal) => {
       const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
-      const query = knex.raw(`SELECT pg_advisory_xact_lock(?)`, [hash])
+      const query = knex.raw(`SELECT pg_advisory_xact_lock(?)`, [hash]).abortOnSignal(signal)
 
       if (opts?.timeout) {
         let timeoutInterval: undefined | NodeJS.Timeout
@@ -859,20 +888,26 @@ export class StorageKnexDB implements Database {
   }
 
   async searchObjects(bucketId: string, prefix: string, options: SearchObjectOption) {
-    return this.runQuery('SearchObjects', async (knex) => {
-      const result = await knex.raw<{ rows: Obj[] }>(
-        'select * from storage.search(?,?,?,?,?,?,?,?)',
-        [
-          prefix,
+    return this.runQuery('SearchObjects', async (knex, signal) => {
+      const sortColumn = options.sortBy?.column ?? 'name'
+      const shouldEscapePattern = sortColumn !== 'name'
+      const safePrefix = shouldEscapePattern ? escapeLike(prefix) : prefix
+      const safeSearch = shouldEscapePattern
+        ? escapeLike(options.search || '')
+        : options.search || ''
+
+      const result = await knex
+        .raw<{ rows: Obj[] }>('select * from storage.search(?,?,?,?,?,?,?,?)', [
+          safePrefix,
           bucketId,
           options.limit || 100,
-          prefix.split('/').length,
+          safePrefix.split('/').length,
           options.offset || 0,
-          options.search || '',
-          options.sortBy?.column ?? 'name',
+          safeSearch,
+          sortColumn,
           options.sortBy?.order ?? 'asc',
-        ]
-      )
+        ])
+        .abortOnSignal(signal)
 
       return result.rows
     })
@@ -885,39 +920,59 @@ export class StorageKnexDB implements Database {
     version: string,
     signature: string,
     owner?: string,
-    metadata?: Record<string, string | null>
+    userMetadata?: Record<string, string | null>,
+    metadata?: Partial<ObjectMetadata>
   ) {
-    return this.runQuery('CreateMultipartUpload', async (knex) => {
+    return this.runQuery('CreateMultipartUpload', async (knex, signal) => {
+      const data: Record<string, unknown> = {
+        id: uploadId,
+        bucket_id: bucketId,
+        key: objectName,
+        version,
+        upload_signature: signature,
+        owner_id: owner,
+        user_metadata: userMetadata,
+      }
+
+      // TODO: move this guard into normalizeColumns once it is table-aware.
+      // metadata was added to s3_multipart_uploads in migration 57 but has existed on
+      // objects since much earlier, so a table-agnostic rule would incorrectly strip it.
+      if (
+        !this.latestMigration ||
+        DBMigration[this.latestMigration] >= DBMigration['s3-multipart-uploads-metadata']
+      ) {
+        data.metadata = metadata
+      }
+
       const multipart = await knex
         .table<S3MultipartUpload>('s3_multipart_uploads')
-        .insert(
-          this.normalizeColumns({
-            id: uploadId,
-            bucket_id: bucketId,
-            key: objectName,
-            version,
-            upload_signature: signature,
-            owner_id: owner,
-            user_metadata: metadata,
-          })
-        )
+        .insert(this.normalizeColumns(data))
         .returning('*')
+        .abortOnSignal(signal)
 
       return multipart[0] as S3MultipartUpload
     })
   }
 
   async findMultipartUpload(uploadId: string, columns = 'id', options?: { forUpdate?: boolean }) {
-    const multiPart = await this.runQuery('FindMultipartUpload', async (knex) => {
-      const query = knex
-        .from('s3_multipart_uploads')
-        .select(columns.split(','))
-        .where('id', uploadId)
+    const multiPart = await this.runQuery('FindMultipartUpload', async (knex, signal) => {
+      // TODO: move this guard into normalizeColumns once it is table-aware.
+      // metadata was added to s3_multipart_uploads in migration 57 but has existed on
+      // objects since much earlier, so a table-agnostic rule would incorrectly strip it.
+      const hasMetadataColumn =
+        !this.latestMigration ||
+        DBMigration[this.latestMigration] >= DBMigration['s3-multipart-uploads-metadata']
+
+      const cols = hasMetadataColumn
+        ? columns.split(',')
+        : columns.split(',').filter((col) => col.trim() !== 'metadata')
+
+      const query = knex.from('s3_multipart_uploads').select(cols).where('id', uploadId)
 
       if (options?.forUpdate) {
-        return query.forUpdate().first()
+        return query.abortOnSignal(signal).forUpdate().first()
       }
-      return query.first()
+      return query.abortOnSignal(signal).first()
     })
 
     if (!multiPart) {
@@ -927,26 +982,28 @@ export class StorageKnexDB implements Database {
   }
 
   async updateMultipartUploadProgress(uploadId: string, progress: number, signature: string) {
-    return this.runQuery('UpdateMultipartUploadProgress', async (knex) => {
+    return this.runQuery('UpdateMultipartUploadProgress', async (knex, signal) => {
       await knex
         .from('s3_multipart_uploads')
         .update({ in_progress_size: progress, upload_signature: signature })
         .where('id', uploadId)
+        .abortOnSignal(signal)
     })
   }
 
   async deleteMultipartUpload(uploadId: string) {
-    return this.runQuery('DeleteMultipartUpload', async (knex) => {
-      await knex.from('s3_multipart_uploads').delete().where('id', uploadId)
+    return this.runQuery('DeleteMultipartUpload', async (knex, signal) => {
+      await knex.from('s3_multipart_uploads').delete().where('id', uploadId).abortOnSignal(signal)
     })
   }
 
   async insertUploadPart(part: S3PartUpload) {
-    return this.runQuery('InsertUploadPart', async (knex) => {
+    return this.runQuery('InsertUploadPart', async (knex, signal) => {
       const storedPart = await knex
         .table<S3PartUpload>('s3_multipart_uploads_parts')
         .insert(part)
         .returning('*')
+        .abortOnSignal(signal)
 
       return storedPart[0]
     })
@@ -956,7 +1013,7 @@ export class StorageKnexDB implements Database {
     uploadId: string,
     options: { afterPart?: string; maxParts: number }
   ): Promise<S3PartUpload[]> {
-    return this.runQuery('ListParts', async (knex) => {
+    return this.runQuery('ListParts', async (knex, signal) => {
       const query = knex
         .from<S3PartUpload>('s3_multipart_uploads_parts')
         .select('etag', 'part_number', 'size', 'upload_id', 'created_at')
@@ -968,13 +1025,13 @@ export class StorageKnexDB implements Database {
         query.andWhere('part_number', '>', options.afterPart)
       }
 
-      return query
+      return query.abortOnSignal(signal)
     })
   }
 
   healthcheck() {
-    return this.runQuery('Healthcheck', (knex) => {
-      return knex.raw('SELECT id from storage.buckets limit 1')
+    return this.runQuery('Healthcheck', (knex, signal) => {
+      return knex.raw('SELECT id from storage.buckets limit 1').abortOnSignal(signal)
     })
   }
 
@@ -1018,13 +1075,19 @@ export class StorageKnexDB implements Database {
     return columns
   }
 
-  protected async runQuery<T extends (db: Knex.Transaction) => Promise<any>>(
-    queryName: string,
-    fn: T
-  ): Promise<Awaited<ReturnType<T>>> {
-    const timer = DbQueryPerformance.startTimer({
-      name: queryName,
-    })
+  protected async runQuery<
+    T extends (...args: [db: Knex.Transaction, signal?: AbortSignal]) => Promise<any>,
+  >(queryName: string, fn: T): Promise<Awaited<ReturnType<T>>> {
+    const startTime = process.hrtime.bigint()
+    const recordDuration = () => {
+      const duration = Number(process.hrtime.bigint() - startTime) / 1e9
+      dbQueryPerformance.record(duration, {
+        name: queryName,
+        tenantId: this.tenantId,
+      })
+    }
+
+    const abortSignal = this.connection.getAbortSignal()
 
     let tnx = this.options.tnx
 
@@ -1046,7 +1109,7 @@ export class StorageKnexDB implements Database {
         await this.connection.setScope(tnx)
       }
 
-      const result: Awaited<ReturnType<T>> = await fn(tnx)
+      const result: Awaited<ReturnType<T>> = await fn(tnx, abortSignal)
 
       if (needsNewTransaction) {
         await tnx.commit()
@@ -1058,14 +1121,14 @@ export class StorageKnexDB implements Database {
         }
       }
 
-      timer()
+      recordDuration()
 
       return result
     } catch (e) {
       if (needsNewTransaction) {
         await tnx.rollback()
       }
-      timer()
+      recordDuration()
       throw e
     }
   }
@@ -1103,8 +1166,41 @@ export class DBError extends StorageBackendError implements RenderableError {
           query,
           code: pgError.code,
         })
+      case '57014': // query_canceled (statement_timeout or user cancel)
+        return ERRORS.DatabaseTimeout(pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
+      case '25006': // read only sql transaction
+        return ERRORS.DatabaseReadOnly(pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
+      case '42P17': // invalid object definition
+        return ERRORS.InvalidObjectDefinition(pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
+      case '22P02': // invalid text representation
+        return ERRORS.InvalidParameter('value', {
+          error: pgError,
+          message: pgError.message || 'Invalid value format or type conversion failed',
+        }).withMetadata({
+          query,
+          code: pgError.code,
+        })
+      case '42703': // undefined column
+        return ERRORS.DatabaseSchemaMismatch(pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
+      case '42P01': // relation does not exist
+        return ERRORS.DatabaseSchemaMismatch(pgError).withMetadata({
+          query,
+          code: pgError.code,
+        })
       default:
-        return ERRORS.DatabaseError(pgError.message, pgError).withMetadata({
+        return ERRORS.DatabaseError(`database error, code: ${pgError.code}`, pgError).withMetadata({
           query,
           code: pgError.code,
         })

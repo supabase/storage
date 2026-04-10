@@ -1,9 +1,9 @@
+import { mergeAsyncGenerators } from '@internal/concurrency'
+import { ERRORS } from '@internal/errors'
+import { withOptionalVersion } from '@storage/backend'
+import { BackupObjectEvent } from '@storage/events/objects/backup-object'
 import { Storage } from '@storage/storage'
 import { getConfig } from '../../config'
-import { ERRORS } from '@internal/errors'
-import { mergeAsyncGenerators } from '@internal/concurrency'
-import { BackupObjectEvent } from '@storage/events/objects/backup-object'
-import { withOptionalVersion } from '@storage/backend'
 
 const { storageS3Bucket } = getConfig()
 
@@ -37,7 +37,6 @@ export class ObjectScanner {
     const localDBKeys = this.syncS3KeysToDB(tmpTable, prefix, options)
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of localDBKeys) {
         // await all of the operation finished
         if (options.signal.aborted) {
@@ -46,8 +45,8 @@ export class ObjectScanner {
       }
 
       const s3Keys = this.listS3Orphans(tmpTable, {
-        bucket: bucket,
-        prefix: `${this.storage.db.tenantId}/${bucket}`,
+        bucket,
+        prefix,
         signal: options.signal,
       })
 
@@ -103,7 +102,6 @@ export class ObjectScanner {
       if (!options.tmpTable) {
         const s3LocalCache = this.syncS3KeysToDB(tmpTable, prefix, options)
 
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         for await (const _ of s3LocalCache) {
           // await all of the operation finished
           if (options.signal.aborted) {
@@ -156,11 +154,7 @@ export class ObjectScanner {
   ) {
     let nextToken: string | undefined = undefined
 
-    while (true) {
-      if (options.signal.aborted) {
-        break
-      }
-
+    for (; !options.signal.aborted; ) {
       const storageObjects = await this.storage.db.listObjects(
         bucket,
         'id,name,version,metadata',
@@ -171,7 +165,7 @@ export class ObjectScanner {
 
       const dbKeys = storageObjects.map(({ name, version, metadata }) => {
         if (version) {
-          return { name: `${name}`, version: version, size: (metadata?.size as number) || 0 }
+          return { name: `${name}`, version, size: (metadata?.size as number) || 0 }
         }
         return { name, size: (metadata?.size as number) || 0 }
       })
@@ -197,10 +191,7 @@ export class ObjectScanner {
   }
 
   protected async *listAllCacheS3Keys(tableName: string, nextItem: string, signal: AbortSignal) {
-    while (true) {
-      if (signal.aborted) {
-        break
-      }
+    for (; !signal.aborted; ) {
       const query = this.storage.db.connection.pool
         .acquire()
         .table(tableName)
@@ -301,26 +292,22 @@ export class ObjectScanner {
   ) {
     let nextToken: string | undefined = undefined
 
-    while (true) {
-      if (options.signal.aborted) {
-        break
-      }
-
+    for (; !options.signal.aborted; ) {
       const result = await this.storage.backend.list(storageS3Bucket, {
-        prefix,
+        prefix: prefix + '/',
         nextToken,
         beforeDate: options.before,
       })
 
-      if (result.keys.length === 0) {
-        break
-      }
-
       nextToken = result.nextToken
 
-      yield result.keys.filter((k) => {
+      const keys = result.keys.filter((k) => {
         return k.name && !k.name.endsWith('.info')
       })
+
+      if (keys.length > 0) {
+        yield keys
+      }
 
       if (!nextToken) {
         break

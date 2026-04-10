@@ -1,12 +1,12 @@
-import { Event as QueueBaseEvent, BasePayload, StaticThis, Event } from '@internal/queue'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
-import { StorageKnexDB } from '../database'
-import { createStorageBackend, StorageBackendAdapter } from '../backend'
-import { Storage } from '../storage'
-import { getConfig } from '../../config'
-import { logger } from '@internal/monitoring'
 import { createAgent } from '@internal/http'
+import { logger } from '@internal/monitoring'
+import { BasePayload, Event, Event as QueueBaseEvent, StaticThis } from '@internal/queue'
 import { TenantLocation } from '@storage/locator'
+import { getConfig } from '../../config'
+import { createStorageBackend, StorageBackendAdapter } from '../backend'
+import { StorageKnexDB } from '../database'
+import { Storage } from '../storage'
 
 const { storageS3Bucket, storageS3MaxSockets, storageBackendType, region } = getConfig()
 
@@ -29,7 +29,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     this: StaticThis<T>,
     payload: Omit<T['payload'], '$version'>
   ) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // biome-ignore lint/style/noCommonJs: build script runs as CommonJS
     const { Webhook } = require('./lifecycle/webhook')
     const eventType = this.eventName()
 
@@ -90,7 +90,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     })
 
     storageBackend = createStorageBackend(storageBackendType, {
-      httpAgent: httpAgent,
+      httpAgent,
     })
 
     if (monitor) {

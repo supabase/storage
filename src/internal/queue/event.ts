@@ -1,12 +1,12 @@
-import { Queue } from './queue'
-import PgBoss, { Job, SendOptions, WorkOptions, Queue as PgBossQueue } from 'pg-boss'
-import { getConfig } from '../../config'
-import { QueueJobScheduled, QueueJobSchedulingTime } from '@internal/monitoring/metrics'
-import { logger, logSchema } from '@internal/monitoring'
 import { getTenantConfig } from '@internal/database'
 import { ERRORS } from '@internal/errors'
+import { logger, logSchema } from '@internal/monitoring'
+import { queueJobScheduled, queueJobSchedulingTime } from '@internal/monitoring/metrics'
 import { KnexQueueDB } from '@internal/queue/database'
 import { Knex } from 'knex'
+import PgBoss, { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
+import { getConfig } from '../../config'
+import { PG_BOSS_SCHEMA, Queue } from './queue'
 
 export interface BasePayload {
   $version?: string
@@ -20,6 +20,16 @@ export interface BasePayload {
 }
 
 const { pgQueueEnable, region, isMultitenant } = getConfig()
+
+function withPayloadVersion<TPayload extends BasePayload>(
+  payload: TPayload,
+  version: string
+): TPayload {
+  return {
+    ...payload,
+    $version: payload.$version ?? version,
+  }
+}
 
 export type StaticThis<T extends Event<any>> = BaseEventConstructor<T>
 
@@ -88,29 +98,33 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       if (this.allowSync) {
         return Promise.all(messages.map((message) => message.send()))
       } else {
-        logger.warn('[Queue] skipped sending batch messages', {
-          type: 'queue',
-          eventType: this.eventName(),
-        })
+        logger.warn(
+          {
+            type: 'queue',
+            eventType: this.eventName(),
+          },
+          '[Queue] skipped sending batch messages'
+        )
         return
       }
     }
 
     return Queue.getInstance().insert(
       messages.map((message) => {
-        const sendOptions = (this.getSendOptions(message.payload) as PgBoss.JobInsert) || {}
-        if (!message.payload.$version) {
-          ;(message.payload as (typeof message)['payload']).$version = this.version
-        }
+        const payloadWithVersion = withPayloadVersion(
+          message.payload as (typeof message)['payload'],
+          this.version
+        )
+        const sendOptions = (this.getSendOptions(payloadWithVersion) as PgBoss.JobInsert) || {}
 
-        if (message.payload.scheduleAt) {
-          sendOptions.startAfter = new Date(message.payload.scheduleAt)
+        if (payloadWithVersion.scheduleAt) {
+          sendOptions.startAfter = new Date(payloadWithVersion.scheduleAt)
         }
 
         return {
           ...sendOptions,
           name: this.getQueueName(),
-          data: message.payload,
+          data: payloadWithVersion,
           deadLetter: this.deadLetterQueueName(),
         }
       })
@@ -122,10 +136,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     payload: Omit<T['payload'], '$version'>,
     opts?: SendOptions & { tnx?: Knex }
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
+    const that = new this(withPayloadVersion(payload as T['payload'], this.version))
     return that.send(opts)
   }
 
@@ -133,10 +144,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     this: StaticThis<T>,
     payload: Omit<T['payload'], '$version'>
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
+    const that = new this(withPayloadVersion(payload as T['payload'], this.version))
     return that.invoke()
   }
 
@@ -145,10 +153,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     payload: Omit<T['payload'], '$version'>,
     options?: SendOptions & { sendWhenError?: (error: unknown) => boolean }
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
+    const that = new this(withPayloadVersion(payload as T['payload'], this.version))
     return that.invokeOrSend(options)
   }
 
@@ -183,10 +188,10 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     }
 
     await Queue.getDb().executeSql(
-      `DELETE FROM pgboss_v10.job
+      `DELETE FROM ${PG_BOSS_SCHEMA}.job
        WHERE id = $1
        AND EXISTS(
-          SELECT 1 FROM pgboss_v10.job
+          SELECT 1 FROM ${PG_BOSS_SCHEMA}.job
              WHERE id != $2
              AND state < 'active'
              AND name = $3
@@ -200,9 +205,9 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
   async invokeOrSend(
     sendOptions?: SendOptions & { sendWhenError?: (error: unknown) => boolean }
   ): Promise<string | void | null> {
-    const constructor = this.constructor as typeof Event
+    const eventClass = this.constructor as typeof Event
 
-    if (!constructor.allowSync) {
+    if (!eventClass.allowSync) {
       throw ERRORS.InternalError(undefined, 'Cannot send this event synchronously')
     }
 
@@ -224,62 +229,65 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
   }
 
   async invoke(): Promise<string | void | null> {
-    const constructor = this.constructor as typeof Event
+    const eventClass = this.constructor as typeof Event
 
-    if (!constructor.allowSync) {
+    if (!eventClass.allowSync) {
       throw ERRORS.InternalError(undefined, 'Cannot send this event synchronously')
     }
 
-    await constructor.handle({
+    await eventClass.handle({
       id: '__sync',
       expireInSeconds: 0,
-      name: constructor.getQueueName(),
+      name: eventClass.getQueueName(),
       data: {
         region,
         ...this.payload,
-        $version: constructor.version,
+        $version: eventClass.version,
       },
     })
   }
 
   async send(customSendOptions?: SendOptions & { tnx?: Knex }): Promise<string | void | null> {
-    const constructor = this.constructor as typeof Event
+    const eventClass = this.constructor as typeof Event
 
-    const shouldSend = await constructor.shouldSend(this.payload)
+    const shouldSend = await eventClass.shouldSend(this.payload)
 
     if (!shouldSend) {
       return
     }
 
     if (!pgQueueEnable) {
-      if (constructor.allowSync) {
-        return constructor.handle({
+      if (eventClass.allowSync) {
+        return eventClass.handle({
           id: '__sync',
           expireInSeconds: 0,
-          name: constructor.getQueueName(),
+          name: eventClass.getQueueName(),
           data: {
             region,
             ...this.payload,
-            $version: constructor.version,
+            $version: eventClass.version,
           },
         })
       } else {
-        logger.warn('[Queue] skipped sending message', {
-          type: 'queue',
-          eventType: constructor.eventName(),
-        })
+        logger.warn(
+          {
+            type: 'queue',
+            eventType: eventClass.eventName(),
+          },
+          '[Queue] skipped sending message'
+        )
         return
       }
     }
 
-    const timer = QueueJobSchedulingTime.startTimer()
-    const sendOptions = constructor.getSendOptions(this.payload) || {}
+    const startTime = process.hrtime.bigint()
+    const sendOptions = eventClass.getSendOptions(this.payload) || {}
 
     if (this.payload.scheduleAt) {
       sendOptions.startAfter = new Date(this.payload.scheduleAt)
     }
 
-    sendOptions!.deadLetter = constructor.deadLetterQueueName()
+    sendOptions!.deadLetter = eventClass.deadLetterQueueName()
 
     try {
       const queue = customSendOptions?.tnx
@@ -290,11 +298,11 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         : Queue.getInstance()
 
       const res = await queue.send({
-        name: constructor.getQueueName(),
+        name: eventClass.getQueueName(),
         data: {
           region,
           ...this.payload,
-          $version: constructor.version,
+          $version: eventClass.version,
         },
         options: {
           ...sendOptions,
@@ -302,8 +310,8 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         },
       })
 
-      QueueJobScheduled.inc({
-        name: constructor.getQueueName(),
+      queueJobScheduled.add(1, {
+        name: eventClass.getQueueName(),
       })
 
       return res
@@ -321,23 +329,24 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         }
       )
 
-      if (!constructor.allowSync) {
+      if (!eventClass.allowSync) {
         throw e
       }
 
-      return constructor.handle({
+      return eventClass.handle({
         id: '__sync',
         expireInSeconds: 0,
-        name: constructor.getQueueName(),
+        name: eventClass.getQueueName(),
         data: {
           region,
           ...this.payload,
-          $version: constructor.version,
+          $version: eventClass.version,
         },
       })
     } finally {
-      timer({
-        name: constructor.getQueueName(),
+      const duration = Number(process.hrtime.bigint() - startTime) / 1e9
+      queueJobSchedulingTime.record(duration, {
+        name: eventClass.getQueueName(),
       })
     }
   }

@@ -1,9 +1,10 @@
+import { objectSchema } from '@storage/schemas/object'
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
-import { objectSchema } from '@storage/schemas/object'
 import { ROUTE_OPERATIONS } from '../operations'
+
 const deleteObjectsParamsSchema = {
   type: 'object',
   properties: {

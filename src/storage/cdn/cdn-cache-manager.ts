@@ -1,7 +1,7 @@
-import { Storage } from '@storage/storage'
-import axios, { AxiosError } from 'axios'
-import { HttpsAgent } from 'agentkeepalive'
 import { ERRORS } from '@internal/errors'
+import { Storage } from '@storage/storage'
+import { HttpsAgent } from 'agentkeepalive'
+import axios, { AxiosError } from 'axios'
 
 import { getConfig } from '../../config'
 
@@ -16,7 +16,7 @@ const httpsAgent = new HttpsAgent({
 
 const client = axios.create({
   baseURL: cdnPurgeEndpointURL,
-  httpsAgent: httpsAgent,
+  httpsAgent,
   headers: {
     Authorization: `Bearer ${cdnPurgeEndpointKey}`,
     'Content-Type': 'application/json',

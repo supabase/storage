@@ -24,18 +24,26 @@ import {
   UploadPartCommand,
   UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
-import { getConfig, mergeConfig } from '../config'
-import app from '../app'
-import { FastifyInstance } from 'fastify'
 import { Upload } from '@aws-sdk/lib-storage'
-import { ReadableStreamBuffer } from 'stream-buffers'
-import { randomUUID } from 'crypto'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import axios from 'axios'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { wait } from '@internal/concurrency'
+import { getPostgresConnection, getServiceKeyUser, TenantConnection } from '@internal/database'
+import { DBMigration } from '@internal/database/migrations'
+import { ERRORS } from '@internal/errors'
+import { StorageKnexDB } from '@storage/database'
+import { Uploader } from '@storage/uploader'
+import axios from 'axios'
+import { createHash, createHmac, randomUUID } from 'crypto'
+import { FastifyInstance } from 'fastify'
+import { ReadableStreamBuffer } from 'stream-buffers'
+import app from '../app'
+import { getConfig, mergeConfig } from '../config'
+import { SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
 
 const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
+const STREAMING_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
+const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
   let bucketName: string
@@ -63,7 +71,7 @@ async function uploadFile(
   headers?: Record<string, string>
 ) {
   const uploader = new Upload({
-    client: client,
+    client,
     params: {
       Bucket: bucketName,
       Key: key,
@@ -76,18 +84,275 @@ async function uploadFile(
   return await uploader.done()
 }
 
+function formatAwsDate(date = new Date()) {
+  return date.toISOString().replace(/[:-]|\.\d{3}/g, '')
+}
+
+function hmacSha256(key: string | Buffer, value: string) {
+  return createHmac('sha256', key).update(value).digest()
+}
+
+function sha256Hex(value: Buffer) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function deriveSigningKey(secretKey: string, shortDate: string, region: string, service: string) {
+  const dateKey = hmacSha256(`AWS4${secretKey}`, shortDate)
+  const regionKey = hmacSha256(dateKey, region)
+  const serviceKey = hmacSha256(regionKey, service)
+  return hmacSha256(serviceKey, 'aws4_request')
+}
+
+function createSignedChunk(
+  payload: Buffer,
+  previousSignature: string,
+  options: {
+    longDate: string
+    shortDate: string
+    region: string
+    service: string
+    secretKey: string
+  }
+) {
+  const signingKey = deriveSigningKey(
+    options.secretKey,
+    options.shortDate,
+    options.region,
+    options.service
+  )
+  const scope = `${options.shortDate}/${options.region}/${options.service}/aws4_request`
+  const chunkHash = sha256Hex(payload)
+  const stringToSign = [
+    'AWS4-HMAC-SHA256-PAYLOAD',
+    options.longDate,
+    scope,
+    previousSignature,
+    EMPTY_SHA256_HASH,
+    chunkHash,
+  ].join('\n')
+  const signature = createHmac('sha256', signingKey).update(stringToSign).digest('hex')
+
+  return {
+    signature,
+    encoded: Buffer.concat([
+      Buffer.from(`${payload.length.toString(16)};chunk-signature=${signature}\r\n`),
+      payload,
+      Buffer.from('\r\n'),
+    ]),
+  }
+}
+
+async function sendAwsChunkedRequest(options: {
+  baseUrl: string
+  path: string
+  payload: Buffer
+  query?: Record<string, string>
+}) {
+  const signedRequest = await createSignedS3Request({
+    baseUrl: options.baseUrl,
+    path: options.path,
+    method: 'PUT',
+    query: options.query,
+    contentSha: STREAMING_PAYLOAD_ALGORITHM,
+    headers: {
+      'content-encoding': 'aws-chunked',
+      'x-amz-decoded-content-length': options.payload.length.toString(),
+    },
+  })
+  const chunk = createSignedChunk(options.payload, signedRequest.signature, {
+    longDate: signedRequest.longDate,
+    shortDate: signedRequest.shortDate,
+    region: storageS3Region,
+    service: signedRequest.service,
+    secretKey: s3ProtocolAccessKeySecret!,
+  })
+  const endChunk = createSignedChunk(Buffer.alloc(0), chunk.signature, {
+    longDate: signedRequest.longDate,
+    shortDate: signedRequest.shortDate,
+    region: storageS3Region,
+    service: signedRequest.service,
+    secretKey: s3ProtocolAccessKeySecret!,
+  })
+  const encodedBody = Buffer.concat([chunk.encoded, endChunk.encoded])
+
+  const response = await fetch(signedRequest.requestUrl, {
+    method: 'PUT',
+    headers: {
+      ...signedRequest.headers,
+      'content-length': encodedBody.length.toString(),
+    },
+    body: encodedBody,
+  })
+
+  return {
+    status: response.status,
+    data: await response.text(),
+  }
+}
+
+async function createSignedS3Request(options: {
+  baseUrl: string
+  path: string
+  method: 'POST' | 'PUT' | 'GET' | 'DELETE'
+  body?: string | Buffer
+  query?: Record<string, string>
+  headers?: Record<string, string>
+  contentSha?: string
+  includeContentLength?: boolean
+}) {
+  const longDate = formatAwsDate()
+  const shortDate = longDate.slice(0, 8)
+  const host = new URL(options.baseUrl).host
+  const service = SignatureV4Service.S3
+  const payload = options.body ?? Buffer.alloc(0)
+  const payloadBuffer = typeof payload === 'string' ? Buffer.from(payload) : payload
+  const payloadHash = options.contentSha || sha256Hex(payloadBuffer)
+  const normalizedHeaders = Object.fromEntries(
+    Object.entries(options.headers || {}).map(([key, value]) => [key.toLowerCase(), value])
+  )
+  const signer = new SignatureV4({
+    enforceRegion: false,
+    credentials: {
+      accessKey: s3ProtocolAccessKeyId!,
+      secretKey: s3ProtocolAccessKeySecret!,
+      region: storageS3Region,
+      service,
+    },
+  })
+
+  const headers: Record<string, string> = {
+    host,
+    'x-amz-content-sha256': payloadHash,
+    'x-amz-date': longDate,
+    ...(options.includeContentLength ? { 'content-length': payloadBuffer.length.toString() } : {}),
+    ...normalizedHeaders,
+  }
+
+  const signedHeaders = Object.keys(headers)
+    .map((header) => header.toLowerCase())
+    .sort()
+
+  const clientSignature = {
+    credentials: {
+      accessKey: s3ProtocolAccessKeyId!,
+      shortDate,
+      region: storageS3Region,
+      service,
+    },
+    signedHeaders,
+    signature: '',
+    longDate,
+    contentSha: payloadHash,
+  }
+
+  const { signature } = await signer.sign(clientSignature, {
+    url: options.path,
+    method: options.method,
+    headers,
+    query: options.query,
+    body: options.body,
+  })
+
+  const requestUrl = new URL(`${options.baseUrl}${options.path}`)
+
+  if (options.query) {
+    for (const [key, value] of Object.entries(options.query)) {
+      requestUrl.searchParams.set(key, value)
+    }
+  }
+
+  return {
+    headers: {
+      ...headers,
+      authorization:
+        `AWS4-HMAC-SHA256 Credential=${s3ProtocolAccessKeyId}/${shortDate}/` +
+        `${storageS3Region}/${service}/aws4_request, SignedHeaders=${signedHeaders.join(';')}, ` +
+        `Signature=${signature}`,
+    },
+    requestUrl,
+    service,
+    shortDate,
+    longDate,
+    signature,
+  }
+}
+
+async function sendSignedS3Request(options: {
+  baseUrl: string
+  path: string
+  method: 'POST' | 'PUT' | 'GET' | 'DELETE'
+  body?: string
+  query?: Record<string, string>
+  headers?: Record<string, string>
+}) {
+  const payload = options.body || ''
+  const signedRequest = await createSignedS3Request({
+    ...options,
+    body: payload,
+    includeContentLength: true,
+  })
+
+  const response = await fetch(signedRequest.requestUrl, {
+    method: options.method,
+    headers: signedRequest.headers,
+    body: payload,
+  })
+
+  return {
+    status: response.status,
+    data: await response.text(),
+  }
+}
+
+async function expectMultipartUploadToRemainPending(
+  client: S3Client,
+  options: {
+    bucket: string
+    key: string
+    uploadId: string
+    partETag: string
+  }
+) {
+  try {
+    await client.send(
+      new HeadObjectCommand({
+        Bucket: options.bucket,
+        Key: options.key,
+      })
+    )
+    throw new Error('Should not reach here')
+  } catch (e) {
+    expect((e as Error).message).not.toBe('Should not reach here')
+    expect((e as S3ServiceException).$metadata.httpStatusCode).toBe(404)
+  }
+
+  const listPartsResp = await client.send(
+    new ListPartsCommand({
+      Bucket: options.bucket,
+      Key: options.key,
+      UploadId: options.uploadId,
+    })
+  )
+
+  expect(listPartsResp.Parts).toHaveLength(1)
+  expect(listPartsResp.Parts?.[0].PartNumber).toBe(1)
+  expect(listPartsResp.Parts?.[0].ETag).toBe(options.partETag)
+}
+
 jest.setTimeout(10 * 1000)
 
 describe('S3 Protocol', () => {
   describe('Bucket', () => {
     let testApp: FastifyInstance
     let client: S3Client
+    let baseUrl: string
 
     beforeAll(async () => {
       testApp = app()
       const listener = await testApp.listen()
+      baseUrl = listener.replace('[::1]', 'localhost')
       client = new S3Client({
-        endpoint: `${listener.replace('[::1]', 'localhost')}/s3`,
+        endpoint: `${baseUrl}/s3`,
         forcePathStyle: true,
         region: storageS3Region,
         credentials: {
@@ -446,6 +711,56 @@ describe('S3 Protocol', () => {
         expect(objectsPage3.Contents?.[0].Key).toBe('test-1.jpg')
         expect(objectsPage3.IsTruncated).toBe(false)
       })
+
+      it('lists an entity-heavy first page without XML expansion failure', async () => {
+        const bucket = await createBucket(client)
+        const minEntityExpansions = 2000
+        const pageSize = 10
+        const entityRefsPerKey = Math.ceil(minEntityExpansions / pageSize)
+        const entityRun = '&'.repeat(entityRefsPerKey)
+        const names = Array.from({ length: pageSize + 1 }, (_, i) => {
+          return `key-${String(i).padStart(2, '0')}-${entityRun}.txt`
+        })
+
+        for (let i = 0; i < names.length; i += pageSize) {
+          await Promise.all(
+            names.slice(i, i + pageSize).map((name) =>
+              client.send(
+                new PutObjectCommand({
+                  Bucket: bucket,
+                  Key: name,
+                  Body: Buffer.alloc(1),
+                  ContentType: 'text/plain',
+                })
+              )
+            )
+          )
+        }
+
+        const page1 = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+            MaxKeys: pageSize,
+          })
+        )
+
+        expect(page1.Contents).toHaveLength(pageSize)
+        expect(page1.IsTruncated).toBe(true)
+        expect(page1.NextContinuationToken).toBeTruthy()
+        expect(page1.Contents?.map((entry) => entry.Key)).toEqual(names.slice(0, pageSize))
+
+        const page2 = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+            ContinuationToken: page1.NextContinuationToken,
+            MaxKeys: pageSize,
+          })
+        )
+
+        expect(page2.Contents).toHaveLength(1)
+        expect(page2.IsTruncated).toBe(false)
+        expect(page2.Contents?.map((entry) => entry.Key)).toEqual(names.slice(pageSize))
+      }, 60000)
     })
 
     for (const urlEncode of [true, false]) {
@@ -570,6 +885,19 @@ describe('S3 Protocol', () => {
         expect(resp.UploadId).toBeTruthy()
       })
 
+      it('creates a multi part upload for a json object', async () => {
+        const bucketName = await createBucket(client)
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: 'test-1.json',
+          ContentType: 'application/json',
+          CacheControl: 'max-age=2000',
+        })
+
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+      })
+
       it('upload a part', async () => {
         const bucketName = await createBucket(client)
         const createMultiPartUpload = new CreateMultipartUploadCommand({
@@ -636,6 +964,249 @@ describe('S3 Protocol', () => {
         const completeResp = await client.send(completeMultiPartUpload)
         expect(completeResp.$metadata.httpStatusCode).toBe(200)
         expect(completeResp.Key).toEqual('test-1.jpg')
+      })
+
+      it('does not complete multipart upload on malformed xml body', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-explicit-parts.xml'
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: key,
+          ContentType: 'application/xml',
+          CacheControl: 'max-age=2000',
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+
+        const part1Body = Buffer.alloc(5 * 1024 * 1024, 'a')
+
+        const part1 = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentLength: part1Body.length,
+            UploadId: resp.UploadId,
+            Body: part1Body,
+            PartNumber: 1,
+          })
+        )
+
+        const malformedCompleteResp = await sendSignedS3Request({
+          baseUrl,
+          method: 'POST',
+          path: `/s3/${bucketName}/${key}`,
+          query: {
+            uploadId: resp.UploadId!,
+          },
+          headers: {
+            'Content-Type': 'application/xml',
+          },
+          body: '<CompleteMultipartUpload><Part></CompleteMultipartUpload>',
+        })
+
+        expect(malformedCompleteResp.status).toBe(400)
+        expect(malformedCompleteResp.data).toContain('<Error>')
+        expect(malformedCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
+        expect(malformedCompleteResp.data).toContain('<Message>Invalid XML payload:')
+
+        await expectMultipartUploadToRemainPending(client, {
+          bucket: bucketName,
+          key,
+          uploadId: resp.UploadId!,
+          partETag: part1.ETag!,
+        })
+
+        const completeResp = await client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: resp.UploadId,
+            MultipartUpload: {
+              Parts: [
+                {
+                  PartNumber: 1,
+                  ETag: part1.ETag,
+                },
+              ],
+            },
+          })
+        )
+
+        expect(completeResp.$metadata.httpStatusCode).toBe(200)
+
+        const getResp = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+          })
+        )
+
+        const data = await getResp.Body?.transformToByteArray()
+        expect(Buffer.from(data || [])).toEqual(part1Body)
+        expect(part1.ETag).toBeTruthy()
+      })
+
+      it('does not complete multipart upload on malformed json body', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-invalid-json-complete.bin'
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: key,
+          ContentType: 'application/octet-stream',
+          CacheControl: 'max-age=2000',
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+
+        const part1Body = Buffer.alloc(5 * 1024 * 1024, 'b')
+
+        const part1 = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentLength: part1Body.length,
+            UploadId: resp.UploadId,
+            Body: part1Body,
+            PartNumber: 1,
+          })
+        )
+
+        const malformedCompleteResp = await sendSignedS3Request({
+          baseUrl,
+          method: 'POST',
+          path: `/s3/${bucketName}/${key}`,
+          query: {
+            uploadId: resp.UploadId!,
+          },
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: '{"Parts":',
+        })
+
+        expect(malformedCompleteResp.status).toBe(400)
+        expect(malformedCompleteResp.data).toContain('<Error>')
+        expect(malformedCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
+        expect(malformedCompleteResp.data).toContain(
+          "<Message>Body is not valid JSON but content-type is set to 'application/json'</Message>"
+        )
+
+        await expectMultipartUploadToRemainPending(client, {
+          bucket: bucketName,
+          key,
+          uploadId: resp.UploadId!,
+          partETag: part1.ETag!,
+        })
+
+        const completeResp = await client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: resp.UploadId,
+            MultipartUpload: {
+              Parts: [
+                {
+                  PartNumber: 1,
+                  ETag: part1.ETag,
+                },
+              ],
+            },
+          })
+        )
+
+        expect(completeResp.$metadata.httpStatusCode).toBe(200)
+
+        const getResp = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+          })
+        )
+
+        const data = await getResp.Body?.transformToByteArray()
+        expect(Buffer.from(data || [])).toEqual(part1Body)
+        expect(part1.ETag).toBeTruthy()
+      })
+
+      it('does not complete multipart upload on empty json body', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-empty-json-complete.bin'
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: key,
+          ContentType: 'application/octet-stream',
+          CacheControl: 'max-age=2000',
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+
+        const part1Body = Buffer.alloc(5 * 1024 * 1024, 'c')
+
+        const part1 = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentLength: part1Body.length,
+            UploadId: resp.UploadId,
+            Body: part1Body,
+            PartNumber: 1,
+          })
+        )
+
+        const emptyJsonCompleteResp = await sendSignedS3Request({
+          baseUrl,
+          method: 'POST',
+          path: `/s3/${bucketName}/${key}`,
+          query: {
+            uploadId: resp.UploadId!,
+          },
+          headers: {
+            'content-type': 'application/json',
+          },
+        })
+
+        expect(emptyJsonCompleteResp.status).toBe(400)
+        expect(emptyJsonCompleteResp.data).toContain('<Error>')
+        expect(emptyJsonCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
+        expect(emptyJsonCompleteResp.data).toContain(
+          "<Message>Body cannot be empty when content-type is set to 'application/json'</Message>"
+        )
+
+        await expectMultipartUploadToRemainPending(client, {
+          bucket: bucketName,
+          key,
+          uploadId: resp.UploadId!,
+          partETag: part1.ETag!,
+        })
+
+        const completeResp = await client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: resp.UploadId,
+            MultipartUpload: {
+              Parts: [
+                {
+                  PartNumber: 1,
+                  ETag: part1.ETag,
+                },
+              ],
+            },
+          })
+        )
+
+        expect(completeResp.$metadata.httpStatusCode).toBe(200)
+
+        const getResp = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+          })
+        )
+
+        const data = await getResp.Body?.transformToByteArray()
+        expect(Buffer.from(data || [])).toEqual(part1Body)
+        expect(part1.ETag).toBeTruthy()
       })
 
       it('aborts a multipart upload', async () => {
@@ -750,6 +1321,33 @@ describe('S3 Protocol', () => {
         }
       })
 
+      it('accepts aws-chunked putObject bodies when decoded size is within the limit', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-aws-chunked-put-object.jpg'
+        const payload = Buffer.alloc(123, 1)
+
+        mergeConfig({
+          uploadFileSizeLimit: 150,
+        })
+
+        const response = await sendAwsChunkedRequest({
+          baseUrl,
+          path: `/s3/${bucketName}/${key}`,
+          payload,
+        })
+
+        expect(response.status).toBe(200)
+
+        const headObject = await client.send(
+          new HeadObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+          })
+        )
+
+        expect(headObject.ContentLength).toBe(payload.length)
+      })
+
       it('will not allow uploading a file that exceeded the maxFileSize', async () => {
         const bucketName = await createBucket(client)
 
@@ -758,7 +1356,7 @@ describe('S3 Protocol', () => {
         })
 
         const uploader = new Upload({
-          client: client,
+          client,
           leavePartsOnError: true,
 
           params: {
@@ -828,11 +1426,51 @@ describe('S3 Protocol', () => {
         }
       })
 
+      it('accepts aws-chunked uploadPart bodies when decoded size is within the limit', async () => {
+        const bucketName = await createBucket(client, 'chunked-part')
+        const payload = Buffer.alloc(123, 2)
+
+        mergeConfig({
+          uploadFileSizeLimit: 150,
+        })
+
+        const multipart = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: 'test-aws-chunked-upload-part.jpg',
+            ContentType: 'image/jpg',
+            CacheControl: 'max-age=2000',
+          })
+        )
+
+        const response = await sendAwsChunkedRequest({
+          baseUrl,
+          path: `/s3/${bucketName}/test-aws-chunked-upload-part.jpg`,
+          payload,
+          query: {
+            uploadId: multipart.UploadId!,
+            partNumber: '1',
+          },
+        })
+
+        expect(response.status).toBe(200)
+
+        const listedParts = await client.send(
+          new ListPartsCommand({
+            Bucket: bucketName,
+            Key: 'test-aws-chunked-upload-part.jpg',
+            UploadId: multipart.UploadId,
+          })
+        )
+
+        expect(listedParts.Parts?.map((part) => part.PartNumber)).toEqual([1])
+      })
+
       it('upload a file using multipart upload', async () => {
         const bucketName = await createBucket(client)
 
         const uploader = new Upload({
-          client: client,
+          client,
           params: {
             Bucket: bucketName,
             Key: 'test-1.jpg',
@@ -844,6 +1482,78 @@ describe('S3 Protocol', () => {
         const resp = await uploader.done()
 
         expect(resp.$metadata).toBeTruthy()
+      })
+
+      it('does not mutate in_progress_size when canUpload (RLS) fails', async () => {
+        /*
+        Calling shouldAllowPartUpload mutates the in_progress_size so we have to ensure
+        canUpload is called beforehand or else it can cause issues for valid uploads.
+
+        This test sets the fileSizeLimit to 10kb and each part at 5kb. It simulates
+        first request successful, second failed, third passes. If the in_progress_size
+        was mutated on the second request it would be at 10kb causing the third to fail.
+        */
+        const bucketName = await createBucket(client)
+        const key = 'rls-ordering-test.jpg'
+        const partSize = 1024 * 5
+
+        mergeConfig({ uploadFileSizeLimit: partSize * 2 })
+
+        const createResp = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: 'image/jpg',
+          })
+        )
+        expect(createResp.UploadId).toBeTruthy()
+        const uploadId = createResp.UploadId
+
+        const part1Resp = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: uploadId,
+            PartNumber: 1,
+            Body: Buffer.alloc(partSize),
+            ContentLength: partSize,
+          })
+        )
+        expect(part1Resp.ETag).toBeTruthy()
+
+        const canUploadSpy = jest
+          .spyOn(Uploader.prototype, 'canUpload')
+          .mockRejectedValueOnce(ERRORS.AccessDenied('upload'))
+
+        try {
+          await client.send(
+            new UploadPartCommand({
+              Bucket: bucketName,
+              Key: key,
+              UploadId: uploadId,
+              PartNumber: 2,
+              Body: Buffer.alloc(partSize),
+              ContentLength: partSize,
+            })
+          )
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+        } finally {
+          canUploadSpy.mockRestore()
+        }
+
+        const part2Resp = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: uploadId,
+            PartNumber: 2,
+            Body: Buffer.alloc(partSize),
+            ContentLength: partSize,
+          })
+        )
+        expect(part2Resp.ETag).toBeTruthy()
       })
     })
 
@@ -1006,7 +1716,7 @@ describe('S3 Protocol', () => {
         expect(resp.Contents).toBe(undefined)
       })
 
-      it('try to delete multiple objects that dont exists', async () => {
+      it('try to delete multiple objects that dont exist', async () => {
         const bucketName = await createBucket(client)
 
         await uploadFile(client, bucketName, 'test-1.jpg', 1)
@@ -1038,14 +1748,12 @@ describe('S3 Protocol', () => {
           {
             Key: 'test-2.jpg',
             Code: 'AccessDenied',
-            Message:
-              "You do not have permission to delete this object or the object doesn't exists",
+            Message: "You do not have permission to delete this object or the object doesn't exist",
           },
           {
             Key: 'test-3.jpg',
             Code: 'AccessDenied',
-            Message:
-              "You do not have permission to delete this object or the object doesn't exists",
+            Message: "You do not have permission to delete this object or the object doesn't exist",
           },
         ])
 
@@ -1142,14 +1850,14 @@ describe('S3 Protocol', () => {
         expect(headObj.CacheControl).toBe('max-age=2009')
       })
 
-      it('will not be able to copy an object that doesnt exists', async () => {
+      it('will not be able to copy an object that doesnt exist', async () => {
         const bucketName1 = await createBucket(client)
         await uploadFile(client, bucketName1, 'test-copy-1.jpg', 1)
 
         const copyObjectCommand = new CopyObjectCommand({
           Bucket: bucketName1,
           Key: 'test-copied-2.jpg',
-          CopySource: `${bucketName1}/test-dont-exists.jpg`,
+          CopySource: `${bucketName1}/test-doesnt-exist.jpg`,
         })
 
         try {
@@ -1222,6 +1930,62 @@ describe('S3 Protocol', () => {
         expect(resp.Uploads?.[1].Key).toBe('test-2.jpg')
         expect(resp.Uploads?.[2].Key).toBe('test-3.jpg')
         expect(resp.CommonPrefixes?.[0].Prefix).toBe('nested/')
+      })
+
+      it('treats % as a literal character in multipart prefix filtering with delimiter', async () => {
+        const bucketName = await createBucket(client)
+        const createMultiPartUpload = (key: string) =>
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: 'image/jpg',
+            CacheControl: 'max-age=2000',
+          })
+
+        await Promise.all([
+          client.send(createMultiPartUpload(`percent-${randomUUID()}.jpg`)),
+          client.send(createMultiPartUpload(`percent-${randomUUID()}.jpg`)),
+        ])
+
+        const listMultipartUploads = new ListMultipartUploadsCommand({
+          Bucket: bucketName,
+          Delimiter: '/',
+          Prefix: '%',
+        })
+
+        const resp = await client.send(listMultipartUploads)
+        expect(resp.Uploads).toBeUndefined()
+        expect(resp.CommonPrefixes).toBeUndefined()
+      })
+
+      it('treats _ as a literal character in multipart prefix filtering with delimiter', async () => {
+        const bucketName = await createBucket(client)
+        const runId = randomUUID()
+        const literalMatchKey = `wild_${runId}/hit.jpg`
+        const wildcardOnlyMatchKey = `wildX${runId}/miss.jpg`
+        const createMultiPartUpload = (key: string) =>
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: 'image/jpg',
+            CacheControl: 'max-age=2000',
+          })
+
+        await Promise.all([
+          client.send(createMultiPartUpload(literalMatchKey)),
+          client.send(createMultiPartUpload(wildcardOnlyMatchKey)),
+        ])
+
+        const listMultipartUploads = new ListMultipartUploadsCommand({
+          Bucket: bucketName,
+          Delimiter: '/',
+          Prefix: `wild_${runId}/`,
+        })
+
+        const resp = await client.send(listMultipartUploads)
+        expect(resp.CommonPrefixes).toBeUndefined()
+        expect(resp.Uploads?.length).toBe(1)
+        expect(resp.Uploads?.[0].Key).toBe(literalMatchKey)
       })
     })
 
@@ -1513,7 +2277,7 @@ describe('S3 Protocol', () => {
 
         const resp = await fetch(uploadUrl, {
           method: 'PUT',
-          body: body,
+          body,
           headers: {
             'Content-Length': body.length.toString(),
           },
@@ -1657,6 +2421,218 @@ describe('S3 Protocol', () => {
         )
 
         expect(response.ExpiresString).toEqual(expiresDate.toUTCString())
+      })
+
+      it('rejects response-content-disposition with invalid characters', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-disposition-reject.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseContentDisposition: 'attachment; filename="test\n\r\0.txt"',
+          })
+        )
+        // invalid content-disposition header removed
+        expect(response.ContentDisposition).toBeUndefined()
+      })
+
+      it('rejects response-content-type with invalid characters', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-content-type-reject.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseContentType: 'text/html\nX-Evil: injection\r\0',
+          })
+        )
+        // invalid content-type header rejected, default used
+        expect(response.ContentType).toBe('image/jpg')
+      })
+
+      it('rejects response-cache-control with invalid characters', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-cache-control-reject.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseCacheControl: 'no-cache\nX-Evil: header\r\0',
+          })
+        )
+        // invalid cache-control header rejected, default used
+        expect(response.CacheControl).toBe('no-cache')
+      })
+
+      it('rejects response-content-encoding with invalid characters', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-content-encoding-reject.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseContentEncoding: 'gzip\nX-Evil: header\r\0',
+          })
+        )
+        // invalid content-encoding header removed
+        expect(response.ContentEncoding).toBeUndefined()
+      })
+
+      it('rejects response-content-language with invalid characters', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-content-language-reject.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            ResponseContentLanguage: 'en-US\nX-Evil: header\r\0',
+          })
+        )
+        // invalid content-language header removed
+        expect(response.ContentLanguage).toBeUndefined()
+      })
+    })
+  })
+})
+
+describe('Migration compatibility', () => {
+  describe('integration', () => {
+    const { tenantId } = getConfig()
+    let connection: TenantConnection
+    let bucketId: string
+
+    beforeAll(async () => {
+      const adminUser = await getServiceKeyUser(tenantId)
+      connection = await getPostgresConnection({
+        tenantId,
+        user: adminUser,
+        superUser: adminUser,
+        host: 'localhost',
+      })
+
+      bucketId = randomUUID()
+      const db = new StorageKnexDB(connection, { tenantId, host: 'localhost' })
+      await db.createBucket({ id: bucketId, name: `migration-test-${bucketId}`, public: false })
+    })
+
+    afterAll(async () => {
+      const db = new StorageKnexDB(connection, { tenantId, host: 'localhost' })
+      await db.deleteBucket(bucketId)
+      await connection.dispose()
+    })
+
+    const makeDB = (latestMigration?: keyof typeof DBMigration) =>
+      new StorageKnexDB(connection, { tenantId, host: 'localhost', latestMigration })
+
+    describe('createMultipartUpload', () => {
+      it('does not store metadata when latestMigration is before s3-multipart-uploads-metadata', async () => {
+        const db = makeDB('fix-optimized-search-function') // migration 56
+        const uploadId = randomUUID()
+        try {
+          const result = await db.createMultipartUpload(
+            uploadId,
+            bucketId,
+            'test-pre-migration.txt',
+            randomUUID(),
+            'sig',
+            undefined,
+            undefined,
+            {
+              cacheControl: 'no-cache',
+              contentLength: 0,
+              size: 0,
+              mimetype: 'text/plain',
+              eTag: 'abc',
+            }
+          )
+          expect(result.metadata).toBeNull()
+        } finally {
+          await makeDB().deleteMultipartUpload(uploadId)
+        }
+      })
+
+      it('stores metadata when latestMigration is s3-multipart-uploads-metadata', async () => {
+        const db = makeDB('s3-multipart-uploads-metadata') // migration 57
+        const uploadId = randomUUID()
+        const metadata = {
+          cacheControl: 'no-cache',
+          contentLength: 0,
+          size: 0,
+          mimetype: 'text/plain',
+          eTag: 'abc',
+        }
+        try {
+          const result = await db.createMultipartUpload(
+            uploadId,
+            bucketId,
+            'test-post-migration.txt',
+            randomUUID(),
+            'sig',
+            undefined,
+            undefined,
+            metadata
+          )
+          expect(result.metadata).toEqual(metadata)
+        } finally {
+          await makeDB().deleteMultipartUpload(uploadId)
+        }
+      })
+    })
+
+    describe('findMultipartUpload', () => {
+      let uploadId: string
+
+      beforeAll(async () => {
+        uploadId = randomUUID()
+        const db = makeDB('s3-multipart-uploads-metadata')
+        await db.createMultipartUpload(
+          uploadId,
+          bucketId,
+          'test-find.txt',
+          randomUUID(),
+          'sig',
+          undefined,
+          undefined,
+          {
+            cacheControl: 'no-cache',
+            contentLength: 0,
+            size: 0,
+            mimetype: 'text/plain',
+            eTag: 'abc',
+          }
+        )
+      })
+
+      afterAll(async () => {
+        await makeDB().deleteMultipartUpload(uploadId)
+      })
+
+      it('excludes metadata from result when latestMigration is before s3-multipart-uploads-metadata', async () => {
+        const db = makeDB('fix-optimized-search-function') // migration 56
+        const result = await db.findMultipartUpload(uploadId, 'id,version,metadata')
+        expect(result).not.toHaveProperty('metadata')
+      })
+
+      it('includes metadata in result when latestMigration is s3-multipart-uploads-metadata', async () => {
+        const db = makeDB('s3-multipart-uploads-metadata') // migration 57
+        const result = await db.findMultipartUpload(uploadId, 'id,version,metadata')
+        expect(result).toHaveProperty('metadata')
       })
     })
   })

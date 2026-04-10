@@ -34,6 +34,10 @@ export class JwksRollUrlSigningKey extends BaseEvent<JwksRollUrlSigningKeyPayloa
     }
   }
 
+  static async shouldSend() {
+    return true
+  }
+
   static async handle(job: Job<JwksRollUrlSigningKeyPayload>) {
     const { tenantId } = job.data
 

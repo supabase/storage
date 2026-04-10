@@ -1,5 +1,7 @@
 'use strict'
 
+import { TENANT_POOL_CACHE_NAME } from '@internal/cache'
+
 type TestPool = {
   acquire: jest.Mock
   rebalance: jest.Mock
@@ -148,6 +150,109 @@ describe('PoolManager cache lifecycle', () => {
     jest.advanceTimersByTime(20)
 
     expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
+
+    await poolManager.destroyAll()
+  })
+
+  test('records logical pool cache misses and hits', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const metricsModule = await import('../internal/monitoring/metrics')
+    const addSpy = jest.spyOn(metricsModule.cacheRequestsTotal, 'add')
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: any): any {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const settings = createPoolSettings('tenant-cache-metrics')
+
+    const first = poolManager.getPool(settings)
+    const second = poolManager.getPool(settings)
+
+    expect(second).toBe(first)
+    expect(poolManager.created).toHaveLength(1)
+    expect(addSpy.mock.calls).toEqual(
+      expect.arrayContaining([
+        [1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'miss' }],
+        [1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'hit' }],
+      ])
+    )
+
+    await poolManager.destroyAll()
+  })
+
+  test('does not record pool cache misses for single-use external pools without cached pools', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const metricsModule = await import('../internal/monitoring/metrics')
+    const addSpy = jest.spyOn(metricsModule.cacheRequestsTotal, 'add')
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: any): any {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const settings = {
+      ...createPoolSettings('tenant-single-use-external'),
+      isSingleUse: true,
+      isExternalPool: true,
+    }
+
+    const first = poolManager.getPool(settings)
+    const second = poolManager.getPool(settings)
+
+    expect(second).not.toBe(first)
+    expect(poolManager.created).toHaveLength(2)
+    expect(
+      addSpy.mock.calls.filter(([, attrs]) => {
+        return attrs && typeof attrs === 'object' && attrs.cache === TENANT_POOL_CACHE_NAME
+      })
+    ).toEqual([])
+
+    await Promise.all([first.destroy(), second.destroy()])
+    await poolManager.destroyAll()
+  })
+
+  test('reuses cached pools for single-use external requests and records a hit', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const metricsModule = await import('../internal/monitoring/metrics')
+    const addSpy = jest.spyOn(metricsModule.cacheRequestsTotal, 'add')
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: any): any {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const tenantId = 'tenant-single-use-external-reuses-cache'
+    const cachedPool = poolManager.getPool(createPoolSettings(tenantId))
+    addSpy.mockClear()
+
+    const reusedPool = poolManager.getPool({
+      ...createPoolSettings(tenantId),
+      isSingleUse: true,
+      isExternalPool: true,
+    })
+
+    expect(reusedPool).toBe(cachedPool)
+    expect(poolManager.created).toHaveLength(1)
+    expect(addSpy.mock.calls).toEqual([[1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'hit' }]])
 
     await poolManager.destroyAll()
   })

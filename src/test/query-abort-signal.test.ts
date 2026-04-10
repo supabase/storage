@@ -17,7 +17,8 @@ describe('Query Abort Signal', () => {
   })
 
   async function withIsolatedConnection<T>(run: (conn: TestConnection) => Promise<T>) {
-    // Force fresh, cache is checked before isSingleUse.
+    // Force fresh because single-use external requests still reuse
+    // an already cached pool for the same tenant.
     await poolManager.destroy(tenantId)
 
     // Use an uncached single-use pool so aborted queries can't

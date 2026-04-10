@@ -221,6 +221,78 @@ describe('Tenant configs', () => {
     await expect(getFeatures('abc')).resolves.toEqual(payload.features)
   })
 
+  test('Get tenant config omits sensitive data when ADMIN_RETURN_TENANT_SENSITIVE_DATA is false', async () => {
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    const previousValue = process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA
+    process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA = 'false'
+
+    try {
+      let isolatedApp: ReturnType<typeof import('../admin-app').default> | undefined
+      await jest.isolateModulesAsync(async () => {
+        const { default: createApp } = await import('../admin-app')
+        isolatedApp = createApp({})
+      })
+
+      const singleResponse = await isolatedApp!.inject({
+        method: 'GET',
+        url: `/tenants/abc`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(singleResponse.statusCode).toBe(200)
+      const singleJSON = JSON.parse(singleResponse.body)
+
+      expect(singleJSON.anonKey).toBeUndefined()
+      expect(singleJSON.databaseUrl).toBeUndefined()
+      expect(singleJSON.databasePoolUrl).toBeUndefined()
+      expect(singleJSON.jwtSecret).toBeUndefined()
+      expect(singleJSON.jwks).toBeUndefined()
+      expect(singleJSON.serviceKey).toBeUndefined()
+
+      // Non-sensitive fields are still returned
+      expect(singleJSON.fileSizeLimit).toBe(payload.fileSizeLimit)
+      expect(singleJSON.maxConnections).toBe(payload.maxConnections)
+      expect(singleJSON.features).toEqual(payload.features)
+      expect(singleJSON.tracingMode).toBe(payload.tracingMode)
+
+      const listResponse = await isolatedApp!.inject({
+        method: 'GET',
+        url: `/tenants`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(listResponse.statusCode).toBe(200)
+      const listJSON = JSON.parse(listResponse.body)
+      expect(listJSON).toHaveLength(1)
+      expect(listJSON[0].id).toBe('abc')
+      expect(listJSON[0].anonKey).toBeUndefined()
+      expect(listJSON[0].databaseUrl).toBeUndefined()
+      expect(listJSON[0].databasePoolUrl).toBeUndefined()
+      expect(listJSON[0].jwtSecret).toBeUndefined()
+      expect(listJSON[0].jwks).toBeUndefined()
+      expect(listJSON[0].serviceKey).toBeUndefined()
+      expect(listJSON[0].fileSizeLimit).toBe(payload.fileSizeLimit)
+
+      await isolatedApp!.close()
+    } finally {
+      if (previousValue === undefined) {
+        delete process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA
+      } else {
+        process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA = previousValue
+      }
+    }
+  })
+
   test('Create tenant config preserves disableEvents and image transformation maxResolution', async () => {
     const createPayload = {
       ...payload,

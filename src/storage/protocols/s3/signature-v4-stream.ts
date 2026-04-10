@@ -1,10 +1,195 @@
 // ChunkSignatureParser.ts
 
 import { ERRORS } from '@internal/errors'
+import { EMPTY_SHA256_HASH } from '@storage/protocols/s3/signature-v4'
 import crypto from 'crypto'
 import { Transform, TransformCallback, TransformOptions } from 'stream'
 
 type ParserState = 'HEADER' | 'DATA' | 'FOOTER' | 'TRAILER'
+
+const EMPTY_BUFFER = Buffer.alloc(0) as Buffer<ArrayBufferLike>
+const CRLF = Buffer.from('\r\n')
+const TRAILER_TERMINATOR = Buffer.from('\r\n\r\n')
+
+class SegmentedBufferQueue {
+  private segments: Buffer[] = []
+  private headIndex = 0
+  private headOffset = 0
+  private totalLength = 0
+
+  get length() {
+    return this.totalLength
+  }
+
+  append(buffer: Buffer) {
+    if (buffer.length === 0) {
+      return
+    }
+
+    this.segments.push(buffer)
+    this.totalLength += buffer.length
+  }
+
+  peek(length: number): Buffer {
+    if (length === 0) {
+      return EMPTY_BUFFER
+    }
+
+    if (length > this.totalLength) {
+      throw new Error('Insufficient buffered data')
+    }
+
+    const head = this.segments[this.headIndex]
+    const availableInHead = head.length - this.headOffset
+
+    if (length <= availableInHead) {
+      return head.subarray(this.headOffset, this.headOffset + length)
+    }
+
+    const parts: Buffer[] = []
+    let remaining = length
+
+    for (let idx = this.headIndex; idx < this.segments.length && remaining > 0; idx++) {
+      const segment = this.segments[idx]
+      const start = idx === this.headIndex ? this.headOffset : 0
+      const take = Math.min(remaining, segment.length - start)
+
+      if (take > 0) {
+        parts.push(segment.subarray(start, start + take))
+        remaining -= take
+      }
+    }
+
+    return Buffer.concat(parts, length)
+  }
+
+  readUtf8(length: number) {
+    return this.peek(length).toString('utf8')
+  }
+
+  peekLastByte(): number | undefined {
+    if (this.totalLength === 0) {
+      return undefined
+    }
+
+    for (let idx = this.segments.length - 1; idx >= this.headIndex; idx--) {
+      const segment = this.segments[idx]
+      const start = idx === this.headIndex ? this.headOffset : 0
+
+      if (segment.length > start) {
+        return segment[segment.length - 1]
+      }
+    }
+
+    return undefined
+  }
+
+  consume(length: number, onChunk?: (chunk: Buffer) => void): number {
+    const requested = Math.min(length, this.totalLength)
+    let remaining = requested
+
+    while (remaining > 0 && this.headIndex < this.segments.length) {
+      const head = this.segments[this.headIndex]
+      const available = head.length - this.headOffset
+      const take = Math.min(remaining, available)
+      const piece = head.subarray(this.headOffset, this.headOffset + take)
+
+      onChunk?.(piece)
+
+      this.headOffset += take
+      this.totalLength -= take
+      remaining -= take
+
+      if (this.headOffset === head.length) {
+        this.headIndex += 1
+        this.headOffset = 0
+      }
+    }
+
+    this.compact()
+    return requested - remaining
+  }
+
+  find(pattern: Buffer, fromOffset = 0): number {
+    if (pattern.length === 0) {
+      return 0
+    }
+
+    if (fromOffset >= this.totalLength) {
+      return -1
+    }
+
+    let absoluteOffset = 0
+    let tail: Buffer<ArrayBufferLike> = EMPTY_BUFFER
+
+    for (let idx = this.headIndex; idx < this.segments.length; idx++) {
+      const segment = this.segments[idx]
+      const segmentStart = idx === this.headIndex ? this.headOffset : 0
+      const segmentLength = segment.length - segmentStart
+
+      if (segmentLength === 0) {
+        continue
+      }
+
+      if (fromOffset >= absoluteOffset + segmentLength) {
+        absoluteOffset += segmentLength
+        continue
+      }
+
+      const viewStart = segmentStart + Math.max(0, fromOffset - absoluteOffset)
+      const view = segment.subarray(viewStart)
+
+      if (tail.length > 0) {
+        const boundaryLength = Math.min(pattern.length - 1, view.length)
+
+        if (boundaryLength > 0) {
+          const boundary = Buffer.concat(
+            [tail, view.subarray(0, boundaryLength)],
+            tail.length + boundaryLength
+          )
+          const boundaryIdx = boundary.indexOf(pattern)
+
+          if (boundaryIdx >= 0) {
+            const matchStart = absoluteOffset - tail.length + boundaryIdx
+            if (matchStart >= fromOffset) {
+              return matchStart
+            }
+          }
+        }
+      }
+
+      const innerIdx = view.indexOf(pattern)
+      if (innerIdx >= 0) {
+        return absoluteOffset + (viewStart - segmentStart) + innerIdx
+      }
+
+      const viewTail = view.subarray(Math.max(0, view.length - (pattern.length - 1)))
+      const tailSource =
+        tail.length === 0
+          ? viewTail
+          : Buffer.concat([tail, viewTail], tail.length + viewTail.length)
+      const tailLength = Math.min(pattern.length - 1, tailSource.length)
+      tail = tailLength === 0 ? EMPTY_BUFFER : tailSource.subarray(tailSource.length - tailLength)
+      absoluteOffset += segmentLength
+    }
+
+    return -1
+  }
+
+  private compact() {
+    if (this.totalLength === 0) {
+      this.segments = []
+      this.headIndex = 0
+      this.headOffset = 0
+      return
+    }
+
+    if (this.headIndex > 32 && this.headIndex * 2 >= this.segments.length) {
+      this.segments = this.segments.slice(this.headIndex)
+      this.headIndex = 0
+    }
+  }
+}
 
 /**
  * Represents the different types of V4 streaming algorithms supported.
@@ -69,15 +254,18 @@ export interface ChunkSignatureParserOptions extends TransformOptions {
  *
  */
 export class ChunkSignatureV4Parser extends Transform {
-  private buffer = Buffer.alloc(0)
+  private readonly buffer = new SegmentedBufferQueue()
   private state: ParserState = 'HEADER'
   private bytesRemaining = 0
+  private headerSearchOffset = 0
+  private trailerSearchOffset = 0
 
   private dataRead = 0
   private currentSignature?: string
   private currentChunkSize = 0
-  private currentHash!: crypto.Hash
+  private currentHash?: crypto.Hash
   private previousSignature?: string
+  private completedFinalChunk = false
 
   private readonly maxHeaderLength: number
   private readonly signaturePattern: RegExp
@@ -94,7 +282,7 @@ export class ChunkSignatureV4Parser extends Transform {
 
   _transform(chunk: Buffer | string, encoding: BufferEncoding, cb: TransformCallback) {
     const data = typeof chunk === 'string' ? Buffer.from(chunk, encoding) : chunk
-    this.buffer = Buffer.concat([this.buffer, data])
+    this.buffer.append(data)
 
     try {
       let madeProgress: boolean
@@ -130,6 +318,31 @@ export class ChunkSignatureV4Parser extends Transform {
     }
   }
 
+  _flush(callback: TransformCallback) {
+    try {
+      switch (this.state) {
+        case 'HEADER':
+          if (this.buffer.length > 0) {
+            throw new Error('Incomplete chunk header')
+          }
+          if (!this.completedFinalChunk) {
+            throw new Error('Missing final chunk')
+          }
+          break
+        case 'DATA':
+          throw new Error('Unexpected end of chunk data')
+        case 'FOOTER':
+          throw new Error('Missing CRLF after chunk data')
+        case 'TRAILER':
+          throw new Error('Incomplete trailer section')
+      }
+
+      callback()
+    } catch (err) {
+      callback(err as Error)
+    }
+  }
+
   private validateStreamingAlgorithm(alg: string) {
     const validAlgorithms = [
       'STREAMING-UNSIGNED-PAYLOAD-TRAILER',
@@ -154,19 +367,19 @@ export class ChunkSignatureV4Parser extends Transform {
       size = parseInt(sizeHex, 16)
       sig = signature
       if (isNaN(size) || !this.signaturePattern.test(sig)) {
-        throw new Error(`Invalid header: "${line}"`)
+        throw new Error('Invalid chunk header')
       }
     } else {
       size = parseInt(line, 16)
       if (isNaN(size)) {
-        throw new Error(`Invalid chunk size: "${line}"`)
+        throw new Error('Invalid chunk size')
       }
       // signature required for signed algorithms
       if (
         this.alg === 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD' ||
         this.alg === 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER'
       ) {
-        throw new Error(`Missing chunk signature: "${line}"`)
+        throw new Error('Missing chunk signature')
       }
     }
     return { size, signature: sig }
@@ -175,14 +388,26 @@ export class ChunkSignatureV4Parser extends Transform {
   private consumeHeader(): boolean {
     if (this.buffer.length === 0) return false
 
-    const idx = this.buffer.indexOf('\r\n')
+    if (this.completedFinalChunk) {
+      throw new Error('Unexpected data after final chunk')
+    }
+
+    const idx = this.buffer.find(CRLF, this.headerSearchOffset)
     if (idx < 0) {
-      if (this.buffer.length > this.maxHeaderLength) {
+      const effectiveHeaderLength =
+        this.buffer.length - (this.buffer.peekLastByte() === CRLF[0] ? 1 : 0)
+      if (effectiveHeaderLength > this.maxHeaderLength) {
         throw new Error(`Header exceeds ${this.maxHeaderLength} bytes`)
       }
+      this.headerSearchOffset = Math.max(0, this.buffer.length - (CRLF.length - 1))
       return false
     }
-    const line = this.buffer.subarray(0, idx).toString('utf8')
+
+    if (idx > this.maxHeaderLength) {
+      throw new Error(`Header exceeds ${this.maxHeaderLength} bytes`)
+    }
+
+    const line = this.buffer.readUtf8(idx)
     const { size, signature } = this.parseHeaderLine(line)
 
     if (size > this.opts.maxChunkSize) {
@@ -192,32 +417,43 @@ export class ChunkSignatureV4Parser extends Transform {
     this.currentChunkSize = size
     this.currentSignature = signature
     this.bytesRemaining = size
-    this.currentHash = crypto.createHash('sha256')
+    this.currentHash =
+      size > 0 && this.requiresChunkHash() ? crypto.createHash('sha256') : undefined
 
-    this.buffer = this.buffer.subarray(idx + 2)
+    this.buffer.consume(idx + CRLF.length)
+    this.headerSearchOffset = 0
     this.state = 'DATA'
     return true
   }
 
   private consumeData(): boolean {
     const want = this.bytesRemaining
-    const piece = this.buffer.length <= want ? this.buffer : this.buffer.subarray(0, want)
 
-    this.currentHash.update(piece)
-
-    if (piece.length === 0) {
-      const isLastChunk = this.currentChunkSize === 0
-      if (isLastChunk) {
+    if (want === 0) {
+      if (this.hasTrailer()) {
+        this.emitCurrentSignatureForVerification()
         this.state = 'TRAILER'
+        this.trailerSearchOffset = 0
+      } else {
+        this.dataRead = 0
+        this.state = 'FOOTER'
       }
-      return isLastChunk
+      return true
     }
 
-    this.push(piece)
+    if (this.buffer.length === 0) {
+      return false
+    }
 
-    this.buffer = this.buffer.subarray(piece.length)
-    this.bytesRemaining -= piece.length
-    this.dataRead += piece.length
+    const toConsume = Math.min(this.buffer.length, want)
+
+    this.buffer.consume(toConsume, (piece) => {
+      this.currentHash?.update(piece)
+      this.push(piece)
+    })
+
+    this.bytesRemaining -= toConsume
+    this.dataRead += toConsume
 
     if (this.dataRead > this.opts.maxChunkSize) {
       throw new Error(`Chunk size exceeds ${this.opts.maxChunkSize} bytes`)
@@ -231,33 +467,34 @@ export class ChunkSignatureV4Parser extends Transform {
   }
 
   private consumeFooter(): boolean {
-    if (this.buffer.length < 2) return false
-    if (this.buffer[0] !== 0x0d || this.buffer[1] !== 0x0a) {
+    if (this.buffer.length < CRLF.length) return false
+
+    const footer = this.buffer.peek(CRLF.length)
+    if (footer[0] !== 0x0d || footer[1] !== 0x0a) {
       throw new Error('Missing CRLF after chunk data')
     }
 
-    const sig = this.currentSignature
-    const size = this.currentChunkSize
-    const prev = this.previousSignature
-
-    if (this.alg !== 'STREAMING-UNSIGNED-PAYLOAD-TRAILER') {
-      const hash = this.currentHash.digest('hex')
-      this.emit('signatureReadyForVerification', sig, size, hash, prev)
+    this.emitCurrentSignatureForVerification()
+    this.buffer.consume(CRLF.length)
+    if (this.currentChunkSize === 0) {
+      this.completedFinalChunk = true
     }
-
-    this.previousSignature = sig
-    this.buffer = this.buffer.subarray(2)
-    this.state = size === 0 && this.hasTrailer() ? 'TRAILER' : 'HEADER'
+    this.state = 'HEADER'
+    this.headerSearchOffset = 0
+    this.trailerSearchOffset = 0
 
     return true
   }
 
   private consumeTrailer(): boolean {
-    const dbl = this.buffer.indexOf('\r\n\r\n')
-    if (dbl < 0) return false
+    const dbl = this.buffer.find(TRAILER_TERMINATOR, this.trailerSearchOffset)
+    if (dbl < 0) {
+      this.trailerSearchOffset = Math.max(0, this.buffer.length - (TRAILER_TERMINATOR.length - 1))
+      return false
+    }
 
-    const block = this.buffer.subarray(0, dbl).toString('utf8')
-    this.buffer = this.buffer.subarray(dbl + 4)
+    const block = this.buffer.readUtf8(dbl)
+    this.buffer.consume(dbl + TRAILER_TERMINATOR.length)
 
     const parsed: Record<string, string> = {}
     block.split('\r\n').forEach((line) => {
@@ -273,12 +510,34 @@ export class ChunkSignatureV4Parser extends Transform {
     })
 
     this.emit('trailer', trailers)
+    this.completedFinalChunk = true
     this.state = 'HEADER'
+    this.headerSearchOffset = 0
+    this.trailerSearchOffset = 0
 
     return true
   }
 
   private hasTrailer(): boolean {
     return this.alg.endsWith('-TRAILER')
+  }
+
+  private requiresChunkHash() {
+    return this.alg !== 'STREAMING-UNSIGNED-PAYLOAD-TRAILER'
+  }
+
+  private emitCurrentSignatureForVerification() {
+    const sig = this.currentSignature
+    const size = this.currentChunkSize
+    const prev = this.previousSignature
+    const hash =
+      this.currentHash?.digest('hex') ??
+      (size === 0 && this.requiresChunkHash() ? EMPTY_SHA256_HASH : undefined)
+
+    if (hash !== undefined) {
+      this.emit('signatureReadyForVerification', sig, size, hash, prev)
+    }
+
+    this.previousSignature = sig
   }
 }

@@ -1,8 +1,9 @@
-import { createTtlCache } from '@internal/cache'
+import { createTtlCache, TENANT_POOL_CACHE_NAME } from '@internal/cache'
 import { wait } from '@internal/concurrency'
 import { getSslSettings } from '@internal/database/ssl'
 import { logger, logSchema } from '@internal/monitoring'
 import {
+  cacheRequestsTotal,
   dbActiveConnection,
   dbActivePool,
   dbInUseConnection,
@@ -207,16 +208,30 @@ export class PoolManager {
   }
 
   getPool(settings: TenantConnectionOptions) {
-    const existingPool = tenantPools.get(settings.tenantId)
+    const isCacheable = (settings.isSingleUse && !settings.isExternalPool) || !settings.isSingleUse
+    const { value: existingPool, outcome } = tenantPools.getWithOutcome(settings.tenantId)
+
     if (existingPool) {
+      cacheRequestsTotal.add(1, {
+        cache: TENANT_POOL_CACHE_NAME,
+        outcome,
+      })
+
       return existingPool
     }
 
+    if (!isCacheable) {
+      return this.newPool({ ...settings, numWorkers: this.numWorkers })
+    }
+
+    cacheRequestsTotal.add(1, {
+      cache: TENANT_POOL_CACHE_NAME,
+      outcome,
+    })
+
     const newPool = this.newPool({ ...settings, numWorkers: this.numWorkers })
 
-    if ((settings.isSingleUse && !settings.isExternalPool) || !settings.isSingleUse) {
-      tenantPools.set(settings.tenantId, newPool)
-    }
+    tenantPools.set(settings.tenantId, newPool)
     return newPool
   }
 

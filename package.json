@@ -47,7 +47,7 @@
     "@opentelemetry/instrumentation-runtime-node": "^0.25.0",
     "@opentelemetry/sdk-metrics": "^2.6.0",
     "@opentelemetry/sdk-node": "^0.213.0",
-    "@platformatic/node": "^3.45.0",
+    "@platformatic/node": "^3.50.0",
     "@platformatic/wattpm-pprof-capture": "^3.45.0",
     "@shopify/semaphore": "^3.0.2",
     "@smithy/node-http-handler": "^2.3.1",

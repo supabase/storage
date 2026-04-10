@@ -1,0 +1,394 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import Fastify, { FastifyInstance } from 'fastify'
+import { setErrorHandler } from '../../src/http/error-handler'
+import { headerValidator } from '../../src/http/plugins/header-validator'
+import { StorageBackendError } from '@internal/errors'
+import { validateXRobotsTag } from '../../src/storage/validators/x-robots-tag'
+
+describe('header-validator plugin', () => {
+  let app: FastifyInstance
+
+  beforeEach(async () => {
+    app = Fastify()
+    await app.register(headerValidator())
+    setErrorHandler(app)
+  })
+
+  afterEach(async () => {
+    await app.close()
+  })
+
+  it('should reject response with newline in header value', async () => {
+    app.get('/test', async (_request, reply) => {
+      reply.header('x-test', 'value\nwith\nnewlines')
+      return { ok: true }
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/test' })
+
+    expect(response.statusCode).toBe(400)
+    const body = response.json()
+    expect(body.message).toContain('Invalid character in response header')
+    expect(body.message).toContain('x-test')
+  })
+
+  it('should reject response with carriage return in header value', async () => {
+    app.get('/test', async (_request, reply) => {
+      reply.header('x-custom', 'value\rwith\rCR')
+      return { ok: true }
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/test' })
+
+    expect(response.statusCode).toBe(400)
+    const body = response.json()
+    expect(body.error).toBe('Bad Request')
+    expect(body.message).toContain('Invalid character in response header')
+  })
+
+  it('should allow valid header values with TAB character', async () => {
+    app.get('/test', async (_request, reply) => {
+      reply.header('x-custom', 'value\twith\ttabs')
+      return { ok: true }
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/test' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['x-custom']).toBe('value\twith\ttabs')
+  })
+
+  it('should allow normal ASCII header values', async () => {
+    app.get('/test', async (_request, reply) => {
+      reply.header('x-transformations', 'width:100,height:200,resize:cover')
+      return { ok: true }
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/test' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['x-transformations']).toBe('width:100,height:200,resize:cover')
+  })
+
+  it('should reject response with newline in array header value', async () => {
+    app.get('/test', async (_request, reply) => {
+      reply.header('x-test', ['blah', 'stuff', 'value\nwith\nnewlines', 'other'])
+      return { ok: true }
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/test' })
+
+    expect(response.statusCode).toBe(400)
+    const body = response.json()
+    expect(body.message).toContain('Invalid character in response header')
+    expect(body.message).toContain('x-test')
+  })
+
+  it('should allow normal ASCII array header values', async () => {
+    app.get('/test', async (_request, reply) => {
+      reply.header('x-transformations', ['width:100,height:200,resize:cover', 'blah', 'blah'])
+      return { ok: true }
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/test' })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['x-transformations']).toEqual([
+      'width:100,height:200,resize:cover',
+      'blah',
+      'blah',
+    ])
+  })
+
+  it('should close the connection when a renderable error requests it', async () => {
+    app.get('/test-close-connection', async () => {
+      throw StorageBackendError.fromError(new Error('socket hang up')).withConnectionClose()
+    })
+
+    const response = await app.inject({ method: 'GET', url: '/test-close-connection' })
+
+    expect(response.statusCode).toBe(500)
+    expect(response.headers.connection).toBe('close')
+  })
+})
+
+describe('validateXRobotsTag', () => {
+  describe('invalid inputs', () => {
+    it('should throw error for empty string', () => {
+      expect(() => validateXRobotsTag('')).toThrow(
+        'X-Robots-Tag header value must be a non-empty string'
+      )
+    })
+
+    it('should throw error for whitespace-only string', () => {
+      expect(() => validateXRobotsTag('   ')).toThrow(
+        'X-Robots-Tag header value must be a non-empty string'
+      )
+    })
+
+    it('should throw error for non-string value', () => {
+      expect(() => validateXRobotsTag(null as unknown as string)).toThrow(
+        'X-Robots-Tag header value must be a non-empty string'
+      )
+    })
+
+    it('should throw error for undefined', () => {
+      expect(() => validateXRobotsTag(undefined as unknown as string)).toThrow(
+        'X-Robots-Tag header value must be a non-empty string'
+      )
+    })
+
+    it('should throw error for empty rule in comma-separated list', () => {
+      expect(() => validateXRobotsTag('noindex,  , nofollow')).toThrow(
+        'X-Robots-Tag header contains empty rule'
+      )
+    })
+
+    it('should throw error for invalid rule', () => {
+      expect(() => validateXRobotsTag('invalidrule')).toThrow(
+        'Invalid X-Robots-Tag rule: "invalidrule"'
+      )
+    })
+  })
+
+  describe('valid simple rules', () => {
+    it.each([
+      'all',
+      'noindex',
+      'nofollow',
+      'none',
+      'nosnippet',
+      'indexifembedded',
+      'notranslate',
+      'noimageindex',
+    ])('should accept "%s"', (rule) => {
+      expect(() => validateXRobotsTag(rule)).not.toThrow()
+    })
+  })
+
+  describe('multiple rules', () => {
+    it('should accept multiple valid rules separated by commas', () => {
+      expect(() => validateXRobotsTag('noindex, nofollow')).not.toThrow()
+    })
+
+    it('should accept multiple rules with extra whitespace', () => {
+      expect(() => validateXRobotsTag('noindex,   nofollow,  noimageindex')).not.toThrow()
+    })
+
+    it('should accept rules with trailing comma and whitespace', () => {
+      expect(() => validateXRobotsTag('noindex, nofollow,   ')).not.toThrow()
+    })
+
+    it('should accept single rule with trailing comma', () => {
+      expect(() => validateXRobotsTag('noindex,')).not.toThrow()
+    })
+
+    it('should throw for invalid rule in multiple rules', () => {
+      expect(() => validateXRobotsTag('noindex, invalidrule, nofollow')).toThrow(
+        'Invalid X-Robots-Tag rule: "invalidrule"'
+      )
+    })
+  })
+
+  describe('max-snippet parametric rule', () => {
+    it('should accept valid max-snippet with number', () => {
+      expect(() => validateXRobotsTag('max-snippet: 50')).not.toThrow()
+    })
+
+    it('should accept max-snippet with 0', () => {
+      expect(() => validateXRobotsTag('max-snippet: 0')).not.toThrow()
+    })
+
+    it('should throw for max-snippet with negative number', () => {
+      expect(() => validateXRobotsTag('max-snippet: -5')).toThrow(
+        'X-Robots-Tag "max-snippet" value must be a non-negative number'
+      )
+    })
+
+    it('should throw for max-snippet with non-numeric value', () => {
+      expect(() => validateXRobotsTag('max-snippet: abc')).toThrow(
+        'X-Robots-Tag "max-snippet" value must be a non-negative number'
+      )
+    })
+
+    it('should throw for max-snippet without value', () => {
+      expect(() => validateXRobotsTag('max-snippet:')).toThrow(
+        'X-Robots-Tag rule "max-snippet" requires a value'
+      )
+    })
+
+    it('should throw for max-snippet with whitespace-only value', () => {
+      expect(() => validateXRobotsTag('max-snippet:   ')).toThrow(
+        'X-Robots-Tag rule "max-snippet" requires a value'
+      )
+    })
+  })
+
+  describe('max-image-preview parametric rule', () => {
+    it('should accept "none"', () => {
+      expect(() => validateXRobotsTag('max-image-preview: none')).not.toThrow()
+    })
+
+    it('should accept "standard"', () => {
+      expect(() => validateXRobotsTag('max-image-preview: standard')).not.toThrow()
+    })
+
+    it('should accept "large"', () => {
+      expect(() => validateXRobotsTag('max-image-preview: large')).not.toThrow()
+    })
+
+    it('should throw for invalid value', () => {
+      expect(() => validateXRobotsTag('max-image-preview: invalid')).toThrow(
+        'X-Robots-Tag "max-image-preview" value must be one of: none, standard, large'
+      )
+    })
+
+    it('should throw for missing value', () => {
+      expect(() => validateXRobotsTag('max-image-preview:')).toThrow(
+        'X-Robots-Tag rule "max-image-preview" requires a value'
+      )
+    })
+  })
+
+  describe('max-video-preview parametric rule', () => {
+    it('should accept positive number', () => {
+      expect(() => validateXRobotsTag('max-video-preview: 30')).not.toThrow()
+    })
+
+    it('should accept 0', () => {
+      expect(() => validateXRobotsTag('max-video-preview: 0')).not.toThrow()
+    })
+
+    it('should accept -1 (no limit)', () => {
+      expect(() => validateXRobotsTag('max-video-preview: -1')).not.toThrow()
+    })
+
+    it('should throw for number less than -1', () => {
+      expect(() => validateXRobotsTag('max-video-preview: -2')).toThrow(
+        'X-Robots-Tag "max-video-preview" value must be a number >= -1'
+      )
+    })
+
+    it('should throw for non-numeric value', () => {
+      expect(() => validateXRobotsTag('max-video-preview: abc')).toThrow(
+        'X-Robots-Tag "max-video-preview" value must be a number >= -1'
+      )
+    })
+
+    it('should throw for missing value', () => {
+      expect(() => validateXRobotsTag('max-video-preview:')).toThrow(
+        'X-Robots-Tag rule "max-video-preview" requires a value'
+      )
+    })
+  })
+
+  describe('unavailable_after parametric rule', () => {
+    it('should accept valid RFC 822 date', () => {
+      expect(() =>
+        validateXRobotsTag('unavailable_after: Wed, 03 Dec 2025 13:09:53 GMT')
+      ).not.toThrow()
+    })
+
+    it('should accept valid ISO 8601 date', () => {
+      expect(() => validateXRobotsTag('unavailable_after: 2025-12-03T13:09:53Z')).not.toThrow()
+    })
+
+    it('should accept other valid date format', () => {
+      expect(() => validateXRobotsTag('unavailable_after: 2025-12-03')).not.toThrow()
+    })
+
+    it('should accept RFC 822 date followed by another rule', () => {
+      expect(() =>
+        validateXRobotsTag('unavailable_after: Wed, 03 Dec 2025 13:09:53 GMT, noindex')
+      ).not.toThrow()
+    })
+
+    it('should throw for invalid date', () => {
+      expect(() => validateXRobotsTag('unavailable_after: not-a-date')).toThrow(
+        'X-Robots-Tag "unavailable_after" value must be a valid date'
+      )
+    })
+
+    it('should throw for missing value', () => {
+      expect(() => validateXRobotsTag('unavailable_after:')).toThrow(
+        'X-Robots-Tag rule "unavailable_after" requires a value'
+      )
+    })
+  })
+
+  describe('user agent specific rules', () => {
+    it('should accept single rule for specific user agent', () => {
+      expect(() => validateXRobotsTag('googlebot: noindex')).not.toThrow()
+    })
+
+    it('should accept multiple rules for specific user agent', () => {
+      expect(() => validateXRobotsTag('googlebot: noindex, nofollow')).not.toThrow()
+    })
+
+    it('should accept multiple user agents with different rules', () => {
+      expect(() =>
+        validateXRobotsTag('BadBot: noindex, nofollow, googlebot: nofollow')
+      ).not.toThrow()
+    })
+
+    it('should throw for user agent with no rules', () => {
+      expect(() => validateXRobotsTag('googlebot:')).toThrow(
+        'X-Robots-Tag user agent "googlebot" has no rules specified'
+      )
+    })
+
+    it('should throw for user agent with whitespace-only rules', () => {
+      expect(() => validateXRobotsTag('googlebot:   ')).toThrow(
+        'X-Robots-Tag user agent "googlebot" has no rules specified'
+      )
+    })
+
+    it('should throw for invalid rule in user agent rules', () => {
+      expect(() => validateXRobotsTag('googlebot: invalidrule')).toThrow(
+        'Invalid X-Robots-Tag rule: "invalidrule"'
+      )
+    })
+  })
+
+  describe('invalid parametric rule names', () => {
+    it('should throw for unknown parametric rule', () => {
+      expect(() => validateXRobotsTag('unknown-rule: invalidvalue')).toThrow(
+        'Invalid X-Robots-Tag rule: "invalidvalue"'
+      )
+    })
+  })
+
+  describe('complex mixed rules', () => {
+    it('should accept mix of simple and parametric rules', () => {
+      expect(() => validateXRobotsTag('noindex, max-snippet: 100')).not.toThrow()
+    })
+
+    it('should accept mix of user agent and parametric rules', () => {
+      expect(() => validateXRobotsTag('googlebot: noindex, max-snippet: 50')).not.toThrow()
+    })
+
+    it('should accept complex real-world example', () => {
+      expect(() =>
+        validateXRobotsTag('noindex, nofollow, max-snippet: 100, max-image-preview: large')
+      ).not.toThrow()
+    })
+  })
+
+  describe('whitespace handling', () => {
+    it('should accept rules with excessive whitespace between rules', () => {
+      expect(() => validateXRobotsTag('noindex,     nofollow,   noimageindex')).not.toThrow()
+    })
+
+    it('should accept parametric rules with whitespace after colon', () => {
+      expect(() => validateXRobotsTag('max-snippet:    50')).not.toThrow()
+    })
+
+    it('should reject rules with spaces in rule names', () => {
+      expect(() => validateXRobotsTag('no index')).toThrow('Invalid X-Robots-Tag rule: "no index"')
+    })
+
+    it('should accept rules with leading and trailing whitespace', () => {
+      expect(() => validateXRobotsTag('  noindex, nofollow  ')).not.toThrow()
+    })
+  })
+})

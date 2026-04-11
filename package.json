@@ -47,8 +47,8 @@
     "@opentelemetry/instrumentation-runtime-node": "^0.25.0",
     "@opentelemetry/sdk-metrics": "^2.6.0",
     "@opentelemetry/sdk-node": "^0.213.0",
-    "@platformatic/node": "^3.45.0",
-    "@platformatic/wattpm-pprof-capture": "^3.45.0",
+    "@platformatic/node": "^3.52.0",
+    "@platformatic/wattpm-pprof-capture": "^3.52.0",
     "@shopify/semaphore": "^3.0.2",
     "@smithy/node-http-handler": "^2.3.1",
     "@tus/file-store": "2.0.0",
@@ -77,9 +77,9 @@
     "pg-listen": "^1.7.0",
     "pino": "^10.3.1",
     "pino-logflare": "^0.5.2",
-    "platformatic": "^3.45.0",
+    "platformatic": "^3.52.0",
     "postgres-migrations": "^5.3.0",
-    "wattpm": "^3.45.0",
+    "wattpm": "^3.52.0",
     "xml2js": "^0.6.2"
   },
   "devDependencies": {

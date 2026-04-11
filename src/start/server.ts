@@ -28,7 +28,6 @@ import { getConfig } from '../config'
 import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 
 const shutdownSignal = new AsyncAbortController()
-let closePromise: Promise<void> | undefined
 
 bindShutdownSignals(shutdownSignal)
 registerPlatformaticCloseHandler()
@@ -46,7 +45,7 @@ main()
       error: e,
     })
 
-    await shutdown(shutdownSignal)
+    await close()
     process.exit(1)
   })
   .catch(() => {
@@ -168,7 +167,7 @@ async function httpServer(signal: AbortSignal) {
     routerOptions: { maxParamLength: 2500 },
   })
 
-  const closePromise = createServerClosedPromise(app.server, () => {
+  const serverClosedPromise = createServerClosedPromise(app.server, () => {
     logSchema.info(logger, '[Server] Exited', {
       type: 'server',
     })
@@ -182,7 +181,7 @@ async function httpServer(signal: AbortSignal) {
           type: 'server',
         })
 
-        await closePromise
+        await serverClosedPromise
       },
       { once: true }
     )
@@ -216,7 +215,7 @@ async function httpAdminServer(
     requestIdHeader: adminRequestIdHeader,
   })
 
-  const closePromise = createServerClosedPromise(adminApp.server, () => {
+  const adminServerClosedPromise = createServerClosedPromise(adminApp.server, () => {
     logSchema.info(logger, '[Admin Server] Exited', {
       type: 'server',
     })
@@ -229,7 +228,7 @@ async function httpAdminServer(
         type: 'server',
       })
 
-      await closePromise
+      await adminServerClosedPromise
     },
     { once: true }
   )
@@ -247,11 +246,7 @@ async function httpAdminServer(
 }
 
 export async function close() {
-  if (!closePromise) {
-    closePromise = shutdown(shutdownSignal)
-  }
-
-  return closePromise
+  return shutdown(shutdownSignal)
 }
 
 function registerPlatformaticCloseHandler() {

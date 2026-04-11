@@ -4,6 +4,7 @@ import '@internal/monitoring/otel-metrics'
 import { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { Cluster } from '@internal/cluster/cluster'
 import { AsyncAbortController } from '@internal/concurrency'
+import { getGlobal } from '@platformatic/globals'
 import {
   listenForTenantUpdate,
   multitenantKnex,
@@ -27,8 +28,10 @@ import { getConfig } from '../config'
 import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 
 const shutdownSignal = new AsyncAbortController()
+let closePromise: Promise<void> | undefined
 
 bindShutdownSignals(shutdownSignal)
+registerPlatformaticCloseHandler()
 
 // Start API server
 main()
@@ -241,6 +244,26 @@ async function httpAdminServer(
     throw err
   }
   return adminApp
+}
+
+export async function close() {
+  if (!closePromise) {
+    closePromise = shutdown(shutdownSignal)
+  }
+
+  return closePromise
+}
+
+function registerPlatformaticCloseHandler() {
+  const platformatic = getGlobal()
+
+  if (!platformatic?.events) {
+    return
+  }
+
+  platformatic.events.on('close', () => {
+    void close()
+  })
 }
 
 async function upgrades() {

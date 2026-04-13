@@ -1029,17 +1029,25 @@ export class S3ProtocolHandler {
       .from(Bucket)
       .deleteObjects(Delete.Objects.map((o) => o.Key || ''))
 
-    const deleted = Delete.Objects.filter((o) => deletedResult.find((d) => d.name === o.Key)).map(
-      (o) => ({ Key: o.Key })
-    )
+    const deletedNames = new Set<string>()
+    for (const result of deletedResult) {
+      deletedNames.add(result.name)
+    }
 
-    const errors = Delete.Objects.filter((o) => !deletedResult.find((d) => d.name === o.Key)).map(
-      (o) => ({
-        Key: o.Key,
-        Code: 'AccessDenied',
-        Message: "You do not have permission to delete this object or the object doesn't exist",
-      })
-    )
+    const deleted: { Key?: string }[] = []
+    const errors: { Key?: string; Code: string; Message: string }[] = []
+
+    for (const object of Delete.Objects) {
+      if (object.Key !== undefined && deletedNames.has(object.Key)) {
+        deleted.push({ Key: object.Key })
+      } else {
+        errors.push({
+          Key: object.Key,
+          Code: 'AccessDenied',
+          Message: "You do not have permission to delete this object or the object doesn't exist",
+        })
+      }
+    }
 
     return {
       responseBody: {

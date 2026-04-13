@@ -151,7 +151,9 @@ function createTusServer(
       }
 
       if (!uploadId) {
-        return getFileSizeLimit(req.upload.tenantId)
+        return getFileSizeLimit(req.upload.tenantId, undefined, {
+          reqId: req.upload.storage.db.reqId,
+        })
       }
 
       const resourceId = UploadId.fromString(uploadId)
@@ -160,7 +162,9 @@ function createTusServer(
         .asSuperUser()
         .findBucket(resourceId.bucket, 'id,file_size_limit')
 
-      const globalFileLimit = await getFileSizeLimit(req.upload.tenantId)
+      const globalFileLimit = await getFileSizeLimit(req.upload.tenantId, undefined, {
+        reqId: req.upload.storage.db.reqId,
+      })
 
       const fileSizeLimit = bucket.file_size_limit || globalFileLimit
       if (fileSizeLimit > globalFileLimit) {

@@ -30,7 +30,7 @@ export class BucketCreatedEvent extends BaseEvent<ObjectCreatedEvent> {
       return
     }
 
-    const { features } = await getTenantConfig(job.data.tenant.ref)
+    const { features } = await getTenantConfig(job.data.tenant.ref, { reqId: job.data.reqId })
 
     const restCatalog = new TenantAwareRestCatalog({
       tenantId: job.data.tenant.ref,

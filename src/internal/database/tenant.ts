@@ -1,5 +1,6 @@
 import {
   createLruCache,
+  createTtlCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_CONFIG_CACHE_NAME,
 } from '@internal/cache'
@@ -7,6 +8,7 @@ import { TenantConnection } from '@internal/database/connection'
 import { lastLocalMigrationName } from '@internal/database/migrations/files'
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
+import { cacheRequestsPerRequestTotal } from '@internal/monitoring/metrics'
 import {
   S3CredentialsManager,
   S3CredentialsManagerStoreKnex,
@@ -44,8 +46,9 @@ interface TenantConfig {
   disableEvents?: string[]
 }
 
-type GetTenantConfigOptions = {
+export type GetTenantConfigOptions = {
   recordMetrics?: boolean
+  reqId?: string
 }
 
 type LegacyJwksConfig = NonNullable<TenantConfig['jwks']>
@@ -92,6 +95,8 @@ const {
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
 export const TENANT_CONFIG_CACHE_MAX_SIZE_BYTES = 1024 * 1024 * 50 // 50 MiB
 export const TENANT_CONFIG_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
+const TENANT_CONFIG_REQUEST_METRIC_TTL_MS = 5 * 60 * 1000
+const TENANT_CONFIG_REQUEST_METRIC_MAX_ITEMS = 100_000
 
 const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CACHE_NAME, {
   max: TENANT_CONFIG_CACHE_MAX_ITEMS,
@@ -101,6 +106,10 @@ const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CAC
   updateAgeOnGet: true,
   allowStale: false,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
+})
+const tenantConfigRequestMetrics = createTtlCache<string, true>({
+  ttl: TENANT_CONFIG_REQUEST_METRIC_TTL_MS,
+  max: TENANT_CONFIG_REQUEST_METRIC_MAX_ITEMS,
 })
 
 const tenantMutex = createMutexByKey<TenantConfig>()
@@ -192,6 +201,8 @@ export async function getTenantConfig(
   const cachedConfig = tenantConfigCache.get(tenantId, {
     recordMetrics: options?.recordMetrics,
   })
+  recordTenantConfigRequestMetrics(tenantId, cachedConfig === undefined ? 'miss' : 'hit', options)
+
   if (cachedConfig !== undefined) {
     return cachedConfig
   }
@@ -287,9 +298,30 @@ export async function getTenantConfig(
   })
 }
 
-export async function getServiceKeyUser(tenantId: string) {
+function recordTenantConfigRequestMetrics(
+  tenantId: string,
+  outcome: 'hit' | 'miss',
+  options?: GetTenantConfigOptions
+): void {
+  if (options?.recordMetrics === false || !options?.reqId) {
+    return
+  }
+
+  const requestMetricKey = `${tenantId}:${options.reqId}`
+  if (tenantConfigRequestMetrics.get(requestMetricKey)) {
+    return
+  }
+
+  tenantConfigRequestMetrics.set(requestMetricKey, true)
+  cacheRequestsPerRequestTotal.add(1, {
+    cache: TENANT_CONFIG_CACHE_NAME,
+    outcome,
+  })
+}
+
+export async function getServiceKeyUser(tenantId: string, options?: GetTenantConfigOptions) {
   if (isMultitenant) {
-    const tenant = await getTenantConfig(tenantId)
+    const tenant = await getTenantConfig(tenantId, options)
 
     return {
       jwt: tenant.serviceKey,
@@ -318,7 +350,7 @@ enum Capability {
  * Get the capabilities for a specific tenant
  * @param tenantId
  */
-export async function getTenantCapabilities(tenantId: string) {
+export async function getTenantCapabilities(tenantId: string, options?: GetTenantConfigOptions) {
   const capabilities: Record<Capability, boolean> = {
     [Capability.LIST_V2]: false,
     [Capability.ICEBERG_CATALOG]: false,
@@ -327,7 +359,7 @@ export async function getTenantCapabilities(tenantId: string) {
   let latestMigrationName = dbMigrationFreezeAt || (await lastLocalMigrationName())
 
   if (isMultitenant) {
-    const { migrationVersion } = await getTenantConfig(tenantId)
+    const { migrationVersion } = await getTenantConfig(tenantId, options)
     latestMigrationName = migrationVersion || 'initialmigration'
   }
 
@@ -350,13 +382,14 @@ export async function getTenantCapabilities(tenantId: string) {
  */
 export async function tenantHasFeature(
   tenantId: string,
-  feature: keyof Features
+  feature: keyof Features,
+  options?: GetTenantConfigOptions
 ): Promise<boolean> {
   if (!isMultitenant) {
     return true // single tenant always has all features
   }
 
-  const { features } = await getTenantConfig(tenantId)
+  const { features } = await getTenantConfig(tenantId, options)
   return features ? features[feature].enabled : false
 }
 
@@ -364,7 +397,10 @@ export async function tenantHasFeature(
  * Get the jwt key from the tenant config
  * @param tenantId
  */
-export async function getJwtSecret(tenantId: string): Promise<{
+export async function getJwtSecret(
+  tenantId: string,
+  options?: GetTenantConfigOptions
+): Promise<{
   secret: string
   urlSigningKey: string | JwksConfigKeyOCT
   jwks: JwksConfig
@@ -372,7 +408,7 @@ export async function getJwtSecret(tenantId: string): Promise<{
   let { secret, jwks } = getSingleTenantJwtConfig()
 
   if (isMultitenant) {
-    const config = await getTenantConfig(tenantId)
+    const config = await getTenantConfig(tenantId, options)
     const tenantJwks = await jwksManager.getJwksTenantConfig(tenantId)
     secret = config.jwtSecret
     jwks = config.jwks?.keys ? mergeTenantJwksWithLegacyKeys(tenantJwks, config.jwks) : tenantJwks
@@ -386,8 +422,11 @@ export async function getJwtSecret(tenantId: string): Promise<{
  * Get the file size limit from the tenant config
  * @param tenantId
  */
-export async function getFileSizeLimit(tenantId: string): Promise<number> {
-  const { fileSizeLimit } = await getTenantConfig(tenantId)
+export async function getFileSizeLimit(
+  tenantId: string,
+  options?: GetTenantConfigOptions
+): Promise<number> {
+  const { fileSizeLimit } = await getTenantConfig(tenantId, options)
   return fileSizeLimit
 }
 
@@ -395,8 +434,11 @@ export async function getFileSizeLimit(tenantId: string): Promise<number> {
  * Get features flags config for a specific tenant
  * @param tenantId
  */
-export async function getFeatures(tenantId: string): Promise<Features> {
-  const { features } = await getTenantConfig(tenantId)
+export async function getFeatures(
+  tenantId: string,
+  options?: GetTenantConfigOptions
+): Promise<Features> {
+  const { features } = await getTenantConfig(tenantId, options)
   return features
 }
 

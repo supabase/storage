@@ -61,7 +61,9 @@ export default async function routes(fastify: FastifyInstance) {
       const { download } = request.query
 
       let payload: SignedToken
-      const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId)
+      const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId, {
+        reqId: request.id,
+      })
 
       try {
         payload = (await verifyJWT(token, jwtSecret, jwks)) as SignedToken

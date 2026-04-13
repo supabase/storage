@@ -126,6 +126,32 @@ async function loadTenantModule(
   }
 }
 
+function mockTenantConfigMetrics() {
+  const cacheRequestsTotalAdd = jest.fn()
+  const cacheRequestsPerRequestTotalAdd = jest.fn()
+
+  jest.doMock('@internal/monitoring/metrics', () => {
+    const actual = jest.requireActual<typeof import('@internal/monitoring/metrics')>(
+      '@internal/monitoring/metrics'
+    )
+
+    return {
+      ...actual,
+      cacheRequestsPerRequestTotal: {
+        add: cacheRequestsPerRequestTotalAdd,
+      },
+      cacheRequestsTotal: {
+        add: cacheRequestsTotalAdd,
+      },
+    }
+  })
+
+  return {
+    cacheRequestsPerRequestTotalAdd,
+    cacheRequestsTotalAdd,
+  }
+}
+
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
   jest.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
@@ -705,34 +731,35 @@ describe('Tenant configs', () => {
     }
   })
 
+  const encryptedTenant = {
+    anon_key: encrypt('anon'),
+    database_url: encrypt('postgres://tenant'),
+    database_pool_mode: null,
+    file_size_limit: 1,
+    jwt_secret: encrypt('jwt-secret'),
+    jwks: null,
+    service_key: encrypt('service-key'),
+    feature_purge_cache: false,
+    feature_image_transformation: false,
+    feature_s3_protocol: false,
+    feature_iceberg_catalog: false,
+    feature_iceberg_catalog_max_catalogs: 0,
+    feature_iceberg_catalog_max_namespaces: 0,
+    feature_iceberg_catalog_max_tables: 0,
+    feature_vector_buckets: false,
+    feature_vector_buckets_max_buckets: 0,
+    feature_vector_buckets_max_indexes: 0,
+    image_transformation_max_resolution: null,
+    database_pool_url: null,
+    max_connections: null,
+    migrations_version: migrationVersion,
+    migrations_status: 'COMPLETED',
+    tracing_mode: null,
+    disable_events: null,
+  }
+
   test('Get tenant config evicts cold tenants from cache', async () => {
     const tenantIds = ['cache-eviction-1', 'cache-eviction-2', 'cache-eviction-3']
-    const encryptedTenant = {
-      anon_key: encrypt('anon'),
-      database_url: encrypt('postgres://tenant'),
-      database_pool_mode: null,
-      file_size_limit: 1,
-      jwt_secret: encrypt('jwt-secret'),
-      jwks: null,
-      service_key: encrypt('service-key'),
-      feature_purge_cache: false,
-      feature_image_transformation: false,
-      feature_s3_protocol: false,
-      feature_iceberg_catalog: false,
-      feature_iceberg_catalog_max_catalogs: 0,
-      feature_iceberg_catalog_max_namespaces: 0,
-      feature_iceberg_catalog_max_tables: 0,
-      feature_vector_buckets: false,
-      feature_vector_buckets_max_buckets: 0,
-      feature_vector_buckets_max_indexes: 0,
-      image_transformation_max_resolution: null,
-      database_pool_url: null,
-      max_connections: null,
-      migrations_version: migrationVersion,
-      migrations_status: 'COMPLETED',
-      tracing_mode: null,
-      disable_events: null,
-    }
 
     const { tenantModule, multitenantDbModule } = await loadTenantModule(2)
     const knexTableSpy = jest.spyOn(multitenantDbModule.multitenantKnex, 'table')
@@ -768,32 +795,6 @@ describe('Tenant configs', () => {
     const knexTableSpy = jest.spyOn(multitenantKnex, 'table')
     const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
     const tenantId = 'cache-metrics-lookup'
-    const encryptedTenant = {
-      anon_key: encrypt('anon'),
-      database_url: encrypt('postgres://tenant'),
-      database_pool_mode: null,
-      file_size_limit: 1,
-      jwt_secret: encrypt('jwt-secret'),
-      jwks: null,
-      service_key: encrypt('service-key'),
-      feature_purge_cache: false,
-      feature_image_transformation: false,
-      feature_s3_protocol: false,
-      feature_iceberg_catalog: false,
-      feature_iceberg_catalog_max_catalogs: 0,
-      feature_iceberg_catalog_max_namespaces: 0,
-      feature_iceberg_catalog_max_tables: 0,
-      feature_vector_buckets: false,
-      feature_vector_buckets_max_buckets: 0,
-      feature_vector_buckets_max_indexes: 0,
-      image_transformation_max_resolution: null,
-      database_pool_url: null,
-      max_connections: null,
-      migrations_version: migrationVersion,
-      migrations_status: 'COMPLETED',
-      tracing_mode: null,
-      disable_events: null,
-    }
 
     const tenantQuery = Promise.withResolvers<typeof encryptedTenant>()
     const queryBuilder = {
@@ -824,6 +825,55 @@ describe('Tenant configs', () => {
       deleteTenantConfig(tenantId)
       knexTableSpy.mockRestore()
       addSpy.mockRestore()
+    }
+  })
+
+  test('Get tenant config records one request-scoped cache outcome per request', async () => {
+    const metrics = mockTenantConfigMetrics()
+    const { tenantModule, multitenantDbModule } = await loadTenantModule(10)
+    const knexTableSpy = jest.spyOn(multitenantDbModule.multitenantKnex, 'table')
+    const tenantId = 'cache-request-metrics'
+    const noRequestTenantId = 'cache-request-metrics-no-req'
+    const queryBuilder = {
+      first: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      abortOnSignal: jest.fn().mockResolvedValue(encryptedTenant),
+    }
+
+    try {
+      knexTableSpy.mockReturnValue(queryBuilder as any)
+
+      await tenantModule.getTenantConfig(noRequestTenantId)
+
+      expect(metrics.cacheRequestsPerRequestTotalAdd).not.toHaveBeenCalled()
+
+      await tenantModule.getTenantConfig(tenantId, { reqId: 'request-a' })
+      await tenantModule.getTenantConfig(tenantId, { reqId: 'request-a' })
+      await tenantModule.getTenantConfig(tenantId, { reqId: 'request-a' })
+      await tenantModule.getTenantConfig(tenantId, { reqId: 'request-b' })
+      await tenantModule.getTenantConfig(tenantId, { reqId: 'request-b' })
+      await tenantModule.getTenantConfig(tenantId, { reqId: 'request-b' })
+
+      expect(metrics.cacheRequestsTotalAdd.mock.calls).toEqual([
+        [1, { cache: TENANT_CONFIG_CACHE_NAME, outcome: 'miss' }], // no req
+        [1, { cache: TENANT_CONFIG_CACHE_NAME, outcome: 'miss' }], // first request-a
+        [1, { cache: TENANT_CONFIG_CACHE_NAME, outcome: 'hit' }],
+        [1, { cache: TENANT_CONFIG_CACHE_NAME, outcome: 'hit' }],
+        [1, { cache: TENANT_CONFIG_CACHE_NAME, outcome: 'hit' }],
+        [1, { cache: TENANT_CONFIG_CACHE_NAME, outcome: 'hit' }],
+        [1, { cache: TENANT_CONFIG_CACHE_NAME, outcome: 'hit' }],
+      ])
+      expect(metrics.cacheRequestsPerRequestTotalAdd.mock.calls).toEqual([
+        [1, { cache: TENANT_CONFIG_CACHE_NAME, outcome: 'miss' }], // first request-a
+        [1, { cache: TENANT_CONFIG_CACHE_NAME, outcome: 'hit' }], // first request-b
+      ])
+    } finally {
+      tenantModule.deleteTenantConfig(tenantId)
+      tenantModule.deleteTenantConfig(noRequestTenantId)
+      jest.dontMock('@internal/cache')
+      jest.dontMock('@internal/monitoring/metrics')
+      jest.resetModules()
+      knexTableSpy.mockRestore()
     }
   })
 })

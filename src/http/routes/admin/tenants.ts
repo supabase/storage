@@ -243,7 +243,9 @@ export default async function routes(fastify: FastifyInstance) {
         disable_events,
       } = tenant
 
-      const capabilities = await getTenantCapabilities(request.params.tenantId)
+      const capabilities = await getTenantCapabilities(request.params.tenantId, {
+        reqId: request.id,
+      })
 
       return {
         anonKey: decrypt(anon_key),
@@ -631,7 +633,7 @@ export default async function routes(fastify: FastifyInstance) {
     async (req, reply) => {
       const { untilMigration, markCompletedTillMigration } = req.body as Record<string, unknown>
 
-      const { databaseUrl } = await getTenantConfig(req.params.tenantId)
+      const { databaseUrl } = await getTenantConfig(req.params.tenantId, { reqId: req.id })
 
       if (!isDBMigrationName(untilMigration)) {
         return reply.status(400).send({ message: 'Invalid migration' })

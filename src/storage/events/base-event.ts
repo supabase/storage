@@ -62,19 +62,21 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
   }
 
   protected static async createStorage(payload: BasePayload) {
-    const adminUser = await getServiceKeyUser(payload.tenant.ref)
+    const adminUser = await getServiceKeyUser(payload.tenant.ref, { reqId: payload.reqId })
 
     const client = await getPostgresConnection({
       user: adminUser,
       superUser: adminUser,
       host: payload.tenant.host,
       tenantId: payload.tenant.ref,
+      reqId: payload.reqId,
       disableHostCheck: true,
     })
 
     const db = new StorageKnexDB(client, {
       tenantId: payload.tenant.ref,
       host: payload.tenant.host,
+      reqId: payload.reqId,
     })
 
     return new Storage(this.getOrCreateStorageBackend(), db, new TenantLocation(storageS3Bucket))

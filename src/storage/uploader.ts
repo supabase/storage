@@ -450,7 +450,9 @@ export async function fileUploadFromRequest(
 
   // When is an empty folder we restrict it to 0 bytes
   if (!isEmptyFolder(options.objectName)) {
-    maxFileSize = await getStandardMaxFileSizeLimit(request.tenantId, options?.fileSizeLimit)
+    maxFileSize = await getStandardMaxFileSizeLimit(request.tenantId, options?.fileSizeLimit, {
+      reqId: request.id,
+    })
   }
 
   let cacheControl: string
@@ -579,9 +581,10 @@ export function parseUserMetadata(metadata: string) {
 
 export async function getStandardMaxFileSizeLimit(
   tenantId: string,
-  bucketSizeLimit?: number | null
+  bucketSizeLimit?: number | null,
+  options?: { reqId?: string }
 ) {
-  let globalFileSizeLimit = await getFileSizeLimit(tenantId)
+  let globalFileSizeLimit = await getFileSizeLimit(tenantId, undefined, options)
 
   if (typeof bucketSizeLimit === 'number') {
     globalFileSizeLimit = Math.min(bucketSizeLimit, globalFileSizeLimit)

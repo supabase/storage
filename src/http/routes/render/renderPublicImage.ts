@@ -64,7 +64,7 @@ export default async function routes(fastify: FastifyInstance) {
       const renderer = request.storage.renderer('image') as ImageRenderer
 
       if (isMultitenant) {
-        const tenantConfig = await getTenantConfig(request.tenantId)
+        const tenantConfig = await getTenantConfig(request.tenantId, { reqId: request.id })
         renderer.setLimits({
           maxResolution: tenantConfig.features.imageTransformation.maxResolution,
         })

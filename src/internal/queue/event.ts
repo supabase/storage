@@ -167,7 +167,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
   static async shouldSend(payload: any) {
     if (isMultitenant && payload?.tenant?.ref) {
       // Do not send an event if disabled for this specific tenant
-      const tenant = await getTenantConfig(payload.tenant.ref)
+      const tenant = await getTenantConfig(payload.tenant.ref, { reqId: payload.reqId })
       const disabledEvents = tenant.disableEvents || []
       if (disabledEvents.includes(this.eventName())) {
         return false

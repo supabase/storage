@@ -113,7 +113,13 @@ async function authorizeRequestSignV4(
     signature: signatureV4,
     claims,
     token,
-  } = await createServerSignature(request.tenantId, clientSignature, service, allowBodyHash)
+  } = await createServerSignature(
+    request.tenantId,
+    request.id,
+    clientSignature,
+    service,
+    allowBodyHash
+  )
 
   let storagePrefix = s3ProtocolPrefix
   if (requestAllowXForwardedPrefix && typeof request.headers['x-forwarded-prefix'] === 'string') {
@@ -166,7 +172,7 @@ async function authorizeRequestSignV4(
     ? byteHasherStream!.toReadable({ autoCleanup: true })
     : (body as Readable)
 
-  const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId)
+  const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId, { reqId: request.id })
 
   if (!token) {
     if (!claims) {
@@ -241,6 +247,7 @@ async function extractSignature(req: AWSRequest) {
 
 async function createServerSignature(
   tenantId: string,
+  reqId: string,
   clientSignature: ClientSignature,
   awsService = SignatureV4Service.S3,
   allowBodyHash = false
@@ -249,7 +256,7 @@ async function createServerSignature(
 
   if (clientSignature?.sessionToken) {
     const tenantAnonKey = isMultitenant
-      ? (await getTenantConfig(tenantId)).anonKey
+      ? (await getTenantConfig(tenantId, { reqId })).anonKey
       : await anonKeyAsync
 
     if (!tenantAnonKey) {

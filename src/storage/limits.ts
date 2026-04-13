@@ -19,11 +19,12 @@ export const RESERVED_BUCKET_SUFFIXES = [icebergBucketDetectionSuffix]
  */
 export async function getFileSizeLimit(
   tenantId: string,
-  maxUpperLimit?: number | null
+  maxUpperLimit?: number | null,
+  options?: { reqId?: string }
 ): Promise<number> {
   let { uploadFileSizeLimit } = getConfig()
   if (isMultitenant) {
-    uploadFileSizeLimit = await getFileSizeLimitForTenant(tenantId)
+    uploadFileSizeLimit = await getFileSizeLimitForTenant(tenantId, options)
   }
 
   if (maxUpperLimit) {
@@ -37,12 +38,12 @@ export async function getFileSizeLimit(
  * Determines if the image transformation feature is enabled.
  * @param tenantId
  */
-export async function isImageTransformationEnabled(tenantId: string) {
+export async function isImageTransformationEnabled(tenantId: string, options?: { reqId?: string }) {
   if (!isMultitenant) {
     return imageTransformationEnabled
   }
 
-  const { imageTransformation } = await getFeatures(tenantId)
+  const { imageTransformation } = await getFeatures(tenantId, options)
 
   return imageTransformation.enabled
 }

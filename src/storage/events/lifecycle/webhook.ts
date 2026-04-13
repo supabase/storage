@@ -71,7 +71,9 @@ export class Webhook extends BaseEvent<WebhookEvent> {
   static async shouldSend(payload: WebhookEvent) {
     if (isMultitenant) {
       // Do not send an event if disabled for this specific tenant
-      const tenant = await getTenantConfig(payload.tenant.ref)
+      const tenant = await getTenantConfig(payload.tenant.ref, {
+        reqId: payload.event.payload.reqId,
+      })
       const disabledEvents = tenant.disableEvents || []
       if (
         disabledEvents.includes(`Webhook:${payload.event.type}`) ||

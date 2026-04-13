@@ -68,7 +68,9 @@ export default async function routes(fastify: FastifyInstance) {
       const { expiresIn } = request.body
 
       const urlPath = request.url.split('?').shift()
-      const imageTransformationEnabled = await isImageTransformationEnabled(request.tenantId)
+      const imageTransformationEnabled = await isImageTransformationEnabled(request.tenantId, {
+        reqId: request.id,
+      })
 
       const transformationOptions = imageTransformationEnabled
         ? {

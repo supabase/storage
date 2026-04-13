@@ -218,7 +218,9 @@ export default function PutObject(s3Router: S3Router) {
       const metadata = s3Protocol.parseMetadataHeaders(fieldsObject)
       const expiresField = fieldsObject.expires
 
-      const maxFileSize = await getStandardMaxFileSizeLimit(ctx.tenantId, bucket.file_size_limit)
+      const maxFileSize = await getStandardMaxFileSizeLimit(ctx.tenantId, bucket.file_size_limit, {
+        reqId: ctx.storage.db.reqId,
+      })
 
       return pipeline(file.file, new ByteLimitTransformStream(maxFileSize), async (fileStream) => {
         return s3Protocol.putObject(

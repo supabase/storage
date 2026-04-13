@@ -21,7 +21,7 @@ export const tracing = fastifyPlugin(
     fastify.addHook('onRequest', async (request) => {
       try {
         if (isMultitenant && request.tenantId) {
-          const tenantConfig = await getTenantConfig(request.tenantId)
+          const tenantConfig = await getTenantConfig(request.tenantId, { reqId: request.id })
           request.tracingMode = tenantConfig.tracingMode
         } else {
           request.tracingMode = defaultTracingMode

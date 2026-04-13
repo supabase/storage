@@ -63,7 +63,7 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       if (isMultitenant) {
-        const { migrationVersion } = await getTenantConfig(request.tenantId)
+        const { migrationVersion } = await getTenantConfig(request.tenantId, { reqId: request.id })
         if (migrationVersion && DBMigration[migrationVersion] < DBMigration['search-v2']) {
           return response.status(400).send({
             message: 'This feature is not available for your tenant',

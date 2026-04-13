@@ -130,6 +130,15 @@ export const cacheRequestsTotal = registerMetric('cache_requests_total', 'counte
   })
 )
 
+export const cacheRequestsPerRequestTotal = registerMetric(
+  'cache_requests_per_request_total',
+  'counter',
+  () =>
+    meter.createCounter('cache_requests_per_request_total', {
+      description: 'Total cache lookup outcomes counted once per request by cache and outcome',
+    })
+)
+
 export const cacheEvictionsTotal = registerMetric('cache_evictions_total', 'counter', () =>
   meter.createCounter('cache_evictions_total', {
     description: 'Total cache evictions',

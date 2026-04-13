@@ -40,7 +40,7 @@ export class ResetMigrationsOnTenant extends BaseEvent<ResetMigrationsPayload> {
 
   static async handle(job: JobWithMetadata<ResetMigrationsPayload>) {
     const tenantId = job.data.tenant.ref
-    const tenant = await getTenantConfig(tenantId)
+    const tenant = await getTenantConfig(tenantId, { reqId: job.data.reqId })
 
     logSchema.info(logger, `[Migrations] resetting migrations for ${tenantId}`, {
       type: 'migrations',

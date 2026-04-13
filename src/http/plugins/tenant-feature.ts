@@ -17,7 +17,7 @@ export const requireTenantFeature = (feature: keyof Features) =>
       fastify.addHook('onRequest', async (request, reply) => {
         if (!isMultitenant) return
 
-        const hasFeature = await tenantHasFeature(request.tenantId, feature)
+        const hasFeature = await tenantHasFeature(request.tenantId, feature, { reqId: request.id })
 
         if (!hasFeature) {
           return reply.status(403).send({

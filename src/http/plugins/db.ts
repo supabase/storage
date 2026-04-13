@@ -35,7 +35,7 @@ export const db = fastifyPlugin(
     fastify.decorateRequest('db')
 
     fastify.addHook('preHandler', async (request) => {
-      const adminUser = await getServiceKeyUser(request.tenantId)
+      const adminUser = await getServiceKeyUser(request.tenantId, { reqId: request.id })
       const userPayload = request.jwtPayload
 
       if (!userPayload) {
@@ -50,6 +50,7 @@ export const db = fastifyPlugin(
         superUser: adminUser,
         tenantId: request.tenantId,
         host: request.headers['x-forwarded-host'] as string,
+        reqId: request.id,
         headers: request.headers,
         path: request.url,
         method: request.method,
@@ -110,13 +111,14 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
     fastify.decorateRequest('db')
 
     fastify.addHook('preHandler', async (request) => {
-      const adminUser = await getServiceKeyUser(request.tenantId)
+      const adminUser = await getServiceKeyUser(request.tenantId, { reqId: request.id })
 
       request.db = await getPostgresConnection({
         user: adminUser,
         superUser: adminUser,
         tenantId: request.tenantId,
         host: request.headers['x-forwarded-host'] as string,
+        reqId: request.id,
         path: request.url,
         method: request.method,
         headers: request.headers,
@@ -176,7 +178,7 @@ export const migrations = fastifyPlugin(
   async function migrations(fastify) {
     fastify.addHook('preHandler', async (req) => {
       if (isMultitenant) {
-        const { migrationVersion } = await getTenantConfig(req.tenantId)
+        const { migrationVersion } = await getTenantConfig(req.tenantId, { reqId: req.id })
         req.latestMigration = migrationVersion
         return
       }
@@ -193,7 +195,7 @@ export const migrations = fastifyPlugin(
           return
         }
 
-        const tenant = await getTenantConfig(request.tenantId)
+        const tenant = await getTenantConfig(request.tenantId, { reqId: request.id })
         const migrationsUpToDate = await areMigrationsUpToDate(request.tenantId)
 
         if (tenant.syncMigrationsDone || migrationsUpToDate) {
@@ -201,7 +203,7 @@ export const migrations = fastifyPlugin(
         }
 
         await migrationsMutex(request.tenantId, async () => {
-          const tenant = await getTenantConfig(request.tenantId)
+          const tenant = await getTenantConfig(request.tenantId, { reqId: request.id })
 
           if (tenant.syncMigrationsDone) {
             return
@@ -224,7 +226,7 @@ export const migrations = fastifyPlugin(
           return
         }
 
-        const tenant = await getTenantConfig(request.tenantId)
+        const tenant = await getTenantConfig(request.tenantId, { reqId: request.id })
         const migrationsUpToDate = await areMigrationsUpToDate(request.tenantId)
 
         // migrations are up to date

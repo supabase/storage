@@ -45,7 +45,7 @@ export const jwt = fastifyPlugin<JWTPluginOptions>(
         return
       }
 
-      const { secret, jwks } = await getJwtSecret(request.tenantId)
+      const { secret, jwks } = await getJwtSecret(request.tenantId, { reqId: request.id })
 
       try {
         const payload = await (jwtCachingEnabled

@@ -3168,7 +3168,7 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "description": "Derived cache hit ratio over time by cache. This treats misses and stale outcomes as non-hits so you can see whether each cache is actually avoiding backend lookups.",
+          "description": "Derived cache hit ratio over time by raw cache lookup. This treats misses and stale outcomes as non-hits. For tenant_config, repeated same-request lookups can make this look higher than request-level reuse.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -3266,7 +3266,113 @@
               "refId": "A"
             }
           ],
-          "title": "Cache Hit Rate",
+          "title": "Cache Hit Rate (Lookup)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "local_prometheus"
+          },
+          "description": "Derived cache hit ratio over time using cache outcomes counted at most once per request. This is currently emitted for tenant_config so repeated tenant config lookups inside one request do not inflate the hit ratio.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "never",
+                "showValues": false,
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "line+area"
+                }
+              },
+              "mappings": [],
+              "max": 1,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": 0
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.8
+                  },
+                  {
+                    "color": "green",
+                    "value": 0.95
+                  }
+                ]
+              },
+              "unit": "percentunit"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 120
+          },
+          "id": 231,
+          "options": {
+            "legend": {
+              "calcs": ["last", "min", "max"],
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "12.3.2",
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "local_prometheus"
+              },
+              "editorMode": "code",
+              "expr": "sum(rate(storage_api_otel_cache_requests_per_request_total{region=~\"$region\", instance=~\"$instance\", outcome=\"hit\"}[$__rate_interval])) by (cache) / clamp_min(sum(rate(storage_api_otel_cache_requests_per_request_total{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])) by (cache), 0.000001)",
+              "legendFormat": "{{ cache }}",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Cache Hit Rate (Per Request)",
           "type": "timeseries"
         },
         {
@@ -3331,8 +3437,8 @@
           "gridPos": {
             "h": 8,
             "w": 8,
-            "x": 16,
-            "y": 120
+            "x": 0,
+            "y": 128
           },
           "id": 227,
           "options": {
@@ -3426,8 +3532,8 @@
           },
           "gridPos": {
             "h": 8,
-            "w": 12,
-            "x": 0,
+            "w": 8,
+            "x": 8,
             "y": 128
           },
           "id": 228,
@@ -3522,8 +3628,8 @@
           },
           "gridPos": {
             "h": 8,
-            "w": 12,
-            "x": 12,
+            "w": 8,
+            "x": 16,
             "y": 128
           },
           "id": 229,

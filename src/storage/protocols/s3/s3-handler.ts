@@ -582,7 +582,9 @@ export class S3ProtocolHandler {
     }
 
     const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'file_size_limit')
-    const maxFileSize = await getFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
+    const maxFileSize = await getFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit, {
+      reqId: this.storage.db.reqId,
+    })
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
 
@@ -1271,7 +1273,10 @@ export class S3ProtocolHandler {
     })
     const maxFileSize = await getFileSizeLimit(
       this.storage.db.tenantId,
-      destinationBucket?.file_size_limit
+      destinationBucket?.file_size_limit,
+      {
+        reqId: this.storage.db.reqId,
+      }
     )
 
     const multipartData = await this.storage.db

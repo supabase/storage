@@ -114,7 +114,7 @@ export class Storage {
     if (data.type === 'ANALYTICS') {
       if (
         !(await tenantHasMigrations(this.db.tenantId, 'iceberg-catalog-flag-on-buckets')) ||
-        !(await tenantHasFeature(this.db.tenantId, 'icebergCatalog'))
+        !(await tenantHasFeature(this.db.tenantId, 'icebergCatalog', { reqId: this.db.reqId }))
       ) {
         throw ERRORS.FeatureNotEnabled(
           'iceberg_catalog',
@@ -242,7 +242,7 @@ export class Storage {
   async deleteIcebergBucket(name: string) {
     if (
       !(await tenantHasMigrations(this.db.tenantId, 'iceberg-catalog-flag-on-buckets')) ||
-      !(await tenantHasFeature(this.db.tenantId, 'icebergCatalog'))
+      !(await tenantHasFeature(this.db.tenantId, 'icebergCatalog', { reqId: this.db.reqId }))
     ) {
       throw ERRORS.FeatureNotEnabled(
         'iceberg_catalog',
@@ -326,7 +326,9 @@ export class Storage {
       maxFileLimit = parseFileSizeToBytes(maxFileLimit)
     }
 
-    const globalMaxLimit = await getFileSizeLimit(this.db.tenantId)
+    const globalMaxLimit = await getFileSizeLimit(this.db.tenantId, undefined, {
+      reqId: this.db.reqId,
+    })
 
     if (maxFileLimit > globalMaxLimit) {
       throw ERRORS.EntityTooLarge()

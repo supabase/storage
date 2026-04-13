@@ -33,7 +33,7 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
     let maxIndexCount = vectorMaxIndexesCount
 
     if (isMultitenant) {
-      const { features } = await getTenantConfig(req.tenantId)
+      const { features } = await getTenantConfig(req.tenantId, { reqId: req.id })
       maxBucketCount = features?.vectorBuckets?.maxBuckets || vectorMaxBucketsCount
       maxIndexCount = features?.vectorBuckets?.maxIndexes || vectorMaxIndexesCount
     }

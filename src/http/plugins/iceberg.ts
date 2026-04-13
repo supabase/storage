@@ -38,7 +38,7 @@ export const icebergRestCatalog = fastifyPlugin(async function (fastify: Fastify
     }
 
     if (isMultitenant) {
-      const { features } = await getTenantConfig(req.tenantId)
+      const { features } = await getTenantConfig(req.tenantId, { reqId: req.id })
 
       limits.maxTableCount = features.icebergCatalog.maxTables
       limits.maxNamespaceCount = features.icebergCatalog.maxNamespaces

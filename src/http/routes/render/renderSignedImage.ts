@@ -58,7 +58,9 @@ export default async function routes(fastify: FastifyInstance) {
       const { download } = request.query
 
       let payload: SignedToken
-      const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId)
+      const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId, {
+        reqId: request.id,
+      })
 
       try {
         payload = (await verifyJWT(token, jwtSecret, jwks)) as SignedToken
@@ -86,7 +88,7 @@ export default async function routes(fastify: FastifyInstance) {
       const renderer = request.storage.renderer('image') as ImageRenderer
 
       if (isMultitenant) {
-        const tenantConfig = await getTenantConfig(request.tenantId)
+        const tenantConfig = await getTenantConfig(request.tenantId, { reqId: request.id })
         renderer.setLimits({
           maxResolution: tenantConfig.features.imageTransformation.maxResolution,
         })

@@ -9,6 +9,7 @@ interface ConnectionOptions {
   host: string
   tenantId: string
   maxConnections?: number
+  reqId?: string
   headers?: Record<string, string | undefined | string[]>
   method?: string
   path?: string
@@ -25,6 +26,7 @@ interface ConnectionOptions {
 export async function getPostgresConnection(options: ConnectionOptions): Promise<TenantConnection> {
   const dbCredentials = await getDbSettings(options.tenantId, options.host, {
     disableHostCheck: options.disableHostCheck,
+    reqId: options.reqId,
   })
 
   return await TenantConnection.create({
@@ -37,7 +39,7 @@ export async function getPostgresConnection(options: ConnectionOptions): Promise
 async function getDbSettings(
   tenantId: string,
   host: string | undefined,
-  options?: { disableHostCheck?: boolean }
+  options?: { disableHostCheck?: boolean; reqId?: string }
 ) {
   const {
     isMultitenant,
@@ -71,7 +73,7 @@ async function getDbSettings(
       }
     }
 
-    const tenant = await getTenantConfig(tenantId)
+    const tenant = await getTenantConfig(tenantId, { reqId: options?.reqId })
     dbUrl = tenant.databasePoolUrl || tenant.databaseUrl
     isExternalPool = Boolean(tenant.databasePoolUrl)
     maxConnections = tenant.maxConnections ?? maxConnections

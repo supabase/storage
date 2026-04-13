@@ -1,6 +1,7 @@
 'use strict'
 
 import { TENANT_POOL_CACHE_NAME } from '@internal/cache'
+import type { PoolStrategy, TenantConnectionOptions } from '../internal/database/pool'
 
 type TestPool = {
   acquire: jest.Mock
@@ -30,12 +31,17 @@ function createTestPool(stats: { used: number; total: number } | null = null): T
   }
 }
 
-async function loadPoolModule(ttlMs: number): Promise<PoolModule> {
+async function loadPoolModule(ttlMs: number, maxEntries?: number): Promise<PoolModule> {
   jest.resetModules()
 
   const configModule = await import('../config')
   configModule.getConfig({ reload: true })
   configModule.mergeConfig({ isMultitenant: true })
+
+  const cacheOptionOverrides = {
+    ttl: ttlMs,
+    ...(maxEntries === undefined ? {} : { max: maxEntries }),
+  }
 
   jest.doMock('@internal/cache', () => {
     const actual = jest.requireActual('@internal/cache') as typeof import('@internal/cache')
@@ -48,14 +54,14 @@ async function loadPoolModule(ttlMs: number): Promise<PoolModule> {
             optionsOrName as never,
             {
               ...(maybeOptions || {}),
-              ttl: ttlMs,
+              ...cacheOptionOverrides,
             } as never
           )
         }
 
         return actual.createTtlCache({
           ...(optionsOrName as Record<string, unknown>),
-          ttl: ttlMs,
+          ...cacheOptionOverrides,
         } as never)
       }) as typeof actual.createTtlCache,
     }
@@ -82,7 +88,7 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
 
-      protected newPool(_settings: any): any {
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
         const pool: TestPool = {
           acquire: jest.fn(),
           rebalance: jest.fn(),
@@ -119,7 +125,7 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
 
-      protected newPool(_settings: any): any {
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
         const pool: TestPool = {
           acquire: jest.fn(),
           rebalance: jest.fn(),
@@ -162,7 +168,7 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
 
-      protected newPool(_settings: any): any {
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
         const pool = createTestPool()
         this.created.push(pool)
         return pool
@@ -187,6 +193,93 @@ describe('PoolManager cache lifecycle', () => {
     await poolManager.destroyAll()
   })
 
+  test('records pool cache evictions when inactivity ttl removes cached pools', async () => {
+    const poolModule = await loadPoolModule(20)
+    const metricsModule = await import('../internal/monitoring/metrics')
+    const evictionSpy = jest.spyOn(metricsModule.cacheEvictionsTotal, 'add')
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    poolManager.getPool(createPoolSettings('tenant-cache-ttl-eviction'))
+
+    jest.advanceTimersByTime(40)
+
+    expect(evictionSpy).toHaveBeenCalledWith(1, {
+      cache: TENANT_POOL_CACHE_NAME,
+    })
+    expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
+
+    await poolManager.destroyAll()
+  })
+
+  test('records pool cache evictions when capacity removes cached pools', async () => {
+    const poolModule = await loadPoolModule(10_000, 1)
+    const metricsModule = await import('../internal/monitoring/metrics')
+    const evictionSpy = jest.spyOn(metricsModule.cacheEvictionsTotal, 'add')
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    poolManager.getPool(createPoolSettings('tenant-cache-capacity-eviction-a'))
+    poolManager.getPool(createPoolSettings('tenant-cache-capacity-eviction-b'))
+
+    expect(evictionSpy).toHaveBeenCalledWith(1, {
+      cache: TENANT_POOL_CACHE_NAME,
+    })
+    expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
+
+    await poolManager.destroyAll()
+  })
+
+  test('does not record pool cache evictions for explicit destroys', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const metricsModule = await import('../internal/monitoring/metrics')
+    const evictionSpy = jest.spyOn(metricsModule.cacheEvictionsTotal, 'add')
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    poolManager.getPool(createPoolSettings('tenant-cache-explicit-destroy-a'))
+    poolManager.getPool(createPoolSettings('tenant-cache-explicit-destroy-b'))
+
+    await poolManager.destroy('tenant-cache-explicit-destroy-a')
+    await poolManager.destroyAll()
+
+    expect(evictionSpy.mock.calls).not.toContainEqual([
+      1,
+      {
+        cache: TENANT_POOL_CACHE_NAME,
+      },
+    ])
+    expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
+    expect(poolManager.created[1].destroy).toHaveBeenCalledTimes(1)
+  })
+
   test('does not record pool cache misses for single-use external pools without cached pools', async () => {
     const poolModule = await loadPoolModule(10_000)
     const metricsModule = await import('../internal/monitoring/metrics')
@@ -195,7 +288,7 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
 
-      protected newPool(_settings: any): any {
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
         const pool = createTestPool()
         this.created.push(pool)
         return pool
@@ -232,7 +325,7 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
 
-      protected newPool(_settings: any): any {
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
         const pool = createTestPool()
         this.created.push(pool)
         return pool
@@ -276,7 +369,7 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: Record<string, TestPool> = {}
 
-      protected newPool(settings: any): any {
+      protected newPool(settings: TenantConnectionOptions): PoolStrategy {
         const pool = createTestPool(
           settings.tenantId === 'tenant-a' ? { used: 2, total: 5 } : { used: 3, total: 7 }
         )
@@ -308,7 +401,7 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: Record<string, TestPool> = {}
 
-      protected newPool(settings: any): any {
+      protected newPool(settings: TenantConnectionOptions): PoolStrategy {
         const pool = createTestPool()
         this.created[settings.tenantId] = pool
         return pool
@@ -340,7 +433,7 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: Record<string, TestPool> = {}
 
-      protected newPool(settings: any): any {
+      protected newPool(settings: TenantConnectionOptions): PoolStrategy {
         const pool = createTestPool()
         pool.destroy.mockRejectedValue(new Error(`destroy failed for ${settings.tenantId}`))
         this.created[settings.tenantId] = pool
@@ -363,7 +456,7 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: Record<string, TestPool> = {}
 
-      protected newPool(settings: any): any {
+      protected newPool(settings: TenantConnectionOptions): PoolStrategy {
         const pool = createTestPool()
 
         if (settings.tenantId === 'tenant-destroyall-error') {
@@ -409,7 +502,7 @@ describe('PoolManager cache lifecycle', () => {
     class TestPoolManager extends poolModule.PoolManager {
       created: Record<string, TestPool> = {}
 
-      protected newPool(settings: any): any {
+      protected newPool(settings: TenantConnectionOptions): PoolStrategy {
         const pool = createTestPool({ used: 1, total: 2 })
         this.created[settings.tenantId] = pool
         return pool

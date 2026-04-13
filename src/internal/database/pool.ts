@@ -3,6 +3,7 @@ import { wait } from '@internal/concurrency'
 import { getSslSettings } from '@internal/database/ssl'
 import { logger, logSchema } from '@internal/monitoring'
 import {
+  cacheEvictionsTotal,
   cacheRequestsTotal,
   dbActiveConnection,
   dbActivePool,
@@ -92,12 +93,30 @@ async function destroyPoolSafely(pool: PoolStrategy): Promise<void> {
   }
 }
 
+function recordTenantPoolCacheEviction(reason: string): void {
+  // Explicit destroy paths are filtered before this helper is called.
+  if (reason === 'stale' || reason === 'evict' || reason === 'delete') {
+    cacheEvictionsTotal.add(1, {
+      cache: TENANT_POOL_CACHE_NAME,
+    })
+  }
+}
+
+function recordTenantPoolCacheRequest(outcome: string): void {
+  cacheRequestsTotal.add(1, {
+    cache: TENANT_POOL_CACHE_NAME,
+    outcome,
+  })
+}
+
 const tenantPools = createTtlCache<string, PoolStrategy>({
   ...(isMultitenant ? multiTenantTtlConfig : { max: 1, ttl: Infinity }),
-  dispose: async (pool) => {
+  dispose: async (pool, _tenantId, reason) => {
     if (!pool || manuallyDestroyedPools.has(pool)) {
       return
     }
+
+    recordTenantPoolCacheEviction(reason)
 
     await destroyPoolSafely(pool)
   },
@@ -212,10 +231,7 @@ export class PoolManager {
     const { value: existingPool, outcome } = tenantPools.getWithOutcome(settings.tenantId)
 
     if (existingPool) {
-      cacheRequestsTotal.add(1, {
-        cache: TENANT_POOL_CACHE_NAME,
-        outcome,
-      })
+      recordTenantPoolCacheRequest(outcome)
 
       return existingPool
     }
@@ -224,10 +240,7 @@ export class PoolManager {
       return this.newPool({ ...settings, numWorkers: this.numWorkers })
     }
 
-    cacheRequestsTotal.add(1, {
-      cache: TENANT_POOL_CACHE_NAME,
-      outcome,
-    })
+    recordTenantPoolCacheRequest(outcome)
 
     const newPool = this.newPool({ ...settings, numWorkers: this.numWorkers })
 
@@ -262,7 +275,7 @@ export class PoolManager {
     return Promise.allSettled(promises)
   }
 
-  protected newPool(settings: TenantConnectionOptions) {
+  protected newPool(settings: TenantConnectionOptions): PoolStrategy {
     return new TenantPool(settings)
   }
 }

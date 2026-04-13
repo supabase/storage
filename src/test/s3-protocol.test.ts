@@ -39,12 +39,11 @@ import { FastifyInstance } from 'fastify'
 import { ReadableStreamBuffer } from 'stream-buffers'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
-import { SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
+import { EMPTY_SHA256_HASH, SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
 
 const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
 const STREAMING_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
-const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-
+const STREAMING_TRAILER_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER'
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
   let bucketName: string
   if (!name) {
@@ -157,6 +156,53 @@ async function sendAwsChunkedRequest(options: {
     headers: {
       'content-encoding': 'aws-chunked',
       'x-amz-decoded-content-length': options.payload.length.toString(),
+    },
+  })
+  const chunk = createSignedChunk(options.payload, signedRequest.signature, {
+    longDate: signedRequest.longDate,
+    shortDate: signedRequest.shortDate,
+    region: storageS3Region,
+    service: signedRequest.service,
+    secretKey: s3ProtocolAccessKeySecret!,
+  })
+  const endChunk = createSignedChunk(Buffer.alloc(0), chunk.signature, {
+    longDate: signedRequest.longDate,
+    shortDate: signedRequest.shortDate,
+    region: storageS3Region,
+    service: signedRequest.service,
+    secretKey: s3ProtocolAccessKeySecret!,
+  })
+  const encodedBody = Buffer.concat([chunk.encoded, endChunk.encoded])
+
+  const response = await fetch(signedRequest.requestUrl, {
+    method: 'PUT',
+    headers: {
+      ...signedRequest.headers,
+      'content-length': encodedBody.length.toString(),
+    },
+    body: encodedBody,
+  })
+
+  return {
+    status: response.status,
+    data: await response.text(),
+  }
+}
+
+async function sendAwsChunkedTrailerModeWithoutTrailerRequest(options: {
+  baseUrl: string
+  path: string
+  payload: Buffer
+}) {
+  const signedRequest = await createSignedS3Request({
+    baseUrl: options.baseUrl,
+    path: options.path,
+    method: 'PUT',
+    contentSha: STREAMING_TRAILER_PAYLOAD_ALGORITHM,
+    headers: {
+      'content-encoding': 'aws-chunked',
+      'x-amz-decoded-content-length': options.payload.length.toString(),
+      'x-amz-trailer': 'x-amz-checksum-crc32',
     },
   })
   const chunk = createSignedChunk(options.payload, signedRequest.signature, {
@@ -1346,6 +1392,37 @@ describe('S3 Protocol', () => {
         )
 
         expect(headObject.ContentLength).toBe(payload.length)
+      })
+
+      it('rejects trailer-mode aws-chunked putObject bodies without a trailer block', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-aws-chunked-put-object-empty-trailer.jpg'
+        const payload = Buffer.alloc(123, 1)
+
+        mergeConfig({
+          uploadFileSizeLimit: 150,
+        })
+
+        const response = await sendAwsChunkedTrailerModeWithoutTrailerRequest({
+          baseUrl,
+          path: `/s3/${bucketName}/${key}`,
+          payload,
+        })
+
+        expect(response.status).toBeGreaterThanOrEqual(400)
+
+        try {
+          await client.send(
+            new HeadObjectCommand({
+              Bucket: bucketName,
+              Key: key,
+            })
+          )
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+        }
       })
 
       it('will not allow uploading a file that exceeded the maxFileSize', async () => {

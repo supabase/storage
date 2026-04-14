@@ -1,5 +1,6 @@
 {
   "name": "supa-storage",
+  "packageManager": "npm@11.12.1",
   "scripts": {
     "postinstall": "patch-package",
     "dev": "tsx watch src/start/server.ts | pino-pretty",
@@ -125,6 +126,7 @@
   "license": "ISC",
   "bin": "./dist/server.js",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "npm": "11.12.1"
   }
 }

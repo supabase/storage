@@ -7,7 +7,7 @@ import {
 } from '@internal/cache'
 import { createMutexByKey } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
-import { PubSubAdapter } from '@internal/pubsub'
+import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
 import objectSizeOf from 'object-sizeof'
 import { getConfig } from '../../../../config'
 import { S3Credentials, S3CredentialsManagerStore, S3CredentialsRaw } from './store'
@@ -47,6 +47,10 @@ export class S3CredentialsManager {
    */
   async listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void> {
     await pubSub.subscribe(TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL, (cacheKey) => {
+      if (!isStringMessage(cacheKey)) {
+        return
+      }
+
       tenantS3CredentialsCache.delete(cacheKey)
     })
   }

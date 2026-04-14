@@ -101,7 +101,7 @@ describe('normalizeRawError', () => {
   })
 
   it('handles unstringifiable errors', () => {
-    const circular: any = {}
+    const circular: { self?: unknown } = {}
     circular.self = circular
 
     const result = normalizeRawError(circular, 'info')

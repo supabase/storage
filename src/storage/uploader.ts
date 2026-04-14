@@ -14,6 +14,8 @@ import { validateXRobotsTag } from './validators/x-robots-tag'
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
 
+type UploadType = 'standard' | 's3' | 'resumable'
+
 interface FileUpload {
   body: Readable
   mimeType: string
@@ -31,7 +33,7 @@ export interface UploadRequest {
   userMetadata?: Record<string, unknown>
   owner?: string
   isUpsert?: boolean
-  uploadType: 'standard' | 's3' | 'resumable'
+  uploadType: UploadType
   signal?: AbortSignal
 }
 
@@ -100,7 +102,7 @@ export class Uploader {
    * We check RLS policies before proceeding
    * @param options
    */
-  async prepareUpload(options: CanUploadOptions & { uploadType?: string }) {
+  async prepareUpload(options: CanUploadOptions & { uploadType: UploadType }) {
     await this.canUpload(options)
     fileUploadStarted.add(1, {
       uploadType: options.uploadType,

@@ -5,7 +5,7 @@ import {
   TENANT_JWKS_CACHE_NAME,
 } from '@internal/cache'
 import { createMutexByKey } from '@internal/concurrency'
-import { PubSubAdapter } from '@internal/pubsub'
+import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
 import { Knex } from 'knex'
 import objectSizeOf from 'object-sizeof'
 import { JwksConfig, JwksConfigKeyOCT } from '../../../config'
@@ -50,6 +50,10 @@ export class JWKSManager {
    */
   async listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void> {
     await pubSub.subscribe(TENANTS_JWKS_UPDATE_CHANNEL, (cacheKey) => {
+      if (!isStringMessage(cacheKey)) {
+        return
+      }
+
       tenantJwksConfigCache.delete(cacheKey)
     })
   }

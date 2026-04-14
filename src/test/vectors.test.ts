@@ -24,7 +24,11 @@ let appInstance: FastifyInstance
 let serviceToken: string
 
 type ListVectorBucketsResponse = Awaited<ReturnType<VectorStoreManager['listBuckets']>>
+type GetVectorBucketResponse = Awaited<ReturnType<VectorStoreManager['getBucket']>>
 type ListIndexesResponse = Awaited<ReturnType<VectorStoreManager['listIndexes']>>
+type ErrorResponse = {
+  error: string
+}
 
 function parseJsonBody<Body>(body: string): Body {
   return JSON.parse(body) as Body
@@ -543,7 +547,7 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(400)
-      const body = JSON.parse(response.body)
+      const body = JSON.parse(response.body) as ErrorResponse
       expect(body.error).toBe('VectorBucketNotEmpty')
     })
 
@@ -633,7 +637,7 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
+      const body = JSON.parse(response.body) as ListVectorBucketsResponse
       expect(body.vectorBuckets.length).toBeLessThanOrEqual(2)
       if (body.vectorBuckets.length === 2) {
         expect(body.nextToken).toBeDefined()
@@ -871,7 +875,7 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
+      const body = JSON.parse(response.body) as GetVectorBucketResponse
       expect(body.vectorBucket).toBeDefined()
       expect(body.vectorBucket.vectorBucketName).toBe(vectorBucketName)
       expect(body.vectorBucket.creationTime).toBeDefined()
@@ -1108,7 +1112,7 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
+      const body = JSON.parse(response.body) as ListIndexesResponse
       expect(body.indexes.length).toBeLessThanOrEqual(1)
     })
 

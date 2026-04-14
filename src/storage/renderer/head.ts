@@ -24,8 +24,8 @@ export class HeadRenderer extends Renderer {
   }
 
   protected handleCacheControl(
-    request: FastifyRequest<any>,
-    response: FastifyReply<any>,
+    request: FastifyRequest,
+    response: FastifyReply,
     metadata: AssetMetadata
   ) {
     const etag = this.findEtagHeader(request)

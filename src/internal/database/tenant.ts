@@ -17,7 +17,7 @@ import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../co
 import { decrypt } from '../auth'
 import { JWKSManager, JWKSManagerStoreKnex } from '../auth/jwks'
 import { createMutexByKey } from '../concurrency'
-import { PubSubAdapter } from '../pubsub'
+import { isStringMessage, PubSubAdapter } from '../pubsub'
 import { DBMigration } from './migrations/types'
 import { multitenantKnex } from './multitenant-db'
 
@@ -406,7 +406,13 @@ const TENANTS_UPDATE_CHANNEL = 'tenants_update'
  * Keeps the in memory config cache up to date
  */
 export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void> {
-  await pubSub.subscribe(TENANTS_UPDATE_CHANNEL, onTenantConfigChange)
+  await pubSub.subscribe(TENANTS_UPDATE_CHANNEL, (cacheKey) => {
+    if (!isStringMessage(cacheKey)) {
+      return
+    }
+
+    void onTenantConfigChange(cacheKey)
+  })
   await s3CredentialsManager.listenForTenantUpdate(pubSub)
   await jwksManager.listenForTenantUpdate(pubSub)
 }

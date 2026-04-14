@@ -396,7 +396,7 @@ describe('S3Locker', () => {
           })
         )
         throw new Error('Lock should have been deleted')
-      } catch (error) {
+      } catch (error: unknown) {
         expect(getErrorDetails(error).name).toBe('NoSuchKey')
       }
     })
@@ -468,7 +468,7 @@ describe('S3Locker', () => {
           const start = Date.now()
           try {
             await lock1.lock(abortController1.signal, cancelReq)
-          } catch (error) {
+          } catch (error: unknown) {
             const errorDetails = getErrorDetails(error)
             const lockDuration = Date.now() - start
             throw new Error(
@@ -512,7 +512,7 @@ describe('S3Locker', () => {
             throw new Error(
               `Zombie lock detected on iteration ${i}! A lock exists after deletion, indicating the IfMatch fix is missing.`
             )
-          } catch (error) {
+          } catch (error: unknown) {
             if (getErrorDetails(error).name === 'NoSuchKey') {
               // Good - no zombie lock exists
               continue

@@ -40,7 +40,7 @@
         "noAssignInExpressions": "error",
         "noAsyncPromiseExecutor": "error",
         "noDoubleEquals": "error",
-        "noExplicitAny": "warn",
+        "noExplicitAny": "error",
         "noFocusedTests": "error",
         "noImplicitAnyLet": "error",
         "noShadowRestrictedNames": "error",

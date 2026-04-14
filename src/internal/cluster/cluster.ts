@@ -5,11 +5,18 @@ import { logger } from '@internal/monitoring'
 
 const clusterEvent = new EventEmitter()
 
+interface ClusterEvents {
+  change: { size: number }
+}
+
 export class Cluster {
   static size: number = 0
   protected static watcher?: NodeJS.Timeout = undefined
 
-  static on(event: string, listener: (...args: any[]) => void) {
+  static on<E extends keyof ClusterEvents>(
+    event: E,
+    listener: (payload: ClusterEvents[E]) => void
+  ) {
     clusterEvent.on(event, listener)
   }
 

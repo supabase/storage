@@ -255,7 +255,7 @@ export interface ChunkSignatureParserOptions extends TransformOptions {
  *
  */
 export class ChunkSignatureV4Parser extends Transform {
-  private readonly buffer = new SegmentedBufferQueue()
+  protected readonly buffer = new SegmentedBufferQueue()
   private state: ParserState = 'HEADER'
   private bytesRemaining = 0
   private headerSearchOffset = 0
@@ -358,7 +358,7 @@ export class ChunkSignatureV4Parser extends Transform {
   /**
    * Extracts size and signature from a header line according to the current algorithm.
    */
-  private parseHeaderLine(line: string): { size: number; signature?: string } {
+  protected parseHeaderLine(line: string): { size: number; signature?: string } {
     const delim = ';chunk-signature='
     let size: number
     let sig: string | undefined

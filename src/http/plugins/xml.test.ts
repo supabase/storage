@@ -1,5 +1,5 @@
 import fastify, { FastifyInstance } from 'fastify'
-import { xmlParser } from '../http/plugins/xml'
+import { xmlParser } from './xml'
 
 async function buildXmlApp(parseAsArray: string[] = []): Promise<FastifyInstance> {
   const app = fastify()

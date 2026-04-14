@@ -6,6 +6,7 @@ import {
 } from '@storage/protocols/s3/signature-v4-stream'
 import { Buffer } from 'buffer'
 import crypto from 'crypto'
+import { vi } from 'vitest'
 
 function deriveSigningKey(secretKey: string, shortDate: string, region: string, service: string) {
   const dateKey = crypto.createHmac('sha256', `AWS4${secretKey}`).update(shortDate).digest()
@@ -562,7 +563,7 @@ describe('ChunkSignatureV4Parser', () => {
       signedHeaders: ['host'],
       longDate: '20260406T120000Z',
     }
-    const signingKeySpy = jest.spyOn(signer as any, 'signingKey')
+    const signingKeySpy = vi.spyOn(signer as any, 'signingKey')
     const firstChunk = createChunkSignature(Buffer.from('hello'), clientSignature.signature, {
       longDate: clientSignature.longDate,
       shortDate: clientSignature.credentials.shortDate,

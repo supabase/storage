@@ -1,4 +1,5 @@
-import { ErrorCode, render } from '@internal/errors'
+import { ErrorCode } from './codes'
+import { render } from './render'
 
 describe('render', () => {
   it('preserves message details for plain errors', () => {

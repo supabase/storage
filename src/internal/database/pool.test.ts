@@ -1,16 +1,19 @@
-'use strict'
-
-import { TENANT_POOL_CACHE_NAME } from '@internal/cache'
-import type { PoolStrategy, TenantConnectionOptions } from '../internal/database/pool'
+import { TENANT_POOL_CACHE_NAME } from '@internal/cache/names'
+import { type Mock, vi } from 'vitest'
+import type { PoolStrategy, TenantConnectionOptions } from './pool'
 
 type TestPool = {
-  acquire: jest.Mock
-  rebalance: jest.Mock
-  destroy: jest.Mock<Promise<void>, []>
-  getPoolStats: jest.Mock
+  acquire: Mock
+  rebalance: Mock
+  destroy: Mock<() => Promise<void>>
+  getPoolStats: Mock
 }
 
-type PoolModule = typeof import('../internal/database/pool')
+type PoolModule = typeof import('./pool')
+
+function isTenantPoolCacheLookupCall(message: string) {
+  return (call: unknown[]) => call[1] === message
+}
 
 function createPoolSettings(tenantId: string) {
   return {
@@ -24,27 +27,34 @@ function createPoolSettings(tenantId: string) {
 
 function createTestPool(stats: { used: number; total: number } | null = null): TestPool {
   return {
-    acquire: jest.fn(),
-    rebalance: jest.fn(),
-    destroy: jest.fn().mockResolvedValue(undefined),
-    getPoolStats: jest.fn().mockReturnValue(stats),
+    acquire: vi.fn(),
+    rebalance: vi.fn(),
+    destroy: vi.fn().mockResolvedValue(undefined),
+    getPoolStats: vi.fn().mockReturnValue(stats),
   }
 }
 
-async function loadPoolModule(ttlMs: number, maxEntries?: number): Promise<PoolModule> {
-  jest.resetModules()
+async function loadPoolModule(
+  ttlMs: number,
+  maxEntries?: number,
+  configOverrides: Record<string, unknown> = {}
+): Promise<PoolModule> {
+  vi.resetModules()
 
-  const configModule = await import('../config')
+  const configModule = await import('../../config')
   configModule.getConfig({ reload: true })
-  configModule.mergeConfig({ isMultitenant: true })
+  configModule.mergeConfig({
+    isMultitenant: true,
+    ...configOverrides,
+  } as Parameters<typeof configModule.mergeConfig>[0])
 
   const cacheOptionOverrides = {
     ttl: ttlMs,
     ...(maxEntries === undefined ? {} : { max: maxEntries }),
   }
 
-  jest.doMock('@internal/cache', () => {
-    const actual = jest.requireActual('@internal/cache') as typeof import('@internal/cache')
+  vi.doMock('@internal/cache', async () => {
+    const actual = await vi.importActual<typeof import('@internal/cache')>('@internal/cache')
 
     return {
       ...actual,
@@ -67,19 +77,27 @@ async function loadPoolModule(ttlMs: number, maxEntries?: number): Promise<PoolM
     }
   })
 
-  return import('../internal/database/pool')
+  return import('./pool')
 }
 
 describe('PoolManager cache lifecycle', () => {
+  beforeAll(() => {
+    vi.useFakeTimers()
+  })
+
   beforeEach(() => {
-    jest.useFakeTimers()
+    vi.clearAllTimers()
+    vi.setSystemTime(0)
   })
 
   afterEach(() => {
-    jest.useRealTimers()
-    jest.dontMock('@internal/cache')
-    jest.resetModules()
-    jest.clearAllMocks()
+    vi.doUnmock('@internal/cache')
+    vi.resetModules()
+    vi.restoreAllMocks()
+  })
+
+  afterAll(() => {
+    vi.useRealTimers()
   })
 
   test('expires cached pools and disposes them after inactivity', async () => {
@@ -90,10 +108,10 @@ describe('PoolManager cache lifecycle', () => {
 
       protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
         const pool: TestPool = {
-          acquire: jest.fn(),
-          rebalance: jest.fn(),
-          destroy: jest.fn().mockResolvedValue(undefined),
-          getPoolStats: jest.fn().mockReturnValue(null),
+          acquire: vi.fn(),
+          rebalance: vi.fn(),
+          destroy: vi.fn().mockResolvedValue(undefined),
+          getPoolStats: vi.fn().mockReturnValue(null),
         }
         this.created.push(pool)
         return pool
@@ -107,7 +125,7 @@ describe('PoolManager cache lifecycle', () => {
 
     expect(poolManager.created).toHaveLength(1)
 
-    jest.advanceTimersByTime(40)
+    await vi.advanceTimersByTimeAsync(40)
 
     expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
 
@@ -127,10 +145,10 @@ describe('PoolManager cache lifecycle', () => {
 
       protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
         const pool: TestPool = {
-          acquire: jest.fn(),
-          rebalance: jest.fn(),
-          destroy: jest.fn().mockResolvedValue(undefined),
-          getPoolStats: jest.fn().mockReturnValue(null),
+          acquire: vi.fn(),
+          rebalance: vi.fn(),
+          destroy: vi.fn().mockResolvedValue(undefined),
+          getPoolStats: vi.fn().mockReturnValue(null),
         }
         this.created.push(pool)
         return pool
@@ -142,18 +160,18 @@ describe('PoolManager cache lifecycle', () => {
 
     const first = poolManager.getPool(settings)
 
-    jest.advanceTimersByTime(15)
+    await vi.advanceTimersByTimeAsync(15)
 
     const reused = poolManager.getPool(settings)
 
     expect(reused).toBe(first)
     expect(poolManager.created[0].destroy).not.toHaveBeenCalled()
 
-    jest.advanceTimersByTime(15)
+    await vi.advanceTimersByTimeAsync(15)
 
     expect(poolManager.created[0].destroy).not.toHaveBeenCalled()
 
-    jest.advanceTimersByTime(20)
+    await vi.advanceTimersByTimeAsync(40)
 
     expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
 
@@ -162,8 +180,8 @@ describe('PoolManager cache lifecycle', () => {
 
   test('records logical pool cache misses and hits', async () => {
     const poolModule = await loadPoolModule(10_000)
-    const metricsModule = await import('../internal/monitoring/metrics')
-    const addSpy = jest.spyOn(metricsModule.cacheRequestsTotal, 'add')
+    const metricsModule = await import('@internal/monitoring/metrics')
+    const addSpy = vi.spyOn(metricsModule.cacheRequestsTotal, 'add')
 
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
@@ -193,10 +211,173 @@ describe('PoolManager cache lifecycle', () => {
     await poolManager.destroyAll()
   })
 
+  test('logs sampled tenant pool cache misses and hits', async () => {
+    const poolModule = await loadPoolModule(10_000, undefined, {
+      tenantPoolCacheHitLogSampleRate: 1,
+      tenantPoolCacheMissLogSampleRate: 1,
+    })
+    const loggerModule = await import('@internal/monitoring/logger')
+    const infoSpy = vi.spyOn(loggerModule.logger, 'info').mockImplementation(() => undefined)
+    const logSchemaInfoSpy = vi.spyOn(loggerModule.logSchema, 'info')
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const settings = createPoolSettings('tenant-cache-lookup-logs')
+
+    const first = poolManager.getPool(settings)
+    const second = poolManager.getPool(settings)
+
+    const expectedMissLog = expect.objectContaining({
+      type: poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_TYPE,
+      cache: TENANT_POOL_CACHE_NAME,
+      tenantId: 'tenant-cache-lookup-logs',
+      project: 'tenant-cache-lookup-logs',
+      outcome: 'miss',
+      sampleRate: 1,
+      sampleWeight: 1,
+      isCacheable: true,
+      isExternalPool: false,
+      isSingleUse: false,
+    })
+    const expectedHitLog = expect.objectContaining({
+      type: poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_TYPE,
+      cache: TENANT_POOL_CACHE_NAME,
+      tenantId: 'tenant-cache-lookup-logs',
+      project: 'tenant-cache-lookup-logs',
+      outcome: 'hit',
+      sampleRate: 1,
+      sampleWeight: 1,
+      isCacheable: true,
+      isExternalPool: false,
+      isSingleUse: false,
+    })
+
+    expect(second).toBe(first)
+    expect(poolManager.created).toHaveLength(1)
+    expect(logSchemaInfoSpy.mock.calls).toEqual(
+      expect.arrayContaining([
+        [loggerModule.logger, poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE, expectedMissLog],
+        [loggerModule.logger, poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE, expectedHitLog],
+      ])
+    )
+    expect(infoSpy.mock.calls).toEqual(
+      expect.arrayContaining([
+        [expectedMissLog, poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE],
+        [expectedHitLog, poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE],
+      ])
+    )
+
+    await poolManager.destroyAll()
+  })
+
+  test('does not log tenant pool cache lookups by default', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const loggerModule = await import('@internal/monitoring/logger')
+    const infoSpy = vi.spyOn(loggerModule.logger, 'info').mockImplementation(() => undefined)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const settings = createPoolSettings('tenant-cache-lookup-logs-disabled')
+
+    poolManager.getPool(settings)
+    poolManager.getPool(settings)
+
+    expect(
+      infoSpy.mock.calls.filter(
+        isTenantPoolCacheLookupCall(poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE)
+      )
+    ).toEqual([])
+
+    await poolManager.destroyAll()
+  })
+
+  test('does not log tenant pool cache lookups when sample rates are explicitly disabled', async () => {
+    const poolModule = await loadPoolModule(10_000, undefined, {
+      tenantPoolCacheHitLogSampleRate: 0,
+      tenantPoolCacheMissLogSampleRate: 0,
+    })
+    const loggerModule = await import('@internal/monitoring/logger')
+    const infoSpy = vi.spyOn(loggerModule.logger, 'info').mockImplementation(() => undefined)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const settings = createPoolSettings('tenant-cache-lookup-logs-explicitly-disabled')
+
+    poolManager.getPool(settings)
+    poolManager.getPool(settings)
+
+    expect(
+      infoSpy.mock.calls.filter(
+        isTenantPoolCacheLookupCall(poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE)
+      )
+    ).toEqual([])
+
+    await poolManager.destroyAll()
+  })
+
+  test('does not log single-use external pool lookups without a cached pool', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const loggerModule = await import('@internal/monitoring/logger')
+    const infoSpy = vi.spyOn(loggerModule.logger, 'info').mockImplementation(() => undefined)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('tenant-single-use-external-log'),
+      isSingleUse: true,
+      isExternalPool: true,
+    })
+
+    expect(
+      infoSpy.mock.calls.filter(
+        isTenantPoolCacheLookupCall(poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE)
+      )
+    ).toEqual([])
+
+    await pool.destroy()
+    await poolManager.destroyAll()
+  })
+
   test('records pool cache evictions when inactivity ttl removes cached pools', async () => {
     const poolModule = await loadPoolModule(20)
-    const metricsModule = await import('../internal/monitoring/metrics')
-    const evictionSpy = jest.spyOn(metricsModule.cacheEvictionsTotal, 'add')
+    const metricsModule = await import('@internal/monitoring/metrics')
+    const evictionSpy = vi.spyOn(metricsModule.cacheEvictionsTotal, 'add')
 
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
@@ -211,7 +392,7 @@ describe('PoolManager cache lifecycle', () => {
     const poolManager = new TestPoolManager()
     poolManager.getPool(createPoolSettings('tenant-cache-ttl-eviction'))
 
-    jest.advanceTimersByTime(40)
+    await vi.advanceTimersByTimeAsync(40)
 
     expect(evictionSpy).toHaveBeenCalledWith(1, {
       cache: TENANT_POOL_CACHE_NAME,
@@ -223,8 +404,8 @@ describe('PoolManager cache lifecycle', () => {
 
   test('records pool cache evictions when capacity removes cached pools', async () => {
     const poolModule = await loadPoolModule(10_000, 1)
-    const metricsModule = await import('../internal/monitoring/metrics')
-    const evictionSpy = jest.spyOn(metricsModule.cacheEvictionsTotal, 'add')
+    const metricsModule = await import('@internal/monitoring/metrics')
+    const evictionSpy = vi.spyOn(metricsModule.cacheEvictionsTotal, 'add')
 
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
@@ -250,8 +431,8 @@ describe('PoolManager cache lifecycle', () => {
 
   test('does not record pool cache evictions for explicit destroys', async () => {
     const poolModule = await loadPoolModule(10_000)
-    const metricsModule = await import('../internal/monitoring/metrics')
-    const evictionSpy = jest.spyOn(metricsModule.cacheEvictionsTotal, 'add')
+    const metricsModule = await import('@internal/monitoring/metrics')
+    const evictionSpy = vi.spyOn(metricsModule.cacheEvictionsTotal, 'add')
 
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
@@ -282,8 +463,8 @@ describe('PoolManager cache lifecycle', () => {
 
   test('does not record pool cache misses for single-use external pools without cached pools', async () => {
     const poolModule = await loadPoolModule(10_000)
-    const metricsModule = await import('../internal/monitoring/metrics')
-    const addSpy = jest.spyOn(metricsModule.cacheRequestsTotal, 'add')
+    const metricsModule = await import('@internal/monitoring/metrics')
+    const addSpy = vi.spyOn(metricsModule.cacheRequestsTotal, 'add')
 
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
@@ -319,8 +500,8 @@ describe('PoolManager cache lifecycle', () => {
 
   test('reuses cached pools for single-use external requests and records a hit', async () => {
     const poolModule = await loadPoolModule(10_000)
-    const metricsModule = await import('../internal/monitoring/metrics')
-    const addSpy = jest.spyOn(metricsModule.cacheRequestsTotal, 'add')
+    const metricsModule = await import('@internal/monitoring/metrics')
+    const addSpy = vi.spyOn(metricsModule.cacheRequestsTotal, 'add')
 
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
@@ -351,11 +532,9 @@ describe('PoolManager cache lifecycle', () => {
   })
 
   test('iterates cached pools for monitor snapshots', async () => {
-    jest.useFakeTimers()
-
     const poolModule = await loadPoolModule(10_000)
-    const metricsModule = await import('../internal/monitoring/metrics')
-    const addBatchObservableCallbackSpy = jest.spyOn(
+    const metricsModule = await import('@internal/monitoring/metrics')
+    const addBatchObservableCallbackSpy = vi.spyOn(
       metricsModule.meter,
       'addBatchObservableCallback'
     )
@@ -379,18 +558,27 @@ describe('PoolManager cache lifecycle', () => {
     }
 
     const poolManager = new TestPoolManager()
-    poolManager.getPool(createPoolSettings('tenant-a'))
+    const firstPool = poolManager.getPool(createPoolSettings('tenant-a'))
     poolManager.getPool(createPoolSettings('tenant-b'))
 
     poolManager.monitor()
-    jest.advanceTimersByTime(5_000)
+    await vi.advanceTimersByTimeAsync(5_000)
 
-    const observeSpy = jest.fn()
+    const observeSpy = vi.fn()
     batchObserver?.({ observe: observeSpy })
 
     expect(observeSpy).toHaveBeenCalledWith(metricsModule.dbActivePool, 2)
     expect(observeSpy).toHaveBeenCalledWith(metricsModule.dbActiveConnection, 12)
     expect(observeSpy).toHaveBeenCalledWith(metricsModule.dbInUseConnection, 5)
+
+    await vi.advanceTimersByTimeAsync(20_000)
+
+    const recreatedPool = poolManager.getPool(createPoolSettings('tenant-a'))
+
+    expect(recreatedPool).not.toBe(firstPool)
+    await vi.waitFor(() => {
+      expect(firstPool.destroy).toHaveBeenCalledTimes(1)
+    })
 
     await poolManager.destroyAll()
   })
@@ -483,42 +671,5 @@ describe('PoolManager cache lifecycle', () => {
     })
     expect(poolManager.created['tenant-destroyall-ok'].destroy).toHaveBeenCalledTimes(1)
     expect(poolManager.created['tenant-destroyall-error'].destroy).toHaveBeenCalledTimes(1)
-  })
-
-  test('does not extend pool ttl when iterating for monitor snapshots', async () => {
-    const poolModule = await loadPoolModule(25)
-    const metricsModule = await import('../internal/monitoring/metrics')
-    const addBatchObservableCallbackSpy = jest.spyOn(
-      metricsModule.meter,
-      'addBatchObservableCallback'
-    )
-    let batchObserver: ((observer: { observe: (...args: unknown[]) => void }) => void) | undefined
-
-    addBatchObservableCallbackSpy.mockImplementation((callback) => {
-      batchObserver = callback as typeof batchObserver
-      return undefined as never
-    })
-
-    class TestPoolManager extends poolModule.PoolManager {
-      created: Record<string, TestPool> = {}
-
-      protected newPool(settings: TenantConnectionOptions): PoolStrategy {
-        const pool = createTestPool({ used: 1, total: 2 })
-        this.created[settings.tenantId] = pool
-        return pool
-      }
-    }
-
-    const poolManager = new TestPoolManager()
-    poolManager.getPool(createPoolSettings('tenant-monitor'))
-
-    poolManager.monitor()
-
-    jest.advanceTimersByTime(5_000)
-    batchObserver?.({ observe: jest.fn() })
-
-    jest.advanceTimersByTime(30)
-
-    expect(poolManager.created['tenant-monitor'].destroy).toHaveBeenCalledTimes(1)
   })
 })

@@ -1,4 +1,4 @@
-import { createTtlCache, TENANT_POOL_CACHE_NAME } from '@internal/cache'
+import { type CacheLookupOutcome, createTtlCache, TENANT_POOL_CACHE_NAME } from '@internal/cache'
 import { wait } from '@internal/concurrency'
 import { getSslSettings } from '@internal/database/ssl'
 import { logger, logSchema } from '@internal/monitoring'
@@ -24,7 +24,12 @@ const {
   dbSearchPath,
   dbPostgresVersion,
   databaseApplicationName,
+  tenantPoolCacheHitLogSampleRate,
+  tenantPoolCacheMissLogSampleRate,
 } = getConfig()
+
+export const TENANT_POOL_CACHE_LOOKUP_LOG_TYPE = 'cache'
+export const TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE = '[Cache] Tenant pool lookup'
 
 export interface TenantConnectionOptions {
   user: User
@@ -107,6 +112,38 @@ function recordTenantPoolCacheRequest(outcome: string): void {
     cache: TENANT_POOL_CACHE_NAME,
     outcome,
   })
+}
+
+function shouldLogTenantPoolCacheLookup(sampleRate: number): boolean {
+  return sampleRate >= 1 || (sampleRate > 0 && Math.random() < sampleRate)
+}
+
+function logTenantPoolCacheLookup(
+  settings: TenantConnectionOptions,
+  isCacheable: boolean,
+  outcome: CacheLookupOutcome
+): void {
+  const sampleRate =
+    outcome === 'hit' ? tenantPoolCacheHitLogSampleRate : tenantPoolCacheMissLogSampleRate
+
+  if (!shouldLogTenantPoolCacheLookup(sampleRate)) {
+    return
+  }
+
+  const log = {
+    type: TENANT_POOL_CACHE_LOOKUP_LOG_TYPE,
+    cache: TENANT_POOL_CACHE_NAME,
+    tenantId: settings.tenantId,
+    project: settings.tenantId,
+    outcome,
+    sampleRate,
+    sampleWeight: 1 / sampleRate,
+    isCacheable,
+    isExternalPool: Boolean(settings.isExternalPool),
+    isSingleUse: Boolean(settings.isSingleUse),
+  }
+
+  logSchema.info(logger, TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE, log)
 }
 
 const tenantPools = createTtlCache<string, PoolStrategy>({
@@ -232,6 +269,7 @@ export class PoolManager {
 
     if (existingPool) {
       recordTenantPoolCacheRequest(outcome)
+      logTenantPoolCacheLookup(settings, isCacheable, outcome)
 
       return existingPool
     }
@@ -241,6 +279,7 @@ export class PoolManager {
     }
 
     recordTenantPoolCacheRequest(outcome)
+    logTenantPoolCacheLookup(settings, isCacheable, outcome)
 
     const newPool = this.newPool({ ...settings, numWorkers: this.numWorkers })
 
@@ -355,7 +394,10 @@ class TenantPool implements PoolStrategy {
 
     if (originalPool) {
       this.drainPool(originalPool).catch((e) => {
-        logger.error({ type: 'pool', error: e })
+        logSchema.error(logger, 'Error draining tenant pool', {
+          type: 'pool',
+          error: e,
+        })
       })
     }
   }

@@ -45,7 +45,7 @@
     "@opentelemetry/instrumentation-knex": "^0.58.0",
     "@opentelemetry/instrumentation-pg": "^0.64.0",
     "@opentelemetry/instrumentation-runtime-node": "^0.25.0",
-    "@opentelemetry/sdk-metrics": "^2.6.0",
+    "@opentelemetry/sdk-metrics": "^2.6.1",
     "@opentelemetry/sdk-node": "^0.213.0",
     "@platformatic/node": "^3.45.0",
     "@platformatic/wattpm-pprof-capture": "^3.45.0",

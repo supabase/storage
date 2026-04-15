@@ -1,3 +1,4 @@
+import { assertValidNumericJWTExpiration } from '@internal/auth'
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
@@ -14,7 +15,11 @@ const getSignedURLsParamsSchema = {
 const getSignedURLsBodySchema = {
   type: 'object',
   properties: {
-    expiresIn: { type: 'integer', minimum: 1, examples: [60000] },
+    expiresIn: {
+      type: 'integer',
+      minimum: 1,
+      examples: [60000],
+    },
     paths: {
       type: 'array',
       items: { type: 'string' },
@@ -77,6 +82,7 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketName } = request.params
       const { expiresIn, paths } = request.body
+      assertValidNumericJWTExpiration(expiresIn)
 
       const signedURLs = await request.storage.from(bucketName).signObjectUrls(paths, expiresIn)
 

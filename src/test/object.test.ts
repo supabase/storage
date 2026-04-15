@@ -1,6 +1,12 @@
 'use strict'
 
-import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
+import {
+  generateHS512JWK,
+  getMaxNumericJWTExpiration,
+  SignedToken,
+  signJWT,
+  verifyJWT,
+} from '@internal/auth'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
 import { randomUUID } from 'crypto'
@@ -1830,6 +1836,38 @@ describe('testing generating signed URL', () => {
     })
     expect(response.statusCode).toBe(400)
   })
+
+  test('rejects oversized expiresIn values for signed URLs before jwt signing', async () => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2/authenticated/cat.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1e21,
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.body).message).toContain('expiresIn')
+  })
+
+  test('rejects expiresIn values above the current runtime maximum for signed URLs', async () => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2/authenticated/cat.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: getMaxNumericJWTExpiration() + 10,
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.body).message).toContain('expiresIn')
+  })
 })
 
 /**
@@ -2034,7 +2072,7 @@ describe('testing uploading with generated signed upload URL', () => {
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
-    const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, -1)
+    const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, '-1s')
     const response = await appInstance.inject({
       method: 'PUT',
       url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
@@ -2207,6 +2245,23 @@ describe('testing generating signed URLs', () => {
     const result = JSON.parse(response.body)
     expect(result[0].error).toBe('Either the object does not exist or you do not have access to it')
   })
+
+  test('rejects oversized expiresIn values for batch signed URLs before jwt signing', async () => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1e21,
+        paths: ['authenticated/cat.jpg'],
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.body).message).toContain('expiresIn')
+  })
 })
 
 /**
@@ -2300,7 +2355,7 @@ describe('testing retrieving signed URL', () => {
 
   test('get object with an expired JWT', async () => {
     const urlToSign = 'bucket2/public/sadcat-upload.png'
-    const expiredJWT = await signJWT({ url: urlToSign }, jwtSecret, -1)
+    const expiredJWT = await signJWT({ url: urlToSign }, jwtSecret, '-1s')
     const response = await appInstance.inject({
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${expiredJWT}`,

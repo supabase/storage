@@ -1,9 +1,17 @@
 import { JWT_CACHE_NAME } from '@internal/cache'
+import { ErrorCode } from '@internal/errors'
 import { cacheRequestsTotal } from '@internal/monitoring/metrics'
 import * as crypto from 'crypto'
 import { SignJWT } from 'jose'
 import { JwksConfigKey } from '../config'
-import { generateHS512JWK, signJWT, verifyJWT, verifyJWTWithCache } from '../internal/auth'
+import {
+  assertValidNumericJWTExpiration,
+  generateHS512JWK,
+  getMaxNumericJWTExpiration,
+  signJWT,
+  verifyJWT,
+  verifyJWTWithCache,
+} from '../internal/auth'
 
 describe('JWT', () => {
   describe('verifyJWT with JWKS', () => {
@@ -146,6 +154,61 @@ describe('JWT', () => {
       await expect(signJWT({ sub: 'things' }, '', 100)).rejects.toThrow(
         'Zero-length key is not supported'
       )
+    })
+
+    test('it should allow the current maximum numeric expiration and keep exp millisecond-safe', async () => {
+      jest.useFakeTimers()
+      jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+
+      const maxNumericExpiration = getMaxNumericJWTExpiration()
+      const jwt = await signJWT({ sub: 'things' }, hmacPrivateKeyWithoutKid, maxNumericExpiration)
+      const result = await verifyJWT(jwt, hmacPrivateKeyWithoutKid)
+
+      expect(maxNumericExpiration).toBeGreaterThan(0)
+      expect(Number.isSafeInteger(result.exp)).toBe(true)
+      expect(Number.isSafeInteger(result.exp! * 1000)).toBe(true)
+    })
+
+    test('it should reject numeric expirations above the current maximum', async () => {
+      jest.useFakeTimers()
+      jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+
+      const maxNumericExpiration = getMaxNumericJWTExpiration()
+      await expect(
+        signJWT({ sub: 'things' }, hmacPrivateKeyWithoutKid, maxNumericExpiration + 1)
+      ).rejects.toMatchObject({
+        code: ErrorCode.InvalidParameter,
+        httpStatusCode: 400,
+        message: 'Invalid Parameter expiresIn',
+      })
+    })
+
+    test('it should reject numeric expirations above the current maximum in the shared validator', () => {
+      jest.useFakeTimers()
+      jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+
+      expect(() => assertValidNumericJWTExpiration(getMaxNumericJWTExpiration() + 1)).toThrow(
+        'Invalid Parameter expiresIn'
+      )
+    })
+
+    test('it should reject numeric expirations below one second', async () => {
+      await expect(signJWT({ sub: 'things' }, hmacPrivateKeyWithoutKid, 0)).rejects.toMatchObject({
+        code: ErrorCode.InvalidParameter,
+        httpStatusCode: 400,
+        message: 'Invalid Parameter expiresIn',
+      })
+
+      await expect(signJWT({ sub: 'things' }, hmacPrivateKeyWithoutKid, -1)).rejects.toMatchObject({
+        code: ErrorCode.InvalidParameter,
+        httpStatusCode: 400,
+        message: 'Invalid Parameter expiresIn',
+      })
+    })
+
+    test('it should reject numeric expirations below one second in the shared validator', () => {
+      expect(() => assertValidNumericJWTExpiration(0)).toThrow('Invalid Parameter expiresIn')
+      expect(() => assertValidNumericJWTExpiration(-1)).toThrow('Invalid Parameter expiresIn')
     })
 
     test('it should reject if jwt is malformed', async () => {

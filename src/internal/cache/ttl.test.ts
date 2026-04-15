@@ -1,9 +1,26 @@
-'use strict'
-
-import { createTtlCache } from '@internal/cache'
+import { vi } from 'vitest'
 
 describe('ttl cache wrapper', () => {
-  test('purges timer-driven stale entries from stats and iteration', async () => {
+  let createTtlCache: typeof import('./ttl').createTtlCache
+
+  beforeAll(async () => {
+    vi.useFakeTimers()
+    ;({ createTtlCache } = await import('./ttl'))
+  })
+
+  beforeEach(() => {
+    vi.clearAllTimers()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  afterAll(() => {
+    vi.useRealTimers()
+  })
+
+  test('purges stale entries from stats and iteration after ttl elapses', async () => {
     const cache = createTtlCache<string, { bytes: number }>({
       max: 10,
       ttl: 20,
@@ -14,7 +31,7 @@ describe('ttl cache wrapper', () => {
 
     expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 4 })
 
-    await new Promise((resolve) => setTimeout(resolve, 40))
+    await vi.advanceTimersByTimeAsync(40)
 
     expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
     expect([...cache.entries()]).toEqual([])
@@ -92,60 +109,43 @@ describe('ttl cache wrapper', () => {
     expect(cache.get('b')).toEqual({ bytes: 5 })
   })
 
-  test('does not extend ttl when iterating entries keys or values', () => {
-    jest.useFakeTimers({ doNotFake: ['performance'] })
-    let now = 0
-    const performanceNowSpy = jest.spyOn(performance, 'now').mockImplementation(() => now)
+  test('does not extend ttl when iterating entries keys or values', async () => {
+    const cache = createTtlCache<string, { bytes: number }>({
+      max: 10,
+      ttl: 40,
+      updateAgeOnGet: true,
+      checkAgeOnGet: true,
+      sizeCalculation: (value) => value.bytes,
+    })
 
-    try {
-      const cache = createTtlCache<string, { bytes: number }>({
-        max: 10,
-        ttl: 20,
-        updateAgeOnGet: true,
-        checkAgeOnGet: true,
-        sizeCalculation: (value) => value.bytes,
-      })
+    cache.set('a', { bytes: 3 })
 
-      cache.set('a', { bytes: 3 })
+    await vi.advanceTimersByTimeAsync(20)
 
-      now += 15
-      jest.advanceTimersByTime(15)
+    expect([...cache.entries()]).toEqual([['a', { bytes: 3 }]])
+    expect([...cache.keys()]).toEqual(['a'])
+    expect([...cache.values()]).toEqual([{ bytes: 3 }])
 
-      expect([...cache.entries()]).toEqual([['a', { bytes: 3 }]])
-      expect([...cache.keys()]).toEqual(['a'])
-      expect([...cache.values()]).toEqual([{ bytes: 3 }])
+    await vi.advanceTimersByTimeAsync(30)
 
-      now += 15
-      jest.advanceTimersByTime(15)
-
-      expect(cache.get('a')).toBeUndefined()
-      expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
-    } finally {
-      performanceNowSpy.mockRestore()
-      jest.useRealTimers()
-    }
+    expect(cache.get('a')).toBeUndefined()
+    expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
   })
 
-  test('cancels the ttl timer on dispose', () => {
-    jest.useFakeTimers()
+  test('cancels the ttl timer on dispose', async () => {
+    const cache = createTtlCache<string, { bytes: number }>({
+      max: 10,
+      ttl: 20,
+      sizeCalculation: (value) => value.bytes,
+    })
 
-    try {
-      const cache = createTtlCache<string, { bytes: number }>({
-        max: 10,
-        ttl: 20,
-        sizeCalculation: (value) => value.bytes,
-      })
+    cache.set('stale', { bytes: 4 })
+    cache.dispose()
 
-      cache.set('stale', { bytes: 4 })
-      cache.dispose()
+    await vi.advanceTimersByTimeAsync(40)
 
-      jest.advanceTimersByTime(40)
+    expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 4 })
 
-      expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 4 })
-
-      cache.dispose()
-    } finally {
-      jest.useRealTimers()
-    }
+    cache.dispose()
   })
 })

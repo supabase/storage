@@ -186,6 +186,8 @@ type StorageConfigType = {
   }
   prometheusMetricsEnabled: boolean
   prometheusMetricsIncludeTenantId: boolean
+  tenantPoolCacheHitLogSampleRate: number
+  tenantPoolCacheMissLogSampleRate: number
   otelMetricsEnabled: boolean
   otelMetricsTemporality: 'DELTA' | 'CUMULATIVE'
   otelMetricsExportIntervalMs: number
@@ -456,6 +458,14 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
     logflareBatchSize: parseInt(getOptionalConfigFromEnv('LOGFLARE_BATCH_SIZE') || '200', 10),
+    tenantPoolCacheHitLogSampleRate: envSampleRate(
+      getOptionalConfigFromEnv('TENANT_POOL_CACHE_HIT_LOG_SAMPLE_RATE'),
+      0
+    ),
+    tenantPoolCacheMissLogSampleRate: envSampleRate(
+      getOptionalConfigFromEnv('TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE'),
+      0
+    ),
     tracingEnabled: getOptionalConfigFromEnv('TRACING_ENABLED') === 'true',
     tracingMode: getOptionalConfigFromEnv('TRACING_MODE') ?? 'basic',
     tracingTimeMinDuration: parseFloat(
@@ -645,4 +655,17 @@ function envNumber(value: string | undefined, defaultValue?: number): number | u
     return defaultValue
   }
   return parsed
+}
+
+function envSampleRate(value: string | undefined, defaultValue: number): number {
+  if (!value) {
+    return defaultValue
+  }
+
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) {
+    return defaultValue
+  }
+
+  return Math.min(Math.max(parsed, 0), 1)
 }

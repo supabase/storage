@@ -618,4 +618,104 @@ describe('Tenant jwks configs', () => {
     const insert = storage.insert('tenant-id', 'encrypted', 'kind', true)
     await expect(insert).rejects.toThrow('failed to find existing jwk on idempotent insert')
   })
+
+  test('Roll url signing key', async () => {
+    const queueSendSpy = mockQueue().sendSpy
+    const queueSpyAwaiter = new Promise((resolve) => {
+      queueSendSpy.mockImplementationOnce((...args) => {
+        resolve(args)
+      })
+    })
+    try {
+      const response = await adminApp.inject({
+        method: 'POST',
+        url: `/tenants/${tenantId}/jwks/url-signing/roll`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      const data = response.json<{ started: boolean }>()
+      expect(data.started).toBe(true)
+
+      await queueSpyAwaiter
+      expect(queueSendSpy).toHaveBeenCalledTimes(1)
+      const [[callArg]] = queueSendSpy.mock.calls
+      expect(callArg).toMatchObject({
+        data: { tenantId },
+        name: 'tenants-jwks-roll-url-signing-key-v1',
+      })
+    } finally {
+      queueSendSpy.mockRestore()
+    }
+  })
+
+  test('Roll url signing key when no key exists', async () => {
+    let configAwaiter = createJwkConfigChangeAwaiter()
+
+    const config = await jwksManager.getJwksTenantConfig(tenantId)
+    expect(config.keys.length).toBe(1)
+    const { kid } = config.keys[0]
+
+    await adminApp.inject({
+      method: 'PUT',
+      url: `/tenants/${tenantId}/jwks/${kid}`,
+      payload: { active: false },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    await expect(configAwaiter).resolves.toBe(tenantId)
+
+    const configBeforeRoll = await waitForEventually(
+      () => jwksManager.getJwksTenantConfig(tenantId),
+      (value) => value.keys.length === 0,
+      `tenant ${tenantId} JWKS to clear after deactivation`
+    )
+    expect(configBeforeRoll.keys.length).toBe(0)
+
+    configAwaiter = createJwkConfigChangeAwaiter()
+    const { oldKid, newKid } = await jwksManager.rollUrlSigningJwk(tenantId)
+
+    expect(oldKid).toBeNull()
+    expect(newKid).toContain('storage-url-signing-key')
+
+    await expect(configAwaiter).resolves.toBe(tenantId)
+    const configAfterRoll = await waitForEventually(
+      () => jwksManager.getJwksTenantConfig(tenantId),
+      (value) => value.keys.length === 1,
+      `tenant ${tenantId} JWKS to clear after deactivation`
+    )
+    expect(configAfterRoll.keys.length).toBe(1)
+    expect(configAfterRoll.keys[0].kid).toBe(newKid)
+  })
+
+  test('Roll url signing key atomically replaces existing key', async () => {
+    const configBefore = await jwksManager.getJwksTenantConfig(tenantId)
+    expect(configBefore.keys.length).toBe(1)
+    const oldKid = configBefore.keys[0].kid
+
+    const configAwaiter = createJwkConfigChangeAwaiter()
+    const { oldKid: returnedOldKid, newKid } = await jwksManager.rollUrlSigningJwk(tenantId)
+
+    expect(returnedOldKid).toBe(oldKid)
+    expect(newKid).not.toBe(oldKid)
+    expect(newKid).toContain('storage-url-signing-key')
+
+    await expect(configAwaiter).resolves.toBe(tenantId)
+    const configAfter = await waitForEventually(
+      () => jwksManager.getJwksTenantConfig(tenantId),
+      (value) => value.keys[0].kid !== oldKid,
+      `tenant ${tenantId} JWKS to clear after deactivation`
+    )
+
+    await jwksManager.getJwksTenantConfig(tenantId)
+    expect(configAfter.keys.length).toBe(1)
+    expect(configAfter.keys[0].kid).toBe(newKid)
+
+    const activeKeys = await jwksManager['storage'].listActive(tenantId, 'storage-url-signing-key')
+    expect(activeKeys.length).toBe(1)
+    expect(activeKeys[0].id).toBe(newKid.split('_')[1])
+  })
 })

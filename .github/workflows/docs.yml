@@ -29,8 +29,8 @@ jobs:
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
-      - name: Set up Node
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - name: Set up Node and npm
+        uses: ./.github/actions/setup-node-npm
         with:
           node-version: ${{ matrix.node }}
 

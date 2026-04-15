@@ -35,7 +35,7 @@ const successResponseSchema = {
     type: 'object',
     properties: {
       error: {
-        error: ['string', 'null'],
+        type: ['string', 'null'],
         examples: ['Either the object does not exist or you do not have access to it'],
       },
       path: {

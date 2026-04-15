@@ -17,7 +17,6 @@ export default defineConfig({
       reporter: ['lcovonly', 'text-summary'],
     },
     environment: 'node',
-    fileParallelism: false,
     globals: true,
     include: ['src/**/*.test.ts'],
     exclude: ['src/test/**/*.test.ts'],

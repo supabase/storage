@@ -4,18 +4,19 @@ import * as xattr from 'fs-xattr'
 import os from 'os'
 import path from 'path'
 import { Readable } from 'stream'
-import { getConfig } from '../config'
-import { withOptionalVersion } from '../storage/backend/adapter'
-import { FileBackend } from '../storage/backend/file'
+import { type Mock, type MockInstance, vi } from 'vitest'
+import { getConfig } from '../../config'
+import { withOptionalVersion } from './adapter'
+import { FileBackend } from './file'
 
-jest.mock('fs-xattr', () => ({
-  set: jest.fn(() => Promise.resolve()),
-  get: jest.fn(() => Promise.resolve(undefined)),
+vi.mock('fs-xattr', () => ({
+  set: vi.fn(() => Promise.resolve()),
+  get: vi.fn(() => Promise.resolve(undefined)),
 }))
 
 describe('FileBackend xattr metadata', () => {
   beforeEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   it('uses a distinct linux xattr key for etag', async () => {
@@ -72,7 +73,7 @@ describe('FileBackend xattr metadata', () => {
     const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
     const originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
     const originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
-    let uploadSpy: jest.SpyInstance | undefined
+    let uploadSpy: MockInstance | undefined
 
     try {
       Object.defineProperty(process, 'platform', {
@@ -103,7 +104,7 @@ describe('FileBackend xattr metadata', () => {
       await fsp.mkdir(partDir, { recursive: true })
       await fsp.writeFile(partPath, 'hello')
 
-      const xattrGet = xattr.get as jest.Mock
+      const xattrGet = xattr.get as unknown as Mock
       xattrGet.mockImplementation((_file: string, attribute: string) => {
         if (attribute === 'user.supabase.etag') {
           return Promise.resolve(Buffer.from('part-etag'))
@@ -111,7 +112,7 @@ describe('FileBackend xattr metadata', () => {
         return Promise.resolve(undefined)
       })
 
-      uploadSpy = jest
+      uploadSpy = vi
         .spyOn(backend, 'uploadObject')
         .mockImplementation(async (_bucket, _key, _version, body) => {
           await new Promise<void>((resolve, reject) => {

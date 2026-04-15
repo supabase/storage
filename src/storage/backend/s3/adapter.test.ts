@@ -2,47 +2,63 @@
 
 import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
+import { ErrorCode, isStorageError } from '@internal/errors'
 import { Readable } from 'stream'
-import { getConfig } from '../config'
-import { ErrorCode, isStorageError } from '../internal/errors'
-import { MAX_PUT_OBJECT_SIZE, S3Backend } from '../storage/backend/s3/adapter'
+import { type Mock, vi } from 'vitest'
+import { getConfig } from '../../../config'
+import { MAX_PUT_OBJECT_SIZE, S3Backend } from './adapter'
 
-jest.mock('@aws-sdk/client-s3', () => {
-  const originalModule = jest.requireActual('@aws-sdk/client-s3')
+vi.mock('@aws-sdk/client-s3', async () => {
+  const originalModule =
+    await vi.importActual<typeof import('@aws-sdk/client-s3')>('@aws-sdk/client-s3')
   return {
     ...originalModule,
-    S3Client: jest.fn().mockImplementation(() => ({
-      send: jest.fn(),
-    })),
+    S3Client: vi.fn(function () {
+      return {
+        send: vi.fn(),
+      }
+    }),
   }
 })
 
-jest.mock('@aws-sdk/lib-storage', () => {
-  const originalModule = jest.requireActual('@aws-sdk/lib-storage')
+vi.mock('@aws-sdk/lib-storage', async () => {
+  const originalModule =
+    await vi.importActual<typeof import('@aws-sdk/lib-storage')>('@aws-sdk/lib-storage')
   return {
     ...originalModule,
-    Upload: jest.fn(),
+    Upload: vi.fn(function () {}),
   }
 })
+
+type UploadOptionsShape = {
+  queueSize?: number
+}
+
+type MockUploadDoneResult = {
+  ETag: string
+  $metadata: {
+    httpStatusCode: number
+  }
+}
 
 type MockUploadInstance = {
-  options: any
-  abort: jest.Mock
-  done: jest.Mock<Promise<any>, []>
-  on: jest.Mock
-  off: jest.Mock
+  options: UploadOptionsShape
+  abort: Mock
+  done: Mock<() => Promise<MockUploadDoneResult>>
+  on: Mock
+  off: Mock
   emit: (event: string, payload: unknown) => void
 }
 
 describe('S3Backend', () => {
-  let mockSend: jest.Mock
-  let mockUploadDone: jest.Mock<Promise<any>, [MockUploadInstance]>
+  let mockSend: Mock
+  let mockUploadDone: Mock<(instance: MockUploadInstance) => Promise<MockUploadDoneResult>>
   let uploadInstances: MockUploadInstance[]
 
   beforeEach(() => {
-    jest.clearAllMocks()
-    mockSend = jest.fn()
-    mockUploadDone = jest.fn().mockResolvedValue({
+    vi.clearAllMocks()
+    mockSend = vi.fn()
+    mockUploadDone = vi.fn().mockResolvedValue({
       ETag: '"multipart-etag"',
       $metadata: {
         httpStatusCode: 200,
@@ -50,24 +66,26 @@ describe('S3Backend', () => {
     })
     uploadInstances = []
 
-    ;(S3Client as jest.Mock).mockImplementation(() => ({
-      send: mockSend,
-    }))
+    ;(S3Client as unknown as Mock).mockImplementation(function () {
+      return {
+        send: mockSend,
+      }
+    })
 
-    ;(Upload as unknown as jest.Mock).mockImplementation((options) => {
+    ;(Upload as unknown as Mock).mockImplementation(function (options: UploadOptionsShape) {
       const handlers = new Map<string, Set<(payload: unknown) => void>>()
       const instance = {} as MockUploadInstance
 
       instance.options = options
-      instance.abort = jest.fn()
-      instance.done = jest.fn(() => mockUploadDone(instance))
-      instance.on = jest.fn((event: string, handler: (payload: unknown) => void) => {
+      instance.abort = vi.fn()
+      instance.done = vi.fn(() => mockUploadDone(instance))
+      instance.on = vi.fn((event: string, handler: (payload: unknown) => void) => {
         const eventHandlers = handlers.get(event) ?? new Set()
         eventHandlers.add(handler)
         handlers.set(event, eventHandlers)
         return instance
       })
-      instance.off = jest.fn((event: string, handler: (payload: unknown) => void) => {
+      instance.off = vi.fn((event: string, handler: (payload: unknown) => void) => {
         handlers.get(event)?.delete(handler)
         return instance
       })

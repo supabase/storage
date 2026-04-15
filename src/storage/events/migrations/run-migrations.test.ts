@@ -1,13 +1,26 @@
-const mockGetTenantConfig = jest.fn()
-const mockDeleteTenantConfig = jest.fn()
-const mockAreMigrationsUpToDate = jest.fn()
-const mockRunMigrationsOnTenant = jest.fn()
-const mockUpdateTenantMigrationsState = jest.fn()
-const mockDeleteIfActiveExists = jest.fn()
-const mockInfo = jest.fn()
-const mockError = jest.fn()
+import { vi } from 'vitest'
 
-jest.mock('@internal/database', () => ({
+const {
+  mockGetTenantConfig,
+  mockDeleteTenantConfig,
+  mockAreMigrationsUpToDate,
+  mockRunMigrationsOnTenant,
+  mockUpdateTenantMigrationsState,
+  mockDeleteIfActiveExists,
+  mockInfo,
+  mockError,
+} = vi.hoisted(() => ({
+  mockGetTenantConfig: vi.fn(),
+  mockDeleteTenantConfig: vi.fn(),
+  mockAreMigrationsUpToDate: vi.fn(),
+  mockRunMigrationsOnTenant: vi.fn(),
+  mockUpdateTenantMigrationsState: vi.fn(),
+  mockDeleteIfActiveExists: vi.fn(),
+  mockInfo: vi.fn(),
+  mockError: vi.fn(),
+}))
+
+vi.mock('@internal/database', () => ({
   deleteTenantConfig: mockDeleteTenantConfig,
   getTenantConfig: mockGetTenantConfig,
   TenantMigrationStatus: {
@@ -17,13 +30,13 @@ jest.mock('@internal/database', () => ({
   },
 }))
 
-jest.mock('@internal/database/migrations', () => ({
+vi.mock('@internal/database/migrations', () => ({
   areMigrationsUpToDate: mockAreMigrationsUpToDate,
   runMigrationsOnTenant: mockRunMigrationsOnTenant,
   updateTenantMigrationsState: mockUpdateTenantMigrationsState,
 }))
 
-jest.mock('../storage/events/base-event', () => ({
+vi.mock('../base-event', () => ({
   BaseEvent: class {
     static deleteIfActiveExists = mockDeleteIfActiveExists
 
@@ -33,18 +46,18 @@ jest.mock('../storage/events/base-event', () => ({
   },
 }))
 
-jest.mock('@internal/monitoring', () => ({
+vi.mock('@internal/monitoring', () => ({
   logger: {},
   logSchema: {
     info: mockInfo,
     error: mockError,
-    warning: jest.fn(),
+    warning: vi.fn(),
   },
 }))
 
 import { TenantMigrationStatus } from '@internal/database'
 import { ERRORS } from '@internal/errors'
-import { RunMigrationsOnTenants } from '../storage/events/migrations/run-migrations'
+import { RunMigrationsOnTenants } from './run-migrations'
 
 function makeJob(overrides?: Partial<Record<string, unknown>>) {
   return {
@@ -67,7 +80,7 @@ function makeJob(overrides?: Partial<Record<string, unknown>>) {
 
 describe('RunMigrationsOnTenants.handle', () => {
   beforeEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
 
     mockGetTenantConfig.mockResolvedValue({
       databaseUrl: 'postgres://tenant-db',

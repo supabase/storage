@@ -1,7 +1,9 @@
 'use strict'
 
-type EventModule = typeof import('../internal/queue/event')
-type QueueModule = typeof import('../internal/queue/queue')
+import { vi } from 'vitest'
+
+type EventModule = typeof import('./event')
+type QueueModule = typeof import('./queue')
 
 type TestPayload = {
   name: string
@@ -14,16 +16,16 @@ type TestPayload = {
 }
 
 async function loadQueueModules(opts?: { pgQueueEnable?: boolean }) {
-  jest.resetModules()
+  vi.resetModules()
 
-  const configModule = await import('../config')
+  const configModule = await import('../../config')
   configModule.getConfig({ reload: true })
   configModule.mergeConfig({
     pgQueueEnable: opts?.pgQueueEnable ?? false,
   })
 
-  const eventModule = (await import('../internal/queue/event')) as EventModule
-  const queueModule = (await import('../internal/queue/queue')) as QueueModule
+  const eventModule = (await import('./event')) as EventModule
+  const queueModule = (await import('./queue')) as QueueModule
 
   return { eventModule, queueModule }
 }
@@ -49,8 +51,8 @@ function createPayload(overrides: Partial<TestPayload> = {}): TestPayload {
 
 describe('Event payload versioning', () => {
   afterEach(() => {
-    jest.restoreAllMocks()
-    jest.resetModules()
+    vi.restoreAllMocks()
+    vi.resetModules()
   })
 
   it('does not mutate payloads passed to static send', async () => {
@@ -58,7 +60,7 @@ describe('Event payload versioning', () => {
     const TestEvent = defineTestEvent(eventModule.Event)
     const payload = createPayload()
 
-    jest.spyOn(TestEvent.prototype, 'send').mockImplementation(function (
+    vi.spyOn(TestEvent.prototype, 'send').mockImplementation(function (
       this: InstanceType<typeof TestEvent>
     ) {
       expect(this.payload.$version).toBe('v-test')
@@ -76,7 +78,7 @@ describe('Event payload versioning', () => {
     const TestEvent = defineTestEvent(eventModule.Event)
     const payload = createPayload()
 
-    jest.spyOn(TestEvent.prototype, 'invoke').mockImplementation(function (
+    vi.spyOn(TestEvent.prototype, 'invoke').mockImplementation(function (
       this: InstanceType<typeof TestEvent>
     ) {
       expect(this.payload.$version).toBe('v-test')
@@ -94,7 +96,7 @@ describe('Event payload versioning', () => {
     const TestEvent = defineTestEvent(eventModule.Event)
     const payload = createPayload()
 
-    jest.spyOn(TestEvent.prototype, 'invokeOrSend').mockImplementation(function (
+    vi.spyOn(TestEvent.prototype, 'invokeOrSend').mockImplementation(function (
       this: InstanceType<typeof TestEvent>
     ) {
       expect(this.payload.$version).toBe('v-test')
@@ -111,11 +113,11 @@ describe('Event payload versioning', () => {
     const { eventModule, queueModule } = await loadQueueModules({ pgQueueEnable: true })
     const TestEvent = defineTestEvent(eventModule.Event)
     const payload = createPayload({ scheduleAt: new Date('2026-04-07T10:00:00.000Z') })
-    const insert = jest.fn().mockResolvedValue('job-id')
+    const insert = vi.fn().mockResolvedValue('job-id')
 
-    jest
-      .spyOn(queueModule.Queue, 'getInstance')
-      .mockReturnValue({ insert } as unknown as ReturnType<typeof queueModule.Queue.getInstance>)
+    vi.spyOn(queueModule.Queue, 'getInstance').mockReturnValue({ insert } as unknown as ReturnType<
+      typeof queueModule.Queue.getInstance
+    >)
 
     const message = new TestEvent(payload)
 

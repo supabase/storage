@@ -1,5 +1,5 @@
 {
-  "$schema": "https://schemas.platformatic.dev/@platformatic/node/3.41.0.json",
+  "$schema": "https://schemas.platformatic.dev/@platformatic/node/3.52.0.json",
   "node": {
     "main": "./dist/start/server.js"
   },

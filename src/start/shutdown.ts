@@ -3,6 +3,8 @@ import { multitenantKnex, TenantConnection } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import http from 'http'
 
+let shutdownPromise: Promise<void> | undefined
+
 /**
  * Binds shutdown handlers to the process
  * @param serverSignal
@@ -55,44 +57,52 @@ export function bindShutdownSignals(serverSignal: AsyncAbortController) {
  * @param serverSignal
  */
 export async function shutdown(serverSignal: AsyncAbortController) {
-  try {
-    const errors: unknown[] = []
-
-    await serverSignal.abortAsync().catch((e) => {
-      logSchema.error(logger, 'Failed to abort server signal', {
-        type: 'shutdown',
-        error: e,
-      })
-      errors.push(e)
-    })
-
-    await multitenantKnex.destroy().catch((e) => {
-      logSchema.error(logger, 'Failed to close database connection', {
-        type: 'shutdown',
-        error: e,
-      })
-      errors.push(e)
-    })
-
-    await TenantConnection.stop().catch((e) => {
-      logSchema.error(logger, 'Failed to close tenant connection', {
-        type: 'shutdown',
-        error: e,
-      })
-    })
-
-    if (errors.length > 0) {
-      throw errors[errors.length - 1]
-    }
-  } catch (e) {
-    logSchema.error(logger, 'shutdown error', {
-      type: 'shutdown',
-      error: e,
-    })
-    throw e
-  } finally {
-    logger.flush()
+  if (shutdownPromise) {
+    return shutdownPromise
   }
+
+  shutdownPromise = (async () => {
+    try {
+      const errors: unknown[] = []
+
+      await serverSignal.abortAsync().catch((e) => {
+        logSchema.error(logger, 'Failed to abort server signal', {
+          type: 'shutdown',
+          error: e,
+        })
+        errors.push(e)
+      })
+
+      await multitenantKnex.destroy().catch((e) => {
+        logSchema.error(logger, 'Failed to close database connection', {
+          type: 'shutdown',
+          error: e,
+        })
+        errors.push(e)
+      })
+
+      await TenantConnection.stop().catch((e) => {
+        logSchema.error(logger, 'Failed to close tenant connection', {
+          type: 'shutdown',
+          error: e,
+        })
+      })
+
+      if (errors.length > 0) {
+        throw errors[errors.length - 1]
+      }
+    } catch (e) {
+      logSchema.error(logger, 'shutdown error', {
+        type: 'shutdown',
+        error: e,
+      })
+      throw e
+    } finally {
+      logger.flush()
+    }
+  })()
+
+  return shutdownPromise
 }
 
 export function createServerClosedPromise(server: http.Server, cb: () => Promise<void> | void) {

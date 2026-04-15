@@ -18,6 +18,7 @@ import {
 import { logger, logSchema } from '@internal/monitoring'
 import { Queue } from '@internal/queue'
 import { KnexShardStoreFactory, ShardCatalog } from '@internal/sharding'
+import { getGlobal } from '@platformatic/globals'
 import { registerWorkers } from '@storage/events'
 import { SyncCatalogIds } from '@storage/events/upgrades/sync-catalog-ids'
 import { FastifyInstance } from 'fastify'
@@ -29,6 +30,7 @@ import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shut
 const shutdownSignal = new AsyncAbortController()
 
 bindShutdownSignals(shutdownSignal)
+registerPlatformaticCloseHandler()
 
 // Start API server
 main()
@@ -43,7 +45,7 @@ main()
       error: e,
     })
 
-    await shutdown(shutdownSignal)
+    await close()
     process.exit(1)
   })
   .catch(() => {
@@ -165,7 +167,7 @@ async function httpServer(signal: AbortSignal) {
     routerOptions: { maxParamLength: 2500 },
   })
 
-  const closePromise = createServerClosedPromise(app.server, () => {
+  const serverClosedPromise = createServerClosedPromise(app.server, () => {
     logSchema.info(logger, '[Server] Exited', {
       type: 'server',
     })
@@ -179,7 +181,7 @@ async function httpServer(signal: AbortSignal) {
           type: 'server',
         })
 
-        await closePromise
+        await serverClosedPromise
       },
       { once: true }
     )
@@ -213,7 +215,7 @@ async function httpAdminServer(
     requestIdHeader: adminRequestIdHeader,
   })
 
-  const closePromise = createServerClosedPromise(adminApp.server, () => {
+  const adminServerClosedPromise = createServerClosedPromise(adminApp.server, () => {
     logSchema.info(logger, '[Admin Server] Exited', {
       type: 'server',
     })
@@ -226,7 +228,7 @@ async function httpAdminServer(
         type: 'server',
       })
 
-      await closePromise
+      await adminServerClosedPromise
     },
     { once: true }
   )
@@ -241,6 +243,22 @@ async function httpAdminServer(
     throw err
   }
   return adminApp
+}
+
+export async function close() {
+  return shutdown(shutdownSignal)
+}
+
+function registerPlatformaticCloseHandler() {
+  const platformatic = getGlobal()
+
+  if (!platformatic?.events) {
+    return
+  }
+
+  platformatic.events.on('close', () => {
+    void close()
+  })
 }
 
 async function upgrades() {

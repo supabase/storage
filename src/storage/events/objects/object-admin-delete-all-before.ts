@@ -5,6 +5,7 @@ import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
 import { Storage } from '../../index'
 import { BaseEvent } from '../base-event'
+import { ObjectRemoved } from '../lifecycle/object-removed'
 
 const DELETE_JOB_TIME_LIMIT_MS = 10_000
 
@@ -87,6 +88,19 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
               }
 
               await backend.deleteObjects(storageS3Bucket, prefixes)
+
+              await Promise.allSettled(
+                deleted.map((object) =>
+                  ObjectRemoved.sendWebhook({
+                    tenant: job.data.tenant,
+                    name: object.name,
+                    bucketId,
+                    reqId: job.data.reqId,
+                    version: object.version,
+                    metadata: object.metadata,
+                  })
+                )
+              )
             }
           })
         }

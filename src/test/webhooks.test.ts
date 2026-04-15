@@ -14,6 +14,7 @@ import { FastifyInstance } from 'fastify'
 import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
+import { ObjectAdminDeleteAllBefore } from '../storage/events/objects/object-admin-delete-all-before'
 import { mockQueue, useMockObject } from './common'
 
 describe('Webhooks', () => {
@@ -385,10 +386,95 @@ describe('Webhooks', () => {
       })
     )
   })
+
+  it('will emit webhooks for each deleted object during empty bucket operation', async () => {
+    const emptyTestBucketName = 'bucket-empty-webhook-test'
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    // Create a dedicated bucket for this test
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization,
+      },
+      payload: {
+        name: emptyTestBucketName,
+      },
+    })
+
+    const objects = await Promise.all([
+      createObject(pg, emptyTestBucketName),
+      createObject(pg, emptyTestBucketName),
+      createObject(pg, emptyTestBucketName),
+    ])
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/bucket/${emptyTestBucketName}/empty`,
+      headers: {
+        authorization,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    // Pass call invoked by empty on to the job handler to trigger the webhooks
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+    const deleteJobCall = sendSpy.mock.calls[0][0]
+    expect(deleteJobCall.name).toBe(ObjectAdminDeleteAllBefore.queueName)
+    await ObjectAdminDeleteAllBefore.handle(deleteJobCall)
+
+    // Check ObjectRemoved:Delete webhooks were sent as expected
+    expect(sendSpy).toHaveBeenCalledTimes(1 + objects.length) // 1 for the delete job + 3 for webhooks
+    objects.forEach((obj) => {
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'webhooks',
+          options: expect.objectContaining({
+            deadLetter: 'webhooks-dead-letter',
+            expireInSeconds: expect.any(Number),
+          }),
+          data: expect.objectContaining({
+            $version: 'v1',
+            event: expect.objectContaining({
+              $version: 'v1',
+              type: 'ObjectRemoved:Delete',
+              applyTime: expect.any(Number),
+              payload: expect.objectContaining({
+                bucketId: emptyTestBucketName,
+                name: obj.name,
+                version: obj.version,
+                metadata: obj.metadata,
+                tenant: {
+                  host: undefined,
+                  ref: 'bjhaohmqunupljrqypxz',
+                },
+                reqId: expect.any(String),
+              }),
+            }),
+            tenant: {
+              host: undefined,
+              ref: 'bjhaohmqunupljrqypxz',
+            },
+          }),
+        })
+      )
+    })
+
+    // Clean up: delete the bucket
+    await appInstance.inject({
+      method: 'DELETE',
+      url: `/bucket/${emptyTestBucketName}`,
+      headers: {
+        authorization,
+      },
+    })
+  })
 })
 
 async function createObject(pg: TenantConnection, bucketId: string) {
-  const objectName = Date.now()
+  const objectName = randomUUID()
   const tnx = await pg.transaction()
 
   const [data] = await tnx

@@ -4,7 +4,6 @@ import '@internal/monitoring/otel-metrics'
 import { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { Cluster } from '@internal/cluster/cluster'
 import { AsyncAbortController } from '@internal/concurrency'
-import { getGlobal } from '@platformatic/globals'
 import {
   listenForTenantUpdate,
   multitenantKnex,
@@ -19,6 +18,7 @@ import {
 import { logger, logSchema } from '@internal/monitoring'
 import { Queue } from '@internal/queue'
 import { KnexShardStoreFactory, ShardCatalog } from '@internal/sharding'
+import { getGlobal } from '@platformatic/globals'
 import { registerWorkers } from '@storage/events'
 import { SyncCatalogIds } from '@storage/events/upgrades/sync-catalog-ids'
 import { FastifyInstance } from 'fastify'

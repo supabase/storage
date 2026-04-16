@@ -19,11 +19,17 @@
     "test": "npm run infra:restart && npm run test:dummy-data && jest --no-cache --runInBand",
     "test:oriole": "npm run infra:restart:oriole && npm run test:dummy-data && jest --no-cache --runInBand",
     "test:coverage": "npm run infra:restart && npm run test:dummy-data && jest --no-cache --runInBand --coverage",
+    "test:coverage:ci": "npm run infra:restart:ci && npm run test:dummy-data && jest --no-cache --runInBand --coverage",
     "infra:stop": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml down --remove-orphans",
-    "infra:start": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml up -d && sleep 5 && npm run migration:run",
-    "infra:start:oriole": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml -f ./.docker/docker-compose-infra-oriole-override.yml up -d && sleep 5 && npm run migration:run",
+    "infra:start": "docker compose --project-directory . --profile monitoring -f ./.docker/docker-compose-infra.yml up -d && sleep 5 && npm run migration:run",
+    "infra:start:ci": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml up -d && sleep 5 && npm run migration:run",
+    "infra:start:oriole": "docker compose --project-directory . --profile monitoring -f ./.docker/docker-compose-infra.yml -f ./.docker/docker-compose-infra-oriole-override.yml up -d && sleep 5 && npm run migration:run",
+    "infra:start:ci:oriole": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml -f ./.docker/docker-compose-infra-oriole-override.yml up -d && sleep 5 && npm run migration:run",
     "infra:restart": "npm run infra:stop && npm run infra:start",
-    "infra:restart:oriole": "npm run infra:stop && npm run infra:start:oriole"
+    "infra:restart:ci": "npm run infra:stop && npm run infra:start:ci",
+    "infra:restart:oriole": "npm run infra:stop && npm run infra:start:oriole",
+    "infra:restart:ci:oriole": "npm run infra:stop && npm run infra:start:ci:oriole",
+    "test:oriole:ci": "npm run infra:restart:ci:oriole && npm run test:dummy-data && jest --no-cache --runInBand"
   },
   "dependencies": {
     "@aws-sdk/client-ecs": "^3.1023.0",

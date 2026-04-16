@@ -203,21 +203,29 @@ services:
 
   # Optional for tracing
   otel:
+    profiles:
+      - monitoring
     extends:
       service: otel-collector
       file: ./.docker/docker-compose-monitoring.yml
 
   jaeger:
+    profiles:
+      - monitoring
     extends:
       service: jaeger
       file: ./.docker/docker-compose-monitoring.yml
 
   grafana:
+    profiles:
+      - monitoring
     extends:
       service: grafana
       file: ./.docker/docker-compose-monitoring.yml
 
   prometheus:
+    profiles:
+      - monitoring
     extends:
       service: prometheus
       file: ./.docker/docker-compose-monitoring.yml

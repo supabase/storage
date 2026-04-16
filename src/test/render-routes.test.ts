@@ -76,6 +76,29 @@ describe('image rendering routes', () => {
     )
   })
 
+  it('will render a public image in all supported formats', async () => {
+    const formats = ['origin', 'webp', 'avif']
+    const testAxios = axios.create({ baseURL: imgProxyURL })
+    jest.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
+    const axiosSpy = jest.spyOn(testAxios, 'get')
+
+    for (let format of formats) {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: `/render/image/public/public-bucket-2/favicon.ico?format=${format}&width=100&height=100`,
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
+      const expectFormat = format === 'origin' ? '' : `/format:${format}`
+      expect(axiosSpy).toHaveBeenCalledWith(
+        `/public/height:100/width:100/resizing_type:fill${expectFormat}/plain/local:///${projectRoot}/data/sadcat.jpg`,
+        { responseType: 'stream', signal: expect.any(AbortSignal) }
+      )
+      jest.clearAllMocks()
+    }
+  })
+
   it('will render a transformed image providing a signed url', async () => {
     const assetUrl = 'bucket2/authenticated/casestudy.png'
     const signURLResponse = await appInstance.inject({

@@ -15,7 +15,7 @@ export interface TransformOptions {
   width?: number
   height?: number
   resize?: 'cover' | 'contain' | 'fill'
-  format?: 'origin' | 'avif'
+  format?: 'origin' | 'avif' | 'webp'
   quality?: number
 }
 

@@ -20,10 +20,12 @@ export const baseLogger = pino({
     error(error) {
       return normalizeRawError(error)
     },
-    res(reply) {
+    res(reply: Pick<FastifyReply, 'statusCode'> & Partial<Pick<FastifyReply, 'getHeaders'>>) {
+      const headers = typeof reply.getHeaders === 'function' ? reply.getHeaders() : {}
+
       return {
         statusCode: reply.statusCode,
-        headers: whitelistHeaders(reply.getHeaders()),
+        headers: whitelistHeaders(headers),
       }
     },
     reqMetadata(metadata?: Record<string, unknown>) {

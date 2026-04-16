@@ -385,8 +385,6 @@ async function expectMultipartUploadToRemainPending(
   expect(listPartsResp.Parts?.[0].ETag).toBe(options.partETag)
 }
 
-jest.setTimeout(10 * 1000)
-
 describe('S3 Protocol', () => {
   describe('Bucket', () => {
     let testApp: FastifyInstance
@@ -1024,7 +1022,7 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const part1Body = Buffer.alloc(5 * 1024 * 1024, 'a')
+        const part1Body = Buffer.alloc(1024 * 5, 'a')
 
         const part1 = await client.send(
           new UploadPartCommand({
@@ -1104,7 +1102,7 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const part1Body = Buffer.alloc(5 * 1024 * 1024, 'b')
+        const part1Body = Buffer.alloc(1024 * 5, 'b')
 
         const part1 = await client.send(
           new UploadPartCommand({
@@ -1186,7 +1184,7 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const part1Body = Buffer.alloc(5 * 1024 * 1024, 'c')
+        const part1Body = Buffer.alloc(1024 * 5, 'c')
 
         const part1 = await client.send(
           new UploadPartCommand({
@@ -1598,7 +1596,7 @@ describe('S3 Protocol', () => {
         )
         expect(part1Resp.ETag).toBeTruthy()
 
-        const canUploadSpy = jest
+        const canUploadSpy = vi
           .spyOn(Uploader.prototype, 'canUpload')
           .mockRejectedValueOnce(ERRORS.AccessDenied('upload'))
 

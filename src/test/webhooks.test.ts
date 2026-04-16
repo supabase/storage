@@ -1,6 +1,10 @@
 import { TenantConnection } from '@internal/database'
 import { getConfig, mergeConfig } from '../config'
 
+vi.hoisted(() => {
+  process.env.PG_QUEUE_ENABLE = 'true'
+})
+
 const { serviceKeyAsync, tenantId } = getConfig()
 
 mergeConfig({
@@ -13,6 +17,7 @@ import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import FormData from 'form-data'
 import fs from 'fs'
+import type { MockInstance } from 'vitest'
 import app from '../app'
 import { ObjectAdminDeleteAllBefore } from '../storage/events/objects/object-admin-delete-all-before'
 import { mockQueue, useMockObject } from './common'
@@ -32,7 +37,7 @@ describe('Webhooks', () => {
   })
 
   let appInstance: FastifyInstance
-  let sendSpy: jest.SpyInstance
+  let sendSpy: MockInstance
   beforeEach(() => {
     const mocks = mockQueue()
     sendSpy = mocks.sendSpy
@@ -41,7 +46,7 @@ describe('Webhooks', () => {
 
   afterEach(async () => {
     await appInstance.close()
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   it('will emit a webhook upon object creation', async () => {

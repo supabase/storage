@@ -16,7 +16,7 @@ const {
 } = getConfig()
 
 async function createFileBackedApp(fileBackendPath: string) {
-  jest.resetModules()
+  vi.resetModules()
 
   const configModule = await import('../config')
 
@@ -62,7 +62,7 @@ describe('S3 protocol error code', () => {
     client?.destroy()
     await testApp?.close()
 
-    jest.resetModules()
+    vi.resetModules()
     await rm(fileBackendPath, { recursive: true, force: true })
   })
 

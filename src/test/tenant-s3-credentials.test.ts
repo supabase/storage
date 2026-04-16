@@ -1,4 +1,9 @@
-'use strict'
+vi.hoisted(() => {
+  process.env.PG_QUEUE_ENABLE = 'true'
+  process.env.MULTI_TENANT = 'true'
+  process.env.IS_MULTITENANT = 'true'
+})
+
 import { getConfig, mergeConfig } from '../config'
 
 const { multitenantDatabaseUrl } = getConfig()
@@ -29,7 +34,7 @@ const pubSub = new PostgresPubSub(multitenantDatabaseUrl!)
 type S3CredentialsManagerType = typeof s3CredentialsManager
 
 async function loadS3CredentialsManager(maxSizeBytes: number): Promise<S3CredentialsManagerType> {
-  jest.resetModules()
+  vi.resetModules()
 
   const configModule = await import('../config')
   configModule.getConfig({ reload: true })
@@ -59,7 +64,7 @@ beforeAll(async () => {
   await migrate.runMultitenantMigrations()
   await pubSub.start()
   await listenForTenantUpdate(pubSub)
-  jest.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
 })
 
 beforeEach(async () => {
@@ -88,10 +93,11 @@ afterEach(async () => {
       apikey: process.env.ADMIN_API_KEYS,
     },
   })
-  jest.dontMock('@internal/cache')
+  vi.doUnmock('@internal/cache')
 })
 
 afterAll(async () => {
+  await adminApp.close()
   await pubSub.close()
   await multitenantKnex.destroy()
 })
@@ -170,7 +176,7 @@ describe('Tenant S3 credentials', () => {
   })
 
   test('Add s3 credential with claim', async () => {
-    const knexTableSpy = jest.spyOn(multitenantKnex, 'table')
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
     try {
       const claimKept = {
         some: 'other',
@@ -331,7 +337,7 @@ describe('Tenant S3 credentials', () => {
   })
 
   test('Config always retrieves concurrent requests from cache', async () => {
-    const getByKeySpy = jest.spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
+    const getByKeySpy = vi.spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
     try {
       const response = await adminApp.inject({
         method: 'POST',
@@ -358,7 +364,7 @@ describe('Tenant S3 credentials', () => {
   })
 
   test('Ensure cache is cleared on delete', async () => {
-    const knexTableSpy = jest.spyOn(multitenantKnex, 'table')
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
     const claims = {
       issuer: `supabase.storage.${tenantId}`,
       role: 'service_role',
@@ -427,7 +433,7 @@ describe('Tenant S3 credentials', () => {
   })
 
   test('Ensure cache is cleared on update', async () => {
-    const knexTableSpy = jest.spyOn(multitenantKnex, 'table')
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
     const claims = {
       issuer: `supabase.storage.${tenantId}`,
       role: 'service_role',
@@ -507,10 +513,7 @@ describe('Tenant S3 credentials', () => {
     const s3CredentialsManagerWithSmallCache = await loadS3CredentialsManager(
       objectSizeOf(templateCredential) + 1
     )
-    const getByKeySpy = jest.spyOn(
-      s3CredentialsManagerWithSmallCache['storage'],
-      'getOneByAccessKey'
-    )
+    const getByKeySpy = vi.spyOn(s3CredentialsManagerWithSmallCache['storage'], 'getOneByAccessKey')
 
     try {
       getByKeySpy.mockImplementation(async (requestTenantId, accessKey) => {
@@ -539,8 +542,8 @@ describe('Tenant S3 credentials', () => {
   })
 
   test('Config records one cache request per logical lookup', async () => {
-    const getByKeySpy = jest.spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
-    const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+    const getByKeySpy = vi.spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
+    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
     const lookupTenantId = 's3-cache-metrics-lookup'
     const lookupAccessKey = 's3-cache-metrics-access-key'
     const credentials = {

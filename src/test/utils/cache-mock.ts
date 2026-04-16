@@ -1,6 +1,6 @@
 export function mockCreateLruCache(overrides: Record<string, unknown>): void {
-  jest.doMock('@internal/cache', () => {
-    const actual = jest.requireActual('@internal/cache') as typeof import('@internal/cache')
+  vi.doMock('@internal/cache', async () => {
+    const actual = await vi.importActual<typeof import('@internal/cache')>('@internal/cache')
 
     return {
       ...actual,

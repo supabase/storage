@@ -1,5 +1,3 @@
-'use strict'
-
 import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import app from '../app'

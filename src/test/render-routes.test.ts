@@ -34,13 +34,13 @@ describe('image rendering routes', () => {
 
   afterEach(async () => {
     await appInstance.close()
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   it('will render an authenticated image applying transformations using external image processing', async () => {
     const testAxios = axios.create({ baseURL: imgProxyURL })
-    jest.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
-    const axiosSpy = jest.spyOn(testAxios, 'get')
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
+    const axiosSpy = vi.spyOn(testAxios, 'get')
 
     const response = await appInstance.inject({
       method: 'GET',
@@ -60,8 +60,8 @@ describe('image rendering routes', () => {
 
   it('will render a public image applying transformations using external image processing', async () => {
     const testAxios = axios.create({ baseURL: imgProxyURL })
-    jest.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
-    const axiosSpy = jest.spyOn(testAxios, 'get')
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
+    const axiosSpy = vi.spyOn(testAxios, 'get')
 
     const response = await appInstance.inject({
       method: 'GET',
@@ -79,8 +79,8 @@ describe('image rendering routes', () => {
   it('will render a public image in all supported formats', async () => {
     const formats = ['origin', 'webp', 'avif']
     const testAxios = axios.create({ baseURL: imgProxyURL })
-    jest.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
-    const axiosSpy = jest.spyOn(testAxios, 'get')
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
+    const axiosSpy = vi.spyOn(testAxios, 'get')
 
     for (let format of formats) {
       const response = await appInstance.inject({
@@ -95,7 +95,7 @@ describe('image rendering routes', () => {
         `/public/height:100/width:100/resizing_type:fill${expectFormat}/plain/local:///${projectRoot}/data/sadcat.jpg`,
         { responseType: 'stream', signal: expect.any(AbortSignal) }
       )
-      jest.clearAllMocks()
+      vi.clearAllMocks()
     }
   })
 
@@ -126,8 +126,8 @@ describe('image rendering routes', () => {
     expect(jwtData.url).toBe(assetUrl)
 
     const testAxios = axios.create({ baseURL: imgProxyURL })
-    jest.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
-    const axiosSpy = jest.spyOn(testAxios, 'get')
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
+    const axiosSpy = vi.spyOn(testAxios, 'get')
 
     const response = await appInstance.inject({
       method: 'GET',
@@ -173,8 +173,8 @@ describe('image rendering routes', () => {
     expect(jwtData.url).toBe(assetUrl)
 
     const testAxios = axios.create({ baseURL: imgProxyURL })
-    jest.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
-    const axiosSpy = jest.spyOn(testAxios, 'get')
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
+    const axiosSpy = vi.spyOn(testAxios, 'get')
 
     const response = await appInstance.inject({
       method: 'GET',

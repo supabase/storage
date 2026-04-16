@@ -6,24 +6,27 @@ mergeConfig({
   cdnPurgeEndpointKey: 'test-key',
 })
 
-import app from '../app'
-
-jest.mock('axios', () => {
+vi.mock('axios', () => {
   const instance = {
-    post: jest.fn(),
+    post: vi.fn(),
     interceptors: {
       request: {
-        use: jest.fn(),
+        use: vi.fn(),
       },
       response: {
-        use: jest.fn(),
+        use: vi.fn(),
       },
     },
   }
 
-  return {
-    create: jest.fn().mockReturnValue(instance),
+  const axiosMock = {
+    create: vi.fn().mockReturnValue(instance),
     ...instance,
+  }
+
+  return {
+    default: axiosMock,
+    ...axiosMock,
   }
 })
 
@@ -38,6 +41,7 @@ const { serviceKeyAsync, anonKeyAsync, tenantId, jwtSecret } = getConfig()
 describe('CDN Cache Manager', () => {
   const storageHook = useStorage()
   let appInstance: FastifyInstance
+  let buildApp: typeof import('../app').default
 
   const bucketName = 'cdn-cache-manager-test-' + Date.now()
   beforeAll(async () => {
@@ -45,15 +49,16 @@ describe('CDN Cache Manager', () => {
       id: bucketName,
       name: bucketName,
     })
+    buildApp = (await import('../app')).default
   })
 
   beforeEach(() => {
-    appInstance = app()
+    appInstance = buildApp()
   })
 
   afterEach(async () => {
     await appInstance.close()
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   afterAll(() => {
@@ -103,7 +108,7 @@ describe('CDN Cache Manager', () => {
       },
     })
 
-    const spy = jest
+    const spy = vi
       .spyOn(axios, 'post')
       .mockReturnValue(Promise.resolve({ data: { message: 'success' } }))
 

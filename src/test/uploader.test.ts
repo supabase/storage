@@ -11,7 +11,7 @@ describe('fileUploadFromRequest', () => {
     const file = Readable.from(['payload']) as Readable & { truncated: boolean }
     file.truncated = false
 
-    const requestFile = jest.fn().mockResolvedValue({
+    const requestFile = vi.fn().mockResolvedValue({
       file,
       fields: {
         cacheControl: { value: '3600' },
@@ -275,13 +275,13 @@ describe('fileUploadFromRequest', () => {
       }
     )
 
-    const objectAdminDeleteSendSpy = jest
+    const objectAdminDeleteSendSpy = vi
       .spyOn(ObjectAdminDelete, 'send')
       .mockResolvedValue(undefined)
 
     const uploader = new Uploader(
       {
-        uploadObject: jest.fn(async (_bucket, _key, _version, body: Readable) => {
+        uploadObject: vi.fn(async (_bucket, _key, _version, body: Readable) => {
           body.destroy(new Error('stream pipeline failed'))
           throw StorageBackendError.fromError(new Error('socket hang up'))
         }),
@@ -290,7 +290,7 @@ describe('fileUploadFromRequest', () => {
         tenantId: 'stub-tenant',
         reqId: 'req-1',
         tenant: () => ({ ref: 'stub-tenant' }),
-        testPermission: jest.fn().mockResolvedValue(undefined),
+        testPermission: vi.fn().mockResolvedValue(undefined),
       } as any,
       new TenantLocation('test-bucket')
     )
@@ -315,7 +315,7 @@ describe('fileUploadFromRequest', () => {
   test('keeps declared request size for permission checks but omits backend size for request-backed uploads', async () => {
     const capturedWrites: Array<{ metadata?: { contentLength?: number } }> = []
     const backend = {
-      uploadObject: jest.fn().mockResolvedValue({
+      uploadObject: vi.fn().mockResolvedValue({
         httpStatusCode: 200,
         cacheControl: 'no-cache',
         eTag: '"etag"',
@@ -332,12 +332,12 @@ describe('fileUploadFromRequest', () => {
         tenantId: 'stub-tenant',
         reqId: 'req-1',
         tenant: () => ({ ref: 'stub-tenant' }),
-        testPermission: jest.fn(async (fn) =>
+        testPermission: vi.fn(async (fn) =>
           fn({
-            createObject: jest.fn(async (payload: { metadata?: { contentLength?: number } }) => {
+            createObject: vi.fn(async (payload: { metadata?: { contentLength?: number } }) => {
               capturedWrites.push(payload)
             }),
-            upsertObject: jest.fn(async (payload: { metadata?: { contentLength?: number } }) => {
+            upsertObject: vi.fn(async (payload: { metadata?: { contentLength?: number } }) => {
               capturedWrites.push(payload)
             }),
           })
@@ -345,7 +345,7 @@ describe('fileUploadFromRequest', () => {
       } as any,
       new TenantLocation('test-bucket')
     )
-    const completeUploadSpy = jest.spyOn(uploader, 'completeUpload').mockResolvedValue({
+    const completeUploadSpy = vi.spyOn(uploader, 'completeUpload').mockResolvedValue({
       metadata: { eTag: '"etag"' },
       obj: { id: 'obj-id' },
     } as any)

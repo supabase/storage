@@ -5,6 +5,7 @@ import {
   getTenantConfig,
   jwksManager,
   multitenantKnex,
+  TenantMigrationStatus,
 } from '@internal/database'
 import {
   isDBMigrationName,
@@ -133,6 +134,13 @@ interface tenantDBInterface {
 
 const { dbMigrationFreezeAt, icebergEnabled, vectorEnabled } = getConfig()
 const migrationQueueName = RunMigrationsOnTenants.getQueueName()
+
+async function markTenantMigrationsCompleted(tenantId: string) {
+  await updateTenantMigrationsState(tenantId, {
+    migration: dbMigrationFreezeAt,
+    state: TenantMigrationStatus.COMPLETED,
+  })
+}
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
@@ -352,7 +360,7 @@ export default async function routes(fastify: FastifyInstance) {
           tenantId,
           upToMigration: dbMigrationFreezeAt,
         })
-        await updateTenantMigrationsState(tenantId)
+        await markTenantMigrationsCompleted(tenantId)
       } catch {
         progressiveMigrations.addTenant(tenantId)
       }
@@ -422,7 +430,7 @@ export default async function routes(fastify: FastifyInstance) {
             tenantId,
             upToMigration: dbMigrationFreezeAt,
           })
-          await updateTenantMigrationsState(tenantId)
+          await markTenantMigrationsCompleted(tenantId)
         } catch (e) {
           if (e instanceof Error) {
             request.executionError = e
@@ -527,7 +535,7 @@ export default async function routes(fastify: FastifyInstance) {
           tenantId,
           upToMigration: dbMigrationFreezeAt,
         })
-        await updateTenantMigrationsState(tenantId)
+        await markTenantMigrationsCompleted(tenantId)
       } catch (e) {
         request.executionError = e as Error
         progressiveMigrations.addTenant(tenantId)
@@ -568,8 +576,10 @@ export default async function routes(fastify: FastifyInstance) {
         return
       }
 
+      const latestMigration = dbMigrationFreezeAt || (await lastLocalMigrationName())
+
       reply.send({
-        isLatest: (await lastLocalMigrationName()) === migrationsInfo?.migrations_version,
+        isLatest: latestMigration === migrationsInfo?.migrations_version,
         migrationsVersion: migrationsInfo?.migrations_version,
         migrationsStatus: migrationsInfo?.migrations_status,
       })
@@ -602,7 +612,7 @@ export default async function routes(fastify: FastifyInstance) {
           tenantId,
           upToMigration: dbMigrationFreezeAt,
         })
-        await updateTenantMigrationsState(tenantId)
+        await markTenantMigrationsCompleted(tenantId)
         return reply.send({
           migrated: true,
         })

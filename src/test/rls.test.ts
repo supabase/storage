@@ -118,8 +118,6 @@ let appInstance: FastifyInstance
 let currentUserId: string
 let currentStorage: Storage
 
-jest.setTimeout(10000)
-
 describe('RLS policies', () => {
   let db: Knex
 
@@ -175,7 +173,7 @@ describe('RLS policies', () => {
 
   afterEach(async () => {
     await appInstance.close()
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   afterAll(async () => {

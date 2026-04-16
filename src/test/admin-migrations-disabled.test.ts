@@ -1,11 +1,8 @@
+import type { FastifyInstance } from 'fastify'
 import { getConfig, mergeConfig } from '../config'
+import { createAdminApp } from './common'
 
 getConfig()
-mergeConfig({
-  pgQueueEnable: false,
-})
-
-import { adminApp } from './common'
 
 type DisabledRouteCase = {
   method: 'DELETE' | 'GET' | 'POST'
@@ -26,7 +23,16 @@ const disabledRouteCases: DisabledRouteCase[] = [
   { method: 'GET', url: '/migrations/failed' },
 ]
 
+let adminApp: FastifyInstance
+
 describe('Admin migrations routes with queue disabled', () => {
+  beforeAll(async () => {
+    mergeConfig({
+      pgQueueEnable: false,
+    })
+    adminApp = await createAdminApp()
+  })
+
   afterAll(async () => {
     await adminApp.close()
   })

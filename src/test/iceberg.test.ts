@@ -39,7 +39,7 @@ describe('Iceberg Catalog', () => {
   })
 
   afterEach(async () => {
-    jest.restoreAllMocks()
+    vi.restoreAllMocks()
   })
 
   afterAll(async () => {
@@ -132,16 +132,14 @@ describe('Iceberg Catalog', () => {
       name: bucketName,
     })
 
-    jest.spyOn(RestCatalogClient.prototype, 'getConfig').mockResolvedValue(
-      Promise.resolve({
-        defaults: {
-          prefix: bucketName,
-        },
-        overrides: {
-          prefix: bucketName,
-        },
-      })
-    )
+    vi.spyOn(RestCatalogClient.prototype, 'getConfig').mockResolvedValue({
+      defaults: {
+        prefix: bucketName,
+      },
+      overrides: {
+        prefix: bucketName,
+      },
+    })
 
     const response = await app.inject({
       method: 'GET',
@@ -176,14 +174,12 @@ describe('Iceberg Catalog', () => {
 
       const namespaceName = t.random.name('namespace')
 
-      jest.spyOn(RestCatalogClient.prototype, 'createNamespace').mockResolvedValue(
-        Promise.resolve({
-          namespace: [namespaceName],
-          properties: {
-            test: 'hello',
-          },
-        })
-      )
+      vi.spyOn(RestCatalogClient.prototype, 'createNamespace').mockResolvedValue({
+        namespace: [namespaceName],
+        properties: {
+          test: 'hello',
+        },
+      })
 
       const response = await app.inject({
         method: 'POST',
@@ -255,11 +251,9 @@ describe('Iceberg Catalog', () => {
         metadata: {},
       })
 
-      jest.spyOn(RestCatalogClient.prototype, 'listNamespaces').mockResolvedValue(
-        Promise.resolve({
-          namespaces: [[namespaceName]],
-        })
-      )
+      vi.spyOn(RestCatalogClient.prototype, 'listNamespaces').mockResolvedValue({
+        namespaces: [[namespaceName]],
+      })
 
       const response = await app.inject({
         method: 'GET',
@@ -297,7 +291,7 @@ describe('Iceberg Catalog', () => {
         catalogId: bucket.id,
       })
 
-      jest.spyOn(RestCatalogClient.prototype, 'dropNamespace').mockResolvedValue(Promise.resolve())
+      vi.spyOn(RestCatalogClient.prototype, 'dropNamespace').mockResolvedValue(undefined)
 
       const response = await app.inject({
         method: 'DELETE',
@@ -338,14 +332,12 @@ describe('Iceberg Catalog', () => {
         },
       })
 
-      jest.spyOn(RestCatalogClient.prototype, 'loadNamespaceMetadata').mockResolvedValue(
-        Promise.resolve({
-          namespace: [namespace.name],
-          properties: {
-            test: 'hello',
-          },
-        })
-      )
+      vi.spyOn(RestCatalogClient.prototype, 'loadNamespaceMetadata').mockResolvedValue({
+        namespace: [namespace.name],
+        properties: {
+          test: 'hello',
+        },
+      })
 
       const response = await app.inject({
         method: 'GET',
@@ -382,9 +374,7 @@ describe('Iceberg Catalog', () => {
         metadata: {},
       })
 
-      jest
-        .spyOn(RestCatalogClient.prototype, 'namespaceExists')
-        .mockResolvedValue(Promise.resolve())
+      vi.spyOn(RestCatalogClient.prototype, 'namespaceExists').mockResolvedValue(undefined)
 
       const response = await app.inject({
         method: 'HEAD',
@@ -460,16 +450,12 @@ describe('Iceberg Catalog', () => {
           's3://821c6598-0032-4345-h1sokpwnexm17nfi7n1axwxmnncg1aps1b--table-s3/metadata/00000-2eed5277-661d-47b5-84c0-30ce9dbad149.metadata.json',
       } as const
 
-      jest
-        .spyOn(RestCatalogClient.prototype, 'createTable')
-        .mockResolvedValue(Promise.resolve(loadTable))
+      vi.spyOn(RestCatalogClient.prototype, 'createTable').mockResolvedValue(loadTable)
 
-      jest.spyOn(RestCatalogClient.prototype, 'createNamespace').mockResolvedValue(
-        Promise.resolve({
-          namespace: [namespace.name],
-          properties: {},
-        })
-      )
+      vi.spyOn(RestCatalogClient.prototype, 'createNamespace').mockResolvedValue({
+        namespace: [namespace.name],
+        properties: {},
+      })
 
       const response = await app.inject({
         method: 'POST',
@@ -541,16 +527,14 @@ describe('Iceberg Catalog', () => {
         bucketId: bucket.id,
       })
 
-      jest.spyOn(RestCatalogClient.prototype, 'listTables').mockResolvedValue(
-        Promise.resolve({
-          identifiers: [
-            {
-              namespace: [namespace.name],
-              name: tableName,
-            },
-          ],
-        })
-      )
+      vi.spyOn(RestCatalogClient.prototype, 'listTables').mockResolvedValue({
+        identifiers: [
+          {
+            namespace: [namespace.name],
+            name: tableName,
+          },
+        ],
+      })
 
       const response = await app.inject({
         method: 'GET',
@@ -606,7 +590,7 @@ describe('Iceberg Catalog', () => {
         shardKey: 'my-warehouse',
       })
 
-      jest.spyOn(RestCatalogClient.prototype, 'tableExists').mockResolvedValue(Promise.resolve())
+      vi.spyOn(RestCatalogClient.prototype, 'tableExists').mockResolvedValue(undefined)
 
       const response = await app.inject({
         method: 'HEAD',
@@ -646,12 +630,10 @@ describe('Iceberg Catalog', () => {
         shardKey: 'my-warehouse',
       })
 
-      jest.spyOn(RestCatalogClient.prototype, 'dropTable').mockResolvedValue(Promise.resolve())
-      jest
-        .spyOn(RestCatalogClient.prototype, 'listTables')
-        .mockResolvedValue(Promise.resolve({ identifiers: [] }))
+      vi.spyOn(RestCatalogClient.prototype, 'dropTable').mockResolvedValue(undefined)
+      vi.spyOn(RestCatalogClient.prototype, 'listTables').mockResolvedValue({ identifiers: [] })
 
-      jest.spyOn(RestCatalogClient.prototype, 'dropNamespace').mockResolvedValue(Promise.resolve())
+      vi.spyOn(RestCatalogClient.prototype, 'dropNamespace').mockResolvedValue(undefined)
 
       const response = await app.inject({
         method: 'DELETE',
@@ -735,9 +717,7 @@ describe('Iceberg Catalog', () => {
         'metadata-location': `s3://${bucketName}/tables/${tableName}/metadata/00000-2eed5277-661d-47b5-84c0-30ce9dbad149.metadata.json`,
       }
 
-      jest
-        .spyOn(RestCatalogClient.prototype, 'loadTable')
-        .mockResolvedValue(Promise.resolve(tableMetadata))
+      vi.spyOn(RestCatalogClient.prototype, 'loadTable').mockResolvedValue(tableMetadata)
 
       const response = await app.inject({
         method: 'GET',

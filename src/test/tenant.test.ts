@@ -1,4 +1,3 @@
-'use strict'
 import { encrypt, signJWT } from '@internal/auth'
 import { TENANT_CONFIG_CACHE_NAME } from '@internal/cache'
 import { jwksManager } from '@internal/database'
@@ -117,7 +116,7 @@ type MultitenantDbModule = typeof import('../internal/database/multitenant-db')
 async function loadTenantModule(
   maxItems: number
 ): Promise<{ tenantModule: TenantModule; multitenantDbModule: MultitenantDbModule }> {
-  jest.resetModules()
+  vi.resetModules()
   mockCreateLruCache({ max: maxItems })
 
   return {
@@ -128,7 +127,7 @@ async function loadTenantModule(
 
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
-  jest.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
   payload.serviceKey = await signJWT(serviceKeyPayload, payload.jwtSecret, 100)
 })
 
@@ -153,6 +152,7 @@ afterEach(async () => {
 })
 
 afterAll(async () => {
+  await adminApp.close()
   await multitenantKnex.destroy()
 })
 
@@ -289,10 +289,10 @@ describe('Tenant configs', () => {
   })
 
   test('Create tenant config rolls back when jwk generation fails', async () => {
-    const generateUrlSigningJwkSpy = jest
+    const generateUrlSigningJwkSpy = vi
       .spyOn(jwksManager, 'generateUrlSigningJwk')
       .mockRejectedValueOnce(new Error('jwk insert failed'))
-    const runMigrationsOnTenantMock = jest.mocked(migrate.runMigrationsOnTenant)
+    const runMigrationsOnTenantMock = vi.mocked(migrate.runMigrationsOnTenant)
     runMigrationsOnTenantMock.mockClear()
 
     try {
@@ -357,9 +357,9 @@ describe('Tenant configs', () => {
       },
     })
 
-    const runMigrationsOnTenantMock = jest.mocked(migrate.runMigrationsOnTenant)
-    const updateTenantMigrationsStateSpy = jest.spyOn(migrate, 'updateTenantMigrationsState')
-    const addTenantSpy = jest
+    const runMigrationsOnTenantMock = vi.mocked(migrate.runMigrationsOnTenant)
+    const updateTenantMigrationsStateSpy = vi.spyOn(migrate, 'updateTenantMigrationsState')
+    const addTenantSpy = vi
       .spyOn(migrate.progressiveMigrations, 'addTenant')
       .mockImplementation(() => undefined)
 
@@ -679,7 +679,7 @@ describe('Tenant configs', () => {
       },
     })
 
-    const knexTableSpy = jest.spyOn(multitenantKnex, 'table')
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
     try {
       await getTenantConfig(tenantId)
       expect(knexTableSpy).toHaveBeenCalledTimes(1)
@@ -735,11 +735,11 @@ describe('Tenant configs', () => {
     }
 
     const { tenantModule, multitenantDbModule } = await loadTenantModule(2)
-    const knexTableSpy = jest.spyOn(multitenantDbModule.multitenantKnex, 'table')
+    const knexTableSpy = vi.spyOn(multitenantDbModule.multitenantKnex, 'table')
     const queryBuilder = {
-      first: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnThis(),
-      abortOnSignal: jest.fn().mockResolvedValue(encryptedTenant),
+      first: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      abortOnSignal: vi.fn().mockResolvedValue(encryptedTenant),
     }
 
     try {
@@ -758,15 +758,15 @@ describe('Tenant configs', () => {
       tenantIds.forEach((tenantId) => {
         tenantModule.deleteTenantConfig(tenantId)
       })
-      jest.dontMock('@internal/cache')
-      jest.resetModules()
+      vi.doUnmock('@internal/cache')
+      vi.resetModules()
       knexTableSpy.mockRestore()
     }
   })
 
   test('Get tenant config records one cache request per logical lookup', async () => {
-    const knexTableSpy = jest.spyOn(multitenantKnex, 'table')
-    const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
     const tenantId = 'cache-metrics-lookup'
     const encryptedTenant = {
       anon_key: encrypt('anon'),
@@ -797,9 +797,9 @@ describe('Tenant configs', () => {
 
     const tenantQuery = Promise.withResolvers<typeof encryptedTenant>()
     const queryBuilder = {
-      first: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnThis(),
-      abortOnSignal: jest.fn().mockImplementation(() => tenantQuery.promise),
+      first: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      abortOnSignal: vi.fn().mockImplementation(() => tenantQuery.promise),
     }
 
     try {

@@ -1,5 +1,3 @@
-'use strict'
-
 import { randomUUID } from 'node:crypto'
 import { ListObjectsV2Result } from '@storage/object'
 import { FastifyInstance } from 'fastify'

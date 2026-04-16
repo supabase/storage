@@ -106,7 +106,7 @@ describe('Query Abort Signal', () => {
 
         try {
           await queryPromise
-          fail('Expected query to be aborted')
+          throw new Error('Expected query to be aborted')
         } catch (error: unknown) {
           expect(error).toMatchObject({
             name: 'AbortError',

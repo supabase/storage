@@ -4,23 +4,21 @@
  */
 
 // Mock only used external dependencies
-jest.mock('axios')
-jest.mock('@internal/database', () => ({
-  getTenantConfig: jest.fn(),
+vi.mock('axios')
+vi.mock('@internal/database', () => ({
+  getTenantConfig: vi.fn(),
 }))
-jest.mock('@internal/database/migrations', () => ({
-  runMigrationsOnTenant: jest.fn(),
+vi.mock('@internal/database/migrations', () => ({
+  runMigrationsOnTenant: vi.fn(),
 }))
 
 import { getTenantConfig } from '@internal/database'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
 import axios from 'axios'
 
-const mockAxios = axios as jest.Mocked<typeof axios>
-const mockGetTenantConfig = getTenantConfig as jest.MockedFunction<typeof getTenantConfig>
-const mockRunMigrationsOnTenant = runMigrationsOnTenant as jest.MockedFunction<
-  typeof runMigrationsOnTenant
->
+const mockAxios = vi.mocked(axios)
+const mockGetTenantConfig = vi.mocked(getTenantConfig)
+const mockRunMigrationsOnTenant = vi.mocked(runMigrationsOnTenant)
 
 describe('Error Handling Patterns', () => {
   it('should handle network errors gracefully', async () => {

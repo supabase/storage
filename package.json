@@ -42,7 +42,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1024.0",
     "@fastify/accepts": "^5.0.4",
     "@fastify/multipart": "^9.4.0",
-    "@fastify/otel": "^0.17.1",
+    "@fastify/otel": "^0.18.1",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/swagger": "^9.7.0",
     "@fastify/swagger-ui": "^5.2.5",

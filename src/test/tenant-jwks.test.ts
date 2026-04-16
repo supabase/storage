@@ -1,4 +1,9 @@
-'use strict'
+vi.hoisted(() => {
+  process.env.PG_QUEUE_ENABLE = 'true'
+  process.env.MULTI_TENANT = 'true'
+  process.env.IS_MULTITENANT = 'true'
+})
+
 import { getConfig, mergeConfig } from '../config'
 
 const { multitenantDatabaseUrl } = getConfig()
@@ -31,13 +36,9 @@ import { waitForEventually } from './utils/promise'
 
 dotenv.config({ path: '.env.test' })
 
-const TENANT_JWKS_TEST_TIMEOUT_MS = 10000
-// Keep helper-level waits shorter than the per-test timeout
-// so helper errors surface first.
+// Keep helper-level waits short so helper errors surface first.
 const TENANT_JWKS_HELPER_TIMEOUT_MS = 4000
 const tenantId = 'abc123'
-
-jest.setTimeout(TENANT_JWKS_TEST_TIMEOUT_MS)
 
 const testJwks = {
   oct: {
@@ -73,7 +74,7 @@ type JwksModule = typeof import('../internal/auth/jwks')
 async function loadJwksModules(
   maxItems: number
 ): Promise<{ databaseModule: DatabaseModule; jwksModule: JwksModule }> {
-  jest.resetModules()
+  vi.resetModules()
 
   const configModule = await import('../config')
   configModule.getConfig({ reload: true })
@@ -123,7 +124,7 @@ beforeAll(async () => {
   await migrate.runMultitenantMigrations()
   await pubSub.start()
   await listenForTenantUpdate(pubSub)
-  jest.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
 })
 
 beforeEach(async () => {
@@ -155,6 +156,7 @@ afterEach(async () => {
 })
 
 afterAll(async () => {
+  await adminApp.close()
   await pubSub.close()
   await multitenantKnex.destroy()
 })
@@ -379,7 +381,7 @@ describe('Tenant jwks configs', () => {
   })
 
   test('Config always retrieves concurrent requests from cache', async () => {
-    const listActiveSpy = jest.spyOn(jwksManager['storage'], 'listActive')
+    const listActiveSpy = vi.spyOn(jwksManager['storage'], 'listActive')
     try {
       const results = await Promise.all([
         jwksManager.getJwksTenantConfig(tenantId),
@@ -402,7 +404,7 @@ describe('Tenant jwks configs', () => {
     }
 
     const { databaseModule, jwksModule } = await loadJwksModules(2)
-    const listActiveSpy = jest.spyOn(databaseModule.jwksManager['storage'], 'listActive')
+    const listActiveSpy = vi.spyOn(databaseModule.jwksManager['storage'], 'listActive')
 
     try {
       listActiveSpy.mockImplementation(async () => {
@@ -422,15 +424,15 @@ describe('Tenant jwks configs', () => {
       tenantIds.forEach((tenantId) => {
         jwksModule.deleteTenantJwksConfig(tenantId)
       })
-      jest.dontMock('@internal/cache')
-      jest.resetModules()
+      vi.doUnmock('@internal/cache')
+      vi.resetModules()
       listActiveSpy.mockRestore()
     }
   })
 
   test('Config records one cache request per logical lookup', async () => {
-    const listActiveSpy = jest.spyOn(jwksManager['storage'], 'listActive')
-    const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+    const listActiveSpy = vi.spyOn(jwksManager['storage'], 'listActive')
+    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
     const lookupTenantId = 'jwks-cache-metrics-lookup'
     const encryptedJwk = {
       id: 'cache-metrics',
@@ -520,7 +522,7 @@ describe('Tenant jwks configs', () => {
   })
 
   test('Generate all jwks when already running', async () => {
-    const statusSpy = jest
+    const statusSpy = vi
       .spyOn(UrlSigningJwkGenerator, 'getGenerationStatus')
       .mockReturnValueOnce({ running: true, sent: 99 })
 
@@ -541,7 +543,7 @@ describe('Tenant jwks configs', () => {
   })
 
   test('Ensure list tenants exits before yield if no items are returned', async () => {
-    const listTenantsSpy = jest
+    const listTenantsSpy = vi
       .spyOn(jwksManager['storage'], 'listTenantsWithoutKindPaginated')
       .mockResolvedValue([])
     try {

@@ -1,5 +1,3 @@
-'use strict'
-
 import net, { AddressInfo } from 'node:net'
 import { FastifyInstance } from 'fastify'
 import app from '../app'

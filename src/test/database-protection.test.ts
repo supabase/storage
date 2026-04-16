@@ -1,5 +1,3 @@
-'use strict'
-
 import { DatabaseError } from 'pg'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
@@ -29,7 +27,7 @@ describe('Database Protection Triggers', () => {
       // Attempt to delete without setting storage.allow_delete_query
       try {
         await db.raw('DELETE FROM storage.buckets WHERE id = ?', [testBucket])
-        fail('Expected DELETE to be blocked by trigger')
+        throw new Error('Expected DELETE to be blocked by trigger')
       } catch (error) {
         const dbError = error as DatabaseError
         expect(dbError.code).toBe('42501') // PostgreSQL error code for insufficient privilege
@@ -62,7 +60,7 @@ describe('Database Protection Triggers', () => {
           testBucketName,
           testObjectName,
         ])
-        fail('Expected DELETE to be blocked by trigger')
+        throw new Error('Expected DELETE to be blocked by trigger')
       } catch (error) {
         const dbError = error as DatabaseError
         expect(dbError.code).toBe('42501')

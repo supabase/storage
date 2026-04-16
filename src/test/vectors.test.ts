@@ -1,5 +1,3 @@
-'use strict'
-
 import {
   CreateIndexCommandOutput,
   DeleteVectorsOutput,
@@ -12,6 +10,7 @@ import { signJWT } from '@internal/auth'
 import { SingleShard } from '@internal/sharding'
 import { KnexVectorMetadataDB, VectorStore, VectorStoreManager } from '@storage/protocols/vector'
 import { FastifyInstance } from 'fastify'
+import type { Mocked } from 'vitest'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
 import { useMockObject, useMockQueue } from './common'
@@ -28,27 +27,27 @@ let serviceToken: string
 useMockObject()
 useMockQueue()
 
-jest.mock('@storage/protocols/vector/adapter/s3-vector', () => {
-  const mockS3Vector = {
-    deleteVectorIndex: jest.fn().mockResolvedValue({} as CreateIndexCommandOutput),
-    createVectorIndex: jest.fn().mockResolvedValue({} as CreateIndexCommandOutput),
-    putVectors: jest.fn().mockResolvedValue({} as PutVectorsOutput),
-    listVectors: jest.fn().mockResolvedValue({} as ListVectorsOutput),
-    queryVectors: jest.fn().mockResolvedValue({} as QueryVectorsOutput),
-    deleteVectors: jest.fn().mockResolvedValue({} as DeleteVectorsOutput),
-    getVectors: jest.fn().mockResolvedValue({} as GetVectorsCommandOutput),
-    createS3VectorClient: jest.fn().mockReturnValue({}),
-  }
+const { mockVectorStore } = vi.hoisted(() => ({
+  mockVectorStore: {
+    deleteVectorIndex: vi.fn().mockResolvedValue({} as CreateIndexCommandOutput),
+    createVectorIndex: vi.fn().mockResolvedValue({} as CreateIndexCommandOutput),
+    putVectors: vi.fn().mockResolvedValue({} as PutVectorsOutput),
+    listVectors: vi.fn().mockResolvedValue({} as ListVectorsOutput),
+    queryVectors: vi.fn().mockResolvedValue({} as QueryVectorsOutput),
+    deleteVectors: vi.fn().mockResolvedValue({} as DeleteVectorsOutput),
+    getVectors: vi.fn().mockResolvedValue({} as GetVectorsCommandOutput),
+  } as Mocked<VectorStore>,
+}))
 
+vi.mock('@storage/protocols/vector/adapter/s3-vector', () => {
   return {
-    S3Vector: jest.fn().mockImplementation(() => mockS3Vector),
-    ...mockS3Vector,
+    S3Vector: vi.fn(function () {
+      return mockVectorStore
+    }),
+    createS3VectorClient: vi.fn().mockReturnValue({}),
+    ...mockVectorStore,
   }
 })
-
-const mockVectorStore = jest.mocked<VectorStore>(
-  jest.requireMock('@storage/protocols/vector/adapter/s3-vector')
-)
 
 let vectorBucketName: string
 let s3Vector: VectorStoreManager
@@ -84,8 +83,8 @@ describe('Vectors API', () => {
   })
 
   beforeEach(async () => {
-    jest.clearAllMocks()
-    jest.resetAllMocks()
+    vi.clearAllMocks()
+    vi.resetAllMocks()
 
     getConfig({ reload: true })
     mergeConfig({ vectorMaxBucketsCount: Infinity, vectorMaxIndexesCount: Infinity })

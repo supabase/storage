@@ -1,5 +1,3 @@
-'use strict'
-
 import { DisableConcurrentIndexTransformer } from '@internal/database/migrations/transformers'
 
 describe('DisableConcurrentIndexTransformer', () => {

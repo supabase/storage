@@ -29,8 +29,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     this: StaticThis<T>,
     payload: Omit<T['payload'], '$version'>
   ) {
-    // biome-ignore lint/style/noCommonJs: build script runs as CommonJS
-    const { Webhook } = require('./lifecycle/webhook')
+    const { Webhook } = await import('./lifecycle/webhook')
     const eventType = this.eventName()
 
     try {

@@ -1,4 +1,6 @@
-'use strict'
+vi.hoisted(() => {
+  process.env.PG_QUEUE_ENABLE = 'true'
+})
 
 import {
   generateHS512JWK,
@@ -90,7 +92,7 @@ describe('testing GET object', () => {
   })
 
   test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
-    const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
+    const mockGetObject = vi.spyOn(S3Backend.prototype, 'getObject')
     mockGetObject.mockRejectedValue({
       $metadata: {
         httpStatusCode: 304,
@@ -758,7 +760,7 @@ describe('testing POST object via multipart upload', () => {
 
   test('should not add row to database if upload fails', async () => {
     // Mock S3 upload failure.
-    jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
+    vi.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
       StorageBackendError.fromError({
         name: 'S3ServiceException',
         message: 'Unknown error',
@@ -1052,7 +1054,7 @@ describe('testing POST object via binary upload', () => {
 
   test('should not add row to database if upload fails', async () => {
     // Mock S3 upload failure.
-    jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
+    vi.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
       StorageBackendError.fromError({
         name: 'S3ServiceException',
         message: 'Unknown error',
@@ -2302,7 +2304,7 @@ describe('testing retrieving signed URL', () => {
   })
 
   test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
-    const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
+    const mockGetObject = vi.spyOn(S3Backend.prototype, 'getObject')
     mockGetObject.mockRejectedValue({
       $metadata: {
         httpStatusCode: 304,
@@ -2366,6 +2368,7 @@ describe('testing retrieving signed URL', () => {
 
 describe('testing move object', () => {
   test('check if RLS policies are respected: authenticated user is able to move an authenticated object', async () => {
+    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
     const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
@@ -2380,10 +2383,11 @@ describe('testing move object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
-    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+    expect(objectAdminDeleteSendSpy).toHaveBeenCalled()
   })
 
   test('can move objects across buckets respecting RLS', async () => {
+    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
     const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
@@ -2399,7 +2403,7 @@ describe('testing move object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
-    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+    expect(objectAdminDeleteSendSpy).toHaveBeenCalled()
   })
 
   test('cross-bucket move rollback should cleanup destination bucket object', async () => {
@@ -2407,7 +2411,7 @@ describe('testing move object', () => {
     const sourceKey = `authenticated/move-orig-rollback-${runId}.png`
     const destinationKey = `authenticated/move-new-rollback-${runId}.png`
     const destinationBucket = 'bucket3'
-    const objectAdminDeleteSendSpy = jest.spyOn(ObjectAdminDelete, 'send')
+    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
 
     const seedTx = await getSuperuserPostgrestClient()
     await seedTx.from<Obj>('objects').insert({
@@ -2420,9 +2424,9 @@ describe('testing move object', () => {
     await seedTx.commit()
     tnx = undefined
 
-    jest
-      .spyOn(S3Backend.prototype, 'headObject')
-      .mockRejectedValueOnce(new Error('forced move failure'))
+    vi.spyOn(S3Backend.prototype, 'headObject').mockRejectedValueOnce(
+      new Error('forced move failure')
+    )
 
     const response = await appInstance.inject({
       method: 'POST',

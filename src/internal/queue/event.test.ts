@@ -1,5 +1,3 @@
-'use strict'
-
 import { vi } from 'vitest'
 
 type EventModule = typeof import('./event')

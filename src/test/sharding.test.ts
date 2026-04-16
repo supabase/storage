@@ -1,5 +1,3 @@
-'use strict'
-
 import { multitenantKnex } from '@internal/database'
 import { runMultitenantMigrations } from '@internal/database/migrations'
 import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'

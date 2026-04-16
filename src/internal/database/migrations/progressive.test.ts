@@ -1,19 +1,23 @@
-const mockBatchSend = jest.fn()
-const mockWarning = jest.fn()
-const mockError = jest.fn()
+import { vi } from 'vitest'
 
-jest.mock('../internal/database/tenant', () => ({
-  getTenantConfig: jest.fn(),
+const { mockBatchSend, mockWarning, mockError } = vi.hoisted(() => ({
+  mockBatchSend: vi.fn(),
+  mockWarning: vi.fn(),
+  mockError: vi.fn(),
+}))
+
+vi.mock('../tenant', () => ({
+  getTenantConfig: vi.fn(),
   TenantMigrationStatus: {
     FAILED_STALE: 'FAILED_STALE',
   },
 }))
 
-jest.mock('@internal/database/migrations/migrate', () => ({
-  areMigrationsUpToDate: jest.fn(),
+vi.mock('@internal/database/migrations/migrate', () => ({
+  areMigrationsUpToDate: vi.fn(),
 }))
 
-jest.mock('@storage/events', () => ({
+vi.mock('@storage/events', () => ({
   RunMigrationsOnTenants: class {
     static batchSend = mockBatchSend
     payload: Record<string, unknown>
@@ -24,10 +28,10 @@ jest.mock('@storage/events', () => ({
   },
 }))
 
-jest.mock('../internal/monitoring', () => ({
+vi.mock('../../monitoring', () => ({
   logger: {},
   logSchema: {
-    info: jest.fn(),
+    info: vi.fn(),
     warning: mockWarning,
     error: mockError,
   },
@@ -36,8 +40,8 @@ jest.mock('../internal/monitoring', () => ({
 import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
 import { ERRORS } from '@internal/errors'
 import { RunMigrationsOnTenants } from '@storage/events'
-import { ProgressiveMigrations } from '../internal/database/migrations/progressive'
-import { getTenantConfig } from '../internal/database/tenant'
+import { getTenantConfig } from '../tenant'
+import { ProgressiveMigrations } from './progressive'
 
 class TestProgressiveMigrations extends ProgressiveMigrations {
   seed(...tenants: string[]) {
@@ -57,13 +61,13 @@ class TestProgressiveMigrations extends ProgressiveMigrations {
   }
 }
 
-const mockGetTenantConfig = jest.mocked(getTenantConfig)
-const mockAreMigrationsUpToDate = jest.mocked(areMigrationsUpToDate)
-const mockRunMigrationsBatchSend = jest.mocked(RunMigrationsOnTenants.batchSend)
+const mockGetTenantConfig = vi.mocked(getTenantConfig)
+const mockAreMigrationsUpToDate = vi.mocked(areMigrationsUpToDate)
+const mockRunMigrationsBatchSend = vi.mocked(RunMigrationsOnTenants.batchSend)
 
 describe('ProgressiveMigrations', () => {
   beforeEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
 
     mockGetTenantConfig.mockResolvedValue({
       migrationStatus: undefined,

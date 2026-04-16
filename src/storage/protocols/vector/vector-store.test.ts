@@ -10,60 +10,69 @@ import {
 } from '@aws-sdk/client-s3vectors'
 import { ERRORS } from '@internal/errors'
 import { Sharder } from '@internal/sharding'
+import { VectorBucket } from '@storage/schemas'
+import { type Mocked, vi } from 'vitest'
+import { type VectorStore } from './adapter/s3-vector'
 import {
-  KnexVectorMetadataDB,
-  VECTOR_BUCKET_COUNT_LOCK,
-  VectorLockResourceType,
-  VectorMetadataDB,
-  VectorStore,
-  VectorStoreManager,
-} from '@storage/protocols/vector'
+  type KnexVectorMetadataDB,
+  type VectorLockResourceType,
+  type VectorMetadataDB,
+} from './knex'
+import { VECTOR_BUCKET_COUNT_LOCK, VectorStoreManager } from './vector-store'
 
-function createMockVectorStore(): jest.Mocked<VectorStore> {
+function createMockVectorStore(): Mocked<VectorStore> {
   return {
-    createVectorIndex: jest.fn().mockResolvedValue({} as CreateIndexCommandOutput),
-    deleteVectorIndex: jest.fn().mockResolvedValue({} as DeleteIndexCommandOutput),
-    putVectors: jest.fn().mockResolvedValue({} as PutVectorsOutput),
-    listVectors: jest.fn().mockResolvedValue({} as ListVectorsOutput),
-    queryVectors: jest.fn().mockResolvedValue({} as QueryVectorsOutput),
-    deleteVectors: jest.fn().mockResolvedValue({} as DeleteVectorsOutput),
-    getVectors: jest.fn().mockResolvedValue({} as GetVectorsCommandOutput),
+    createVectorIndex: vi.fn().mockResolvedValue({} as CreateIndexCommandOutput),
+    deleteVectorIndex: vi.fn().mockResolvedValue({} as DeleteIndexCommandOutput),
+    putVectors: vi.fn().mockResolvedValue({} as PutVectorsOutput),
+    listVectors: vi.fn().mockResolvedValue({} as ListVectorsOutput),
+    queryVectors: vi.fn().mockResolvedValue({} as QueryVectorsOutput),
+    deleteVectors: vi.fn().mockResolvedValue({} as DeleteVectorsOutput),
+    getVectors: vi.fn().mockResolvedValue({} as GetVectorsCommandOutput),
   }
 }
 
-function createMockSharder(): jest.Mocked<Sharder> {
+function createMockSharder(): Mocked<Sharder> {
   return {
-    createShard: jest.fn(),
-    setShardStatus: jest.fn(),
-    reserve: jest.fn(),
-    confirm: jest.fn(),
-    cancel: jest.fn(),
-    expireLeases: jest.fn(),
-    freeByLocation: jest.fn(),
-    freeByResource: jest.fn(),
-    shardStats: jest.fn(),
-    findShardByResourceId: jest.fn(),
-    listShardByKind: jest.fn(),
-    withTnx: jest.fn(),
-  } as unknown as jest.Mocked<Sharder>
+    createShard: vi.fn(),
+    setShardStatus: vi.fn(),
+    reserve: vi.fn(),
+    confirm: vi.fn(),
+    cancel: vi.fn(),
+    expireLeases: vi.fn(),
+    freeByLocation: vi.fn(),
+    freeByResource: vi.fn(),
+    shardStats: vi.fn(),
+    findShardByResourceId: vi.fn(),
+    listShardByKind: vi.fn(),
+    withTnx: vi.fn(),
+  } as unknown as Mocked<Sharder>
 }
 
-function createMockVectorDb(): jest.Mocked<VectorMetadataDB> {
+function createMockVectorDb(): Mocked<VectorMetadataDB> {
   return {
-    withTransaction: jest.fn(),
-    lockResource: jest.fn(),
-    findVectorBucket: jest.fn(),
-    createVectorBucket: jest.fn(),
-    deleteVectorBucket: jest.fn(),
-    listBuckets: jest.fn(),
-    countBuckets: jest.fn(),
-    countIndexes: jest.fn(),
-    createVectorIndex: jest.fn(),
-    getIndex: jest.fn(),
-    listIndexes: jest.fn(),
-    deleteVectorIndex: jest.fn(),
-    findVectorIndexForBucket: jest.fn(),
-  } as unknown as jest.Mocked<VectorMetadataDB>
+    withTransaction: vi.fn(),
+    lockResource: vi.fn(),
+    findVectorBucket: vi.fn(),
+    createVectorBucket: vi.fn(),
+    deleteVectorBucket: vi.fn(),
+    listBuckets: vi.fn(),
+    countBuckets: vi.fn(),
+    countIndexes: vi.fn(),
+    createVectorIndex: vi.fn(),
+    getIndex: vi.fn(),
+    listIndexes: vi.fn(),
+    deleteVectorIndex: vi.fn(),
+    findVectorIndexForBucket: vi.fn(),
+  } as unknown as Mocked<VectorMetadataDB>
+}
+
+function createVectorBucketRecord(bucketName: string): VectorBucket {
+  return {
+    id: bucketName,
+    created_at: new Date(),
+    updated_at: new Date().toISOString(),
+  } as unknown as VectorBucket
 }
 
 function createDeterministicVectorDb(options: {
@@ -119,11 +128,7 @@ function createDeterministicVectorDb(options: {
         },
         findVectorBucket: async (bucketName: string) => {
           if (state.existingBuckets.has(bucketName)) {
-            return {
-              id: bucketName,
-              created_at: new Date(),
-              updated_at: new Date().toISOString(),
-            } as any
+            return createVectorBucketRecord(bucketName)
           }
 
           throw ERRORS.S3VectorNotFoundException('vector bucket', bucketName)
@@ -331,13 +336,11 @@ describe('VectorStoreManager bucket lifecycle', () => {
     const vectorStore = createMockVectorStore()
 
     db.findVectorBucket
-      .mockResolvedValueOnce({
-        id: 'bucket-a',
-        created_at: new Date(),
-        updated_at: new Date().toISOString(),
-      } as any)
+      .mockResolvedValueOnce(createVectorBucketRecord('bucket-a'))
       .mockRejectedValueOnce(ERRORS.S3VectorNotFoundException('vector bucket', 'bucket-a'))
-    db.withTransaction.mockImplementation(async (fn) => fn(db as unknown as KnexVectorMetadataDB))
+    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
+      fn(db as unknown as KnexVectorMetadataDB)
+    )
 
     const manager = new VectorStoreManager(vectorStore, db, sharder, {
       tenantId: 'test-tenant',

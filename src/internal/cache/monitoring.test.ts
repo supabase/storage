@@ -14,7 +14,8 @@ import {
   meter,
   setMetricsEnabled,
 } from '@internal/monitoring/metrics'
-import { monitorCache } from '../internal/cache/monitoring'
+import { vi } from 'vitest'
+import { monitorCache } from './monitoring'
 
 function busyWaitMs(ms: number) {
   const end = Date.now() + ms
@@ -25,16 +26,16 @@ function busyWaitMs(ms: number) {
 
 describe('cache telemetry helpers', () => {
   beforeEach(() => {
-    jest.useFakeTimers()
+    vi.useFakeTimers()
   })
 
   afterEach(() => {
-    jest.restoreAllMocks()
-    jest.useRealTimers()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
   })
 
   test('records cache hits and misses', () => {
-    const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
     })
@@ -55,7 +56,7 @@ describe('cache telemetry helpers', () => {
   })
 
   test('can read without recording cache request metrics', () => {
-    const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
     })
@@ -69,7 +70,7 @@ describe('cache telemetry helpers', () => {
   })
 
   test('records stale cache reads when allowStale is enabled', () => {
-    const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
       ttl: 10,
@@ -80,7 +81,7 @@ describe('cache telemetry helpers', () => {
     })
 
     cache.set('stale', { ok: true })
-    jest.advanceTimersByTime(11)
+    vi.advanceTimersByTime(11)
 
     expect(cache.get('stale')).toEqual({ ok: true })
     expect(addSpy).toHaveBeenCalledWith(1, {
@@ -90,7 +91,7 @@ describe('cache telemetry helpers', () => {
   })
 
   test('records evictions', () => {
-    const evictionSpy = jest.spyOn(cacheEvictionsTotal, 'add')
+    const evictionSpy = vi.spyOn(cacheEvictionsTotal, 'add')
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 1,
     })
@@ -107,7 +108,7 @@ describe('cache telemetry helpers', () => {
   })
 
   test('records ttl cache hits and misses', () => {
-    const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
     const cache = createTtlCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
       ttl: 1000,
@@ -129,7 +130,7 @@ describe('cache telemetry helpers', () => {
   })
 
   test('records ttl cache evictions', () => {
-    const evictionSpy = jest.spyOn(cacheEvictionsTotal, 'add')
+    const evictionSpy = vi.spyOn(cacheEvictionsTotal, 'add')
     const cache = createTtlCache(TENANT_CONFIG_CACHE_NAME, {
       max: 1,
       ttl: 1000,
@@ -144,8 +145,8 @@ describe('cache telemetry helpers', () => {
   })
 
   test('chains caller disposeAfter after recording evictions', () => {
-    const evictionSpy = jest.spyOn(cacheEvictionsTotal, 'add')
-    const disposeAfter = jest.fn()
+    const evictionSpy = vi.spyOn(cacheEvictionsTotal, 'add')
+    const disposeAfter = vi.fn()
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 1,
       disposeAfter,
@@ -179,7 +180,7 @@ describe('cache telemetry helpers', () => {
 
     expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 1 })
 
-    jest.advanceTimersByTime(DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS)
+    vi.advanceTimersByTime(DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS)
 
     expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
     expect(cache.get('stale')).toBeUndefined()
@@ -189,14 +190,14 @@ describe('cache telemetry helpers', () => {
     expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 1 })
     expect(cache.get('fresh')).toEqual({ ok: false })
 
-    jest.advanceTimersByTime(DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS)
+    vi.advanceTimersByTime(DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS)
 
     expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
     expect(cache.get('fresh')).toBeUndefined()
   })
 
   test('purges stale entries before reporting occupancy metrics', () => {
-    const addBatchObservableCallbackSpy = jest.spyOn(meter, 'addBatchObservableCallback')
+    const addBatchObservableCallbackSpy = vi.spyOn(meter, 'addBatchObservableCallback')
     let batchObserver: ((observer: { observe: (...args: unknown[]) => void }) => void) | undefined
 
     addBatchObservableCallbackSpy.mockImplementation((callback) => {
@@ -216,11 +217,11 @@ describe('cache telemetry helpers', () => {
 
     cache.set('stale', { ok: true })
 
-    jest.advanceTimersByTime(11)
+    vi.advanceTimersByTime(11)
 
     expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 1 })
 
-    const observeSpy = jest.fn()
+    const observeSpy = vi.fn()
     batchObserver?.({ observe: observeSpy })
 
     expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
@@ -233,7 +234,7 @@ describe('cache telemetry helpers', () => {
   })
 
   test('skips stale purges when occupancy gauges are disabled', () => {
-    const addBatchObservableCallbackSpy = jest.spyOn(meter, 'addBatchObservableCallback')
+    const addBatchObservableCallbackSpy = vi.spyOn(meter, 'addBatchObservableCallback')
     let batchObserver: ((observer: { observe: (...args: unknown[]) => void }) => void) | undefined
 
     addBatchObservableCallbackSpy.mockImplementation((callback) => {
@@ -241,13 +242,13 @@ describe('cache telemetry helpers', () => {
       return undefined as never
     })
 
-    const purgeStale = jest.fn()
+    const purgeStale = vi.fn()
     const cache = {
-      delete: jest.fn().mockReturnValue(false),
-      get: jest.fn(),
-      getStats: jest.fn().mockReturnValue({ entries: 1, sizeBytes: 1 }),
-      getWithOutcome: jest.fn().mockReturnValue({ value: undefined, outcome: 'miss' }),
-      set: jest.fn(),
+      delete: vi.fn().mockReturnValue(false),
+      get: vi.fn(),
+      getStats: vi.fn().mockReturnValue({ entries: 1, sizeBytes: 1 }),
+      getWithOutcome: vi.fn().mockReturnValue({ value: undefined, outcome: 'miss' }),
+      set: vi.fn(),
     }
 
     monitorCache(TENANT_CONFIG_CACHE_NAME, cache, { purgeStale })
@@ -258,7 +259,7 @@ describe('cache telemetry helpers', () => {
         { name: 'cache_size_bytes', enabled: false },
       ])
 
-      const observeSpy = jest.fn()
+      const observeSpy = vi.fn()
       batchObserver?.({ observe: observeSpy })
 
       expect(purgeStale).not.toHaveBeenCalled()
@@ -273,9 +274,9 @@ describe('cache telemetry helpers', () => {
   })
 
   test('records stale ttl cache reads before timer cleanup', () => {
-    jest.useRealTimers()
+    vi.useRealTimers()
 
-    const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
     const cache = createTtlCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
       ttl: 10,
@@ -292,9 +293,9 @@ describe('cache telemetry helpers', () => {
   })
 
   test('purges stale ttl entries before reporting occupancy metrics', () => {
-    jest.useRealTimers()
+    vi.useRealTimers()
 
-    const addBatchObservableCallbackSpy = jest.spyOn(meter, 'addBatchObservableCallback')
+    const addBatchObservableCallbackSpy = vi.spyOn(meter, 'addBatchObservableCallback')
     let batchObserver: ((observer: { observe: (...args: unknown[]) => void }) => void) | undefined
 
     addBatchObservableCallbackSpy.mockImplementation((callback) => {
@@ -311,7 +312,7 @@ describe('cache telemetry helpers', () => {
     cache.set('stale', { ok: true })
     busyWaitMs(20)
 
-    const observeSpy = jest.fn()
+    const observeSpy = vi.fn()
     batchObserver?.({ observe: observeSpy })
 
     expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
@@ -324,15 +325,15 @@ describe('cache telemetry helpers', () => {
   })
 
   test('dispose unregisters occupancy callbacks and tears down wrapped caches', () => {
-    const addBatchObservableCallbackSpy = jest.spyOn(meter, 'addBatchObservableCallback')
-    const removeBatchObservableCallbackSpy = jest.spyOn(meter, 'removeBatchObservableCallback')
+    const addBatchObservableCallbackSpy = vi.spyOn(meter, 'addBatchObservableCallback')
+    const removeBatchObservableCallbackSpy = vi.spyOn(meter, 'removeBatchObservableCallback')
     const cache = {
-      delete: jest.fn().mockReturnValue(false),
-      dispose: jest.fn(),
-      get: jest.fn(),
-      getStats: jest.fn().mockReturnValue({ entries: 1, sizeBytes: 1 }),
-      getWithOutcome: jest.fn().mockReturnValue({ value: undefined, outcome: 'miss' }),
-      set: jest.fn(),
+      delete: vi.fn().mockReturnValue(false),
+      dispose: vi.fn(),
+      get: vi.fn(),
+      getStats: vi.fn().mockReturnValue({ entries: 1, sizeBytes: 1 }),
+      getWithOutcome: vi.fn().mockReturnValue({ value: undefined, outcome: 'miss' }),
+      set: vi.fn(),
     }
 
     const monitoredCache = monitorCache(TENANT_CONFIG_CACHE_NAME, cache)

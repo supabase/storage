@@ -1,6 +1,8 @@
-jest.mock('@storage/events/objects/backup-object', () => ({
+import { type Mock, vi } from 'vitest'
+
+vi.mock('@storage/events/objects/backup-object', () => ({
   BackupObjectEvent: {
-    batchSend: jest.fn(),
+    batchSend: vi.fn(),
   },
 }))
 
@@ -22,10 +24,10 @@ class TestObjectScanner extends ObjectScanner {
   }
 }
 
-function makeScanner(params: { listS3Objects?: jest.Mock }) {
+function makeScanner(params: { listS3Objects?: Mock }) {
   const storage = {
     backend: {
-      list: params.listS3Objects ?? jest.fn(),
+      list: params.listS3Objects ?? vi.fn(),
     },
     db: {},
   } as unknown as Storage
@@ -35,7 +37,7 @@ function makeScanner(params: { listS3Objects?: jest.Mock }) {
 
 describe('ObjectScanner pagination regressions', () => {
   test('continues scanning S3 pages after an empty filtered page when a continuation token remains', async () => {
-    const listS3Objects = jest
+    const listS3Objects = vi
       .fn()
       .mockResolvedValueOnce({
         keys: [

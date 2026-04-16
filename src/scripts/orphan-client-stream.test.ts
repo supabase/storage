@@ -2,20 +2,21 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { Readable } from 'stream'
-import { writeStreamToJsonArray } from '../scripts/orphan-client-stream'
+import { vi } from 'vitest'
+import { writeStreamToJsonArray } from './orphan-client-stream'
 
 describe('writeStreamToJsonArray', () => {
   let tempDir: string
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orphan-client-stream-'))
-    jest.spyOn(console, 'error').mockImplementation(() => {})
-    jest.spyOn(console, 'log').mockImplementation(() => {})
-    jest.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
 
   afterEach(async () => {
-    jest.restoreAllMocks()
+    vi.restoreAllMocks()
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 

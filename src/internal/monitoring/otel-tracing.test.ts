@@ -2,13 +2,30 @@ interface OTelGlobalState {
   __otelTracingShutdown?: () => Promise<void>
 }
 
+import { vi } from 'vitest'
+
+const mockedTracingModules = [
+  '@opentelemetry/sdk-node',
+  '@opentelemetry/instrumentation',
+  '@opentelemetry/auto-instrumentations-node',
+  '@fastify/otel',
+  '@opentelemetry/exporter-trace-otlp-grpc',
+  '@internal/monitoring/logger',
+  './otel-class-instrumentations',
+] as const
+
+async function importOtelTracingModule() {
+  await import('./otel-tracing')
+  return (globalThis as typeof globalThis & OTelGlobalState).__otelTracingShutdown
+}
+
 describe('otel tracing bootstrap', () => {
   const originalTracingEnabled = process.env.TRACING_ENABLED
   const originalTraceEndpoint = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
 
   beforeEach(() => {
-    jest.resetModules()
-    jest.clearAllMocks()
+    vi.resetModules()
+    vi.clearAllMocks()
     process.env.TRACING_ENABLED = 'true'
     process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'http://127.0.0.1:4317'
   })
@@ -33,43 +50,51 @@ describe('otel tracing bootstrap', () => {
       process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = originalTraceEndpoint
     }
 
-    jest.restoreAllMocks()
+    for (const moduleId of mockedTracingModules) {
+      vi.doUnmock(moduleId)
+    }
+
+    vi.restoreAllMocks()
   })
 
   test('does not let tracing sdk create a hidden metrics pipeline', async () => {
-    const start = jest.fn()
-    const shutdown = jest.fn().mockResolvedValue(undefined)
-    const NodeSDK = jest.fn().mockImplementation(() => ({
-      start,
-      shutdown,
-    }))
-    const registerInstrumentations = jest.fn(() => jest.fn())
-    const getNodeAutoInstrumentations = jest.fn().mockReturnValue([])
-    const FastifyOtelInstrumentation = jest.fn().mockImplementation((config) => ({
-      instrumentationName: '@fastify/otel',
-      config,
-    }))
-    const OTLPTraceExporter = jest.fn().mockImplementation(() => ({}))
+    const start = vi.fn()
+    const shutdown = vi.fn().mockResolvedValue(undefined)
+    const NodeSDK = vi.fn(function () {
+      return {
+        start,
+        shutdown,
+      }
+    })
+    const registerInstrumentations = vi.fn(() => vi.fn())
+    const getNodeAutoInstrumentations = vi.fn().mockReturnValue([])
+    const FastifyOtelInstrumentation = vi.fn(function (config) {
+      return {
+        instrumentationName: '@fastify/otel',
+        config,
+      }
+    })
+    const OTLPTraceExporter = vi.fn(function () {
+      return {}
+    })
 
-    jest.doMock('@opentelemetry/sdk-node', () => ({
+    vi.doMock('@opentelemetry/sdk-node', () => ({
       NodeSDK,
     }))
-    jest.doMock('@opentelemetry/instrumentation', () => ({
+    vi.doMock('@opentelemetry/instrumentation', () => ({
       registerInstrumentations,
     }))
-    jest.doMock('@opentelemetry/auto-instrumentations-node', () => ({
+    vi.doMock('@opentelemetry/auto-instrumentations-node', () => ({
       getNodeAutoInstrumentations,
     }))
-    jest.doMock('@fastify/otel', () => ({
+    vi.doMock('@fastify/otel', () => ({
       FastifyOtelInstrumentation,
     }))
-    jest.doMock('@opentelemetry/exporter-trace-otlp-grpc', () => ({
+    vi.doMock('@opentelemetry/exporter-trace-otlp-grpc', () => ({
       OTLPTraceExporter,
     }))
 
-    await jest.isolateModulesAsync(async () => {
-      await import('../internal/monitoring/otel-tracing')
-    })
+    await importOtelTracingModule()
 
     expect(NodeSDK).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -90,54 +115,54 @@ describe('otel tracing bootstrap', () => {
   })
 
   test('does not register class instrumentations after shutdown starts', async () => {
-    const start = jest.fn()
-    const shutdown = jest.fn().mockResolvedValue(undefined)
-    const unregisterTracingInstrumentations = jest.fn()
-    const unregisterClassInstrumentations = jest.fn()
-    const NodeSDK = jest.fn().mockImplementation(() => ({
-      start,
-      shutdown,
-    }))
-    const registerInstrumentations = jest
+    const start = vi.fn()
+    const shutdown = vi.fn().mockResolvedValue(undefined)
+    const unregisterTracingInstrumentations = vi.fn()
+    const unregisterClassInstrumentations = vi.fn()
+    const NodeSDK = vi.fn(function () {
+      return {
+        start,
+        shutdown,
+      }
+    })
+    const registerInstrumentations = vi
       .fn()
       .mockReturnValueOnce(unregisterTracingInstrumentations)
       .mockReturnValueOnce(unregisterClassInstrumentations)
-    const getNodeAutoInstrumentations = jest.fn().mockReturnValue([])
-    const FastifyOtelInstrumentation = jest.fn().mockImplementation((config) => ({
-      instrumentationName: '@fastify/otel',
-      config,
-    }))
-    const OTLPTraceExporter = jest.fn().mockImplementation(() => ({}))
+    const getNodeAutoInstrumentations = vi.fn().mockReturnValue([])
+    const FastifyOtelInstrumentation = vi.fn(function (config) {
+      return {
+        instrumentationName: '@fastify/otel',
+        config,
+      }
+    })
+    const OTLPTraceExporter = vi.fn(function () {
+      return {}
+    })
     const classInstrumentationsDeferred = Promise.withResolvers<{
       classInstrumentations: unknown[]
     }>()
 
-    jest.doMock('@opentelemetry/sdk-node', () => ({
+    vi.doMock('@opentelemetry/sdk-node', () => ({
       NodeSDK,
     }))
-    jest.doMock('@opentelemetry/instrumentation', () => ({
+    vi.doMock('@opentelemetry/instrumentation', () => ({
       registerInstrumentations,
     }))
-    jest.doMock('@opentelemetry/auto-instrumentations-node', () => ({
+    vi.doMock('@opentelemetry/auto-instrumentations-node', () => ({
       getNodeAutoInstrumentations,
     }))
-    jest.doMock('@fastify/otel', () => ({
+    vi.doMock('@fastify/otel', () => ({
       FastifyOtelInstrumentation,
     }))
-    jest.doMock('@opentelemetry/exporter-trace-otlp-grpc', () => ({
+    vi.doMock('@opentelemetry/exporter-trace-otlp-grpc', () => ({
       OTLPTraceExporter,
     }))
-    jest.doMock('../internal/monitoring/otel-class-instrumentations', () => ({
-      loadClassInstrumentations: jest.fn(() => classInstrumentationsDeferred.promise),
+    vi.doMock('./otel-class-instrumentations', () => ({
+      loadClassInstrumentations: vi.fn(() => classInstrumentationsDeferred.promise),
     }))
 
-    let shutdownOtelTracing: (() => Promise<void>) | undefined
-
-    await jest.isolateModulesAsync(async () => {
-      await import('../internal/monitoring/otel-tracing')
-      shutdownOtelTracing = (globalThis as typeof globalThis & OTelGlobalState)
-        .__otelTracingShutdown
-    })
+    const shutdownOtelTracing = await importOtelTracingModule()
 
     const shutdownPromise = shutdownOtelTracing?.()
 
@@ -152,71 +177,73 @@ describe('otel tracing bootstrap', () => {
   })
 
   test('still shuts down sdk when unregister callbacks throw', async () => {
-    const start = jest.fn()
-    const shutdown = jest.fn().mockResolvedValue(undefined)
+    const start = vi.fn()
+    const shutdown = vi.fn().mockResolvedValue(undefined)
     const unregisterTracingError = new Error('tracing unregister failed')
     const unregisterClassError = new Error('class unregister failed')
-    const unregisterTracingInstrumentations = jest.fn(() => {
+    const unregisterTracingInstrumentations = vi.fn(() => {
       throw unregisterTracingError
     })
-    const unregisterClassInstrumentations = jest.fn(() => {
+    const unregisterClassInstrumentations = vi.fn(() => {
       throw unregisterClassError
     })
-    const NodeSDK = jest.fn().mockImplementation(() => ({
-      start,
-      shutdown,
-    }))
-    const registerInstrumentations = jest
+    const NodeSDK = vi.fn(function () {
+      return {
+        start,
+        shutdown,
+      }
+    })
+    const registerInstrumentations = vi
       .fn()
       .mockReturnValueOnce(unregisterTracingInstrumentations)
       .mockReturnValueOnce(unregisterClassInstrumentations)
-    const getNodeAutoInstrumentations = jest.fn().mockReturnValue([])
-    const FastifyOtelInstrumentation = jest.fn().mockImplementation((config) => ({
-      instrumentationName: '@fastify/otel',
-      config,
-    }))
-    const OTLPTraceExporter = jest.fn().mockImplementation(() => ({}))
+    const getNodeAutoInstrumentations = vi.fn().mockReturnValue([])
+    const FastifyOtelInstrumentation = vi.fn(function (config) {
+      return {
+        instrumentationName: '@fastify/otel',
+        config,
+      }
+    })
+    const OTLPTraceExporter = vi.fn(function () {
+      return {}
+    })
     const classInstrumentationsDeferred = Promise.withResolvers<unknown[]>()
     const logSchema = {
-      error: jest.fn(),
-      info: jest.fn(),
-      warning: jest.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      warning: vi.fn(),
     }
 
-    jest.doMock('@opentelemetry/sdk-node', () => ({
+    vi.doMock('@opentelemetry/sdk-node', () => ({
       NodeSDK,
     }))
-    jest.doMock('@opentelemetry/instrumentation', () => ({
+    vi.doMock('@opentelemetry/instrumentation', () => ({
       registerInstrumentations,
     }))
-    jest.doMock('@opentelemetry/auto-instrumentations-node', () => ({
+    vi.doMock('@opentelemetry/auto-instrumentations-node', () => ({
       getNodeAutoInstrumentations,
     }))
-    jest.doMock('@fastify/otel', () => ({
+    vi.doMock('@fastify/otel', () => ({
       FastifyOtelInstrumentation,
     }))
-    jest.doMock('@opentelemetry/exporter-trace-otlp-grpc', () => ({
+    vi.doMock('@opentelemetry/exporter-trace-otlp-grpc', () => ({
       OTLPTraceExporter,
     }))
-    jest.doMock('@internal/monitoring/logger', () => ({
+    vi.doMock('@internal/monitoring/logger', () => ({
       logger: {},
       logSchema,
     }))
-    jest.doMock('../internal/monitoring/otel-class-instrumentations', () => ({
-      loadClassInstrumentations: jest.fn(() => classInstrumentationsDeferred.promise),
+    vi.doMock('./otel-class-instrumentations', () => ({
+      loadClassInstrumentations: vi.fn(() => classInstrumentationsDeferred.promise),
     }))
 
-    let shutdownOtelTracing: (() => Promise<void>) | undefined
-
-    await jest.isolateModulesAsync(async () => {
-      await import('../internal/monitoring/otel-tracing')
-      shutdownOtelTracing = (globalThis as typeof globalThis & OTelGlobalState)
-        .__otelTracingShutdown
-    })
+    const shutdownOtelTracing = await importOtelTracingModule()
 
     classInstrumentationsDeferred.resolve([])
     await classInstrumentationsDeferred.promise
-    await Promise.resolve()
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(registerInstrumentations).toHaveBeenCalledTimes(2)
 
     await expect(shutdownOtelTracing?.()).resolves.toBeUndefined()
 

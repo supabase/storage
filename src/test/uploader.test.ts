@@ -6,6 +6,22 @@ import { ObjectAdminDelete } from '../storage/events'
 import { TenantLocation } from '../storage/locator'
 import { fileUploadFromRequest, Uploader } from '../storage/uploader'
 
+type UploaderBackend = ConstructorParameters<typeof Uploader>[0]
+type UploaderDatabase = ConstructorParameters<typeof Uploader>[1]
+type CompleteUploadResult = Awaited<ReturnType<Uploader['completeUpload']>>
+
+function createUploader(
+  backend: Partial<UploaderBackend> & Pick<UploaderBackend, 'uploadObject'>,
+  db: Partial<UploaderDatabase> &
+    Pick<UploaderDatabase, 'tenantId' | 'reqId' | 'tenant' | 'testPermission'>
+) {
+  return new Uploader(
+    backend as UploaderBackend,
+    db as UploaderDatabase,
+    new TenantLocation('test-bucket')
+  )
+}
+
 describe('fileUploadFromRequest', () => {
   test('keeps multipart/form-data file size undefined even when the request content-length exceeds 5GB', async () => {
     const file = Readable.from(['payload']) as Readable & { truncated: boolean }
@@ -279,20 +295,19 @@ describe('fileUploadFromRequest', () => {
       .spyOn(ObjectAdminDelete, 'send')
       .mockResolvedValue(undefined)
 
-    const uploader = new Uploader(
+    const uploader = createUploader(
       {
         uploadObject: vi.fn(async (_bucket, _key, _version, body: Readable) => {
           body.destroy(new Error('stream pipeline failed'))
           throw StorageBackendError.fromError(new Error('socket hang up'))
         }),
-      } as any,
+      },
       {
         tenantId: 'stub-tenant',
         reqId: 'req-1',
-        tenant: () => ({ ref: 'stub-tenant' }),
+        tenant: () => ({ ref: 'stub-tenant', host: 'stub-tenant.local' }),
         testPermission: vi.fn().mockResolvedValue(undefined),
-      } as any,
-      new TenantLocation('test-bucket')
+      }
     )
 
     try {
@@ -326,29 +341,25 @@ describe('fileUploadFromRequest', () => {
         contentRange: undefined,
       }),
     }
-    const uploader = new Uploader(
-      backend as any,
-      {
-        tenantId: 'stub-tenant',
-        reqId: 'req-1',
-        tenant: () => ({ ref: 'stub-tenant' }),
-        testPermission: vi.fn(async (fn) =>
-          fn({
-            createObject: vi.fn(async (payload: { metadata?: { contentLength?: number } }) => {
-              capturedWrites.push(payload)
-            }),
-            upsertObject: vi.fn(async (payload: { metadata?: { contentLength?: number } }) => {
-              capturedWrites.push(payload)
-            }),
-          })
-        ),
-      } as any,
-      new TenantLocation('test-bucket')
-    )
+    const uploader = createUploader(backend, {
+      tenantId: 'stub-tenant',
+      reqId: 'req-1',
+      tenant: () => ({ ref: 'stub-tenant', host: 'stub-tenant.local' }),
+      testPermission: vi.fn(async (fn) =>
+        fn({
+          createObject: vi.fn(async (payload: { metadata?: { contentLength?: number } }) => {
+            capturedWrites.push(payload)
+          }),
+          upsertObject: vi.fn(async (payload: { metadata?: { contentLength?: number } }) => {
+            capturedWrites.push(payload)
+          }),
+        })
+      ),
+    })
     const completeUploadSpy = vi.spyOn(uploader, 'completeUpload').mockResolvedValue({
       metadata: { eTag: '"etag"' },
       obj: { id: 'obj-id' },
-    } as any)
+    } as CompleteUploadResult)
 
     await uploader.upload({
       bucketId: 'bucket',

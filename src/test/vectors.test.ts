@@ -23,6 +23,13 @@ const vectorBucketS3 = vectorS3Buckets[0]
 let appInstance: FastifyInstance
 let serviceToken: string
 
+type ListVectorBucketsResponse = Awaited<ReturnType<VectorStoreManager['listBuckets']>>
+type ListIndexesResponse = Awaited<ReturnType<VectorStoreManager['listIndexes']>>
+
+function parseJsonBody<Body>(body: string): Body {
+  return JSON.parse(body) as Body
+}
+
 // Use the common mock helpers
 useMockObject()
 useMockQueue()
@@ -600,13 +607,13 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
+      const body = parseJsonBody<ListVectorBucketsResponse>(response.body)
       expect(body.vectorBuckets).toBeDefined()
       expect(Array.isArray(body.vectorBuckets)).toBe(true)
       expect(body.vectorBuckets.length).toBeGreaterThan(0)
 
       // Verify structure of bucket objects
-      body.vectorBuckets.forEach((bucket: any) => {
+      body.vectorBuckets.forEach((bucket) => {
         expect(bucket.vectorBucketName).toBeDefined()
         expect(bucket.creationTime).toBeDefined()
         expect(typeof bucket.creationTime).toBe('number')
@@ -687,8 +694,8 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
-      body.vectorBuckets.forEach((bucket: any) => {
+      const body = parseJsonBody<ListVectorBucketsResponse>(response.body)
+      body.vectorBuckets.forEach((bucket) => {
         expect(bucket.vectorBucketName).toMatch(new RegExp(`^${prefix}`))
       })
     })
@@ -806,8 +813,8 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
-      const names = body.vectorBuckets.map((bucket: any) => bucket.vectorBucketName)
+      const body = parseJsonBody<ListVectorBucketsResponse>(response.body)
+      const names = body.vectorBuckets.map((bucket) => bucket.vectorBucketName)
       expect(names).toContain(matchingBucket)
       expect(names).not.toContain(nonMatchingBucket)
     })
@@ -833,8 +840,8 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
-      const names = body.vectorBuckets.map((bucket: any) => bucket.vectorBucketName)
+      const body = parseJsonBody<ListVectorBucketsResponse>(response.body)
+      const names = body.vectorBuckets.map((bucket) => bucket.vectorBucketName)
       expect(names).toContain(matchingBucket)
       expect(names).not.toContain(nonMatchingBucket)
     })
@@ -1073,13 +1080,13 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
+      const body = parseJsonBody<ListIndexesResponse>(response.body)
       expect(body.indexes).toBeDefined()
       expect(Array.isArray(body.indexes)).toBe(true)
       expect(body.indexes.length).toBeGreaterThanOrEqual(2)
 
       // Verify structure of index objects
-      body.indexes.forEach((index: any) => {
+      body.indexes.forEach((index) => {
         expect(index.indexName).toBeDefined()
         expect(index.vectorBucketName).toBe(vectorBucketName)
         expect(index.creationTime).toBeDefined()
@@ -1157,8 +1164,8 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
-      body.indexes.forEach((index: any) => {
+      const body = parseJsonBody<ListIndexesResponse>(response.body)
+      body.indexes.forEach((index) => {
         expect(index.indexName).toMatch(new RegExp(`^${prefix}`))
       })
     })

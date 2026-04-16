@@ -3,7 +3,8 @@ import { ErrorCode } from '@internal/errors'
 import { cacheRequestsTotal } from '@internal/monitoring/metrics'
 import * as crypto from 'crypto'
 import { SignJWT } from 'jose'
-import { JwksConfigKey } from '../config'
+import { vi } from 'vitest'
+import { JwksConfigKey } from '../../config'
 import {
   assertValidNumericJWTExpiration,
   generateHS512JWK,
@@ -11,34 +12,68 @@ import {
   signJWT,
   verifyJWT,
   verifyJWTWithCache,
-} from '../internal/auth'
+} from './jwt'
+
+type TestPublicKey = {
+  export: () => JwksConfigKey | Record<string, string>
+}
+
+type AsymmetricKeyFixture = {
+  alg: 'RS256' | 'ES256' | 'EdDSA'
+  kid: string
+  publicKey: TestPublicKey
+  privateKey: crypto.KeyObject
+}
+
+type HmacKeyFixture = {
+  alg: 'HS256'
+  kid?: string
+  publicKey: TestPublicKey
+  privateKey: Buffer
+}
+
+type KeyFixture = AsymmetricKeyFixture | HmacKeyFixture
+type AsymmetricKeyType = 'rsa' | 'ec' | 'ed25519'
+type GeneratedKeyPair = {
+  publicKey: crypto.KeyObject
+  privateKey: crypto.KeyObject
+}
+
+const asymmetricKeyPairFactories: Record<AsymmetricKeyType, () => GeneratedKeyPair> = {
+  rsa: () => crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }),
+  ec: () => crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }),
+  ed25519: () => crypto.generateKeyPairSync('ed25519'),
+}
+
+function createAsymmetricKeyFixture(
+  type: AsymmetricKeyType,
+  alg: AsymmetricKeyFixture['alg'],
+  kid: string
+): AsymmetricKeyFixture {
+  const { publicKey, privateKey } = asymmetricKeyPairFactories[type]()
+
+  return {
+    alg,
+    kid,
+    publicKey: {
+      export: () => publicKey.export({ format: 'jwk' }) as JwksConfigKey,
+    },
+    privateKey,
+  }
+}
 
 describe('JWT', () => {
   describe('verifyJWT with JWKS', () => {
     afterEach(() => {
-      jest.restoreAllMocks()
-      jest.useRealTimers()
+      vi.restoreAllMocks()
+      vi.useRealTimers()
     })
 
-    const keys: {
-      type?: string
-      options?: object
-      alg: string
-      kid?: string
-      publicKey: any
-      privateKey: any
-    }[] = [
-      { type: 'rsa', options: { modulusLength: 2048 }, alg: 'RS256' },
-      { type: 'ec', options: { namedCurve: 'P-256' }, alg: 'ES256' },
-      { type: 'ed25519', options: {}, alg: 'EdDSA' },
-    ].map((desc, i) => ({
-      kid: i.toString(),
-      ...desc,
-      ...crypto.generateKeyPairSync(
-        desc.type as 'rsa' & 'ec',
-        (desc.options || undefined) as object
-      ),
-    }))
+    const keys: KeyFixture[] = [
+      createAsymmetricKeyFixture('rsa', 'RS256', '0'),
+      createAsymmetricKeyFixture('ec', 'ES256', '1'),
+      createAsymmetricKeyFixture('ed25519', 'EdDSA', '2'),
+    ]
 
     const hmacPrivateKeyWithoutKid = crypto.randomBytes(256 / 8).toString('hex')
 
@@ -72,7 +107,7 @@ describe('JWT', () => {
       keys: keys.map(
         ({ publicKey, kid, alg }) =>
           ({
-            ...(publicKey as unknown as crypto.KeyObject).export({ format: 'jwk' }),
+            ...publicKey.export(),
             kid,
             alg,
           }) as JwksConfigKey
@@ -90,27 +125,35 @@ describe('JWT', () => {
         ),
       ]
 
-      if (!alg.startsWith('HS')) {
-        const sign = crypto.createSign('SHA256')
-        sign.write(parts.join('.'))
-        sign.end()
-
-        if (alg === 'EdDSA') {
+      switch (alg) {
+        case 'EdDSA': {
           // Ed25519 signs the raw message directly
           const message = Buffer.from(parts.join('.'))
           parts.push(crypto.sign(null, message, privateKey).toString('base64url'))
-        } else if (alg === 'ES256') {
+          break
+        }
+        case 'ES256': {
+          const sign = crypto.createSign('SHA256')
+          sign.write(parts.join('.'))
+          sign.end()
           parts.push(
             sign.sign(Object.assign(privateKey, { dsaEncoding: 'ieee-p1363' }), 'base64url')
           )
-        } else {
-          parts.push(sign.sign(privateKey, 'base64url'))
+          break
         }
-      } else {
-        const hmacAlgo = alg.replace('HS', 'SHA')
-        const hmac = crypto.createHmac(hmacAlgo, privateKey)
-        hmac.update(parts.join('.'))
-        parts.push(hmac.digest('base64url'))
+        case 'RS256': {
+          const sign = crypto.createSign('SHA256')
+          sign.write(parts.join('.'))
+          sign.end()
+          parts.push(sign.sign(privateKey, 'base64url'))
+          break
+        }
+        case 'HS256': {
+          const hmac = crypto.createHmac('SHA256', privateKey)
+          hmac.update(parts.join('.'))
+          parts.push(hmac.digest('base64url'))
+          break
+        }
       }
 
       const jwtStr = parts.join('.')
@@ -157,8 +200,8 @@ describe('JWT', () => {
     })
 
     test('it should allow the current maximum numeric expiration and keep exp millisecond-safe', async () => {
-      jest.useFakeTimers()
-      jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
 
       const maxNumericExpiration = getMaxNumericJWTExpiration()
       const jwt = await signJWT({ sub: 'things' }, hmacPrivateKeyWithoutKid, maxNumericExpiration)
@@ -170,8 +213,8 @@ describe('JWT', () => {
     })
 
     test('it should reject numeric expirations above the current maximum', async () => {
-      jest.useFakeTimers()
-      jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
 
       const maxNumericExpiration = getMaxNumericJWTExpiration()
       await expect(
@@ -184,8 +227,8 @@ describe('JWT', () => {
     })
 
     test('it should reject numeric expirations above the current maximum in the shared validator', () => {
-      jest.useFakeTimers()
-      jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
 
       expect(() => assertValidNumericJWTExpiration(getMaxNumericJWTExpiration() + 1)).toThrow(
         'Invalid Parameter expiresIn'
@@ -218,10 +261,10 @@ describe('JWT', () => {
     })
 
     test('it should reuse cached JWT verifications for the same inputs until the token expires', async () => {
-      jest.useFakeTimers()
-      jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
 
-      const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+      const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
       const secret = crypto.randomBytes(32).toString('base64url')
       const token = await signJWT({ sub: 'cached-user' }, secret, 2)
 
@@ -239,13 +282,13 @@ describe('JWT', () => {
         [1, { cache: JWT_CACHE_NAME, outcome: 'hit' }],
       ])
 
-      jest.advanceTimersByTime(2200)
+      vi.advanceTimersByTime(2200)
 
       await expect(verifyJWTWithCache(token, secret)).rejects.toThrow()
     })
 
     test('it should not reuse cached JWT verifications when the secret changes', async () => {
-      const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+      const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
       const secret = crypto.randomBytes(32).toString('base64url')
       const token = await signJWT({ sub: 'cached-user' }, secret, 2)
 
@@ -280,7 +323,7 @@ describe('JWT', () => {
     })
 
     test('it should skip caching when the token expires before the cache ttl is computed', async () => {
-      jest.useFakeTimers()
+      vi.useFakeTimers()
 
       const issuedAt = new Date('2026-01-01T00:00:00.000Z')
       const issuedAtMs = issuedAt.getTime()
@@ -288,14 +331,14 @@ describe('JWT', () => {
       const secret = 'ttl-edge-secret'
       const token = 'header.payload.signature'
 
-      jest.setSystemTime(issuedAt)
-      jest.resetModules()
+      vi.setSystemTime(issuedAt)
+      vi.resetModules()
 
-      const actualJose = jest.requireActual('jose') as typeof import('jose')
-      const jwtVerifyMock = jest
+      const actualJose = await vi.importActual<typeof import('jose')>('jose')
+      const jwtVerifyMock = vi
         .fn()
         .mockImplementationOnce(async () => {
-          jest.setSystemTime(issuedAtMs + 2000)
+          vi.setSystemTime(issuedAtMs + 2000)
           return {
             payload: {
               sub: 'cached-user',
@@ -310,7 +353,7 @@ describe('JWT', () => {
           },
         })
 
-      jest.doMock('jose', () => ({
+      vi.doMock('jose', () => ({
         ...actualJose,
         jwtVerify: jwtVerifyMock,
       }))
@@ -319,10 +362,8 @@ describe('JWT', () => {
         const { cacheRequestsTotal: isolatedCacheRequestsTotal } = await import(
           '@internal/monitoring/metrics'
         )
-        const { verifyJWTWithCache: isolatedVerifyJWTWithCache } = await import(
-          '../internal/auth/jwt'
-        )
-        const addSpy = jest.spyOn(isolatedCacheRequestsTotal, 'add')
+        const { verifyJWTWithCache: isolatedVerifyJWTWithCache } = await import('./jwt')
+        const addSpy = vi.spyOn(isolatedCacheRequestsTotal, 'add')
 
         addSpy.mockClear()
 
@@ -330,7 +371,7 @@ describe('JWT', () => {
           sub: 'cached-user',
         })
 
-        jest.setSystemTime(issuedAtMs + 1000)
+        vi.setSystemTime(issuedAtMs + 1000)
 
         await expect(isolatedVerifyJWTWithCache(token, secret)).resolves.toMatchObject({
           sub: 'cached-user',
@@ -346,8 +387,8 @@ describe('JWT', () => {
           [1, { cache: JWT_CACHE_NAME, outcome: 'hit' }],
         ])
       } finally {
-        jest.dontMock('jose')
-        jest.resetModules()
+        vi.doUnmock('jose')
+        vi.resetModules()
       }
     })
   })

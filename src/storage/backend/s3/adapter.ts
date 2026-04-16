@@ -283,7 +283,7 @@ export class S3Backend implements StorageBackendAdapter {
         httpStatusCode: data.$metadata.httpStatusCode || metadata.httpStatusCode,
         cacheControl,
         eTag: metadata.eTag,
-        mimetype: metadata.mimetype,
+        mimetype: contentType || metadata.mimetype,
         contentLength: metadata.contentLength,
         lastModified: metadata.lastModified,
         size: metadata.size,

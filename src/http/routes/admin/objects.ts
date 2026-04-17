@@ -149,6 +149,11 @@ export default async function routes(fastify: FastifyInstance) {
       const bucket = `${req.params.bucketId}`
       let before = req.body.before ? new Date(req.body.before as string) : undefined
 
+      if (before && isNaN(before.getTime())) {
+        return reply.status(400).send({
+          error: 'Invalid date format',
+        })
+      }
       if (!before) {
         before = new Date()
         before.setHours(before.getHours() - 1)

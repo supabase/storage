@@ -47,7 +47,7 @@ describe('admin orphan-objects routes', () => {
       expect(JSON.parse(response.body).error).toBe('Invalid date format')
     })
 
-    it('returns 400 when neither deleteDbKeys nor deleteS3Keys is set (unchanged behavior)', async () => {
+    it('returns 400 when neither deleteDbKeys nor deleteS3Keys is set', async () => {
       const response = await adminApp.inject({
         method: 'DELETE',
         url: '/tenants/bjhaohmqunupljrqypxz/buckets/bucket2/orphan-objects',

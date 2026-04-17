@@ -45,7 +45,7 @@ export class InfoRenderer extends HeadRenderer {
       .header('ETag', data.metadata.eTag)
       .header('Content-Length', data.metadata.contentLength)
       .header('Last-Modified', data.metadata.lastModified?.toUTCString())
-      .header('Cache-Control', data.metadata.cacheControl)
+      .header('Cache-Control', 'no-cache')
 
     if (data.transformations && data.transformations.length > 0) {
       response.header('X-Transformations', data.transformations.join(','))

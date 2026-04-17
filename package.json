@@ -64,7 +64,7 @@
     "@platformatic/node": "^3.52.0",
     "@platformatic/wattpm-pprof-capture": "^3.52.1",
     "@shopify/semaphore": "^3.0.2",
-    "@smithy/node-http-handler": "^2.3.1",
+    "@smithy/node-http-handler": "^4.5.2",
     "@tus/file-store": "2.0.0",
     "@tus/s3-store": "2.0.2",
     "@tus/server": "2.2.1",

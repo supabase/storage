@@ -146,6 +146,62 @@ describe('Tus multipart', () => {
     })
   })
 
+  it('Returns the object id in the x-supabase-id response header on upload completion', async () => {
+    const objectName = randomUUID() + '-cat.jpeg'
+
+    const bucket = await storage.createBucket({
+      id: bucketName,
+      name: bucketName,
+      public: true,
+    })
+
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    let supabaseId: string | undefined
+
+    await new Promise((resolve, reject) => {
+      const upload = new tus.Upload(
+        fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg')),
+        {
+          endpoint: `${localServerAddress}/upload/resumable`,
+          onShouldRetry: () => false,
+          uploadDataDuringCreation: false,
+          headers: {
+            authorization,
+            'x-upsert': 'true',
+          },
+          metadata: {
+            bucketName,
+            objectName,
+            contentType: 'image/jpeg',
+            cacheControl: '3600',
+          },
+          onAfterResponse: (_req, res) => {
+            const id = res.getHeader('x-supabase-id')
+            if (id) {
+              supabaseId = id
+            }
+          },
+          onError(error) {
+            reject(error)
+          },
+          onSuccess: () => {
+            resolve(true)
+          },
+        }
+      )
+
+      upload.start()
+    })
+
+    expect(supabaseId).toBeDefined()
+    expect(supabaseId).toMatch(uuidRegex)
+
+    const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+    expect(supabaseId).toEqual(dbAsset.id)
+  })
+
   describe('TUS Validation', () => {
     it('Cannot upload to a non-existing bucket', async () => {
       const objectName = randomUUID() + '-cat.jpeg'

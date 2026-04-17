@@ -11,6 +11,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
+import type { PubSubAdapter } from '@internal/pubsub'
 import type { Mock } from 'vitest'
 import { getConfig } from '../config'
 import { backends } from '../storage'
@@ -22,12 +23,29 @@ const { storageS3Bucket, storageBackendType } = getConfig()
 const backend = backends.createStorageBackend(storageBackendType)
 const s3ClientFromBackend = backend.client
 
+type TrackedLock = ReturnType<S3Locker['newLock']>
+
+function getErrorDetails(error: unknown) {
+  if (error instanceof Error) {
+    return error
+  }
+
+  if (typeof error === 'object' && error !== null) {
+    return {
+      name: 'name' in error && typeof error.name === 'string' ? error.name : undefined,
+      message: 'message' in error && typeof error.message === 'string' ? error.message : undefined,
+    }
+  }
+
+  return {}
+}
+
 describe('S3Locker', () => {
   let s3Client: S3Client
   let locker: S3Locker
   let testBucket: string
   let mockNotifier: LockNotifier
-  let allLocks: Array<{ lock: any; locker: S3Locker }> = []
+  let allLocks: TrackedLock[] = []
 
   beforeAll(async () => {
     // Use the configured S3 client from the backend
@@ -50,12 +68,21 @@ describe('S3Locker', () => {
     await cleanupTestLocks()
 
     // Create mock notifier
-    mockNotifier = {
-      release: vi.fn(),
-      onRelease: vi.fn(),
-      unsubscribe: vi.fn(),
-      subscribe: vi.fn(),
-    } as any
+    const pubSub: PubSubAdapter = {
+      async start() {},
+      async publish() {},
+      async subscribe() {},
+      async unsubscribe() {},
+      async close() {},
+      on() {
+        return this
+      },
+    }
+
+    mockNotifier = new LockNotifier(pubSub)
+    vi.spyOn(mockNotifier, 'release').mockResolvedValue()
+    vi.spyOn(mockNotifier, 'onRelease')
+    vi.spyOn(mockNotifier, 'unsubscribe')
 
     // Create fresh locker instance
     locker = new S3Locker({
@@ -77,7 +104,7 @@ describe('S3Locker', () => {
 
   afterEach(async () => {
     // Clean up all tracked locks first
-    for (const { lock } of allLocks) {
+    for (const lock of allLocks) {
       try {
         await lock.unlock()
       } catch {
@@ -91,7 +118,7 @@ describe('S3Locker', () => {
 
   afterAll(async () => {
     // Final cleanup - ensure all locks are released
-    for (const { lock } of allLocks) {
+    for (const lock of allLocks) {
       try {
         await lock.unlock()
       } catch {
@@ -113,8 +140,8 @@ describe('S3Locker', () => {
     }
   })
 
-  function trackLock(lock: any, lockLocker: S3Locker = locker) {
-    allLocks.push({ lock, locker: lockLocker })
+  function trackLock(lock: TrackedLock) {
+    allLocks.push(lock)
     return lock
   }
 
@@ -316,7 +343,7 @@ describe('S3Locker', () => {
 
       // Acquire first lock
       await lock1.lock(abortController1.signal, cancelReq)
-      trackLock(lock1, shortTtlLocker)
+      trackLock(lock1)
 
       // Manually abort the first lock to stop its renewal timer
       abortController1.abort()
@@ -369,8 +396,8 @@ describe('S3Locker', () => {
           })
         )
         throw new Error('Lock should have been deleted')
-      } catch (error: any) {
-        expect(error.name).toBe('NoSuchKey')
+      } catch (error) {
+        expect(getErrorDetails(error).name).toBe('NoSuchKey')
       }
     })
   })
@@ -441,10 +468,11 @@ describe('S3Locker', () => {
           const start = Date.now()
           try {
             await lock1.lock(abortController1.signal, cancelReq)
-          } catch (error: any) {
+          } catch (error) {
+            const errorDetails = getErrorDetails(error)
             const lockDuration = Date.now() - start
             throw new Error(
-              `Lock acquisition failed on iteration ${i} after ${lockDuration}ms with error: ${error.message}. This likely means a zombie lock exists from a previous iteration.`
+              `Lock acquisition failed on iteration ${i} after ${lockDuration}ms with error: ${errorDetails.message}. This likely means a zombie lock exists from a previous iteration.`
             )
           }
           const lockDuration = Date.now() - start
@@ -484,8 +512,8 @@ describe('S3Locker', () => {
             throw new Error(
               `Zombie lock detected on iteration ${i}! A lock exists after deletion, indicating the IfMatch fix is missing.`
             )
-          } catch (error: any) {
-            if (error.name === 'NoSuchKey') {
+          } catch (error) {
+            if (getErrorDetails(error).name === 'NoSuchKey') {
               // Good - no zombie lock exists
               continue
             }
@@ -596,7 +624,7 @@ describe('S3Locker', () => {
 
       await lock1.unlock()
       await lock2.unlock()
-    }, 10000)
+    })
 
     test('should automatically renew locks', async () => {
       const lock = locker.newLock('renewal-test-lock')

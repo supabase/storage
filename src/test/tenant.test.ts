@@ -112,6 +112,7 @@ const payload2 = {
 
 type TenantModule = typeof import('../internal/database/tenant')
 type MultitenantDbModule = typeof import('../internal/database/multitenant-db')
+type TenantQueryBuilder = ReturnType<(typeof multitenantKnex)['table']>
 
 async function loadTenantModule(
   maxItems: number
@@ -743,7 +744,7 @@ describe('Tenant configs', () => {
     }
 
     try {
-      knexTableSpy.mockReturnValue(queryBuilder as any)
+      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
 
       for (const tenantId of tenantIds) {
         await tenantModule.getTenantConfig(tenantId)
@@ -803,7 +804,7 @@ describe('Tenant configs', () => {
     }
 
     try {
-      knexTableSpy.mockReturnValue(queryBuilder as any)
+      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
       await assertLogicalLookupMetrics({
         addSpy,
         backendCallSpy: queryBuilder.abortOnSignal,

@@ -62,7 +62,7 @@
     "@opentelemetry/sdk-node": "^0.213.0",
     "@platformatic/globals": "^3.52.0",
     "@platformatic/node": "^3.52.0",
-    "@platformatic/wattpm-pprof-capture": "^3.52.0",
+    "@platformatic/wattpm-pprof-capture": "^3.52.1",
     "@shopify/semaphore": "^3.0.2",
     "@smithy/node-http-handler": "^2.3.1",
     "@tus/file-store": "2.0.0",

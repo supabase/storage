@@ -58,4 +58,5 @@ export const DBMigration = {
   'fix-optimized-search-function': 56,
   's3-multipart-uploads-metadata': 57,
   'operation-ergonomics': 58,
+  'fix-common-prefix-empty-segments': 59,
 } as const

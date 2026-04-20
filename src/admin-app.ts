@@ -1,6 +1,7 @@
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
 import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'
+import { getGlobal } from '@platformatic/globals'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, setErrorHandler } from './http'
@@ -13,6 +14,7 @@ const { version, prometheusMetricsEnabled } = getConfig()
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
   const app = fastify(opts)
+  const isRunningUnderWatt = typeof getGlobal()?.applicationId === 'string'
 
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {
@@ -31,6 +33,9 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
           { name: 's3-credentials', description: 'S3 credentials management' },
           { name: 'queue', description: 'Queue management' },
           { name: 'metrics', description: 'Metrics configuration' },
+          ...(isRunningUnderWatt
+            ? [{ name: 'pprof', description: 'Runtime profiling via Watt control APIs' }]
+            : []),
         ],
       },
     })
@@ -47,6 +52,9 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(routes.objects, { prefix: 'tenants' })
   app.register(routes.jwks, { prefix: 'tenants' })
   app.register(routes.migrations, { prefix: 'migrations' })
+  if (isRunningUnderWatt) {
+    app.register(routes.pprof, { prefix: 'debug/pprof' })
+  }
   app.register(routes.s3Credentials, { prefix: 's3' })
   app.register(routes.queue, { prefix: 'queue' })
   app.register(routes.metricsConfig, { prefix: 'metrics' })

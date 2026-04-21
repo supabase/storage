@@ -525,6 +525,19 @@ describe('testing public bucket functionality', () => {
     })
     expect(response.statusCode).toBe(400)
   })
+
+  test('user is not able to update a bucket with empty payload', async () => {
+    const bucketId = 'public-bucket'
+    const response = await appInstance.inject({
+      method: 'PUT',
+      url: `/bucket/${bucketId}`,
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {},
+    })
+    expect(response.statusCode).toBe(400)
+  })
 })
 
 describe('testing count objects in bucket', () => {

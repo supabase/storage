@@ -194,6 +194,9 @@ export class Storage {
     }
   ) {
     mustBeValidBucketName(id)
+    if (!Object.values(data).some((v) => typeof v !== 'undefined')) {
+      throw ERRORS.NoContentProvided()
+    }
 
     const bucketData: Parameters<Database['updateBucket']>[1] = data
 

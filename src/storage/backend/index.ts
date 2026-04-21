@@ -6,6 +6,7 @@ import { S3Backend, S3ClientOptions } from './s3/adapter'
 export * from './adapter'
 export * from './file'
 export * from './s3'
+export * from './secure-path'
 
 const { storageS3Region, storageS3Endpoint, storageS3ForcePathStyle, storageS3ClientTimeout } =
   getConfig()

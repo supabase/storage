@@ -17,6 +17,7 @@ import {
   UploadPart,
   withOptionalVersion,
 } from './adapter'
+import { resolveSecureFilesystemPath } from './secure-path'
 
 const pipeline = promisify(stream.pipeline)
 
@@ -657,40 +658,7 @@ export class FileBackend implements StorageBackendAdapter {
    * @throws {StorageBackendError} If the resolved path escapes the storage directory
    */
   private resolveSecurePath(relativePath: string): string {
-    if (relativePath.includes('\0')) {
-      throw ERRORS.InvalidKey(`Invalid key: ${relativePath} contains null byte`)
-    }
-
-    if (path.isAbsolute(relativePath)) {
-      throw ERRORS.InvalidKey(`Invalid key: ${relativePath} must be a relative path`)
-    }
-
-    const isWindowsDriveAbsolutePath = /^[a-zA-Z]:[\\/]/.test(relativePath)
-    const isWindowsUncPath = /^\\\\[^\\/]+[\\/][^\\/]+/.test(relativePath)
-    if (isWindowsDriveAbsolutePath || isWindowsUncPath) {
-      throw ERRORS.InvalidKey(`Invalid key: ${relativePath} must not be an absolute Windows path`)
-    }
-
-    const hasDotTraversalSegment = relativePath
-      .split(/[\\/]+/)
-      .filter(Boolean)
-      .some((segment) => segment === '.' || segment === '..')
-
-    if (hasDotTraversalSegment) {
-      throw ERRORS.InvalidKey(`Path traversal detected: ${relativePath} contains dot path segment`)
-    }
-
-    const resolvedPath = path.resolve(this.filePath, relativePath)
-    const normalizedPath = path.normalize(resolvedPath)
-
-    // Ensure the resolved path is within the storage directory
-    if (!normalizedPath.startsWith(this.filePath + path.sep) && normalizedPath !== this.filePath) {
-      throw ERRORS.InvalidKey(
-        `Path traversal detected: ${relativePath} resolves outside storage directory`
-      )
-    }
-
-    return normalizedPath
+    return resolveSecureFilesystemPath(this.filePath, relativePath)
   }
 
   private async etag(file: string, stats: Stats): Promise<string> {

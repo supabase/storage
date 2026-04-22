@@ -1121,6 +1121,7 @@ export class S3ProtocolHandler {
       },
       userMetadata: command.Metadata,
       copyMetadata: command.MetadataDirective === 'COPY',
+      uploadType: 's3',
     })
 
     return {

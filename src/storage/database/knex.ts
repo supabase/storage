@@ -48,6 +48,7 @@ export class StorageKnexDB implements Database {
   public readonly tenantHost: string
   public readonly tenantId: string
   public readonly reqId: string | undefined
+  public readonly sbReqId: string | undefined
   public readonly role?: string
   public readonly latestMigration?: keyof typeof DBMigration
 
@@ -58,6 +59,7 @@ export class StorageKnexDB implements Database {
     this.tenantHost = options.host
     this.tenantId = options.tenantId
     this.reqId = options.reqId
+    this.sbReqId = options.sbReqId
     this.role = connection?.role
     this.latestMigration = options.latestMigration
   }

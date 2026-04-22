@@ -157,6 +157,7 @@ export class Storage {
             ref: db.tenantId,
             host: db.tenantHost,
           },
+          sbReqId: db.sbReqId,
         },
         {
           sendWhenError: (error) => {
@@ -168,6 +169,7 @@ export class Storage {
               project: db.tenantId,
               type: 'event',
               error,
+              sbReqId: db.sbReqId,
             })
             return true
           },
@@ -262,6 +264,7 @@ export class Storage {
         ref: this.db.tenantId,
         host: this.db.tenantHost,
       },
+      sbReqId: this.db.sbReqId,
     })
   }
 
@@ -298,10 +301,11 @@ export class Storage {
 
     // use queue to recursively delete all objects created before the specified time
     await ObjectAdminDeleteAllBefore.send({
-      before,
+      before: before.toISOString(),
       bucketId,
       tenant: this.db.tenant(),
       reqId: this.db.reqId,
+      sbReqId: this.db.sbReqId,
     })
   }
 

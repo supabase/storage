@@ -38,6 +38,8 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
   }
 
   static async handle(job: Job<MoveJobsPayload>) {
+    const { sbReqId } = job.data
+
     await multitenantKnex.transaction(async (tnx) => {
       const resultLock = await tnx.raw('SELECT pg_try_advisory_xact_lock(-5525285245963000611)')
       const lockAcquired = resultLock.rows.shift()?.pg_try_advisory_xact_lock || false
@@ -53,6 +55,7 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
       if (!toQueue) {
         logSchema.error(logger, `[PgBoss] Target queue ${job.data.toQueue} does not exist`, {
           type: 'pgboss',
+          sbReqId,
         })
         return
       }
@@ -116,6 +119,7 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
         logSchema.error(logger, '[PgBoss] Error while copying jobs', {
           type: 'pgboss',
           error,
+          sbReqId,
         })
       }
     })

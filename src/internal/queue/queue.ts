@@ -3,20 +3,25 @@ import { QueueDB } from '@internal/queue/database'
 import { Semaphore } from '@shopify/semaphore'
 import PgBoss, { Db, Job, JobWithMetadata } from 'pg-boss'
 import { getConfig } from '../../config'
-import { logger, logSchema } from '../monitoring'
+import { getSbReqIdFromPayload, logger, logSchema } from '../monitoring'
 import { queueJobCompleted, queueJobError, queueJobRetryFailed } from '../monitoring/metrics'
 import { Event } from './event'
 
-type SubclassOfBaseClass = (new (
-  payload: any
-) => Event<any>) & {
-  [K in keyof typeof Event]: (typeof Event)[K]
+type RegisteredEvent = {
+  deadLetterQueueName(): string
+  getQueueName(): string
+  getQueueOptions(): ReturnType<typeof Event.getQueueOptions>
+  getWorkerOptions(): ReturnType<typeof Event.getWorkerOptions>
+  handle(job: Job<unknown> | Job<unknown>[], opts?: { signal?: AbortSignal }): unknown
+  onClose(): unknown
+  onStart(): unknown
+  name: string
 }
 
 export const PG_BOSS_SCHEMA = 'pgboss_v10'
 
 export abstract class Queue {
-  protected static events: SubclassOfBaseClass[] = []
+  protected static events: RegisteredEvent[] = []
   private static pgBoss?: PgBoss
   private static pgBossDb?: PgBoss.Db
 
@@ -184,7 +189,7 @@ export abstract class Queue {
     return this.pgBossDb
   }
 
-  static register<T extends SubclassOfBaseClass>(event: T) {
+  static register<T extends RegisteredEvent>(event: T) {
     Queue.events.push(event)
   }
 
@@ -234,7 +239,7 @@ export abstract class Queue {
   }
 
   protected static async registerTask(
-    event: SubclassOfBaseClass,
+    event: RegisteredEvent,
     maxConcurrentTasks: number,
     onMessage?: (job: Job) => void,
     signal?: AbortSignal
@@ -276,7 +281,7 @@ export abstract class Queue {
   }
 
   protected static pollQueue(
-    event: SubclassOfBaseClass,
+    event: RegisteredEvent,
     queueOpts: {
       concurrentTaskCount: number
       onMessage?: (job: Job) => void
@@ -344,6 +349,8 @@ export abstract class Queue {
         await Promise.allSettled(
           jobs.map(async (job) => {
             const lock = await semaphore.acquire()
+            const sbReqId = getSbReqIdFromPayload(job.data)
+
             try {
               queueOpts.onMessage?.(job as Job)
 
@@ -379,6 +386,7 @@ export abstract class Queue {
                   type: 'queue-task',
                   error: e,
                   metadata: JSON.stringify(job),
+                  sbReqId,
                 })
               }
 
@@ -386,6 +394,7 @@ export abstract class Queue {
                 type: 'queue-task',
                 error: e,
                 metadata: JSON.stringify(job),
+                sbReqId,
               })
 
               throw e

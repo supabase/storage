@@ -182,12 +182,20 @@ describe('ProgressiveMigrations', () => {
 
     expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(2)
     expect(
-      (mockRunMigrationsBatchSend.mock.calls[0][0][0] as { payload: { tenantId: string } }).payload
+      (
+        mockRunMigrationsBatchSend.mock.calls[0][0][0] as unknown as {
+          payload: { tenantId: string }
+        }
+      ).payload
     ).toMatchObject({
       tenantId: 'tenant-a',
     })
     expect(
-      (mockRunMigrationsBatchSend.mock.calls[1][0][0] as { payload: { tenantId: string } }).payload
+      (
+        mockRunMigrationsBatchSend.mock.calls[1][0][0] as unknown as {
+          payload: { tenantId: string }
+        }
+      ).payload
     ).toMatchObject({
       tenantId: 'tenant-b',
     })
@@ -218,12 +226,20 @@ describe('ProgressiveMigrations', () => {
 
     expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(2)
     expect(
-      (mockRunMigrationsBatchSend.mock.calls[0][0][0] as { payload: { tenantId: string } }).payload
+      (
+        mockRunMigrationsBatchSend.mock.calls[0][0][0] as unknown as {
+          payload: { tenantId: string }
+        }
+      ).payload
     ).toMatchObject({
       tenantId: 'tenant-a',
     })
     expect(
-      (mockRunMigrationsBatchSend.mock.calls[1][0][0] as { payload: { tenantId: string } }).payload
+      (
+        mockRunMigrationsBatchSend.mock.calls[1][0][0] as unknown as {
+          payload: { tenantId: string }
+        }
+      ).payload
     ).toMatchObject({
       tenantId: 'tenant-b',
     })
@@ -257,7 +273,11 @@ describe('ProgressiveMigrations', () => {
     await expect(migrations.flush(1)).resolves.toBeUndefined()
     expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(1)
     expect(
-      (mockRunMigrationsBatchSend.mock.calls[0][0][0] as { payload: { tenantId: string } }).payload
+      (
+        mockRunMigrationsBatchSend.mock.calls[0][0][0] as unknown as {
+          payload: { tenantId: string }
+        }
+      ).payload
     ).toMatchObject({
       tenantId: 'tenant-a',
     })
@@ -289,7 +309,11 @@ describe('ProgressiveMigrations', () => {
     expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(1)
     expect(mockRunMigrationsBatchSend.mock.calls[0][0]).toHaveLength(1)
     expect(
-      (mockRunMigrationsBatchSend.mock.calls[0][0][0] as { payload: { tenantId: string } }).payload
+      (
+        mockRunMigrationsBatchSend.mock.calls[0][0][0] as unknown as {
+          payload: { tenantId: string }
+        }
+      ).payload
     ).toMatchObject({
       tenantId: 'tenant-a',
     })
@@ -330,7 +354,11 @@ describe('ProgressiveMigrations', () => {
     expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(1)
     expect(mockRunMigrationsBatchSend.mock.calls[0][0]).toHaveLength(1)
     expect(
-      (mockRunMigrationsBatchSend.mock.calls[0][0][0] as { payload: { tenantId: string } }).payload
+      (
+        mockRunMigrationsBatchSend.mock.calls[0][0][0] as unknown as {
+          payload: { tenantId: string }
+        }
+      ).payload
     ).toMatchObject({
       tenantId: 'tenant-a',
     })

@@ -45,6 +45,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
     })
   }
 
+  app.register(plugins.requestContext)
   app.register(plugins.signals)
   app.register(plugins.adminTenantId)
   app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health', '/version'] }))

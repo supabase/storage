@@ -65,6 +65,7 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
         tenantId: job.data.tenant.ref,
         project: job.data.tenant.ref,
         reqId: job.data.reqId,
+        sbReqId: job.data.sbReqId,
       })
 
       await storage.backend.backup({
@@ -86,6 +87,7 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
           tenantId: job.data.tenant.ref,
           project: job.data.tenant.ref,
           reqId: job.data.reqId,
+          sbReqId: job.data.sbReqId,
         })
 
         await storage.backend.deleteObject(
@@ -111,6 +113,7 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
           tenantId: job.data.tenant.ref,
           project: job.data.tenant.ref,
           reqId: job.data.reqId,
+          sbReqId: job.data.sbReqId,
         },
         `[Admin]: BackupObjectEvent ${s3Key} - FAILED`
       )
@@ -122,7 +125,7 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
         })
         .catch((e) => {
           logger.error(
-            { error: e },
+            { error: e, sbReqId: job.data.sbReqId },
             `[Admin]: BackupObjectEvent ${tenantId} - FAILED DISPOSING CONNECTION`
           )
         })

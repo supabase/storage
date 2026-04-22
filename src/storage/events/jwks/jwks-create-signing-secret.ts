@@ -35,7 +35,7 @@ export class JwksCreateSigningSecret extends BaseEvent<JwksCreateSigningSecretPa
   }
 
   static async handle(job: Job<JwksCreateSigningSecretPayload>) {
-    const { tenantId } = job.data
+    const { tenantId, sbReqId } = job.data
 
     try {
       const { kid } = await jwksManager.generateUrlSigningJwk(tenantId)
@@ -46,6 +46,7 @@ export class JwksCreateSigningSecret extends BaseEvent<JwksCreateSigningSecretPa
         {
           type: 'jwks',
           project: tenantId,
+          sbReqId,
         }
       )
     } catch (e) {
@@ -56,6 +57,7 @@ export class JwksCreateSigningSecret extends BaseEvent<JwksCreateSigningSecretPa
           type: 'jwks',
           error: e,
           project: tenantId,
+          sbReqId,
         }
       )
       throw e

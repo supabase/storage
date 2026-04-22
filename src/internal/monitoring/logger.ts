@@ -80,6 +80,7 @@ export interface RequestLog {
   operation?: string
   resources?: string[]
   serverTimes?: { spanName: string; duration: number }[]
+  sbReqId?: string
 }
 
 export interface EventLog {
@@ -92,6 +93,7 @@ export interface EventLog {
   project: string
   resources?: string[]
   reqId?: string
+  sbReqId?: string
 }
 
 interface ErrorLog {
@@ -99,12 +101,14 @@ interface ErrorLog {
   error?: Error | unknown
   project?: string
   metadata?: string
+  sbReqId?: string
 }
 
 interface InfoLog {
   type: string
   project?: string
   metadata?: string
+  sbReqId?: string
 }
 
 export const logSchema = {
@@ -202,6 +206,7 @@ const allowlistedHeaders = new Set([
   'transfer-encoding',
   'x-kong-proxy-latency',
   'x-kong-upstream-latency',
+  'sb-request-id',
   'sb-gateway-mode',
   'sb-gateway-version',
   'x-transformations',

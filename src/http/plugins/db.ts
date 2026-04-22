@@ -68,6 +68,7 @@ export const db = fastifyPlugin(
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
             error: e,
+            sbReqId: request.sbReqId,
           })
         })
       }
@@ -80,6 +81,7 @@ export const db = fastifyPlugin(
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
             error: e,
+            sbReqId: request.sbReqId,
           })
         })
       }
@@ -91,6 +93,7 @@ export const db = fastifyPlugin(
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
             error: e,
+            sbReqId: request.sbReqId,
           })
         })
       }
@@ -137,6 +140,7 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
             error: e,
+            sbReqId: request.sbReqId,
           })
         })
       }
@@ -150,6 +154,7 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
             error: e,
+            sbReqId: request.sbReqId,
           })
         })
       }
@@ -161,6 +166,7 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
             error: e,
+            sbReqId: request.sbReqId,
           })
         })
       }

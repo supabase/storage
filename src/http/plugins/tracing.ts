@@ -40,7 +40,11 @@ export const tracing = fastifyPlugin(
           }
         }
       } catch (e) {
-        logSchema.error(request.log, 'failed setting tracing mode', { error: e, type: 'tracing' })
+        logSchema.error(request.log, 'failed setting tracing mode', {
+          error: e,
+          type: 'tracing',
+          sbReqId: request.sbReqId,
+        })
       }
     })
   },

@@ -6,12 +6,18 @@ import {
 } from '@internal/database/migrations'
 import { PG_BOSS_SCHEMA, Queue } from '@internal/queue'
 import { RunMigrationsOnTenants } from '@storage/events'
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { getConfig } from '../../../config'
 import apiKey from '../../plugins/apikey'
 
 const { pgQueueEnable } = getConfig()
 const migrationQueueName = RunMigrationsOnTenants.getQueueName()
+
+interface FailedMigrationsRequest extends RequestGenericInterface {
+  Querystring: {
+    cursor?: string
+  }
+}
 
 export default async function routes(fastify: FastifyInstance) {
   fastify.register(apiKey)
@@ -21,7 +27,10 @@ export default async function routes(fastify: FastifyInstance) {
       return reply.status(400).send({ message: 'Queue is not enabled' })
     }
 
-    await runMigrationsOnAllTenants(req.signals.disconnect.signal)
+    await runMigrationsOnAllTenants({
+      signal: req.signals.disconnect.signal,
+      sbReqId: req.sbReqId,
+    })
 
     return reply.send({ message: 'Migrations scheduled' })
   })
@@ -50,6 +59,7 @@ export default async function routes(fastify: FastifyInstance) {
         ? markCompletedTillMigration
         : undefined,
       signal: req.signals.disconnect.signal,
+      sbReqId: req.sbReqId,
     })
 
     return reply.send({ message: 'Migrations scheduled' })
@@ -92,23 +102,37 @@ export default async function routes(fastify: FastifyInstance) {
     return { remaining: queueSize }
   })
 
-  fastify.get('/failed', { schema: { tags: ['migration'] } }, async (req, reply) => {
-    if (!pgQueueEnable) {
-      return reply.code(400).send({ message: 'Queue is not enabled' })
+  fastify.get<FailedMigrationsRequest>(
+    '/failed',
+    { schema: { tags: ['migration'] } },
+    async (req, reply) => {
+      if (!pgQueueEnable) {
+        return reply.code(400).send({ message: 'Queue is not enabled' })
+      }
+      let offset = 0
+
+      if (req.query.cursor !== undefined) {
+        const parsedCursor = Number(req.query.cursor)
+
+        if (!Number.isFinite(parsedCursor) || !Number.isInteger(parsedCursor) || parsedCursor < 0) {
+          return reply.code(400).send({ message: 'Invalid cursor' })
+        }
+
+        offset = parsedCursor
+      }
+
+      const failed = await multitenantKnex
+        .table('tenants')
+        .where('migrations_status', 'FAILED')
+        .where('cursor_id', '>', offset)
+        .limit(50)
+        .select('id', 'cursor_id')
+        .orderBy('cursor_id')
+
+      reply.status(200).send({
+        next_cursor_id: failed[failed.length - 1]?.cursor_id || null,
+        data: failed,
+      })
     }
-    const offset = (req.query as any).cursor ? Number((req.query as any).cursor) : 0
-
-    const failed = await multitenantKnex
-      .table('tenants')
-      .where('migrations_status', 'FAILED')
-      .where('cursor_id', '>', offset)
-      .limit(50)
-      .select('id', 'cursor_id')
-      .orderBy('cursor_id')
-
-    reply.status(200).send({
-      next_cursor_id: failed[failed.length - 1]?.cursor_id || null,
-      data: failed,
-    })
-  })
+  )
 }

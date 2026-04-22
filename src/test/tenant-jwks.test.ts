@@ -634,6 +634,7 @@ describe('Tenant jwks configs', () => {
         url: `/tenants/${tenantId}/jwks/url-signing/roll`,
         headers: {
           apikey: process.env.ADMIN_API_KEYS,
+          'sb-request-id': 'sb-req-123',
         },
       })
       expect(response.statusCode).toBe(200)
@@ -644,7 +645,7 @@ describe('Tenant jwks configs', () => {
       expect(queueSendSpy).toHaveBeenCalledTimes(1)
       const [[callArg]] = queueSendSpy.mock.calls
       expect(callArg).toMatchObject({
-        data: { tenantId },
+        data: { tenantId, sbReqId: 'sb-req-123' },
         name: 'tenants-jwks-roll-url-signing-key-v1',
       })
     } finally {

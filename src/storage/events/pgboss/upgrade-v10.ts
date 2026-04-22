@@ -34,6 +34,8 @@ export class UpgradePgBossV10 extends BaseEvent<UpgradePgBossV10Payload> {
   }
 
   static async handle(job: Job<UpgradePgBossV10Payload>) {
+    const { sbReqId } = job.data
+
     await multitenantKnex.transaction(async (tnx) => {
       const resultLock = await tnx.raw('SELECT pg_try_advisory_xact_lock(-5525285245963000606)')
       const lockAcquired = resultLock.rows.shift()?.pg_try_advisory_xact_lock || false
@@ -96,6 +98,7 @@ export class UpgradePgBossV10 extends BaseEvent<UpgradePgBossV10Payload> {
           logSchema.error(logger, '[PgBoss] Error while copying jobs', {
             type: 'pgboss',
             error,
+            sbReqId,
           })
         }
       }

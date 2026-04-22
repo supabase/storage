@@ -24,7 +24,13 @@ export class UrlSigningJwkGenerator {
   /**
    * Generates url signing jwks for all tenants
    */
-  static async generateUrlSigningJwksOnAllTenants(signal: AbortSignal) {
+  static async generateUrlSigningJwksOnAllTenants({
+    signal,
+    sbReqId,
+  }: {
+    signal: AbortSignal
+    sbReqId?: string
+  }) {
     if (!pgQueueEnable || !isMultitenant || UrlSigningJwkGenerator.isRunning) {
       return
     }
@@ -32,6 +38,7 @@ export class UrlSigningJwkGenerator {
     UrlSigningJwkGenerator.countSent = 0
     logSchema.info(logger, '[Jwks Generator] Generating url signing jwks for all tenants', {
       type: 'jwk-generator',
+      sbReqId,
     })
     try {
       const tenants = jwksManager.listTenantsMissingUrlSigningJwk(signal)
@@ -44,6 +51,7 @@ export class UrlSigningJwkGenerator {
                 host: '',
                 ref: tenant,
               },
+              sbReqId,
             })
           })
         )
@@ -55,6 +63,7 @@ export class UrlSigningJwkGenerator {
         `[Jwks Generator] Completed generation of url signing jwks for ${UrlSigningJwkGenerator.countSent} tenants`,
         {
           type: 'jwk-generator',
+          sbReqId,
         }
       )
     } catch (e) {
@@ -64,6 +73,7 @@ export class UrlSigningJwkGenerator {
         metadata: JSON.stringify({
           completed: UrlSigningJwkGenerator.countSent,
         }),
+        sbReqId,
       })
     }
     UrlSigningJwkGenerator.isRunning = false

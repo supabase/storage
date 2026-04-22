@@ -38,6 +38,7 @@ export interface TransactionOptions {
 export interface DatabaseOptions<TNX> {
   tenantId: string
   reqId?: string
+  sbReqId?: string
   latestMigration?: keyof typeof DBMigration
   host: string
   tnx?: TNX
@@ -57,6 +58,7 @@ export interface Database {
   tenantHost: string
   tenantId: string
   reqId?: string
+  sbReqId?: string
   role?: string
   connection: TenantConnection
 

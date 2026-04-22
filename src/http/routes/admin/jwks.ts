@@ -144,7 +144,9 @@ export default async function routes(fastify: FastifyInstance) {
         tenantId,
         tenant: {
           ref: tenantId,
+          host: '',
         },
+        sbReqId: request.sbReqId,
       })
 
       return reply.send({ started: true })
@@ -162,12 +164,14 @@ export default async function routes(fastify: FastifyInstance) {
           .send(`Generate missing jwks is already running, and has sent ${sent} items so far`)
       }
 
-      UrlSigningJwkGenerator.generateUrlSigningJwksOnAllTenants(
-        request.signals.disconnect.signal
-      ).catch((e) => {
+      UrlSigningJwkGenerator.generateUrlSigningJwksOnAllTenants({
+        sbReqId: request.sbReqId,
+        signal: request.signals.disconnect.signal,
+      }).catch((e) => {
         logSchema.error(request.log, 'Error generating url signing jwks for all tenants', {
           type: 'jwk-generator',
           error: e,
+          sbReqId: request.sbReqId,
         })
       })
       return reply.send({ started: true })

@@ -53,6 +53,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
           tenantId,
           project: tenantId,
           reqId: job.data.reqId,
+          sbReqId: job.data.sbReqId,
         }
       )
 
@@ -96,6 +97,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
                     name: object.name,
                     bucketId,
                     reqId: job.data.reqId,
+                    sbReqId: job.data.sbReqId,
                     version: object.version,
                     metadata: object.metadata,
                   })
@@ -113,10 +115,11 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
       if (moreObjectsToDelete) {
         // delete next batch
         await ObjectAdminDeleteAllBefore.send({
-          before,
+          before: before.toISOString(),
           bucketId,
           tenant: job.data.tenant,
           reqId: job.data.reqId,
+          sbReqId: job.data.sbReqId,
         })
       }
     } catch (e) {
@@ -131,6 +134,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
           tenantId,
           project: tenantId,
           reqId: job.data.reqId,
+          sbReqId: job.data.sbReqId,
         },
         `[Admin]: ObjectAdminDeleteAllBefore ${bucketId} ${before.toUTCString()} - FAILED`
       )
@@ -145,7 +149,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
           })
           .catch((e) => {
             logger.error(
-              { error: e },
+              { error: e, sbReqId: job.data.sbReqId },
               `[Admin]: ObjectAdminDeleteAllBefore ${tenant.ref} - FAILED DISPOSING CONNECTION`
             )
           })

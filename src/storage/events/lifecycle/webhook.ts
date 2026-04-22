@@ -19,10 +19,11 @@ interface WebhookEvent {
   event: {
     $version: string
     type: string
-    payload: object & { reqId?: string; bucketId: string; name: string }
+    region: string
+    payload: object & { reqId?: string; sbReqId?: string; bucketId: string; name: string }
     applyTime: number
   }
-  sentAt: string
+  sentAt?: string
   tenant: {
     ref: string
     host: string
@@ -105,6 +106,7 @@ export class Webhook extends BaseEvent<WebhookEvent> {
       tenantId: job.data.tenant.ref,
       project: job.data.tenant.ref,
       reqId: job.data.event.payload.reqId,
+      sbReqId: job.data.event.payload.sbReqId,
     })
 
     try {
@@ -127,6 +129,7 @@ export class Webhook extends BaseEvent<WebhookEvent> {
           tenantId: job.data.tenant.ref,
           project: job.data.tenant.ref,
           reqId: job.data.event.payload.reqId,
+          sbReqId: job.data.event.payload.sbReqId,
         },
         `[Lifecycle]: ${job.data.event.type} ${path} - FAILED`
       )

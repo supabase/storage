@@ -67,7 +67,7 @@ export function startAsyncMigrations(signal: AbortSignal) {
       progressiveMigrations.start(signal)
       break
     case MultitenantMigrationStrategy.FULL_FLEET:
-      runMigrationsOnAllTenants(signal).catch((e) => {
+      runMigrationsOnAllTenants({ signal }).catch((e) => {
         logger.error(
           {
             type: 'migrations',
@@ -205,7 +205,10 @@ export async function areMigrationsUpToDate(tenantId: string) {
   )
 }
 
-export async function obtainLockOnMultitenantDB<T>(fn: (tnx: Knex.Transaction) => Promise<T>) {
+export async function obtainLockOnMultitenantDB<T>(
+  fn: (tnx: Knex.Transaction) => Promise<T>,
+  options?: { sbReqId?: string }
+) {
   const trx = await multitenantKnex.transaction()
   try {
     const result = await trx.raw(
@@ -221,6 +224,7 @@ export async function obtainLockOnMultitenantDB<T>(fn: (tnx: Knex.Transaction) =
 
     logSchema.info(logger, '[Migrations] Instance acquired the lock', {
       type: 'migrations',
+      sbReqId: options?.sbReqId,
     })
 
     const fnResult = await fn(trx)
@@ -236,67 +240,83 @@ export async function resetMigrationsOnTenants(options: {
   till: keyof typeof DBMigration
   markCompletedTillMigration?: keyof typeof DBMigration
   signal: AbortSignal
+  sbReqId?: string
 }) {
-  await obtainLockOnMultitenantDB(async () => {
-    logSchema.info(logger, '[Migrations] Listing all tenants', {
-      type: 'migrations',
-    })
+  await obtainLockOnMultitenantDB(
+    async () => {
+      logSchema.info(logger, '[Migrations] Listing all tenants', {
+        type: 'migrations',
+        sbReqId: options.sbReqId,
+      })
 
-    const tenants = listTenantsToResetMigrations(options.till, options.signal)
+      const tenants = listTenantsToResetMigrations(options.till, options.signal)
 
-    for await (const tenantBatch of tenants) {
-      await ResetMigrationsOnTenant.batchSend(
-        tenantBatch.map((tenant) => {
-          return new ResetMigrationsOnTenant({
-            tenantId: tenant,
-            untilMigration: options.till,
-            markCompletedTillMigration: options.markCompletedTillMigration,
-            tenant: {
-              host: '',
-              ref: tenant,
-            },
+      for await (const tenantBatch of tenants) {
+        await ResetMigrationsOnTenant.batchSend(
+          tenantBatch.map((tenant) => {
+            return new ResetMigrationsOnTenant({
+              tenantId: tenant,
+              untilMigration: options.till,
+              markCompletedTillMigration: options.markCompletedTillMigration,
+              sbReqId: options.sbReqId,
+              tenant: {
+                host: '',
+                ref: tenant,
+              },
+            })
           })
-        })
-      )
-    }
+        )
+      }
 
-    logSchema.info(logger, '[Migrations] reset migrations jobs scheduled', {
-      type: 'migrations',
-    })
-  })
+      logSchema.info(logger, '[Migrations] reset migrations jobs scheduled', {
+        type: 'migrations',
+        sbReqId: options.sbReqId,
+      })
+    },
+    { sbReqId: options.sbReqId }
+  )
 }
 
 /**
  * Runs migrations for all tenants
  * only one instance at the time is allowed to run
  */
-export async function runMigrationsOnAllTenants(signal: AbortSignal) {
+export async function runMigrationsOnAllTenants(options: {
+  signal: AbortSignal
+  sbReqId?: string
+}) {
   if (!pgQueueEnable) {
     return
   }
-  await obtainLockOnMultitenantDB(async () => {
-    logSchema.info(logger, '[Migrations] Listing all tenants', {
-      type: 'migrations',
-    })
-    const tenants = listTenantsToMigrate(signal)
-    for await (const tenantBatch of tenants) {
-      await RunMigrationsOnTenants.batchSend(
-        tenantBatch.map((tenant) => {
-          return new RunMigrationsOnTenants({
-            tenantId: tenant,
-            tenant: {
-              host: '',
-              ref: tenant,
-            },
+  await obtainLockOnMultitenantDB(
+    async () => {
+      logSchema.info(logger, '[Migrations] Listing all tenants', {
+        type: 'migrations',
+        sbReqId: options.sbReqId,
+      })
+      const tenants = listTenantsToMigrate(options.signal)
+      for await (const tenantBatch of tenants) {
+        await RunMigrationsOnTenants.batchSend(
+          tenantBatch.map((tenant) => {
+            return new RunMigrationsOnTenants({
+              tenantId: tenant,
+              sbReqId: options.sbReqId,
+              tenant: {
+                host: '',
+                ref: tenant,
+              },
+            })
           })
-        })
-      )
-    }
+        )
+      }
 
-    logSchema.info(logger, '[Migrations] Async migrations jobs completed', {
-      type: 'migrations',
-    })
-  })
+      logSchema.info(logger, '[Migrations] Async migrations jobs completed', {
+        type: 'migrations',
+        sbReqId: options.sbReqId,
+      })
+    },
+    { sbReqId: options.sbReqId }
+  )
 }
 
 /**
@@ -682,15 +702,18 @@ function runMigrations({
       for (const migration of migrationsToRun) {
         try {
           const ignore = migration.sql.includes('-- postgres-migrations ignore')
+          const runnableMigration = ignore
+            ? {
+                ...migration,
+                sql: 'SELECT 1;',
+                contents: 'SELECT 1;',
+              }
+            : migration
 
-          if (ignore) {
-            ;(migration as any).sql = 'SELECT 1;'
-            ;(migration as any).contents = 'SELECT 1;'
-          }
           const result = await runMigration(
             migrationTableName,
             client
-          )(runMigrationTransformers(migration, transformers))
+          )(runMigrationTransformers(runnableMigration, transformers))
           completedMigrations.push(result)
         } catch (e) {
           throw ERRORS.DatabaseError(

@@ -582,9 +582,7 @@ describe('S3 Protocol', () => {
           uploadFile(client, bucket, 'c.jpg', 1),
         ])
 
-        const truncated = await client.send(
-          new ListObjectsCommand({ Bucket: bucket, MaxKeys: 2 })
-        )
+        const truncated = await client.send(new ListObjectsCommand({ Bucket: bucket, MaxKeys: 2 }))
         expect(truncated.IsTruncated).toBe(true)
         expect(truncated.NextMarker).toBeDefined()
 

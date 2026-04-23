@@ -11,6 +11,7 @@ import { Storage } from '../storage'
 const { storageS3Bucket, storageS3MaxSockets, storageBackendType, region } = getConfig()
 
 let storageBackend: StorageBackendAdapter | undefined = undefined
+let Webhook: Awaited<typeof import('./lifecycle/webhook')>['Webhook'] | undefined = undefined
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends QueueBaseEvent<T> {
   static onStart() {
@@ -29,7 +30,9 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     this: StaticThis<T>,
     payload: Omit<T['payload'], '$version'>
   ) {
-    const { Webhook } = await import('./lifecycle/webhook')
+    if (!Webhook) {
+      Webhook = (await import('./lifecycle/webhook')).Webhook
+    }
     const eventType = this.eventName()
 
     try {

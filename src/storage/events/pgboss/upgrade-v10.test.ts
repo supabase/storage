@@ -21,25 +21,35 @@ vi.mock('@internal/monitoring', () => ({
   },
 }))
 
-vi.mock('@internal/queue', () => ({
-  PG_BOSS_SCHEMA: 'storage',
-  Queue: {
-    getInstance: () => ({
-      getQueues: mockGetQueues,
-    }),
-  },
-}))
+vi.mock('@internal/queue', async () => {
+  const { SYSTEM_TENANT, SYSTEM_TENANT_REF } = await vi.importActual<
+    typeof import('@internal/queue/constants')
+  >('@internal/queue/constants')
+
+  return {
+    PG_BOSS_SCHEMA: 'storage',
+    SYSTEM_TENANT,
+    SYSTEM_TENANT_REF,
+    Queue: {
+      getInstance: () => ({
+        getQueues: mockGetQueues,
+      }),
+    },
+  }
+})
 
 vi.mock('../base-event', () => ({
   BaseEvent: class {},
 }))
 
+import { SYSTEM_TENANT, SYSTEM_TENANT_REF } from '@internal/queue'
 import { UpgradePgBossV10 } from './upgrade-v10'
 
 function makeJob(overrides?: Partial<Record<string, unknown>>) {
   return {
     data: {
       sbReqId: 'sb-req-123',
+      tenant: SYSTEM_TENANT,
     },
     ...overrides,
   }
@@ -80,6 +90,7 @@ describe('UpgradePgBossV10.handle', () => {
       expect.objectContaining({
         type: 'pgboss',
         error,
+        project: SYSTEM_TENANT_REF,
         sbReqId: 'sb-req-123',
       })
     )

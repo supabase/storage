@@ -6,6 +6,7 @@ import { KnexQueueDB } from '@internal/queue/database'
 import { Knex } from 'knex'
 import PgBoss, { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../config'
+import { SYSTEM_TENANT_REF } from './constants'
 import { PG_BOSS_SCHEMA, Queue } from './queue'
 
 export interface BasePayload {
@@ -215,7 +216,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
 
       logSchema.error(logger, '[Queue] Error invoking event synchronously, sending to queue', {
         type: 'queue',
-        project: this.payload.tenant?.ref,
+        project: this.payload.tenant?.ref || SYSTEM_TENANT_REF,
         error: e,
         metadata: JSON.stringify(this.payload),
         sbReqId: this.payload.sbReqId,
@@ -321,6 +322,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         `[Queue Sender] Error while sending job to queue, sending synchronously`,
         {
           type: 'queue',
+          project: this.payload.tenant?.ref || SYSTEM_TENANT_REF,
           error: e,
           metadata: JSON.stringify(this.payload),
           sbReqId: this.payload.sbReqId,

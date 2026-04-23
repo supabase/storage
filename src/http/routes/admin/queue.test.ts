@@ -109,10 +109,7 @@ describe('admin queue routes', () => {
         toQueue: 'target-queue',
         deleteJobsFromOriginalQueue: true,
         sbReqId: 'sb-req-123',
-        tenant: {
-          ref: '',
-          host: '',
-        },
+        tenant: SYSTEM_TENANT,
       })
     } finally {
       await app.close()

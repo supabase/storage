@@ -33,7 +33,6 @@ import { DBMigration } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
 import { StorageKnexDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
-import axios from 'axios'
 import { createHash, createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import { ReadableStreamBuffer } from 'stream-buffers'
@@ -878,9 +877,7 @@ describe('S3 Protocol', () => {
         const data = Buffer.alloc(1024)
         formData.set('file', new Blob([data]), 'test.jpg')
 
-        const resp = await axios.post(signedURL.url, formData, {
-          validateStatus: () => true,
-        })
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
 
         expect(resp.status).toBe(200)
       })
@@ -907,9 +904,7 @@ describe('S3 Protocol', () => {
         const data = Buffer.alloc(1024 * 2)
         formData.set('file', new Blob([data]), 'test.jpg')
 
-        const resp = await axios.post(signedURL.url, formData, {
-          validateStatus: () => true,
-        })
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
 
         expect(resp.status).toBe(413)
         expect(resp.statusText).toBe('Payload Too Large')

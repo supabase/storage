@@ -1,9 +1,9 @@
 import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
-import axios from 'axios'
 import dotenv from 'dotenv'
 import { FastifyInstance } from 'fastify'
 import fs from 'fs/promises'
 import path from 'path'
+import { Readable } from 'stream'
 import app from '../app'
 import { getConfig, JwksConfig, mergeConfig } from '../config'
 import { S3Backend } from '../storage/backend'
@@ -11,10 +11,32 @@ import { ImageRenderer } from '../storage/renderer'
 import { useMockObject } from './common'
 
 dotenv.config({ path: '.env.test' })
-const { imgProxyURL, jwtSecret } = getConfig()
+const { jwtSecret } = getConfig()
 let appInstance: FastifyInstance
 
 const projectRoot = path.join(__dirname, '..', '..')
+const renderedBodyText = 'mock-rendered-image-body'
+
+function createMockRendererClient() {
+  const bodyChunks = [Buffer.from('mock-rendered-'), Buffer.from('image-body')]
+  const body = Buffer.concat(bodyChunks)
+  const get = vi.fn().mockResolvedValue({
+    data: Readable.from(bodyChunks),
+    status: 200,
+    headers: {
+      'content-length': String(body.length),
+      'content-type': 'image/png',
+      'last-modified': 'Wed, 12 Oct 2022 11:17:02 GMT',
+    },
+  })
+  const client: ReturnType<ImageRenderer['getClient']> = { get }
+
+  return {
+    body,
+    client,
+    get,
+  }
+}
 
 describe('image rendering routes', () => {
   beforeAll(async () => {
@@ -34,13 +56,13 @@ describe('image rendering routes', () => {
 
   afterEach(async () => {
     await appInstance.close()
+    vi.restoreAllMocks()
     vi.clearAllMocks()
   })
 
   it('will render an authenticated image applying transformations using external image processing', async () => {
-    const testAxios = axios.create({ baseURL: imgProxyURL })
-    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
-    const axiosSpy = vi.spyOn(testAxios, 'get')
+    const { client: testClient, get: getSpy } = createMockRendererClient()
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
 
     const response = await appInstance.inject({
       method: 'GET',
@@ -51,17 +73,20 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
+    expect(response.body).toBe(renderedBodyText)
     expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
-    expect(axiosSpy).toHaveBeenCalledWith(
+    expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
-      { responseType: 'stream', signal: expect.any(AbortSignal) }
+      expect.objectContaining({
+        responseType: 'stream',
+        signal: expect.any(AbortSignal),
+      })
     )
   })
 
   it('will render a public image applying transformations using external image processing', async () => {
-    const testAxios = axios.create({ baseURL: imgProxyURL })
-    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
-    const axiosSpy = vi.spyOn(testAxios, 'get')
+    const { client: testClient, get: getSpy } = createMockRendererClient()
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
 
     const response = await appInstance.inject({
       method: 'GET',
@@ -70,17 +95,19 @@ describe('image rendering routes', () => {
 
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
-    expect(axiosSpy).toHaveBeenCalledWith(
+    expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
-      { responseType: 'stream', signal: expect.any(AbortSignal) }
+      expect.objectContaining({
+        responseType: 'stream',
+        signal: expect.any(AbortSignal),
+      })
     )
   })
 
   it('will render a public image in all supported formats', async () => {
     const formats = ['origin', 'webp', 'avif']
-    const testAxios = axios.create({ baseURL: imgProxyURL })
-    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
-    const axiosSpy = vi.spyOn(testAxios, 'get')
+    const { client: testClient, get: getSpy } = createMockRendererClient()
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
 
     for (let format of formats) {
       const response = await appInstance.inject({
@@ -91,9 +118,12 @@ describe('image rendering routes', () => {
       expect(response.statusCode).toBe(200)
       expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
       const expectFormat = format === 'origin' ? '' : `/format:${format}`
-      expect(axiosSpy).toHaveBeenCalledWith(
+      expect(getSpy).toHaveBeenCalledWith(
         `/public/height:100/width:100/resizing_type:fill${expectFormat}/plain/local:///${projectRoot}/data/sadcat.jpg`,
-        { responseType: 'stream', signal: expect.any(AbortSignal) }
+        expect.objectContaining({
+          responseType: 'stream',
+          signal: expect.any(AbortSignal),
+        })
       )
       vi.clearAllMocks()
     }
@@ -125,9 +155,8 @@ describe('image rendering routes', () => {
     const jwtData = (await verifyJWT(token, jwtSecret)) as SignedToken
     expect(jwtData.url).toBe(assetUrl)
 
-    const testAxios = axios.create({ baseURL: imgProxyURL })
-    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
-    const axiosSpy = vi.spyOn(testAxios, 'get')
+    const { client: testClient, get: getSpy } = createMockRendererClient()
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
 
     const response = await appInstance.inject({
       method: 'GET',
@@ -136,9 +165,12 @@ describe('image rendering routes', () => {
 
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
-    expect(axiosSpy).toHaveBeenCalledWith(
+    expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
-      { responseType: 'stream', signal: expect.any(AbortSignal) }
+      expect.objectContaining({
+        responseType: 'stream',
+        signal: expect.any(AbortSignal),
+      })
     )
   })
 
@@ -172,9 +204,8 @@ describe('image rendering routes', () => {
     const jwtData = (await verifyJWT(token, 'invalid-old-jwt-secret', jwtJWKS)) as SignedToken
     expect(jwtData.url).toBe(assetUrl)
 
-    const testAxios = axios.create({ baseURL: imgProxyURL })
-    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testAxios)
-    const axiosSpy = vi.spyOn(testAxios, 'get')
+    const { client: testClient, get: getSpy } = createMockRendererClient()
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
 
     const response = await appInstance.inject({
       method: 'GET',
@@ -183,9 +214,12 @@ describe('image rendering routes', () => {
 
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
-    expect(axiosSpy).toHaveBeenCalledWith(
+    expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
-      { responseType: 'stream', signal: expect.any(AbortSignal) }
+      expect.objectContaining({
+        responseType: 'stream',
+        signal: expect.any(AbortSignal),
+      })
     )
   })
 

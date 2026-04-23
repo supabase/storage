@@ -1,40 +1,15 @@
+import { CdnCacheManager } from '@storage/cdn/cdn-cache-manager'
+import { FastifyInstance } from 'fastify'
+import { SignJWT } from 'jose'
+import { Readable } from 'stream'
 import { getConfig, mergeConfig } from '../config'
+import { useStorage } from './utils/storage'
 
 getConfig()
 mergeConfig({
   cdnPurgeEndpointURL: 'http://localhost/stub/cache',
   cdnPurgeEndpointKey: 'test-key',
 })
-
-vi.mock('axios', () => {
-  const instance = {
-    post: vi.fn(),
-    interceptors: {
-      request: {
-        use: vi.fn(),
-      },
-      response: {
-        use: vi.fn(),
-      },
-    },
-  }
-
-  const axiosMock = {
-    create: vi.fn().mockReturnValue(instance),
-    ...instance,
-  }
-
-  return {
-    default: axiosMock,
-    ...axiosMock,
-  }
-})
-
-import axios from 'axios'
-import { FastifyInstance } from 'fastify'
-import { SignJWT } from 'jose'
-import { Readable } from 'stream'
-import { useStorage } from './utils/storage'
 
 const { serviceKeyAsync, anonKeyAsync, tenantId, jwtSecret } = getConfig()
 
@@ -58,6 +33,7 @@ describe('CDN Cache Manager', () => {
 
   afterEach(async () => {
     await appInstance.close()
+    vi.restoreAllMocks()
     vi.clearAllMocks()
   })
 
@@ -108,9 +84,7 @@ describe('CDN Cache Manager', () => {
       },
     })
 
-    const spy = vi
-      .spyOn(axios, 'post')
-      .mockReturnValue(Promise.resolve({ data: { message: 'success' } }))
+    const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
 
     const response = await appInstance.inject({
       method: 'DELETE',
@@ -124,11 +98,9 @@ describe('CDN Cache Manager', () => {
 
     const body = await response.json()
     expect(body).toEqual({ message: 'success' })
-    expect(spy).toHaveBeenCalledWith('/purge', {
-      tenant: {
-        ref: tenantId,
-      },
-      bucketId: bucketName,
+    expect(purgeSpy).toHaveBeenCalledWith({
+      tenant: tenantId,
+      bucket: bucketName,
       objectName,
     })
   })

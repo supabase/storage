@@ -1,8 +1,7 @@
 import { getTenantConfig } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
-import HttpAgent, { HttpsAgent } from 'agentkeepalive'
-import axios from 'axios'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
+import { Agent } from 'undici'
 import { getConfig } from '../../../config'
 import { BaseEvent } from '../base-event'
 
@@ -14,6 +13,11 @@ const {
   webhookMaxConnections,
   webhookQueueMaxFreeSockets,
 } = getConfig()
+const WEBHOOK_TIMEOUT_MS = 4000
+const webhookKeepAliveTimeoutMs = Math.min(
+  Math.max(webhookQueueMaxFreeSockets, 1) * 1000,
+  WEBHOOK_TIMEOUT_MS
+)
 
 interface WebhookEvent {
   event: {
@@ -30,30 +34,76 @@ interface WebhookEvent {
   }
 }
 
-const httpAgent = webhookURL?.startsWith('https://')
-  ? {
-      httpsAgent: new HttpsAgent({
-        maxSockets: webhookMaxConnections,
-        maxFreeSockets: webhookQueueMaxFreeSockets,
-      }),
-    }
-  : {
-      httpAgent: new HttpAgent({
-        maxSockets: webhookMaxConnections,
-        maxFreeSockets: webhookQueueMaxFreeSockets,
-      }),
+interface WebhookRequest {
+  type: 'Webhook'
+  event: WebhookEvent['event']
+  sentAt: Date
+  tenant: WebhookEvent['tenant']
+}
+
+interface WebhookClient {
+  post(url: string, payload: WebhookRequest): Promise<void>
+}
+
+const dispatcher = new Agent({
+  connections: webhookMaxConnections,
+  // `undici` cannot cap idle socket count like `agentkeepalive.maxFreeSockets`,
+  // so use the old knob to make idle sockets expire sooner when a small free pool is desired.
+  keepAliveTimeout: webhookKeepAliveTimeoutMs,
+  keepAliveMaxTimeout: webhookKeepAliveTimeoutMs,
+})
+
+const defaultHeaders = new Headers({
+  'content-type': 'application/json',
+  ...(webhookApiKey ? { authorization: `Bearer ${webhookApiKey}` } : {}),
+})
+
+async function assertOkResponse(response: Response) {
+  if (response.ok) {
+    return
+  }
+
+  throw new Error(`Request failed with status code ${response.status}`)
+}
+
+function normalizeWebhookError(error: unknown) {
+  if (error instanceof DOMException && error.name === 'TimeoutError') {
+    return new Error(`timeout of ${WEBHOOK_TIMEOUT_MS}ms exceeded`)
+  }
+
+  if (error instanceof Error) {
+    return error
+  }
+
+  return new Error(String(error))
+}
+
+const client: WebhookClient = {
+  async post(url, payload) {
+    const requestInit: RequestInit & { dispatcher: Agent } = {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      headers: defaultHeaders,
+      dispatcher,
+      signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
     }
 
-const client = axios.create({
-  ...httpAgent,
-  timeout: 4000,
-  headers: {
-    ...(webhookApiKey ? { authorization: `Bearer ${webhookApiKey}` } : {}),
+    const response = await fetch(url, requestInit)
+
+    try {
+      await assertOkResponse(response)
+    } finally {
+      await response.body?.cancel().catch(() => {})
+    }
   },
-})
+}
 
 export class Webhook extends BaseEvent<WebhookEvent> {
   static queueName = 'webhooks'
+
+  protected static getClient() {
+    return client
+  }
 
   static getWorkerOptions(): WorkOptions {
     return {
@@ -110,16 +160,18 @@ export class Webhook extends BaseEvent<WebhookEvent> {
     })
 
     try {
-      await client.post(webhookURL, {
+      await this.getClient().post(webhookURL, {
         type: 'Webhook',
         event: job.data.event,
         sentAt: new Date(),
         tenant: job.data.tenant,
       })
     } catch (e) {
+      const error = normalizeWebhookError(e)
+
       logger.error(
         {
-          error: (e as Error)?.message,
+          error: error.message,
           jodId: job.id,
           type: 'event',
           event: job.data.event.type,
@@ -134,9 +186,7 @@ export class Webhook extends BaseEvent<WebhookEvent> {
         `[Lifecycle]: ${job.data.event.type} ${path} - FAILED`
       )
       throw new Error(
-        `Failed to send webhook for event ${job.data.event.type} to ${webhookURL}: ${
-          (e as Error).message
-        }`
+        `Failed to send webhook for event ${job.data.event.type} to ${webhookURL}: ${error.message}`
       )
     }
 

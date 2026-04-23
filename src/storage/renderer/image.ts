@@ -72,6 +72,8 @@ interface TransformLimits {
   maxResolution?: number
 }
 
+type ImageRendererClient = Pick<Axios, 'get'>
+
 /**
  * ImageRenderer
  * renders an image by applying transformations
@@ -79,7 +81,7 @@ interface TransformLimits {
  * Interacts with an imgproxy backend for the actual transformation
  */
 export class ImageRenderer extends Renderer {
-  private readonly client: Axios
+  private readonly client: ImageRendererClient
   private transformOptions?: TransformOptions
   private limits?: TransformLimits
 

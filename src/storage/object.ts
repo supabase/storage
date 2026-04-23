@@ -28,6 +28,7 @@ interface CopyObjectParams {
   owner?: string
   copyMetadata?: boolean
   upsert?: boolean
+  uploadType: 'standard' | 's3' | 'resumable'
   metadata?: {
     cacheControl?: string
     mimetype?: string
@@ -155,6 +156,7 @@ export class ObjectStorage {
       version: obj.version,
       bucketId: this.bucketId,
       reqId: this.db.reqId,
+      sbReqId: this.db.sbReqId,
       metadata: obj.metadata,
     })
   }
@@ -217,6 +219,7 @@ export class ObjectStorage {
                 name: object.name,
                 bucketId: this.bucketId,
                 reqId: this.db.reqId,
+                sbReqId: this.db.sbReqId,
                 version: object.version,
                 metadata: object.metadata,
               })
@@ -246,6 +249,7 @@ export class ObjectStorage {
       bucketId: this.bucketId,
       metadata,
       reqId: this.db.reqId,
+      sbReqId: this.db.sbReqId,
     })
 
     return result
@@ -301,6 +305,7 @@ export class ObjectStorage {
     conditions,
     copyMetadata,
     upsert,
+    uploadType,
     metadata: fileMetadata,
     userMetadata,
   }: CopyObjectParams) {
@@ -393,10 +398,11 @@ export class ObjectStorage {
         if (existingDestObject) {
           await ObjectAdminDelete.send({
             name: existingDestObject.name,
-            bucketId: existingDestObject.bucket_id,
+            bucketId: existingDestObject.bucket_id ?? destinationBucket,
             tenant: this.db.tenant(),
             version: existingDestObject.version,
             reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
           })
         }
 
@@ -409,7 +415,9 @@ export class ObjectStorage {
         version: newVersion,
         bucketId: destinationBucket,
         metadata,
+        uploadType,
         reqId: this.db.reqId,
+        sbReqId: this.db.sbReqId,
       })
 
       return {
@@ -425,6 +433,7 @@ export class ObjectStorage {
         tenant: this.db.tenant(),
         version: newVersion,
         reqId: this.db.reqId,
+        sbReqId: this.db.sbReqId,
       })
       throw e
     }
@@ -441,6 +450,7 @@ export class ObjectStorage {
     sourceObjectName: string,
     destinationBucket: string,
     destinationObjectName: string,
+    uploadType: 'standard' | 's3' | 'resumable',
     owner?: string
   ) {
     mustBeValidKey(destinationObjectName)
@@ -525,6 +535,7 @@ export class ObjectStorage {
           tenant: this.db.tenant(),
           version: sourceObj.version,
           reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
         })
 
         await Promise.allSettled([
@@ -533,6 +544,7 @@ export class ObjectStorage {
             name: sourceObjectName,
             bucketId: this.bucketId,
             reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
             version: sourceObject.version,
             metadata: sourceObject.metadata,
           }),
@@ -542,6 +554,7 @@ export class ObjectStorage {
             version: newVersion,
             bucketId: destinationBucket,
             metadata,
+            uploadType,
             oldObject: {
               name: sourceObjectName,
               bucketId: this.bucketId,
@@ -549,6 +562,7 @@ export class ObjectStorage {
               version: sourceObject.version,
             },
             reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
           }),
         ])
 
@@ -570,6 +584,7 @@ export class ObjectStorage {
         tenant: this.db.tenant(),
         version: newVersion,
         reqId: this.db.reqId,
+        sbReqId: this.db.sbReqId,
       })
       throw e
     }

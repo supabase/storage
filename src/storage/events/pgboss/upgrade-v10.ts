@@ -1,6 +1,6 @@
 import { multitenantKnex } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload, PG_BOSS_SCHEMA, Queue } from '@internal/queue'
+import { BasePayload, PG_BOSS_SCHEMA, Queue, SYSTEM_TENANT_REF } from '@internal/queue'
 import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
 import { BaseEvent } from '../base-event'
 
@@ -34,6 +34,8 @@ export class UpgradePgBossV10 extends BaseEvent<UpgradePgBossV10Payload> {
   }
 
   static async handle(job: Job<UpgradePgBossV10Payload>) {
+    const { sbReqId } = job.data
+
     await multitenantKnex.transaction(async (tnx) => {
       const resultLock = await tnx.raw('SELECT pg_try_advisory_xact_lock(-5525285245963000606)')
       const lockAcquired = resultLock.rows.shift()?.pg_try_advisory_xact_lock || false
@@ -68,7 +70,7 @@ export class UpgradePgBossV10 extends BaseEvent<UpgradePgBossV10Payload> {
                 output,
                 policy
             )
-            SELECT 
+            SELECT
                 id,
                 name,
                 priority,
@@ -96,6 +98,8 @@ export class UpgradePgBossV10 extends BaseEvent<UpgradePgBossV10Payload> {
           logSchema.error(logger, '[PgBoss] Error while copying jobs', {
             type: 'pgboss',
             error,
+            project: job.data.tenant?.ref || SYSTEM_TENANT_REF,
+            sbReqId,
           })
         }
       }

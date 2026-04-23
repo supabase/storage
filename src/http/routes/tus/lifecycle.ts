@@ -1,12 +1,13 @@
 import { TenantConnection } from '@internal/database'
 import { ERRORS, isRenderableError } from '@internal/errors'
+import { logSchema } from '@internal/monitoring'
 import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
 import { Uploader, validateMimeType } from '@storage/uploader'
 import { DataStore, Metadata, Upload } from '@tus/server'
 import { randomUUID } from 'crypto'
+import type { FastifyBaseLogger } from 'fastify'
 import http from 'http'
-import { BaseLogger } from 'pino'
 import type { ServerRequest as Request } from 'srvx'
 
 import { getConfig } from '../../../config'
@@ -31,7 +32,8 @@ function getNodeRequest(rawReq: Request): MultiPartRequest {
   return req
 }
 export type MultiPartRequest = http.IncomingMessage & {
-  log: BaseLogger
+  executionError?: Error
+  log: FastifyBaseLogger
   upload: {
     storage: Storage
     db: TenantConnection
@@ -39,6 +41,17 @@ export type MultiPartRequest = http.IncomingMessage & {
     tenantId: string
     isUpsert: boolean
     resources?: string[]
+    sbReqId?: string
+  }
+}
+
+type TusError = { status_code: number; body: string }
+
+function getTusError(error: { render(): { statusCode: string; message: string } }): TusError {
+  const renderedError = error.render()
+  return {
+    status_code: parseInt(renderedError.statusCode, 10),
+    body: renderedError.message,
   }
 }
 
@@ -55,7 +68,11 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
 
   res.on('finish', () => {
     req.upload.db.dispose().catch((e) => {
-      req.log.error({ error: e }, 'Error disposing db connection')
+      logSchema.error(req.log, 'Error disposing db connection', {
+        type: 'db-connection',
+        error: e,
+        sbReqId: req.upload.sbReqId,
+      })
     })
   })
 
@@ -104,7 +121,11 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
         contentType = parsedMetadata?.contentType ?? undefined
         rawMetadata = parsedMetadata?.metadata
       } catch (e) {
-        req.log.warn({ error: e }, 'Failed to parse upload metadata')
+        logSchema.warning(req.log, 'Failed to parse upload metadata', {
+          type: 'tus',
+          error: e,
+          sbReqId: req.upload.sbReqId,
+        })
         throw ERRORS.InvalidParameter('upload-metadata', {
           error: e as Error,
           message: 'Invalid Upload-Metadata header',
@@ -125,7 +146,11 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
     try {
       customMd = JSON.parse(rawMetadata)
     } catch (e) {
-      req.log.warn({ error: e }, 'Failed to parse user metadata')
+      logSchema.warning(req.log, 'Failed to parse user metadata', {
+        type: 'tus',
+        error: e,
+        sbReqId: req.upload.sbReqId,
+      })
     }
   }
 
@@ -326,14 +351,11 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
     }
   } catch (e) {
     if (isRenderableError(e)) {
-      ;(e as any).status_code = parseInt(e.render().statusCode, 10)
-      ;(e as any).body = e.render().message
+      throw Object.assign(e, getTusError(e))
     }
     throw e
   }
 }
-
-type TusError = { status_code: number; body: string }
 
 /**
  * Runs when there is an error on the TUS upload
@@ -342,15 +364,12 @@ export function onResponseError(rawReq: Request, e: TusError | Error) {
   const req = getNodeRequest(rawReq)
 
   if (e instanceof Error) {
-    ;(req as any).executionError = e
+    req.executionError = e
   } else {
-    ;(req as any).executionError = ERRORS.TusError(e.body, e.status_code).withMetadata(e)
+    req.executionError = ERRORS.TusError(e.body, e.status_code).withMetadata(e)
   }
 
   if (isRenderableError(e)) {
-    return {
-      status_code: parseInt(e.render().statusCode, 10),
-      body: e.render().message,
-    }
+    return getTusError(e)
   }
 }

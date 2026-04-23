@@ -9,6 +9,7 @@ const { serviceKeyAsync, tenantId } = getConfig()
 
 mergeConfig({
   pgQueueEnable: true,
+  requestTraceHeader: 'trace-id',
 })
 
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
@@ -104,6 +105,36 @@ describe('Webhooks', () => {
         }),
       })
     )
+  })
+
+  it('keeps trace reqId separate from sbReqId in queued webhook payloads', async () => {
+    const form = new FormData()
+
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization,
+      'trace-id': 'trace-123',
+      'sb-request-id': 'sb-req-123',
+    })
+
+    const fileName = (Math.random() + 1).toString(36).substring(7)
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/bucket6/public/${fileName}.png`,
+      headers,
+      payload: form,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+    const queuedWebhook = sendSpy.mock.calls[0][0].data
+
+    expect(queuedWebhook).not.toHaveProperty('sbReqId') // not top level
+    expect(queuedWebhook.event.payload.reqId).toEqual(expect.any(String))
+    expect(queuedWebhook.event.payload.sbReqId).toBe('sb-req-123')
+    expect(queuedWebhook.event.payload.reqId).not.toBe(queuedWebhook.event.payload.sbReqId)
   })
 
   it('will emit a webhook upon object deletion', async () => {

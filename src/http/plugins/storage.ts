@@ -26,6 +26,7 @@ export const storage = fastifyPlugin(
         tenantId: request.tenantId,
         host: request.headers['x-forwarded-host'] as string,
         reqId: request.id,
+        sbReqId: request.sbReqId,
         latestMigration: request.latestMigration,
       })
 

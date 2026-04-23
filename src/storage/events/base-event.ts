@@ -26,21 +26,24 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
    * Sends a message as a webhook
    * @param payload
    */
-  static async sendWebhook<T extends Event<any>>(
-    this: StaticThis<T>,
-    payload: Omit<T['payload'], '$version'>
-  ) {
+  static async sendWebhook<
+    TPayload extends BasePayload & {
+      bucketId: string
+      name: string
+    },
+  >(this: StaticThis<TPayload>, payload: Omit<TPayload, '$version'>) {
     if (!Webhook) {
       Webhook = (await import('./lifecycle/webhook')).Webhook
     }
-    const eventType = this.eventName()
+    const eventClass = this as typeof Event
+    const eventType = eventClass.eventName()
 
     try {
       await Webhook.send({
         event: {
           type: eventType,
           region,
-          $version: this.version,
+          $version: eventClass.version,
           applyTime: Date.now(),
           payload,
         },
@@ -50,9 +53,10 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
       logger.error(
         {
           error: e,
+          sbReqId: payload.sbReqId,
           event: {
             type: eventType,
-            $version: this.version,
+            $version: eventClass.version,
             applyTime: Date.now(),
             payload: JSON.stringify(payload),
           },
@@ -77,6 +81,8 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     const db = new StorageKnexDB(client, {
       tenantId: payload.tenant.ref,
       host: payload.tenant.host,
+      reqId: payload.reqId,
+      sbReqId: payload.sbReqId,
     })
 
     return new Storage(this.getOrCreateStorageBackend(), db, new TenantLocation(storageS3Bucket))

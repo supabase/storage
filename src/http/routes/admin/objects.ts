@@ -1,4 +1,5 @@
 import { render } from '@internal/errors'
+import { logSchema } from '@internal/monitoring'
 import { ObjectScanner } from '@storage/scanner/scanner'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FastifyReply } from 'fastify/types/reply'
@@ -121,7 +122,13 @@ export default async function routes(fastify: FastifyInstance) {
           }
         }
       } catch (e) {
-        req.log.error({ err: e, bucket }, 'list orphaned objects stream failed')
+        logSchema.error(req.log, 'list orphaned objects stream failed', {
+          type: 'orphan',
+          error: e,
+          project: req.params.tenantId,
+          metadata: JSON.stringify({ bucket }),
+          sbReqId: req.sbReqId,
+        })
         writeNdjson(reply, {
           event: 'error',
           error: render(e),
@@ -181,7 +188,13 @@ export default async function routes(fastify: FastifyInstance) {
           })
         }
       } catch (e) {
-        req.log.error({ err: e, bucket }, 'delete orphaned objects stream failed')
+        logSchema.error(req.log, 'delete orphaned objects stream failed', {
+          type: 'orphan',
+          error: e,
+          project: req.params.tenantId,
+          metadata: JSON.stringify({ bucket }),
+          sbReqId: req.sbReqId,
+        })
         writeNdjson(reply, {
           event: 'error',
           error: render(e),

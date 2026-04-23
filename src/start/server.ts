@@ -16,7 +16,7 @@ import {
   startAsyncMigrations,
 } from '@internal/database/migrations'
 import { logger, logSchema } from '@internal/monitoring'
-import { Queue } from '@internal/queue'
+import { Queue, SYSTEM_TENANT } from '@internal/queue'
 import { KnexShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { getGlobal } from '@platformatic/globals'
 import { registerWorkers } from '@storage/events'
@@ -262,5 +262,9 @@ function registerPlatformaticCloseHandler() {
 }
 
 async function upgrades() {
-  return Promise.all([SyncCatalogIds.invoke({})])
+  return Promise.all([
+    SyncCatalogIds.invoke({
+      tenant: SYSTEM_TENANT,
+    }),
+  ])
 }

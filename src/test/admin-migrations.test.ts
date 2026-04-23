@@ -147,7 +147,10 @@ describe('Admin migrations routes', () => {
       payload: {
         untilMigration: 'create-migrations-table' satisfies keyof typeof DBMigration,
       },
-      headers,
+      headers: {
+        ...headers,
+        'sb-request-id': 'sb-req-123',
+      },
     })
 
     expect(response.statusCode).toBe(200)
@@ -156,6 +159,27 @@ describe('Admin migrations routes', () => {
       till: 'create-migrations-table',
       markCompletedTillMigration: undefined,
       signal: expect.any(AbortSignal),
+      sbReqId: 'sb-req-123',
+    })
+  })
+
+  test('passes sbReqId to fleet migrate scheduling', async () => {
+    const runSpy = vi.mocked(migrations.runMigrationsOnAllTenants).mockResolvedValue(undefined)
+
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: '/migrations/migrate/fleet',
+      headers: {
+        ...headers,
+        'sb-request-id': 'sb-req-123',
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.body)).toEqual({ message: 'Migrations scheduled' })
+    expect(runSpy).toHaveBeenCalledWith({
+      signal: expect.any(AbortSignal),
+      sbReqId: 'sb-req-123',
     })
   })
 
@@ -475,6 +499,20 @@ describe('Admin migrations routes', () => {
         }),
       ],
     })
+  })
+
+  test.each([
+    '/migrations/failed?cursor=cursor-NaN',
+    '/migrations/failed?cursor=-1',
+  ])('rejects invalid failed-migrations cursor for %s', async (url) => {
+    const response = await adminApp.inject({
+      method: 'GET',
+      url,
+      headers,
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.body)).toEqual({ message: 'Invalid cursor' })
   })
 
   test('marks only active fleet migration jobs from the current queue as completed', async () => {

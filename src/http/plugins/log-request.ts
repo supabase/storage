@@ -1,10 +1,20 @@
-import { logger, logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
-import { FastifyReply } from 'fastify/types/reply'
-import { FastifyRequest } from 'fastify/types/request'
+import { logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
+import type { FastifyReply, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 
 interface RequestLoggerOptions {
   excludeUrls?: string[]
+}
+
+type BivariantHandler<Args extends unknown[], Return> = {
+  bivarianceHack(...args: Args): Return
+}['bivarianceHack']
+
+declare module 'http' {
+  interface IncomingMessage {
+    executionError?: Error
+    resources?: string[]
+  }
 }
 
 declare module 'fastify' {
@@ -18,8 +28,8 @@ declare module 'fastify' {
 
   interface FastifyContextConfig {
     operation?: { type: string }
-    resources?: (req: FastifyRequest<any>) => string[]
-    logMetadata?: (req: FastifyRequest<any>) => Record<string, unknown>
+    resources?: BivariantHandler<[req: FastifyRequest], string[]>
+    logMetadata?: BivariantHandler<[req: FastifyRequest], Record<string, unknown>>
   }
 }
 
@@ -64,7 +74,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
         }
 
         if (resources === undefined) {
-          resources = (req.raw as any).resources
+          resources = req.raw.resources
         }
 
         if (resources === undefined) {
@@ -150,7 +160,7 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
   const rId = req.id
   const cIP = req.ip
   const statusCode = options.statusCode
-  const error = (req.raw as any).executionError || req.executionError
+  const error = req.raw.executionError || req.executionError
   const tenantId = req.tenantId
 
   let reqMetadata: Record<string, unknown> = {}
@@ -166,16 +176,18 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
           }
         } catch (e) {
           // do nothing
-          logSchema.warning(logger, 'Failed to serialize log metadata', {
+          logSchema.warning(req.log, 'Failed to serialize log metadata', {
             type: 'otel',
             error: e,
+            sbReqId: req.sbReqId,
           })
         }
       }
     } catch (e) {
-      logSchema.error(logger, 'Failed to get log metadata', {
+      logSchema.error(req.log, 'Failed to get log metadata', {
         type: 'request',
         error: e,
+        sbReqId: req.sbReqId,
       })
     }
   }
@@ -195,5 +207,6 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     resources: req.resources,
     operation: req.operation?.type ?? req.routeOptions.config.operation?.type,
     serverTimes: req.serverTimings,
+    sbReqId: req.sbReqId,
   })
 }

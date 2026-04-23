@@ -39,7 +39,7 @@ export class JwksRollUrlSigningKey extends BaseEvent<JwksRollUrlSigningKeyPayloa
   }
 
   static async handle(job: Job<JwksRollUrlSigningKeyPayload>) {
-    const { tenantId } = job.data
+    const { tenantId, sbReqId } = job.data
 
     try {
       const { oldKid, newKid } = await jwksManager.rollUrlSigningJwk(tenantId)
@@ -50,6 +50,7 @@ export class JwksRollUrlSigningKey extends BaseEvent<JwksRollUrlSigningKeyPayloa
         {
           type: 'jwks',
           project: tenantId,
+          sbReqId,
         }
       )
     } catch (e) {
@@ -57,6 +58,7 @@ export class JwksRollUrlSigningKey extends BaseEvent<JwksRollUrlSigningKeyPayloa
         type: 'jwks',
         error: e,
         project: tenantId,
+        sbReqId,
       })
       throw e
     }

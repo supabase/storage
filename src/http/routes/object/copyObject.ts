@@ -74,6 +74,7 @@ export default async function routes(fastify: FastifyInstance) {
         metadata,
         copyMetadata: request.body.copyMetadata ?? true,
         upsert: request.headers['x-upsert'] === 'true',
+        uploadType: 'standard',
       })
 
       return response.status(result.httpStatusCode ?? 200).send({

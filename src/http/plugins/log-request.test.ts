@@ -1,12 +1,38 @@
-import Fastify, { FastifyInstance } from 'fastify'
+import { Writable } from 'node:stream'
+import Fastify from 'fastify'
+import pino from 'pino'
 import { logRequest } from './log-request'
+import { requestContext } from './request-context'
+
+function createApp(lines: string[]) {
+  return Fastify({
+    disableRequestLogging: true,
+    loggerInstance: pino(
+      { level: 'info' },
+      new Writable({
+        write(chunk, _encoding, callback) {
+          lines.push(chunk.toString())
+          callback()
+        },
+      })
+    ),
+  })
+}
 
 describe('log-request plugin', () => {
-  let app: FastifyInstance
+  let app: ReturnType<typeof createApp>
+  let lines: string[]
 
   beforeEach(async () => {
-    app = Fastify()
+    lines = []
+    app = createApp(lines)
+
+    await app.register(requestContext)
     await app.register(logRequest({}))
+
+    app.get('/request-log', async () => {
+      return { ok: true }
+    })
   })
 
   afterEach(async () => {
@@ -55,5 +81,23 @@ describe('log-request plugin', () => {
     expect(response.json()).toEqual({
       resources: ['/bucket/demo', '/object/demo'],
     })
+  })
+
+  it('threads sbReqId into the request log data', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/request-log',
+      headers: {
+        'sb-request-id': 'sb-req-123',
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const requestLogLine = lines.find((line) => line.includes('"type":"request"'))
+
+    expect(requestLogLine).toBeDefined()
+    expect(requestLogLine).toContain('"sbReqId":"sb-req-123"')
+    expect(requestLogLine).not.toContain('"request_id"')
   })
 })

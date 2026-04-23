@@ -69,6 +69,7 @@ function makeJob(overrides?: Partial<Record<string, unknown>>) {
     data: {
       tenantId: 'tenant-a',
       upToMigration: 'storage-schema',
+      sbReqId: 'sb-req-123',
       tenant: {
         ref: 'tenant-a',
         host: '',
@@ -109,6 +110,15 @@ describe('RunMigrationsOnTenants.handle', () => {
       state: TenantMigrationStatus.COMPLETED,
     })
     expect(mockDeleteIfActiveExists).not.toHaveBeenCalled()
+    expect(mockInfo).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] completed for tenant tenant-a',
+      expect.objectContaining({
+        type: 'migrations',
+        project: 'tenant-a',
+        sbReqId: 'sb-req-123',
+      })
+    )
   })
 
   it('short-circuits when migrations are already up to date', async () => {
@@ -134,6 +144,7 @@ describe('RunMigrationsOnTenants.handle', () => {
       expect.objectContaining({
         type: 'migrations',
         project: 'tenant-a',
+        sbReqId: 'sb-req-123',
       })
     )
   })
@@ -152,6 +163,15 @@ describe('RunMigrationsOnTenants.handle', () => {
       RunMigrationsOnTenants.getQueueName(),
       'migrations_tenant-a',
       'job-1'
+    )
+    expect(mockError).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] failed for tenant tenant-a',
+      expect.objectContaining({
+        type: 'migrations',
+        project: 'tenant-a',
+        sbReqId: 'sb-req-123',
+      })
     )
   })
 

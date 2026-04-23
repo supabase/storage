@@ -1,6 +1,9 @@
-import { ECSClient, ListTasksCommand } from '@aws-sdk/client-ecs'
-import { DesiredStatus } from '@aws-sdk/client-ecs/dist-types/models/enums'
-import axios from 'axios'
+import { type DesiredStatus, ECSClient, ListTasksCommand } from '@aws-sdk/client-ecs'
+
+type ECSTaskMetadata = {
+  Cluster: string
+  Family: string
+}
 
 export class ClusterDiscoveryECS {
   private client: ECSClient
@@ -14,20 +17,35 @@ export class ClusterDiscoveryECS {
       throw new Error('ECS_CONTAINER_METADATA_URI is not set')
     }
 
+    const metadata = await this.getTaskMetadata(process.env.ECS_CONTAINER_METADATA_URI)
+
     const [running, pending] = await Promise.all([
-      this.listTasks('RUNNING'),
-      this.listTasks('PENDING'),
+      this.listTasks(metadata, 'RUNNING'),
+      this.listTasks(metadata, 'PENDING'),
     ])
 
     return running + pending
   }
 
-  private async listTasks(status: DesiredStatus) {
-    const respMetadata = await axios.get(`${process.env.ECS_CONTAINER_METADATA_URI}/task`)
+  private async getTaskMetadata(metadataUri: string): Promise<ECSTaskMetadata> {
+    const metadataUrl = `${metadataUri}/task`
+    const response = await fetch(metadataUrl)
 
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined)
+      const statusText = response.statusText ? ` ${response.statusText}` : ''
+      throw new Error(
+        `Request failed with status code ${response.status}${statusText} fetching ECS task metadata from ${metadataUrl}`
+      )
+    }
+
+    return (await response.json()) as ECSTaskMetadata
+  }
+
+  private async listTasks(metadata: ECSTaskMetadata, status: DesiredStatus) {
     const command = new ListTasksCommand({
-      family: respMetadata.data.Family,
-      cluster: respMetadata.data.Cluster,
+      family: metadata.Family,
+      cluster: metadata.Cluster,
       desiredStatus: status,
     })
     const response = await this.client.send(command)

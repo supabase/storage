@@ -78,7 +78,7 @@
     "axios": "^1.13.6",
     "axios-retry": "^3.9.1",
     "conventional-changelog-conventionalcommits": "^5.0.0",
-    "dotenv": "^16.0.0",
+    "dotenv": "^17.4.2",
     "fastify": "^5.8.3",
     "fastify-plugin": "^5.1.0",
     "fs-xattr": "0.3.1",

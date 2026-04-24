@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { ListObjectsV2Result } from '@storage/object'
+import { getNextCommonPrefix, ListObjectsV2Result } from '@storage/object'
 import { FastifyInstance } from 'fastify'
 import { Knex } from 'knex'
 import app from '../app'
@@ -577,6 +577,7 @@ describe('objects - list v2 sorting tests', () => {
 })
 
 const LIST_V2_WILDCARD_BUCKET = `list-v2-wildcard-${randomUUID()}`
+const LIST_V2_EMPTY_SEGMENT_BUCKET = `list-v2-empty-segment-${randomUUID()}`
 
 describe('objects - list v2 prefix wildcard handling', () => {
   beforeAll(async () => {
@@ -697,5 +698,275 @@ describe('objects - list v2 prefix wildcard handling', () => {
     const data = response.json<ListObjectsV2Result>()
     expect(data.folders).toHaveLength(0)
     expect(data.objects.map((obj) => obj.name)).toEqual([literalMatch])
+  })
+})
+
+describe('objects - list v2 repeated delimiters', () => {
+  beforeAll(async () => {
+    appInstance = app()
+
+    const createBucketResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        name: LIST_V2_EMPTY_SEGMENT_BUCKET,
+      },
+    })
+
+    expect(createBucketResponse.statusCode).toBe(200)
+    await appInstance.close()
+  })
+
+  afterAll(async () => {
+    appInstance = app()
+
+    const emptyBucketResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/bucket/${LIST_V2_EMPTY_SEGMENT_BUCKET}/empty`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(emptyBucketResponse.statusCode).toBe(200)
+
+    const deleteBucketResponse = await appInstance.inject({
+      method: 'DELETE',
+      url: `/bucket/${LIST_V2_EMPTY_SEGMENT_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(deleteBucketResponse.statusCode).toBe(200)
+    await appInstance.close()
+  })
+
+  test('skips empty path segments when grouping with a delimiter', async () => {
+    const pdfObject = 'service-bulletins/pdfs//whirlpool-washer.pdf'
+    const nestedPdfObject = 'service-bulletins/pdfs//nested/whirlpool-washer-nested.pdf'
+    const markdownObject = 'service-bulletins/markdown//whirlpool-washer.md'
+
+    for (const objectName of [pdfObject, nestedPdfObject, markdownObject]) {
+      const uploadResponse = await appInstance.inject({
+        method: 'POST',
+        url: `/object/${LIST_V2_EMPTY_SEGMENT_BUCKET}/${encodeURIComponent(objectName)}`,
+        payload: createUpload(objectName, 'test content'),
+        headers: {
+          authorization: serviceKey,
+        },
+      })
+
+      expect(uploadResponse.statusCode).toBe(200)
+    }
+
+    const rootListResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_EMPTY_SEGMENT_BUCKET}`,
+      payload: {
+        prefix: 'service-bulletins/',
+        with_delimiter: true,
+        limit: 100,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(rootListResponse.statusCode).toBe(200)
+    expect(rootListResponse.json<ListObjectsV2Result>()).toMatchObject({
+      folders: [{ name: 'service-bulletins/markdown/' }, { name: 'service-bulletins/pdfs/' }],
+      objects: [],
+    })
+
+    const pdfFolderListResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_EMPTY_SEGMENT_BUCKET}`,
+      payload: {
+        prefix: 'service-bulletins/pdfs/',
+        with_delimiter: true,
+        limit: 100,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(pdfFolderListResponse.statusCode).toBe(200)
+    expect(pdfFolderListResponse.json<ListObjectsV2Result>()).toMatchObject({
+      folders: [{ name: 'service-bulletins/pdfs//nested/' }],
+      objects: [{ name: pdfObject }],
+    })
+
+    const emptySegmentListResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_EMPTY_SEGMENT_BUCKET}`,
+      payload: {
+        prefix: 'service-bulletins/pdfs//',
+        with_delimiter: true,
+        limit: 100,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(emptySegmentListResponse.statusCode).toBe(200)
+    expect(emptySegmentListResponse.json<ListObjectsV2Result>()).toMatchObject({
+      folders: [{ name: 'service-bulletins/pdfs//nested/' }],
+      objects: [{ name: pdfObject }],
+    })
+
+    const nestedFolderListResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_EMPTY_SEGMENT_BUCKET}`,
+      payload: {
+        prefix: 'service-bulletins/pdfs//nested/',
+        with_delimiter: true,
+        limit: 100,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(nestedFolderListResponse.statusCode).toBe(200)
+    expect(nestedFolderListResponse.json<ListObjectsV2Result>()).toMatchObject({
+      folders: [],
+      objects: [{ name: nestedPdfObject }],
+    })
+  })
+
+  test('keeps repeated-delimiter folders distinct from normal folders in byte order', async () => {
+    const prefix = `mixed-ordering/${randomUUID()}/a/`
+    const repeatedBLeaf = `${prefix}//b/repeated-leaf.txt`
+    const repeatedBNestedLeaf = `${prefix}//b/nested/repeated-nested-leaf.txt`
+    const repeatedDLeaf = `${prefix}//d/repeated-second-leaf.txt`
+    const normalBLeaf = `${prefix}b/normal-leaf.txt`
+    const normalBNestedLeaf = `${prefix}b/nested/normal-nested-leaf.txt`
+    const normalCLeaf = `${prefix}c/normal-second-leaf.txt`
+
+    for (const objectName of [
+      repeatedBLeaf,
+      repeatedBNestedLeaf,
+      repeatedDLeaf,
+      normalBLeaf,
+      normalBNestedLeaf,
+      normalCLeaf,
+    ]) {
+      const uploadResponse = await appInstance.inject({
+        method: 'POST',
+        url: `/object/${LIST_V2_EMPTY_SEGMENT_BUCKET}/${encodeURIComponent(objectName)}`,
+        payload: createUpload(objectName, 'test content'),
+        headers: {
+          authorization: serviceKey,
+        },
+      })
+
+      expect(uploadResponse.statusCode).toBe(200)
+    }
+
+    const rootListResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_EMPTY_SEGMENT_BUCKET}`,
+      payload: {
+        prefix,
+        with_delimiter: true,
+        limit: 100,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(rootListResponse.statusCode).toBe(200)
+    expect(rootListResponse.json<ListObjectsV2Result>()).toMatchObject({
+      folders: [
+        { name: `${prefix}//b/` },
+        { name: `${prefix}//d/` },
+        { name: `${prefix}b/` },
+        { name: `${prefix}c/` },
+      ],
+      objects: [],
+    })
+
+    const repeatedBListResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_EMPTY_SEGMENT_BUCKET}`,
+      payload: {
+        prefix: `${prefix}//b/`,
+        with_delimiter: true,
+        limit: 100,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(repeatedBListResponse.statusCode).toBe(200)
+    expect(repeatedBListResponse.json<ListObjectsV2Result>()).toMatchObject({
+      folders: [{ name: `${prefix}//b/nested/` }],
+      objects: [{ name: repeatedBLeaf }],
+    })
+
+    const normalBListResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_EMPTY_SEGMENT_BUCKET}`,
+      payload: {
+        prefix: `${prefix}b/`,
+        with_delimiter: true,
+        limit: 100,
+      },
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    expect(normalBListResponse.statusCode).toBe(200)
+    expect(normalBListResponse.json<ListObjectsV2Result>()).toMatchObject({
+      folders: [{ name: `${prefix}b/nested/` }],
+      objects: [{ name: normalBLeaf }],
+    })
+  })
+})
+
+describe('getNextCommonPrefix', () => {
+  test('returns undefined when delimiter is empty', () => {
+    expect(getNextCommonPrefix('service-bulletins/pdfs/file.pdf', 'service-bulletins/', '')).toBe(
+      undefined
+    )
+  })
+
+  test('returns undefined when key does not start with the provided prefix', () => {
+    expect(
+      getNextCommonPrefix('service-bulletins/pdfs/file.pdf', 'service-bulletins/markdown/', '/')
+    ).toBe(undefined)
+  })
+
+  test('skips empty path segments immediately after the prefix', () => {
+    expect(
+      getNextCommonPrefix(
+        'service-bulletins/pdfs//nested/whirlpool-washer-nested.pdf',
+        'service-bulletins/pdfs/',
+        '/'
+      )
+    ).toBe('service-bulletins/pdfs//nested/')
+  })
+
+  test('skips multiple empty path segments immediately after the prefix', () => {
+    expect(getNextCommonPrefix('a///b/c', 'a/', '/')).toBe('a///b/')
+  })
+
+  test('treats repeated delimiters followed by a leaf as a file, not a folder', () => {
+    expect(
+      getNextCommonPrefix(
+        'service-bulletins/pdfs//whirlpool-washer.pdf',
+        'service-bulletins/pdfs/',
+        '/'
+      )
+    ).toBe(undefined)
   })
 })

@@ -49,6 +49,36 @@ export interface ListObjectsV2Result {
   nextCursorKey?: string
 }
 
+export function getNextCommonPrefix(
+  key: string,
+  prefix: string,
+  delimiter: string
+): string | undefined {
+  if (!delimiter || !key.startsWith(prefix)) {
+    return undefined
+  }
+
+  const suffix = key.slice(prefix.length)
+  let scanIndex = 0
+
+  // Ignore empty path segments immediately after the current prefix so
+  // repeated delimiters like `prefix//file` do not produce `prefix/` again.
+  // Only skip when the prefix already ends with the delimiter. Otherwise
+  // the first delimiter in the suffix is the real folder boundary.
+  if (prefix.endsWith(delimiter)) {
+    while (suffix.startsWith(delimiter, scanIndex)) {
+      scanIndex += delimiter.length
+    }
+  }
+
+  const nextDelimiterIndex = suffix.indexOf(delimiter, scanIndex)
+  if (nextDelimiterIndex < 0) {
+    return undefined
+  }
+
+  return key.substring(0, prefix.length + nextDelimiterIndex + delimiter.length)
+}
+
 /**
  * ObjectStorage
  * interact with remote objects and database state
@@ -639,11 +669,9 @@ export class ObjectStorage {
     if (delimiter) {
       const delimitedResults: Obj[] = []
       for (const object of searchResult) {
-        let idx = object.name.replace(prefix, '').indexOf(delimiter)
+        const currPrefix = getNextCommonPrefix(object.name, prefix, delimiter)
 
-        if (idx >= 0) {
-          idx = prefix.length + idx + delimiter.length
-          const currPrefix = object.name.substring(0, idx)
+        if (currPrefix) {
           if (currPrefix === prevPrefix) {
             continue
           }

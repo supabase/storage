@@ -1,8 +1,7 @@
 import { ERRORS } from '@internal/errors'
 import { FastifyReply, FastifyRequest } from 'fastify'
-import { ObjectMetadata } from '../backend'
 import { ImageRenderer, TransformOptions } from './image'
-import { AssetResponse, Renderer, RenderOptions } from './renderer'
+import { AssetMetadata, AssetResponse, Renderer, RenderOptions } from './renderer'
 
 /**
  * HeadRenderer
@@ -16,13 +15,10 @@ export class HeadRenderer extends Renderer {
       throw ERRORS.NoSuchKey(`${options.bucket}/${options.key}/${options.version}`)
     }
 
-    const metadata = object.metadata ? { ...object.metadata } : {}
-    if (metadata.lastModified) {
-      metadata.lastModified = new Date(metadata.lastModified as string)
-    }
+    const metadata = createAssetMetadata(object.metadata)
 
     return {
-      metadata: metadata as ObjectMetadata,
+      metadata,
       transformations: ImageRenderer.applyTransformation(request.query as TransformOptions),
     }
   }
@@ -30,14 +26,14 @@ export class HeadRenderer extends Renderer {
   protected handleCacheControl(
     request: FastifyRequest<any>,
     response: FastifyReply<any>,
-    metadata: ObjectMetadata
+    metadata: AssetMetadata
   ) {
     const etag = this.findEtagHeader(request)
 
     const cacheControl = [metadata.cacheControl]
 
     if (!etag) {
-      response.header('Cache-Control', cacheControl.join(', '))
+      this.setCacheControlHeader(response, cacheControl)
       return
     }
 
@@ -47,6 +43,74 @@ export class HeadRenderer extends Renderer {
       cacheControl.push(`s-maxage=${this.sMaxAge}`)
     }
 
-    response.header('Cache-Control', cacheControl.join(', '))
+    this.setCacheControlHeader(response, cacheControl)
+  }
+}
+
+function createAssetMetadata(
+  rawMetadata: Record<string, unknown> | null | undefined
+): AssetMetadata {
+  const metadata: AssetMetadata = {}
+  const raw = rawMetadata ?? {}
+
+  if (typeof raw.cacheControl === 'string') {
+    metadata.cacheControl = raw.cacheControl
+  }
+
+  const contentLength = parseMetadataNumber(raw.contentLength)
+  if (contentLength !== undefined) {
+    metadata.contentLength = contentLength
+  }
+
+  if (typeof raw.contentRange === 'string') {
+    metadata.contentRange = raw.contentRange
+  }
+
+  if (typeof raw.eTag === 'string') {
+    metadata.eTag = raw.eTag
+  }
+
+  const httpStatusCode = parseMetadataNumber(raw.httpStatusCode)
+  if (httpStatusCode !== undefined) {
+    metadata.httpStatusCode = httpStatusCode
+  }
+
+  if (typeof raw.mimetype === 'string') {
+    metadata.mimetype = raw.mimetype
+  }
+
+  const size = parseMetadataNumber(raw.size)
+  if (size !== undefined) {
+    metadata.size = size
+  }
+
+  if (typeof raw.xRobotsTag === 'string') {
+    metadata.xRobotsTag = raw.xRobotsTag
+  }
+
+  if (
+    typeof raw.lastModified === 'string' ||
+    typeof raw.lastModified === 'number' ||
+    raw.lastModified instanceof Date
+  ) {
+    const lastModified = new Date(raw.lastModified)
+    if (!Number.isNaN(lastModified.getTime())) {
+      metadata.lastModified = lastModified
+    }
+  }
+
+  return metadata
+}
+
+function parseMetadataNumber(value: unknown) {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    return value
+  }
+
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    const parsed = Number(value)
+    if (Number.isSafeInteger(parsed)) {
+      return parsed
+    }
   }
 }

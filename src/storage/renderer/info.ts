@@ -22,10 +22,10 @@ export class InfoRenderer extends HeadRenderer {
         name: obj.name,
         version: obj.version,
         bucket_id: obj.bucket_id,
-        size: obj.metadata?.size ?? null,
-        content_type: obj.metadata?.mimetype ?? null,
-        cache_control: obj.metadata?.cacheControl ?? null,
-        etag: obj.metadata?.eTag ?? null,
+        size: headAsset.metadata.size ?? null,
+        content_type: headAsset.metadata.mimetype ?? null,
+        cache_control: headAsset.metadata.cacheControl ?? null,
+        etag: headAsset.metadata.eTag ?? null,
         metadata: obj.user_metadata,
         last_modified: obj.updated_at,
         created_at: obj.created_at,
@@ -43,9 +43,10 @@ export class InfoRenderer extends HeadRenderer {
       .status(data.metadata.httpStatusCode ?? 200)
       .header('Content-Type', 'application/json')
       .header('ETag', data.metadata.eTag)
-      .header('Content-Length', data.metadata.contentLength)
-      .header('Last-Modified', data.metadata.lastModified?.toUTCString())
-      .header('Cache-Control', data.metadata.cacheControl)
+
+    this.setLastModifiedHeader(response, data.metadata.lastModified)
+    this.setCacheControlHeader(response, [data.metadata.cacheControl])
+    this.setContentLengthHeader(response, data.metadata.contentLength)
 
     if (data.transformations && data.transformations.length > 0) {
       response.header('X-Transformations', data.transformations.join(','))

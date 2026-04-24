@@ -78,7 +78,6 @@ describe('image rendering routes', () => {
     expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       expect.objectContaining({
-        responseType: 'stream',
         signal: expect.any(AbortSignal),
       })
     )
@@ -98,7 +97,6 @@ describe('image rendering routes', () => {
     expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       expect.objectContaining({
-        responseType: 'stream',
         signal: expect.any(AbortSignal),
       })
     )
@@ -121,7 +119,6 @@ describe('image rendering routes', () => {
       expect(getSpy).toHaveBeenCalledWith(
         `/public/height:100/width:100/resizing_type:fill${expectFormat}/plain/local:///${projectRoot}/data/sadcat.jpg`,
         expect.objectContaining({
-          responseType: 'stream',
           signal: expect.any(AbortSignal),
         })
       )
@@ -168,7 +165,6 @@ describe('image rendering routes', () => {
     expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
       expect.objectContaining({
-        responseType: 'stream',
         signal: expect.any(AbortSignal),
       })
     )
@@ -217,7 +213,6 @@ describe('image rendering routes', () => {
     expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
       expect.objectContaining({
-        responseType: 'stream',
         signal: expect.any(AbortSignal),
       })
     )

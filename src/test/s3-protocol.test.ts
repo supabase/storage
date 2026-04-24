@@ -573,7 +573,7 @@ describe('S3 Protocol', () => {
         expect(resp2.Contents?.length).toBe(1)
       })
 
-      it('sets NextMarker when the response is truncated', async () => {
+      it('omits NextMarker when truncated without a delimiter', async () => {
         const bucket = await createBucket(client)
 
         await Promise.all([
@@ -584,14 +584,9 @@ describe('S3 Protocol', () => {
 
         const truncated = await client.send(new ListObjectsCommand({ Bucket: bucket, MaxKeys: 2 }))
         expect(truncated.IsTruncated).toBe(true)
-        expect(truncated.NextMarker).toBeDefined()
-
-        // NextMarker must be usable as the next request's Marker per S3 spec
-        const next = await client.send(
-          new ListObjectsCommand({ Bucket: bucket, Marker: truncated.NextMarker })
-        )
-        expect(next.IsTruncated).toBe(false)
-        expect(next.Contents?.length).toBeGreaterThan(0)
+        // Per the S3 spec, NextMarker is only returned when the Delimiter
+        // request parameter is specified.
+        expect(truncated.NextMarker).toBeUndefined()
       })
 
       it('omits NextMarker when the response is not truncated', async () => {

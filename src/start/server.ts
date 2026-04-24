@@ -236,7 +236,7 @@ async function httpAdminServer(
   try {
     await adminApp.listen({ port: adminPort, host, signal })
   } catch (err) {
-    logSchema.error(adminApp.log, 'Failed to start admin app', {
+    logSchema.error(logger, 'Failed to start admin app', {
       type: 'adminAppStartError',
       error: err,
     })

@@ -56,7 +56,7 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
 
     try {
       logSchema.event(logger, `[Admin]: BackupObject ${s3Key}`, {
-        jodId: job.id,
+        jobId: job.id,
         type: 'event',
         event: 'BackupObject',
         payload: JSON.stringify(job.data),
@@ -78,7 +78,7 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
 
       if (job.data.deleteOriginal) {
         logSchema.event(logger, `[Admin]: DeleteOriginalObject ${s3Key}`, {
-          jodId: job.id,
+          jobId: job.id,
           type: 'event',
           event: 'BackupObject',
           payload: JSON.stringify(job.data),

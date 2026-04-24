@@ -124,10 +124,12 @@ export default async function routes(fastify: FastifyInstance) {
       } catch (e) {
         logSchema.error(req.log, 'list orphaned objects stream failed', {
           type: 'orphan',
-          error: e,
-          project: req.params.tenantId,
-          metadata: JSON.stringify({ bucket }),
+          tenantId: req.tenantId,
+          project: req.tenantId,
+          reqId: req.id,
           sbReqId: req.sbReqId,
+          error: e,
+          metadata: JSON.stringify({ bucket }),
         })
         writeNdjson(reply, {
           event: 'error',
@@ -190,10 +192,12 @@ export default async function routes(fastify: FastifyInstance) {
       } catch (e) {
         logSchema.error(req.log, 'delete orphaned objects stream failed', {
           type: 'orphan',
-          error: e,
-          project: req.params.tenantId,
-          metadata: JSON.stringify({ bucket }),
+          tenantId: req.tenantId,
+          project: req.tenantId,
+          reqId: req.id,
           sbReqId: req.sbReqId,
+          error: e,
+          metadata: JSON.stringify({ bucket }),
         })
         writeNdjson(reply, {
           event: 'error',

@@ -170,8 +170,11 @@ export default async function routes(fastify: FastifyInstance) {
       }).catch((e) => {
         logSchema.error(request.log, 'Error generating url signing jwks for all tenants', {
           type: 'jwk-generator',
-          error: e,
+          tenantId: request.tenantId,
+          project: request.tenantId,
+          reqId: request.id,
           sbReqId: request.sbReqId,
+          error: e,
         })
       })
       return reply.send({ started: true })

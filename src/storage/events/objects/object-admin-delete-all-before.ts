@@ -45,7 +45,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
         logger,
         `[Admin]: ObjectAdminDeleteAllBefore ${bucketId} ${before.toUTCString()}`,
         {
-          jodId: job.id,
+          jobId: job.id,
           type: 'event',
           event: 'ObjectAdminDeleteAllBefore',
           payload: JSON.stringify(job.data),

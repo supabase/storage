@@ -42,7 +42,7 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
       })
 
       logSchema.event(logger, `[Admin]: ObjectAdminDelete ${s3Key}`, {
-        jodId: job.id,
+        jobId: job.id,
         type: 'event',
         event: 'ObjectAdminDelete',
         payload: JSON.stringify(job.data),

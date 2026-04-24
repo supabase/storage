@@ -147,7 +147,7 @@ export class Webhook extends BaseEvent<WebhookEvent> {
     const path = `${job.data.tenant.ref}/${payload.bucketId}/${payload.name}`
 
     logSchema.event(logger, `[Lifecycle]: ${job.data.event.type} ${path}`, {
-      jodId: job.id,
+      jobId: job.id,
       type: 'event',
       event: job.data.event.type,
       payload: JSON.stringify(job.data.event.payload),

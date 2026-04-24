@@ -27,6 +27,7 @@ describe('log-request plugin', () => {
     lines = []
     app = createApp(lines)
 
+    app.decorateRequest('tenantId', 'tenant-a')
     await app.register(requestContext)
     await app.register(logRequest({}))
 
@@ -99,5 +100,20 @@ describe('log-request plugin', () => {
     expect(requestLogLine).toBeDefined()
     expect(requestLogLine).toContain('"sbReqId":"sb-req-123"')
     expect(requestLogLine).not.toContain('"request_id"')
+  })
+
+  it('threads tenant context into the request log data', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/request-log',
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const requestLogLine = lines.find((line) => line.includes('"type":"request"'))
+
+    expect(requestLogLine).toBeDefined()
+    expect(requestLogLine).toContain('"tenantId":"tenant-a"')
+    expect(requestLogLine).toContain('"project":"tenant-a"')
   })
 })

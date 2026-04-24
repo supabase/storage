@@ -178,16 +178,22 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
           // do nothing
           logSchema.warning(req.log, 'Failed to serialize log metadata', {
             type: 'otel',
-            error: e,
+            tenantId,
+            project: tenantId,
+            reqId: rId,
             sbReqId: req.sbReqId,
+            error: e,
           })
         }
       }
     } catch (e) {
       logSchema.error(req.log, 'Failed to get log metadata', {
         type: 'request',
-        error: e,
+        tenantId,
+        project: tenantId,
+        reqId: rId,
         sbReqId: req.sbReqId,
+        error: e,
       })
     }
   }
@@ -196,6 +202,10 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
 
   logSchema.request(req.log, buildLogMessage, {
     type: 'request',
+    tenantId,
+    project: tenantId,
+    reqId: rId,
+    sbReqId: req.sbReqId,
     req,
     reqMetadata,
     res: options.reply,
@@ -207,6 +217,5 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     resources: req.resources,
     operation: req.operation?.type ?? req.routeOptions.config.operation?.type,
     serverTimes: req.serverTimings,
-    sbReqId: req.sbReqId,
   })
 }

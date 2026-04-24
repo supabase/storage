@@ -12,6 +12,7 @@ const {
   logflareEnabled,
   logflareBatchSize,
   region,
+  version: appVersion,
 } = getConfig()
 
 export const baseLogger = pino({
@@ -61,13 +62,20 @@ export const baseLogger = pino({
   timestamp: pino.stdTimeFunctions.isoTime,
 })
 
-export let logger = baseLogger.child({ region })
+export let logger = baseLogger.child({ region, appVersion })
 
 export function setLogger(newLogger: Logger) {
   logger = newLogger
 }
 
-export interface RequestLog {
+export interface RequestLogContext {
+  tenantId?: string
+  project?: string
+  reqId?: string
+  sbReqId?: string
+}
+
+export interface RequestLog extends RequestLogContext {
   type: 'request'
   req: FastifyRequest
   res?: FastifyReply
@@ -80,35 +88,26 @@ export interface RequestLog {
   operation?: string
   resources?: string[]
   serverTimes?: { spanName: string; duration: number }[]
-  sbReqId?: string
 }
 
-export interface EventLog {
-  jodId: string
+export interface EventLog extends RequestLogContext {
+  jobId: string
   type: 'event'
   event: string
   payload: string
   objectPath: string
-  tenantId: string
-  project: string
   resources?: string[]
-  reqId?: string
-  sbReqId?: string
 }
 
-interface ErrorLog {
+interface ErrorLog extends RequestLogContext {
   type: string
   error?: Error | unknown
-  project?: string
   metadata?: string
-  sbReqId?: string
 }
 
-interface InfoLog {
+interface InfoLog extends RequestLogContext {
   type: string
-  project?: string
   metadata?: string
-  sbReqId?: string
 }
 
 export const logSchema = {

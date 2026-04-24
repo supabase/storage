@@ -1,6 +1,6 @@
 import { TenantConnection } from '@internal/database'
 import { ERRORS, isRenderableError } from '@internal/errors'
-import { logSchema } from '@internal/monitoring'
+import { logSchema, RequestLogContext } from '@internal/monitoring'
 import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
 import { Uploader, validateMimeType } from '@storage/uploader'
@@ -34,14 +34,13 @@ function getNodeRequest(rawReq: Request): MultiPartRequest {
 export type MultiPartRequest = http.IncomingMessage & {
   executionError?: Error
   log: FastifyBaseLogger
-  upload: {
+  upload: RequestLogContext & {
+    tenantId: string
     storage: Storage
     db: TenantConnection
     owner?: string
-    tenantId: string
     isUpsert: boolean
     resources?: string[]
-    sbReqId?: string
   }
 }
 
@@ -70,8 +69,11 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
     req.upload.db.dispose().catch((e) => {
       logSchema.error(req.log, 'Error disposing db connection', {
         type: 'db-connection',
-        error: e,
+        tenantId: req.upload.tenantId,
+        project: req.upload.tenantId,
+        reqId: req.upload.reqId,
         sbReqId: req.upload.sbReqId,
+        error: e,
       })
     })
   })
@@ -123,8 +125,11 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
       } catch (e) {
         logSchema.warning(req.log, 'Failed to parse upload metadata', {
           type: 'tus',
-          error: e,
+          tenantId: req.upload.tenantId,
+          project: req.upload.tenantId,
+          reqId: req.upload.reqId,
           sbReqId: req.upload.sbReqId,
+          error: e,
         })
         throw ERRORS.InvalidParameter('upload-metadata', {
           error: e as Error,
@@ -148,8 +153,11 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
     } catch (e) {
       logSchema.warning(req.log, 'Failed to parse user metadata', {
         type: 'tus',
-        error: e,
+        tenantId: req.upload.tenantId,
+        project: req.upload.tenantId,
+        reqId: req.upload.reqId,
         sbReqId: req.upload.sbReqId,
+        error: e,
       })
     }
   }

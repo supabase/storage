@@ -246,11 +246,12 @@ const authenticatedRoutes = fastifyPlugin(
       fastify.addHook('preHandler', async (req) => {
         ;(req.raw as MultiPartRequest).log = req.log
         ;(req.raw as MultiPartRequest).upload = {
+          tenantId: req.tenantId,
           storage: req.storage,
           owner: req.owner,
-          tenantId: req.tenantId,
           db: req.db,
           isUpsert: req.headers['x-upsert'] === 'true',
+          reqId: req.id,
           sbReqId: req.sbReqId,
         }
       })
@@ -349,11 +350,12 @@ export const publicRoutes = fastifyPlugin(
       fastify.addHook('preHandler', async (req) => {
         ;(req.raw as MultiPartRequest).log = req.log
         ;(req.raw as MultiPartRequest).upload = {
+          tenantId: req.tenantId,
           storage: req.storage,
           owner: req.owner,
-          tenantId: req.tenantId,
           db: req.db,
           isUpsert: req.headers['x-upsert'] === 'true',
+          reqId: req.id,
           sbReqId: req.sbReqId,
         }
       })

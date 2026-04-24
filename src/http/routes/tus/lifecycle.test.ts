@@ -39,6 +39,7 @@ function createRawTusRequest({
         location: {},
       },
       tenantId: 'tenant-123',
+      reqId: 'req-123',
       sbReqId,
     },
     url: '/upload/resumable',
@@ -79,6 +80,9 @@ describe('tus lifecycle logging', () => {
 
     expect(errorSpy).toHaveBeenCalledWith(reqLog, 'Error disposing db connection', {
       type: 'db-connection',
+      tenantId: 'tenant-123',
+      project: 'tenant-123',
+      reqId: 'req-123',
       error,
       sbReqId: 'sb-req-123',
     })
@@ -97,6 +101,9 @@ describe('tus lifecycle logging', () => {
 
     expect(warningSpy).toHaveBeenCalledWith(reqLog, 'Failed to parse upload metadata', {
       type: 'tus',
+      tenantId: 'tenant-123',
+      project: 'tenant-123',
+      reqId: 'req-123',
       error: expect.any(Error),
       sbReqId: 'sb-req-123',
     })
@@ -117,6 +124,9 @@ describe('tus lifecycle logging', () => {
     expect(canUploadSpy).toHaveBeenCalledOnce()
     expect(warningSpy).toHaveBeenCalledWith(reqLog, 'Failed to parse user metadata', {
       type: 'tus',
+      tenantId: 'tenant-123',
+      project: 'tenant-123',
+      reqId: 'req-123',
       error: expect.any(Error),
       sbReqId: 'sb-req-123',
     })

@@ -170,17 +170,25 @@ export class S3ProtocolHandler {
       cursorV1: true,
     })
 
+    const v2Result = list.responseBody.ListBucketResult
+
     return {
       responseBody: {
         ListBucketResult: {
-          Name: list.responseBody.ListBucketResult.Name,
-          Prefix: list.responseBody.ListBucketResult.Prefix,
-          Marker: list.responseBody.ListBucketResult.NextContinuationToken,
-          MaxKeys: list.responseBody.ListBucketResult.MaxKeys,
-          IsTruncated: list.responseBody.ListBucketResult.IsTruncated,
-          Contents: list.responseBody.ListBucketResult.Contents,
-          CommonPrefixes: list.responseBody.ListBucketResult.CommonPrefixes,
-          EncodingType: list.responseBody.ListBucketResult.EncodingType,
+          Name: v2Result.Name,
+          Prefix: v2Result.Prefix,
+          Marker: v2Result.NextContinuationToken,
+          // NextMarker is returned only when the response is truncated AND the
+          // Delimiter request parameter is specified, per the S3 ListObjects V1
+          // reference.
+          ...(v2Result.IsTruncated && v2Result.NextContinuationToken && command.Delimiter
+            ? { NextMarker: v2Result.NextContinuationToken }
+            : {}),
+          MaxKeys: v2Result.MaxKeys,
+          IsTruncated: v2Result.IsTruncated,
+          Contents: v2Result.Contents,
+          CommonPrefixes: v2Result.CommonPrefixes,
+          EncodingType: v2Result.EncodingType,
         },
       },
     }

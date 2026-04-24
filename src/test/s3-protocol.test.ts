@@ -571,6 +571,58 @@ describe('S3 Protocol', () => {
         expect(resp2.CommonPrefixes?.length).toBe(2)
         expect(resp2.Contents?.length).toBe(1)
       })
+
+      it('omits NextMarker when truncated without a delimiter', async () => {
+        const bucket = await createBucket(client)
+
+        await Promise.all([
+          uploadFile(client, bucket, 'a.jpg', 1),
+          uploadFile(client, bucket, 'b.jpg', 1),
+          uploadFile(client, bucket, 'c.jpg', 1),
+        ])
+
+        const truncated = await client.send(new ListObjectsCommand({ Bucket: bucket, MaxKeys: 2 }))
+        expect(truncated.IsTruncated).toBe(true)
+        // Per the S3 spec, NextMarker is only returned when the Delimiter
+        // request parameter is specified.
+        expect(truncated.NextMarker).toBeUndefined()
+      })
+
+      it('omits NextMarker when the response is not truncated', async () => {
+        const bucket = await createBucket(client)
+
+        await uploadFile(client, bucket, 'only.jpg', 1)
+
+        const resp = await client.send(new ListObjectsCommand({ Bucket: bucket }))
+        expect(resp.IsTruncated).toBe(false)
+        expect(resp.NextMarker).toBeUndefined()
+      })
+
+      it('sets NextMarker when truncated with a delimiter', async () => {
+        const bucket = await createBucket(client)
+
+        await Promise.all([
+          uploadFile(client, bucket, 'p1/test-1.jpg', 1),
+          uploadFile(client, bucket, 'p2/test-1.jpg', 1),
+          uploadFile(client, bucket, 'p3/test-1.jpg', 1),
+        ])
+
+        const resp = await client.send(
+          new ListObjectsCommand({ Bucket: bucket, Delimiter: '/', MaxKeys: 1 })
+        )
+        expect(resp.IsTruncated).toBe(true)
+        expect(resp.NextMarker).toBeDefined()
+
+        const next = await client.send(
+          new ListObjectsCommand({
+            Bucket: bucket,
+            Delimiter: '/',
+            MaxKeys: 10,
+            Marker: resp.NextMarker,
+          })
+        )
+        expect(next.CommonPrefixes?.length).toBeGreaterThan(0)
+      })
     })
 
     describe('ListObjectsV2Command', () => {

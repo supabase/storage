@@ -1,15 +1,15 @@
-import { multitenantKnex } from '@internal/database'
+import { multitenantPgExecutor, PgTransaction } from '@internal/database'
 import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload } from '@internal/queue'
+import type { BasePayload } from '@internal/queue'
 import { BaseEvent } from '@storage/events'
-import { Knex } from 'knex'
 import { Job, Queue as PgBossQueue, SendOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
 
 const { isMultitenant } = getConfig()
 
 export type UpgradeBaseEventPayload = BasePayload
+export type UpgradeTransaction = PgTransaction
 
 export abstract class UpgradeBaseEvent<T extends UpgradeBaseEventPayload> extends BaseEvent<T> {
   static getQueueOptions(): PgBossQueue {
@@ -32,7 +32,7 @@ export abstract class UpgradeBaseEvent<T extends UpgradeBaseEventPayload> extend
   }
 
   static async handleUpgrade(
-    tnx: Knex.Transaction,
+    tnx: UpgradeTransaction,
     job: Job<UpgradeBaseEventPayload>
   ): Promise<void> {}
 
@@ -41,53 +41,74 @@ export abstract class UpgradeBaseEvent<T extends UpgradeBaseEventPayload> extend
       return
     }
 
-    await this.runOnce((t: Knex.Transaction) => {
+    await this.runOnce((t) => {
       return this.handleUpgrade(t, job)
     })
   }
 
-  protected static async runOnce(fn: (t: Knex.Transaction) => Promise<unknown> | void) {
+  protected static async runOnce(fn: (t: UpgradeTransaction) => Promise<unknown> | void) {
     logSchema.info(logger, `[Upgrade] Starting upgrade event: ${this.getQueueName()}`, {
       type: 'upgradeEvent',
     })
-    await multitenantKnex.transaction(async (t) => {
+
+    const t = await multitenantPgExecutor.beginTransaction()
+
+    try {
       const hash = hashStringToInt('event:upgrade-lock')
-      const result = await t.raw<{ rows: { pg_try_advisory_xact_lock: boolean }[] }>(
-        `SELECT pg_try_advisory_xact_lock(?);`,
-        [hash]
-      )
+      const result = await t.query<{ pg_try_advisory_xact_lock: boolean }>({
+        text: `SELECT pg_try_advisory_xact_lock($1);`,
+        values: [hash],
+      })
       const lockAcquired = result.rows.shift()?.pg_try_advisory_xact_lock || false
 
       if (!lockAcquired) {
         logSchema.info(logger, `[Upgrade] Lock already acquired for: ${this.getQueueName()}`, {
           type: 'upgradeEvent',
         })
+        await t.commit()
         return
       }
 
-      const id = await t
-        .table('event_upgrades')
-        .select('event_id')
-        .where('event_id', this.getQueueName())
-        .first()
+      const id = await t.query<{ event_id: string }>({
+        text: `SELECT event_id FROM event_upgrades WHERE event_id = $1 LIMIT 1`,
+        values: [this.getQueueName()],
+      })
 
-      if (id) {
+      if (id.rows.length > 0) {
+        await t.commit()
         return
       }
 
       await fn(t)
 
-      await t
-        .table('event_upgrades')
-        .insert({
-          event_id: this.getQueueName(),
-        })
-        .onConflict('event_id')
-        .ignore()
+      await t.query({
+        text: `
+          INSERT INTO event_upgrades (event_id)
+          VALUES ($1)
+          ON CONFLICT (event_id) DO NOTHING
+        `,
+        values: [this.getQueueName()],
+      })
 
       logSchema.info(logger, `[Upgrade] Completed upgrade: ${this.getQueueName()}`, {
         type: 'upgradeEvent',
       })
-    })
+
+      await t.commit()
+    } catch (e) {
+      try {
+        await t.rollback()
+      } catch (rollbackError) {
+        logSchema.warning(logger, '[Upgrade] Failed to rollback transaction', {
+          type: 'upgradeEvent',
+          error: rollbackError,
+          metadata: JSON.stringify({
+            queueName: this.getQueueName(),
+            originalError: String(e),
+          }),
+        })
+      }
+      throw e
+    }
   }
 }

@@ -1,9 +1,9 @@
-import { getTenantConfig, multitenantKnex } from '@internal/database'
+import { getTenantConfig, multitenantPgExecutor } from '@internal/database'
 import { BasePayload } from '@internal/queue'
-import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
+import { PgShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 import { BucketType } from '@storage/limits'
 import { getCatalogAuthStrategy, TenantAwareRestCatalog } from '@storage/protocols/iceberg/catalog'
-import { KnexMetastore } from '@storage/protocols/iceberg/knex'
+import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { Job } from 'pg-boss'
 import { getConfig } from '../../../config'
 import { BaseEvent } from '../base-event'
@@ -41,13 +41,13 @@ export class BucketCreatedEvent extends BaseEvent<ObjectCreatedEvent> {
       },
       restCatalogUrl: icebergCatalogUrl,
       sharding: isMultitenant
-        ? new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
+        ? new ShardCatalog(new PgShardStoreFactory(multitenantPgExecutor))
         : new SingleShard({
             shardKey: icebergWarehouse,
             capacity: 10000,
           }),
       auth: catalogAuthType,
-      metastore: new KnexMetastore(multitenantKnex, {
+      metastore: new PgMetastore(multitenantPgExecutor, {
         multiTenant: true,
         schema: 'public',
       }),

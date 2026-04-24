@@ -1,4 +1,4 @@
-import { TenantConnection } from '@internal/database'
+import { PgTenantConnection } from '@internal/database'
 import { getConfig, mergeConfig } from '../config'
 
 vi.hoisted(() => {
@@ -26,7 +26,7 @@ import { mockQueue, useMockObject } from './common'
 describe('Webhooks', () => {
   useMockObject()
 
-  let pg: TenantConnection
+  let pg: PgTenantConnection
   beforeAll(async () => {
     const superUser = await getServiceKeyUser(tenantId)
     pg = await getPostgresConnection({
@@ -434,7 +434,7 @@ describe('Webhooks', () => {
   })
 
   it('will emit webhooks for each deleted object during empty bucket operation', async () => {
-    const emptyTestBucketName = 'bucket-empty-webhook-test'
+    const emptyTestBucketName = `bucket-empty-webhook-test-${randomUUID()}`
     const authorization = `Bearer ${await serviceKeyAsync}`
 
     // Create a dedicated bucket for this test
@@ -519,31 +519,33 @@ describe('Webhooks', () => {
   })
 })
 
-async function createObject(pg: TenantConnection, bucketId: string) {
+async function createObject(pg: PgTenantConnection, bucketId: string) {
   const objectName = randomUUID()
   const tnx = await pg.transaction()
 
-  const [data] = await tnx
-    .from<Obj>('objects')
-    .insert([
+  const result = await tnx.query<Obj>({
+    text: `
+      INSERT INTO objects (name, bucket_id, version, metadata, created_at)
+      VALUES ($1, $2, $3, $4, now() - interval '1 second')
+      RETURNING *
+    `,
+    values: [
+      objectName.toString(),
+      bucketId,
+      randomUUID(),
       {
-        name: objectName.toString(),
-        bucket_id: bucketId,
-        version: randomUUID(),
-        metadata: {
-          cacheControl: 'no-cache',
-          contentLength: 3746,
-          eTag: 'abc',
-          lastModified: new Date(),
-          httpStatusCode: 200,
-          mimetype: 'image/png',
-          size: 3746,
-        },
+        cacheControl: 'no-cache',
+        contentLength: 3746,
+        eTag: 'abc',
+        lastModified: new Date(),
+        httpStatusCode: 200,
+        mimetype: 'image/png',
+        size: 3746,
       },
-    ])
-    .returning('*')
+    ],
+  })
 
   await tnx.commit()
 
-  return data as Obj
+  return result.rows[0]
 }

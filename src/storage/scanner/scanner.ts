@@ -69,7 +69,7 @@ export class ObjectScanner {
       throw e
     } finally {
       if (!options.keepTmpTable) {
-        await this.storage.db.connection.pool.acquire().raw(`DROP TABLE IF EXISTS ${tmpTable}`)
+        await this.storage.db.dropS3KeysTempTable(tmpTable)
       }
     }
   }
@@ -137,7 +137,7 @@ export class ObjectScanner {
     } catch (e) {
       throw e
     } finally {
-      await this.storage.db.connection.pool.acquire().raw(`DROP TABLE IF EXISTS ${tmpTable}`)
+      await this.storage.db.dropS3KeysTempTable(tmpTable)
     }
   }
 
@@ -192,17 +192,7 @@ export class ObjectScanner {
 
   protected async *listAllCacheS3Keys(tableName: string, nextItem: string, signal: AbortSignal) {
     for (; !signal.aborted; ) {
-      const query = this.storage.db.connection.pool
-        .acquire()
-        .table(tableName)
-        .select('key', 'size')
-        .orderBy('key', 'asc')
-
-      if (nextItem) {
-        query.where('key', '>', nextItem)
-      }
-
-      const result = await query.limit(1000)
+      const result = await this.storage.db.listS3KeysFromTempTable(tableName, nextItem, 1000)
 
       if (result.length === 1000) {
         nextItem = result[result.length - 1].key
@@ -233,11 +223,7 @@ export class ObjectScanner {
     keys: string[]
     // { before }: { before?: Date }
   ) {
-    return this.storage.db.connection.pool
-      .acquire()
-      .table(table)
-      .select<{ key: string }[]>('key')
-      .whereIn('key', keys)
+    return this.storage.db.findS3KeysInTempTable(table, keys)
   }
 
   protected async *syncS3KeysToDB(
@@ -245,12 +231,7 @@ export class ObjectScanner {
     bucket: string,
     { signal, before }: { signal: AbortSignal; before?: Date }
   ) {
-    await this.storage.db.connection.pool.acquire().raw(`
-      CREATE UNLOGGED TABLE IF NOT EXISTS ${tmpTable} (
-        key TEXT COLLATE "C" PRIMARY KEY,
-        size BIGINT NOT NULL
-      )
-    `)
+    await this.storage.db.createS3KeysTempTable(tmpTable)
 
     const s3ObjectsStream = this.listAllS3Objects(bucket, {
       before,
@@ -258,21 +239,15 @@ export class ObjectScanner {
     })
 
     for await (const s3ObjectKeys of s3ObjectsStream) {
-      const stored = await this.storage.db.connection.pool
-        .acquire()
-        .table(tmpTable)
-        .insert(
-          s3ObjectKeys.map((k) => ({
-            key: k.name,
-            size: k.size,
-          })),
-          tmpTable
-        )
-        .onConflict()
-        .ignore()
-        .returning('*')
+      await this.storage.db.insertS3KeysIntoTempTable(
+        tmpTable,
+        s3ObjectKeys.map((k) => ({
+          key: k.name,
+          size: k.size,
+        }))
+      )
 
-      yield stored
+      yield undefined
     }
   }
 
@@ -440,24 +415,23 @@ export class ObjectScanner {
       signal: AbortSignal
     }
   ) {
-    const promises = []
     const orphans = this.listDBOrphans(tmpTable, {
       ...options,
       before: options.before,
     })
     for await (const dbObjects of orphans) {
       if (dbObjects.length > 0) {
-        promises.push(
-          this.storage.db.deleteObjectVersions(
-            options.bucket,
-            dbObjects.filter((o) => o.version) as { name: string; version: string }[]
-          )
-        )
+        const objectVersions = dbObjects.filter((o) => o.version) as {
+          name: string
+          version: string
+        }[]
+
+        if (objectVersions.length > 0) {
+          await this.storage.db.deleteObjectVersions(options.bucket, objectVersions)
+        }
 
         yield dbObjects
       }
     }
-
-    await Promise.all(promises)
   }
 }

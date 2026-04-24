@@ -189,9 +189,6 @@ if (tracingEnabled && traceExporter && spanProcessors.length > 0) {
         enabled: true,
         requireParentSpan: true,
       },
-      '@opentelemetry/instrumentation-knex': {
-        enabled: true,
-      },
       '@opentelemetry/instrumentation-runtime-node': {
         enabled: false,
       },

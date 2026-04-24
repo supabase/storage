@@ -5,7 +5,8 @@ import { BasePayload, Event, Event as QueueBaseEvent, StaticThis } from '@intern
 import { TenantLocation } from '@storage/locator'
 import { getConfig } from '../../config'
 import { createStorageBackend, StorageBackendAdapter } from '../backend'
-import { StorageKnexDB } from '../database'
+import type { Database } from '../database'
+import { StoragePgDB } from '../database'
 import { Storage } from '../storage'
 
 const { storageS3Bucket, storageS3MaxSockets, storageBackendType, region } = getConfig()
@@ -69,21 +70,25 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
 
   protected static async createStorage(payload: BasePayload) {
     const adminUser = await getServiceKeyUser(payload.tenant.ref)
-
-    const client = await getPostgresConnection({
+    const connectionOptions = {
       user: adminUser,
       superUser: adminUser,
       host: payload.tenant.host,
       tenantId: payload.tenant.ref,
       disableHostCheck: true,
-    })
+    }
 
-    const db = new StorageKnexDB(client, {
+    const databaseOptions = {
       tenantId: payload.tenant.ref,
       host: payload.tenant.host,
       reqId: payload.reqId,
       sbReqId: payload.sbReqId,
-    })
+    }
+
+    const db: Database = new StoragePgDB(
+      await getPostgresConnection(connectionOptions),
+      databaseOptions
+    )
 
     return new Storage(this.getOrCreateStorageBackend(), db, new TenantLocation(storageS3Bucket))
   }

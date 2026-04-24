@@ -1,14 +1,14 @@
 import { vi } from 'vitest'
 
-const { mockTransaction, mockGetQueue, mockError } = vi.hoisted(() => ({
-  mockTransaction: vi.fn(),
+const { mockBeginTransaction, mockGetQueue, mockError } = vi.hoisted(() => ({
+  mockBeginTransaction: vi.fn(),
   mockGetQueue: vi.fn(),
   mockError: vi.fn(),
 }))
 
 vi.mock('@internal/database', () => ({
-  multitenantKnex: {
-    transaction: mockTransaction,
+  multitenantPgExecutor: {
+    beginTransaction: mockBeginTransaction,
   },
 }))
 
@@ -58,10 +58,12 @@ function makeJob(overrides?: Partial<Record<string, unknown>>) {
   }
 }
 
-function mockLockedTransaction(raw: ReturnType<typeof vi.fn>) {
-  mockTransaction.mockImplementation(
-    async (callback: (tnx: { raw: typeof raw }) => Promise<void>) => callback({ raw })
-  )
+function mockLockedTransaction(query: ReturnType<typeof vi.fn>) {
+  mockBeginTransaction.mockResolvedValue({
+    query,
+    commit: vi.fn(),
+    rollback: vi.fn(),
+  })
 }
 
 describe('MoveJobs.handle', () => {
@@ -70,10 +72,10 @@ describe('MoveJobs.handle', () => {
   })
 
   it('logs the missing target queue with sbReqId', async () => {
-    const raw = vi.fn().mockResolvedValueOnce({
-      rows: [{ pg_try_advisory_xact_lock: true }],
+    const query = vi.fn().mockResolvedValueOnce({
+      rows: [{ locked: true }],
     })
-    mockLockedTransaction(raw)
+    mockLockedTransaction(query)
     mockGetQueue.mockResolvedValue(undefined)
 
     await expect(MoveJobs.handle(makeJob() as never)).resolves.toBeUndefined()
@@ -91,13 +93,13 @@ describe('MoveJobs.handle', () => {
 
   it('logs copy failures with sbReqId', async () => {
     const error = new Error('copy failed')
-    const raw = vi
+    const query = vi
       .fn()
       .mockResolvedValueOnce({
-        rows: [{ pg_try_advisory_xact_lock: true }],
+        rows: [{ locked: true }],
       })
       .mockRejectedValueOnce(error)
-    mockLockedTransaction(raw)
+    mockLockedTransaction(query)
     mockGetQueue.mockResolvedValue({
       name: 'target-queue',
       policy: 'exactly_once',

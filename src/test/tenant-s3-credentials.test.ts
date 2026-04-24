@@ -14,13 +14,17 @@ mergeConfig({
 
 import { encrypt, signJWT } from '@internal/auth'
 import { TENANT_S3_CREDENTIALS_CACHE_NAME } from '@internal/cache'
-import { listenForTenantUpdate, s3CredentialsManager } from '@internal/database'
+import {
+  closeMultitenantPg,
+  listenForTenantUpdate,
+  multitenantPgExecutor,
+  s3CredentialsManager,
+} from '@internal/database'
 import { cacheRequestsTotal } from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
 import objectSizeOf from 'object-sizeof'
 import * as migrate from '../internal/database/migrations/migrate'
-import { multitenantKnex } from '../internal/database/multitenant-db'
 import { adminApp } from './common'
 import { assertLogicalLookupMetrics } from './utils/cache-metrics'
 import { mockCreateLruCache } from './utils/cache-mock'
@@ -46,10 +50,11 @@ async function loadS3CredentialsManager(maxSizeBytes: number): Promise<S3Credent
   mockCreateLruCache({ maxSize: maxSizeBytes })
 
   const managerModule = await import('../storage/protocols/s3/credentials/manager')
-  const storeModule = await import('../storage/protocols/s3/credentials/store-knex')
+  const storeModule = await import('../storage/protocols/s3/credentials/store-pg')
+  const pgModule = await import('../internal/database/multitenant-pg')
 
   return new managerModule.S3CredentialsManager(
-    new storeModule.S3CredentialsManagerStoreKnex(multitenantKnex)
+    new storeModule.S3CredentialsManagerStorePg(pgModule.multitenantPgExecutor)
   ) as S3CredentialsManagerType
 }
 
@@ -99,7 +104,7 @@ afterEach(async () => {
 afterAll(async () => {
   await adminApp.close()
   await pubSub.close()
-  await multitenantKnex.destroy()
+  await closeMultitenantPg()
 })
 
 describe('Tenant S3 credentials', () => {
@@ -176,7 +181,7 @@ describe('Tenant S3 credentials', () => {
   })
 
   test('Add s3 credential with claim', async () => {
-    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const getByKeySpy = vi.spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
     try {
       const claimKept = {
         some: 'other',
@@ -209,7 +214,6 @@ describe('Tenant S3 credentials', () => {
       expect(createJson.description).toBeTruthy()
       expect(createJson.access_key).toBeTruthy()
       expect(createJson.secret_key).toBeTruthy()
-      expect(knexTableSpy).toHaveBeenCalledTimes(2) // insert and count
 
       // check that the claims were stored correctly
       const keyResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
@@ -217,8 +221,7 @@ describe('Tenant S3 credentials', () => {
         createJson.access_key
       )
       // ensure it was loaded from the database
-      expect(knexTableSpy).toHaveBeenCalledWith('tenants_s3_credentials')
-      expect(knexTableSpy).toHaveBeenCalledTimes(3)
+      expect(getByKeySpy).toHaveBeenCalledTimes(1)
       expect(keyResult).toMatchObject({
         accessKey: createJson.access_key,
         secretKey: createJson.secret_key,
@@ -234,10 +237,10 @@ describe('Tenant S3 credentials', () => {
         tenantId,
         createJson.access_key
       )
-      expect(knexTableSpy).toHaveBeenCalledTimes(3)
+      expect(getByKeySpy).toHaveBeenCalledTimes(1)
       expect(cacheResult).toMatchObject(keyResult)
     } finally {
-      knexTableSpy.mockRestore()
+      getByKeySpy.mockRestore()
     }
   })
 
@@ -364,7 +367,7 @@ describe('Tenant S3 credentials', () => {
   })
 
   test('Ensure cache is cleared on delete', async () => {
-    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const getByKeySpy = vi.spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
     const claims = {
       issuer: `supabase.storage.${tenantId}`,
       role: 'service_role',
@@ -380,7 +383,6 @@ describe('Tenant S3 credentials', () => {
       })
       expect(response.statusCode).toBe(201)
       const createJson = await response.json()
-      expect(knexTableSpy).toHaveBeenCalledTimes(2) // create and count
 
       // check that the claims were stored correctly
       const keyResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
@@ -388,8 +390,7 @@ describe('Tenant S3 credentials', () => {
         createJson.access_key
       )
       // ensure it was loaded from the database
-      expect(knexTableSpy).toHaveBeenCalledWith('tenants_s3_credentials')
-      expect(knexTableSpy).toHaveBeenCalledTimes(3)
+      expect(getByKeySpy).toHaveBeenCalledTimes(1)
       expect(keyResult).toEqual({
         accessKey: createJson.access_key,
         secretKey: createJson.secret_key,
@@ -401,7 +402,7 @@ describe('Tenant S3 credentials', () => {
         tenantId,
         createJson.access_key
       )
-      expect(knexTableSpy).toHaveBeenCalledTimes(3)
+      expect(getByKeySpy).toHaveBeenCalledTimes(1)
       expect(cacheResult).toEqual(keyResult)
 
       const configAwaiter = createS3CredentialsChangeAwaiter()
@@ -416,7 +417,6 @@ describe('Tenant S3 credentials', () => {
         },
       })
       expect(deleteResponse.statusCode).toBe(204)
-      expect(knexTableSpy).toHaveBeenCalledTimes(4)
 
       const cacheKey = await configAwaiter
       expect(cacheKey).toBe(tenantId + ':' + cacheResult.accessKey)
@@ -425,15 +425,14 @@ describe('Tenant S3 credentials', () => {
       await expect(
         s3CredentialsManager.getS3CredentialsByAccessKey(tenantId, createJson.access_key)
       ).rejects.toThrow('The Access Key Id you provided does not exist in our records.')
-      expect(knexTableSpy).toHaveBeenCalledWith('tenants_s3_credentials')
-      expect(knexTableSpy).toHaveBeenCalledTimes(5)
+      expect(getByKeySpy).toHaveBeenCalledTimes(2)
     } finally {
-      knexTableSpy.mockRestore()
+      getByKeySpy.mockRestore()
     }
   })
 
   test('Ensure cache is cleared on update', async () => {
-    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const getByKeySpy = vi.spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
     const claims = {
       issuer: `supabase.storage.${tenantId}`,
       role: 'service_role',
@@ -449,7 +448,6 @@ describe('Tenant S3 credentials', () => {
       })
       expect(response.statusCode).toBe(201)
       const createJson = await response.json()
-      expect(knexTableSpy).toHaveBeenCalledTimes(2) // create and count
 
       // check that the claims were stored correctly
       const keyResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
@@ -457,8 +455,7 @@ describe('Tenant S3 credentials', () => {
         createJson.access_key
       )
       // ensure it was loaded from the database
-      expect(knexTableSpy).toHaveBeenCalledWith('tenants_s3_credentials')
-      expect(knexTableSpy).toHaveBeenCalledTimes(3)
+      expect(getByKeySpy).toHaveBeenCalledTimes(1)
       expect(keyResult).toEqual({
         accessKey: createJson.access_key,
         secretKey: createJson.secret_key,
@@ -470,18 +467,21 @@ describe('Tenant S3 credentials', () => {
         tenantId,
         createJson.access_key
       )
-      expect(knexTableSpy).toHaveBeenCalledTimes(3)
+      expect(getByKeySpy).toHaveBeenCalledTimes(1)
       expect(cacheResult).toEqual(keyResult)
 
       const configAwaiter = createS3CredentialsChangeAwaiter()
 
       // update item
       const secretKey = 'zzzzzzzzzzzzzzzzz'
-      await multitenantKnex
-        .table('tenants_s3_credentials')
-        .update({ secret_key: encrypt(secretKey) })
-        .where('id', createJson.id)
-      expect(knexTableSpy).toHaveBeenCalledTimes(4)
+      await multitenantPgExecutor.query({
+        text: `
+          UPDATE tenants_s3_credentials
+          SET secret_key = $1
+          WHERE id = $2
+        `,
+        values: [encrypt(secretKey), createJson.id],
+      })
 
       const cacheKey = await configAwaiter
       expect(cacheKey).toBe(tenantId + ':' + cacheResult.accessKey)
@@ -491,11 +491,10 @@ describe('Tenant S3 credentials', () => {
         tenantId,
         createJson.access_key
       )
-      expect(knexTableSpy).toHaveBeenCalledWith('tenants_s3_credentials')
-      expect(knexTableSpy).toHaveBeenCalledTimes(5)
+      expect(getByKeySpy).toHaveBeenCalledTimes(2)
       expect(cacheResult2).toEqual({ ...keyResult, secretKey })
     } finally {
-      knexTableSpy.mockRestore()
+      getByKeySpy.mockRestore()
     }
   })
 

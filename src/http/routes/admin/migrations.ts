@@ -1,4 +1,4 @@
-import { multitenantKnex } from '@internal/database'
+import { MigrationAdminStorePg, multitenantPgExecutor } from '@internal/database'
 import {
   isDBMigrationName,
   resetMigrationsOnTenants,
@@ -12,6 +12,7 @@ import { registerApiKeyAuth } from '../../plugins/apikey'
 
 const { pgQueueEnable } = getConfig()
 const migrationQueueName = RunMigrationsOnTenants.getQueueName()
+const migrationAdminStorePg = new MigrationAdminStorePg(multitenantPgExecutor, PG_BOSS_SCHEMA)
 
 interface FailedMigrationsRequest extends RequestGenericInterface {
   Querystring: {
@@ -69,12 +70,7 @@ export default async function routes(fastify: FastifyInstance) {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
-    const data = await multitenantKnex
-      .table(`${PG_BOSS_SCHEMA}.job`)
-      .where('state', 'active')
-      .where('name', migrationQueueName)
-      .orderBy('created_on', 'desc')
-      .limit(2000)
+    const data = await migrationAdminStorePg.listActiveJobs(migrationQueueName, 2000)
 
     return reply.send(data)
   })
@@ -83,13 +79,7 @@ export default async function routes(fastify: FastifyInstance) {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
-    const data = await multitenantKnex
-      .table(`${PG_BOSS_SCHEMA}.job`)
-      .where('state', 'active')
-      .where('name', migrationQueueName)
-      .orderBy('created_on', 'desc')
-      .update({ state: 'completed' })
-      .limit(2000)
+    const data = await migrationAdminStorePg.completeActiveJobs(migrationQueueName, 2000)
 
     return reply.send(data)
   })
@@ -121,13 +111,7 @@ export default async function routes(fastify: FastifyInstance) {
         offset = parsedCursor
       }
 
-      const failed = await multitenantKnex
-        .table('tenants')
-        .where('migrations_status', 'FAILED')
-        .where('cursor_id', '>', offset)
-        .limit(50)
-        .select('id', 'cursor_id')
-        .orderBy('cursor_id')
+      const failed = await migrationAdminStorePg.listFailedTenants(offset, 50)
 
       reply.status(200).send({
         next_cursor_id: failed[failed.length - 1]?.cursor_id || null,

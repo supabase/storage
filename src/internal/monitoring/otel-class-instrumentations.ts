@@ -1,10 +1,10 @@
 import { S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
-import { TenantConnection } from '@internal/database'
+import { PgTenantConnection } from '@internal/database'
 import { Event as QueueBaseEvent } from '@internal/queue'
 import { Permit, Semaphore } from '@shopify/semaphore'
 import { S3Backend } from '@storage/backend'
-import { StorageKnexDB } from '@storage/database'
+import { StoragePgDB } from '@storage/database'
 import { ObjectStorage } from '@storage/object'
 import { PgLock } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
@@ -98,7 +98,7 @@ export const classInstrumentations = [
     ],
   }),
   new ClassInstrumentation({
-    targetClass: StorageKnexDB,
+    targetClass: StoragePgDB,
     enabled: true,
     methodsToInstrument: ['runQuery'],
     setName: (name, attrs) => {
@@ -116,7 +116,7 @@ export const classInstrumentations = [
     },
   }),
   new ClassInstrumentation({
-    targetClass: TenantConnection,
+    targetClass: PgTenantConnection,
     enabled: true,
     methodsToInstrument: ['transaction', 'setScope'],
   }),

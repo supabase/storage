@@ -3,7 +3,7 @@ import {
   getPostgresConnection,
   getServiceKeyUser,
   getTenantConfig,
-  TenantConnection,
+  PgTenantConnection,
 } from '@internal/database'
 import {
   areMigrationsUpToDate,
@@ -20,7 +20,7 @@ import { getConfig, MultitenantMigrationStrategy } from '../../config'
 
 declare module 'fastify' {
   interface FastifyRequest {
-    db: TenantConnection
+    db: PgTenantConnection
     latestMigration?: keyof typeof DBMigration
   }
 }
@@ -63,49 +63,16 @@ export const db = fastifyPlugin(
     })
 
     fastify.addHook('onSend', async (request, reply, payload) => {
-      if (request.db) {
-        request.db.dispose().catch((e) => {
-          logSchema.error(request.log, 'Error disposing db connection', {
-            type: 'db-connection',
-            tenantId: request.tenantId,
-            project: request.tenantId,
-            reqId: request.id,
-            sbReqId: request.sbReqId,
-            error: e,
-          })
-        })
-      }
+      disposeRequestConnections(request)
       return payload
     })
 
     fastify.addHook('onTimeout', async (request) => {
-      if (request.db) {
-        request.db.dispose().catch((e) => {
-          logSchema.error(request.log, 'Error disposing db connection', {
-            type: 'db-connection',
-            tenantId: request.tenantId,
-            project: request.tenantId,
-            reqId: request.id,
-            sbReqId: request.sbReqId,
-            error: e,
-          })
-        })
-      }
+      disposeRequestConnections(request)
     })
 
     fastify.addHook('onRequestAbort', async (request) => {
-      if (request.db) {
-        request.db.dispose().catch((e) => {
-          logSchema.error(request.log, 'Error disposing db connection', {
-            type: 'db-connection',
-            tenantId: request.tenantId,
-            project: request.tenantId,
-            reqId: request.id,
-            sbReqId: request.sbReqId,
-            error: e,
-          })
-        })
-      }
+      disposeRequestConnections(request)
     })
   },
   { name: 'db-init' }
@@ -144,54 +111,39 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
     })
 
     fastify.addHook('onSend', async (request, reply, payload) => {
-      if (request.db) {
-        request.db.dispose().catch((e) => {
-          logSchema.error(request.log, 'Error disposing db connection', {
-            type: 'db-connection',
-            tenantId: request.tenantId,
-            project: request.tenantId,
-            reqId: request.id,
-            sbReqId: request.sbReqId,
-            error: e,
-          })
-        })
-      }
-
+      disposeRequestConnections(request)
       return payload
     })
 
     fastify.addHook('onTimeout', async (request) => {
-      if (request.db) {
-        request.db.dispose().catch((e) => {
-          logSchema.error(request.log, 'Error disposing db connection', {
-            type: 'db-connection',
-            tenantId: request.tenantId,
-            project: request.tenantId,
-            reqId: request.id,
-            sbReqId: request.sbReqId,
-            error: e,
-          })
-        })
-      }
+      disposeRequestConnections(request)
     })
 
     fastify.addHook('onRequestAbort', async (request) => {
-      if (request.db) {
-        request.db.dispose().catch((e) => {
-          logSchema.error(request.log, 'Error disposing db connection', {
-            type: 'db-connection',
-            tenantId: request.tenantId,
-            project: request.tenantId,
-            reqId: request.id,
-            sbReqId: request.sbReqId,
-            error: e,
-          })
-        })
-      }
+      disposeRequestConnections(request)
     })
   },
   { name: 'db-superuser-init' }
 )
+
+function disposeRequestConnections(request: {
+  db?: PgTenantConnection
+  log: Parameters<typeof logSchema.error>[0]
+  tenantId: string
+  id: string
+  sbReqId?: string
+}) {
+  request.db?.dispose().catch((e) => {
+    logSchema.error(request.log, 'Error disposing db connection', {
+      type: 'db-connection',
+      tenantId: request.tenantId,
+      project: request.tenantId,
+      reqId: request.id,
+      sbReqId: request.sbReqId,
+      error: e,
+    })
+  })
+}
 
 /**
  * Handle database migration for multitenant applications when a request is made

@@ -16,7 +16,7 @@ import fs from 'fs'
 import * as tus from 'tus-js-client'
 import { DetailedError } from 'tus-js-client'
 import type { StorageBackendAdapter } from '../storage/backend'
-import type { StorageKnexDB as StorageKnexDBType } from '../storage/database/knex'
+import type { StoragePgDB as StoragePgDBType } from '../storage/database/pg'
 import type { TenantLocation as TenantLocationType } from '../storage/locator'
 import type { Storage as StorageType } from '../storage/storage'
 import { checkBucketExists } from './common'
@@ -36,7 +36,7 @@ type TusTestConfig = {
 
 type TusTestContext = {
   Storage: typeof StorageType
-  StorageKnexDB: typeof StorageKnexDBType
+  StoragePgDB: typeof StoragePgDBType
   TenantLocation: typeof TenantLocationType
   backend: StorageBackendAdapter
   baseUrl: string
@@ -172,7 +172,7 @@ async function createTusTestContext(
       import('../app'),
       import('../storage/backend'),
       import('../storage/storage'),
-      import('../storage/database/knex'),
+      import('../storage/database'),
       import('../storage/locator'),
     ])
 
@@ -190,7 +190,7 @@ async function createTusTestContext(
 
   return {
     Storage: storageModule.Storage,
-    StorageKnexDB: databaseModule.StorageKnexDB,
+    StoragePgDB: databaseModule.StoragePgDB,
     TenantLocation: locatorModule.TenantLocation,
     backend,
     baseUrl: listener.replace('[::1]', '127.0.0.1'),
@@ -207,7 +207,7 @@ describe.each([
 ])('TUS resumable — $name', ({ backendType }) => {
   let context: TusTestContext
   let fileBackendPath: string | undefined
-  let db: StorageKnexDBType
+  let db: StoragePgDBType
   let storage: StorageType
   let connection: Awaited<ReturnType<typeof getPostgresConnection>>
   let bucketName: string
@@ -237,7 +237,7 @@ describe.each([
       disableHostCheck: true,
     })
 
-    db = new context.StorageKnexDB(connection, {
+    db = new context.StoragePgDB(connection, {
       tenantId: context.config.tenantId,
       host: 'localhost',
     })
@@ -1099,7 +1099,7 @@ describe('File-backed TUS — path traversal', () => {
       disableHostCheck: true,
     })
 
-    const db = new context.StorageKnexDB(connection, {
+    const db = new context.StoragePgDB(connection, {
       tenantId: context.config.tenantId,
       host: 'localhost',
     })

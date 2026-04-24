@@ -1,4 +1,4 @@
-import { TenantConnection } from '@internal/database'
+import { PgTenantConnection } from '@internal/database'
 import { ERRORS, isRenderableError } from '@internal/errors'
 import { logSchema, RequestLogContext } from '@internal/monitoring'
 import { UploadId } from '@storage/protocols/tus'
@@ -37,7 +37,7 @@ export type MultiPartRequest = http.IncomingMessage & {
   upload: RequestLogContext & {
     tenantId: string
     storage: Storage
-    db: TenantConnection
+    db: PgTenantConnection
     owner?: string
     isUpsert: boolean
     resources?: string[]

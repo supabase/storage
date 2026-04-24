@@ -1,3 +1,3 @@
 export * from './manager'
 export * from './store'
-export * from './store-knex'
+export * from './store-pg'

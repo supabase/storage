@@ -4,16 +4,22 @@ const {
   mockRunBatchSend,
   mockResetBatchSend,
   mockInfo,
-  mockTransaction,
-  mockTable,
+  mockBeginTransaction,
+  mockWarning,
+  mockQuery,
   mockLastLocalMigrationName,
+  mockLocalMigrationFiles,
+  mockPgClientConstructor,
 } = vi.hoisted(() => ({
   mockRunBatchSend: vi.fn(),
   mockResetBatchSend: vi.fn(),
   mockInfo: vi.fn(),
-  mockTransaction: vi.fn(),
-  mockTable: vi.fn(),
+  mockBeginTransaction: vi.fn(),
+  mockWarning: vi.fn(),
+  mockQuery: vi.fn(),
   mockLastLocalMigrationName: vi.fn(),
+  mockLocalMigrationFiles: vi.fn(),
+  mockPgClientConstructor: vi.fn(),
 }))
 
 vi.mock('../../../config', () => ({
@@ -63,15 +69,23 @@ vi.mock('../../monitoring', () => ({
   logger: {},
   logSchema: {
     info: mockInfo,
-    warning: vi.fn(),
+    warning: mockWarning,
     error: vi.fn(),
   },
 }))
 
-vi.mock('../multitenant-db', () => ({
-  multitenantKnex: {
-    transaction: mockTransaction,
-    table: mockTable,
+vi.mock('pg', () => ({
+  Client: class {
+    constructor(...args: unknown[]) {
+      return mockPgClientConstructor(...args)
+    }
+  },
+}))
+
+vi.mock('../multitenant-pg', () => ({
+  multitenantPgExecutor: {
+    beginTransaction: mockBeginTransaction,
+    query: mockQuery,
   },
 }))
 
@@ -91,7 +105,7 @@ vi.mock('../pool', () => ({
 vi.mock('./files', () => ({
   lastLocalMigrationName: mockLastLocalMigrationName,
   loadMigrationFilesCached: vi.fn(),
-  localMigrationFiles: vi.fn(),
+  localMigrationFiles: mockLocalMigrationFiles,
 }))
 
 vi.mock('./progressive', () => ({
@@ -102,43 +116,83 @@ vi.mock('./progressive', () => ({
   },
 }))
 
-import { resetMigrationsOnTenants, runMigrationsOnAllTenants } from './migrate'
+import {
+  obtainLockOnMultitenantDB,
+  resetMigration,
+  resetMigrationsOnTenants,
+  runMigrationsOnAllTenants,
+} from './migrate'
+
+type MockPgClient = {
+  connect: ReturnType<typeof vi.fn>
+  end: ReturnType<typeof vi.fn>
+  on: ReturnType<typeof vi.fn>
+  query: ReturnType<typeof vi.fn>
+}
+
+type QueryResult = {
+  rows: unknown[]
+  rowCount?: number
+}
+
+function getQueryText(statement: unknown): string {
+  if (typeof statement === 'string') {
+    return statement
+  }
+
+  if (statement && typeof statement === 'object' && 'text' in statement) {
+    return String((statement as { text: string }).text)
+  }
+
+  return String(statement)
+}
+
+function normalizeSql(sql: string): string {
+  return sql.replace(/\s+/g, ' ').trim()
+}
+
+function createMigrationClient(migrations: Array<{ id: number; name: string }>): MockPgClient {
+  const client: MockPgClient = {
+    connect: vi.fn().mockResolvedValue(undefined),
+    end: vi.fn().mockResolvedValue(undefined),
+    on: vi.fn(),
+    query: vi.fn(async (statement: unknown): Promise<QueryResult> => {
+      const text = getQueryText(statement)
+
+      if (text === 'SELECT pg_try_advisory_lock(-8525285245963000605);') {
+        return { rows: [{ pg_try_advisory_lock: true }] }
+      }
+
+      if (text === 'SELECT * from migrations') {
+        return { rows: migrations }
+      }
+
+      return { rows: [], rowCount: 0 }
+    }),
+  }
+
+  mockPgClientConstructor.mockReturnValue(client)
+
+  return client
+}
+
+function getMigrationQueryCall(client: MockPgClient, sql: string) {
+  return client.query.mock.calls.find(([statement]) => {
+    return normalizeSql(getQueryText(statement)).startsWith(sql)
+  })
+}
 
 function createTenantQueryMock(batches: Array<Array<{ id: string; cursor_id: number }>>) {
   let batchIndex = 0
 
-  return vi.fn(() => {
-    const nestedBuilder = {
-      where: (arg?: unknown) => {
-        if (typeof arg === 'function') {
-          arg(nestedBuilder)
-        }
-        return nestedBuilder
-      },
-      whereNotIn: () => nestedBuilder,
-      orWhere: () => nestedBuilder,
-    }
-
-    const query = {
-      select: () => query,
-      where: (arg?: unknown) => {
-        if (typeof arg === 'function') {
-          arg(nestedBuilder)
-        }
-        return query
-      },
-      whereIn: () => query,
-      orderBy: () => query,
-      limit: vi.fn(async () => batches[batchIndex++] ?? []),
-    }
-
-    return query
-  })
+  return vi.fn(async () => ({
+    rows: batches[batchIndex++] ?? [],
+  }))
 }
 
 function makeTransaction() {
   return {
-    raw: vi.fn().mockResolvedValue({
+    query: vi.fn().mockResolvedValue({
       rows: [{ locked: true }],
     }),
     commit: vi.fn(),
@@ -150,12 +204,14 @@ describe('migration helper request id propagation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockLastLocalMigrationName.mockResolvedValue('storage-schema')
+    mockLocalMigrationFiles.mockResolvedValue([])
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 1 })
   })
 
   it('passes sbReqId into fleet migration jobs and scheduler logs', async () => {
     const trx = makeTransaction()
-    mockTransaction.mockResolvedValue(trx)
-    mockTable.mockImplementation(
+    mockBeginTransaction.mockResolvedValue(trx)
+    mockQuery.mockImplementation(
       createTenantQueryMock([
         [
           { id: 'tenant-a', cursor_id: 1 },
@@ -207,8 +263,8 @@ describe('migration helper request id propagation', () => {
 
   it('passes sbReqId into fleet reset jobs and scheduler logs', async () => {
     const trx = makeTransaction()
-    mockTransaction.mockResolvedValue(trx)
-    mockTable.mockImplementation(createTenantQueryMock([[{ id: 'tenant-c', cursor_id: 1 }], []]))
+    mockBeginTransaction.mockResolvedValue(trx)
+    mockQuery.mockImplementation(createTenantQueryMock([[{ id: 'tenant-c', cursor_id: 1 }], []]))
 
     await expect(
       resetMigrationsOnTenants({
@@ -239,5 +295,158 @@ describe('migration helper request id propagation', () => {
         sbReqId: 'sb-req-123',
       })
     )
+  })
+
+  it('preserves lock callback errors when rollback fails', async () => {
+    const error = new Error('migration callback failed')
+    const rollbackError = new Error('rollback failed')
+    const trx = makeTransaction()
+    trx.rollback.mockRejectedValue(rollbackError)
+    mockBeginTransaction.mockResolvedValue(trx)
+
+    await expect(
+      obtainLockOnMultitenantDB(
+        async () => {
+          throw error
+        },
+        { sbReqId: 'sb-req-123' }
+      )
+    ).rejects.toBe(error)
+
+    expect(trx.rollback).toHaveBeenCalledTimes(1)
+    expect(mockWarning).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] Failed to rollback transaction',
+      expect.objectContaining({
+        type: 'migrations',
+        sbReqId: 'sb-req-123',
+        error: rollbackError,
+      })
+    )
+  })
+})
+
+describe('resetMigration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockLastLocalMigrationName.mockResolvedValue('storage-schema')
+    mockLocalMigrationFiles.mockResolvedValue([])
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 1 })
+  })
+
+  it('uses the advisory lock and marks skipped migrations as completed', async () => {
+    const client = createMigrationClient([
+      { id: 0, name: 'create-migrations-table' },
+      { id: 1, name: 'initialmigration' },
+      { id: 5, name: 'add-size-functions' },
+    ])
+    mockLocalMigrationFiles.mockResolvedValue([
+      { id: 3, name: 'pathtoken-column', hash: 'hash-3' },
+      { id: 4, name: 'add-migrations-rls', hash: 'hash-4' },
+    ])
+
+    await expect(
+      resetMigration({
+        tenantId: 'tenant-reset',
+        untilMigration: 'storage-schema',
+        markCompletedTillMigration: 'add-migrations-rls',
+        databaseUrl: 'postgres://tenant',
+      })
+    ).resolves.toBe(true)
+
+    const queryTexts = client.query.mock.calls.map(([statement]) =>
+      normalizeSql(getQueryText(statement))
+    )
+
+    expect(queryTexts).toEqual([
+      'SELECT pg_try_advisory_lock(-8525285245963000605);',
+      'SET search_path TO storage,public',
+      'SELECT * from migrations',
+      'BEGIN',
+      'DELETE FROM migrations WHERE id > $1',
+      'INSERT INTO migrations(id, name, hash, executed_at) VALUES ($1, $2, $3, NOW()),($4, $5, $6, NOW())',
+      'COMMIT',
+      'SELECT pg_advisory_unlock(-8525285245963000605);',
+    ])
+
+    const deleteCall = getMigrationQueryCall(client, 'DELETE FROM migrations WHERE id >')
+    expect(deleteCall?.[0]).toMatchObject({
+      text: 'DELETE FROM migrations WHERE id > $1',
+      values: [2],
+    })
+
+    const insertCall = getMigrationQueryCall(client, 'INSERT INTO migrations')
+    expect(insertCall?.[0]).toMatchObject({
+      values: [3, 'pathtoken-column', 'hash-3', 4, 'add-migrations-rls', 'hash-4'],
+    })
+
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining('UPDATE tenants'),
+        values: ['COMPLETED', 'add-migrations-rls', 'tenant-reset'],
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      })
+    )
+    expect(client.end).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not open a transaction for no-op resets', async () => {
+    const client = createMigrationClient([
+      { id: 0, name: 'create-migrations-table' },
+      { id: 1, name: 'initialmigration' },
+      { id: 2, name: 'storage-schema' },
+    ])
+
+    await expect(
+      resetMigration({
+        tenantId: 'tenant-reset',
+        untilMigration: 'storage-schema',
+        databaseUrl: 'postgres://tenant',
+      })
+    ).resolves.toBe(false)
+
+    const queryTexts = client.query.mock.calls.map(([statement]) =>
+      normalizeSql(getQueryText(statement))
+    )
+
+    expect(queryTexts).toEqual([
+      'SELECT pg_try_advisory_lock(-8525285245963000605);',
+      'SET search_path TO storage,public',
+      'SELECT * from migrations',
+      'SELECT pg_advisory_unlock(-8525285245963000605);',
+    ])
+    expect(mockQuery).not.toHaveBeenCalled()
+    expect(client.end).toHaveBeenCalledTimes(1)
+  })
+
+  it('rolls back, unlocks, and closes the client when mark-completed migration files are missing', async () => {
+    const client = createMigrationClient([
+      { id: 0, name: 'create-migrations-table' },
+      { id: 1, name: 'initialmigration' },
+      { id: 5, name: 'add-size-functions' },
+    ])
+    mockLocalMigrationFiles.mockResolvedValue([{ id: 3, name: 'pathtoken-column', hash: 'hash-3' }])
+
+    await expect(
+      resetMigration({
+        tenantId: 'tenant-reset',
+        untilMigration: 'storage-schema',
+        markCompletedTillMigration: 'add-migrations-rls',
+        databaseUrl: 'postgres://tenant',
+      })
+    ).rejects.toThrow('Migration add-migrations-rls not found')
+
+    const queryTexts = client.query.mock.calls.map(([statement]) =>
+      normalizeSql(getQueryText(statement))
+    )
+
+    expect(queryTexts).toContain('BEGIN')
+    expect(queryTexts).toContain('ROLLBACK')
+    expect(queryTexts).not.toContain('COMMIT')
+    expect(queryTexts.at(-1)).toBe('SELECT pg_advisory_unlock(-8525285245963000605);')
+    expect(mockQuery).not.toHaveBeenCalled()
+    expect(client.end).toHaveBeenCalledTimes(1)
   })
 })

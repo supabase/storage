@@ -5,7 +5,7 @@ vi.hoisted(() => {
 })
 
 import { signJWT } from '@internal/auth'
-import { StorageKnexDB } from '@storage/database'
+import { StoragePgDB } from '@storage/database'
 import { getConfig, mergeConfig } from '../config'
 import * as tenant from '../internal/database/tenant'
 import { adminApp } from './common'
@@ -49,14 +49,14 @@ vi.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
 
 // Mock module with inline implementation that doesn't depend on variables
 vi.mock('@storage/database', () => ({
-  StorageKnexDB: vi.fn(function () {
+  StoragePgDB: vi.fn(function () {
     return {
       listBuckets: vi.fn().mockResolvedValue([{ id: 'abc123', name: 'def456' }]),
     }
   }),
 }))
 
-const storageDbMock = vi.mocked(StorageKnexDB)
+const storageDbMock = vi.mocked(StoragePgDB)
 const fallbackTenantId = `x-forwarded-default-${Date.now()}`
 const fallbackTenantJwtSecret = 'fallback-jwt-secret'
 let fallbackAuthenticatedJwt = ''
@@ -68,8 +68,8 @@ mergeConfig({
   requestXForwardedHostRegExp: '^([a-z]{20})\\.supabase\\.(?:co|in|net)$',
 })
 
+import { closeMultitenantPg } from '../internal/database'
 import * as migrate from '../internal/database/migrations/migrate'
-import { multitenantKnex } from '../internal/database/multitenant-db'
 
 let appInstance: import('fastify').FastifyInstance
 let buildApp: typeof import('../app').default
@@ -125,7 +125,7 @@ afterAll(async () => {
     },
   })
   await adminApp.close()
-  await multitenantKnex.destroy()
+  await closeMultitenantPg()
   vi.restoreAllMocks()
 })
 

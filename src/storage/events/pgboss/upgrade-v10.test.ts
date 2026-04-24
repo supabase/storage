@@ -1,14 +1,14 @@
 import { vi } from 'vitest'
 
-const { mockTransaction, mockGetQueues, mockError } = vi.hoisted(() => ({
-  mockTransaction: vi.fn(),
+const { mockBeginTransaction, mockGetQueues, mockError } = vi.hoisted(() => ({
+  mockBeginTransaction: vi.fn(),
   mockGetQueues: vi.fn(),
   mockError: vi.fn(),
 }))
 
 vi.mock('@internal/database', () => ({
-  multitenantKnex: {
-    transaction: mockTransaction,
+  multitenantPgExecutor: {
+    beginTransaction: mockBeginTransaction,
   },
 }))
 
@@ -55,10 +55,12 @@ function makeJob(overrides?: Partial<Record<string, unknown>>) {
   }
 }
 
-function mockLockedTransaction(raw: ReturnType<typeof vi.fn>) {
-  mockTransaction.mockImplementation(
-    async (callback: (tnx: { raw: typeof raw }) => Promise<void>) => callback({ raw })
-  )
+function mockLockedTransaction(query: ReturnType<typeof vi.fn>) {
+  mockBeginTransaction.mockResolvedValue({
+    query,
+    commit: vi.fn(),
+    rollback: vi.fn(),
+  })
 }
 
 describe('UpgradePgBossV10.handle', () => {
@@ -68,13 +70,13 @@ describe('UpgradePgBossV10.handle', () => {
 
   it('logs copy failures with sbReqId', async () => {
     const error = new Error('copy failed')
-    const raw = vi
+    const query = vi
       .fn()
       .mockResolvedValueOnce({
-        rows: [{ pg_try_advisory_xact_lock: true }],
+        rows: [{ locked: true }],
       })
       .mockRejectedValueOnce(error)
-    mockLockedTransaction(raw)
+    mockLockedTransaction(query)
     mockGetQueues.mockResolvedValue([
       {
         name: 'queue-a',

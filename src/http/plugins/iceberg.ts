@@ -1,8 +1,9 @@
-import { getTenantConfig, multitenantKnex } from '@internal/database'
-import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
+import { getTenantConfig, multitenantPgExecutor } from '@internal/database'
+import { PgShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 import { ICEBERG_BUCKET_RESERVED_SUFFIX } from '@storage/limits'
 import { getCatalogAuthStrategy, TenantAwareRestCatalog } from '@storage/protocols/iceberg/catalog'
-import { KnexMetastore, TableIndex } from '@storage/protocols/iceberg/knex'
+import { TableIndex } from '@storage/protocols/iceberg/metastore'
+import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 import { getConfig } from '../../config'
@@ -45,21 +46,25 @@ export const icebergRestCatalog = fastifyPlugin(async function (fastify: Fastify
       limits.maxCatalogsCount = features.icebergCatalog.maxCatalogs
     }
 
+    const sharding = isMultitenant
+      ? new ShardCatalog(new PgShardStoreFactory(multitenantPgExecutor))
+      : new SingleShard({
+          shardKey: icebergWarehouse,
+          capacity: 10000,
+        })
+
+    const metastore = new PgMetastore(isMultitenant ? multitenantPgExecutor : req.db, {
+      multiTenant: isMultitenant,
+      schema: isMultitenant ? 'public' : 'storage',
+    })
+
     req.icebergCatalog = new TenantAwareRestCatalog({
       tenantId: req.tenantId,
       limits,
       restCatalogUrl: icebergCatalogUrl,
       auth: catalogAuthType,
-      sharding: isMultitenant
-        ? new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
-        : new SingleShard({
-            shardKey: icebergWarehouse,
-            capacity: 10000,
-          }),
-      metastore: new KnexMetastore(isMultitenant ? multitenantKnex : req.db.pool.acquire(), {
-        multiTenant: isMultitenant,
-        schema: isMultitenant ? 'public' : 'storage',
-      }),
+      sharding,
+      metastore,
     })
   })
 })

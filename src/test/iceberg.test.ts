@@ -7,7 +7,8 @@ import {
   LoadTableResult,
   RestCatalogClient,
 } from '@storage/protocols/iceberg/catalog'
-import { KnexMetastore, Metastore } from '@storage/protocols/iceberg/knex'
+import { Metastore } from '@storage/protocols/iceberg/metastore'
+import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { FastifyInstance } from 'fastify'
 import { getConfig, mergeConfig } from '../config'
 import { createBucketIfNotExists, useStorage } from './utils/storage'
@@ -35,7 +36,7 @@ describe('Iceberg Catalog', () => {
 
     const { default: makeApp } = await import('../app')
     app = makeApp()
-    icebergMetastore = new KnexMetastore(t.database.connection.pool.acquire(), {
+    icebergMetastore = new PgMetastore(t.database.connection.pool.acquire(), {
       multiTenant: false,
       schema: 'storage',
     })

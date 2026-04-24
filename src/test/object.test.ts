@@ -9,13 +9,12 @@ import {
   signJWT,
   verifyJWT,
 } from '@internal/auth'
-import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
+import { getPostgresConnection, getServiceKeyUser, PgTransaction } from '@internal/database'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
 import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import FormData from 'form-data'
 import fs from 'fs'
-import { Knex } from 'knex'
 import app from '../app'
 import { getConfig, JwksConfig, JwksConfigKeyOCT, mergeConfig } from '../config'
 import { backends, Obj } from '../storage'
@@ -28,7 +27,7 @@ const anonKey = process.env.ANON_KEY || ''
 const S3Backend = backends.S3Backend
 let appInstance: FastifyInstance
 
-let tnx: Knex.Transaction | undefined
+let tnx: PgTransaction | undefined
 async function getSuperuserPostgrestClient() {
   const superUser = await getServiceKeyUser(tenantId)
 
@@ -41,6 +40,83 @@ async function getSuperuserPostgrestClient() {
   tnx = await conn.transaction()
 
   return tnx
+}
+
+async function findObject(
+  db: PgTransaction,
+  bucketId: string,
+  name: string
+): Promise<Obj | undefined> {
+  const result = await db.query<Obj>({
+    text: `
+      SELECT *
+      FROM objects
+      WHERE bucket_id = $1
+        AND name = $2
+      LIMIT 1
+    `,
+    values: [bucketId, name],
+  })
+
+  return result.rows[0]
+}
+
+async function insertObjects(
+  db: PgTransaction,
+  objects:
+    | Array<Partial<Obj> & { bucket_id: string; name: string }>
+    | (Partial<Obj> & { bucket_id: string; name: string })
+) {
+  const rows = Array.isArray(objects) ? objects : [objects]
+
+  for (const row of rows) {
+    const entries = Object.entries(row)
+    await db.query({
+      text: `
+        INSERT INTO objects (${entries.map(([column]) => column).join(', ')})
+        VALUES (${entries.map((_, index) => `$${index + 1}`).join(', ')})
+      `,
+      values: entries.map(([, value]) => value),
+    })
+  }
+}
+
+async function deleteObjectsByName(db: PgTransaction, bucketId: string, names: string | string[]) {
+  await db.query({
+    text: `
+      DELETE FROM objects
+      WHERE bucket_id = $1
+        AND name = ANY($2::text[])
+    `,
+    values: [bucketId, Array.isArray(names) ? names : [names]],
+  })
+}
+
+async function insertBucket(
+  db: PgTransaction,
+  bucket: {
+    id: string
+    name: string
+    public: boolean
+    file_size_limit: null
+    allowed_mime_types: null
+    type: string
+  }
+) {
+  await db.query({
+    text: `
+      INSERT INTO buckets (id, name, public, file_size_limit, allowed_mime_types, type)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `,
+    values: [
+      bucket.id,
+      bucket.name,
+      bucket.public,
+      bucket.file_size_limit,
+      bucket.allowed_mime_types,
+      bucket.type,
+    ],
+  })
 }
 
 useMockObject()
@@ -488,12 +564,7 @@ describe('testing POST object via multipart upload', () => {
 
     const client = await getSuperuserPostgrestClient()
 
-    const object = await client
-      .table('objects')
-      .select('*')
-      .where('name', 'sadcat-upload3012.png')
-      .where('bucket_id', 'bucket2')
-      .first()
+    const object = await findObject(client, 'bucket2', 'sadcat-upload3012.png')
 
     expect(object).not.toBeFalsy()
     expect(object?.user_metadata).toEqual({
@@ -527,12 +598,7 @@ describe('testing POST object via multipart upload', () => {
 
     const client = await getSuperuserPostgrestClient()
 
-    const object = await client
-      .table('objects')
-      .select('*')
-      .where('name', 'sadcat-upload3018.png')
-      .where('bucket_id', 'bucket2')
-      .first()
+    const object = await findObject(client, 'bucket2', 'sadcat-upload3018.png')
 
     expect(object).not.toBeFalsy()
     expect(object?.user_metadata).toEqual({
@@ -871,14 +937,7 @@ describe('testing POST object via multipart upload', () => {
 
     // Ensure that row does not exist in database.
     const db = await getSuperuserPostgrestClient()
-    const objectResponse = await db
-      .from<Obj>('objects')
-      .select('*')
-      .where({
-        name: OBJECT_NAME,
-        bucket_id: BUCKET_ID,
-      })
-      .first()
+    const objectResponse = await findObject(db, BUCKET_ID, OBJECT_NAME)
 
     expect(objectResponse).toBe(undefined)
   })
@@ -1066,7 +1125,7 @@ describe('testing POST object via binary upload', () => {
       host: 'localhost',
     })
     const setupTx = await db.transaction()
-    await setupTx.table('buckets').insert({
+    await insertBucket(setupTx, {
       id: bucketId,
       name: bucketId,
       public: true,
@@ -1168,14 +1227,7 @@ describe('testing POST object via binary upload', () => {
 
     // Ensure that row does not exist in database.
     const db = await getSuperuserPostgrestClient()
-    const objectResponse = await db
-      .from<Obj>('objects')
-      .select('*')
-      .where({
-        name: OBJECT_NAME,
-        bucket_id: BUCKET_ID,
-      })
-      .first()
+    const objectResponse = await findObject(db, BUCKET_ID, OBJECT_NAME)
     expect(objectResponse).toBe(undefined)
   })
 })
@@ -1510,15 +1562,10 @@ describe('testing copy object', () => {
     expect(jsonResponse.Key).toBe(`bucket2/authenticated/${copiedKey}`)
 
     const conn = await getSuperuserPostgrestClient()
-    const object = await conn
-      .table('objects')
-      .select('*')
-      .where('bucket_id', 'bucket2')
-      .where('name', `authenticated/${copiedKey}`)
-      .first()
+    const object = await findObject(conn, 'bucket2', `authenticated/${copiedKey}`)
 
     expect(object).not.toBeFalsy()
-    expect(object.user_metadata).toEqual({
+    expect(object!.user_metadata).toEqual({
       test1: 1234,
     })
   })
@@ -1563,18 +1610,13 @@ describe('testing copy object', () => {
     )
 
     const conn = await getSuperuserPostgrestClient()
-    const object = await conn
-      .table('objects')
-      .select('*')
-      .where('bucket_id', 'bucket2')
-      .where('name', `authenticated/${copiedKey}`)
-      .first()
+    const object = await findObject(conn, 'bucket2', `authenticated/${copiedKey}`)
 
     expect(object).not.toBeFalsy()
-    expect(object.user_metadata).toEqual({
+    expect(object!.user_metadata).toEqual({
       newMetadata: 'test1',
     })
-    expect(object.metadata).toEqual(
+    expect(object!.metadata).toEqual(
       expect.objectContaining({
         cacheControl: 'max-age=999',
         mimetype: 'image/gif',
@@ -1603,15 +1645,10 @@ describe('testing copy object', () => {
     expect(jsonResponse.Key).toBe(`bucket2/authenticated/${copiedKey}`)
 
     const conn = await getSuperuserPostgrestClient()
-    const object = await conn
-      .table('objects')
-      .select('*')
-      .where('bucket_id', 'bucket2')
-      .where('name', `authenticated/${copiedKey}`)
-      .first()
+    const object = await findObject(conn, 'bucket2', `authenticated/${copiedKey}`)
 
     expect(object).not.toBeFalsy()
-    expect(object.user_metadata).toBeNull()
+    expect(object!.user_metadata).toBeNull()
   })
 
   test('cannot copy objects across buckets when RLS dont allow it', async () => {
@@ -2023,14 +2060,7 @@ describe('testing generating signed URL for upload', () => {
     expect(result.url).toBeTruthy()
     // Ensure that row does not exist in database.
     const db = await getSuperuserPostgrestClient()
-    const objectResponse = await db
-      .from<Obj>('objects')
-      .select('*')
-      .where({
-        name: OBJECT_NAME,
-        bucket_id: BUCKET_ID,
-      })
-      .first()
+    const objectResponse = await findObject(db, BUCKET_ID, OBJECT_NAME)
     expect(objectResponse).toBe(undefined)
   })
 
@@ -2055,14 +2085,7 @@ describe('testing generating signed URL for upload', () => {
     )
     // Ensure that row does not exist in database.
     const db = await getSuperuserPostgrestClient()
-    const objectResponse = await db
-      .from<Obj>('objects')
-      .select('*')
-      .where({
-        name: OBJECT_NAME,
-        bucket_id: BUCKET_ID,
-      })
-      .first()
+    const objectResponse = await findObject(db, BUCKET_ID, OBJECT_NAME)
     expect(objectResponse).toBe(undefined)
   })
 
@@ -2137,25 +2160,12 @@ describe('testing uploading with generated signed upload URL', () => {
 
     // check that row has neccessary data
     const db = await getSuperuserPostgrestClient()
-    const objectResponse = await db
-      .from<Obj>('objects')
-      .select('*')
-      .where({
-        name: OBJECT_NAME,
-        bucket_id: BUCKET_ID,
-      })
-      .first()
+    const objectResponse = await findObject(db, BUCKET_ID, OBJECT_NAME)
     expect(objectResponse?.owner).toBe(owner)
 
     // remove row to not to break other tests
     await withDeleteEnabled(db, async (db) => {
-      await db
-        .from<Obj>('objects')
-        .where({
-          name: OBJECT_NAME,
-          bucket_id: BUCKET_ID,
-        })
-        .delete()
+      await deleteObjectsByName(db, BUCKET_ID, OBJECT_NAME)
     })
   })
 
@@ -2578,7 +2588,7 @@ describe('testing move object', () => {
     const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
 
     const seedTx = await getSuperuserPostgrestClient()
-    await seedTx.from<Obj>('objects').insert({
+    await insertObjects(seedTx, {
       bucket_id: 'bucket2',
       name: sourceKey,
       owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
@@ -2907,7 +2917,8 @@ describe('testing list objects', () => {
     const objectNames = [`percent-${runId}/first.txt`, `percent-${runId}/second.txt`]
 
     const seedTx = await getSuperuserPostgrestClient()
-    await seedTx.from<Obj>('objects').insert(
+    await insertObjects(
+      seedTx,
       objectNames.map((name, idx) => ({
         bucket_id: bucketName,
         name,
@@ -2947,11 +2958,7 @@ describe('testing list objects', () => {
     } finally {
       const cleanupTx = await getSuperuserPostgrestClient()
       await withDeleteEnabled(cleanupTx, async (db) => {
-        await db
-          .from<Obj>('objects')
-          .where({ bucket_id: bucketName })
-          .whereIn('name', objectNames)
-          .delete()
+        await deleteObjectsByName(db, bucketName, objectNames)
       })
       await cleanupTx.commit()
       tnx = undefined
@@ -2965,7 +2972,7 @@ describe('testing list objects', () => {
     const wildcardOnlyMatch = `wildX${runId}/miss.txt`
 
     const seedTx = await getSuperuserPostgrestClient()
-    await seedTx.from<Obj>('objects').insert([
+    await insertObjects(seedTx, [
       {
         bucket_id: bucketName,
         name: literalMatch,
@@ -3016,11 +3023,7 @@ describe('testing list objects', () => {
     } finally {
       const cleanupTx = await getSuperuserPostgrestClient()
       await withDeleteEnabled(cleanupTx, async (db) => {
-        await db
-          .from<Obj>('objects')
-          .where({ bucket_id: bucketName })
-          .whereIn('name', [literalMatch, wildcardOnlyMatch])
-          .delete()
+        await deleteObjectsByName(db, bucketName, [literalMatch, wildcardOnlyMatch])
       })
       await cleanupTx.commit()
       tnx = undefined

@@ -1,13 +1,13 @@
-import { KnexPersistence } from '@internal/testing/seeder'
-import { Knex } from 'knex'
+import { PgPersistence } from '@internal/testing/seeder'
+import { Pool, PoolConfig } from 'pg'
 import { BucketsSeeder } from './bucket'
 
 export class TestUtils {
-  private persistence: KnexPersistence
+  private persistence: PgPersistence
   private bucketsSeeder: BucketsSeeder
 
-  constructor(knexConfig: Knex.Config | Knex) {
-    this.persistence = new KnexPersistence(knexConfig)
+  constructor(pgConfig: PoolConfig | string | Pool) {
+    this.persistence = new PgPersistence(pgConfig)
     this.bucketsSeeder = new BucketsSeeder(this.persistence)
   }
 
@@ -29,7 +29,7 @@ export class TestUtils {
   }
 
   /**
-   * Destroys the Knex instance to close database connections.
+   * Destroys the pg pool to close database connections.
    */
   async destroy(): Promise<void> {
     await this.persistence.destroy()

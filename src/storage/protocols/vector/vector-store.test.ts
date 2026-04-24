@@ -13,11 +13,7 @@ import { Sharder } from '@internal/sharding'
 import { VectorBucket } from '@storage/schemas'
 import { type Mocked, vi } from 'vitest'
 import { type VectorStore } from './adapter/s3-vector'
-import {
-  type KnexVectorMetadataDB,
-  type VectorLockResourceType,
-  type VectorMetadataDB,
-} from './knex'
+import { type VectorLockResourceType, type VectorMetadataDB } from './metadata'
 import { VECTOR_BUCKET_COUNT_LOCK, VectorStoreManager } from './vector-store'
 
 function createMockVectorStore(): Mocked<VectorStore> {
@@ -114,7 +110,7 @@ function createDeterministicVectorDb(options: {
   }
 
   return {
-    async withTransaction<T>(fn: (db: KnexVectorMetadataDB) => T): Promise<T> {
+    async withTransaction<T>(fn: (db: VectorMetadataDB) => Promise<T> | T): Promise<T> {
       let holdsCountLock = false
 
       const tx: Partial<VectorMetadataDB> = {
@@ -158,7 +154,7 @@ function createDeterministicVectorDb(options: {
       }
 
       try {
-        return await fn(tx as KnexVectorMetadataDB)
+        return await fn(tx as VectorMetadataDB)
       } finally {
         if (holdsCountLock) {
           releaseCountLock()
@@ -338,8 +334,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
     db.findVectorBucket
       .mockResolvedValueOnce(createVectorBucketRecord('bucket-a'))
       .mockRejectedValueOnce(ERRORS.S3VectorNotFoundException('vector bucket', 'bucket-a'))
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
 
     const manager = new VectorStoreManager(vectorStore, db, sharder, {

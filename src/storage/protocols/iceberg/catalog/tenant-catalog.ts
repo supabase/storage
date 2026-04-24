@@ -8,7 +8,7 @@ import {
   IcebergError,
   IcebergHttpStatusCode,
 } from '@storage/protocols/iceberg/catalog/errors'
-import { Metastore } from '../knex'
+import { Metastore } from '../metastore'
 import {
   CatalogAuthType,
   CommitTableRequest,

@@ -107,3 +107,77 @@ describe('Queue worker sbReqId propagation', () => {
     expect((processingErrorCall?.[2] as { sbReqId?: string }).sbReqId).toBe(expectedSbReqId)
   })
 })
+
+describe('Queue.stop', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  it('times out a hung pg-boss stop and clears cached queue state', async () => {
+    vi.useFakeTimers()
+
+    const {
+      queueModule: { Queue },
+    } = await loadQueueModule()
+    const boss = {
+      stop: vi.fn(() => new Promise<void>(() => undefined)),
+    }
+    const db = {}
+
+    ;(Queue as unknown as { pgBoss: unknown }).pgBoss = boss
+    ;(Queue as unknown as { pgBossDb: unknown }).pgBossDb = db
+
+    const stopPromise = Queue.stop()
+    const stopErrorPromise = stopPromise.catch((error) => error)
+
+    await vi.advanceTimersByTimeAsync(25_000)
+
+    expect(await stopErrorPromise).toEqual(
+      expect.objectContaining({
+        message: 'Queue stop timed out after 25000ms',
+      })
+    )
+    expect(boss.stop).toHaveBeenCalledWith({
+      timeout: 20 * 1000,
+      graceful: false,
+      wait: true,
+    })
+    expect((Queue as unknown as { pgBoss?: unknown }).pgBoss).toBeUndefined()
+    expect((Queue as unknown as { pgBossDb?: unknown }).pgBossDb).toBeUndefined()
+  })
+
+  it('clears cached queue state when close hooks time out', async () => {
+    vi.useFakeTimers()
+
+    const {
+      queueModule: { Queue },
+    } = await loadQueueModule()
+    const boss = {
+      stop: vi.fn().mockResolvedValue(undefined),
+    }
+    const db = {}
+
+    ;(Queue as unknown as { pgBoss: unknown }).pgBoss = boss
+    ;(Queue as unknown as { pgBossDb: unknown }).pgBossDb = db
+    ;(Queue as unknown as { events: Array<{ onClose: () => Promise<void> }> }).events = [
+      {
+        onClose: () => new Promise<void>(() => undefined),
+      },
+    ]
+
+    const stopPromise = Queue.stop()
+    const stopErrorPromise = stopPromise.catch((error) => error)
+
+    await vi.advanceTimersByTimeAsync(25_000)
+
+    expect(await stopErrorPromise).toEqual(
+      expect.objectContaining({
+        message: 'Queue close timed out after 25000ms',
+      })
+    )
+    expect((Queue as unknown as { pgBoss?: unknown }).pgBoss).toBeUndefined()
+    expect((Queue as unknown as { pgBossDb?: unknown }).pgBossDb).toBeUndefined()
+  })
+})

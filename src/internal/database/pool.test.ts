@@ -256,6 +256,33 @@ describe('PoolManager cache lifecycle', () => {
     await poolManager.destroyAll()
   })
 
+  test('shares cached tenant pools across manager instances', async () => {
+    const poolModule = await loadPoolModule(10_000)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const firstManager = new TestPoolManager()
+    const secondManager = new TestPoolManager()
+    const settings = createPoolSettings('tenant-shared-manager-cache')
+
+    const first = firstManager.getPool(settings)
+    const second = secondManager.getPool(settings)
+
+    expect(second).toBe(first)
+    expect(firstManager.created).toHaveLength(1)
+    expect(secondManager.created).toHaveLength(0)
+
+    await secondManager.destroyAll()
+  })
+
   test('logs sampled tenant pool cache misses and hits', async () => {
     const poolModule = await loadPoolModule(10_000, undefined, {
       tenantPoolCacheHitLogSampleRate: 1,
@@ -387,8 +414,10 @@ describe('PoolManager cache lifecycle', () => {
     await poolManager.destroyAll()
   })
 
-  test('does not log single-use external pool lookups without a cached pool', async () => {
-    const poolModule = await loadPoolModule(10_000)
+  test('logs sampled single-use external pool cache misses without a cached pool', async () => {
+    const poolModule = await loadPoolModule(10_000, undefined, {
+      tenantPoolCacheMissLogSampleRate: 1,
+    })
     const loggerModule = await import('@internal/monitoring/logger')
     const infoSpy = vi.spyOn(loggerModule.logger, 'info').mockImplementation(() => undefined)
 
@@ -403,6 +432,18 @@ describe('PoolManager cache lifecycle', () => {
     }
 
     const poolManager = new TestPoolManager()
+    const expectedMissLog = expect.objectContaining({
+      type: poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_TYPE,
+      cache: TENANT_POOL_CACHE_NAME,
+      tenantId: 'tenant-single-use-external-log',
+      project: 'tenant-single-use-external-log',
+      outcome: 'miss',
+      sampleRate: 1,
+      sampleWeight: 1,
+      isCacheable: false,
+      isExternalPool: true,
+      isSingleUse: true,
+    })
     const pool = poolManager.getPool({
       ...createPoolSettings('tenant-single-use-external-log'),
       isSingleUse: true,
@@ -413,7 +454,7 @@ describe('PoolManager cache lifecycle', () => {
       infoSpy.mock.calls.filter(
         isTenantPoolCacheLookupCall(poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE)
       )
-    ).toEqual([])
+    ).toEqual([[expectedMissLog, poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE]])
 
     await pool.destroy()
     await poolManager.destroyAll()
@@ -506,7 +547,7 @@ describe('PoolManager cache lifecycle', () => {
     expect(poolManager.created[1].destroy).toHaveBeenCalledTimes(1)
   })
 
-  test('does not record pool cache misses for single-use external pools without cached pools', async () => {
+  test('records pool cache misses for single-use external pools without cached pools', async () => {
     const poolModule = await loadPoolModule(10_000)
     const metricsModule = await import('@internal/monitoring/metrics')
     const addSpy = vi.spyOn(metricsModule.cacheRequestsTotal, 'add')
@@ -537,7 +578,10 @@ describe('PoolManager cache lifecycle', () => {
       addSpy.mock.calls.filter(([, attrs]) => {
         return attrs && typeof attrs === 'object' && attrs.cache === TENANT_POOL_CACHE_NAME
       })
-    ).toEqual([])
+    ).toEqual([
+      [1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'miss' }],
+      [1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'miss' }],
+    ])
 
     await Promise.all([first.destroy(), second.destroy()])
     await poolManager.destroyAll()

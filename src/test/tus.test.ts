@@ -1,80 +1,249 @@
-import dotenv from 'dotenv'
-import path from 'path'
-
-dotenv.config({ path: path.resolve(__dirname, '..', '..', '.env.test') })
-
-import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
-import { wait } from '@internal/concurrency'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import {
+  CreateBucketCommand,
+  HeadObjectCommand,
+  ListMultipartUploadsCommand,
+  S3Client,
+} from '@aws-sdk/client-s3'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
+import { pathExists, removePath } from '@internal/fs'
 import { logger } from '@internal/monitoring'
-import { TenantLocation } from '@storage/locator'
 import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import fs from 'fs'
 import * as tus from 'tus-js-client'
 import { DetailedError } from 'tus-js-client'
-import app from '../app'
-import { getConfig } from '../config'
-import { backends, Storage, StorageKnexDB } from '../storage'
+import type { StorageBackendAdapter } from '../storage/backend'
+import type { StorageKnexDB as StorageKnexDBType } from '../storage/database/knex'
+import type { TenantLocation as TenantLocationType } from '../storage/locator'
+import type { Storage as StorageType } from '../storage/storage'
 import { checkBucketExists } from './common'
 
-const { serviceKeyAsync, tenantId, storageS3Bucket, storageBackendType } = getConfig()
-const oneChunkFile = fs.createReadStream(path.resolve(__dirname, 'assets', 'sadcat.jpg'))
-const localServerAddress = 'http://127.0.0.1:8999'
+const assetPath = path.resolve(__dirname, 'assets', 'sadcat.jpg')
+const assetSize = fs.statSync(assetPath).size
+const openAssetStream = () => fs.createReadStream(assetPath)
 
-const backend = backends.createStorageBackend(storageBackendType)
-const client = backend.client
+type TusTestConfig = {
+  serviceKeyAsync: Promise<string>
+  storageS3Bucket: string
+  storageFilePath?: string
+  storageBackendType: 'file' | 's3'
+  tenantId: string
+  tusPath: string
+}
 
-describe('Tus multipart', () => {
-  let db: StorageKnexDB
-  let storage: Storage
-  let server: FastifyInstance
+type TusTestContext = {
+  Storage: typeof StorageType
+  StorageKnexDB: typeof StorageKnexDBType
+  TenantLocation: typeof TenantLocationType
+  backend: StorageBackendAdapter
+  baseUrl: string
+  config: TusTestConfig
+  fileBackendPath?: string
+  server: FastifyInstance
+}
+
+function expectedAssetEtag(backendType: TusTestConfig['storageBackendType']) {
+  return backendType === 's3'
+    ? '"53e1323c929d57b09b95fbe6d531865c-1"'
+    : '"740f5c4bb4f6f2f73c1a301fa455c747"'
+}
+
+function encodeTusMetadata(metadata: Record<string, string>): string {
+  return Object.entries(metadata)
+    .map(([key, value]) => `${key} ${Buffer.from(value).toString('base64')}`)
+    .join(',')
+}
+
+function decodeTusUploadId(location: string): string {
+  const encodedUploadId = location.split('/').pop()
+
+  if (!encodedUploadId) {
+    throw new Error('TUS upload location is missing an encoded upload id')
+  }
+
+  return Buffer.from(encodedUploadId, 'base64url').toString('utf8')
+}
+
+function getTusDatastoreUploadId(
+  config: Pick<TusTestConfig, 'tenantId'>,
+  location: string
+): string {
+  return `${config.tenantId}/${decodeTusUploadId(location)}`
+}
+
+function getTusUploadPath(context: TusTestContext, location: string): string {
+  if (!context.fileBackendPath) {
+    throw new Error('getTusUploadPath is only valid for the file backend')
+  }
+
+  const relativeUploadId = decodeTusUploadId(location)
+  return path.join(
+    context.fileBackendPath,
+    context.config.storageS3Bucket,
+    context.config.tenantId,
+    relativeUploadId
+  )
+}
+
+function getStoredObjectPath(
+  context: TusTestContext,
+  bucketId: string,
+  objectName: string,
+  version: string
+): string {
+  if (!context.fileBackendPath) {
+    throw new Error('getStoredObjectPath is only valid for the file backend')
+  }
+
+  return path.join(
+    context.fileBackendPath,
+    context.config.storageS3Bucket,
+    context.config.tenantId,
+    bucketId,
+    objectName,
+    version
+  )
+}
+
+async function createTusUpload(
+  context: Pick<TusTestContext, 'baseUrl' | 'config'>,
+  authorization: string,
+  metadata: Record<string, string>,
+  uploadLength = 5
+) {
+  return fetch(`${context.baseUrl}${context.config.tusPath}`, {
+    method: 'POST',
+    headers: {
+      authorization,
+      'tus-resumable': '1.0.0',
+      'upload-length': String(uploadLength),
+      'upload-metadata': encodeTusMetadata(metadata),
+      'x-upsert': 'true',
+    },
+  })
+}
+
+async function deleteTusUpload(location: string, authorization: string) {
+  return fetch(location, {
+    method: 'DELETE',
+    headers: {
+      authorization,
+      'tus-resumable': '1.0.0',
+      'x-upsert': 'true',
+    },
+  })
+}
+
+async function createTusTestContext(
+  backendType: 'file' | 's3',
+  options: { fileBackendPath?: string } = {}
+): Promise<TusTestContext> {
+  vi.resetModules()
+
+  const configModule = await import('../config')
+  configModule.setEnvPaths(['.env.test', '.env'])
+  configModule.getConfig({ reload: true })
+
+  const overrides: Partial<{
+    storageBackendType: 'file' | 's3'
+    storageFilePath: string
+  }> = { storageBackendType: backendType }
+  if (backendType === 'file') {
+    overrides.storageFilePath = options.fileBackendPath
+  }
+  configModule.mergeConfig(overrides)
+
+  const [appModule, backendModule, storageModule, databaseModule, locatorModule] =
+    await Promise.all([
+      import('../app'),
+      import('../storage/backend'),
+      import('../storage/storage'),
+      import('../storage/database/knex'),
+      import('../storage/locator'),
+    ])
+
+  const server = appModule.default({ loggerInstance: logger })
+  const listener = await server.listen()
+  const config = configModule.getConfig() as TusTestConfig
+  const backend = backendModule.createStorageBackend(config.storageBackendType)
+
+  if (backendType === 's3' && backend.client instanceof S3Client) {
+    const bucketExists = await checkBucketExists(backend.client, config.storageS3Bucket)
+    if (!bucketExists) {
+      await backend.client.send(new CreateBucketCommand({ Bucket: config.storageS3Bucket }))
+    }
+  }
+
+  return {
+    Storage: storageModule.Storage,
+    StorageKnexDB: databaseModule.StorageKnexDB,
+    TenantLocation: locatorModule.TenantLocation,
+    backend,
+    baseUrl: listener.replace('[::1]', '127.0.0.1'),
+    config,
+    fileBackendPath: options.fileBackendPath,
+    server,
+  }
+}
+
+describe.each([
+  { name: 'S3 backend', backendType: 's3' as const },
+  { name: 'File backend', backendType: 'file' as const },
+])('TUS resumable — $name', ({ backendType }) => {
+  let context: TusTestContext
+  let fileBackendPath: string | undefined
+  let db: StorageKnexDBType
+  let storage: StorageType
+  let connection: Awaited<ReturnType<typeof getPostgresConnection>>
   let bucketName: string
 
   beforeAll(async () => {
-    server = await app({
-      loggerInstance: logger,
-    })
-
-    await server.listen({
-      port: 8999,
-    })
-
-    if (client instanceof S3Client) {
-      const bucketExists = await checkBucketExists(client, storageS3Bucket)
-
-      if (!bucketExists) {
-        const createBucketCommand = new CreateBucketCommand({
-          Bucket: storageS3Bucket,
-        })
-        await client.send(createBucketCommand)
-      }
+    if (backendType === 'file') {
+      fileBackendPath = await mkdtemp(path.join(tmpdir(), 'storage-tus-'))
     }
+    context = await createTusTestContext(backendType, { fileBackendPath })
   })
 
   afterAll(async () => {
-    await server.close()
+    await context?.server?.close()
+    vi.resetModules()
+    if (fileBackendPath) {
+      await removePath(fileBackendPath)
+    }
   })
 
   beforeEach(async () => {
-    const superUser = await getServiceKeyUser(tenantId)
-    const pg = await getPostgresConnection({
+    const superUser = await getServiceKeyUser(context.config.tenantId)
+    connection = await getPostgresConnection({
       superUser,
       user: superUser,
-      tenantId,
+      tenantId: context.config.tenantId,
       host: 'localhost',
+      disableHostCheck: true,
     })
 
-    db = new StorageKnexDB(pg, {
+    db = new context.StorageKnexDB(connection, {
+      tenantId: context.config.tenantId,
       host: 'localhost',
-      tenantId,
     })
 
     bucketName = randomUUID()
-    storage = new Storage(backend, db, new TenantLocation(storageS3Bucket))
+    storage = new context.Storage(
+      context.backend,
+      db,
+      new context.TenantLocation(context.config.storageS3Bucket)
+    )
   })
 
-  it('Can upload an asset with the TUS protocol', async () => {
+  afterEach(async () => {
+    vi.useRealTimers()
+    await connection?.dispose()
+  })
+
+  it('can upload an asset with the TUS protocol', async () => {
     const objectName = randomUUID() + '-cat.jpeg'
 
     const bucket = await storage.createBucket({
@@ -83,11 +252,11 @@ describe('Tus multipart', () => {
       public: true,
     })
 
-    const authorization = `Bearer ${await serviceKeyAsync}`
+    const authorization = `Bearer ${await context.config.serviceKeyAsync}`
 
     const result = await new Promise((resolve, reject) => {
-      const upload = new tus.Upload(oneChunkFile, {
-        endpoint: `${localServerAddress}/upload/resumable`,
+      const upload = new tus.Upload(openAssetStream(), {
+        endpoint: `${context.baseUrl}${context.config.tusPath}`,
         onShouldRetry: () => false,
         uploadDataDuringCreation: false,
         headers: {
@@ -126,12 +295,12 @@ describe('Tus multipart', () => {
       last_accessed_at: expect.any(Date),
       metadata: {
         cacheControl: 'max-age=3600',
-        contentLength: 29526,
-        eTag: '"53e1323c929d57b09b95fbe6d531865c-1"',
+        contentLength: assetSize,
+        eTag: expectedAssetEtag(backendType),
         httpStatusCode: 200,
         lastModified: expect.any(String),
         mimetype: 'image/jpeg',
-        size: 29526,
+        size: assetSize,
       },
       user_metadata: {
         test1: 'test1',
@@ -144,10 +313,266 @@ describe('Tus multipart', () => {
       updated_at: expect.any(Date),
       version: expect.any(String),
     })
+
+    if (backendType === 'file') {
+      if (!dbAsset.version) {
+        throw new Error('expected uploaded object version')
+      }
+
+      const storedObjectPath = getStoredObjectPath(context, bucket.id, objectName, dbAsset.version)
+      expect(await pathExists(storedObjectPath)).toBe(true)
+    }
+  })
+
+  it('can resume an interrupted upload with the TUS protocol', async () => {
+    const chunkSize = 8 * 1024
+    const objectName = `${randomUUID()}-resume-cat.jpeg`
+
+    const bucket = await storage.createBucket({
+      id: bucketName,
+      name: bucketName,
+      public: true,
+    })
+
+    const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+    let interruptedUploadUrl: string | null = null
+    let interruptedBytesAccepted = 0
+
+    await new Promise<void>((resolve, reject) => {
+      let aborted = false
+
+      const upload = new tus.Upload(openAssetStream(), {
+        chunkSize,
+        endpoint: `${context.baseUrl}${context.config.tusPath}`,
+        onShouldRetry: () => false,
+        uploadDataDuringCreation: false,
+        headers: {
+          authorization,
+          'x-upsert': 'true',
+        },
+        metadata: {
+          bucketName,
+          objectName,
+          contentType: 'image/jpeg',
+          cacheControl: '3600',
+          metadata: JSON.stringify({
+            resume: 'true',
+          }),
+        },
+        onUploadUrlAvailable: () => {
+          interruptedUploadUrl = upload.url
+        },
+        onChunkComplete: (_chunkLength, bytesAccepted) => {
+          interruptedUploadUrl = upload.url
+          interruptedBytesAccepted = bytesAccepted
+
+          if (aborted || bytesAccepted < chunkSize) {
+            return
+          }
+
+          aborted = true
+          upload.abort().then(resolve, reject)
+        },
+        onError(error) {
+          reject(error)
+        },
+        onSuccess: () => {
+          reject(new Error('upload should have been interrupted before completion'))
+        },
+      })
+
+      upload.start()
+    })
+
+    expect(interruptedUploadUrl).toBeTruthy()
+    expect(interruptedBytesAccepted).toBe(chunkSize)
+    expect(interruptedBytesAccepted).toBeLessThan(assetSize)
+
+    if (backendType === 's3') {
+      const client = context.backend.client
+      if (!(client instanceof S3Client)) {
+        throw new Error('Expected S3 client for s3 backend')
+      }
+
+      const uploadId = getTusDatastoreUploadId(context.config, interruptedUploadUrl!)
+      const metadataKey = `${uploadId}.info`
+
+      const metadataObject = await client.send(
+        new HeadObjectCommand({
+          Bucket: context.config.storageS3Bucket,
+          Key: metadataKey,
+        })
+      )
+
+      expect(metadataObject.Metadata).toMatchObject({
+        'tus-version': expect.any(String),
+        'upload-id': expect.any(String),
+      })
+
+      const uploads = await client.send(
+        new ListMultipartUploadsCommand({
+          Bucket: context.config.storageS3Bucket,
+          Prefix: uploadId,
+        })
+      )
+
+      expect(uploads.Uploads?.find((upload) => upload.Key === uploadId)?.Key).toBe(uploadId)
+    } else {
+      const tusUploadPath = getTusUploadPath(context, interruptedUploadUrl!)
+      expect(await pathExists(tusUploadPath)).toBe(true)
+      expect(await pathExists(`${tusUploadPath}.json`)).toBe(true)
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const upload = new tus.Upload(openAssetStream(), {
+        chunkSize,
+        uploadUrl: interruptedUploadUrl,
+        onShouldRetry: () => false,
+        headers: {
+          authorization,
+          'x-upsert': 'true',
+        },
+        onError(error) {
+          reject(error)
+        },
+        onSuccess: () => {
+          resolve()
+        },
+      })
+
+      upload.start()
+    })
+
+    const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+    expect(dbAsset).toEqual({
+      bucket_id: bucket.id,
+      created_at: expect.any(Date),
+      id: expect.any(String),
+      last_accessed_at: expect.any(Date),
+      metadata: {
+        cacheControl: 'max-age=3600',
+        contentLength: assetSize,
+        eTag: expectedAssetEtag(backendType),
+        httpStatusCode: 200,
+        lastModified: expect.any(String),
+        mimetype: 'image/jpeg',
+        size: assetSize,
+      },
+      user_metadata: {
+        resume: 'true',
+      },
+      name: objectName,
+      owner: null,
+      owner_id: null,
+      path_tokens: [objectName],
+      updated_at: expect.any(Date),
+      version: expect.any(String),
+    })
+
+    if (backendType === 'file') {
+      if (!dbAsset.version) {
+        throw new Error('expected uploaded object version')
+      }
+
+      const storedObjectPath = getStoredObjectPath(context, bucket.id, objectName, dbAsset.version)
+      expect(await pathExists(storedObjectPath)).toBe(true)
+    }
+  })
+
+  it('can delete an incomplete upload via TUS', async () => {
+    const objectName = `${randomUUID()}-incomplete.txt`
+
+    await storage.createBucket({
+      id: bucketName,
+      name: bucketName,
+      public: true,
+    })
+
+    const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+    const createResponse = await createTusUpload(context, authorization, {
+      bucketName,
+      objectName,
+      contentType: 'text/plain',
+      cacheControl: '3600',
+    })
+
+    expect(createResponse.status).toBe(201)
+
+    const location = createResponse.headers.get('location')
+    expect(location).toBeTruthy()
+
+    if (backendType === 's3') {
+      const client = context.backend.client
+      if (!(client instanceof S3Client)) {
+        throw new Error('Expected S3 client for s3 backend')
+      }
+
+      const uploadId = getTusDatastoreUploadId(context.config, location!)
+      const metadataKey = `${uploadId}.info`
+
+      const metadataObject = await client.send(
+        new HeadObjectCommand({
+          Bucket: context.config.storageS3Bucket,
+          Key: metadataKey,
+        })
+      )
+
+      expect(metadataObject.Metadata).toMatchObject({
+        'tus-version': expect.any(String),
+        'upload-id': expect.any(String),
+      })
+
+      const uploadsBeforeDelete = await client.send(
+        new ListMultipartUploadsCommand({
+          Bucket: context.config.storageS3Bucket,
+          Prefix: uploadId,
+        })
+      )
+
+      expect(uploadsBeforeDelete.Uploads?.find((upload) => upload.Key === uploadId)?.Key).toBe(
+        uploadId
+      )
+
+      const deleteResponse = await deleteTusUpload(location!, authorization)
+
+      expect(deleteResponse.status).toBe(204)
+
+      await expect(
+        client.send(
+          new HeadObjectCommand({
+            Bucket: context.config.storageS3Bucket,
+            Key: metadataKey,
+          })
+        )
+      ).rejects.toMatchObject({
+        $metadata: {
+          httpStatusCode: 404,
+        },
+      })
+
+      const uploadsAfterDelete = await client.send(
+        new ListMultipartUploadsCommand({
+          Bucket: context.config.storageS3Bucket,
+          Prefix: uploadId,
+        })
+      )
+
+      expect(uploadsAfterDelete.Uploads?.find((upload) => upload.Key === uploadId)).toBeUndefined()
+    } else {
+      const tusUploadPath = getTusUploadPath(context, location!)
+      expect(await pathExists(tusUploadPath)).toBe(true)
+      expect(await pathExists(`${tusUploadPath}.json`)).toBe(true)
+
+      const deleteResponse = await deleteTusUpload(location!, authorization)
+
+      expect(deleteResponse.status).toBe(204)
+      expect(await pathExists(tusUploadPath)).toBe(false)
+      expect(await pathExists(`${tusUploadPath}.json`)).toBe(false)
+    }
   })
 
   describe('TUS Validation', () => {
-    it('Cannot upload to a non-existing bucket', async () => {
+    it('cannot upload to a non-existing bucket', async () => {
       const objectName = randomUUID() + '-cat.jpeg'
 
       await storage.createBucket({
@@ -158,10 +583,10 @@ describe('Tus multipart', () => {
       })
 
       try {
-        const authorization = `Bearer ${await serviceKeyAsync}`
+        const authorization = `Bearer ${await context.config.serviceKeyAsync}`
         await new Promise((resolve, reject) => {
-          const upload = new tus.Upload(oneChunkFile, {
-            endpoint: `${localServerAddress}/upload/resumable`,
+          const upload = new tus.Upload(openAssetStream(), {
+            endpoint: `${context.baseUrl}${context.config.tusPath}`,
             onShouldRetry: () => false,
             uploadDataDuringCreation: false,
             headers: {
@@ -186,7 +611,7 @@ describe('Tus multipart', () => {
           upload.start()
         })
 
-        throw Error('it should error with max-size exceeded')
+        throw Error('it should error with bucket not found')
       } catch (e) {
         expect(e).toBeInstanceOf(DetailedError)
 
@@ -196,7 +621,7 @@ describe('Tus multipart', () => {
       }
     })
 
-    it('Cannot upload an asset that exceed the maximum bucket size', async () => {
+    it('cannot upload an asset that exceeds the maximum bucket size', async () => {
       const objectName = randomUUID() + '-cat.jpeg'
 
       await storage.createBucket({
@@ -207,10 +632,10 @@ describe('Tus multipart', () => {
       })
 
       try {
-        const authorization = `Bearer ${await serviceKeyAsync}`
+        const authorization = `Bearer ${await context.config.serviceKeyAsync}`
         await new Promise((resolve, reject) => {
-          const upload = new tus.Upload(oneChunkFile, {
-            endpoint: `${localServerAddress}/upload/resumable`,
+          const upload = new tus.Upload(openAssetStream(), {
+            endpoint: `${context.baseUrl}${context.config.tusPath}`,
             onShouldRetry: () => false,
             uploadDataDuringCreation: false,
             headers: {
@@ -261,8 +686,8 @@ describe('Tus multipart', () => {
         .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 3600)
 
       const result = await new Promise((resolve, reject) => {
-        const upload = new tus.Upload(oneChunkFile, {
-          endpoint: `${localServerAddress}/upload/resumable/sign`,
+        const upload = new tus.Upload(openAssetStream(), {
+          endpoint: `${context.baseUrl}${context.config.tusPath}/sign`,
           onShouldRetry: () => false,
           uploadDataDuringCreation: false,
           headers: {
@@ -300,12 +725,12 @@ describe('Tus multipart', () => {
         last_accessed_at: expect.any(Date),
         metadata: {
           cacheControl: 'max-age=3600',
-          contentLength: 29526,
-          eTag: '"53e1323c929d57b09b95fbe6d531865c-1"',
+          contentLength: assetSize,
+          eTag: expectedAssetEtag(backendType),
           httpStatusCode: 200,
           lastModified: expect.any(String),
           mimetype: 'image/jpeg',
-          size: 29526,
+          size: assetSize,
         },
         user_metadata: {
           test1: 'test1',
@@ -334,8 +759,8 @@ describe('Tus multipart', () => {
         .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 3600, 'some-owner-id')
 
       const result = await new Promise((resolve, reject) => {
-        const upload = new tus.Upload(oneChunkFile, {
-          endpoint: `${localServerAddress}/upload/resumable/sign`,
+        const upload = new tus.Upload(openAssetStream(), {
+          endpoint: `${context.baseUrl}${context.config.tusPath}/sign`,
           onShouldRetry: () => false,
           uploadDataDuringCreation: false,
           headers: {
@@ -369,12 +794,12 @@ describe('Tus multipart', () => {
         last_accessed_at: expect.any(Date),
         metadata: {
           cacheControl: 'max-age=3600',
-          contentLength: 29526,
-          eTag: '"53e1323c929d57b09b95fbe6d531865c-1"',
+          contentLength: assetSize,
+          eTag: expectedAssetEtag(backendType),
           httpStatusCode: 200,
           lastModified: expect.any(String),
           mimetype: 'image/jpeg',
-          size: 29526,
+          size: assetSize,
         },
         user_metadata: null,
         name: objectName,
@@ -395,16 +820,19 @@ describe('Tus multipart', () => {
 
       const objectName = randomUUID() + '-cat.jpeg'
 
+      const signedAt = new Date()
+      vi.setSystemTime(signedAt)
+
       const signedUpload = await storage
         .from(bucketName)
         .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 1)
 
-      await wait(2000)
+      vi.setSystemTime(new Date(signedAt.getTime() + 2000))
 
       try {
         await new Promise((resolve, reject) => {
-          const upload = new tus.Upload(oneChunkFile, {
-            endpoint: `${localServerAddress}/upload/resumable/sign`,
+          const upload = new tus.Upload(openAssetStream(), {
+            endpoint: `${context.baseUrl}${context.config.tusPath}/sign`,
             onShouldRetry: () => false,
             uploadDataDuringCreation: false,
             headers: {
@@ -447,12 +875,10 @@ describe('Tus multipart', () => {
 
       const objectName = randomUUID() + '-cat.jpeg'
 
-      await wait(2000)
-
       try {
         await new Promise((resolve, reject) => {
-          const upload = new tus.Upload(oneChunkFile, {
-            endpoint: `${localServerAddress}/upload/resumable/sign`,
+          const upload = new tus.Upload(openAssetStream(), {
+            endpoint: `${context.baseUrl}${context.config.tusPath}/sign`,
             onShouldRetry: () => false,
             uploadDataDuringCreation: false,
             headers: {
@@ -476,9 +902,9 @@ describe('Tus multipart', () => {
           upload.start()
         })
 
-        throw new Error('it should error with expired token')
+        throw new Error('it should error with invalid token')
       } catch (e) {
-        expect((e as Error).message).not.toEqual('it should error with expired token')
+        expect((e as Error).message).not.toEqual('it should error with invalid token')
 
         const err = e as DetailedError
         expect(err.originalResponse.getBody()).toEqual('Invalid Compact JWS')
@@ -495,12 +921,10 @@ describe('Tus multipart', () => {
 
       const objectName = randomUUID() + '-cat.jpeg'
 
-      await wait(2000)
-
       try {
         await new Promise((resolve, reject) => {
-          const upload = new tus.Upload(oneChunkFile, {
-            endpoint: `${localServerAddress}/upload/resumable/sign`,
+          const upload = new tus.Upload(openAssetStream(), {
+            endpoint: `${context.baseUrl}${context.config.tusPath}/sign`,
             onShouldRetry: () => false,
             uploadDataDuringCreation: false,
             metadata: {
@@ -521,14 +945,96 @@ describe('Tus multipart', () => {
           upload.start()
         })
 
-        throw new Error('it should error with expired token')
+        throw new Error('it should error with missing token')
       } catch (e) {
-        expect((e as Error).message).not.toEqual('it should error with expired token')
+        expect((e as Error).message).not.toEqual('it should error with missing token')
 
         const err = e as DetailedError
         expect(err.originalResponse.getBody()).toEqual('Missing x-signature header')
         expect(err.originalResponse.getStatus()).toEqual(400)
       }
     })
+  })
+})
+
+describe('File-backed TUS — path traversal', () => {
+  let context: TusTestContext
+  let connection: Awaited<ReturnType<typeof getPostgresConnection>>
+  let fileBackendPath: string
+  let storage: StorageType
+
+  beforeAll(async () => {
+    fileBackendPath = await mkdtemp(path.join(tmpdir(), 'storage-tus-traversal-'))
+    context = await createTusTestContext('file', { fileBackendPath })
+  })
+
+  afterAll(async () => {
+    await context?.server?.close()
+    vi.resetModules()
+    if (fileBackendPath) {
+      await removePath(fileBackendPath)
+    }
+  })
+
+  beforeEach(async () => {
+    const superUser = await getServiceKeyUser(context.config.tenantId)
+    connection = await getPostgresConnection({
+      tenantId: context.config.tenantId,
+      user: superUser,
+      superUser,
+      host: 'localhost',
+      disableHostCheck: true,
+    })
+
+    const db = new context.StorageKnexDB(connection, {
+      tenantId: context.config.tenantId,
+      host: 'localhost',
+    })
+
+    storage = new context.Storage(
+      context.backend,
+      db,
+      new context.TenantLocation(context.config.storageS3Bucket)
+    )
+  })
+
+  afterEach(async () => {
+    await connection.dispose()
+  })
+
+  it('rejects traversal object names and does not write outside the file-backed TUS root', async () => {
+    const bucketName = randomUUID()
+    const escapePrefix = `storage-tus-escape-${randomUUID()}`
+    const bucketRoot = path.join(
+      context.fileBackendPath!,
+      context.config.storageS3Bucket,
+      context.config.tenantId,
+      bucketName
+    )
+    const escapedPath = path.join(tmpdir(), escapePrefix)
+    const objectName = path
+      .relative(bucketRoot, path.join(escapedPath, 'escape.txt'))
+      .split(path.sep)
+      .join('/')
+
+    await storage.createBucket({
+      id: bucketName,
+      name: bucketName,
+      public: true,
+    })
+
+    const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+    const createResponse = await createTusUpload(context, authorization, {
+      bucketName,
+      objectName,
+      contentType: 'text/plain',
+      cacheControl: '3600',
+    })
+
+    expect(createResponse.status).toBe(400)
+    expect(await createResponse.text()).toContain('Invalid key')
+    expect(createResponse.headers.get('location')).toBeNull()
+    expect(await pathExists(bucketRoot)).toBe(false)
+    expect(await pathExists(escapedPath)).toBe(false)
   })
 })

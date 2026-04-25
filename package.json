@@ -36,7 +36,7 @@
     "test:oriole:ci": "npm run infra:restart:ci:oriole && npm run test:dummy-data && npm run test:integration"
   },
   "dependencies": {
-    "@aws-sdk/client-ecs": "^3.1023.0",
+    "@aws-sdk/client-ecs": "^3.1033.0",
     "@aws-sdk/client-s3": "^3.1023.0",
     "@aws-sdk/client-s3vectors": "^3.1023.0",
     "@aws-sdk/lib-storage": "^3.1023.0",

@@ -59,6 +59,7 @@ type StorageConfigType = {
   headersTimeout: number
   adminApiKeys: string
   adminRequestIdHeader?: string
+  adminReturnTenantSensitiveData: boolean
   encryptionKey: string
   uploadFileSizeLimit: number
   uploadFileSizeLimitStandard?: number
@@ -304,6 +305,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'REQUEST_TRACE_HEADER',
       'REQUEST_ADMIN_TRACE_HEADER'
     ),
+    adminReturnTenantSensitiveData:
+      getOptionalConfigFromEnv('ADMIN_RETURN_TENANT_SENSITIVE_DATA') !== 'false',
 
     encryptionKey: getOptionalConfigFromEnv('AUTH_ENCRYPTION_KEY', 'ENCRYPTION_KEY') || '',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('AUTH_JWT_SECRET', 'PGRST_JWT_SECRET') || '',

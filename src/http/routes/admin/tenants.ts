@@ -132,7 +132,8 @@ interface tenantDBInterface {
   disable_events?: string[] | null
 }
 
-const { dbMigrationFreezeAt, icebergEnabled, vectorEnabled } = getConfig()
+const { dbMigrationFreezeAt, icebergEnabled, vectorEnabled, adminReturnTenantSensitiveData } =
+  getConfig()
 const migrationQueueName = RunMigrationsOnTenants.getQueueName()
 
 async function markTenantMigrationsCompleted(tenantId: string) {
@@ -176,15 +177,19 @@ export default async function routes(fastify: FastifyInstance) {
         disable_events,
       }) => ({
         id,
-        anonKey: decrypt(anon_key),
-        databaseUrl: decrypt(database_url),
-        databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
+        ...(adminReturnTenantSensitiveData
+          ? {
+              anonKey: decrypt(anon_key),
+              databaseUrl: decrypt(database_url),
+              databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
+              jwtSecret: decrypt(jwt_secret),
+              jwks,
+              serviceKey: decrypt(service_key),
+            }
+          : {}),
         databasePoolMode: database_pool_mode,
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
-        jwtSecret: decrypt(jwt_secret),
-        jwks,
-        serviceKey: decrypt(service_key),
         migrationVersion: migrations_version,
         migrationStatus: migrations_status,
         tracingMode: tracing_mode,
@@ -254,20 +259,24 @@ export default async function routes(fastify: FastifyInstance) {
       const capabilities = await getTenantCapabilities(request.params.tenantId)
 
       return {
-        anonKey: decrypt(anon_key),
-        databaseUrl: decrypt(database_url),
-        databasePoolUrl:
-          database_pool_url === null
-            ? null
-            : database_pool_url
-              ? decrypt(database_pool_url)
-              : undefined,
+        ...(adminReturnTenantSensitiveData
+          ? {
+              anonKey: decrypt(anon_key),
+              databaseUrl: decrypt(database_url),
+              databasePoolUrl:
+                database_pool_url === null
+                  ? null
+                  : database_pool_url
+                    ? decrypt(database_pool_url)
+                    : undefined,
+              jwtSecret: decrypt(jwt_secret),
+              jwks,
+              serviceKey: decrypt(service_key),
+            }
+          : {}),
         databasePoolMode: database_pool_mode,
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
-        jwtSecret: decrypt(jwt_secret),
-        jwks,
-        serviceKey: decrypt(service_key),
         capabilities,
         features: {
           imageTransformation: {

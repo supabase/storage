@@ -5,7 +5,7 @@ import {
   getAcceptanceConfig,
   joinUrl,
 } from '../support/config'
-import { createRestClient } from '../support/http'
+import { createAcceptanceHeaders, createRestClient, withAcceptanceHeaders } from '../support/http'
 import {
   cleanupRestResources,
   createRestBucket,
@@ -42,10 +42,10 @@ describeAcceptance(
           const upload = new tus.Upload(uploadPayload, {
             chunkSize: uploadPayload.size,
             endpoint: config.tusEndpoint,
-            headers: {
+            headers: withAcceptanceHeaders({
               authorization: `Bearer ${requireServiceKey(config)}`,
               'x-upsert': 'true',
-            },
+            }),
             metadata: {
               bucketName,
               cacheControl: '60',
@@ -143,10 +143,10 @@ describeAcceptance(
         let deleted: Response | undefined
         try {
           deleted = await fetch(uploadUrl, {
-            headers: {
+            headers: createAcceptanceHeaders({
               ...headers,
               'tus-resumable': tusVersion,
-            },
+            }),
             method: 'DELETE',
           })
           expect(deleted.status).toBe(204)
@@ -157,10 +157,10 @@ describeAcceptance(
         let afterDelete: Response | undefined
         try {
           afterDelete = await fetch(uploadUrl, {
-            headers: {
+            headers: createAcceptanceHeaders({
               ...headers,
               'tus-resumable': tusVersion,
-            },
+            }),
             method: 'HEAD',
           })
           expect([404, 410]).toContain(afterDelete.status)
@@ -239,13 +239,14 @@ async function uploadTusInChunks({
   metadata: Record<string, string>
   totalLength: number
 }) {
+  const requestHeaders = withAcceptanceHeaders(headers)
   const uploadUrl = await createTusUpload({
     endpoint,
-    headers,
+    headers: requestHeaders,
     metadata,
     totalLength,
   })
-  let offset = await getTusOffset(uploadUrl, headers)
+  let offset = await getTusOffset(uploadUrl, requestHeaders)
   expect(offset).toBe(0)
 
   for (const chunk of chunks) {
@@ -253,12 +254,12 @@ async function uploadTusInChunks({
     try {
       patched = await fetch(uploadUrl, {
         body: chunk as unknown as BodyInit,
-        headers: {
-          ...headers,
+        headers: createAcceptanceHeaders({
+          ...requestHeaders,
           'content-type': 'application/offset+octet-stream',
           'tus-resumable': tusVersion,
           'upload-offset': offset.toString(),
-        },
+        }),
         method: 'PATCH',
       })
       expect(patched.status).toBe(204)
@@ -286,9 +287,9 @@ async function createTusUpload({
   let options: Response | undefined
   try {
     options = await fetch(endpoint, {
-      headers: {
+      headers: createAcceptanceHeaders({
         'tus-resumable': tusVersion,
-      },
+      }),
       method: 'OPTIONS',
     })
     expect([200, 204]).toContain(options.status)
@@ -300,12 +301,12 @@ async function createTusUpload({
   let created: Response | undefined
   try {
     created = await fetch(endpoint, {
-      headers: {
+      headers: createAcceptanceHeaders({
         ...headers,
         'tus-resumable': tusVersion,
         'upload-length': totalLength.toString(),
         'upload-metadata': encodeTusMetadata(metadata),
-      },
+      }),
       method: 'POST',
     })
     expect(created.status).toBe(201)
@@ -323,10 +324,10 @@ async function getTusOffset(uploadUrl: string, headers: Record<string, string>) 
   let head: Response | undefined
   try {
     head = await fetch(uploadUrl, {
-      headers: {
+      headers: createAcceptanceHeaders({
         ...headers,
         'tus-resumable': tusVersion,
-      },
+      }),
       method: 'HEAD',
     })
     expect(head.status).toBe(200)

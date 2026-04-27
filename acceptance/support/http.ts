@@ -1,4 +1,7 @@
 import { getAcceptanceConfig, joinUrl } from './config'
+import { createAcceptanceHeaders } from './headers'
+
+export { createAcceptanceHeaders, withAcceptanceHeaders } from './headers'
 
 export interface HttpRequestOptions {
   body?: BodyInit | Record<string, unknown>
@@ -24,7 +27,7 @@ export class AcceptanceHttpClient {
     options: HttpRequestOptions = {}
   ): Promise<HttpResponse<T>> {
     const url = joinUrl(this.baseUrl, route)
-    const headers = new Headers(options.headers)
+    const headers = createAcceptanceHeaders(options.headers)
 
     if (options.token) {
       headers.set('authorization', `Bearer ${options.token}`)

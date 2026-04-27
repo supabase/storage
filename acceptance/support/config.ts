@@ -22,6 +22,7 @@ export interface AcceptanceConfig {
   baseUrl: string
   capabilities: Record<AcceptanceCapability, boolean>
   forcePathStyle: boolean
+  forwardedHost?: string
   profile: AcceptanceProfile
   region: string
   resourcePrefix: string
@@ -161,6 +162,9 @@ function buildAcceptanceConfig(): AcceptanceConfig {
     forcePathStyle: boolOptionDefaultTrue(
       's3-force-path-style',
       envOption('ACCEPTANCE_S3_FORCE_PATH_STYLE')
+    ),
+    forwardedHost: optionalTrim(
+      readOption('x-forwarded-host') ?? envOption('ACCEPTANCE_X_FORWARDED_HOST')
     ),
     profile,
     region: readOption('region') ?? envOption('ACCEPTANCE_REGION') ?? 'us-east-1',

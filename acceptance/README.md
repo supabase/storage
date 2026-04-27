@@ -65,6 +65,7 @@ secrets as environment secrets.
 | `ACCEPTANCE_BASE_URL`             | REST base URL. Defaults to `http://127.0.0.1:5000`.                          |
 | `ACCEPTANCE_S3_ENDPOINT`          | S3 endpoint. Defaults to `$ACCEPTANCE_BASE_URL/s3`.                          |
 | `ACCEPTANCE_TUS_ENDPOINT`         | TUS endpoint. Defaults to `$ACCEPTANCE_BASE_URL/upload/resumable`.           |
+| `ACCEPTANCE_X_FORWARDED_HOST`     | Optional tenant-routing host header for multitenant targets.                 |
 | `ACCEPTANCE_ADMIN_URL`            | Admin API base URL for admin tests.                                          |
 | `ACCEPTANCE_SERVICE_KEY`          | Service role JWT for REST tests.                                             |
 | `ACCEPTANCE_S3_ACCESS_KEY_ID`     | S3 protocol access key.                                                      |

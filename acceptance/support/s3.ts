@@ -8,11 +8,12 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3'
 import { getAcceptanceConfig, requireConfigValue } from './config'
+import { hasHeader } from './headers'
 
 export function createAcceptanceS3Client() {
   const config = getAcceptanceConfig()
 
-  return new S3Client({
+  const client = new S3Client({
     credentials: {
       accessKeyId: requireConfigValue(config.s3AccessKeyId, 'ACCEPTANCE_S3_ACCESS_KEY_ID'),
       secretAccessKey: requireConfigValue(
@@ -24,6 +25,28 @@ export function createAcceptanceS3Client() {
     forcePathStyle: config.forcePathStyle,
     region: config.region,
   })
+
+  const forwardedHost = config.forwardedHost
+
+  if (forwardedHost) {
+    client.middlewareStack.add(
+      (next) => async (args) => {
+        const request = args.request as { headers?: Record<string, string> } | undefined
+
+        if (request?.headers && !hasHeader(request.headers, 'x-forwarded-host')) {
+          request.headers['x-forwarded-host'] = forwardedHost
+        }
+
+        return next(args)
+      },
+      {
+        name: 'acceptanceForwardedHost',
+        step: 'build',
+      }
+    )
+  }
+
+  return client
 }
 
 export async function cleanupS3Bucket(client: S3Client, bucketName: string) {

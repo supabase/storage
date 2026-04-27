@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { db, jwt, storage } from '../../plugins'
+import { db, registerJwtAuth, storage } from '../../plugins'
 import createBucket from './createBucket'
 import deleteBucket from './deleteBucket'
 import emptyBucket from './emptyBucket'
@@ -8,7 +8,7 @@ import getBucket from './getBucket'
 import updateBucket from './updateBucket'
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.register(jwt)
+  registerJwtAuth(fastify)
   fastify.register(db)
   fastify.register(storage)
 

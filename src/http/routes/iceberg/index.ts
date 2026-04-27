@@ -1,7 +1,13 @@
 import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
 import { setErrorHandler } from '../../error-handler'
-import { db, icebergRestCatalog, jwt, requireTenantFeature, storage } from '../../plugins'
+import {
+  db,
+  icebergRestCatalog,
+  registerJwtAuth,
+  requireTenantFeature,
+  storage,
+} from '../../plugins'
 import bucket from './bucket'
 import catalogue from './catalog'
 import namespace from './namespace'
@@ -16,7 +22,7 @@ export default async function routes(fastify: FastifyInstance) {
   }
 
   fastify.register(async function authenticated(fastify) {
-    fastify.register(jwt, {
+    registerJwtAuth(fastify, {
       enforceJwtRoles: [dbServiceRole],
     })
 

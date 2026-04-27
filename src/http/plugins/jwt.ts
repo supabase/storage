@@ -1,6 +1,7 @@
 import { verifyJWT, verifyJWTWithCache } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
 import { ERRORS } from '@internal/errors'
+import { FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 import { JWTPayload } from 'jose'
 import { getConfig } from '../../config'
@@ -27,7 +28,7 @@ const { jwtCachingEnabled } = getConfig()
 
 const BEARER = /^Bearer\s+/i
 
-export const jwt = fastifyPlugin<JWTPluginOptions>(
+const jwtPlugin = fastifyPlugin<JWTPluginOptions>(
   async (fastify, opts) => {
     fastify.decorateRequest('jwt', '')
     fastify.decorateRequest('jwtPayload', undefined)
@@ -96,3 +97,11 @@ export const enforceJwtRole = fastifyPlugin<EnforceJWTRoleOptions>(
   },
   { name: 'allow-invalid-jwt' }
 )
+
+export function registerJwtAuth(fastify: FastifyInstance, opts: JWTPluginOptions = {}) {
+  fastify.addHook('onRoute', (routeOptions) => {
+    routeOptions.schema = routeOptions.schema || {}
+    routeOptions.schema.security = [{ bearerAuth: [] }]
+  })
+  fastify.register(jwtPlugin, opts)
+}

@@ -34,7 +34,7 @@ vi.mock('@platformatic/globals', () => ({
 }))
 
 vi.mock('../../plugins/apikey', () => ({
-  async default() {},
+  async registerApiKeyAuth() {},
 }))
 
 vi.mock('@internal/monitoring/pprof/multipart', async (importOriginal) => {

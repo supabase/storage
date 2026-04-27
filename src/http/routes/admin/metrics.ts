@@ -1,7 +1,7 @@
 import { getMetricsConfig, setMetricsEnabled } from '@internal/monitoring/metrics'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import apiKey from '../../plugins/apikey'
+import { registerApiKeyAuth } from '../../plugins/apikey'
 
 const updateMetricsConfigSchema = {
   body: {
@@ -28,7 +28,7 @@ interface UpdateMetricsConfigRequest extends RequestGenericInterface {
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.register(apiKey)
+  registerApiKeyAuth(fastify)
 
   fastify.get('/config', { schema: { tags: ['metrics'] } }, async (_request, reply) => {
     return reply.send({

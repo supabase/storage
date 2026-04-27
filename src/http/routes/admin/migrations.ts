@@ -8,7 +8,7 @@ import { PG_BOSS_SCHEMA, Queue } from '@internal/queue'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { getConfig } from '../../../config'
-import apiKey from '../../plugins/apikey'
+import { registerApiKeyAuth } from '../../plugins/apikey'
 
 const { pgQueueEnable } = getConfig()
 const migrationQueueName = RunMigrationsOnTenants.getQueueName()
@@ -20,7 +20,7 @@ interface FailedMigrationsRequest extends RequestGenericInterface {
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.register(apiKey)
+  registerApiKeyAuth(fastify)
 
   fastify.post('/migrate/fleet', { schema: { tags: ['migration'] } }, async (req, reply) => {
     if (!pgQueueEnable) {

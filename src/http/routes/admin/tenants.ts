@@ -22,7 +22,7 @@ import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey } from '../../../config'
 import { dbSuperUser, storage } from '../../plugins'
-import apiKey from '../../plugins/apikey'
+import { registerApiKeyAuth } from '../../plugins/apikey'
 import { registerJsonParserAllowingEmptyBody } from '../../plugins/empty-json-body'
 
 const patchSchema = {
@@ -143,7 +143,7 @@ async function markTenantMigrationsCompleted(tenantId: string) {
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.register(apiKey)
+  registerApiKeyAuth(fastify)
 
   fastify.get('/', { schema: { tags: ['tenant'] } }, async () => {
     const tenants = await multitenantKnex('tenants').select()

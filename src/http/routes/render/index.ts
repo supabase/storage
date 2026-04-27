@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
-import { db, dbSuperUser, jwt, requireTenantFeature, storage } from '../../plugins'
+import { db, dbSuperUser, registerJwtAuth, requireTenantFeature, storage } from '../../plugins'
 import { rateLimiter } from './rate-limiter'
 import renderAuthenticatedImage from './renderAuthenticatedImage'
 import renderPublicImage from './renderPublicImage'
@@ -20,7 +20,7 @@ export default async function routes(fastify: FastifyInstance) {
       fastify.register(rateLimiter)
     }
 
-    fastify.register(jwt)
+    registerJwtAuth(fastify)
     fastify.register(db)
     fastify.register(storage)
 

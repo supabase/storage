@@ -4,7 +4,7 @@ import { ObjectScanner } from '@storage/scanner/scanner'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FastifyReply } from 'fastify/types/reply'
 import { dbSuperUser, storage } from '../../plugins'
-import apiKey from '../../plugins/apikey'
+import { registerApiKeyAuth } from '../../plugins/apikey'
 
 const listOrphanedObjects = {
   description: 'List Orphaned Objects',
@@ -72,7 +72,7 @@ interface SyncOrphanObjectsRequest extends RequestGenericInterface {
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.register(apiKey)
+  registerApiKeyAuth(fastify)
   fastify.register(dbSuperUser, {
     disableHostCheck: true,
     maxConnections: 5,

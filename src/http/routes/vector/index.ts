@@ -5,7 +5,7 @@ import { setErrorHandler } from '../../error-handler'
 import {
   dbSuperUser,
   enforceJwtRole,
-  jwt,
+  registerJwtAuth,
   requireTenantFeature,
   s3vector,
   signatureV4,
@@ -42,7 +42,7 @@ export default async function routes(fastify: FastifyInstance) {
       skipIfJwtToken: true,
     })
 
-    fastify.register(jwt, {
+    registerJwtAuth(fastify, {
       skipIfAlreadyAuthenticated: true,
     })
 

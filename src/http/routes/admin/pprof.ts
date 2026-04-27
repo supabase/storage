@@ -28,7 +28,7 @@ import type {
 import { RuntimeApiClient } from '@platformatic/control'
 import { FastifyInstance, FastifyReply, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import apiKey from '../../plugins/apikey'
+import { registerApiKeyAuth } from '../../plugins/apikey'
 
 const CPU_PROFILE_SECONDS_DEFAULT = 10
 const HEAP_PROFILE_SECONDS_DEFAULT = 10
@@ -311,7 +311,7 @@ async function stopActivePprofSessions(client: ProfilingRuntimeApiClient) {
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.register(apiKey)
+  registerApiKeyAuth(fastify)
   fastify.addHook('onClose', async () => {
     if (activePprofSessions.size === 0) {
       return

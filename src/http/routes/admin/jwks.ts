@@ -4,7 +4,7 @@ import { logSchema } from '@internal/monitoring'
 import { JwksRollUrlSigningKey } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import apiKey from '../../plugins/apikey'
+import { registerApiKeyAuth } from '../../plugins/apikey'
 
 const addSchema = {
   body: {
@@ -105,7 +105,7 @@ function validateAddJwkRequest({ jwk, kind }: JwksAddRequestInterface['Body']): 
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.register(apiKey)
+  registerApiKeyAuth(fastify)
 
   fastify.post<JwksAddRequestInterface>(
     '/:tenantId/jwks',

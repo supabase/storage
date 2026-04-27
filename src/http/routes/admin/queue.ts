@@ -3,7 +3,7 @@ import { MoveJobs, UpgradePgBossV10 } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
-import apiKey from '../../plugins/apikey'
+import { registerApiKeyAuth } from '../../plugins/apikey'
 
 const { pgQueueEnable } = getConfig()
 
@@ -31,7 +31,7 @@ interface MoveJobsRequestInterface extends RequestGenericInterface {
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.register(apiKey)
+  registerApiKeyAuth(fastify)
 
   fastify.post('/migrate/pgboss-v10', { schema: { tags: ['queue'] } }, async (req, reply) => {
     if (!pgQueueEnable) {

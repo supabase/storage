@@ -15,7 +15,7 @@ import fastifyPlugin from 'fastify-plugin'
 import * as http from 'http'
 import type { ServerRequest as Request } from 'srvx'
 import { getConfig } from '../../../config'
-import { db, dbSuperUser, jwt, storage } from '../../plugins'
+import { db, dbSuperUser, registerJwtAuth, storage } from '../../plugins'
 import { ROUTE_OPERATIONS } from '../operations'
 import {
   generateUrl,
@@ -185,7 +185,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   // authenticated routes
   fastify.register(async (fastify) => {
-    fastify.register(jwt)
+    registerJwtAuth(fastify)
     fastify.register(db)
     fastify.register(storage)
 

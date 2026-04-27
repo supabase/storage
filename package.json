@@ -24,7 +24,7 @@
     "test:oriole": "npm run infra:restart:oriole && npm run test:dummy-data && npm run test:integration",
     "test:coverage": "npm run infra:restart && npm run test:dummy-data && npm run test:integration:coverage",
     "test:coverage:ci": "npm run infra:restart:ci && npm run test:dummy-data && npm run test:integration:coverage",
-    "infra:stop": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml down --remove-orphans",
+    "infra:stop": "docker compose --project-directory . --profile monitoring -f ./.docker/docker-compose-infra.yml down --remove-orphans",
     "infra:start": "docker compose --project-directory . --profile monitoring -f ./.docker/docker-compose-infra.yml up -d && sleep 5 && npm run migration:run",
     "infra:start:ci": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml up -d && sleep 5 && npm run migration:run",
     "infra:start:oriole": "docker compose --project-directory . --profile monitoring -f ./.docker/docker-compose-infra.yml -f ./.docker/docker-compose-infra-oriole-override.yml up -d && sleep 5 && npm run migration:run",

@@ -37,7 +37,7 @@ class SegmentedBufferQueue {
     }
 
     if (length > this.totalLength) {
-      throw new Error('Insufficient buffered data')
+      throw ERRORS.InternalError(undefined, 'Insufficient buffered data')
     }
 
     const head = this.segments[this.headIndex]
@@ -324,18 +324,18 @@ export class ChunkSignatureV4Parser extends Transform {
       switch (this.state) {
         case 'HEADER':
           if (this.buffer.length > 0) {
-            throw new Error('Incomplete chunk header')
+            throw ERRORS.InvalidRequest(new Error('Incomplete chunk header'))
           }
           if (!this.completedFinalChunk) {
-            throw new Error('Missing final chunk')
+            throw ERRORS.InvalidRequest(new Error('Missing final chunk'))
           }
           break
         case 'DATA':
-          throw new Error('Unexpected end of chunk data')
+          throw ERRORS.InvalidRequest(new Error('Unexpected end of chunk data'))
         case 'FOOTER':
-          throw new Error('Missing CRLF after chunk data')
+          throw ERRORS.InvalidRequest(new Error('Missing CRLF after chunk data'))
         case 'TRAILER':
-          throw new Error('Incomplete trailer section')
+          throw ERRORS.InvalidRequest(new Error('Incomplete trailer section'))
       }
 
       callback()
@@ -351,7 +351,7 @@ export class ChunkSignatureV4Parser extends Transform {
       'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER',
     ]
     if (!validAlgorithms.includes(alg)) {
-      throw new Error(`Invalid streaming algorithm: ${alg}`)
+      throw ERRORS.InvalidRequest(new Error(`Invalid streaming algorithm: ${alg}`))
     }
   }
 
@@ -367,15 +367,15 @@ export class ChunkSignatureV4Parser extends Transform {
     if (signedHeaderParts.length === 2) {
       const [sizeHex, signature] = signedHeaderParts
       if (!CHUNK_SIZE_PATTERN.test(sizeHex) || !this.signaturePattern.test(signature)) {
-        throw new Error('Invalid chunk header')
+        throw ERRORS.InvalidRequest(new Error('Invalid chunk header'))
       }
       size = parseInt(sizeHex, 16)
       sig = signature
     } else if (signedHeaderParts.length > 2) {
-      throw new Error('Invalid chunk header')
+      throw ERRORS.InvalidRequest(new Error('Invalid chunk header'))
     } else {
       if (!CHUNK_SIZE_PATTERN.test(line)) {
-        throw new Error('Invalid chunk size')
+        throw ERRORS.InvalidRequest(new Error('Invalid chunk size'))
       }
       size = parseInt(line, 16)
       // signature required for signed algorithms
@@ -383,7 +383,7 @@ export class ChunkSignatureV4Parser extends Transform {
         this.alg === 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD' ||
         this.alg === 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER'
       ) {
-        throw new Error('Missing chunk signature')
+        throw ERRORS.InvalidSignature('Missing chunk signature')
       }
     }
     return { size, signature: sig }
@@ -393,7 +393,7 @@ export class ChunkSignatureV4Parser extends Transform {
     if (this.buffer.length === 0) return false
 
     if (this.completedFinalChunk) {
-      throw new Error('Unexpected data after final chunk')
+      throw ERRORS.InvalidRequest(new Error('Unexpected data after final chunk'))
     }
 
     const idx = this.buffer.find(CRLF, this.headerSearchOffset)
@@ -401,21 +401,21 @@ export class ChunkSignatureV4Parser extends Transform {
       const effectiveHeaderLength =
         this.buffer.length - (this.buffer.peekLastByte() === CRLF[0] ? 1 : 0)
       if (effectiveHeaderLength > this.maxHeaderLength) {
-        throw new Error(`Header exceeds ${this.maxHeaderLength} bytes`)
+        throw ERRORS.EntityTooLarge(undefined, 'chunk header', `${this.maxHeaderLength} bytes`)
       }
       this.headerSearchOffset = Math.max(0, this.buffer.length - (CRLF.length - 1))
       return false
     }
 
     if (idx > this.maxHeaderLength) {
-      throw new Error(`Header exceeds ${this.maxHeaderLength} bytes`)
+      throw ERRORS.EntityTooLarge(undefined, 'chunk header', `${this.maxHeaderLength} bytes`)
     }
 
     const line = this.buffer.readUtf8(idx)
     const { size, signature } = this.parseHeaderLine(line)
 
     if (size > this.opts.maxChunkSize) {
-      throw new Error(`Chunk size exceeds ${this.opts.maxChunkSize} bytes`)
+      throw ERRORS.EntityTooLarge(undefined, 'chunk', `${this.opts.maxChunkSize} bytes`)
     }
 
     this.currentChunkSize = size
@@ -460,7 +460,7 @@ export class ChunkSignatureV4Parser extends Transform {
     this.dataRead += toConsume
 
     if (this.dataRead > this.opts.maxChunkSize) {
-      throw new Error(`Chunk size exceeds ${this.opts.maxChunkSize} bytes`)
+      throw ERRORS.EntityTooLarge(undefined, 'chunk', `${this.opts.maxChunkSize} bytes`)
     }
 
     if (this.bytesRemaining === 0) {
@@ -475,7 +475,7 @@ export class ChunkSignatureV4Parser extends Transform {
 
     const footer = this.buffer.peek(CRLF.length)
     if (footer[0] !== 0x0d || footer[1] !== 0x0a) {
-      throw new Error('Missing CRLF after chunk data')
+      throw ERRORS.InvalidRequest(new Error('Missing CRLF after chunk data'))
     }
 
     this.emitCurrentSignatureForVerification()

@@ -158,7 +158,7 @@ describe('ChunkSignatureV4Parser', () => {
       () => {
         parser.end('abc')
       },
-      /Header exceeds 2 bytes/
+      /header exceeded 2 bytes/
     )
   })
 
@@ -169,7 +169,7 @@ describe('ChunkSignatureV4Parser', () => {
       () => {
         parser.end('abc\r\n')
       },
-      /Header exceeds 2 bytes/
+      /header exceeded 2 bytes/
     )
   })
 

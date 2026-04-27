@@ -1,3 +1,4 @@
+import { IcebergError } from '@storage/protocols/iceberg/catalog/errors'
 import { StorageBackendError } from './storage-error'
 
 export enum ErrorCode {
@@ -49,7 +50,7 @@ export enum ErrorCode {
   IcebergMaximumResourceLimit = 'IcebergMaximumResourceLimit',
   IcebergResourceNotEmpty = 'IcebergResourceNotEmpty',
   NoSuchCatalog = 'NoSuchCatalog',
-
+  UnknownError = 'UnknownError',
   S3VectorConflictException = 'ConflictException',
   S3VectorNotFoundException = 'NotFoundException',
   S3VectorBucketNotEmpty = 'VectorBucketNotEmpty',
@@ -145,6 +146,14 @@ export const ERRORS = {
       httpStatusCode: 400,
       message: opts?.message || `Invalid Parameter ${parameter}`,
       originalError: opts?.error,
+    }),
+
+  InvalidRequest: (error: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidRequest,
+      httpStatusCode: 400,
+      message: error.message || 'Invalid Request',
+      originalError: error,
     }),
 
   InvalidJWT: (e?: Error) =>
@@ -550,30 +559,70 @@ export const ERRORS = {
   },
 }
 
-export function isStorageError(errorType: ErrorCode, error: any): error is StorageBackendError {
+const ERROR_CODE_MAP: Record<string, ErrorCode> = {
+  FST_ERR_VALIDATION: ErrorCode.InvalidRequest,
+  FST_ERR_CTP_EMPTY_JSON_BODY: ErrorCode.InvalidRequest,
+  FST_ERR_CTP_INVALID_JSON_BODY: ErrorCode.InvalidRequest,
+  FST_ERR_CTP_INVALID_CONTENT_LENGTH: ErrorCode.InvalidRequest,
+  FST_ERR_CTP_INVALID_MEDIA_TYPE: ErrorCode.InvalidRequest,
+  FST_ERR_CTP_BODY_TOO_LARGE: ErrorCode.InvalidRequest,
+}
+
+export function isStorageError(errorType: ErrorCode, error: unknown): error is StorageBackendError {
   return error instanceof StorageBackendError && error.code === errorType
 }
 
-function hasStatusCode(error: Error): error is Error & { statusCode: number } {
-  return 'statusCode' in error && typeof (error as any).statusCode === 'number'
+function hasNumericStatusCode(error: Error): error is Error & { statusCode: number } {
+  return 'statusCode' in error && typeof error.statusCode === 'number'
 }
 
-export function normalizeRawError(error: any) {
-  if (error instanceof Error) {
-    let statusCode = 0
-    if (error instanceof StorageBackendError && error.httpStatusCode) {
-      statusCode = error.httpStatusCode
-    } else if (hasStatusCode(error)) {
-      // Fastify validation errors include statusCode we can use
-      statusCode = error.statusCode
+function hasStringErrorCode(error: Error): error is Error & { code: string } {
+  return 'code' in error && typeof error.code === 'string'
+}
+
+function getErrorCode(error: Error): string {
+  let code: string = ErrorCode.UnknownError
+  if (error instanceof IcebergError && error.error) {
+    code = error.error
+  } else if (hasStringErrorCode(error)) {
+    if (error.code in ErrorCode) {
+      code = error.code as ErrorCode
+    } else if (error.code in ERROR_CODE_MAP) {
+      code = ERROR_CODE_MAP[error.code]
     }
+  }
+  return code
+}
+
+function getErrorStatusCode(error: Error): number {
+  let statusCode = 0
+  if (error instanceof StorageBackendError && error.httpStatusCode) {
+    statusCode = error.httpStatusCode
+  } else if (error instanceof IcebergError) {
+    statusCode = error.code
+  } else if (hasNumericStatusCode(error)) {
+    // Fastify validation errors include statusCode we can use
+    statusCode = error.statusCode
+  }
+  return statusCode
+}
+
+export function normalizeRawError(error: unknown, logLevel: string) {
+  if (error instanceof Error) {
+    const statusCode = getErrorStatusCode(error)
+    const errorCode = getErrorCode(error)
+    const includeStack =
+      logLevel === 'debug' || statusCode >= 500 || errorCode === ErrorCode.UnknownError
+        ? true
+        : false
 
     return {
       raw: JSON.stringify(error),
       name: error.name,
       message: error.message,
-      stack: error.stack,
+      stack: includeStack ? error.stack || '' : '',
       statusCode,
+      errorCode,
     }
   }
 

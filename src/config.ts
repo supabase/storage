@@ -116,7 +116,7 @@ type StorageConfigType = {
   requestXForwardedHostRegExp?: string
   requestAllowXForwardedPrefix?: boolean
   storagePublicUrl?: string
-  logLevel?: string
+  logLevel: string
   logflareEnabled?: boolean
   logflareApiKey?: string
   logflareSourceToken?: string

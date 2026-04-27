@@ -1467,7 +1467,7 @@ function decodeContinuationToken(token: string) {
   const decoded = Buffer.from(token, 'base64').toString().split(':')
 
   if (decoded.length === 0) {
-    throw new Error('Invalid continuation token')
+    throw ERRORS.InvalidParameter('continuation token')
   }
 
   return decoded[1]

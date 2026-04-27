@@ -20,7 +20,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:integration:watch": "vitest --config vitest.integration.config.ts",
     "test:integration:coverage": "vitest run --coverage --config vitest.integration.config.ts",
-    "test": "npm run infra:restart && npm run test:dummy-data && npm run test:integration",
+    "test": "npm run infra:restart && npm run test:dummy-data && npm run test:integration && npm run test:unit",
     "test:oriole": "npm run infra:restart:oriole && npm run test:dummy-data && npm run test:integration",
     "test:coverage": "npm run infra:restart && npm run test:dummy-data && npm run test:integration:coverage",
     "test:coverage:ci": "npm run infra:restart:ci && npm run test:dummy-data && npm run test:integration:coverage",

@@ -59,6 +59,7 @@ export enum ErrorCode {
   NoAvailableShard = 'NoAvailableShard',
   ShardNotFound = 'ShardNotFound',
 }
+const KNOWN_ERROR_CODES = new Set<string>(Object.values(ErrorCode))
 
 export const ERRORS = {
   BucketNotEmpty: (bucket: string, e?: Error) =>
@@ -581,37 +582,36 @@ function hasStringErrorCode(error: Error): error is Error & { code: string } {
 }
 
 function getErrorCode(error: Error): string {
-  let code: string = ErrorCode.UnknownError
   if (error instanceof IcebergError && error.error) {
-    code = error.error
+    return error.error
   } else if (hasStringErrorCode(error)) {
-    if (error.code in ErrorCode) {
-      code = error.code as ErrorCode
+    if (KNOWN_ERROR_CODES.has(error.code)) {
+      return error.code as ErrorCode
     } else if (error.code in ERROR_CODE_MAP) {
-      code = ERROR_CODE_MAP[error.code]
+      return ERROR_CODE_MAP[error.code]
     }
   }
-  return code
+  return ErrorCode.UnknownError
 }
 
 function getErrorStatusCode(error: Error): number {
-  let statusCode = 0
   if (error instanceof StorageBackendError && error.httpStatusCode) {
-    statusCode = error.httpStatusCode
+    return error.httpStatusCode
   } else if (error instanceof IcebergError) {
-    statusCode = error.code
+    return error.code
   } else if (hasNumericStatusCode(error)) {
     // Fastify validation errors include statusCode we can use
-    statusCode = error.statusCode
+    return error.statusCode
   }
-  return statusCode
+  return 0
 }
 
 export function normalizeRawError(error: unknown, logLevel: string) {
   if (error instanceof Error) {
     const statusCode = getErrorStatusCode(error)
     const errorCode = getErrorCode(error)
-    const includeStack = logLevel === 'debug' || statusCode >= 500 || errorCode === ErrorCode.UnknownError
+    const includeStack =
+      logLevel === 'debug' || statusCode >= 500 || errorCode === ErrorCode.UnknownError
 
     return {
       raw: JSON.stringify(error),

@@ -611,10 +611,7 @@ export function normalizeRawError(error: unknown, logLevel: string) {
   if (error instanceof Error) {
     const statusCode = getErrorStatusCode(error)
     const errorCode = getErrorCode(error)
-    const includeStack =
-      logLevel === 'debug' || statusCode >= 500 || errorCode === ErrorCode.UnknownError
-        ? true
-        : false
+    const includeStack = logLevel === 'debug' || statusCode >= 500 || errorCode === ErrorCode.UnknownError
 
     return {
       raw: JSON.stringify(error),

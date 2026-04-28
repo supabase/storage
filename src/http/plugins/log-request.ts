@@ -1,4 +1,4 @@
-import { logSchema, redactQueryParamFromRequest } from '@internal/monitoring'
+import { logSchema, serializeReplyLog, serializeRequestLog } from '@internal/monitoring'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 
@@ -149,13 +149,10 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     return
   }
 
-  const rMeth = req.method
-  const rUrl = redactQueryParamFromRequest(req, [
-    'token',
-    'X-Amz-Credential',
-    'X-Amz-Signature',
-    'X-Amz-Security-Token',
-  ])
+  const requestLog = serializeRequestLog(req)
+  const replyLog = serializeReplyLog(options.reply)
+  const rMeth = requestLog.method
+  const rUrl = requestLog.url
   const uAgent = req.headers['user-agent']
   const rId = req.id
   const cIP = req.ip
@@ -206,9 +203,9 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     project: tenantId,
     reqId: rId,
     sbReqId: req.sbReqId,
-    req,
+    req: requestLog,
     reqMetadata,
-    res: options.reply,
+    res: replyLog,
     responseTime: options.responseTime,
     executionTime: options.executionTime,
     error,

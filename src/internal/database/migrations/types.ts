@@ -59,4 +59,5 @@ export const DBMigration = {
   's3-multipart-uploads-metadata': 57,
   'operation-ergonomics': 58,
   'drop-unused-functions': 59,
+  'optimize-existing-functions-again': 60,
 } as const

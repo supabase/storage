@@ -11,6 +11,9 @@ import app from '../app'
     method: 'GET',
     url: '/documentation/json',
   })
+  if (response.statusCode !== 200) {
+    throw new Error('Unable to get api spec: ' + response.statusCode + ' ' + response.statusMessage)
+  }
 
   await fs.writeFile('static/api.json', response.body)
 
@@ -25,8 +28,19 @@ import app from '../app'
     method: 'GET',
     url: '/documentation/json',
   })
+  if (adminResponse.statusCode !== 200) {
+    throw new Error(
+      'Unable to get admin api spec: ' +
+        adminResponse.statusCode +
+        ' ' +
+        adminResponse.statusMessage
+    )
+  }
 
   await fs.writeFile('static/api-admin.json', adminResponse.body)
 
   await adminApp.close()
-})().catch(console.error)
+})().catch((e) => {
+  console.error(e)
+  process.exit(1)
+})

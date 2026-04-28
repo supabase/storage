@@ -12,3 +12,4 @@ coverage/
 .idea/
 src/scripts/*.py
 .claude/
+swagger-ui/

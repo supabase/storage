@@ -20,4 +20,7 @@ function swaggerInitializer(targetUrl: string) {
   await fs.cp(swaggerPath, targetPath, { recursive: true })
   await fs.cp(specPath, resolve(targetPath, specFile))
   await fs.writeFile(resolve(targetPath, 'swagger-initializer.js'), swaggerInitializer(specFile))
-})().catch(console.error)
+})().catch((e) => {
+  console.error(e)
+  process.exit(1)
+})

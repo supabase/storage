@@ -90,7 +90,8 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
 
         const attributes = {
           method,
-          operation: request.operation?.type || 'unknown',
+          operation:
+            request.operation?.type || request.routeOptions?.config?.operation?.type || 'unknown',
           status_code: statusCode,
           tenantId: request.tenantId || '',
         }

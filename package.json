@@ -12,6 +12,7 @@
     "migration:test-idempotency": "tsx src/scripts/test-migration-idempotency.ts",
     "migrations:types": "tsx src/scripts/migrations-types.ts",
     "docs:export": "tsx ./src/scripts/export-docs.ts",
+    "docs:export-ui": "tsx ./src/scripts/export-docs-ui.ts",
     "pprof:capture": "tsx src/scripts/pprof-client.ts",
     "test:dummy-data": "tsx -r dotenv/config ./src/test/db/import-dummy-data.ts",
     "test:unit": "vitest run --config vitest.unit.config.ts",

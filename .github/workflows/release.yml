@@ -52,6 +52,8 @@ jobs:
           FILE_SIZE_LIMIT: "52428800"
           STORAGE_BACKEND: s3
           ENABLE_IMAGE_TRANSFORMATION: true
+          VECTOR_ENABLED: true
+          ICEBERG_ENABLED: true
 
   publish:
     needs:

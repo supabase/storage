@@ -67,7 +67,7 @@ const dropNamespaceSchema = {
     },
     required: ['prefix', 'namespace'],
   },
-  summary: 'Create a namespace',
+  summary: 'Drop a namespace',
 } as const
 
 interface createNamespaceSchemaRequest extends AuthenticatedRequest {

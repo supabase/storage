@@ -172,7 +172,7 @@ const listTableSchema = {
     },
     required: ['prefix', 'namespace'],
   },
-  summary: 'Create a namespace',
+  summary: 'Create a table',
 } as const
 
 const loadTableSchema = {

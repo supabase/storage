@@ -19,7 +19,7 @@ export const baseLogger = pino({
   transport: buildTransport(),
   serializers: {
     error(error) {
-      return normalizeRawError(error)
+      return normalizeRawError(error, logLevel)
     },
     res(reply: Pick<FastifyReply, 'statusCode'> & Partial<Pick<FastifyReply, 'getHeaders'>>) {
       const headers = typeof reply.getHeaders === 'function' ? reply.getHeaders() : {}

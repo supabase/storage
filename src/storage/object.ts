@@ -899,7 +899,7 @@ function decodeContinuationToken(token: string): ContinuationToken {
   for (const part of decodedParts) {
     const partMatch = part.match(/^(\S):(.*)/)
     if (!partMatch || partMatch.length !== 3 || !(partMatch[1] in CONTINUATION_TOKEN_PART_MAP)) {
-      throw new Error('Invalid continuation token')
+      throw ERRORS.InvalidParameter('continuation token')
     }
     result[CONTINUATION_TOKEN_PART_MAP[partMatch[1]]] = partMatch[2]
   }

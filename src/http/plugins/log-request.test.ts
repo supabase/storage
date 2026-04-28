@@ -8,7 +8,13 @@ function createApp(lines: string[]) {
   return Fastify({
     disableRequestLogging: true,
     loggerInstance: pino(
-      { level: 'info' },
+      {
+        level: 'info',
+        serializers: {
+          req: (request) => request,
+          res: (reply) => reply,
+        },
+      },
       new Writable({
         write(chunk, _encoding, callback) {
           lines.push(chunk.toString())
@@ -31,7 +37,10 @@ describe('log-request plugin', () => {
     await app.register(requestContext)
     await app.register(logRequest({}))
 
-    app.get('/request-log', async () => {
+    app.get('/request-log', async (_request, reply) => {
+      reply.header('etag', 'test-etag')
+      reply.header('x-secret-response', 'hidden-response')
+
       return { ok: true }
     })
   })
@@ -115,5 +124,69 @@ describe('log-request plugin', () => {
     expect(requestLogLine).toBeDefined()
     expect(requestLogLine).toContain('"tenantId":"tenant-a"')
     expect(requestLogLine).toContain('"project":"tenant-a"')
+  })
+
+  it('logs redacted urls without leaking sensitive request data', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/request-log?token=hidden-query&keep=visible',
+      headers: {
+        authorization: 'Bearer hidden-auth',
+        'x-client-info': 'storage-js',
+        'x-forwarded-proto': 'https',
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const requestLogLine = lines.find((line) => line.includes('"type":"request"'))
+    expect(requestLogLine).toBeDefined()
+
+    const requestLog = JSON.parse(requestLogLine ?? '{}')
+    const serializedLog = JSON.stringify(requestLog)
+
+    expect(requestLog.msg).toContain('/request-log?token=redacted&keep=visible')
+    expect(requestLog.req).toMatchObject({
+      method: 'GET',
+      url: '/request-log?token=redacted&keep=visible',
+    })
+    expect(requestLog.res).toMatchObject({
+      headers: {
+        etag: 'test-etag',
+      },
+    })
+    expect(serializedLog).not.toContain('hidden-query')
+    expect(serializedLog).not.toContain('hidden-auth')
+    expect(serializedLog).not.toContain('hidden-response')
+  })
+
+  it('logs redacted urls for aborted response logs without reply metadata', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/request-log?token=hidden-query&keep=visible',
+      simulate: {
+        close: true,
+        end: true,
+        error: false,
+        split: false,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const abortedLogLine = lines.find((line) => line.includes('ABORTED RES'))
+    expect(abortedLogLine).toBeDefined()
+
+    const abortedLog = JSON.parse(abortedLogLine ?? '{}')
+    const serializedLog = JSON.stringify(abortedLog)
+
+    expect(abortedLog.msg).toContain('ABORTED RES')
+    expect(abortedLog.msg).toContain('/request-log?token=redacted&keep=visible')
+    expect(abortedLog.req).toMatchObject({
+      method: 'GET',
+      url: '/request-log?token=redacted&keep=visible',
+    })
+    expect(abortedLog.res).toBeUndefined()
+    expect(serializedLog).not.toContain('hidden-query')
   })
 })

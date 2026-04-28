@@ -24,6 +24,7 @@ const {
   dbSearchPath,
   dbPostgresVersion,
   databaseApplicationName,
+  tenantPoolCacheTtlMs,
   tenantPoolCacheHitLogSampleRate,
   tenantPoolCacheMissLogSampleRate,
 } = getConfig()
@@ -72,7 +73,7 @@ export const searchPath = ['storage', 'public', 'extensions', ...dbSearchPath.sp
 )
 
 const multiTenantTtlConfig = {
-  ttl: 1000 * 10,
+  ttl: tenantPoolCacheTtlMs,
   updateAgeOnGet: true,
   checkAgeOnGet: true,
 }

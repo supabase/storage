@@ -186,6 +186,7 @@ type StorageConfigType = {
   }
   prometheusMetricsEnabled: boolean
   prometheusMetricsIncludeTenantId: boolean
+  tenantPoolCacheTtlMs: number
   tenantPoolCacheHitLogSampleRate: number
   tenantPoolCacheMissLogSampleRate: number
   otelMetricsEnabled: boolean
@@ -458,6 +459,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
     logflareBatchSize: parseInt(getOptionalConfigFromEnv('LOGFLARE_BATCH_SIZE') || '200', 10),
+    tenantPoolCacheTtlMs: envPositiveInteger(
+      getOptionalConfigFromEnv('TENANT_POOL_CACHE_TTL_MS'),
+      1000 * 10
+    ),
     tenantPoolCacheHitLogSampleRate: envSampleRate(
       getOptionalConfigFromEnv('TENANT_POOL_CACHE_HIT_LOG_SAMPLE_RATE'),
       0
@@ -655,6 +660,12 @@ function envNumber(value: string | undefined, defaultValue?: number): number | u
     return defaultValue
   }
   return parsed
+}
+
+function envPositiveInteger(value: string | undefined, defaultValue: number): number {
+  const parsed = envNumber(value, defaultValue)
+
+  return parsed && parsed > 0 ? parsed : defaultValue
 }
 
 function envSampleRate(value: string | undefined, defaultValue: number): number {

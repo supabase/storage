@@ -157,7 +157,7 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
         project: req.upload.tenantId,
         reqId: req.upload.reqId,
         sbReqId: req.upload.sbReqId,
-        error: ERRORS.InvalidRequest(e as Error),
+        error: ERRORS.InvalidRequest('Failed to parse metadata', e as Error),
       })
     }
   }

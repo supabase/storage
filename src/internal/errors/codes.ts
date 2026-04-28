@@ -149,11 +149,11 @@ export const ERRORS = {
       originalError: opts?.error,
     }),
 
-  InvalidRequest: (error: Error) =>
+  InvalidRequest: (message: string, error?: Error) =>
     new StorageBackendError({
       code: ErrorCode.InvalidRequest,
       httpStatusCode: 400,
-      message: error.message || 'Invalid Request',
+      message: message || 'Invalid Request',
       originalError: error,
     }),
 
@@ -565,8 +565,8 @@ const ERROR_CODE_MAP: Record<string, ErrorCode> = {
   FST_ERR_CTP_EMPTY_JSON_BODY: ErrorCode.InvalidRequest,
   FST_ERR_CTP_INVALID_JSON_BODY: ErrorCode.InvalidRequest,
   FST_ERR_CTP_INVALID_CONTENT_LENGTH: ErrorCode.InvalidRequest,
-  FST_ERR_CTP_INVALID_MEDIA_TYPE: ErrorCode.InvalidRequest,
-  FST_ERR_CTP_BODY_TOO_LARGE: ErrorCode.InvalidRequest,
+  FST_ERR_CTP_INVALID_MEDIA_TYPE: ErrorCode.InvalidMimeType,
+  FST_ERR_CTP_BODY_TOO_LARGE: ErrorCode.EntityTooLarge,
 }
 
 export function isStorageError(errorType: ErrorCode, error: unknown): error is StorageBackendError {
@@ -584,10 +584,12 @@ function hasStringErrorCode(error: Error): error is Error & { code: string } {
 function getErrorCode(error: Error): string {
   if (error instanceof IcebergError && error.error) {
     return error.error
-  } else if (hasStringErrorCode(error)) {
+  }
+  if (hasStringErrorCode(error)) {
     if (KNOWN_ERROR_CODES.has(error.code)) {
       return error.code as ErrorCode
-    } else if (error.code in ERROR_CODE_MAP) {
+    }
+    if (error.code in ERROR_CODE_MAP) {
       return ERROR_CODE_MAP[error.code]
     }
   }
@@ -597,9 +599,11 @@ function getErrorCode(error: Error): string {
 function getErrorStatusCode(error: Error): number {
   if (error instanceof StorageBackendError && error.httpStatusCode) {
     return error.httpStatusCode
-  } else if (error instanceof IcebergError) {
+  }
+  if (error instanceof IcebergError) {
     return error.code
-  } else if (hasNumericStatusCode(error)) {
+  }
+  if (hasNumericStatusCode(error)) {
     // Fastify validation errors include statusCode we can use
     return error.statusCode
   }

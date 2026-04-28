@@ -63,7 +63,7 @@ export const xmlParser = fastifyPlugin(
             (err: Error | null, parsed: unknown) => {
               if (err) {
                 const parseError: RequestError = ERRORS.InvalidRequest(
-                  new Error(`Invalid XML payload: ${err.message}`)
+                  `Invalid XML payload: ${err.message}`
                 )
                 parseError.statusCode = 400
                 done(parseError)

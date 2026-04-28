@@ -77,9 +77,7 @@ export default async function routes(fastify: FastifyInstance) {
                 const isValid = compiler(data)
 
                 if (!isValid) {
-                  const validationError = ERRORS.InvalidRequest(
-                    new Error('Invalid request')
-                  ) as Error & {
+                  const validationError = ERRORS.InvalidRequest('Invalid request') as Error & {
                     validation?: unknown
                   }
                   // validation property is required to send correct reply in error-handler.ts

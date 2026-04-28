@@ -324,18 +324,18 @@ export class ChunkSignatureV4Parser extends Transform {
       switch (this.state) {
         case 'HEADER':
           if (this.buffer.length > 0) {
-            throw ERRORS.InvalidRequest(new Error('Incomplete chunk header'))
+            throw ERRORS.InvalidRequest('Incomplete chunk header')
           }
           if (!this.completedFinalChunk) {
-            throw ERRORS.InvalidRequest(new Error('Missing final chunk'))
+            throw ERRORS.InvalidRequest('Missing final chunk')
           }
           break
         case 'DATA':
-          throw ERRORS.InvalidRequest(new Error('Unexpected end of chunk data'))
+          throw ERRORS.InvalidRequest('Unexpected end of chunk data')
         case 'FOOTER':
-          throw ERRORS.InvalidRequest(new Error('Missing CRLF after chunk data'))
+          throw ERRORS.InvalidRequest('Missing CRLF after chunk data')
         case 'TRAILER':
-          throw ERRORS.InvalidRequest(new Error('Incomplete trailer section'))
+          throw ERRORS.InvalidRequest('Incomplete trailer section')
       }
 
       callback()
@@ -351,7 +351,7 @@ export class ChunkSignatureV4Parser extends Transform {
       'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER',
     ]
     if (!validAlgorithms.includes(alg)) {
-      throw ERRORS.InvalidRequest(new Error(`Invalid streaming algorithm: ${alg}`))
+      throw ERRORS.InvalidRequest(`Invalid streaming algorithm: ${alg}`)
     }
   }
 
@@ -367,15 +367,15 @@ export class ChunkSignatureV4Parser extends Transform {
     if (signedHeaderParts.length === 2) {
       const [sizeHex, signature] = signedHeaderParts
       if (!CHUNK_SIZE_PATTERN.test(sizeHex) || !this.signaturePattern.test(signature)) {
-        throw ERRORS.InvalidRequest(new Error('Invalid chunk header'))
+        throw ERRORS.InvalidRequest('Invalid chunk header')
       }
       size = parseInt(sizeHex, 16)
       sig = signature
     } else if (signedHeaderParts.length > 2) {
-      throw ERRORS.InvalidRequest(new Error('Invalid chunk header'))
+      throw ERRORS.InvalidRequest('Invalid chunk header')
     } else {
       if (!CHUNK_SIZE_PATTERN.test(line)) {
-        throw ERRORS.InvalidRequest(new Error('Invalid chunk size'))
+        throw ERRORS.InvalidRequest('Invalid chunk size')
       }
       size = parseInt(line, 16)
       // signature required for signed algorithms
@@ -393,7 +393,7 @@ export class ChunkSignatureV4Parser extends Transform {
     if (this.buffer.length === 0) return false
 
     if (this.completedFinalChunk) {
-      throw ERRORS.InvalidRequest(new Error('Unexpected data after final chunk'))
+      throw ERRORS.InvalidRequest('Unexpected data after final chunk')
     }
 
     const idx = this.buffer.find(CRLF, this.headerSearchOffset)
@@ -475,7 +475,7 @@ export class ChunkSignatureV4Parser extends Transform {
 
     const footer = this.buffer.peek(CRLF.length)
     if (footer[0] !== 0x0d || footer[1] !== 0x0a) {
-      throw ERRORS.InvalidRequest(new Error('Missing CRLF after chunk data'))
+      throw ERRORS.InvalidRequest('Missing CRLF after chunk data')
     }
 
     this.emitCurrentSignatureForVerification()

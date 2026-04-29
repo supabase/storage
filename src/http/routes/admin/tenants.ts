@@ -111,8 +111,8 @@ interface tenantDBInterface {
   id: string
   anon_key: string
   database_url: string
-  database_pool_url?: string
-  database_pool_mode?: string
+  database_pool_url?: string | null
+  database_pool_mode?: string | null
   max_connections?: number
   jwt_secret: string
   jwks: { keys?: JwksConfigKey[] } | null
@@ -495,15 +495,15 @@ export default async function routes(fastify: FastifyInstance) {
         tenantInfo.feature_s3_protocol = features?.s3Protocol?.enabled
       }
 
-      if (databasePoolUrl) {
-        tenantInfo.database_pool_url = encrypt(databasePoolUrl)
+      if (databasePoolUrl !== undefined) {
+        tenantInfo.database_pool_url = databasePoolUrl === null ? null : encrypt(databasePoolUrl)
       }
 
       if (maxConnections) {
         tenantInfo.max_connections = Number(maxConnections)
       }
 
-      if (databasePoolMode) {
+      if (databasePoolMode !== undefined) {
         tenantInfo.database_pool_mode = databasePoolMode
       }
 

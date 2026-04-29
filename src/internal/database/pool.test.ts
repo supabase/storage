@@ -80,6 +80,22 @@ async function loadPoolModule(
   return import('./pool')
 }
 
+async function loadPoolModuleWithConfig(
+  configOverrides: Record<string, unknown> = {}
+): Promise<PoolModule> {
+  vi.resetModules()
+  vi.doUnmock('@internal/cache')
+
+  const configModule = await import('../../config')
+  configModule.getConfig({ reload: true })
+  configModule.mergeConfig({
+    isMultitenant: true,
+    ...configOverrides,
+  } as Parameters<typeof configModule.mergeConfig>[0])
+
+  return import('./pool')
+}
+
 describe('PoolManager cache lifecycle', () => {
   beforeAll(() => {
     vi.useFakeTimers()
@@ -132,6 +148,35 @@ describe('PoolManager cache lifecycle', () => {
     const second = poolManager.getPool(settings)
 
     expect(second).not.toBe(first)
+    expect(poolManager.created).toHaveLength(2)
+
+    await poolManager.destroyAll()
+  })
+
+  test('uses the configured tenant pool cache ttl', async () => {
+    const poolModule = await loadPoolModuleWithConfig({
+      tenantPoolCacheTtlMs: 20,
+    })
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const settings = createPoolSettings('tenant-configured-cache-ttl')
+
+    const first = poolManager.getPool(settings)
+
+    await vi.advanceTimersByTimeAsync(40)
+
+    expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
+    expect(poolManager.getPool(settings)).not.toBe(first)
     expect(poolManager.created).toHaveLength(2)
 
     await poolManager.destroyAll()

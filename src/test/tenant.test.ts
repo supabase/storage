@@ -819,6 +819,37 @@ describe('Tenant configs', () => {
     expect(getResponseJSON.databasePoolUrl).toBeNull()
   })
 
+  test('PUT clears tenant databasePoolUrl when set to null', async () => {
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    const putResponse = await adminApp.inject({
+      method: 'PUT',
+      url: `/tenants/abc`,
+      payload: { ...payload, databasePoolUrl: null },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(putResponse.statusCode).toBe(204)
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(JSON.parse(getResponse.body).databasePoolUrl).toBeNull()
+  })
+
   test('Upsert tenant config updates iceberg/vector limits when enabled is omitted', async () => {
     await adminApp.inject({
       method: 'POST',

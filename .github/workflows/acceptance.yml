@@ -40,10 +40,22 @@ concurrency:
 
 jobs:
   acceptance_local:
-    name: Local
+    name: Local / ${{ matrix.storage_backend }} / ${{ matrix.database }} / ${{ matrix.tenancy }}
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.acceptance_environment == 'local' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 35
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        storage_backend:
+          - s3
+          - file
+        database:
+          - pg
+          - oriole
+        tenancy:
+          - single
+          - multitenant
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
@@ -67,7 +79,16 @@ jobs:
         run: npm run acceptance:typecheck
       - name: Run local acceptance profile
         env:
+          ACCEPTANCE_ADMIN_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5001' || '' }}
+          ACCEPTANCE_ENABLE_ADMIN: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
+          ACCEPTANCE_ENABLE_PATH_EDGES: ${{ matrix.storage_backend == 'file' && 'true' || 'false' }}
+          ACCEPTANCE_INFRA_RESTART_SCRIPT: ${{ matrix.database == 'oriole' && 'infra:restart:ci:oriole' || 'infra:restart:ci' }}
           ACCEPTANCE_PROFILE: ${{ inputs.profile || 'smoke' }}
+          ACCEPTANCE_X_FORWARDED_HOST: ${{ matrix.tenancy == 'multitenant' && 'bjhaohmqunupljrqypxz.local.dev' || '' }}
+          MULTI_TENANT: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
+          REQUEST_X_FORWARDED_HOST_REGEXP: ${{ matrix.tenancy == 'multitenant' && '^([a-z]{20})[.]local[.](?:com|dev)$' || '' }}
+          STORAGE_PUBLIC_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5000' || '' }}
+          STORAGE_BACKEND: ${{ matrix.storage_backend }}
         run: |
           mkdir -p data coverage/acceptance
           chmod -R 777 data
@@ -76,7 +97,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: acceptance-local
+          name: acceptance-local-${{ matrix.storage_backend }}-${{ matrix.database }}-${{ matrix.tenancy }}
           path: coverage/acceptance
           if-no-files-found: ignore
 
@@ -126,6 +147,7 @@ jobs:
           ACCEPTANCE_TLS_REJECT_UNAUTHORIZED: ${{ vars.ACCEPTANCE_TLS_REJECT_UNAUTHORIZED }}
           ACCEPTANCE_TENANT_ID: ${{ vars.ACCEPTANCE_TENANT_ID || secrets.ACCEPTANCE_TENANT_ID }}
           ACCEPTANCE_TUS_ENDPOINT: ${{ vars.ACCEPTANCE_TUS_ENDPOINT }}
+          ACCEPTANCE_X_FORWARDED_HOST: ${{ vars.ACCEPTANCE_X_FORWARDED_HOST }}
           ACCEPTANCE_ADMIN_URL: ${{ vars.ACCEPTANCE_ADMIN_URL || secrets.ACCEPTANCE_ADMIN_URL }}
           ACCEPTANCE_ADMIN_API_KEY: ${{ secrets.ACCEPTANCE_ADMIN_API_KEY }}
           ACCEPTANCE_ANON_KEY: ${{ secrets.ACCEPTANCE_ANON_KEY }}

@@ -4,7 +4,7 @@ import {
   getAcceptanceConfig,
   joinUrl,
 } from '../support/config'
-import { createRestClient } from '../support/http'
+import { createAcceptanceHeaders, createRestClient } from '../support/http'
 import {
   cleanupRestResources,
   createRestBucket,
@@ -106,7 +106,9 @@ describeAcceptance(
         const signedUrl = joinUrl(config.baseUrl, signed.json?.signedURL ?? '')
         let signedResponse: Response | undefined
         try {
-          signedResponse = await fetch(signedUrl)
+          signedResponse = await fetch(signedUrl, {
+            headers: createAcceptanceHeaders(),
+          })
           expect(signedResponse.status).toBe(200)
           expect(await signedResponse.text()).toBe(payload)
         } finally {

@@ -4,7 +4,7 @@ import {
   getAcceptanceConfig,
   joinUrl,
 } from '../support/config'
-import { createRestClient } from '../support/http'
+import { createAcceptanceHeaders, createRestClient } from '../support/http'
 import {
   cleanupRestResources,
   createRestBucket,
@@ -209,9 +209,9 @@ describeAcceptance(
             joinUrl(config.baseUrl, signedUpload.json?.url ?? ''),
             {
               body: signedPayload,
-              headers: {
+              headers: createAcceptanceHeaders({
                 'content-type': 'text/plain',
-              },
+              }),
               method: 'PUT',
             }
           )

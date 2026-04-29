@@ -4,7 +4,7 @@ import {
   getAcceptanceConfig,
   joinUrl,
 } from '../support/config'
-import { createRestClient } from '../support/http'
+import { createAcceptanceHeaders, createRestClient } from '../support/http'
 import {
   cleanupRestResources,
   createRestBucket,
@@ -140,11 +140,13 @@ async function expectRenderedImage(url: string, token?: string) {
   let response: Response | undefined
   try {
     response = await fetch(url, {
-      headers: token
-        ? {
-            authorization: `Bearer ${token}`,
-          }
-        : undefined,
+      headers: createAcceptanceHeaders(
+        token
+          ? {
+              authorization: `Bearer ${token}`,
+            }
+          : undefined
+      ),
     })
 
     expect(response.status).toBe(200)

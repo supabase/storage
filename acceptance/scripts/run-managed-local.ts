@@ -13,7 +13,7 @@ const profile = readArg('profile') ?? acceptanceEnv('ACCEPTANCE_PROFILE') ?? 'sm
 const serverEnv = loadServerEnvFiles(inheritedEnv)
 const serverPort = serverEnv.SERVER_PORT || serverEnv.PORT || '5000'
 const baseUrl = acceptanceEnv('ACCEPTANCE_BASE_URL') ?? `http://127.0.0.1:${serverPort}`
-const acceptanceRunEnv = {
+const acceptanceRunEnv: NodeJS.ProcessEnv = {
   ...process.env,
   ACCEPTANCE_BASE_URL: baseUrl,
   ACCEPTANCE_PROFILE: profile,
@@ -23,6 +23,7 @@ const acceptanceRunEnv = {
 }
 
 let server: ChildProcess | undefined
+let provisionedS3Credential: ProvisionedS3Credential | undefined
 
 main().catch((error) => {
   console.error(error)
@@ -32,7 +33,7 @@ main().catch((error) => {
 async function main() {
   try {
     if (process.env.ACCEPTANCE_SKIP_INFRA !== 'true') {
-      await run('npm', ['run', 'infra:restart:ci'], serverEnv)
+      await run('npm', ['run', resolveInfraRestartScript()], serverEnv)
       await run('npm', ['run', 'test:dummy-data'], serverEnv)
     }
 
@@ -45,12 +46,213 @@ async function main() {
     prefixOutput(server.stderr, '[storage] ')
 
     await waitForStatus(`${baseUrl}/status`, 60_000)
+
+    if (isTruthy(serverEnv.MULTI_TENANT) || isTruthy(serverEnv.IS_MULTITENANT)) {
+      provisionedS3Credential = await provisionLocalMultitenantTenant(serverEnv)
+      acceptanceRunEnv.ACCEPTANCE_TENANT_ID = provisionedS3Credential.tenantId
+      acceptanceRunEnv.ACCEPTANCE_S3_ACCESS_KEY_ID = provisionedS3Credential.accessKey
+      acceptanceRunEnv.ACCEPTANCE_S3_SECRET_ACCESS_KEY = provisionedS3Credential.secretKey
+    }
+
     await run('npm', ['run', 'acceptance:run', '--', ...args], acceptanceRunEnv)
   } finally {
+    if (provisionedS3Credential) {
+      await deleteProvisionedS3Credential(provisionedS3Credential).catch((error) => {
+        process.stderr.write(
+          `[acceptance] failed to delete local S3 credential: ${String(error)}\n`
+        )
+      })
+    }
+
     if (server) {
       await stopServer(server)
     }
   }
+}
+
+interface ProvisionedS3Credential {
+  accessKey: string
+  adminApiKey: string
+  adminUrl: string
+  id: string
+  secretKey: string
+  tenantId: string
+}
+
+interface S3CredentialResponse {
+  access_key?: string
+  id?: string
+  secret_key?: string
+}
+
+async function provisionLocalMultitenantTenant(
+  env: NodeJS.ProcessEnv
+): Promise<ProvisionedS3Credential> {
+  const adminPort = env.SERVER_ADMIN_PORT || '5001'
+  const adminUrl = `http://127.0.0.1:${adminPort}`
+  const adminApiKey = firstCsvValue(requiredEnv(env, 'SERVER_ADMIN_API_KEYS', 'ADMIN_API_KEYS'))
+  const tenantId = requiredEnv(env, 'TENANT_ID')
+
+  await waitForStatus(`${adminUrl}/status`, 60_000)
+
+  await requestAdmin(adminUrl, adminApiKey, 'PUT', `/tenants/${encodeURIComponent(tenantId)}`, {
+    anonKey: requiredEnv(env, 'ANON_KEY'),
+    databasePoolUrl: env.DATABASE_POOL_URL || undefined,
+    databaseUrl: requiredEnv(env, 'DATABASE_URL'),
+    features: {
+      icebergCatalog: {
+        enabled: isTruthy(env.ICEBERG_ENABLED),
+        maxCatalogs: envNumber(env.ICEBERG_MAX_CATALOGS, 2),
+        maxNamespaces: envNumber(env.ICEBERG_MAX_NAMESPACES, 25),
+        maxTables: envNumber(env.ICEBERG_MAX_TABLES, 10),
+      },
+      imageTransformation: {
+        enabled: isTruthy(env.IMAGE_TRANSFORMATION_ENABLED),
+        maxResolution: envNumber(env.IMAGE_TRANSFORMATION_LIMIT_MAX_SIZE, 2000),
+      },
+      purgeCache: {
+        enabled: false,
+      },
+      s3Protocol: {
+        enabled: true,
+      },
+      vectorBuckets: {
+        enabled: isTruthy(env.VECTOR_ENABLED),
+        maxBuckets: envNumber(env.VECTOR_MAX_BUCKETS, 10),
+        maxIndexes: envNumber(env.VECTOR_MAX_INDEXES, 20),
+      },
+    },
+    fileSizeLimit: envNumber(env.UPLOAD_FILE_SIZE_LIMIT, 524288000),
+    jwtSecret: requiredEnv(env, 'AUTH_JWT_SECRET', 'PGRST_JWT_SECRET'),
+    serviceKey: requiredEnv(env, 'SERVICE_KEY'),
+  })
+
+  const credential = await requestAdmin<S3CredentialResponse>(
+    adminUrl,
+    adminApiKey,
+    'POST',
+    `/s3/${encodeURIComponent(tenantId)}/credentials`,
+    {
+      claims: {
+        role: env.DB_SERVICE_ROLE || 'service_role',
+        sub: 'local-acceptance',
+      },
+      description: `local-acceptance-${Date.now()}`,
+    },
+    201
+  )
+
+  if (!credential?.id || !credential.access_key || !credential.secret_key) {
+    throw new Error('Local multitenant S3 credential response was incomplete')
+  }
+
+  return {
+    accessKey: credential.access_key,
+    adminApiKey,
+    adminUrl,
+    id: credential.id,
+    secretKey: credential.secret_key,
+    tenantId,
+  }
+}
+
+async function deleteProvisionedS3Credential(credential: ProvisionedS3Credential) {
+  await requestAdmin(
+    credential.adminUrl,
+    credential.adminApiKey,
+    'DELETE',
+    `/s3/${encodeURIComponent(credential.tenantId)}/credentials`,
+    {
+      id: credential.id,
+    },
+    [200, 204]
+  )
+}
+
+async function requestAdmin<T = unknown>(
+  adminUrl: string,
+  adminApiKey: string,
+  method: string,
+  route: string,
+  body?: Record<string, unknown>,
+  expectedStatus: number | number[] = 204
+): Promise<T | undefined> {
+  const response = await fetch(new URL(route.replace(/^\/+/, ''), `${adminUrl}/`), {
+    body: body ? JSON.stringify(body) : undefined,
+    headers: {
+      apikey: adminApiKey,
+      ...(body ? { 'content-type': 'application/json' } : undefined),
+    },
+    method,
+  })
+  const text = await response.text()
+
+  if (!statusMatches(response.status, expectedStatus)) {
+    throw new Error(
+      [
+        `Unexpected admin status for ${method} ${route}`,
+        `expected: ${Array.isArray(expectedStatus) ? expectedStatus.join(', ') : expectedStatus}`,
+        `received: ${response.status}`,
+        `body: ${text}`,
+      ].join('\n')
+    )
+  }
+
+  return parseJson<T>(text)
+}
+
+function resolveInfraRestartScript() {
+  const script = acceptanceEnv('ACCEPTANCE_INFRA_RESTART_SCRIPT') ?? 'infra:restart:ci'
+  const allowed = new Set(['infra:restart:ci', 'infra:restart:ci:oriole'])
+
+  if (!allowed.has(script)) {
+    throw new Error(`Unsupported ACCEPTANCE_INFRA_RESTART_SCRIPT: ${script}`)
+  }
+
+  return script
+}
+
+function requiredEnv(env: NodeJS.ProcessEnv, name: string, fallbackName?: string): string {
+  const value = env[name] || (fallbackName ? env[fallbackName] : undefined)
+
+  if (!value) {
+    throw new Error(
+      `Missing required local acceptance environment variable: ${
+        fallbackName ? `${name} or ${fallbackName}` : name
+      }`
+    )
+  }
+
+  return value
+}
+
+function envNumber(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback
+  }
+
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
+
+function firstCsvValue(value: string): string {
+  return value.split(',')[0]?.trim() || value
+}
+
+function isTruthy(value: string | undefined): boolean {
+  return value === '1' || value === 'true' || value === 'yes'
+}
+
+function statusMatches(status: number, expected: number | number[]) {
+  return Array.isArray(expected) ? expected.includes(status) : status === expected
+}
+
+function parseJson<T>(text: string): T | undefined {
+  if (!text) {
+    return undefined
+  }
+
+  return JSON.parse(text) as T
 }
 
 function run(cmd: string, runArgs: string[], runEnv: NodeJS.ProcessEnv): Promise<void> {

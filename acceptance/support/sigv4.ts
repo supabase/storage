@@ -69,6 +69,9 @@ async function sendAwsChunkedRequest(options: {
     headers: {
       'content-encoding': 'aws-chunked',
       'x-amz-decoded-content-length': options.payload.length.toString(),
+      ...(options.config.forwardedHost
+        ? { 'x-forwarded-host': options.config.forwardedHost }
+        : undefined),
       ...options.headers,
     },
     method: 'PUT',

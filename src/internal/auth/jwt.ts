@@ -40,6 +40,7 @@ export type SignedUploadToken = {
 }
 
 const jwtJwksFingerprintCache = new WeakMap<object, string>()
+const encoder = new TextEncoder()
 
 async function findJWKFromHeader(
   header: JWTHeaderParameters,
@@ -47,7 +48,7 @@ async function findJWKFromHeader(
   jwks: JwksConfig | null
 ) {
   if (!jwks || !jwks.keys) {
-    return new TextEncoder().encode(secret)
+    return encoder.encode(secret)
   }
 
   if (JWT_HMAC_ALGOS.indexOf(header.alg) > -1) {
@@ -55,7 +56,7 @@ async function findJWKFromHeader(
 
     if (!header.kid && header.alg === jwtAlgorithm) {
       // jwt is probably signed with the static secret
-      return new TextEncoder().encode(secret)
+      return encoder.encode(secret)
     }
 
     // find the first key without a kid or with the matching kid and the "oct" type
@@ -65,7 +66,7 @@ async function findJWKFromHeader(
 
     if (!jwk) {
       // jwt is probably signed with the static secret
-      return new TextEncoder().encode(secret)
+      return encoder.encode(secret)
     }
 
     return Buffer.from(jwk.k, 'base64')
@@ -87,7 +88,7 @@ async function findJWKFromHeader(
 
   if (!jwk) {
     // couldn't find a matching JWK, try to use the secret
-    return new TextEncoder().encode(secret)
+    return encoder.encode(secret)
   }
   return await importJWK(jwk)
 }
@@ -241,7 +242,7 @@ export async function signJWT(
   }
 
   if (typeof secret === 'string') {
-    const signingSecret = new TextEncoder().encode(secret)
+    const signingSecret = encoder.encode(secret)
     return signer.setProtectedHeader({ alg: jwtAlgorithm }).sign(signingSecret)
   } else {
     const signingSecret = await importJWK(secret)

@@ -336,13 +336,13 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
         name: params.warehouse,
       })
 
-      const namespace = await this.options.metastore.findNamespaceByName({
+      const namespace = await store.findNamespaceByName({
         tenantId: this.tenantId,
         name: params.namespace,
         catalogId: catalog.id,
       })
 
-      const dbTable = await this.options.metastore.findTableByName({
+      const dbTable = await store.findTableByName({
         tenantId: this.tenantId,
         name: params.table,
         namespaceId: namespace.id,

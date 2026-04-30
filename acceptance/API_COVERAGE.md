@@ -4,9 +4,9 @@ The acceptance suite is black-box by design. Tests only use public HTTP, S3, TUS
 surfaces so the same contracts can be run against the current TypeScript service or a future
 Go/Rust rewrite.
 
-## Default PR Coverage
+## Core Coverage
 
-These run in `smoke` / `core` profiles and are suitable for pull requests against local CI:
+These run in `smoke` / `core` profiles and are included in the default local CI `full` profile:
 
 | Area                   | Covered APIs / behavior                                                                                                           |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -28,9 +28,10 @@ These run in the `wire` profile in addition to smoke coverage:
 | ---------- | ----------------------------------------------------------------------- |
 | Wire/SigV4 | raw `aws-chunked` PutObject and UploadPart, trailer-signature rejection |
 
-## Opt-In Coverage
+## Capability-Gated Coverage
 
-These require target-specific capabilities and are off by default:
+These require target-specific capabilities. They run when the capability flag is enabled and the
+selected profile includes the spec:
 
 | Capability | Enable with                                                                             | Covered APIs / behavior                                                                                                                                                                              |
 | ---------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

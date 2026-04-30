@@ -10,7 +10,7 @@ on:
       profile:
         description: Acceptance profile to run
         required: true
-        default: smoke
+        default: full
         type: choice
         options:
           - smoke
@@ -83,7 +83,7 @@ jobs:
           ACCEPTANCE_ENABLE_ADMIN: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           ACCEPTANCE_ENABLE_PATH_EDGES: ${{ matrix.storage_backend == 'file' && 'true' || 'false' }}
           ACCEPTANCE_INFRA_RESTART_SCRIPT: ${{ matrix.database == 'oriole' && 'infra:restart:ci:oriole' || 'infra:restart:ci' }}
-          ACCEPTANCE_PROFILE: ${{ inputs.profile || 'smoke' }}
+          ACCEPTANCE_PROFILE: ${{ inputs.profile || 'full' }}
           ACCEPTANCE_X_FORWARDED_HOST: ${{ matrix.tenancy == 'multitenant' && 'bjhaohmqunupljrqypxz.local.dev' || '' }}
           MULTI_TENANT: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           REQUEST_X_FORWARDED_HOST_REGEXP: ${{ matrix.tenancy == 'multitenant' && '^([a-z]{20})[.]local[.](?:com|dev)$' || '' }}

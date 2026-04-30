@@ -180,7 +180,7 @@ services:
       - IMGPROXY_FORMAT_QUALITY=jpeg=80,avif=62,webp=80
 
   rest-catalog:
-    image: tabulario/iceberg-rest
+    image: apache/iceberg-rest-fixture:1.10.1
     container_name: iceberg-rest
     depends_on:
       - minio_setup

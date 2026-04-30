@@ -34,13 +34,12 @@ describeAcceptance(
       const bucketName = uniqueBucketName('tus')
       const objectKey = uniqueObjectKey('tus')
       const payload = Buffer.from(`acceptance-tus-${config.runId}`)
-      const uploadPayload = new Blob([payload])
 
       try {
         await createRestBucket(bucketName)
         await new Promise<void>((resolve, reject) => {
-          const upload = new tus.Upload(uploadPayload, {
-            chunkSize: uploadPayload.size,
+          const upload = new tus.Upload(payload, {
+            chunkSize: payload.length,
             endpoint: config.tusEndpoint,
             headers: withAcceptanceHeaders({
               authorization: `Bearer ${requireServiceKey(config)}`,

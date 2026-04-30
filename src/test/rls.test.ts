@@ -635,8 +635,11 @@ async function tusUploadFile(
   } catch (e) {
     if (!(e instanceof DetailedError)) throw e
 
-    statusCode = e.originalResponse.getStatus()
-    message = e.originalResponse.getBody()
+    const response = e.originalResponse
+    if (!response) throw e
+
+    statusCode = response.getStatus()
+    message = response.getBody()
   }
 
   const body = message ? { message } : {}

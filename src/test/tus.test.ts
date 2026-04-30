@@ -25,6 +25,18 @@ const localServerAddress = 'http://127.0.0.1:8999'
 const backend = backends.createStorageBackend(storageBackendType)
 const client = backend.client
 
+function expectTusErrorResponse(error: unknown) {
+  expect(error).toBeInstanceOf(DetailedError)
+
+  const response = (error as DetailedError).originalResponse
+  expect(response).not.toBeNull()
+  if (!response) {
+    throw error
+  }
+
+  return response
+}
+
 describe('Tus multipart', () => {
   let db: StorageKnexDB
   let storage: Storage
@@ -188,11 +200,9 @@ describe('Tus multipart', () => {
 
         throw Error('it should error with max-size exceeded')
       } catch (e) {
-        expect(e).toBeInstanceOf(DetailedError)
-
-        const err = e as DetailedError
-        expect(err.originalResponse.getBody()).toEqual('Bucket not found')
-        expect(err.originalResponse.getStatus()).toEqual(404)
+        const response = expectTusErrorResponse(e)
+        expect(response.getBody()).toEqual('Bucket not found')
+        expect(response.getStatus()).toEqual(404)
       }
     })
 
@@ -237,11 +247,9 @@ describe('Tus multipart', () => {
 
         throw Error('it should error with max-size exceeded')
       } catch (e) {
-        expect(e).toBeInstanceOf(DetailedError)
-
-        const err = e as DetailedError
-        expect(err.originalResponse.getBody()).toEqual('Maximum size exceeded\n')
-        expect(err.originalResponse.getStatus()).toEqual(413)
+        const response = expectTusErrorResponse(e)
+        expect(response.getBody()).toEqual('Maximum size exceeded\n')
+        expect(response.getStatus()).toEqual(413)
       }
     })
   })
@@ -432,9 +440,9 @@ describe('Tus multipart', () => {
       } catch (e) {
         expect((e as Error).message).not.toEqual('it should error with expired token')
 
-        const err = e as DetailedError
-        expect(err.originalResponse.getBody()).toEqual('"exp" claim timestamp check failed')
-        expect(err.originalResponse.getStatus()).toEqual(400)
+        const response = expectTusErrorResponse(e)
+        expect(response.getBody()).toEqual('"exp" claim timestamp check failed')
+        expect(response.getStatus()).toEqual(400)
       }
     })
 
@@ -480,9 +488,9 @@ describe('Tus multipart', () => {
       } catch (e) {
         expect((e as Error).message).not.toEqual('it should error with expired token')
 
-        const err = e as DetailedError
-        expect(err.originalResponse.getBody()).toEqual('Invalid Compact JWS')
-        expect(err.originalResponse.getStatus()).toEqual(400)
+        const response = expectTusErrorResponse(e)
+        expect(response.getBody()).toEqual('Invalid Compact JWS')
+        expect(response.getStatus()).toEqual(400)
       }
     })
 
@@ -525,9 +533,9 @@ describe('Tus multipart', () => {
       } catch (e) {
         expect((e as Error).message).not.toEqual('it should error with expired token')
 
-        const err = e as DetailedError
-        expect(err.originalResponse.getBody()).toEqual('Missing x-signature header')
-        expect(err.originalResponse.getStatus()).toEqual(400)
+        const response = expectTusErrorResponse(e)
+        expect(response.getBody()).toEqual('Missing x-signature header')
+        expect(response.getStatus()).toEqual(400)
       }
     })
   })

@@ -79,6 +79,19 @@ function createTusServer(
   agent: { httpsAgent: https.Agent; httpAgent: http.Agent }
 ) {
   const datastore = createTusStore(agent)
+  const sharedS3Client =
+    tusLockType === 's3'
+      ? new S3Client({
+          requestHandler: new NodeHttpHandler({
+            ...agent,
+            connectionTimeout: 5000,
+            requestTimeout: storageS3ClientTimeout,
+          }),
+          region: storageS3Region,
+          endpoint: storageS3Endpoint,
+          forcePathStyle: storageS3ForcePathStyle,
+        })
+      : undefined
   const serverOptions: ServerOptions & {
     datastore: DataStore
   } = {
@@ -105,16 +118,7 @@ function createTusServer(
             maxRetries: 10,
             retryDelayMs: 250,
             renewalIntervalMs: 10 * 1000, // 10 seconds
-            s3Client: new S3Client({
-              requestHandler: new NodeHttpHandler({
-                ...agent,
-                connectionTimeout: 5000,
-                requestTimeout: storageS3ClientTimeout,
-              }),
-              region: storageS3Region,
-              endpoint: storageS3Endpoint,
-              forcePathStyle: storageS3ForcePathStyle,
-            }),
+            s3Client: sharedS3Client!,
             notifier: lockNotifier,
           })
 

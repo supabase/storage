@@ -23,7 +23,7 @@ ACCEPTANCE_S3_ENDPOINT=http://127.0.0.1:5000/s3 \
 ACCEPTANCE_SERVICE_KEY="..." \
 ACCEPTANCE_S3_ACCESS_KEY_ID="..." \
 ACCEPTANCE_S3_SECRET_ACCESS_KEY="..." \
-npm run acceptance:run -- --profile smoke
+npm run acceptance:run -- --profile full
 ```
 
 For a hosted target with a path prefix, set `ACCEPTANCE_BASE_URL` to the public storage base,
@@ -39,12 +39,15 @@ For local targets on a non-default port, set `ACCEPTANCE_BASE_URL` explicitly.
 cp .env.sample .env
 cp .env.test.sample .env.test
 cp .env.acceptance.sample .env.acceptance
-npm run acceptance -- --profile smoke
+npm run acceptance -- --profile full
 ```
 
 This restarts local infra, seeds dummy data, starts the TypeScript server from `.env.test` plus
 `.env`, waits for `/status`, runs the acceptance profile, and then stops the server. Set
 `ACCEPTANCE_SKIP_INFRA=true` to reuse already-running local infra.
+
+The sample env and local CI default to `full`, so enabled capability-gated tests such as Iceberg
+run by default. Use `--profile smoke` for a faster sanity run.
 
 For local backend variants, put server/runtime changes in `.env` or `.env.test`. Keep
 `.env.acceptance` limited to acceptance runner inputs such as target URLs, client credentials,
@@ -63,6 +66,7 @@ secrets as environment secrets.
 | Variable                          | Meaning                                                                      |
 | --------------------------------- | ---------------------------------------------------------------------------- |
 | `ACCEPTANCE_BASE_URL`             | REST base URL. Defaults to `http://127.0.0.1:5000`.                          |
+| `ACCEPTANCE_PROFILE`              | Acceptance profile to run. Sample env and local CI default to `full`.        |
 | `ACCEPTANCE_S3_ENDPOINT`          | S3 endpoint. Defaults to `$ACCEPTANCE_BASE_URL/s3`.                          |
 | `ACCEPTANCE_TUS_ENDPOINT`         | TUS endpoint. Defaults to `$ACCEPTANCE_BASE_URL/upload/resumable`.           |
 | `ACCEPTANCE_X_FORWARDED_HOST`     | Optional tenant-routing host header for multitenant targets.                 |

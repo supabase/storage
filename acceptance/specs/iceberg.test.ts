@@ -195,6 +195,71 @@ describeAcceptance(
         )
         expect(table.json?.metadata).toBeTruthy()
         expect(table.json?.['metadata-location']).toBeTruthy()
+
+        await client.request(
+          'HEAD',
+          `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables/${tableName}`,
+          {
+            expectedStatus: 204,
+            token,
+          }
+        )
+
+        const committed = await client.request<IcebergTableResponse>(
+          'POST',
+          `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables/${tableName}`,
+          {
+            body: {
+              requirements: [],
+              updates: [
+                {
+                  action: 'set-properties',
+                  updates: { 'acceptance.commit': 'true' },
+                },
+              ],
+            },
+            expectedStatus: 200,
+            token,
+          }
+        )
+        expect(committed.json?.metadata).toBeTruthy()
+
+        await client.request('GET', `/iceberg/v1/${bucketName}/namespaces/missing${suffix}`, {
+          expectedStatus: 404,
+          token,
+        })
+
+        await client.request(
+          'GET',
+          `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables/missing${suffix}`,
+          {
+            expectedStatus: 404,
+            token,
+          }
+        )
+
+        await client.request(
+          'POST',
+          `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables`,
+          {
+            body: {
+              name: tableName,
+              schema: {
+                type: 'struct',
+                fields: [
+                  {
+                    id: 1,
+                    name: 'id',
+                    required: false,
+                    type: 'long',
+                  },
+                ],
+              },
+            },
+            expectedStatus: 409,
+            token,
+          }
+        )
       } finally {
         if (tableCreated) {
           await client

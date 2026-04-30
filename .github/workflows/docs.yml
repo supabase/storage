@@ -16,13 +16,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  test:
-    name: Test / OS ${{ matrix.platform }} / Node ${{ matrix.node }}
+  deploy:
+    name: Deploy docs / OS ${{ matrix.platform }} / Node ${{ matrix.node }}
     strategy:
       fail-fast: false
       matrix:
         platform: [ubuntu-24.04]
         node: ["24"]
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
     runs-on: ${{ matrix.platform }}
 

@@ -38,6 +38,14 @@ interface IcebergTableResponse {
   'metadata-location'?: string
 }
 
+interface IcebergErrorResponse {
+  error?: {
+    code?: number
+    message?: string
+    type?: string
+  }
+}
+
 describeAcceptance(
   'Iceberg catalog contract',
   {
@@ -87,6 +95,21 @@ describeAcceptance(
         expect(catalogConfig.json?.defaults?.prefix).toBe(bucketName)
         expect(catalogConfig.json?.overrides?.prefix).toBe(bucketName)
 
+        const missingWarehouse = await client.request<IcebergErrorResponse>(
+          'GET',
+          `/iceberg/v1/${bucketName}-missing/namespaces/${namespaceName}/tables/${tableName}`,
+          {
+            expectedStatus: 404,
+            token,
+          }
+        )
+        expect(missingWarehouse.json).toMatchObject({
+          error: {
+            code: 404,
+            type: 'NoSuchCatalog',
+          },
+        })
+
         const createdNamespace = await client.request<IcebergNamespaceResponse>(
           'POST',
           `/iceberg/v1/${bucketName}/namespaces`,
@@ -104,10 +127,15 @@ describeAcceptance(
         namespaceCreated = true
         expect(createdNamespace.json?.namespace).toEqual([namespaceName])
 
-        await client.request('HEAD', `/iceberg/v1/${bucketName}/namespaces/${namespaceName}`, {
-          expectedStatus: 204,
-          token,
-        })
+        const headNamespace = await client.request(
+          'HEAD',
+          `/iceberg/v1/${bucketName}/namespaces/${namespaceName}`,
+          {
+            expectedStatus: 204,
+            token,
+          }
+        )
+        expect(headNamespace.body).toBe('')
 
         const namespace = await client.request<IcebergNamespaceResponse>(
           'GET',
@@ -196,7 +224,7 @@ describeAcceptance(
         expect(table.json?.metadata).toBeTruthy()
         expect(table.json?.['metadata-location']).toBeTruthy()
 
-        await client.request(
+        const headTable = await client.request(
           'HEAD',
           `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables/${tableName}`,
           {
@@ -204,6 +232,7 @@ describeAcceptance(
             token,
           }
         )
+        expect(headTable.body).toBe('')
 
         const committed = await client.request<IcebergTableResponse>(
           'POST',
@@ -224,12 +253,23 @@ describeAcceptance(
         )
         expect(committed.json?.metadata).toBeTruthy()
 
-        await client.request('GET', `/iceberg/v1/${bucketName}/namespaces/missing${suffix}`, {
-          expectedStatus: 404,
-          token,
+        const missingNamespace = await client.request<IcebergErrorResponse>(
+          'GET',
+          `/iceberg/v1/${bucketName}/namespaces/missing${suffix}`,
+          {
+            expectedStatus: 404,
+            token,
+          }
+        )
+        expect(missingNamespace.json).toMatchObject({
+          error: {
+            code: 404,
+            message: 'Namespace not found',
+            type: 'NoSuchNamespaceException',
+          },
         })
 
-        await client.request(
+        const missingTable = await client.request<IcebergErrorResponse>(
           'GET',
           `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables/missing${suffix}`,
           {
@@ -237,8 +277,15 @@ describeAcceptance(
             token,
           }
         )
+        expect(missingTable.json).toMatchObject({
+          error: {
+            code: 404,
+            message: 'Table not found',
+            type: 'NoSuchTableException',
+          },
+        })
 
-        await client.request(
+        const duplicateTable = await client.request<IcebergErrorResponse>(
           'POST',
           `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables`,
           {
@@ -260,6 +307,13 @@ describeAcceptance(
             token,
           }
         )
+        expect(duplicateTable.json).toMatchObject({
+          error: {
+            code: 409,
+            message: 'Table already exists',
+            type: 'AlreadyExistsException',
+          },
+        })
       } finally {
         if (tableCreated) {
           await client

@@ -149,9 +149,14 @@ async function expectRenderedImage(url: string, token?: string) {
       ),
     })
 
-    expect(response.status).toBe(200)
-    expect(response.headers.get('content-type')).toMatch(/^image\//)
-    expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(0)
+    const contentType = response.headers.get('content-type') ?? ''
+    const body = await response.arrayBuffer()
+    const isImageResponse = /^image\//.test(contentType)
+    const failureBody = isImageResponse ? '' : new TextDecoder().decode(body)
+
+    expect(response.status, failureBody).toBe(200)
+    expect(contentType, failureBody).toMatch(/^image\//)
+    expect(body.byteLength, failureBody).toBeGreaterThan(0)
   } finally {
     if (response && !response.bodyUsed) {
       await response.body?.cancel()

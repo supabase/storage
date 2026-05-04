@@ -70,6 +70,7 @@ type StorageConfigType = {
   storageS3UploadQueueSize: number
   storageS3Bucket: string
   storageS3Endpoint?: string
+  storageS3PrivateAssetEndpoint?: string
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
   storageS3ClientTimeout: number
@@ -378,6 +379,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('STORAGE_S3_ENABLED_METRICS') === 'true',
     storageS3Bucket: getOptionalConfigFromEnv('STORAGE_S3_BUCKET', 'GLOBAL_S3_BUCKET'),
     storageS3Endpoint: getOptionalConfigFromEnv('STORAGE_S3_ENDPOINT', 'GLOBAL_S3_ENDPOINT'),
+    storageS3PrivateAssetEndpoint: getOptionalConfigFromEnv(
+      'STORAGE_S3_PRIVATE_ASSET_ENDPOINT',
+      'GLOBAL_S3_PRIVATE_ASSET_ENDPOINT'
+    ),
     storageS3ForcePathStyle:
       getOptionalConfigFromEnv('STORAGE_S3_FORCE_PATH_STYLE', 'GLOBAL_S3_FORCE_PATH_STYLE') ===
       'true',

@@ -46,6 +46,7 @@ export const MAX_PUT_OBJECT_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
 
 export interface S3ClientOptions {
   endpoint?: string
+  privateAssetEndpoint?: string
   region?: string
   forcePathStyle?: boolean
   accessKey?: string
@@ -61,6 +62,7 @@ export interface S3ClientOptions {
  */
 export class S3Backend implements StorageBackendAdapter {
   client: S3Client
+  private privateAssetClient: S3Client
   agent: InstrumentedAgent
 
   constructor(options: S3ClientOptions) {
@@ -80,6 +82,15 @@ export class S3Backend implements StorageBackendAdapter {
       name: 's3_default',
       httpAgent: this.agent,
     })
+
+    this.privateAssetClient = options.privateAssetEndpoint
+      ? this.createS3Client({
+          ...options,
+          endpoint: options.privateAssetEndpoint,
+          name: 's3_private_asset',
+          httpAgent: this.agent,
+        })
+      : this.client
   }
 
   /**
@@ -505,7 +516,7 @@ export class S3Backend implements StorageBackendAdapter {
     }
 
     const command = new GetObjectCommand(input)
-    return getSignedUrl(this.client, command, { expiresIn: 600 })
+    return getSignedUrl(this.privateAssetClient, command, { expiresIn: 600 })
   }
 
   async createMultiPartUpload(

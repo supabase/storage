@@ -1,9 +1,11 @@
-import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ErrorCode, isStorageError } from '@internal/errors'
 import { Readable } from 'stream'
 import { type Mock, vi } from 'vitest'
 import { getConfig } from '../../../config'
+import { withOptionalVersion } from '../adapter'
 import { MAX_PUT_OBJECT_SIZE, S3Backend } from './adapter'
 
 vi.mock('@aws-sdk/client-s3', async () => {
@@ -27,6 +29,10 @@ vi.mock('@aws-sdk/lib-storage', async () => {
     Upload: vi.fn(function () {}),
   }
 })
+
+vi.mock('@aws-sdk/s3-request-presigner', () => ({
+  getSignedUrl: vi.fn().mockResolvedValue('http://signed.example.com/test-bucket/test-key'),
+}))
 
 type UploadOptionsShape = {
   queueSize?: number
@@ -144,6 +150,57 @@ describe('S3Backend', () => {
       const result = await backend.getObject('test-bucket', 'test-key', undefined)
 
       expect(result.metadata.mimetype).toBe('image/png')
+    })
+  })
+
+  describe('privateAssetUrl', () => {
+    test('uses the primary S3 client when no private asset endpoint is configured', async () => {
+      const backend = createBackend()
+
+      await expect(backend.privateAssetUrl('test-bucket', 'test-key', undefined)).resolves.toBe(
+        'http://signed.example.com/test-bucket/test-key'
+      )
+
+      const s3ClientMock = S3Client as unknown as Mock
+      const defaultClient = s3ClientMock.mock.results[0].value
+      expect(s3ClientMock).toHaveBeenCalledTimes(1)
+      expect(getSignedUrl).toHaveBeenCalledWith(defaultClient, expect.any(GetObjectCommand), {
+        expiresIn: 600,
+      })
+    })
+
+    test('uses the private asset endpoint when signing private asset URLs', async () => {
+      const backend = new S3Backend({
+        region: 'us-east-1',
+        endpoint: 'http://127.0.0.1:9000',
+        privateAssetEndpoint: 'http://minio:9000',
+        forcePathStyle: true,
+      })
+
+      await backend.privateAssetUrl('test-bucket', 'test-key', 'version-id')
+
+      const s3ClientMock = S3Client as unknown as Mock
+      expect(s3ClientMock).toHaveBeenCalledTimes(2)
+      expect(s3ClientMock.mock.calls[0][0]).toMatchObject({
+        endpoint: 'http://127.0.0.1:9000',
+        forcePathStyle: true,
+        region: 'us-east-1',
+      })
+      expect(s3ClientMock.mock.calls[1][0]).toMatchObject({
+        endpoint: 'http://minio:9000',
+        forcePathStyle: true,
+        region: 'us-east-1',
+      })
+
+      const privateAssetClient = s3ClientMock.mock.results[1].value
+      const privateAssetCommand = (getSignedUrl as Mock).mock.calls[0][1] as GetObjectCommand
+      expect(privateAssetCommand.input).toMatchObject({
+        Bucket: 'test-bucket',
+        Key: withOptionalVersion('test-key', 'version-id'),
+      })
+      expect(getSignedUrl).toHaveBeenCalledWith(privateAssetClient, privateAssetCommand, {
+        expiresIn: 600,
+      })
     })
   })
 

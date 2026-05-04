@@ -53,6 +53,34 @@ For local backend variants, put server/runtime changes in `.env` or `.env.test`.
 `.env.acceptance` limited to acceptance runner inputs such as target URLs, client credentials,
 capability gates, and resource naming.
 
+### Local Render Tests
+
+Image rendering tests need imgproxy to read the source image URL produced by the storage server.
+The default local S3 endpoint is `http://127.0.0.1:9000`, which works for a host-run server but is
+not reachable as MinIO from the Dockerized imgproxy container.
+
+For S3-backed render coverage, keep normal S3 traffic on the host-reachable endpoint and use
+`STORAGE_S3_PRIVATE_ASSET_ENDPOINT` for the Docker-reachable URL embedded in imgproxy source links:
+
+```bash
+STORAGE_BACKEND=s3 \
+STORAGE_S3_PRIVATE_ASSET_ENDPOINT=http://minio:9000 \
+ACCEPTANCE_ENABLE_RENDER=true \
+npm run acceptance -- --profile full acceptance/specs/cdn-render.test.ts
+```
+
+The file backend also works because imgproxy mounts the local `./data` directory:
+
+```bash
+mkdir -p data
+STORAGE_BACKEND=file ACCEPTANCE_ENABLE_RENDER=true npm run acceptance -- --profile full acceptance/specs/cdn-render.test.ts
+```
+
+Local CI enables render tests for both S3 and file backend runs. The S3 matrix sets
+`STORAGE_S3_PRIVATE_ASSET_ENDPOINT=http://minio:9000`. Multitenant render tests also rely on the
+local imgproxy container allowing security processing options because tenant image limits are sent
+as `max_src_resolution`.
+
 ## GitHub Environments
 
 The workflow dispatch `acceptance_environment` input uses `local` for the managed local run. Any

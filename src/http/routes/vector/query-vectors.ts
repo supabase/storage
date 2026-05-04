@@ -1,142 +1,205 @@
 import { ERRORS } from '@internal/errors'
 import Ajv from 'ajv'
-import { FastifyInstance, FastifySchemaCompiler } from 'fastify'
+import { FastifyInstance, FastifySchema, FastifySchemaCompiler } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
-const queryVectorFilterDefsSchema = {
-  $id: 'queryVectorFilterDefsSchema',
-  $defs: {
-    Primitive: {
-      anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }],
-    },
-    FieldOperators: {
-      type: 'object',
-      minProperties: 1,
-      propertyNames: { pattern: '^\\$' },
-      properties: {
-        $eq: { $ref: '#/$defs/Primitive' },
-        $ne: { $ref: '#/$defs/Primitive' },
-        $gt: { type: 'number' },
-        $gte: { type: 'number' },
-        $lt: { type: 'number' },
-        $lte: { type: 'number' },
-        $in: { type: 'array', minItems: 1, items: { $ref: '#/$defs/Primitive' } },
-        $nin: { type: 'array', minItems: 1, items: { $ref: '#/$defs/Primitive' } },
-        $exists: { type: 'boolean' },
-      },
-      additionalProperties: false,
-    },
-    LogicalFilter: {
-      anyOf: [
-        {
-          type: 'object',
-          properties: {
-            $and: {
-              type: 'array',
-              minItems: 1,
-              items: { $ref: '#/$defs/Filter' },
-            },
-          },
-          required: ['$and'],
-          additionalProperties: false,
-        },
-        {
-          type: 'object',
-          properties: {
-            $or: {
-              type: 'array',
-              minItems: 1,
-              items: { $ref: '#/$defs/Filter' },
-            },
-          },
-          required: ['$or'],
-          additionalProperties: false,
-        },
-      ],
-    },
-    Filter: {
-      anyOf: [
-        { $ref: '#/$defs/LogicalFilter' },
-        {
-          type: 'object',
-          additionalProperties: {
-            anyOf: [{ $ref: '#/$defs/Primitive' }, { $ref: '#/$defs/FieldOperators' }],
-          },
-        },
-      ],
-    },
-  },
+const queryVectorPrimitiveSchema = {
+  $id: 'queryVectorPrimitive',
+  anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }],
 } as const
 
-const queryVectorBodySchema = {
-  $id: 'queryVectorBodySchema',
+const queryVectorFieldOperatorsSchema = {
+  $id: 'queryVectorFieldOperators',
   type: 'object',
+  minProperties: 1,
+  propertyNames: { pattern: '^\\$' },
   properties: {
-    filter: { $ref: 'queryVectorFilterDefsSchema#/$defs/Filter' },
-    indexArn: { type: 'string' },
-    indexName: {
-      type: 'string',
-      minLength: 3,
-      maxLength: 45,
-      pattern: '^[a-z0-9](?:[a-z0-9.-]{1,61})?[a-z0-9]$',
-    },
-    queryVector: {
-      type: 'object',
-      properties: {
-        float32: { type: 'array', items: { type: 'number' } },
-      },
-      required: ['float32'],
-      additionalProperties: false,
-    },
-    returnDistance: { type: 'boolean' },
-    returnMetadata: { type: 'boolean' },
-    topK: { type: 'number' },
-    vectorBucketName: { type: 'string' },
+    $eq: { $ref: 'queryVectorPrimitive#' },
+    $ne: { $ref: 'queryVectorPrimitive#' },
+    $gt: { type: 'number' },
+    $gte: { type: 'number' },
+    $lt: { type: 'number' },
+    $lte: { type: 'number' },
+    $in: { type: 'array', minItems: 1, items: { $ref: 'queryVectorPrimitive#' } },
+    $nin: { type: 'array', minItems: 1, items: { $ref: 'queryVectorPrimitive#' } },
+    $exists: { type: 'boolean' },
   },
-  required: ['vectorBucketName', 'indexName', 'queryVector', 'topK'],
   additionalProperties: false,
 } as const
 
+const queryVectorLogicalFilterSchema = {
+  $id: 'queryVectorLogicalFilter',
+  anyOf: [
+    {
+      type: 'object',
+      properties: {
+        $and: {
+          type: 'array',
+          minItems: 1,
+          items: { $ref: 'queryVectorFilter#' },
+        },
+      },
+      required: ['$and'],
+      additionalProperties: false,
+    },
+    {
+      type: 'object',
+      properties: {
+        $or: {
+          type: 'array',
+          minItems: 1,
+          items: { $ref: 'queryVectorFilter#' },
+        },
+      },
+      required: ['$or'],
+      additionalProperties: false,
+    },
+  ],
+} as const
+
+const queryVectorFilterSchema = {
+  $id: 'queryVectorFilter',
+  anyOf: [
+    { $ref: 'queryVectorLogicalFilter#' },
+    {
+      type: 'object',
+      propertyNames: { not: { pattern: '^\\$' } },
+      additionalProperties: {
+        anyOf: [{ $ref: 'queryVectorPrimitive#' }, { $ref: 'queryVectorFieldOperators#' }],
+      },
+    },
+  ],
+} as const
+
+const queryVectorBodyBaseProperties = {
+  indexArn: { type: 'string' },
+  indexName: {
+    type: 'string',
+    minLength: 3,
+    maxLength: 45,
+    pattern: '^[a-z0-9](?:[a-z0-9.-]{1,61})?[a-z0-9]$',
+  },
+  queryVector: {
+    type: 'object',
+    properties: {
+      float32: { type: 'array', items: { type: 'number' } },
+    },
+    required: ['float32'],
+    additionalProperties: false,
+  },
+  returnDistance: { type: 'boolean' },
+  returnMetadata: { type: 'boolean' },
+  topK: { type: 'number' },
+  vectorBucketName: { type: 'string' },
+} as const
+
+const queryVectorBodyRequired = ['vectorBucketName', 'indexName', 'queryVector', 'topK'] as const
+
+// Strict body: used by Ajv for runtime validation. Filter is recursive
+// (LogicalFilter <> Filter), so this schema is intentionally NOT registered on
+// Fastify: cyclic refs cannot be represented in OpenAPI 3.0.3 `--dereferenced`
+// JSON, which Redocly emits for the public docs spec.
+const queryVectorBodySchema = {
+  $id: 'queryVectorBody',
+  type: 'object',
+  properties: {
+    filter: { $ref: 'queryVectorFilter#' },
+    ...queryVectorBodyBaseProperties,
+  },
+  required: queryVectorBodyRequired,
+  additionalProperties: false,
+} as const
+
+// Doc body: registered on Fastify for the OpenAPI spec. Filter is loosened
+// to a generic object to avoid leaking the recursive Filter/LogicalFilter
+// pair into the bundled spec. Filter syntax is documented in prose.
+const queryVectorBodyDocSchema = {
+  $id: 'queryVectorBodyDoc',
+  type: 'object',
+  properties: {
+    filter: {
+      type: 'object',
+      description:
+        'Boolean filter expression. Supports field operators ($eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists) and logical operators ($and, $or) with arbitrary nesting.',
+      additionalProperties: true,
+    },
+    ...queryVectorBodyBaseProperties,
+  },
+  required: queryVectorBodyRequired,
+  additionalProperties: false,
+} as const
+
+type QueryVectorPrimitive = string | number | boolean
+type NonEmptyArray<T> = [T, ...T[]]
+type RequireAtLeastOne<T extends object> = {
+  [K in keyof T]-?: Required<Pick<T, K>> & Partial<Omit<T, K>>
+}[keyof T]
+
+type QueryVectorFieldOperators = RequireAtLeastOne<{
+  $eq: QueryVectorPrimitive
+  $ne: QueryVectorPrimitive
+  $gt: number
+  $gte: number
+  $lt: number
+  $lte: number
+  $in: NonEmptyArray<QueryVectorPrimitive>
+  $nin: NonEmptyArray<QueryVectorPrimitive>
+  $exists: boolean
+}>
+
+type QueryVectorFilter =
+  | { $and: NonEmptyArray<QueryVectorFilter> }
+  | { $or: NonEmptyArray<QueryVectorFilter> }
+  | ({
+      [fieldName: string]: QueryVectorPrimitive | QueryVectorFieldOperators
+    } & {
+      [operatorName in `$${string}`]?: never
+    })
+
+type QueryVectorBody = Omit<FromSchema<typeof queryVectorBodySchema>, 'filter'> & {
+  filter?: QueryVectorFilter
+}
+
 interface queryVectorRequest extends AuthenticatedRequest {
-  Body: FromSchema<typeof queryVectorBodySchema>
+  Body: QueryVectorBody
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  // Register on Fastify's schema registry so @fastify/swagger can resolve the
-  // body $ref when emitting /documentation/json.
-  fastify.addSchema(queryVectorFilterDefsSchema)
-  fastify.addSchema(queryVectorBodySchema)
+  // Only register the doc-facing body on Fastify so the recursive Filter
+  // schemas never appear in components.schemas of the emitted OpenAPI spec.
+  fastify.addSchema(queryVectorBodyDocSchema)
 
-  // Separate Ajv with removeAdditional disabled so request bodies are not
-  // stripped before reaching the handler.
+  // Strict validation runs through a separate Ajv instance (removeAdditional
+  // disabled so payloads aren't silently stripped before reaching the handler).
   const ajvNoRemoval = new Ajv({
     allErrors: true,
     removeAdditional: false,
     coerceTypes: false,
   })
-  ajvNoRemoval.addSchema(queryVectorFilterDefsSchema)
+  ajvNoRemoval.addSchema(queryVectorPrimitiveSchema)
+  ajvNoRemoval.addSchema(queryVectorFieldOperatorsSchema)
+  ajvNoRemoval.addSchema(queryVectorLogicalFilterSchema)
+  ajvNoRemoval.addSchema(queryVectorFilterSchema)
   ajvNoRemoval.addSchema(queryVectorBodySchema)
 
-  const perRouteValidator: FastifySchemaCompiler<any> = ({ schema }) => {
-    const validate = ajvNoRemoval.compile(schema as object)
-    return (data) => {
-      const ok = validate(data)
-      if (ok) return { value: data }
-      return { error: new Error(JSON.stringify(validate.errors)) }
-    }
+  const validateBody = ajvNoRemoval.compile(queryVectorBodySchema)
+
+  const queryVectorsValidator: FastifySchemaCompiler<FastifySchema> = () => (data: unknown) => {
+    if (validateBody(data)) return { value: data }
+    return { error: validateBody.errors ?? [] }
   }
 
   fastify.post<queryVectorRequest>(
     '/QueryVectors',
     {
-      validatorCompiler: perRouteValidator,
+      validatorCompiler: queryVectorsValidator,
       config: {
         operation: { type: ROUTE_OPERATIONS.QUERY_VECTORS },
       },
       schema: {
-        body: { $ref: 'queryVectorBodySchema#' },
+        body: { $ref: 'queryVectorBodyDoc#' },
         tags: ['vector'],
         summary: 'Query vectors',
       },

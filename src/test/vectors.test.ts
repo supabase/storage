@@ -1808,6 +1808,30 @@ describe('Vectors API', () => {
       )
     })
 
+    it('should reject reserved logical operator keys used as field names', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/QueryVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          queryVector: {
+            float32: [1.0, 2.0, 3.0],
+          },
+          topK: 5,
+          filter: {
+            $and: true,
+          },
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.queryVectors).not.toHaveBeenCalled()
+    })
+
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
@@ -1862,6 +1886,9 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(400)
+      const body = parseJsonBody<{ message: string }>(response.body)
+      expect(body.message).toContain('queryVector')
+      expect(body.message).toContain('float32')
     })
 
     it('should handle non-existent index', async () => {

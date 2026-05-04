@@ -5,17 +5,15 @@ import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
-const defs = {
-  $id: 'https://schemas.example.com/defs.json',
+const queryVectorFilterDefsSchema = {
+  $id: 'queryVectorFilterDefsSchema',
   $defs: {
     Primitive: {
       anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }],
     },
     FieldOperators: {
       type: 'object',
-      // ensure at least one operator remains after removal
       minProperties: 1,
-      // only allow keys that start with '$'
       propertyNames: { pattern: '^\\$' },
       properties: {
         $eq: { $ref: '#/$defs/Primitive' },
@@ -72,11 +70,11 @@ const defs = {
   },
 } as const
 
-const queryVectorBody = {
-  $id: 'https://schemas.example.com/queryVectorBody.json',
+const queryVectorBodySchema = {
+  $id: 'queryVectorBodySchema',
   type: 'object',
   properties: {
-    filter: { $ref: 'https://schemas.example.com/defs.json#/$defs/Filter' },
+    filter: { $ref: 'queryVectorFilterDefsSchema#/$defs/Filter' },
     indexArn: { type: 'string' },
     indexName: {
       type: 'string',
@@ -102,15 +100,24 @@ const queryVectorBody = {
 } as const
 
 interface queryVectorRequest extends AuthenticatedRequest {
-  Body: FromSchema<typeof queryVectorBody>
+  Body: FromSchema<typeof queryVectorBodySchema>
 }
 
 export default async function routes(fastify: FastifyInstance) {
+  // Register on Fastify's schema registry so @fastify/swagger can resolve the
+  // body $ref when emitting /documentation/json.
+  fastify.addSchema(queryVectorFilterDefsSchema)
+  fastify.addSchema(queryVectorBodySchema)
+
+  // Separate Ajv with removeAdditional disabled so request bodies are not
+  // stripped before reaching the handler.
   const ajvNoRemoval = new Ajv({
     allErrors: true,
-    removeAdditional: false, // <- key bit
+    removeAdditional: false,
     coerceTypes: false,
   })
+  ajvNoRemoval.addSchema(queryVectorFilterDefsSchema)
+  ajvNoRemoval.addSchema(queryVectorBodySchema)
 
   const perRouteValidator: FastifySchemaCompiler<any> = ({ schema }) => {
     const validate = ajvNoRemoval.compile(schema as object)
@@ -121,9 +128,6 @@ export default async function routes(fastify: FastifyInstance) {
     }
   }
 
-  ajvNoRemoval.addSchema(defs)
-  ajvNoRemoval.addSchema(queryVectorBody)
-
   fastify.post<queryVectorRequest>(
     '/QueryVectors',
     {
@@ -132,7 +136,7 @@ export default async function routes(fastify: FastifyInstance) {
         operation: { type: ROUTE_OPERATIONS.QUERY_VECTORS },
       },
       schema: {
-        body: { $ref: 'https://schemas.example.com/queryVectorBody.json' },
+        body: { $ref: 'queryVectorBodySchema#' },
         tags: ['vector'],
         summary: 'Query vectors',
       },

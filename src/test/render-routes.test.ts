@@ -1,3 +1,5 @@
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
 import dotenv from 'dotenv'
 import { FastifyInstance } from 'fastify'
@@ -36,6 +38,52 @@ function createMockRendererClient() {
     client,
     get,
   }
+}
+
+function requestRenderedImage(
+  port: number,
+  requestPath: string
+): Promise<{ body: string; ended: boolean; error?: Error; statusCode?: number }> {
+  return new Promise((resolve) => {
+    let settled = false
+    let body = ''
+
+    const finish = (result: { ended: boolean; error?: Error; statusCode?: number }) => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      resolve({ body, ...result })
+    }
+
+    const request = http.get({ host: '127.0.0.1', path: requestPath, port }, (response) => {
+      response.setEncoding('utf8')
+      response.on('data', (chunk) => {
+        body += chunk
+      })
+      response.on('end', () => {
+        finish({ ended: true, statusCode: response.statusCode })
+      })
+      response.on('aborted', () => {
+        finish({
+          ended: false,
+          error: new Error('response aborted'),
+          statusCode: response.statusCode,
+        })
+      })
+      response.on('error', (error) => {
+        finish({ ended: false, error, statusCode: response.statusCode })
+      })
+    })
+
+    request.setTimeout(5000, () => {
+      request.destroy(new Error('Timed out waiting for render response'))
+    })
+    request.on('error', (error) => {
+      finish({ ended: false, error })
+    })
+  })
 }
 
 describe('image rendering routes', () => {
@@ -78,7 +126,6 @@ describe('image rendering routes', () => {
     expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       expect.objectContaining({
-        responseType: 'stream',
         signal: expect.any(AbortSignal),
       })
     )
@@ -91,6 +138,9 @@ describe('image rendering routes', () => {
     const response = await appInstance.inject({
       method: 'GET',
       url: '/render/image/public/public-bucket-2/favicon.ico?width=100&height=100',
+      headers: {
+        accept: 'image/avif,image/webp',
+      },
     })
 
     expect(response.statusCode).toBe(200)
@@ -98,10 +148,53 @@ describe('image rendering routes', () => {
     expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       expect.objectContaining({
-        responseType: 'stream',
+        headers: {
+          accept: 'image/avif,image/webp',
+        },
         signal: expect.any(AbortSignal),
       })
     )
+  })
+
+  it('aborts the route response when the rendered body errors after streaming starts', async () => {
+    let pushed = false
+    const renderedBody = new Readable({
+      read() {
+        if (pushed) {
+          return
+        }
+
+        pushed = true
+        this.push('partial-body')
+        setImmediate(() => this.destroy(new Error('caller stopped')))
+      },
+    })
+    const get = vi.fn().mockResolvedValue({
+      data: renderedBody,
+      status: 200,
+      headers: {
+        'content-type': 'image/png',
+      },
+    })
+    const client: ReturnType<ImageRenderer['getClient']> = { get }
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(client)
+    await appInstance.listen({ host: '127.0.0.1', port: 0 })
+
+    const address = appInstance.server.address()
+    if (!address || typeof address === 'string') {
+      throw new Error('Expected Fastify to listen on a TCP port')
+    }
+
+    const response = await requestRenderedImage(
+      (address as AddressInfo).port,
+      '/render/image/public/public-bucket-2/favicon.ico?width=100&height=100'
+    )
+
+    expect(response.statusCode).toBe(200)
+    expect(response.body).toBe('partial-body')
+    expect(response.ended).toBe(false)
+    expect(response.error).toBeInstanceOf(Error)
+    expect(get).toHaveBeenCalledTimes(1)
   })
 
   it('will render a public image in all supported formats', async () => {
@@ -121,7 +214,6 @@ describe('image rendering routes', () => {
       expect(getSpy).toHaveBeenCalledWith(
         `/public/height:100/width:100/resizing_type:fill${expectFormat}/plain/local:///${projectRoot}/data/sadcat.jpg`,
         expect.objectContaining({
-          responseType: 'stream',
           signal: expect.any(AbortSignal),
         })
       )
@@ -168,7 +260,6 @@ describe('image rendering routes', () => {
     expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
       expect.objectContaining({
-        responseType: 'stream',
         signal: expect.any(AbortSignal),
       })
     )
@@ -217,7 +308,6 @@ describe('image rendering routes', () => {
     expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
       expect.objectContaining({
-        responseType: 'stream',
         signal: expect.any(AbortSignal),
       })
     )

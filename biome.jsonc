@@ -9,15 +9,13 @@
       "**/*.mjs",
       "**/*.json",
       "**/*.jsonc",
-      "!!package-lock.json",
-      "!!build/**",
-      "!!coverage/**",
-      "!!dist/**",
-      "!!static/**",
-      "!!data/**",
-      "!!node_modules/**",
-      "!!.claude/**"
+      "!!package-lock.json"
     ]
+  },
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
   },
   "formatter": {
     "enabled": true,

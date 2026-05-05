@@ -977,6 +977,12 @@ export class S3ProtocolHandler {
       headers['expires'] = command.ResponseExpires.toUTCString()
     }
 
+    if (headers['cache-control']) {
+      headers['cache-control'] += ', no-transform'
+    } else {
+      headers['cache-control'] = 'no-transform'
+    }
+
     return {
       headers,
       responseBody: response.body,

@@ -84,9 +84,9 @@ type ResponseType = {
 export type RequestInput<
   S extends Schema,
   A extends {
-    [key in keyof S]: S[key] extends JSONSchema ? FromSchema<S[key]> : undefined
+    [key in keyof S]: S[key] extends JSONSchema ? FromSchema<S[key]> : unknown
   } = {
-    [key in keyof S]: S[key] extends JSONSchema ? FromSchema<S[key]> : undefined
+    [key in keyof S]: S[key] extends JSONSchema ? FromSchema<S[key]> : unknown
   },
 > = {
   Querystring: A['Querystring']
@@ -122,7 +122,7 @@ type Route<S extends Schema, Context> = {
   compiledSchema: () => ValidateFunction<JTDDataType<S>>
 }
 
-interface RouteOptions<S extends JSONSchema> {
+interface RouteOptions<S extends Schema> {
   disableContentTypeParser?: boolean
   allowEmptyJsonBody?: boolean
   acceptMultiformData?: boolean
@@ -131,8 +131,11 @@ interface RouteOptions<S extends JSONSchema> {
   type?: string
 }
 
-export class Router<Context = unknown, S extends Schema = Schema> {
-  protected _routes: Map<string, Route<S, Context>[]> = new Map<string, Route<S, Context>[]>()
+export class Router<Context = unknown> {
+  protected _routes: Map<string, Route<Schema, Context>[]> = new Map<
+    string,
+    Route<Schema, Context>[]
+  >()
 
   protected ajv = new Ajv({
     coerceTypes: 'array',
@@ -143,11 +146,11 @@ export class Router<Context = unknown, S extends Schema = Schema> {
     allErrors: false,
   })
 
-  registerRoute<R extends S = S>(
+  registerRoute(
     method: HTTPMethod,
     url: string,
-    options: RouteOptions<R>,
-    handler: Handler<R, Context>
+    options: RouteOptions<Schema>,
+    handler: Handler<Schema, Context>
   ) {
     const { query, headers } = this.parseRequestInfo(url)
     const normalizedUrl = url.split('?')[0].split('|')[0]
@@ -204,48 +207,52 @@ export class Router<Context = unknown, S extends Schema = Schema> {
       )
     }
 
-    const newRoute: Route<R, Context> = {
-      method: method as HTTPMethod,
+    const newRoute: Route<Schema, Context> = {
+      method,
       path: normalizedUrl,
       querystringMatches: query,
       headersMatches: headers,
       schema,
-      compiledSchema: () => this.ajv.getSchema(method + url) as ValidateFunction<JTDDataType<R>>,
-      handler: handler as Handler<R, Context>,
+      compiledSchema: () =>
+        this.ajv.getSchema(method + url) as ValidateFunction<JTDDataType<Schema>>,
+      handler,
       disableContentTypeParser,
       allowEmptyJsonBody,
       acceptMultiformData,
       operation,
       type: options.type,
-    } as const
+    }
 
     if (!existingPath) {
-      this._routes.set(normalizedUrl, [newRoute as unknown as Route<S, Context>])
+      this._routes.set(normalizedUrl, [newRoute])
       return
     }
 
-    existingPath.push(newRoute as unknown as Route<S, Context>)
+    existingPath.push(newRoute)
     this._routes.set(normalizedUrl, existingPath)
   }
 
-  get<R extends S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
-    this.registerRoute('get', url, options, handler as any)
+  // The deep mapped types in RouteOptions<R> / Handler<R> (JTDDataType, FromSchema)
+  // hit TS2589 when checked against Schema, and Handler is contravariant in R, so the
+  // per-route generic is erased at the call boundary into the schema-agnostic registry.
+  get<R extends Schema>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRoute('get', url, ...erase<R, Context>(options, handler))
   }
 
-  post<R extends S = S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
-    this.registerRoute('post', url, options, handler as any)
+  post<R extends Schema>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRoute('post', url, ...erase<R, Context>(options, handler))
   }
 
-  put<R extends S = S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
-    this.registerRoute('put', url, options, handler as any)
+  put<R extends Schema>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRoute('put', url, ...erase<R, Context>(options, handler))
   }
 
-  delete<R extends S = S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
-    this.registerRoute('delete', url, options, handler as any)
+  delete<R extends Schema>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRoute('delete', url, ...erase<R, Context>(options, handler))
   }
 
-  head<R extends S = S>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
-    this.registerRoute('head', url, options, handler as any)
+  head<R extends Schema>(url: string, options: RouteOptions<R>, handler: Handler<R, Context>) {
+    this.registerRoute('head', url, ...erase<R, Context>(options, handler))
   }
 
   parseQueryMatch(query: string): QuerystringMatch {
@@ -268,7 +275,7 @@ export class Router<Context = unknown, S extends Schema = Schema> {
   }
 
   matchRoute(
-    route: Route<S, Context>,
+    route: Route<Schema, Context>,
     match: { query: RouteQuery; headers: Record<string, string>; type?: string }
   ) {
     const isOfType = match.type ? match.type === route.type : route.type === undefined
@@ -342,6 +349,22 @@ export class Router<Context = unknown, S extends Schema = Schema> {
 
     return true
   }
+}
+
+/**
+ * The per-route generic R is preserved at the public-method call site for inference,
+ * then erased here into the schema-agnostic registry shape. Centralising the casts
+ * avoids both TS2589 (deep instantiation of RouteOptions<R>/Handler<R>) and the
+ * Handler contravariance mismatch in one place.
+ */
+function erase<R extends Schema, Context>(
+  options: RouteOptions<R>,
+  handler: Handler<R, Context>
+): [RouteOptions<Schema>, Handler<Schema, Context>] {
+  return [
+    options as unknown as RouteOptions<Schema>,
+    handler as unknown as Handler<Schema, Context>,
+  ]
 }
 
 /**

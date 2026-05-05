@@ -1,4 +1,5 @@
 type BucketResponseType = { message: string; statusCode?: string; error?: string }
+type SchemaObject = Record<string, unknown>
 
 /**
  * Create generic response for all buckets
@@ -23,7 +24,10 @@ function createResponse(message: string, status?: string, error?: string): Bucke
   return response
 }
 
-function createDefaultSchema(successResponseSchema: any, properties: any): any {
+function createDefaultSchema(
+  successResponseSchema: SchemaObject,
+  properties: SchemaObject
+): SchemaObject {
   return {
     headers: { $ref: 'authSchema#' },
     response: {

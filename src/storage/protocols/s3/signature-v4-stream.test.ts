@@ -8,6 +8,24 @@ import { Buffer } from 'buffer'
 import crypto from 'crypto'
 import { vi } from 'vitest'
 
+// Test-only subclasses re-export `protected` members so the suite can exercise
+// them without `as unknown as`-style casts. Using the parent classes directly
+// elsewhere is unaffected.
+class TestChunkParser extends ChunkSignatureV4Parser {
+  get testBuffer() {
+    return this.buffer
+  }
+  testParseHeaderLine(line: string) {
+    return this.parseHeaderLine(line)
+  }
+}
+
+class TestSignatureV4 extends SignatureV4 {
+  override signingKey(key: string, dateStamp: string, regionName: string, serviceName: string) {
+    return super.signingKey(key, dateStamp, regionName, serviceName)
+  }
+}
+
 function deriveSigningKey(secretKey: string, shortDate: string, region: string, service: string) {
   const dateKey = crypto.createHmac('sha256', `AWS4${secretKey}`).update(shortDate).digest()
   const regionKey = crypto.createHmac('sha256', dateKey).update(region).digest()
@@ -76,12 +94,12 @@ describe('ChunkSignatureV4Parser', () => {
       maxChunkSize: 1024,
       ...opts,
     }
-    return new ChunkSignatureV4Parser(defaultOpts)
+    return new TestChunkParser(defaultOpts)
   }
 
   test('buffer find handles boundary-spanning delimiters after skipped prefixes', () => {
     const parser = makeParser()
-    const queue = (parser as any).buffer
+    const queue = parser.testBuffer
 
     queue.append(Buffer.from('\r'))
     queue.append(Buffer.from('\n'))
@@ -97,7 +115,7 @@ describe('ChunkSignatureV4Parser', () => {
 
   test('buffer consume returns the actual consumed byte count', () => {
     const parser = makeParser()
-    const queue = (parser as any).buffer
+    const queue = parser.testBuffer
     const consumed: Buffer[] = []
 
     queue.append(Buffer.from('ab'))
@@ -112,13 +130,18 @@ describe('ChunkSignatureV4Parser', () => {
 
   test('constructor throws on invalid algorithm', () => {
     expect(
-      () => new ChunkSignatureV4Parser({ streamingAlgorithm: 'INVALID' as any, maxChunkSize: 1 })
+      () =>
+        new ChunkSignatureV4Parser({
+          streamingAlgorithm:
+            'INVALID' as unknown as ChunkSignatureParserOptions['streamingAlgorithm'],
+          maxChunkSize: 1,
+        })
     ).toThrow(/Invalid streaming algorithm/)
   })
 
   test('parseHeaderLine accepts signed header and rejects malformed signature', () => {
     const parser = makeParser()
-    const parse = (parser as any).parseHeaderLine.bind(parser)
+    const parse = parser.testParseHeaderLine.bind(parser)
     const validSig = 'a'.repeat(64)
     const { size, signature } = parse(`5;chunk-signature=${validSig}`)
     expect(size).toBe(5)
@@ -134,7 +157,7 @@ describe('ChunkSignatureV4Parser', () => {
 
   test('parseHeaderLine rejects invalid chunk size', () => {
     const parser = makeParser()
-    const parse = (parser as any).parseHeaderLine.bind(parser)
+    const parse = parser.testParseHeaderLine.bind(parser)
     expect(() => parse('zz;chunk-signature=' + 'a'.repeat(64))).toThrow(/Invalid chunk header/)
     expect(() => parse('zz')).toThrow(/Invalid chunk size/)
     expect(() => parse('5zz')).toThrow(/Invalid chunk size/)
@@ -536,14 +559,14 @@ describe('ChunkSignatureV4Parser', () => {
       maxChunkSize: 10,
       signaturePattern: /^[0-9]+$/,
     })
-    const parse = (parser as any).parseHeaderLine.bind(parser)
+    const parse = parser.testParseHeaderLine.bind(parser)
     expect(parse('3;chunk-signature=123').signature).toBe('123')
     expect(() => parse('3;chunk-signature=abc')).toThrow()
   })
 
   test('reuses the derived signing key across chunk validations in the same scope', () => {
     const secretKey = 'secret-key'
-    const signer = new SignatureV4({
+    const signer = new TestSignatureV4({
       enforceRegion: false,
       credentials: {
         accessKey: 'access-key',
@@ -563,7 +586,7 @@ describe('ChunkSignatureV4Parser', () => {
       signedHeaders: ['host'],
       longDate: '20260406T120000Z',
     }
-    const signingKeySpy = vi.spyOn(signer as any, 'signingKey')
+    const signingKeySpy = vi.spyOn(signer, 'signingKey')
     const firstChunk = createChunkSignature(Buffer.from('hello'), clientSignature.signature, {
       longDate: clientSignature.longDate,
       shortDate: clientSignature.credentials.shortDate,

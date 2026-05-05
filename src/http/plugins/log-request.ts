@@ -78,26 +78,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
         }
 
         if (resources === undefined) {
-          const params = req.params as Record<string, unknown> | undefined
-          let resourceFromParams = ''
-
-          if (params) {
-            let first = true
-            for (const key in params) {
-              if (!Object.prototype.hasOwnProperty.call(params, key)) {
-                continue
-              }
-
-              if (!first) {
-                resourceFromParams += '/'
-              }
-
-              const value = params[key]
-              resourceFromParams += value == null ? '' : String(value)
-              first = false
-            }
-          }
-
+          const resourceFromParams = getResourceFromParams(req.params)
           resources = resourceFromParams ? [resourceFromParams] : []
         }
 
@@ -215,4 +196,29 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     operation: req.operation?.type ?? req.routeOptions.config.operation?.type,
     serverTimes: req.serverTimings,
   })
+}
+
+function getResourceFromParams(params: unknown): string {
+  if (!params || typeof params !== 'object') {
+    return ''
+  }
+
+  let resource = ''
+  let first = true
+
+  for (const key in params) {
+    if (!Object.prototype.hasOwnProperty.call(params, key)) {
+      continue
+    }
+
+    if (!first) {
+      resource += '/'
+    }
+
+    const value = (params as Record<string, unknown>)[key]
+    resource += value == null ? '' : String(value)
+    first = false
+  }
+
+  return resource
 }

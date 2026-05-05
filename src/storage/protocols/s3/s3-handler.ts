@@ -425,6 +425,7 @@ export class S3ProtocolHandler {
       metadata: {
         mimetype: command.ContentType,
       },
+      uploadType: 's3',
     })
 
     const uploadId = await this.storage.backend.createMultiPartUpload(

@@ -34,8 +34,8 @@ export class InfoRenderer extends HeadRenderer {
   }
 
   protected setHeaders(
-    request: FastifyRequest<any>,
-    response: FastifyReply<any>,
+    request: FastifyRequest,
+    response: FastifyReply,
     data: AssetResponse,
     options: RenderOptions
   ) {

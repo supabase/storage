@@ -1,8 +1,8 @@
-type MergedYield<Gens extends Record<string, AsyncGenerator<any>>> = {
+type MergedYield<Gens extends Record<string, AsyncGenerator<unknown>>> = {
   [K in keyof Gens]: Gens[K] extends AsyncGenerator<infer V> ? { type: K; value: V } : never
 }[keyof Gens]
 
-export async function* mergeAsyncGenerators<Gens extends Record<string, AsyncGenerator<any>>>(
+export async function* mergeAsyncGenerators<Gens extends Record<string, AsyncGenerator<unknown>>>(
   gens: Gens
 ): AsyncGenerator<MergedYield<Gens>> {
   // Convert the input object into an array of [name, generator] tuples

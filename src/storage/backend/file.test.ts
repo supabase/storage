@@ -1,9 +1,11 @@
 import * as fsp from 'node:fs/promises'
+import { ErrorCode } from '@internal/errors/codes'
 import { removePath } from '@internal/fs'
 import * as xattr from 'fs-xattr'
 import os from 'os'
 import path from 'path'
 import { Readable } from 'stream'
+import { text } from 'stream/consumers'
 import { type Mock, type MockInstance, vi } from 'vitest'
 import { getConfig } from '../../config'
 import { withOptionalVersion } from './adapter'
@@ -362,5 +364,103 @@ describe('FileBackend lastModified', () => {
 
     const getResult = await backend.getObject(bucket, key, version)
     expect(getResult.metadata.lastModified).toEqual(knownMtime)
+  })
+})
+
+describe('FileBackend range reads', () => {
+  let tmpDir: string
+  let backend: FileBackend
+  let originalStoragePath: string | undefined
+  let originalFilePath: string | undefined
+  const bucket = 'range-bucket'
+  const key = 'range.txt'
+  const version = 'v1'
+  const payload = '0123456789'
+
+  beforeEach(async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
+    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
+    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
+    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
+    getConfig({ reload: true })
+    backend = new FileBackend()
+
+    await backend.uploadObject(
+      bucket,
+      key,
+      version,
+      Readable.from(payload),
+      'text/plain',
+      'no-cache'
+    )
+  })
+
+  afterEach(async () => {
+    if (originalStoragePath === undefined) {
+      delete process.env.STORAGE_FILE_BACKEND_PATH
+    } else {
+      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
+    }
+    if (originalFilePath === undefined) {
+      delete process.env.FILE_STORAGE_BACKEND_PATH
+    } else {
+      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
+    }
+    await removePath(tmpDir)
+  })
+
+  it('returns inclusive explicit byte ranges', async () => {
+    const result = await backend.getObject(bucket, key, version, { range: 'bytes=2-5' })
+
+    await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe('2345')
+    expect(result.httpStatusCode).toBe(206)
+    expect(result.metadata.contentRange).toBe('bytes 2-5/10')
+    expect(result.metadata.contentLength).toBe(4)
+    expect(result.metadata.size).toBe(4)
+  })
+
+  it('returns open-ended byte ranges', async () => {
+    const result = await backend.getObject(bucket, key, version, { range: 'bytes=7-' })
+
+    await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe('789')
+    expect(result.metadata.contentRange).toBe('bytes 7-9/10')
+    expect(result.metadata.contentLength).toBe(3)
+    expect(result.metadata.size).toBe(3)
+  })
+
+  it('returns suffix byte ranges', async () => {
+    const result = await backend.getObject(bucket, key, version, { range: 'bytes=-5' })
+
+    await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe('56789')
+    expect(result.metadata.contentRange).toBe('bytes 5-9/10')
+    expect(result.metadata.contentLength).toBe(5)
+    expect(result.metadata.size).toBe(5)
+  })
+
+  it('caps range ends at the object size', async () => {
+    const result = await backend.getObject(bucket, key, version, { range: 'bytes=8-99' })
+
+    await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe('89')
+    expect(result.metadata.contentRange).toBe('bytes 8-9/10')
+    expect(result.metadata.contentLength).toBe(2)
+    expect(result.metadata.size).toBe(2)
+  })
+
+  it.each([
+    'bytes=-0',
+    'bytes=10-12',
+    'bytes=8-4',
+    'bytes=-',
+    'bytes=a-b',
+    'items=0-1',
+  ])('rejects invalid byte range %s', async (range) => {
+    await expect(backend.getObject(bucket, key, version, { range })).rejects.toMatchObject({
+      code: ErrorCode.InvalidRange,
+      error: 'invalid_range',
+      httpStatusCode: 416,
+      userStatusCode: 416,
+      message: 'invalid range provided',
+    })
   })
 })

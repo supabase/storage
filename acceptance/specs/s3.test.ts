@@ -179,6 +179,8 @@ describeAcceptance(
       const keyB = `${prefix}/b.txt`
       const keyC = `${prefix}/nested/c.txt`
       const copiedPartKey = `${prefix}/copied-part.txt`
+      const copiedWholePartKey = `${prefix}/copied-whole-part.txt`
+      const copiedInvalidRangeKey = `${prefix}/copied-invalid-range.txt`
       const abortedKey = `${prefix}/aborted.txt`
       const payload = Buffer.from('acceptance-s3-extended-object')
 
@@ -216,6 +218,46 @@ describeAcceptance(
         expect(await ranged.Body?.transformToString()).toBe(payload.subarray(0, 10).toString())
         expect(ranged.ContentRange).toBe(`bytes 0-9/${payload.length}`)
 
+        const suffixRange = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: keyA,
+            Range: 'bytes=-5',
+          })
+        )
+        expect(await suffixRange.Body?.transformToString()).toBe(payload.subarray(-5).toString())
+        expect(suffixRange.ContentRange).toBe(
+          `bytes ${payload.length - 5}-${payload.length - 1}/${payload.length}`
+        )
+
+        const openEndedRange = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: keyA,
+            Range: `bytes=${payload.length - 5}-`,
+          })
+        )
+        expect(await openEndedRange.Body?.transformToString()).toBe(
+          payload.subarray(payload.length - 5).toString()
+        )
+        expect(openEndedRange.ContentRange).toBe(
+          `bytes ${payload.length - 5}-${payload.length - 1}/${payload.length}`
+        )
+
+        await expect(
+          client.send(
+            new GetObjectCommand({
+              Bucket: bucketName,
+              Key: keyA,
+              Range: `bytes=${payload.length}-`,
+            })
+          )
+        ).rejects.toMatchObject({
+          $metadata: {
+            httpStatusCode: 416,
+          },
+        })
+
         const listedV1 = await client.send(
           new ListObjectsCommand({
             Bucket: bucketName,
@@ -240,7 +282,7 @@ describeAcceptance(
           new UploadPartCopyCommand({
             Bucket: bucketName,
             CopySource: `${bucketName}/${keyA}`,
-            CopySourceRange: `bytes=0-${payload.length - 1}`,
+            CopySourceRange: 'bytes=0-9',
             Key: copiedPartKey,
             PartNumber: 1,
             UploadId: multipartCopy.UploadId,
@@ -260,7 +302,68 @@ describeAcceptance(
         const copiedPartHead = await client.send(
           new HeadObjectCommand({ Bucket: bucketName, Key: copiedPartKey })
         )
-        expect(copiedPartHead.ContentLength).toBe(payload.length)
+        expect(copiedPartHead.ContentLength).toBe(10)
+
+        const wholePartCopy = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: copiedWholePartKey,
+          })
+        )
+        const wholeCopiedPart = await client.send(
+          new UploadPartCopyCommand({
+            Bucket: bucketName,
+            CopySource: `${bucketName}/${keyA}`,
+            Key: copiedWholePartKey,
+            PartNumber: 1,
+            UploadId: wholePartCopy.UploadId,
+          })
+        )
+        expect(wholeCopiedPart.CopyPartResult?.ETag).toBeTruthy()
+        await client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: copiedWholePartKey,
+            MultipartUpload: {
+              Parts: [{ ETag: wholeCopiedPart.CopyPartResult?.ETag, PartNumber: 1 }],
+            },
+            UploadId: wholePartCopy.UploadId,
+          })
+        )
+        const copiedWholePartHead = await client.send(
+          new HeadObjectCommand({ Bucket: bucketName, Key: copiedWholePartKey })
+        )
+        expect(copiedWholePartHead.ContentLength).toBe(payload.length)
+
+        const invalidRangeCopy = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: copiedInvalidRangeKey,
+          })
+        )
+        await expect(
+          client.send(
+            new UploadPartCopyCommand({
+              Bucket: bucketName,
+              CopySource: `${bucketName}/${keyA}`,
+              CopySourceRange: 'bytes=-5',
+              Key: copiedInvalidRangeKey,
+              PartNumber: 1,
+              UploadId: invalidRangeCopy.UploadId,
+            })
+          )
+        ).rejects.toMatchObject({
+          $metadata: {
+            httpStatusCode: 400,
+          },
+        })
+        await client.send(
+          new AbortMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: copiedInvalidRangeKey,
+            UploadId: invalidRangeCopy.UploadId,
+          })
+        )
 
         const aborted = await client.send(
           new CreateMultipartUploadCommand({
@@ -284,7 +387,9 @@ describeAcceptance(
           new DeleteObjectsCommand({
             Bucket: bucketName,
             Delete: {
-              Objects: [keyA, keyB, keyC, copiedPartKey].map((Key) => ({ Key })),
+              Objects: [keyA, keyB, keyC, copiedPartKey, copiedWholePartKey].map((Key) => ({
+                Key,
+              })),
             },
           })
         )

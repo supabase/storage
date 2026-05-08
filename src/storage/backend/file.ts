@@ -9,6 +9,7 @@ import path from 'path'
 import stream from 'stream'
 import { promisify } from 'util'
 import { getConfig } from '../../config'
+import { parseRangeHeader } from '../range'
 import {
   BrowserCacheHeaders,
   ObjectMetadata,
@@ -129,23 +130,19 @@ export class FileBackend implements StorageBackendAdapter {
     }
 
     if (headers?.range) {
-      const parts = headers.range.replace(/bytes=/, '').split('-')
-      const startRange = parseInt(parts[0], 10)
-      const endRange = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
-      const size = endRange - startRange
-      const chunkSize = size + 1
-      const body = fs.createReadStream(file, { start: startRange, end: endRange })
+      const range = parseRangeHeader(headers.range, fileSize)
+      const body = fs.createReadStream(file, { start: range.fromByte, end: range.toByte })
 
       return {
         metadata: {
           cacheControl: cacheControl || 'no-cache',
           mimetype: contentType || 'application/octet-stream',
           lastModified,
-          contentRange: `bytes ${startRange}-${endRange}/${fileSize}`,
+          contentRange: `bytes ${range.fromByte}-${range.toByte}/${fileSize}`,
           httpStatusCode: 206,
-          size,
+          size: range.size,
           eTag,
-          contentLength: chunkSize,
+          contentLength: range.size,
         },
         httpStatusCode: 206,
         body,

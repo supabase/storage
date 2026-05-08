@@ -24,6 +24,7 @@ import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getConfig } from '../../../config'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
+import { parseCopySourceRangeHeader } from '../../range'
 import { S3MultipartUpload } from '../../schemas'
 import { Storage } from '../../storage'
 import { Uploader, validateMimeType } from '../../uploader'
@@ -1222,10 +1223,6 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    if (!CopySourceRange) {
-      throw ERRORS.MissingParameter('CopySourceRange')
-    }
-
     const sourceBucketName = (
       CopySource.startsWith('/') ? CopySource.replace('/', '').split('/') : CopySource.split('/')
     ).shift()
@@ -1250,25 +1247,14 @@ export class S3ProtocolHandler {
       'id,name,version,metadata'
     )
 
-    let copySize = copySource.metadata?.size || 0
+    const sourceSize = Number(copySource.metadata?.size ?? 0)
+    let copySize = sourceSize
     let rangeBytes: { fromByte: number; toByte: number } | undefined = undefined
 
     if (CopySourceRange) {
-      const bytes = CopySourceRange.split('=')[1].split('-')
-
-      if (bytes.length !== 2) {
-        throw ERRORS.InvalidRange()
-      }
-
-      const fromByte = Number(bytes[0])
-      const toByte = Number(bytes[1])
-
-      if (isNaN(fromByte) || isNaN(toByte)) {
-        throw ERRORS.InvalidRange()
-      }
-
-      rangeBytes = { fromByte, toByte }
-      copySize = toByte - fromByte
+      const range = parseCopySourceRangeHeader(CopySourceRange, sourceSize)
+      rangeBytes = range
+      copySize = range.size
     }
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)

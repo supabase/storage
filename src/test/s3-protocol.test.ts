@@ -2298,6 +2298,128 @@ describe('S3 Protocol', () => {
     })
 
     describe('UploadPartCopyCommand', () => {
+      it('copies inclusive source ranges without dropping boundary bytes', async () => {
+        const bucket = await createBucket(client)
+
+        const sourceKey = `source-${randomUUID()}.txt`
+        const payload = Buffer.from('0123456789')
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: sourceKey,
+            Body: payload,
+            ContentType: 'text/plain',
+          })
+        )
+
+        const rangeCases: Array<[string, Buffer]> = [
+          ['bytes=0-0', Buffer.from('0')],
+          ['bytes=9-9', Buffer.from('9')],
+          ['bytes=0-9', payload],
+          ['bytes=2-5', Buffer.from('2345')],
+        ]
+
+        for (const [copySourceRange, expected] of rangeCases) {
+          const targetKey = `range-copy-${randomUUID()}.txt`
+          const multipart = await client.send(
+            new CreateMultipartUploadCommand({
+              Bucket: bucket,
+              Key: targetKey,
+              ContentType: 'text/plain',
+            })
+          )
+
+          const copiedPart = await client.send(
+            new UploadPartCopyCommand({
+              Bucket: bucket,
+              Key: targetKey,
+              UploadId: multipart.UploadId,
+              PartNumber: 1,
+              CopySource: `${bucket}/${sourceKey}`,
+              CopySourceRange: copySourceRange,
+            })
+          )
+
+          expect(copiedPart.CopyPartResult?.ETag).toBeTruthy()
+
+          await client.send(
+            new CompleteMultipartUploadCommand({
+              Bucket: bucket,
+              Key: targetKey,
+              UploadId: multipart.UploadId,
+              MultipartUpload: {
+                Parts: [
+                  {
+                    PartNumber: 1,
+                    ETag: copiedPart.CopyPartResult?.ETag,
+                  },
+                ],
+              },
+            })
+          )
+
+          const copiedObject = await client.send(
+            new GetObjectCommand({
+              Bucket: bucket,
+              Key: targetKey,
+            })
+          )
+          const copiedBytes = await copiedObject.Body?.transformToByteArray()
+
+          expect(copiedObject.ContentLength).toBe(expected.length)
+          expect(Buffer.from(copiedBytes || [])).toEqual(expected)
+        }
+      })
+
+      it('accounts source ranges inclusively when enforcing max file size', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `source-${randomUUID()}.txt`
+        const targetKey = `range-copy-limit-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: sourceKey,
+            Body: Buffer.from('0123456789'),
+            ContentType: 'text/plain',
+          })
+        )
+
+        mergeConfig({
+          uploadFileSizeLimit: 1,
+        })
+
+        const multipart = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucket,
+            Key: targetKey,
+            ContentType: 'text/plain',
+          })
+        )
+
+        try {
+          await client.send(
+            new UploadPartCopyCommand({
+              Bucket: bucket,
+              Key: targetKey,
+              UploadId: multipart.UploadId,
+              PartNumber: 1,
+              CopySource: `${bucket}/${sourceKey}`,
+              CopySourceRange: 'bytes=0-1',
+            })
+          )
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(413)
+          expect((e as S3ServiceException).message).toEqual(
+            'The object exceeded the maximum allowed size'
+          )
+          expect((e as S3ServiceException).name).toEqual('EntityTooLarge')
+        }
+      })
+
       it('will copy a part from an existing object and upload it as a part', async () => {
         const bucket = await createBucket(client)
 

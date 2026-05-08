@@ -241,6 +241,68 @@ describe('CompleteMultipartUpload route mapping', () => {
   })
 })
 
+describe('DeleteObject route mapping', () => {
+  it('returns 204 from iceberg single-object deletes', async () => {
+    const previousIcebergDeleteEnabled = process.env.ICEBERG_S3_DELETE_ENABLED
+    process.env.ICEBERG_S3_DELETE_ENABLED = 'true'
+    vi.resetModules()
+
+    try {
+      const [{ Router: FreshRouter }, { default: DeleteObject }] = await Promise.all([
+        import('./router'),
+        import('./commands/delete-object'),
+      ])
+      const router = new FreshRouter()
+      const deleteObject = vi.fn().mockResolvedValue(undefined)
+
+      DeleteObject(router as unknown as S3Router)
+
+      const route = router
+        .routes()
+        .get('/:Bucket/*')
+        ?.find((candidate) => candidate.method === 'delete' && candidate.type === 'iceberg')
+
+      expect(route).toBeDefined()
+
+      const response = await route!.handler!(
+        {
+          Params: {
+            Bucket: 'public-bucket',
+            '*': 'metadata/file.avro',
+          },
+          Querystring: {},
+        } as never,
+        {
+          req: {
+            internalIcebergBucketName: 'internal-iceberg-bucket',
+            storage: {
+              backend: {
+                deleteObject,
+              },
+            },
+          },
+        } as never
+      )
+
+      expect(deleteObject).toHaveBeenCalledWith(
+        'internal-iceberg-bucket',
+        'metadata/file.avro',
+        undefined
+      )
+      expect(response).toEqual({
+        statusCode: 204,
+      })
+    } finally {
+      if (previousIcebergDeleteEnabled === undefined) {
+        delete process.env.ICEBERG_S3_DELETE_ENABLED
+      } else {
+        process.env.ICEBERG_S3_DELETE_ENABLED = previousIcebergDeleteEnabled
+      }
+      vi.resetModules()
+    }
+  })
+})
+
 describe('S3ProtocolHandler multipart completion regressions', () => {
   it('preserves ChecksumCRC32C when completing multipart uploads', async () => {
     const backend = {

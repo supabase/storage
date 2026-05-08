@@ -97,8 +97,18 @@ describeAcceptance(
         )
         expect(copied.ContentLength).toBe(payload.length)
 
-        await client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }))
-        await client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: copyKey }))
+        const existingDelete = await client.send(
+          new DeleteObjectCommand({ Bucket: bucketName, Key: key })
+        )
+        expect(existingDelete.$metadata.httpStatusCode).toBe(204)
+        const copiedDelete = await client.send(
+          new DeleteObjectCommand({ Bucket: bucketName, Key: copyKey })
+        )
+        expect(copiedDelete.$metadata.httpStatusCode).toBe(204)
+        const missingDelete = await client.send(
+          new DeleteObjectCommand({ Bucket: bucketName, Key: uniqueObjectKey('missing', 'txt') })
+        )
+        expect(missingDelete.$metadata.httpStatusCode).toBe(204)
       } finally {
         await cleanupS3Bucket(client, bucketName)
         client.destroy()
@@ -383,16 +393,29 @@ describeAcceptance(
         )
         expect(activeUploads.Uploads ?? []).toHaveLength(0)
 
-        await client.send(
+        const bulkMissingKey = uniqueObjectKey('bulk-missing', 'txt')
+        const bulkDelete = await client.send(
           new DeleteObjectsCommand({
             Bucket: bucketName,
             Delete: {
-              Objects: [keyA, keyB, keyC, copiedPartKey, copiedWholePartKey].map((Key) => ({
-                Key,
-              })),
+              Objects: [keyA, keyB, keyC, copiedPartKey, copiedWholePartKey, bulkMissingKey].map(
+                (Key) => ({ Key })
+              ),
             },
           })
         )
+        expect(bulkDelete.Deleted?.map((object) => object.Key)).toEqual(
+          expect.arrayContaining([
+            keyA,
+            keyB,
+            keyC,
+            copiedPartKey,
+            copiedWholePartKey,
+            bulkMissingKey,
+          ])
+        )
+        expect(bulkDelete.Deleted).toHaveLength(6)
+        expect(bulkDelete.Errors ?? []).toEqual([])
 
         await client.send(new DeleteBucketCommand({ Bucket: bucketName }))
       } finally {

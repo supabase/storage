@@ -18,7 +18,7 @@ import {
   UploadPartCopyCommandInput,
 } from '@aws-sdk/client-s3'
 import { decrypt, encrypt } from '@internal/auth'
-import { ERRORS } from '@internal/errors'
+import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
@@ -1004,9 +1004,19 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Key')
     }
 
-    await this.storage.from(Bucket).deleteObject(Key)
+    try {
+      await this.storage.from(Bucket).deleteObject(Key)
+    } catch (e) {
+      if (!isStorageError(ErrorCode.NoSuchKey, e)) {
+        throw e
+      }
 
-    return {}
+      await this.storage.asSuperUser().findBucket(Bucket)
+    }
+
+    return {
+      statusCode: 204,
+    }
   }
 
   /**
@@ -1032,29 +1042,43 @@ export class S3ProtocolHandler {
     }
 
     if (Delete.Objects.length === 0) {
-      return {}
+      await this.storage.asSuperUser().findBucket(Bucket)
+      return { responseBody: { DeleteResult: { Deleted: [], Error: [] } } }
     }
 
-    const deletedResult = await this.storage
-      .from(Bucket)
-      .deleteObjects(Delete.Objects.map((o) => o.Key || ''))
+    const requestedKeys = Delete.Objects.filter((object) => object.Key !== undefined).map(
+      (object) => object.Key || ''
+    )
 
-    const deletedNames = new Set<string>()
-    for (const result of deletedResult) {
-      deletedNames.add(result.name)
+    const deletedObjects = await this.storage.from(Bucket).deleteObjects(requestedKeys)
+    const deletedNames = new Set(deletedObjects.map((object) => object.name))
+    const unresolvedKeys = requestedKeys.filter((key) => !deletedNames.has(key))
+
+    const remainingObjects =
+      unresolvedKeys.length > 0
+        ? await this.storage.asSuperUser().from(Bucket).findObjects(unresolvedKeys, 'name')
+        : []
+
+    if (deletedObjects.length === 0 && remainingObjects.length === 0) {
+      await this.storage.asSuperUser().findBucket(Bucket)
     }
 
-    const deleted: { Key?: string }[] = []
+    const remainingNames = new Set(remainingObjects.map((object) => object.name))
+
+    const deleted: { Key: string }[] = []
     const errors: { Key?: string; Code: string; Message: string }[] = []
 
     for (const object of Delete.Objects) {
-      if (object.Key !== undefined && deletedNames.has(object.Key)) {
+      if (
+        object.Key !== undefined &&
+        (deletedNames.has(object.Key) || !remainingNames.has(object.Key))
+      ) {
         deleted.push({ Key: object.Key })
       } else {
         errors.push({
           Key: object.Key,
           Code: 'AccessDenied',
-          Message: "You do not have permission to delete this object or the object doesn't exist",
+          Message: 'Access Denied',
         })
       }
     }

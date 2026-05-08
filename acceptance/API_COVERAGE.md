@@ -15,7 +15,7 @@ These run in `smoke` / `core` profiles and are included in the default local CI 
 | REST objects           | upload, update, authenticated read/head/info, public read/head/info, delete                                                       |
 | REST object operations | list-v1, list-v2, signed URL, batch signed URLs, signed upload URL, copy, move, bulk delete                                       |
 | S3 buckets             | CreateBucket, HeadBucket, ListBuckets, GetBucketLocation, GetBucketVersioning, DeleteBucket                                       |
-| S3 objects             | PutObject, HeadObject, GetObject, Range GetObject, CopyObject, DeleteObject, DeleteObjects                                        |
+| S3 objects             | PutObject, HeadObject, GetObject, Range GetObject, CopyObject, DeleteObject idempotency, DeleteObjects                            |
 | S3 listing             | ListObjectsV2, ListObjects V1 with delimiter/common prefixes                                                                      |
 | S3 multipart           | CreateMultipartUpload, UploadPart, ListParts, CompleteMultipartUpload, UploadPartCopy, AbortMultipartUpload, ListMultipartUploads |
 | TUS                    | OPTIONS, POST create, HEAD offset, PATCH resume, DELETE termination, full upload through `tus-js-client`, signed TUS upload       |

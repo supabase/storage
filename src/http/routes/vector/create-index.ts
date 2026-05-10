@@ -30,6 +30,20 @@ const createVectorIndex = {
           },
         },
       },
+      filterableMetadataKeys: {
+        type: 'array',
+        description:
+          'Embedded vector backend only: declares the filterable metadata schema. Required when VECTOR_BACKEND=embedded; ignored when VECTOR_BACKEND=s3.',
+        items: {
+          type: 'object',
+          required: ['name', 'dataType'],
+          additionalProperties: false,
+          properties: {
+            name: { type: 'string', minLength: 1, maxLength: 64 },
+            dataType: { type: 'string', enum: ['string', 'number', 'boolean'] },
+          },
+        },
+      },
       vectorBucketName: { type: 'string' },
     },
     required: ['dataType', 'dimension', 'distanceMetric', 'indexName', 'vectorBucketName'],

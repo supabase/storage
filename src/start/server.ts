@@ -61,10 +61,23 @@ async function main() {
     isMultitenant,
     pgQueueEnable,
     dbMigrationFreezeAt,
+    vectorBackend,
+    vectorEmbeddedPath,
     vectorS3Buckets,
     icebergShards,
     numWorkers,
   } = getConfig()
+
+  if (vectorBackend === 'embedded') {
+    if (!vectorEmbeddedPath) {
+      throw new Error('VECTOR_EMBEDDED_PATH is required when VECTOR_BACKEND=embedded')
+    }
+    if (numWorkers > 1) {
+      throw new Error(
+        `VECTOR_BACKEND=embedded requires WORKERS_NUM=1 (got ${numWorkers}); zvec is single-writer`
+      )
+    }
+  }
 
   // Queue
   if (pgQueueEnable) {
@@ -129,6 +142,12 @@ async function main() {
 
   // Cluster information
   await Cluster.init(shutdownSignal.nextGroup.signal)
+
+  if (vectorBackend === 'embedded' && Cluster.size > 1) {
+    throw new Error(
+      `VECTOR_BACKEND=embedded requires Cluster.size <= 1 (got ${Cluster.size}); zvec is single-writer`
+    )
+  }
 
   Cluster.on('change', (data) => {
     logger.info(

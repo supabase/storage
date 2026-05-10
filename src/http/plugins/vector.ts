@@ -1,10 +1,19 @@
 import { getTenantConfig, multitenantKnex } from '@internal/database'
 import { ERRORS } from '@internal/errors'
-import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 import {
+  BucketScopedSingleShard,
+  KnexShardStoreFactory,
+  ShardCatalog,
+  Sharder,
+  SingleShard,
+} from '@internal/sharding'
+import {
+  createEmbeddedVectorStore,
   createS3VectorClient,
+  EmbeddedVectorStore,
   KnexVectorMetadataDB,
   S3Vector,
+  VectorStore,
   VectorStoreManager,
 } from '@storage/protocols/vector'
 import { FastifyInstance } from 'fastify'
@@ -17,17 +26,37 @@ declare module 'fastify' {
   }
 }
 
-const s3VectorClient = createS3VectorClient()
-const s3VectorAdapter = new S3Vector(s3VectorClient)
-
 export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) {
-  fastify.addHook('preHandler', async (req) => {
-    const { isMultitenant, vectorS3Buckets, vectorMaxBucketsCount, vectorMaxIndexesCount } =
-      getConfig()
+  const config = getConfig()
+  const { vectorBackend, vectorEmbeddedPath, vectorS3Buckets } = config
 
-    if (!vectorS3Buckets || vectorS3Buckets.length === 0) {
+  let adapter: VectorStore | undefined
+  let backendEnabled = false
+
+  if (vectorBackend === 'embedded') {
+    if (!vectorEmbeddedPath) {
+      // Plugin still registers; preHandler will throw FeatureNotEnabled.
+      backendEnabled = false
+    } else {
+      adapter = await createEmbeddedVectorStore({
+        basePath: vectorEmbeddedPath,
+        ttlMs: 60_000,
+      })
+      backendEnabled = true
+    }
+  } else if (vectorBackend === 's3') {
+    if (vectorS3Buckets.length > 0) {
+      adapter = new S3Vector(createS3VectorClient())
+      backendEnabled = true
+    }
+  }
+
+  fastify.addHook('preHandler', async (req) => {
+    if (!backendEnabled || !adapter) {
       throw ERRORS.FeatureNotEnabled('vector', 'Vector service not configured')
     }
+
+    const { isMultitenant, vectorMaxBucketsCount, vectorMaxIndexesCount } = config
 
     let maxBucketCount = vectorMaxBucketsCount
     let maxIndexCount = vectorMaxIndexesCount
@@ -40,17 +69,29 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
 
     const db = req.db.pool.acquire()
     const store = new KnexVectorMetadataDB(db)
-    const shard = isMultitenant
-      ? new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
-      : new SingleShard({
-          shardKey: vectorS3Buckets[0],
-          capacity: 10000,
-        })
 
-    req.s3Vector = new VectorStoreManager(s3VectorAdapter, store, shard, {
+    let shard: Sharder
+    if (vectorBackend === 'embedded') {
+      shard = new BucketScopedSingleShard({
+        keyPrefix: 'embedded__',
+        capacity: Number.MAX_SAFE_INTEGER,
+      })
+    } else if (isMultitenant) {
+      shard = new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
+    } else {
+      shard = new SingleShard({
+        shardKey: vectorS3Buckets[0],
+        capacity: 10000,
+      })
+    }
+
+    req.s3Vector = new VectorStoreManager(adapter, store, shard, {
       tenantId: req.tenantId,
       maxBucketCount,
       maxIndexCount,
     })
   })
 })
+
+// Re-export so existing callers that pulled from this module keep compiling.
+export type { EmbeddedVectorStore }

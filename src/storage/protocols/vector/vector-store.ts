@@ -1,6 +1,5 @@
 import {
   ConflictException,
-  CreateIndexInput,
   DeleteIndexInput,
   DeleteVectorsInput,
   DistanceMetric,
@@ -19,7 +18,7 @@ import { ERRORS } from '@internal/errors'
 import { ErrorCode } from '@internal/errors/codes'
 import { logger, logSchema } from '@internal/monitoring'
 import { Sharder } from '@internal/sharding/sharder'
-import { VectorStore } from './adapter/s3-vector'
+import { CreateVectorIndexInput, VectorStore } from './adapter/s3-vector'
 import { VectorMetadataDB } from './knex'
 
 interface VectorStoreConfig {
@@ -124,7 +123,7 @@ export class VectorStoreManager {
   // Store it in MultiTenantDB
   // Queue Job in the same transaction
   // Poll for job completion
-  async createVectorIndex(command: CreateIndexInput): Promise<void> {
+  async createVectorIndex(command: CreateVectorIndexInput): Promise<void> {
     if (!command.indexName) {
       throw ERRORS.MissingParameter('indexName')
     }

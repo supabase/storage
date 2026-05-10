@@ -103,6 +103,9 @@
     "wattpm": "^3.52.0",
     "xml2js": "^0.6.2"
   },
+  "optionalDependencies": {
+    "@zvec/zvec": "^0.4.0"
+  },
   "devDependencies": {
     "@aws-sdk/s3-presigned-post": "^3.1023.0",
     "@biomejs/biome": "^2.4.4",

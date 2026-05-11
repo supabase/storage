@@ -522,6 +522,25 @@ describe('PgPoolStrategy', () => {
     }
   })
 
+  it('recreates the current pg pool with updated max connections after rebalance', async () => {
+    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
+
+    try {
+      const originalPool = strategy.getCurrentPoolForTest()
+      expect(originalPool.options.max).toBe(8)
+
+      strategy.rebalance({ maxConnections: 12 })
+
+      expect(originalPool.ended).toBe(true)
+
+      const rebalancedPool = strategy.getCurrentPoolForTest()
+      expect(rebalancedPool).not.toBe(originalPool)
+      expect(rebalancedPool.options.max).toBe(12)
+    } finally {
+      await strategy.destroy()
+    }
+  })
+
   it('logs old pool drain failures after rebalance', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const error = new Error('pool drain failed')

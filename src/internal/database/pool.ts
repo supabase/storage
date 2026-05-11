@@ -52,8 +52,13 @@ export interface PoolStats {
   total: number
 }
 
+export interface PoolRebalanceOptions {
+  clusterSize?: number
+  maxConnections?: number
+}
+
 export interface PoolStrategy {
-  rebalance(options: { clusterSize: number }): void
+  rebalance(options: PoolRebalanceOptions): void
   destroy(): Promise<void>
   getPoolStats(): PoolStats | null
 }
@@ -254,7 +259,7 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
     }
   }
 
-  rebalance(tenantId: string, data: { clusterSize: number }) {
+  rebalance(tenantId: string, data: PoolRebalanceOptions) {
     const pool = tenantPools.get(tenantId)
     if (pool) {
       pool.rebalance({

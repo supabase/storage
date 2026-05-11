@@ -500,7 +500,7 @@ describe('Tenant configs', () => {
     expect(getResponseJSON).toEqual({ ...payload, fileSizeLimit: 2 })
   })
 
-  test('Tenant config maxConnections change destroys cached pg pool instead of rebalancing', async () => {
+  test('Tenant config maxConnections change rebalances cached pg pool without destroying it', async () => {
     const tenantId = 'pool-max-connections-change'
     const encryptedTenant = {
       anon_key: encrypt('anon'),
@@ -544,8 +544,8 @@ describe('Tenant configs', () => {
       await getTenantConfig(tenantId)
       await onTenantConfigChange(tenantId)
 
-      expect(destroySpy).toHaveBeenCalledWith(tenantId)
-      expect(rebalanceSpy).not.toHaveBeenCalled()
+      expect(rebalanceSpy).toHaveBeenCalledWith(tenantId, { maxConnections: 40 })
+      expect(destroySpy).not.toHaveBeenCalled()
     } finally {
       deleteTenantConfig(tenantId)
       querySpy.mockRestore()

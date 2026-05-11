@@ -5,7 +5,13 @@ import retry from 'async-retry'
 import pg, { DatabaseError, Pool, PoolClient, QueryResult, QueryResultRow } from 'pg'
 import PgConnection from 'pg/lib/connection'
 import { getConfig } from '../../config'
-import { PoolManager, PoolStats, searchPath, TenantConnectionOptions } from './pool'
+import {
+  PoolManager,
+  PoolRebalanceOptions,
+  PoolStats,
+  searchPath,
+  TenantConnectionOptions,
+} from './pool'
 import { getSslSettings } from './ssl'
 
 const {
@@ -92,13 +98,24 @@ export class PgPoolStrategy {
     await this.drainPool(originalPool, 'destroy')
   }
 
-  rebalance(options: { clusterSize: number }): void {
-    if (options.clusterSize === 0) {
+  rebalance(options: PoolRebalanceOptions): void {
+    let shouldReplacePool = false
+
+    if (options.clusterSize !== undefined && options.clusterSize !== 0) {
+      this.options.clusterSize = options.clusterSize
+      shouldReplacePool = true
+    }
+
+    if (options.maxConnections !== undefined) {
+      this.options.maxConnections = options.maxConnections
+      shouldReplacePool = true
+    }
+
+    if (!shouldReplacePool) {
       return
     }
 
     const originalPool = this.pool
-    this.options.clusterSize = options.clusterSize
     this.pool = undefined
 
     if (originalPool) {

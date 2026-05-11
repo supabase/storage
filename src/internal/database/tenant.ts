@@ -86,8 +86,14 @@ export enum TenantMigrationStatus {
   FAILED_STALE = 'FAILED_STALE',
 }
 
-const { isMultitenant, dbServiceRole, dbMigrationFreezeAt, icebergEnabled, vectorEnabled } =
-  getConfig()
+const {
+  isMultitenant,
+  dbServiceRole,
+  dbMigrationFreezeAt,
+  icebergEnabled,
+  vectorEnabled,
+  databaseMaxConnections,
+} = getConfig()
 
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
 export const TENANT_CONFIG_CACHE_MAX_SIZE_BYTES = 1024 * 1024 * 50 // 50 MiB
@@ -444,7 +450,9 @@ export async function onTenantConfigChange(cacheKey: string) {
       normalizeMaxConnections(newConfig.maxConnections) !==
       normalizeMaxConnections(oldConfig.maxConnections)
     ) {
-      await destroyTenantPool(cacheKey)
+      PgTenantConnection.poolManager.rebalance(cacheKey, {
+        maxConnections: resolveMaxConnections(newConfig.maxConnections),
+      })
     }
   } catch {
     // if the tenant config is not found, we can ignore it
@@ -456,6 +464,10 @@ export async function onTenantConfigChange(cacheKey: string) {
 
 function normalizeMaxConnections(maxConnections: number | null | undefined): number | null {
   return maxConnections ?? null
+}
+
+function resolveMaxConnections(maxConnections: number | null | undefined): number {
+  return maxConnections ?? databaseMaxConnections
 }
 
 async function destroyTenantPool(cacheKey: string): Promise<void> {

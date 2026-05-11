@@ -206,6 +206,85 @@ describe('Iceberg Catalog', () => {
       })
     })
 
+    it('updates namespace properties when creating an existing namespace', async () => {
+      const bucketName = t.random.name('ice-bucket')
+      await t.storage.createIcebergBucket({
+        name: bucketName,
+      })
+
+      const namespaceName = t.random.name('namespace')
+
+      const createResponse = await app.inject({
+        method: 'POST',
+        url: `/iceberg/v1/${bucketName}/namespaces`,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+        payload: {
+          namespace: namespaceName,
+          properties: {
+            stable: 'kept',
+            overwrite: 'old',
+          },
+        },
+      })
+
+      expect(createResponse.statusCode).toBe(200)
+      expect(await createResponse.json()).toEqual({
+        namespace: [namespaceName],
+        properties: {
+          stable: 'kept',
+          overwrite: 'old',
+        },
+      })
+
+      const updateResponse = await app.inject({
+        method: 'POST',
+        url: `/iceberg/v1/${bucketName}/namespaces`,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+        payload: {
+          namespace: namespaceName,
+          properties: {
+            overwrite: 'new',
+            added: 'value',
+          },
+        },
+      })
+
+      expect(updateResponse.statusCode).toBe(200)
+      expect(await updateResponse.json()).toEqual({
+        namespace: [namespaceName],
+        properties: {
+          stable: 'kept',
+          overwrite: 'new',
+          added: 'value',
+        },
+      })
+
+      const loadResponse = await app.inject({
+        method: 'GET',
+        url: `/iceberg/v1/${bucketName}/namespaces/${namespaceName}`,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(loadResponse.statusCode).toBe(200)
+      expect(await loadResponse.json()).toEqual({
+        namespace: [namespaceName],
+        properties: {
+          stable: 'kept',
+          overwrite: 'new',
+          added: 'value',
+        },
+      })
+    })
+
     it('returns InvalidParameter for invalid namespace names', async () => {
       const bucketName = t.random.name('ice-bucket')
       await t.storage.createIcebergBucket({

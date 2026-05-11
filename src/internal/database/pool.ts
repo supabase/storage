@@ -61,9 +61,14 @@ export interface PoolStats {
   total: number
 }
 
+export interface PoolRebalanceOptions {
+  clusterSize?: number
+  maxConnections?: number
+}
+
 export interface PoolStrategy {
   acquire(): Knex
-  rebalance(options: { clusterSize: number }): void
+  rebalance(options: PoolRebalanceOptions): void
   destroy(): Promise<void>
   getPoolStats(): PoolStats | null
 }
@@ -255,12 +260,10 @@ export class PoolManager {
     }
   }
 
-  rebalance(tenantId: string, data: { clusterSize: number }) {
+  rebalance(tenantId: string, data: PoolRebalanceOptions) {
     const pool = tenantPools.get(tenantId)
     if (pool) {
-      pool.rebalance({
-        clusterSize: data.clusterSize,
-      })
+      pool.rebalance({ ...data })
     }
   }
 
@@ -383,14 +386,24 @@ class TenantPool implements PoolStrategy {
     }
   }
 
-  rebalance(options: { clusterSize: number }) {
-    if (options.clusterSize === 0) {
+  rebalance(options: PoolRebalanceOptions) {
+    let shouldReplacePool = false
+
+    if (options.clusterSize !== undefined && options.clusterSize !== 0) {
+      this.options.clusterSize = options.clusterSize
+      shouldReplacePool = true
+    }
+
+    if (options.maxConnections !== undefined) {
+      this.options.maxConnections = options.maxConnections
+      shouldReplacePool = true
+    }
+
+    if (!shouldReplacePool) {
       return
     }
 
     const originalPool = this.pool
-
-    this.options.clusterSize = options.clusterSize
     this.pool = undefined
 
     if (originalPool) {

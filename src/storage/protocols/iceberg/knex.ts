@@ -459,6 +459,7 @@ export class KnexMetastore implements Metastore<Knex.Transaction> {
       .onConflict(conflictColumns)
       .merge({
         updated_at: new Date(),
+        metadata: this.db.raw('?? || excluded.??', ['iceberg_namespaces.metadata', 'metadata']),
       })
       .returning<NamespaceIndex[]>('*')
 
@@ -466,10 +467,7 @@ export class KnexMetastore implements Metastore<Knex.Transaction> {
       throw ERRORS.NoSuchKey(params.name)
     }
 
-    return {
-      ...namespaceIndex,
-      id: result[0].id,
-    }
+    return result[0]
   }
 
   async listNamespaces(params: ListNamespaceParams) {

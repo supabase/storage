@@ -118,7 +118,7 @@ tests:
       - operation: object.delete
         role: authenticated
         status: 400
-        message: "Object not found"
+        message: "Access denied"
 
       - operation: upload
         bucketName: "bucket_{{runId}}"
@@ -180,7 +180,7 @@ tests:
       - operation: object.delete
         role: authenticated
         status: 400
-        message: "Object not found"
+        message: "Access denied"
 
   - description: "Will not empty a bucket without delete permission on objects"
     policies:
@@ -307,7 +307,7 @@ tests:
 
       - operation: object.delete
         status: 400
-        error: "Object not found"
+        error: "Access denied"
 
       - operation: bucket.update
         status: 200
@@ -344,7 +344,7 @@ tests:
 
       - operation: object.delete
         status: 400
-        error: "Object not found"
+        error: "Access denied"
 
       - operation: bucket.update
         status: 400
@@ -385,7 +385,7 @@ tests:
 
       - operation: object.delete
         status: 400
-        error: "Object not found"
+        error: "Access denied"
 
       - operation: object.delete
         role: service
@@ -661,7 +661,7 @@ tests:
 
       - operation: object.delete
         status: 400
-        error: "Object not found"
+        error: "Access denied"
 
   - description: "Operation helper any-of policies allow both list and get"
     policies:
@@ -680,4 +680,4 @@ tests:
 
       - operation: object.delete
         status: 400
-        error: "Object not found"
+        error: "Access denied"

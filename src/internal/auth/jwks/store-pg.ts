@@ -1,12 +1,12 @@
 import { getConfig } from '../../../config'
-import { PgPoolExecutor, PgTransaction } from '../../database/pg-connection'
+import { PgTransaction, PgTransactionalExecutor } from '../../database/pg-connection'
 import { logger, logSchema } from '../../monitoring'
 import { JWKSManagerStore, JWKStoreItem, PaginatedTenantItem } from './store'
 
 const { multitenantDatabaseQueryTimeout } = getConfig()
 
 export class JWKSManagerStorePg implements JWKSManagerStore<PgTransaction> {
-  constructor(private db: PgPoolExecutor) {}
+  constructor(private db: PgTransactionalExecutor) {}
 
   async transaction<T>(callback: (trx: PgTransaction) => Promise<T>): Promise<T> {
     const trx = await this.db.beginTransaction()

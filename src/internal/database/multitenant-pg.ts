@@ -1,16 +1,8 @@
 import { logger, logSchema } from '@internal/monitoring'
 import { Pool, PoolConfig } from 'pg'
 import { getConfig } from '../../config'
-import { PgPoolExecutor } from './pg-connection'
+import { PgPoolExecutor, PgTransactionalExecutor } from './pg-connection'
 import { getSslSettings } from './ssl'
-
-// multitenantPgPool is a Proxy that re-creates the underlying pg.Pool when config
-// changes. Do NOT register persistent event handlers (e.g., pool.on('error', ...))
-// directly on this object; they will be lost on config swap. Register handlers
-// inside MultitenantPgPoolOwner.getPool() if needed.
-export function getMultitenantPgPoolConfig(): PoolConfig {
-  return buildMultitenantPgPoolConfig(getConfig())
-}
 
 function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): PoolConfig {
   const {
@@ -43,49 +35,111 @@ function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): Poo
   }
 }
 
+type PgPoolState = {
+  readonly pool: Pool
+  readonly executor: PgPoolExecutor
+  readonly config: ReturnType<typeof getConfig>
+  readonly configSignature: string
+}
+
 class MultitenantPgPoolOwner {
-  private pool?: Pool
-  private config?: ReturnType<typeof getConfig>
-  private configSignature?: string
+  private state?: PgPoolState
+  private closePromise?: Promise<void>
+  private shutdownPromise?: Promise<void>
 
   getPool(): Pool {
+    return this.getState().pool
+  }
+
+  getExecutor(): PgPoolExecutor {
+    return this.getState().executor
+  }
+
+  private getState(): PgPoolState {
+    if (this.shutdownPromise) {
+      throw new Error('MultitenantPgPool is shut down')
+    }
+
+    if (this.closePromise) {
+      throw new Error('MultitenantPgPool is closing')
+    }
+
     const currentConfig = getConfig()
 
-    if (this.pool && this.config === currentConfig) {
-      return this.pool
+    if (this.state && this.state.config === currentConfig) {
+      return this.state
     }
 
     const poolConfig = buildMultitenantPgPoolConfig(currentConfig)
     const configSignature = getPoolConfigSignature(poolConfig)
 
-    if (!this.pool || this.configSignature !== configSignature) {
-      const oldPool = this.pool
-      this.pool = new Pool(poolConfig)
-      this.configSignature = configSignature
-
-      if (oldPool) {
-        void oldPool.end().catch((error) => {
-          logSchema.warning(logger, '[MultitenantPg] Failed to close replaced pg pool', {
-            type: 'db',
-            error,
-          })
-        })
-      }
+    if (this.state && this.state.configSignature === configSignature) {
+      // Same connection params, only the config object reference rotated.
+      // Refresh the cached reference so subsequent calls hit the fast path.
+      this.state = { ...this.state, config: currentConfig }
+      return this.state
     }
 
-    this.config = currentConfig
+    const oldState = this.state
+    const pool = new Pool(poolConfig)
+    this.state = {
+      pool,
+      executor: new PgPoolExecutor(pool),
+      config: currentConfig,
+      configSignature,
+    }
 
-    return this.pool
+    if (oldState) {
+      void oldState.pool.end().catch((error) => {
+        logSchema.warning(logger, '[MultitenantPg] Failed to close replaced pg pool', {
+          type: 'db',
+          error,
+        })
+      })
+    }
+
+    return this.state
   }
 
-  async close(): Promise<void> {
-    const pool = this.pool
+  // Transient, lazily rebuilt if accessed after close.
+  close(): Promise<void> {
+    if (this.closePromise) {
+      return this.closePromise
+    }
 
-    this.pool = undefined
-    this.config = undefined
-    this.configSignature = undefined
+    if (this.shutdownPromise) {
+      return this.shutdownPromise
+    }
 
-    await pool?.end()
+    const pool = this.state?.pool
+    this.state = undefined
+
+    if (!pool) {
+      return Promise.resolve()
+    }
+
+    this.closePromise = pool.end().finally(() => {
+      this.closePromise = undefined
+    })
+    return this.closePromise
+  }
+
+  // Terminal, pool is gone and cannot be re-created without a restart.
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) {
+      return this.shutdownPromise
+    }
+
+    if (this.closePromise) {
+      this.shutdownPromise = this.closePromise
+      return this.shutdownPromise
+    }
+
+    const state = this.state
+    this.state = undefined
+
+    this.shutdownPromise = state ? state.pool.end() : Promise.resolve()
+    return this.shutdownPromise
   }
 }
 
@@ -103,17 +157,19 @@ function getPoolConfigSignature(config: PoolConfig): string {
 
 const multitenantPgPoolOwner = new MultitenantPgPoolOwner()
 
-export const multitenantPgPool = new Proxy({} as Pool, {
-  get(_target, property) {
-    const pool = multitenantPgPoolOwner.getPool()
-    const value = Reflect.get(pool, property, pool)
-
-    return typeof value === 'function' ? value.bind(pool) : value
+export const multitenantPgExecutor: PgTransactionalExecutor = {
+  async query(statement, options) {
+    return multitenantPgPoolOwner.getExecutor().query(statement, options)
   },
-})
-
-export const multitenantPgExecutor = new PgPoolExecutor(multitenantPgPool)
+  async beginTransaction(options) {
+    return multitenantPgPoolOwner.getExecutor().beginTransaction(options)
+  },
+}
 
 export function closeMultitenantPg(): Promise<void> {
   return multitenantPgPoolOwner.close()
+}
+
+export function shutdownMultitenantPg(): Promise<void> {
+  return multitenantPgPoolOwner.shutdown()
 }

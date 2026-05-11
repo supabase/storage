@@ -1,11 +1,29 @@
 import { vi } from 'vitest'
 
 type MultitenantPgModule = typeof import('./multitenant-pg')
+type MockPgPoolOptions = {
+  connectionString?: string
+  max?: number
+  ssl?: unknown
+}
+type MockPgClient = {
+  query: () => Promise<{ rows: unknown[] }>
+  release: () => void
+}
+type MockPgPool = {
+  options: MockPgPoolOptions
+  ended: boolean
+  connect: () => Promise<MockPgClient>
+  end: () => Promise<void>
+}
+
+let createdPools: MockPgPool[] = []
 
 async function loadMultitenantPgModule(
   configOverrides: Record<string, unknown> = {}
 ): Promise<MultitenantPgModule> {
   vi.resetModules()
+  mockPgModule()
 
   const configModule = await import('../../config')
   configModule.getConfig({ reload: true })
@@ -26,6 +44,7 @@ describe('multitenant pg pool', () => {
   afterEach(async () => {
     await loadedModule?.closeMultitenantPg()
     loadedModule = undefined
+    vi.doUnmock('pg')
     vi.resetModules()
   })
 
@@ -34,7 +53,9 @@ describe('multitenant pg pool', () => {
       databaseSSLRootCert: 'root-cert',
     })
 
-    expect(loadedModule.getMultitenantPgPoolConfig()).toEqual(
+    await runQuery(loadedModule)
+
+    expect(getLatestPool().options).toEqual(
       expect.objectContaining({
         connectionString: 'postgres://user:password@db.example.test:5432/postgres',
         max: 3,
@@ -51,7 +72,9 @@ describe('multitenant pg pool', () => {
       multitenantDatabasePoolUrl: 'postgres://user:password@1.2.3.4:6432/postgres',
     })
 
-    expect(loadedModule.getMultitenantPgPoolConfig()).toEqual(
+    await runQuery(loadedModule)
+
+    expect(getLatestPool().options).toEqual(
       expect.objectContaining({
         connectionString: 'postgres://user:password@1.2.3.4:6432/postgres',
         max: 30,
@@ -66,7 +89,9 @@ describe('multitenant pg pool', () => {
   it('reads the current config after runtime config changes', async () => {
     loadedModule = await loadMultitenantPgModule()
 
-    expect(loadedModule.getMultitenantPgPoolConfig()).toEqual(
+    await runQuery(loadedModule)
+
+    expect(getLatestPool().options).toEqual(
       expect.objectContaining({
         connectionString: 'postgres://user:password@db.example.test:5432/postgres',
         max: 3,
@@ -79,7 +104,9 @@ describe('multitenant pg pool', () => {
       multitenantMaxConnections: 5,
     })
 
-    expect(loadedModule.getMultitenantPgPoolConfig()).toEqual(
+    await runQuery(loadedModule)
+
+    expect(getLatestPool().options).toEqual(
       expect.objectContaining({
         connectionString: 'postgres://user:password@db2.example.test:5432/postgres',
         max: 5,
@@ -87,10 +114,13 @@ describe('multitenant pg pool', () => {
     )
   })
 
-  it('routes the exported pool proxy through the current config', async () => {
+  it('replaces the current pool after runtime config changes', async () => {
     loadedModule = await loadMultitenantPgModule()
 
-    expect(getLoadedPoolOptions(loadedModule)).toEqual(
+    await runQuery(loadedModule)
+    const firstPool = getLatestPool()
+
+    expect(firstPool.options).toEqual(
       expect.objectContaining({
         connectionString: 'postgres://user:password@db.example.test:5432/postgres',
         max: 3,
@@ -103,20 +133,120 @@ describe('multitenant pg pool', () => {
       multitenantMaxConnections: 4,
     })
 
-    expect(getLoadedPoolOptions(loadedModule)).toEqual(
+    await runQuery(loadedModule)
+    const secondPool = getLatestPool()
+
+    expect(secondPool).not.toBe(firstPool)
+    expect(firstPool.ended).toBe(true)
+    expect(secondPool.options).toEqual(
       expect.objectContaining({
         connectionString: 'postgres://user:password@1.2.3.4:6432/postgres',
         max: 40,
       })
     )
   })
+
+  it('blocks new work while close is pending and allows reuse after close settles', async () => {
+    loadedModule = await loadMultitenantPgModule()
+
+    await runQuery(loadedModule)
+    const pool = getLatestPool()
+    const closeDeferred = Promise.withResolvers<void>()
+    const endSpy = vi.spyOn(pool, 'end').mockReturnValue(closeDeferred.promise as never)
+
+    const closePromise = loadedModule.closeMultitenantPg()
+
+    try {
+      await expect(loadedModule.multitenantPgExecutor.query('select 1')).rejects.toThrow(
+        'MultitenantPgPool is closing'
+      )
+    } finally {
+      closeDeferred.resolve()
+      await closePromise
+      endSpy.mockRestore()
+    }
+
+    await runQuery(loadedModule)
+
+    expect(getLatestPool()).not.toBe(pool)
+  })
+
+  it('keeps shutdown terminal after the current pool is closed', async () => {
+    loadedModule = await loadMultitenantPgModule()
+
+    await runQuery(loadedModule)
+    const pool = getLatestPool()
+
+    await loadedModule.shutdownMultitenantPg()
+
+    await expect(loadedModule.multitenantPgExecutor.query('select 1')).rejects.toThrow(
+      'MultitenantPgPool is shut down'
+    )
+    expect(pool.ended).toBe(true)
+  })
+
+  it('does not export raw pool or pool config helpers', async () => {
+    loadedModule = await loadMultitenantPgModule()
+
+    expect('getMultitenantPgPool' in loadedModule).toBe(false)
+    expect('getMultitenantPgPoolConfig' in loadedModule).toBe(false)
+  })
 })
 
-function getLoadedPoolOptions(module: MultitenantPgModule): {
-  connectionString?: string
-  max?: number
-} {
-  return (
-    module.multitenantPgPool as unknown as { options: { connectionString?: string; max?: number } }
-  ).options
+async function runQuery(module: MultitenantPgModule): Promise<void> {
+  await module.multitenantPgExecutor.query('select 1')
+}
+
+function getLatestPool(): MockPgPool {
+  const pool = createdPools.at(-1)
+
+  if (!pool) {
+    throw new Error('Expected pg Pool to be created')
+  }
+
+  return pool
+}
+
+function mockPgModule(): void {
+  createdPools = []
+
+  vi.doMock('pg', () => {
+    const types = {
+      setTypeParser: vi.fn(),
+    }
+
+    class DatabaseError extends Error {}
+
+    class MockPool implements MockPgPool {
+      readonly options: MockPgPoolOptions
+      ended = false
+      connect = vi.fn(async () => createMockPgClient())
+      end = vi.fn(async () => {
+        this.ended = true
+      })
+
+      constructor(options: MockPgPoolOptions) {
+        this.options = options
+        createdPools.push(this)
+      }
+    }
+
+    return {
+      DatabaseError,
+      Pool: MockPool,
+      types,
+      default: {
+        DatabaseError,
+        Pool: MockPool,
+        types,
+      },
+    }
+  })
+}
+
+function createMockPgClient(): MockPgClient {
+  return {
+    query: vi.fn(async () => ({ rows: [] })),
+    release: vi.fn(),
+  }
 }

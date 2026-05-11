@@ -1,7 +1,7 @@
 import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
 import { DatabaseError, QueryResultRow } from 'pg'
-import { PgExecutor, PgPoolExecutor, PgTransaction } from '../database/pg-connection'
+import { PgExecutor, PgTransaction, PgTransactionalExecutor } from '../database/pg-connection'
 import {
   ReservationRow,
   ResourceKind,
@@ -13,7 +13,7 @@ import {
 } from './store'
 
 export class PgShardStoreFactory implements ShardStoreFactory<PgTransaction> {
-  constructor(private db: PgPoolExecutor | PgTransaction) {}
+  constructor(private db: PgTransactionalExecutor | PgTransaction) {}
 
   withExistingTransaction(tnx: PgTransaction): ShardStoreFactory<PgTransaction> {
     return new PgShardStoreFactory(tnx)

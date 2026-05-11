@@ -1,5 +1,5 @@
 import { AsyncAbortController } from '@internal/concurrency'
-import { closeMultitenantPg, PgTenantConnection } from '@internal/database'
+import { PgTenantConnection, shutdownMultitenantPg } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import http from 'http'
 
@@ -84,8 +84,8 @@ export async function shutdown(serverSignal: AsyncAbortController) {
         }
       )
 
-      await runShutdownPhase('close pg database connection', closeMultitenantPg).catch((e) => {
-        logSchema.error(logger, 'Failed to close pg database connection', {
+      await runShutdownPhase('close pg database connection', shutdownMultitenantPg).catch((e) => {
+        logSchema.error(logger, 'Failed to shutdown pg database connection', {
           type: 'shutdown',
           error: e,
         })

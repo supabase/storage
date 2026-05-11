@@ -10,15 +10,15 @@ describe('shutdown', () => {
 
   it('drains tenant pools before closing the shared multitenant pool', async () => {
     const calls: string[] = []
-    const closeMultitenantPg = vi.fn(async () => {
-      calls.push('closeMultitenantPg')
+    const shutdownMultitenantPg = vi.fn(async () => {
+      calls.push('shutdownMultitenantPg')
     })
     const stop = vi.fn(async () => {
       calls.push('PgTenantConnection.stop')
     })
 
     vi.doMock('@internal/database', () => ({
-      closeMultitenantPg,
+      shutdownMultitenantPg,
       PgTenantConnection: {
         stop,
       },
@@ -45,7 +45,7 @@ describe('shutdown', () => {
     expect(calls).toEqual([
       'serverSignal.abortAsync',
       'PgTenantConnection.stop',
-      'closeMultitenantPg',
+      'shutdownMultitenantPg',
     ])
   })
 
@@ -53,15 +53,15 @@ describe('shutdown', () => {
     vi.useFakeTimers()
 
     const calls: string[] = []
-    const closeMultitenantPg = vi.fn(async () => {
-      calls.push('closeMultitenantPg')
+    const shutdownMultitenantPg = vi.fn(async () => {
+      calls.push('shutdownMultitenantPg')
     })
     const stop = vi.fn(async () => {
       calls.push('PgTenantConnection.stop')
     })
 
     vi.doMock('@internal/database', () => ({
-      closeMultitenantPg,
+      shutdownMultitenantPg,
       PgTenantConnection: {
         stop,
       },
@@ -97,15 +97,15 @@ describe('shutdown', () => {
     expect(calls).toEqual([
       'serverSignal.abortAsync',
       'PgTenantConnection.stop',
-      'closeMultitenantPg',
+      'shutdownMultitenantPg',
     ])
   })
 
   it('rejects when tenant pool drain fails after closing the shared pool', async () => {
     const calls: string[] = []
     const tenantError = new Error('tenant pool drain failed')
-    const closeMultitenantPg = vi.fn(async () => {
-      calls.push('closeMultitenantPg')
+    const shutdownMultitenantPg = vi.fn(async () => {
+      calls.push('shutdownMultitenantPg')
     })
     const stop = vi.fn(async () => {
       calls.push('PgTenantConnection.stop')
@@ -113,7 +113,7 @@ describe('shutdown', () => {
     })
 
     vi.doMock('@internal/database', () => ({
-      closeMultitenantPg,
+      shutdownMultitenantPg,
       PgTenantConnection: {
         stop,
       },
@@ -139,7 +139,7 @@ describe('shutdown', () => {
     expect(calls).toEqual([
       'serverSignal.abortAsync',
       'PgTenantConnection.stop',
-      'closeMultitenantPg',
+      'shutdownMultitenantPg',
     ])
   })
 })

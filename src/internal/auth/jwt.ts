@@ -90,7 +90,7 @@ async function findJWKFromHeader(
     // couldn't find a matching JWK, try to use the secret
     return encoder.encode(secret)
   }
-  return await importJWK(jwk)
+  return await importJWK(jwk, header.alg)
 }
 
 function getJWTVerificationKey(secret: string, jwks: JwksConfig | null): JWTVerifyGetKey {

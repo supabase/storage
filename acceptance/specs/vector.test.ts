@@ -4,11 +4,13 @@ import { createRestClient } from '../support/http'
 import { requireServiceKey } from '../support/resources'
 
 interface VectorListBucketsResponse {
+  nextToken?: string
   vectorBuckets?: Array<{ vectorBucketName?: string }>
 }
 
 interface VectorListIndexesResponse {
   indexes?: Array<{ indexName?: string }>
+  nextToken?: string
 }
 
 interface VectorListResponse {
@@ -28,8 +30,11 @@ describeAcceptance(
       const client = createRestClient()
       const token = requireServiceKey(config)
       const suffix = randomUUID().replace(/-/g, '').slice(0, 12)
-      const vectorBucketName = `${config.resourcePrefix}-vec-${suffix}`.slice(0, 45)
-      const indexName = `idx-${suffix}`
+      const vectorPrefix = `${config.resourcePrefix.slice(0, 24)}-vec-${suffix}`.slice(0, 41)
+      const vectorBucketName = `${vectorPrefix}-a`
+      const secondaryVectorBucketName = `${vectorPrefix}-b`
+      const indexName = `idx-${suffix}-a`
+      const secondaryIndexName = `idx-${suffix}-b`
       const vectorKeys = [`vec-a-${suffix}`, `vec-b-${suffix}`]
 
       try {
@@ -41,19 +46,48 @@ describeAcceptance(
           token,
         })
 
+        await client.request('POST', '/vector/CreateVectorBucket', {
+          body: {
+            vectorBucketName: secondaryVectorBucketName,
+          },
+          expectedStatus: 200,
+          token,
+        })
+
         const buckets = await client.request<VectorListBucketsResponse>(
           'POST',
           '/vector/ListVectorBuckets',
           {
             body: {
-              prefix: vectorBucketName,
+              maxResults: 1,
+              prefix: vectorPrefix,
             },
             expectedStatus: 200,
             token,
           }
         )
-        expect(buckets.json?.vectorBuckets?.map((bucket) => bucket.vectorBucketName)).toContain(
-          vectorBucketName
+        expect(buckets.json?.vectorBuckets).toHaveLength(1)
+        expect(buckets.json?.nextToken).toBeTruthy()
+
+        const bucketsSecondPage = await client.request<VectorListBucketsResponse>(
+          'POST',
+          '/vector/ListVectorBuckets',
+          {
+            body: {
+              maxResults: 1,
+              nextToken: buckets.json?.nextToken,
+              prefix: vectorPrefix,
+            },
+            expectedStatus: 200,
+            token,
+          }
+        )
+        const listedBucketNames = [
+          ...(buckets.json?.vectorBuckets ?? []),
+          ...(bucketsSecondPage.json?.vectorBuckets ?? []),
+        ].map((bucket) => bucket.vectorBucketName)
+        expect(listedBucketNames).toEqual(
+          expect.arrayContaining([vectorBucketName, secondaryVectorBucketName])
         )
 
         await client.request('POST', '/vector/GetVectorBucket', {
@@ -76,18 +110,53 @@ describeAcceptance(
           token,
         })
 
+        await client.request('POST', '/vector/CreateIndex', {
+          body: {
+            dataType: 'float32',
+            dimension: 2,
+            distanceMetric: 'cosine',
+            indexName: secondaryIndexName,
+            vectorBucketName,
+          },
+          expectedStatus: 200,
+          token,
+        })
+
         const indexes = await client.request<VectorListIndexesResponse>(
           'POST',
           '/vector/ListIndexes',
           {
             body: {
+              maxResults: 1,
+              prefix: `idx-${suffix}`,
               vectorBucketName,
             },
             expectedStatus: 200,
             token,
           }
         )
-        expect(indexes.json?.indexes?.map((index) => index.indexName)).toContain(indexName)
+        expect(indexes.json?.indexes).toHaveLength(1)
+        expect(indexes.json?.nextToken).toBeTruthy()
+
+        const indexesSecondPage = await client.request<VectorListIndexesResponse>(
+          'POST',
+          '/vector/ListIndexes',
+          {
+            body: {
+              maxResults: 1,
+              nextToken: indexes.json?.nextToken,
+              prefix: `idx-${suffix}`,
+              vectorBucketName,
+            },
+            expectedStatus: 200,
+            token,
+          }
+        )
+        const listedIndexNames = [
+          ...(indexes.json?.indexes ?? []),
+          ...(indexesSecondPage.json?.indexes ?? []),
+        ].map((index) => index.indexName)
+        expect(listedIndexNames).toEqual(expect.arrayContaining([indexName, secondaryIndexName]))
 
         await client.request('POST', '/vector/GetIndex', {
           body: {
@@ -196,9 +265,28 @@ describeAcceptance(
           })
           .catch(() => undefined)
         await client
+          .request('POST', '/vector/DeleteIndex', {
+            body: {
+              indexName: secondaryIndexName,
+              vectorBucketName,
+            },
+            expectedStatus: [200, 400, 404],
+            token,
+          })
+          .catch(() => undefined)
+        await client
           .request('POST', '/vector/DeleteVectorBucket', {
             body: {
               vectorBucketName,
+            },
+            expectedStatus: [200, 400, 404],
+            token,
+          })
+          .catch(() => undefined)
+        await client
+          .request('POST', '/vector/DeleteVectorBucket', {
+            body: {
+              vectorBucketName: secondaryVectorBucketName,
             },
             expectedStatus: [200, 400, 404],
             token,

@@ -6,7 +6,6 @@ export type AcceptanceCapability =
   | 'admin'
   | 'cdn'
   | 'iceberg'
-  | 'pathEdges'
   | 'render'
   | 'rlsSetup'
   | 'tus'
@@ -34,6 +33,8 @@ export interface AcceptanceConfig {
   s3Endpoint: string
   s3SecretAccessKey?: string
   serviceKey?: string
+  supportsPathEdges: boolean
+  storageBackend?: string
   target: 'local' | 'remote'
   tenantId?: string
   tlsRejectUnauthorized: boolean
@@ -123,7 +124,10 @@ function buildAcceptanceConfig(): AcceptanceConfig {
       joinUrl(baseUrl, '/upload/resumable')
   )
   const adminUrl = optionalTrim(readOption('admin-url') ?? envOption('ACCEPTANCE_ADMIN_URL'))
-  const adminCapabilityRequested = boolOption('enable-admin', envOption('ACCEPTANCE_ENABLE_ADMIN'))
+  const adminCapabilityOption = boolOptionValue(
+    'enable-admin',
+    envOption('ACCEPTANCE_ENABLE_ADMIN')
+  )
   const runId = sanitizeRunId(
     readOption('run-id') ??
       envOption('ACCEPTANCE_RUN_ID') ??
@@ -137,6 +141,9 @@ function buildAcceptanceConfig(): AcceptanceConfig {
   )
   const adminApiKey = readOption('admin-api-key') ?? envOption('ACCEPTANCE_ADMIN_API_KEY')
   const hasAdminConfig = Boolean(adminUrl && adminApiKey)
+  const adminCapabilityEnabled =
+    adminCapabilityOption !== false && (adminCapabilityOption === true || hasAdminConfig)
+  const storageBackend = optionalLower(envOption('STORAGE_BACKEND'))
 
   const config: AcceptanceConfig = {
     adminApiKey,
@@ -146,10 +153,9 @@ function buildAcceptanceConfig(): AcceptanceConfig {
     authenticatedKey: envOption('ACCEPTANCE_AUTHENTICATED_KEY'),
     baseUrl,
     capabilities: {
-      admin: (adminCapabilityRequested || hasAdminConfig) && hasAdminConfig,
+      admin: adminCapabilityEnabled && hasAdminConfig,
       cdn: boolOption('enable-cdn', process.env.ACCEPTANCE_ENABLE_CDN),
       iceberg: boolOption('enable-iceberg', process.env.ACCEPTANCE_ENABLE_ICEBERG),
-      pathEdges: boolOption('enable-path-edges', process.env.ACCEPTANCE_ENABLE_PATH_EDGES),
       render: boolOption('enable-render', process.env.ACCEPTANCE_ENABLE_RENDER),
       rlsSetup: boolOption('enable-rls-setup', process.env.ACCEPTANCE_ENABLE_RLS_SETUP),
       tus: boolOptionDefaultTrue('enable-tus', envOption('ACCEPTANCE_ENABLE_TUS')),
@@ -170,9 +176,7 @@ function buildAcceptanceConfig(): AcceptanceConfig {
     region: readOption('region') ?? envOption('ACCEPTANCE_REGION') ?? 'us-east-1',
     resourcePrefix,
     rlsBucket: envOption('ACCEPTANCE_RLS_BUCKET') ?? (target === 'local' ? 'bucket2' : undefined),
-    rlsReadObject:
-      envOption('ACCEPTANCE_RLS_READ_OBJECT') ??
-      (target === 'local' ? 'authenticated/casestudy.png' : undefined),
+    rlsReadObject: envOption('ACCEPTANCE_RLS_READ_OBJECT'),
     rlsWritePrefix:
       envOption('ACCEPTANCE_RLS_WRITE_PREFIX') ??
       (target === 'local' ? 'authenticated' : undefined),
@@ -181,6 +185,9 @@ function buildAcceptanceConfig(): AcceptanceConfig {
     s3Endpoint,
     s3SecretAccessKey: envOption('ACCEPTANCE_S3_SECRET_ACCESS_KEY'),
     serviceKey: envOption('ACCEPTANCE_SERVICE_KEY'),
+    storageBackend,
+    supportsPathEdges:
+      target === 'local' && storageBackend !== undefined && storageBackend !== 's3',
     target,
     tenantId: envOption('ACCEPTANCE_TENANT_ID'),
     tlsRejectUnauthorized: boolOptionDefaultTrue(
@@ -230,18 +237,21 @@ function normalizeTarget(value: string | undefined): AcceptanceConfig['target'] 
 }
 
 function boolOption(cliName: string, envValue: string | undefined): boolean {
-  const cliValue = readOption(cliName)
-  const value = cliValue ?? envValue
-
-  return value === '1' || value === 'true' || value === 'yes'
+  return boolOptionValue(cliName, envValue) === true
 }
 
 function boolOptionDefaultTrue(cliName: string, envValue: string | undefined): boolean {
+  const value = boolOptionValue(cliName, envValue)
+
+  return value === undefined ? true : value
+}
+
+function boolOptionValue(cliName: string, envValue: string | undefined): boolean | undefined {
   const cliValue = readOption(cliName)
   const value = cliValue ?? envValue
 
   if (value === undefined) {
-    return true
+    return undefined
   }
 
   return value === '1' || value === 'true' || value === 'yes'
@@ -284,6 +294,10 @@ function optionalTrim(value: string | undefined): string | undefined {
   }
 
   return trimTrailingSlash(value)
+}
+
+function optionalLower(value: string | undefined): string | undefined {
+  return value?.toLowerCase()
 }
 
 function sanitizeRunId(value: string): string {

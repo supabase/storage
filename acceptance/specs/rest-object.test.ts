@@ -128,39 +128,43 @@ describeAcceptance(
   {
     destructive: true,
     profiles: ['core'],
-    requires: ['pathEdges'],
   },
   () => {
-    it('preserves exact empty-segment object names in list-v2 when the backend accepts them', async () => {
-      const bucketName = uniqueBucketName('path')
-      const keys = [`${uniqueObjectKey('a')}/child.txt`, `${uniqueObjectKey('a')}///child.txt`]
-      const client = createRestClient()
+    const pathEdgeIt = getAcceptanceConfig().supportsPathEdges ? it : it.skip
 
-      try {
-        await createRestBucket(bucketName)
-        await uploadRestObject(bucketName, keys[0], 'one')
-        await uploadRestObject(bucketName, keys[1], 'two')
+    pathEdgeIt(
+      'preserves exact empty-segment object names in list-v2 when the backend accepts them',
+      async () => {
+        const bucketName = uniqueBucketName('path')
+        const keys = [`${uniqueObjectKey('a')}/child.txt`, `${uniqueObjectKey('a')}///child.txt`]
+        const client = createRestClient()
 
-        const listed = await client.request<ListObjectsV2Response>(
-          'POST',
-          `/object/list-v2/${bucketName}`,
-          {
-            body: {
-              limit: 100,
-              prefix: '',
-              with_delimiter: false,
-            },
-            expectedStatus: 200,
-            token: requireServiceKey(),
-          }
-        )
+        try {
+          await createRestBucket(bucketName)
+          await uploadRestObject(bucketName, keys[0], 'one')
+          await uploadRestObject(bucketName, keys[1], 'two')
 
-        expect(listed.json?.objects.map((object) => object.name)).toEqual(
-          expect.arrayContaining(keys)
-        )
-      } finally {
-        await cleanupRestResources(bucketName, keys, client)
+          const listed = await client.request<ListObjectsV2Response>(
+            'POST',
+            `/object/list-v2/${bucketName}`,
+            {
+              body: {
+                limit: 100,
+                prefix: '',
+                with_delimiter: false,
+              },
+              expectedStatus: 200,
+              token: requireServiceKey(),
+            }
+          )
+
+          expect(listed.json?.objects.map((object) => object.name)).toEqual(
+            expect.arrayContaining(keys)
+          )
+        } finally {
+          await cleanupRestResources(bucketName, keys, client)
+        }
       }
-    })
+    )
   }
 )

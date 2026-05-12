@@ -115,4 +115,37 @@ describe('admin queue routes', () => {
       await app.close()
     }
   })
+
+  it('rejects move jobs requests without queue names', async () => {
+    vi.resetModules()
+
+    const { mergeConfig } = await import('../../../config')
+    mergeConfig({
+      pgQueueEnable: true,
+      adminApiKeys: 'test-admin-key',
+    })
+
+    const fastify = (await import('fastify')).default
+    const { default: routes } = await import('./queue')
+
+    const app = fastify()
+    app.decorateRequest('sbReqId', undefined)
+    app.register(routes, { prefix: '/queue' })
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/queue/move',
+        headers: {
+          apikey: 'test-admin-key',
+        },
+        payload: {},
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockMoveJobsSend).not.toHaveBeenCalled()
+    } finally {
+      await app.close()
+    }
+  })
 })

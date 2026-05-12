@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import fs from 'node:fs'
+import { createServer, type Server as HttpServer } from 'node:http'
 import path from 'node:path'
 import process from 'node:process'
 import dotenv from 'dotenv'
@@ -11,18 +12,22 @@ loadAcceptanceEnvFile()
 const args = process.argv.slice(2)
 const profile = readArg('profile') ?? acceptanceEnv('ACCEPTANCE_PROFILE') ?? 'smoke'
 const serverEnv = loadServerEnvFiles(inheritedEnv)
+configureManagedLocalQueueEnv(serverEnv)
 const serverPort = serverEnv.SERVER_PORT || serverEnv.PORT || '5000'
 const baseUrl = acceptanceEnv('ACCEPTANCE_BASE_URL') ?? `http://127.0.0.1:${serverPort}`
+const serverIsMultitenant = isMultitenantServer(serverEnv)
 const acceptanceRunEnv: NodeJS.ProcessEnv = {
   ...process.env,
   ACCEPTANCE_BASE_URL: baseUrl,
   ACCEPTANCE_PROFILE: profile,
   ACCEPTANCE_S3_ENDPOINT: acceptanceEnv('ACCEPTANCE_S3_ENDPOINT') ?? `${baseUrl}/s3`,
+  STORAGE_BACKEND: acceptanceEnv('STORAGE_BACKEND') ?? serverEnv.STORAGE_BACKEND,
   ACCEPTANCE_TUS_ENDPOINT:
     acceptanceEnv('ACCEPTANCE_TUS_ENDPOINT') ?? `${baseUrl}/upload/resumable`,
 }
 
 let server: ChildProcess | undefined
+let cdnPurgeServer: HttpServer | undefined
 let provisionedS3Credential: ProvisionedS3Credential | undefined
 
 main().catch((error) => {
@@ -37,6 +42,12 @@ async function main() {
       await run('npm', ['run', 'test:dummy-data'], serverEnv)
     }
 
+    if (isTruthy(acceptanceRunEnv.ACCEPTANCE_ENABLE_CDN) && !serverEnv.CDN_PURGE_ENDPOINT_URL) {
+      const purge = await startLocalCdnPurgeServer()
+      cdnPurgeServer = purge.server
+      serverEnv.CDN_PURGE_ENDPOINT_URL = purge.url
+    }
+
     server = spawn(localBin('tsx'), ['src/start/server.ts'], {
       detached: process.platform !== 'win32',
       env: serverEnv,
@@ -47,11 +58,20 @@ async function main() {
 
     await waitForStatus(`${baseUrl}/status`, 60_000)
 
-    if (isTruthy(serverEnv.MULTI_TENANT) || isTruthy(serverEnv.IS_MULTITENANT)) {
+    if (serverIsMultitenant) {
       provisionedS3Credential = await provisionLocalMultitenantTenant(serverEnv)
+      acceptanceRunEnv.ACCEPTANCE_ADMIN_URL = provisionedS3Credential.adminUrl
+      acceptanceRunEnv.ACCEPTANCE_ADMIN_API_KEY = provisionedS3Credential.adminApiKey
       acceptanceRunEnv.ACCEPTANCE_TENANT_ID = provisionedS3Credential.tenantId
       acceptanceRunEnv.ACCEPTANCE_S3_ACCESS_KEY_ID = provisionedS3Credential.accessKey
       acceptanceRunEnv.ACCEPTANCE_S3_SECRET_ACCESS_KEY = provisionedS3Credential.secretKey
+    } else if (isTruthy(acceptanceRunEnv.ACCEPTANCE_ENABLE_ADMIN)) {
+      acceptanceRunEnv.ACCEPTANCE_ENABLE_ADMIN = 'false'
+      acceptanceRunEnv.ACCEPTANCE_ADMIN_URL = ''
+      acceptanceRunEnv.ACCEPTANCE_ADMIN_API_KEY = ''
+      process.stderr.write(
+        '[acceptance] disabled admin acceptance for managed single-tenant server\n'
+      )
     }
 
     await run('npm', ['run', 'acceptance:run', '--', ...args], acceptanceRunEnv)
@@ -66,6 +86,12 @@ async function main() {
 
     if (server) {
       await stopServer(server)
+    }
+
+    if (cdnPurgeServer) {
+      await closeHttpServer(cdnPurgeServer).catch((error) => {
+        process.stderr.write(`[acceptance] failed to stop CDN purge stub: ${String(error)}\n`)
+      })
     }
   }
 }
@@ -111,7 +137,7 @@ async function provisionLocalMultitenantTenant(
         maxResolution: envNumber(env.IMAGE_TRANSFORMATION_LIMIT_MAX_SIZE, 2000),
       },
       purgeCache: {
-        enabled: false,
+        enabled: isTruthy(acceptanceRunEnv.ACCEPTANCE_ENABLE_CDN),
       },
       s3Protocol: {
         enabled: true,
@@ -201,6 +227,54 @@ async function requestAdmin<T = unknown>(
   return parseJson<T>(text)
 }
 
+function startLocalCdnPurgeServer(): Promise<{ server: HttpServer; url: string }> {
+  return new Promise((resolve, reject) => {
+    const server = createServer((request, response) => {
+      request.resume()
+
+      if (
+        request.method === 'POST' &&
+        new URL(request.url ?? '/', 'http://127.0.0.1').pathname === '/purge'
+      ) {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ message: 'success' }))
+        return
+      }
+
+      response.writeHead(404, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ message: 'not found' }))
+    })
+
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject)
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('Local CDN purge stub did not bind to a TCP port'))
+        return
+      }
+
+      resolve({
+        server,
+        url: `http://127.0.0.1:${address.port}`,
+      })
+    })
+  })
+}
+
+function closeHttpServer(server: HttpServer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error)
+        return
+      }
+
+      resolve()
+    })
+  })
+}
+
 function resolveInfraRestartScript() {
   const script = acceptanceEnv('ACCEPTANCE_INFRA_RESTART_SCRIPT') ?? 'infra:restart:ci'
   const allowed = new Set(['infra:restart:ci', 'infra:restart:ci:oriole'])
@@ -241,6 +315,21 @@ function firstCsvValue(value: string): string {
 
 function isTruthy(value: string | undefined): boolean {
   return value === '1' || value === 'true' || value === 'yes'
+}
+
+function isMultitenantServer(env: NodeJS.ProcessEnv): boolean {
+  return isTruthy(env.MULTI_TENANT) || isTruthy(env.IS_MULTITENANT)
+}
+
+function configureManagedLocalQueueEnv(env: NodeJS.ProcessEnv) {
+  if (
+    isTruthy(env.PG_QUEUE_ENABLE) &&
+    isMultitenantServer(env) &&
+    !env.PG_QUEUE_CONNECTION_URL &&
+    env.DATABASE_MULTITENANT_URL
+  ) {
+    env.PG_QUEUE_CONNECTION_URL = env.DATABASE_MULTITENANT_URL
+  }
 }
 
 function statusMatches(status: number, expected: number | number[]) {

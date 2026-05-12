@@ -6,7 +6,7 @@ vi.mock('fs-xattr', () => ({
   get: vi.fn(() => Promise.resolve(undefined)),
 }))
 
-import { isValidHeader } from '@storage/protocols/s3/s3-handler'
+import { isValidHeader, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 
 // Mirror the constants in s3-handler.ts
 const MAX_HEADER_NAME_LENGTH = 1024 * 8
@@ -72,5 +72,62 @@ describe('isValidHeader', () => {
 
   it('rejects an array of values when any are invalid', () => {
     expect(isValidHeader('x-custom', ['ok', 'bad\x00value'])).toBe(false)
+  })
+})
+
+describe('S3ProtocolHandler.getObject', () => {
+  it('preserves backend not-modified responses for cache validators', async () => {
+    const backendGetObject = vi.fn().mockResolvedValue({
+      body: undefined,
+      httpStatusCode: 304,
+      metadata: {
+        cacheControl: 'no-cache',
+        contentLength: 0,
+        eTag: '"current-etag"',
+        httpStatusCode: 304,
+        lastModified: new Date(),
+        mimetype: 'text/plain',
+        size: 29,
+      },
+    })
+    const findObject = vi.fn().mockResolvedValue({
+      user_metadata: null,
+      version: 'object-version',
+    })
+    const getRootLocation = vi.fn(() => 'root-bucket')
+    const getKeyLocation = vi.fn(() => 'tenant-id/bucket/object.txt')
+    const storage = {
+      backend: {
+        getObject: backendGetObject,
+      },
+      from: vi.fn(() => ({
+        findObject,
+      })),
+      location: {
+        getKeyLocation,
+        getRootLocation,
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.getObject({
+      Bucket: 'bucket',
+      IfNoneMatch: '"current-etag"',
+      Key: 'object.txt',
+    })
+
+    expect(response.statusCode).toBe(304)
+    expect(response.responseBody).toBeUndefined()
+    expect(backendGetObject).toHaveBeenCalledWith(
+      'root-bucket',
+      'tenant-id/bucket/object.txt',
+      'object-version',
+      {
+        ifModifiedSince: undefined,
+        ifNoneMatch: '"current-etag"',
+        range: undefined,
+      },
+      undefined
+    )
   })
 })

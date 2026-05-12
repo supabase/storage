@@ -61,22 +61,21 @@ async function main() {
     isMultitenant,
     pgQueueEnable,
     dbMigrationFreezeAt,
-    vectorBackend,
-    vectorEmbeddedPath,
+    vectorBucketProvider,
+    vectorDatabaseURL,
     vectorS3Buckets,
     icebergShards,
     numWorkers,
   } = getConfig()
 
-  if (vectorBackend === 'embedded') {
-    if (!vectorEmbeddedPath) {
-      throw new Error('VECTOR_EMBEDDED_PATH is required when VECTOR_BACKEND=embedded')
-    }
-    if (numWorkers > 1) {
-      throw new Error(
-        `VECTOR_BACKEND=embedded requires WORKERS_NUM=1 (got ${numWorkers}); zvec is single-writer`
-      )
-    }
+  // VECTOR_DATABASE_URL is only required in single-tenant mode — it's the
+  // maintenance URL used to CREATE DATABASE storage_vectors. In multi-tenant
+  // pgvector mode each tenant DB hosts its own storage_vectors schema, so no
+  // global maintenance URL is needed.
+  if (vectorBucketProvider === 'pgvector' && !isMultitenant && !vectorDatabaseURL) {
+    throw new Error(
+      'VECTOR_DATABASE_URL is required when VECTOR_BUCKET_PROVIDER=pgvector in single-tenant mode'
+    )
   }
 
   // Queue
@@ -120,6 +119,8 @@ async function main() {
       }))
     )
   } else {
+    // runMigrationsOnTenant internally handles vector_store migrations when
+    // VECTOR_BUCKET_PROVIDER=pgvector + VECTOR_STORE_MIGRATIONS_ENABLED=true.
     await runMigrationsOnTenant({
       databaseUrl: databaseURL,
       upToMigration: dbMigrationFreezeAt,
@@ -142,12 +143,6 @@ async function main() {
 
   // Cluster information
   await Cluster.init(shutdownSignal.nextGroup.signal)
-
-  if (vectorBackend === 'embedded' && Cluster.size > 1) {
-    throw new Error(
-      `VECTOR_BACKEND=embedded requires Cluster.size <= 1 (got ${Cluster.size}); zvec is single-writer`
-    )
-  }
 
   Cluster.on('change', (data) => {
     logger.info(

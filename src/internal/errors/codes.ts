@@ -56,8 +56,6 @@ export enum ErrorCode {
   S3VectorBucketNotEmpty = 'VectorBucketNotEmpty',
   S3VectorMaxBucketsExceeded = 'S3VectorMaxBucketsExceeded',
   S3VectorMaxIndexesExceeded = 'S3VectorMaxIndexesExceeded',
-  S3VectorEmbeddedNotSupported = 'S3VectorEmbeddedNotSupported',
-  S3VectorEmbeddedSchemaMismatch = 'S3VectorEmbeddedSchemaMismatch',
   NoAvailableShard = 'NoAvailableShard',
   ShardNotFound = 'ShardNotFound',
 }
@@ -544,20 +542,6 @@ export const ERRORS = {
       code: ErrorCode.S3VectorMaxIndexesExceeded,
       httpStatusCode: 400,
       message: `Maximum number of indexes exceeded. Max allowed is ${maxIndexes}. Contact support to increase your limit.`,
-    })
-  },
-  S3VectorEmbeddedNotSupported(feature: string) {
-    return new StorageBackendError({
-      code: ErrorCode.S3VectorEmbeddedNotSupported,
-      httpStatusCode: 501,
-      message: `"${feature}" is not supported when VECTOR_BACKEND=embedded`,
-    })
-  },
-  S3VectorEmbeddedSchemaMismatch(field: string, expected: string, got: string) {
-    return new StorageBackendError({
-      code: ErrorCode.S3VectorEmbeddedSchemaMismatch,
-      httpStatusCode: 400,
-      message: `Metadata field "${field}" expects type "${expected}" but received "${got}"`,
     })
   },
   NoAvailableShard() {

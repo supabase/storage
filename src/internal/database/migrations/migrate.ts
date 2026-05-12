@@ -33,6 +33,9 @@ const {
   dbMigrationFreezeAt,
   icebergShards,
   multitenantDatabaseQueryTimeout,
+  vectorBucketProvider,
+  vectorStoreMigrationsEnabled,
+  vectorDatabaseURL,
 } = getConfig()
 
 /**
@@ -373,6 +376,125 @@ export async function runMigrationsOnTenant({
     waitForLock,
     upToMigration,
   })
+
+  // pgvector mode: run the vector_store migrations after the standard tenant
+  // migrations. Branching:
+  //   • Multi-tenant: vectors live in each tenant's DB (per-tenant schema
+  //     isolation via TenantConnection), so we migrate into the same URL.
+  //   • Single-tenant: vectors live in a dedicated `storage_vectors` database
+  //     on the server pointed at by VECTOR_DATABASE_URL. The migration runner
+  //     CREATE DATABASE's it and then connects via the derived URL.
+  if (vectorBucketProvider === 'pgvector' && vectorStoreMigrationsEnabled) {
+    if (isMultitenant) {
+      await runVectorStoreMigrations({ databaseUrl, waitForLock })
+    } else if (vectorDatabaseURL) {
+      await runVectorStoreMigrations({
+        databaseUrl: vectorDatabaseURL,
+        createDatabase: true,
+        waitForLock,
+      })
+    }
+  }
+}
+
+export const VECTOR_DATABASE_NAME = 'storage_vectors'
+
+/**
+ * Derive the runtime vector-store connection string from a maintenance URL
+ * by swapping the database name to `storage_vectors`. Used by both the
+ * migration runner (after creating the dedicated DB) and the request-time
+ * vector plugin (to open its pool).
+ */
+export function deriveVectorDatabaseUrl(maintenanceUrl: string): string {
+  const u = new URL(maintenanceUrl)
+  u.pathname = `/${VECTOR_DATABASE_NAME}`
+  return u.toString()
+}
+
+/**
+ * Creates the `storage_vectors` Postgres database on the same server as
+ * `maintenanceUrl` if it does not already exist. Connects to the URL as-is —
+ * the caller is expected to point it at an existing DB on the target server
+ * (e.g. `postgres`, the default maintenance DB).
+ */
+async function ensureVectorDatabaseExists(
+  maintenanceUrl: string,
+  ssl: ClientConfig['ssl']
+): Promise<void> {
+  const client = await connect({
+    connectionString: maintenanceUrl,
+    ssl,
+  })
+  try {
+    const exists = await client.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [
+      VECTOR_DATABASE_NAME,
+    ])
+    if (exists.rows.length === 0) {
+      // CREATE DATABASE doesn't accept parameter binding; the name is a
+      // hard-coded constant we control, so direct interpolation is safe.
+      await client.query(`CREATE DATABASE "${VECTOR_DATABASE_NAME}"`)
+      logSchema.info(logger, `[Migrations] Created database ${VECTOR_DATABASE_NAME}`, {
+        type: 'migrations',
+      })
+    }
+  } finally {
+    await client.end()
+  }
+}
+
+/**
+ * Runs vector-store migrations against a Postgres database. The migrations live
+ * in ./migrations/vector_store and are tracked in storage_vectors.migrations,
+ * isolated from the standard tenant migrations (storage.migrations) by schema.
+ *
+ * Only invoked when VECTOR_BUCKET_PROVIDER=pgvector and
+ * VECTOR_STORE_MIGRATIONS_ENABLED=true (gated by the caller).
+ *
+ * @param databaseUrl     when `createDatabase=true` (single-tenant), this is the
+ *                        maintenance URL on the target Postgres server; the
+ *                        runner will CREATE DATABASE `storage_vectors` against
+ *                        it and run migrations on the derived URL. When
+ *                        `createDatabase=false` (multi-tenant), this is the
+ *                        tenant's own DB URL and migrations run there directly.
+ * @param createDatabase  bootstrap the dedicated `storage_vectors` database
+ *                        before migrating into it (single-tenant only).
+ */
+export async function runVectorStoreMigrations({
+  databaseUrl,
+  createDatabase = false,
+  waitForLock = true,
+}: {
+  databaseUrl: string
+  createDatabase?: boolean
+  waitForLock?: boolean
+}): Promise<void> {
+  logSchema.info(logger, '[Migrations] Running vector_store migrations', {
+    type: 'migrations',
+  })
+  const ssl = getSslSettings({ connectionString: databaseUrl, databaseSSLRootCert })
+
+  let migrationsTarget = databaseUrl
+  if (createDatabase) {
+    await ensureVectorDatabaseExists(databaseUrl, ssl)
+    migrationsTarget = deriveVectorDatabaseUrl(databaseUrl)
+  }
+
+  await connectAndMigrate({
+    databaseUrl: migrationsTarget,
+    migrationsDirectory: './migrations/vector_store',
+    // Schema-scoped tracking: storage_vectors.migrations lives in its own
+    // schema, so it can't collide with the storage.migrations table used by
+    // the standard tenant migrations even though both share the default
+    // table name. postgres-migrations bundles a `0_create-migrations-table`
+    // bootstrap that hardcodes the literal name `migrations`, so we cannot
+    // rename it without forking the library.
+    migrationsTableSchema: 'storage_vectors',
+    ssl,
+    // Bootstrap the storage_vectors schema before postgres-migrations tries to
+    // create its tracking table inside it.
+    shouldCreateStorageSchema: true,
+    waitForLock,
+  })
 }
 
 export async function resetMigration(options: {
@@ -633,7 +755,15 @@ function runMigrations({
     try {
       const migrationTableName = 'migrations'
 
-      await client.query(`SET search_path TO ${searchPath.join(',')}`)
+      // If migrations are tracked in a non-default schema (e.g. storage_vectors),
+      // prepend it to search_path so the postgres-migrations library's bundled
+      // bootstrap (which references `migrations` unqualified) resolves to the
+      // right table — otherwise we'd collide with storage.migrations.
+      const effectiveSearchPath =
+        migrationsTableSchema && !searchPath.includes(migrationsTableSchema)
+          ? [migrationsTableSchema, ...searchPath]
+          : searchPath
+      await client.query(`SET search_path TO ${effectiveSearchPath.join(',')}`)
 
       let appliedMigrations: Migration[] = []
       if (
@@ -659,9 +789,10 @@ function runMigrations({
           )
         }
       } else if (shouldCreateStorageSchema) {
-        const schemaExists = await doesSchemaExists(client, 'storage')
+        const targetSchema = migrationsTableSchema ?? 'storage'
+        const schemaExists = await doesSchemaExists(client, targetSchema)
         if (!schemaExists) {
-          await client.query(`CREATE SCHEMA IF NOT EXISTS storage`)
+          await client.query(`CREATE SCHEMA IF NOT EXISTS ${targetSchema}`)
         }
       }
 
@@ -695,7 +826,8 @@ function runMigrations({
           set_config('storage.service_role', ${dbServiceRole}, false),
           set_config('storage.super_user', ${dbSuperUser}, false),
           set_config('storage.iceberg_default_shard', ${icebergDefaultShard}, false),
-          set_config('storage.iceberg_shards', ${icebergShardVar}, false);
+          set_config('storage.iceberg_shards', ${icebergShardVar}, false),
+          set_config('storage.vector_bucket_provider', ${vectorBucketProvider}, false);
         `)
       }
 

@@ -3,7 +3,7 @@ import dotenv from 'dotenv'
 import { SignJWT } from 'jose'
 
 export type StorageBackendType = 'file' | 's3'
-export type VectorBackendType = 's3' | 'embedded'
+export type VectorBucketProvider = 's3' | 'pgvector'
 export type IcebergCatalogAuthType = 'sigv4' | 'token'
 export enum MultitenantMigrationStrategy {
   PROGRESSIVE = 'progressive',
@@ -211,10 +211,11 @@ type StorageConfigType = {
   icebergS3DeleteEnabled: boolean
 
   vectorEnabled: boolean
-  vectorBackend: VectorBackendType
+  vectorBucketProvider: VectorBucketProvider
   vectorS3Buckets: string[]
   vectorBucketRegion?: string
-  vectorEmbeddedPath?: string
+  vectorDatabaseURL?: string
+  vectorStoreMigrationsEnabled: boolean
   vectorMaxBucketsCount: number
   vectorMaxIndexesCount: number
 }
@@ -618,10 +619,13 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     icebergS3DeleteEnabled: getOptionalConfigFromEnv('ICEBERG_S3_DELETE_ENABLED') === 'true',
 
     vectorEnabled: getOptionalConfigFromEnv('VECTOR_ENABLED') === 'true',
-    vectorBackend: (getOptionalConfigFromEnv('VECTOR_BACKEND') || 's3') as VectorBackendType,
+    vectorBucketProvider: (getOptionalConfigFromEnv('VECTOR_BUCKET_PROVIDER') ||
+      's3') as VectorBucketProvider,
     vectorS3Buckets: getOptionalConfigFromEnv('VECTOR_S3_BUCKETS')?.trim()?.split(',') || [],
     vectorBucketRegion: getOptionalConfigFromEnv('VECTOR_BUCKET_REGION') || undefined,
-    vectorEmbeddedPath: getOptionalConfigFromEnv('VECTOR_EMBEDDED_PATH') || undefined,
+    vectorDatabaseURL: getOptionalConfigFromEnv('VECTOR_DATABASE_URL') || undefined,
+    vectorStoreMigrationsEnabled:
+      getOptionalConfigFromEnv('VECTOR_STORE_MIGRATIONS_ENABLED') === 'true',
     vectorMaxBucketsCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_BUCKETS') || '10', 10),
     vectorMaxIndexesCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_INDEXES') || '20', 10),
   } as StorageConfigType

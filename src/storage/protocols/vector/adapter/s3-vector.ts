@@ -28,17 +28,8 @@ import {
 import { ERRORS } from '@internal/errors'
 import { getConfig } from '../../../../config'
 
-export type FilterableMetadataKey = {
-  name: string
-  dataType: 'string' | 'number' | 'boolean'
-}
-
-export interface CreateVectorIndexInput extends CreateIndexCommandInput {
-  filterableMetadataKeys?: FilterableMetadataKey[]
-}
-
 export interface VectorStore {
-  createVectorIndex(command: CreateVectorIndexInput): Promise<CreateIndexCommandOutput>
+  createVectorIndex(command: CreateIndexCommandInput): Promise<CreateIndexCommandOutput>
   deleteVectorIndex(param: DeleteIndexCommandInput): Promise<DeleteIndexCommandOutput>
   putVectors(command: PutVectorsInput): Promise<PutVectorsOutput>
   listVectors(command: ListVectorsInput): Promise<ListVectorsOutput>
@@ -105,9 +96,8 @@ export class S3Vector implements VectorStore {
     })
   }
 
-  async createVectorIndex(command: CreateVectorIndexInput): Promise<CreateIndexCommandOutput> {
-    const { filterableMetadataKeys: _ignored, ...awsInput } = command
-    return this.handleError(() => this.s3VectorClient.send(new CreateIndexCommand(awsInput)), {
+  async createVectorIndex(command: CreateIndexCommandInput): Promise<CreateIndexCommandOutput> {
+    return this.handleError(() => this.s3VectorClient.send(new CreateIndexCommand(command)), {
       type: 'vector-index',
       name: command.indexName || 'unknown',
     })

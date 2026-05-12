@@ -13,12 +13,34 @@ export class BucketScopedSingleShard implements Sharder {
     return `${this.opts.keyPrefix}${resource.bucketName}`
   }
 
-  listShardByKind(_kind: ResourceKind): Promise<ShardRow[]> {
-    return Promise.resolve([])
+  listShardByKind(kind: ResourceKind): Promise<ShardRow[]> {
+    // The actual shard_key varies per bucket (this.opts.keyPrefix + bucketName),
+    // but list/stats have no bucket context. Return a single canonical entry
+    // keyed by the prefix so generic introspection code doesn't think the
+    // strategy has zero shards (parity with SingleShard's sentinel response).
+    return Promise.resolve([
+      {
+        id: 1,
+        kind,
+        shard_key: this.opts.keyPrefix,
+        capacity: this.opts.capacity,
+        next_slot: -1,
+        status: 'active',
+        created_at: new Date().toISOString(),
+      },
+    ])
   }
 
   shardStats(_kind?: ResourceKind): Promise<ShardStats> {
-    return Promise.resolve([])
+    return Promise.resolve([
+      {
+        shardId: '1',
+        shardKey: this.opts.keyPrefix,
+        capacity: this.opts.capacity,
+        used: -1,
+        free: -1,
+      },
+    ])
   }
 
   withTnx(_tnx: unknown): Sharder {
@@ -48,7 +70,7 @@ export class BucketScopedSingleShard implements Sharder {
       capacity: opts.capacity ?? this.opts.capacity,
       kind: opts.kind,
       id: 1,
-      status: 'active',
+      status: opts.status ?? 'active',
       next_slot: 1,
       created_at: new Date().toISOString(),
     })

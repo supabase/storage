@@ -1,4 +1,5 @@
 import { getTenantConfig, multitenantKnex } from '@internal/database'
+import { deriveVectorDatabaseUrl } from '@internal/database/vector-store-url'
 import { ERRORS } from '@internal/errors'
 import {
   BucketScopedSingleShard,
@@ -8,16 +9,16 @@ import {
   SingleShard,
 } from '@internal/sharding'
 import {
-  createEmbeddedVectorStore,
   createS3VectorClient,
-  EmbeddedVectorStore,
   KnexVectorMetadataDB,
+  PgVectorStore,
   S3Vector,
   VectorStore,
   VectorStoreManager,
 } from '@storage/protocols/vector'
 import { FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
+import Knex from 'knex'
 import { getConfig } from '../../config'
 
 declare module 'fastify' {
@@ -28,35 +29,49 @@ declare module 'fastify' {
 
 export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) {
   const config = getConfig()
-  const { vectorBackend, vectorEmbeddedPath, vectorS3Buckets } = config
+  const {
+    vectorBucketProvider,
+    vectorDatabaseURL,
+    vectorS3Buckets,
+    isMultitenant,
+    databaseApplicationName,
+  } = config
 
-  let adapter: VectorStore | undefined
-  let backendEnabled = false
-
-  if (vectorBackend === 'embedded') {
-    if (!vectorEmbeddedPath) {
-      // Plugin still registers; preHandler will throw FeatureNotEnabled.
-      backendEnabled = false
-    } else {
-      adapter = await createEmbeddedVectorStore({
-        basePath: vectorEmbeddedPath,
-        ttlMs: 60_000,
-      })
-      backendEnabled = true
-    }
-  } else if (vectorBackend === 's3') {
-    if (vectorS3Buckets.length > 0) {
-      adapter = new S3Vector(createS3VectorClient())
-      backendEnabled = true
-    }
+  // S3 mode: build a singleton client+adapter at boot.
+  let s3Adapter: S3Vector | undefined
+  if (vectorBucketProvider === 's3' && vectorS3Buckets.length > 0) {
+    s3Adapter = new S3Vector(createS3VectorClient())
   }
 
+  // pgvector + single-tenant: VECTOR_DATABASE_URL is the maintenance URL the
+  // migration runner used to CREATE DATABASE; the runtime pool targets the
+  // derived `storage_vectors` database on the same server.
+  let stPgVectorAdapter: PgVectorStore | undefined
+  if (vectorBucketProvider === 'pgvector' && !isMultitenant && vectorDatabaseURL) {
+    const vectorKnex = Knex({
+      client: 'pg',
+      connection: {
+        connectionString: deriveVectorDatabaseUrl(vectorDatabaseURL),
+        application_name: databaseApplicationName,
+      },
+      pool: { min: 0, max: 10 },
+    })
+    stPgVectorAdapter = new PgVectorStore(vectorKnex)
+    fastify.addHook('onClose', async () => {
+      await vectorKnex.destroy()
+    })
+  }
+
+  const featureEnabled =
+    (vectorBucketProvider === 's3' && Boolean(s3Adapter)) ||
+    (vectorBucketProvider === 'pgvector' && (isMultitenant || Boolean(stPgVectorAdapter)))
+
   fastify.addHook('preHandler', async (req) => {
-    if (!backendEnabled || !adapter) {
+    if (!featureEnabled) {
       throw ERRORS.FeatureNotEnabled('vector', 'Vector service not configured')
     }
 
-    const { isMultitenant, vectorMaxBucketsCount, vectorMaxIndexesCount } = config
+    const { vectorMaxBucketsCount, vectorMaxIndexesCount } = config
 
     let maxBucketCount = vectorMaxBucketsCount
     let maxIndexCount = vectorMaxIndexesCount
@@ -70,10 +85,20 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
     const db = req.db.pool.acquire()
     const store = new KnexVectorMetadataDB(db)
 
+    // Pick the adapter. In multi-tenant pgvector mode the adapter binds to the
+    // request's own tenant pool (vectors live in the tenant DB); ST pgvector
+    // uses the singleton; s3 uses the singleton S3 client.
+    let adapter: VectorStore
+    if (vectorBucketProvider === 'pgvector') {
+      adapter = isMultitenant ? new PgVectorStore(db) : stPgVectorAdapter!
+    } else {
+      adapter = s3Adapter!
+    }
+
     let shard: Sharder
-    if (vectorBackend === 'embedded') {
+    if (vectorBucketProvider === 'pgvector') {
       shard = new BucketScopedSingleShard({
-        keyPrefix: 'embedded__',
+        keyPrefix: 'pgvector__',
         capacity: Number.MAX_SAFE_INTEGER,
       })
     } else if (isMultitenant) {
@@ -92,6 +117,3 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
     })
   })
 })
-
-// Re-export so existing callers that pulled from this module keep compiling.
-export type { EmbeddedVectorStore }

@@ -61,22 +61,31 @@ async function main() {
     isMultitenant,
     pgQueueEnable,
     dbMigrationFreezeAt,
-    vectorBackend,
-    vectorEmbeddedPath,
+    vectorBucketProvider,
+    vectorDatabaseURL,
+    vectorEnabled,
+    vectorStoreMigrationsEnabled,
     vectorS3Buckets,
     icebergShards,
     numWorkers,
   } = getConfig()
 
-  if (vectorBackend === 'embedded') {
-    if (!vectorEmbeddedPath) {
-      throw new Error('VECTOR_EMBEDDED_PATH is required when VECTOR_BACKEND=embedded')
-    }
-    if (numWorkers > 1) {
-      throw new Error(
-        `VECTOR_BACKEND=embedded requires WORKERS_NUM=1 (got ${numWorkers}); zvec is single-writer`
-      )
-    }
+  // VECTOR_DATABASE_URL is only required when pgvector is actually going to
+  // be used: single-tenant mode (it's the maintenance URL used to CREATE
+  // DATABASE storage_vectors) AND either vector routes are enabled or the
+  // migration runner is going to materialise the DB. Multi-tenant pgvector
+  // mode keeps the vector schema in each tenant DB, so no global URL is
+  // needed. Gating on these flags avoids blocking startup in configs that
+  // intentionally keep vectors off.
+  if (
+    vectorBucketProvider === 'pgvector' &&
+    !isMultitenant &&
+    (vectorEnabled || vectorStoreMigrationsEnabled) &&
+    !vectorDatabaseURL
+  ) {
+    throw new Error(
+      'VECTOR_DATABASE_URL is required when VECTOR_BUCKET_PROVIDER=pgvector in single-tenant mode'
+    )
   }
 
   // Queue
@@ -120,6 +129,8 @@ async function main() {
       }))
     )
   } else {
+    // runMigrationsOnTenant internally handles vector_store migrations when
+    // VECTOR_BUCKET_PROVIDER=pgvector + VECTOR_STORE_MIGRATIONS_ENABLED=true.
     await runMigrationsOnTenant({
       databaseUrl: databaseURL,
       upToMigration: dbMigrationFreezeAt,
@@ -142,12 +153,6 @@ async function main() {
 
   // Cluster information
   await Cluster.init(shutdownSignal.nextGroup.signal)
-
-  if (vectorBackend === 'embedded' && Cluster.size > 1) {
-    throw new Error(
-      `VECTOR_BACKEND=embedded requires Cluster.size <= 1 (got ${Cluster.size}); zvec is single-writer`
-    )
-  }
 
   Cluster.on('change', (data) => {
     logger.info(

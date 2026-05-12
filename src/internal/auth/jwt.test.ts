@@ -187,7 +187,9 @@ describe('JWT', () => {
             .setProtectedHeader({ alg, kid })
             .sign(privateKey)
 
-          const result = await verifyJWT(token, 'unused-secret', { keys: [jwkWithoutAlg as JwksConfigKey] })
+          const result = await verifyJWT(token, 'unused-secret', {
+            keys: [jwkWithoutAlg as JwksConfigKey],
+          })
           expect(result.sub).toEqual(`test-${alg}`)
         })
       })
@@ -208,9 +210,7 @@ describe('JWT', () => {
           .setProtectedHeader({ alg: 'RS512', kid })
           .sign(privateKey)
 
-        await expect(
-          verifyJWT(token, 'unused-secret', { keys: [jwkRS256] })
-        ).rejects.toThrow()
+        await expect(verifyJWT(token, 'unused-secret', { keys: [jwkRS256] })).rejects.toThrow()
       })
 
       test('it should reject a HMAC JWT when the matching jwk has a different alg', async () => {
@@ -230,9 +230,7 @@ describe('JWT', () => {
           .setProtectedHeader({ alg: 'HS256', kid })
           .sign(rawKey)
 
-        await expect(
-          verifyJWT(token, 'wrong-secret', { keys: [jwkHS512] })
-        ).rejects.toThrow()
+        await expect(verifyJWT(token, 'wrong-secret', { keys: [jwkHS512] })).rejects.toThrow()
       })
     })
 

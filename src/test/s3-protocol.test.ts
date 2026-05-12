@@ -1,3 +1,5 @@
+import { Readable } from 'node:stream'
+import { setTimeout as sleep } from 'node:timers/promises'
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
@@ -35,7 +37,6 @@ import { StorageKnexDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
 import { createHash, createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
-import { ReadableStreamBuffer } from 'stream-buffers'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
 import { EMPTY_SHA256_HASH, SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
@@ -1524,13 +1525,17 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const readable = new ReadableStreamBuffer({
-          frequency: 500,
-          chunkSize: 1024 * 3,
-        })
-
-        readable.put(Buffer.alloc(1024 * 12))
-        readable.stop()
+        const readable = Readable.from(
+          (async function* () {
+            const buffer = Buffer.alloc(1024 * 12)
+            const chunkSize = 1024 * 3
+            for (let i = 0; i < buffer.length; i += chunkSize) {
+              await sleep(500)
+              yield buffer.subarray(i, i + chunkSize)
+            }
+          })(),
+          { objectMode: false }
+        )
 
         const uploadPart = new UploadPartCommand({
           Bucket: bucketName,

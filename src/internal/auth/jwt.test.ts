@@ -164,6 +164,101 @@ describe('JWT', () => {
       })
     })
 
+    const algFixtures: { type: AsymmetricKeyType; alg: AsymmetricKeyFixture['alg'] }[] = [
+      { type: 'rsa', alg: 'RS256' },
+      { type: 'ec', alg: 'ES256' },
+      { type: 'ed25519', alg: 'EdDSA' },
+    ]
+
+    describe('JWK alg field matching', () => {
+      algFixtures.forEach(({ type, alg }) => {
+        test(`it should verify a ${alg} JWT when the matching jwk has no alg field`, async () => {
+          const { publicKey, privateKey } = asymmetricKeyPairFactories[type]()
+          const kid = `no-alg-${alg}`
+
+          const { alg: _omitted, ...jwkWithoutAlg } = {
+            ...(publicKey.export({ format: 'jwk' }) as JwksConfigKey),
+            kid,
+          }
+
+          const token = await new SignJWT({ sub: `test-${alg}` })
+            .setIssuedAt()
+            .setExpirationTime('1h')
+            .setProtectedHeader({ alg, kid })
+            .sign(privateKey)
+
+          const result = await verifyJWT(token, 'unused-secret', { keys: [jwkWithoutAlg as JwksConfigKey] })
+          expect(result.sub).toEqual(`test-${alg}`)
+        })
+      })
+
+      test('it should reject an asymmetric JWT when the matching jwk has a different alg', async () => {
+        const { publicKey, privateKey } = asymmetricKeyPairFactories['rsa']()
+        const kid = 'alg-mismatch-rsa'
+
+        const jwkRS256 = {
+          ...(publicKey.export({ format: 'jwk' }) as JwksConfigKey),
+          kid,
+          alg: 'RS256' as const,
+        }
+
+        const token = await new SignJWT({ sub: 'alg-mismatch-test' })
+          .setIssuedAt()
+          .setExpirationTime('1h')
+          .setProtectedHeader({ alg: 'RS512', kid })
+          .sign(privateKey)
+
+        await expect(
+          verifyJWT(token, 'unused-secret', { keys: [jwkRS256] })
+        ).rejects.toThrow()
+      })
+
+      test('it should reject a HMAC JWT when the matching jwk has a different alg', async () => {
+        const rawKey = crypto.randomBytes(32)
+        const kid = 'alg-mismatch-hmac'
+
+        const jwkHS512: JwksConfigKey = {
+          kty: 'oct',
+          k: rawKey.toString('base64url'),
+          kid,
+          alg: 'HS512',
+        } as JwksConfigKey
+
+        const token = await new SignJWT({ sub: 'hmac-alg-mismatch' })
+          .setIssuedAt()
+          .setExpirationTime('1h')
+          .setProtectedHeader({ alg: 'HS256', kid })
+          .sign(rawKey)
+
+        await expect(
+          verifyJWT(token, 'wrong-secret', { keys: [jwkHS512] })
+        ).rejects.toThrow()
+      })
+    })
+
+    algFixtures.forEach(({ type, alg }) => {
+      test(`it should reject a ${alg} JWT when the token was signed with a key not in the jwks`, async () => {
+        const { publicKey } = asymmetricKeyPairFactories[type]()
+        const { privateKey: wrongPrivateKey } = asymmetricKeyPairFactories[type]()
+        const kid = `wrong-key-${alg}`
+
+        const { alg: _omitted, ...jwkWithoutAlg } = {
+          ...(publicKey.export({ format: 'jwk' }) as JwksConfigKey),
+          kid,
+        }
+
+        const token = await new SignJWT({ sub: `test-${alg}` })
+          .setIssuedAt()
+          .setExpirationTime('1h')
+          .setProtectedHeader({ alg, kid })
+          .sign(wrongPrivateKey)
+
+        await expect(
+          verifyJWT(token, 'unused-secret', { keys: [jwkWithoutAlg as JwksConfigKey] })
+        ).rejects.toThrow()
+      })
+    })
+
     test('it should try secret if no matching jwk kty/alg found in jwks', async () => {
       const jwk = await generateHS512JWK()
       jwk.kid = 'abc123'

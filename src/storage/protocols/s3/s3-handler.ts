@@ -982,7 +982,7 @@ export class S3ProtocolHandler {
     return {
       headers,
       responseBody: response.body,
-      statusCode: command.Range ? 206 : 200,
+      statusCode: response.httpStatusCode,
     }
   }
 

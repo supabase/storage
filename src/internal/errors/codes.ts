@@ -20,7 +20,6 @@ export enum ErrorCode {
   KeyAlreadyExists = 'KeyAlreadyExists',
   BucketAlreadyExists = 'BucketAlreadyExists',
   DatabaseTimeout = 'DatabaseTimeout',
-  DatabaseConnectionLimit = 'DatabaseConnectionLimit',
   DatabaseReadOnly = 'DatabaseReadOnly',
   DatabaseInvalidObjectDefinition = 'DatabaseInvalidObjectDefinition',
   DatabaseSchemaMismatch = 'DatabaseSchemaMismatch',
@@ -383,15 +382,6 @@ export const ERRORS = {
       code: ErrorCode.DatabaseTimeout,
       httpStatusCode: 544,
       message: 'The connection to the database timed out',
-      originalError: e,
-    }),
-
-  DatabaseConnectionLimit: (e?: Error) =>
-    new StorageBackendError({
-      code: ErrorCode.DatabaseConnectionLimit,
-      httpStatusCode: 503,
-      message:
-        'The database has reached its maximum number of connections. Please try again later.',
       originalError: e,
     }),
 

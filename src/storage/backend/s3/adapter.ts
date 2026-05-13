@@ -21,7 +21,7 @@ import { Progress, Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { createAgent, InstrumentedAgent } from '@internal/http'
-import { monitorStream } from '@internal/streams'
+import { createByteCounterStream, monitorStream } from '@internal/streams'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
 import { getConfig } from '../../../config'
@@ -245,7 +245,20 @@ export class S3Backend implements StorageBackendAdapter {
     cacheControl: string,
     signal?: AbortSignal
   ): Promise<ObjectMetadata> {
-    const dataStream = tracingFeatures?.upload ? monitorStream(body) : body
+    if (body.errored) {
+      if (body.errored instanceof StorageBackendError) {
+        throw body.errored
+      }
+      throw StorageBackendError.fromError(body.errored)
+    }
+
+    const byteCounter = createByteCounterStream()
+
+    // Persist source bytes, not SDK transfer progress. Progress events can be
+    // absent or retry-dependent, while object metadata should match the stream read.
+    const dataStream = tracingFeatures?.upload
+      ? monitorStream(body, byteCounter)
+      : body.pipe(byteCounter.transformStream)
 
     const upload = new Upload({
       client: this.client,
@@ -259,54 +272,61 @@ export class S3Backend implements StorageBackendAdapter {
       },
     })
 
-    signal?.addEventListener('abort', () => upload.abort(), { once: true })
-
-    let hasUploadedBytes = false
-    const progressHandler = (progress: Progress) => {
-      if (!hasUploadedBytes && progress.loaded && progress.loaded > 0) {
-        hasUploadedBytes = true
-      }
-      if (tracingFeatures?.upload) {
-        dataStream.emit('s3_progress', JSON.stringify(progress))
-      }
+    let bodyError: Error | undefined
+    const onBodyError = (err: Error) => {
+      bodyError = err
+      byteCounter.transformStream.destroy(err)
+      upload.abort()
     }
-    upload.on('httpUploadProgress', progressHandler)
+    body.once('error', onBodyError)
+
+    const abortUpload = () => upload.abort()
+    signal?.addEventListener('abort', abortUpload, { once: true })
+
+    const progressHandler = (progress: Progress) => {
+      dataStream.emit('s3_progress', JSON.stringify(progress))
+    }
+    if (tracingFeatures?.upload) {
+      upload.on('httpUploadProgress', progressHandler)
+    }
 
     try {
       const data = await upload.done()
 
-      upload.off('httpUploadProgress', progressHandler)
-
-      const metadata: ObjectMetadata = hasUploadedBytes
-        ? await this.headObject(bucketName, key, version)
-        : {
-            httpStatusCode: 200,
-            cacheControl,
-            eTag: data.ETag || '',
-            mimetype: contentType,
-            lastModified: new Date(),
-            size: 0,
-            contentLength: 0,
-            contentRange: undefined,
-          }
+      const finalSize = byteCounter.bytes
 
       return {
-        httpStatusCode: data.$metadata.httpStatusCode || metadata.httpStatusCode,
+        httpStatusCode: data.$metadata.httpStatusCode || 200,
         cacheControl,
-        eTag: metadata.eTag,
-        mimetype: metadata.mimetype,
-        contentLength: metadata.contentLength,
-        lastModified: metadata.lastModified,
-        size: metadata.size,
-        contentRange: metadata.contentRange,
+        eTag: data.ETag || '',
+        mimetype: contentType,
+        lastModified: new Date(),
+        contentLength: finalSize,
+        size: finalSize,
+        contentRange: undefined,
       }
     } catch (err) {
-      upload.off('httpUploadProgress', progressHandler)
+      if (bodyError) {
+        if (bodyError instanceof StorageBackendError) {
+          throw bodyError
+        }
+        throw StorageBackendError.fromError(bodyError)
+      }
 
       if (err instanceof Error && err.name === 'AbortError') {
         throw ERRORS.AbortedTerminate('Upload was aborted', err)
       }
+      if (err instanceof StorageBackendError) {
+        throw err
+      }
       throw StorageBackendError.fromError(err)
+    } finally {
+      body.off('error', onBodyError)
+      signal?.removeEventListener('abort', abortUpload)
+
+      if (tracingFeatures?.upload) {
+        upload.off('httpUploadProgress', progressHandler)
+      }
     }
   }
 

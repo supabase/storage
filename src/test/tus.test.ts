@@ -255,6 +255,17 @@ describe.each([
     await connection?.dispose()
   })
 
+  it('advertises TUS protocol headers on OPTIONS preflight', async () => {
+    const response = await fetch(`${context.baseUrl}${context.config.tusPath}`, {
+      method: 'OPTIONS',
+    })
+
+    expect(response.status).toBe(204)
+    expect(response.headers.get('tus-extension')).toEqual(expect.stringContaining('creation'))
+    expect(response.headers.get('tus-max-size')).toMatch(/^\d+$/)
+    expect(response.headers.get('tus-version')).toBe('1.0.0')
+  })
+
   it('can upload an asset with the TUS protocol', async () => {
     const objectName = randomUUID() + '-cat.jpeg'
 
@@ -317,6 +328,100 @@ describe.each([
       user_metadata: {
         test1: 'test1',
         test2: 'test2',
+      },
+      name: objectName,
+      owner: null,
+      owner_id: null,
+      path_tokens: [objectName],
+      updated_at: expect.any(Date),
+      version: expect.any(String),
+    })
+
+    if (backendType === 'file') {
+      if (!dbAsset.version) {
+        throw new Error('expected uploaded object version')
+      }
+
+      const storedObjectPath = getStoredObjectPath(context, bucket.id, objectName, dbAsset.version)
+      expect(await pathExists(storedObjectPath)).toBe(true)
+    }
+  })
+
+  it('can upload an asset with data during TUS creation', async () => {
+    const objectName = randomUUID() + '-creation-cat.jpeg'
+    const seenResponses: Array<{ method: string; status: number; uploadOffset?: string }> = []
+
+    const bucket = await storage.createBucket({
+      id: bucketName,
+      name: bucketName,
+      public: true,
+    })
+
+    const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+
+    const result = await new Promise((resolve, reject) => {
+      const upload = new tus.Upload(openAssetStream(), {
+        endpoint: `${context.baseUrl}${context.config.tusPath}`,
+        onShouldRetry: () => false,
+        uploadDataDuringCreation: true,
+        headers: {
+          authorization,
+          'x-upsert': 'true',
+        },
+        metadata: {
+          bucketName,
+          objectName,
+          contentType: 'image/jpeg',
+          cacheControl: '3600',
+          metadata: JSON.stringify({
+            creation: 'with-data',
+          }),
+        },
+        onAfterResponse(req, res) {
+          seenResponses.push({
+            method: req.getMethod(),
+            status: res.getStatus(),
+            uploadOffset: res.getHeader('Upload-Offset'),
+          })
+        },
+        onError(error) {
+          console.log('Failed because: ' + error)
+          reject(error)
+        },
+        onSuccess: () => {
+          resolve(true)
+        },
+      })
+
+      upload.start()
+    })
+
+    expect(result).toEqual(true)
+    expect(seenResponses).toEqual([
+      {
+        method: 'POST',
+        status: 201,
+        uploadOffset: String(assetSize),
+      },
+    ])
+
+    const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+    expect(dbAsset).toEqual({
+      bucket_id: bucket.id,
+      created_at: expect.any(Date),
+      id: expect.any(String),
+      last_accessed_at: expect.any(Date),
+      metadata: {
+        cacheControl: 'max-age=3600',
+        contentLength: assetSize,
+        eTag: expectedAssetEtag(backendType),
+        httpStatusCode: 200,
+        lastModified: expect.any(String),
+        mimetype: 'image/jpeg',
+        size: assetSize,
+      },
+      user_metadata: {
+        creation: 'with-data',
       },
       name: objectName,
       owner: null,

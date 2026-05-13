@@ -10,14 +10,19 @@ import {
 import { getAcceptanceConfig, requireConfigValue } from './config'
 import { hasHeader } from './headers'
 
-export function createAcceptanceS3Client() {
+export function createAcceptanceS3Client(
+  credentials: { accessKeyId?: string; secretAccessKey?: string } = {}
+) {
   const config = getAcceptanceConfig()
 
   const client = new S3Client({
     credentials: {
-      accessKeyId: requireConfigValue(config.s3AccessKeyId, 'ACCEPTANCE_S3_ACCESS_KEY_ID'),
+      accessKeyId: requireConfigValue(
+        credentials.accessKeyId ?? config.s3AccessKeyId,
+        'ACCEPTANCE_S3_ACCESS_KEY_ID'
+      ),
       secretAccessKey: requireConfigValue(
-        config.s3SecretAccessKey,
+        credentials.secretAccessKey ?? config.s3SecretAccessKey,
         'ACCEPTANCE_S3_SECRET_ACCESS_KEY'
       ),
     },

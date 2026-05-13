@@ -6,7 +6,7 @@ import {
   requireConfigValue,
 } from '../support/config'
 import { createRestClient } from '../support/http'
-import { cleanupRestObjects } from '../support/resources'
+import { cleanupRestObjects, uploadRestObject } from '../support/resources'
 
 describeAcceptance(
   'RLS authorization contract',
@@ -20,7 +20,6 @@ describeAcceptance(
       const config = getAcceptanceConfig()
       const client = createRestClient()
       const bucketName = requireConfigValue(config.rlsBucket, 'ACCEPTANCE_RLS_BUCKET')
-      const readObject = requireConfigValue(config.rlsReadObject, 'ACCEPTANCE_RLS_READ_OBJECT')
       const writePrefix = requireConfigValue(
         config.rlsWritePrefix,
         'ACCEPTANCE_RLS_WRITE_PREFIX'
@@ -30,6 +29,11 @@ describeAcceptance(
         'ACCEPTANCE_AUTHENTICATED_KEY'
       )
       const anonKey = requireConfigValue(config.anonKey, 'ACCEPTANCE_ANON_KEY')
+      const generatedReadObject = `${writePrefix}/acceptance-read-${config.runId}-${randomUUID()
+        .replace(/-/g, '')
+        .slice(0, 12)}.txt`
+      const readObject = config.rlsReadObject ?? generatedReadObject
+      const provisionReadObject = !config.rlsReadObject
       const writeKey = `${writePrefix}/acceptance-${config.runId}-${randomUUID()
         .replace(/-/g, '')
         .slice(0, 12)}.txt`
@@ -38,6 +42,10 @@ describeAcceptance(
         .slice(0, 12)}.txt`
 
       try {
+        if (provisionReadObject) {
+          await uploadRestObject(bucketName, readObject, `acceptance-rls-read-${config.runId}`)
+        }
+
         await client.request(
           'GET',
           `/object/authenticated/${bucketName}/${encodePathSegments(readObject)}`,
@@ -80,7 +88,11 @@ describeAcceptance(
         )
         expect(deniedWrite.status).toBeGreaterThanOrEqual(400)
       } finally {
-        await cleanupRestObjects(bucketName, [writeKey, deniedWriteKey], client)
+        await cleanupRestObjects(
+          bucketName,
+          provisionReadObject ? [readObject, writeKey, deniedWriteKey] : [writeKey, deniedWriteKey],
+          client
+        )
       }
     })
   }

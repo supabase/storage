@@ -1,8 +1,8 @@
-import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { ErrorCode, isStorageError } from '@internal/errors'
-import { Readable } from 'stream'
+import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
+import { PassThrough, Readable } from 'stream'
 import { type Mock, vi } from 'vitest'
 import { getConfig } from '../../../config'
 import { withOptionalVersion } from '../adapter'
@@ -36,6 +36,9 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({
 
 type UploadOptionsShape = {
   queueSize?: number
+  params?: {
+    Body?: AsyncIterable<unknown>
+  }
 }
 
 type MockUploadDoneResult = {
@@ -59,14 +62,28 @@ describe('S3Backend', () => {
   let mockUploadDone: Mock<(instance: MockUploadInstance) => Promise<MockUploadDoneResult>>
   let uploadInstances: MockUploadInstance[]
 
+  async function drainUploadBody(instance: MockUploadInstance) {
+    const body = instance.options.params?.Body
+    if (!body) {
+      return
+    }
+
+    for await (const _chunk of body) {
+      // Drain the body to simulate what Upload does while sending multipart data.
+    }
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockSend = vi.fn()
-    mockUploadDone = vi.fn().mockResolvedValue({
-      ETag: '"multipart-etag"',
-      $metadata: {
-        httpStatusCode: 200,
-      },
+    mockUploadDone = vi.fn(async (instance) => {
+      await drainUploadBody(instance)
+      return {
+        ETag: '"multipart-etag"',
+        $metadata: {
+          httpStatusCode: 200,
+        },
+      }
     })
     uploadInstances = []
 
@@ -285,28 +302,20 @@ describe('S3Backend', () => {
       })
     })
 
-    test('falls back to multipart upload when content length exceeds the single-request limit', async () => {
+    test('uses source stream bytes for over-limit multipart upload metadata', async () => {
       const overLimit = MAX_PUT_OBJECT_SIZE + 1
-      const lastModified = new Date('2024-01-01T00:00:00.000Z')
 
+      // Emit a progress value that disagrees with both the declared length and the
+      // request body; metadata should use the bytes read from the source stream.
       mockUploadDone.mockImplementationOnce(async (instance) => {
         instance.emit('httpUploadProgress', { loaded: 1 })
+        await drainUploadBody(instance)
         return {
           ETag: '"multipart-etag"',
           $metadata: {
             httpStatusCode: 200,
           },
         }
-      })
-      mockSend.mockResolvedValueOnce({
-        CacheControl: 'max-age=60',
-        ContentType: 'text/plain',
-        ContentLength: overLimit,
-        ETag: '"head-etag"',
-        LastModified: lastModified,
-        $metadata: {
-          httpStatusCode: 200,
-        },
       })
 
       const backend = createBackend()
@@ -323,20 +332,59 @@ describe('S3Backend', () => {
 
       expect(Upload).toHaveBeenCalledTimes(1)
       expect(uploadInstances[0].options.queueSize).toBe(getConfig().storageS3UploadQueueSize)
-      expect(mockSend).toHaveBeenCalledTimes(1)
-      expect(mockSend.mock.calls[0][0]).toBeInstanceOf(HeadObjectCommand)
+      expect(mockSend).not.toHaveBeenCalled()
       expect(result).toMatchObject({
         httpStatusCode: 200,
         cacheControl: 'max-age=60',
-        eTag: '"head-etag"',
+        eTag: '"multipart-etag"',
         mimetype: 'text/plain',
-        contentLength: overLimit,
-        size: overLimit,
-        lastModified,
+        contentLength: 5,
+        size: 5,
+        lastModified: expect.any(Date),
+      })
+    })
+
+    test('uses source stream bytes for over-limit multipart upload without progress', async () => {
+      const overLimit = MAX_PUT_OBJECT_SIZE + 1
+
+      const backend = createBackend()
+      const result = await backend.uploadObject(
+        'test-bucket',
+        'test-key',
+        undefined,
+        Readable.from(['hello']),
+        'text/plain',
+        'max-age=60',
+        undefined,
+        overLimit
+      )
+
+      expect(Upload).toHaveBeenCalledTimes(1)
+      expect(uploadInstances[0].options.queueSize).toBe(getConfig().storageS3UploadQueueSize)
+      expect(mockSend).not.toHaveBeenCalled()
+      expect(result).toMatchObject({
+        httpStatusCode: 200,
+        cacheControl: 'max-age=60',
+        eTag: '"multipart-etag"',
+        mimetype: 'text/plain',
+        contentLength: 5,
+        size: 5,
+        lastModified: expect.any(Date),
       })
     })
 
     test('uses multipart upload when content length is unknown', async () => {
+      mockUploadDone.mockImplementationOnce(async (instance) => {
+        instance.emit('httpUploadProgress', { loaded: 42 })
+        await drainUploadBody(instance)
+        return {
+          ETag: '"multipart-etag"',
+          $metadata: {
+            httpStatusCode: 200,
+          },
+        }
+      })
+
       const backend = createBackend()
       const result = await backend.uploadObject(
         'test-bucket',
@@ -355,8 +403,111 @@ describe('S3Backend', () => {
         cacheControl: 'max-age=60',
         eTag: '"multipart-etag"',
         mimetype: 'text/plain',
+        contentLength: 5,
+        size: 5,
+        lastModified: expect.any(Date),
+      })
+    })
+
+    test('removes multipart success listeners after upload completes', async () => {
+      const abortController = new AbortController()
+      const body = Readable.from(['hello'])
+
+      const backend = createBackend()
+      await backend.uploadObject(
+        'test-bucket',
+        'test-key',
+        undefined,
+        body,
+        'text/plain',
+        'max-age=60',
+        abortController.signal
+      )
+
+      expect(body.listenerCount('error')).toBe(0)
+
+      abortController.abort()
+      expect(uploadInstances[0].abort).not.toHaveBeenCalled()
+    })
+
+    test('aborts multipart upload when the source stream errors after emitting bytes', async () => {
+      const sourceError = ERRORS.InvalidRequest('Incomplete trailer section')
+      const body = new Readable({
+        read() {
+          this.push(Buffer.from('hello'))
+          this.destroy(sourceError)
+        },
+      })
+
+      mockUploadDone.mockImplementationOnce((instance) => {
+        void drainUploadBody(instance).catch(() => undefined)
+
+        return new Promise((_resolve, reject) => {
+          instance.abort.mockImplementation(() => reject(sourceError))
+        })
+      })
+
+      const backend = createBackend()
+      const upload = backend.uploadObject(
+        'test-bucket',
+        'test-key',
+        undefined,
+        body,
+        'text/plain',
+        'max-age=60'
+      )
+      const uploadError = upload.catch((error: unknown) => error)
+
+      await vi.waitFor(() => {
+        expect(uploadInstances[0].abort).toHaveBeenCalledTimes(1)
+      })
+      await expect(uploadError).resolves.toMatchObject({
+        code: ErrorCode.InvalidRequest,
+        message: 'Incomplete trailer section',
+      })
+    })
+
+    test('rejects an already-errored multipart source stream without starting upload', async () => {
+      const sourceError = ERRORS.InvalidRequest('Incomplete trailer section')
+      const body = new PassThrough()
+      body.on('error', () => undefined)
+      body.write(Buffer.from('hello'))
+      body.destroy(sourceError)
+
+      const backend = createBackend()
+      const upload = backend
+        .uploadObject('test-bucket', 'test-key', undefined, body, 'text/plain', 'max-age=60')
+        .catch((error: unknown) => error)
+
+      await expect(upload).resolves.toMatchObject({
+        code: ErrorCode.InvalidRequest,
+        message: 'Incomplete trailer section',
+      })
+      expect(Upload).not.toHaveBeenCalled()
+    })
+
+    test('returns zero-byte metadata for unknown-size uploads without progress', async () => {
+      const backend = createBackend()
+      const result = await backend.uploadObject(
+        'test-bucket',
+        'empty-key',
+        undefined,
+        Readable.from([]),
+        'application/octet-stream',
+        'no-cache'
+      )
+
+      expect(Upload).toHaveBeenCalledTimes(1)
+      expect(uploadInstances[0].options.queueSize).toBe(getConfig().storageS3UploadQueueSize)
+      expect(mockSend).not.toHaveBeenCalled()
+      expect(result).toMatchObject({
+        httpStatusCode: 200,
+        cacheControl: 'no-cache',
+        eTag: '"multipart-etag"',
+        mimetype: 'application/octet-stream',
         contentLength: 0,
         size: 0,
+        lastModified: expect.any(Date),
       })
     })
 

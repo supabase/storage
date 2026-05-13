@@ -1,9 +1,9 @@
 import { S3ServiceException } from '@aws-sdk/client-s3'
 import { FastifyError } from '@fastify/error'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { isDatabaseSlowDownError } from '@internal/errors/database-error'
 import { FastifyReply } from 'fastify/types/reply'
 import { FastifyRequest } from 'fastify/types/request'
-import { DatabaseError } from 'pg'
 
 type ValidationIssue = {
   instancePath?: string
@@ -46,16 +46,7 @@ export const s3ErrorHandler = (
   }
 
   // database error
-  if (
-    error instanceof DatabaseError &&
-    [
-      'Max client connections reached',
-      'remaining connection slots are reserved for non-replication superuser connections',
-      'no more connections allowed',
-      'sorry, too many clients already',
-      'server login has been failing, try again later',
-    ].some((msg) => (error as DatabaseError).message.includes(msg))
-  ) {
+  if (isDatabaseSlowDownError(error)) {
     return reply.status(429).send({
       Error: {
         Resource: resource,

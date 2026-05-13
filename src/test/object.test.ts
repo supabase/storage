@@ -782,8 +782,14 @@ describe('testing POST object via multipart upload', () => {
     } finally {
       const db = await getSuperuserPostgrestClient()
       await withDeleteEnabled(db, async (db) => {
-        await db.from<Obj>('objects').where({ bucket_id: bucketId }).delete()
-        await db.from('buckets').where({ id: bucketId }).delete()
+        await db.query({
+          text: 'DELETE FROM objects WHERE bucket_id = $1',
+          values: [bucketId],
+        })
+        await db.query({
+          text: 'DELETE FROM buckets WHERE id = $1',
+          values: [bucketId],
+        })
       })
     }
   })
@@ -1406,13 +1412,14 @@ describe('testing PUT object via binary upload', () => {
     } finally {
       const db = await getSuperuserPostgrestClient()
       await withDeleteEnabled(db, async (db) => {
-        await db
-          .from<Obj>('objects')
-          .where({
-            name: objectName,
-            bucket_id: 'bucket2',
-          })
-          .delete()
+        await db.query({
+          text: `
+            DELETE FROM objects
+            WHERE name = $1
+              AND bucket_id = $2
+          `,
+          values: [objectName, 'bucket2'],
+        })
       })
     }
   })

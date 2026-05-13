@@ -108,15 +108,19 @@ describe('Iceberg Catalog', () => {
 
     expect(response.statusCode).toBe(200)
 
-    const deletedCatalog = await t.database.connection.pool
-      .acquire()
-      .withSchema('storage')
-      .table('buckets_analytics')
-      .select('deleted_at')
-      .where('id', bucket.id)
-      .first<{ deleted_at: Date | string | null }>()
+    const deletedCatalog = await t.database.connection.pool.acquire().query<{
+      deleted_at: Date | string | null
+    }>({
+      text: `
+        SELECT deleted_at
+        FROM storage.buckets_analytics
+        WHERE id = $1
+        LIMIT 1
+      `,
+      values: [bucket.id],
+    })
 
-    expect(deletedCatalog?.deleted_at).toBeTruthy()
+    expect(deletedCatalog.rows[0]?.deleted_at).toBeTruthy()
   })
 
   it('can empty analytic bucket resources after deletion starts', async () => {

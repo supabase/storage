@@ -495,10 +495,6 @@ export class PgTenantConnection {
         throw ERRORS.DatabaseTimeout(e)
       }
 
-      if (isConnectionLimitError(e)) {
-        throw ERRORS.DatabaseConnectionLimit(e as DatabaseError)
-      }
-
       throw e
     }
   }

@@ -7,7 +7,8 @@ import {
   LoadTableResult,
   RestCatalogClient,
 } from '@storage/protocols/iceberg/catalog'
-import { KnexMetastore, Metastore } from '@storage/protocols/iceberg/knex'
+import { Metastore } from '@storage/protocols/iceberg/metastore'
+import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { FastifyInstance } from 'fastify'
 import { getConfig, mergeConfig } from '../config'
 import { createBucketIfNotExists, useStorage } from './utils/storage'
@@ -35,7 +36,7 @@ describe('Iceberg Catalog', () => {
 
     const { default: makeApp } = await import('../app')
     app = makeApp()
-    icebergMetastore = new KnexMetastore(t.database.connection.pool.acquire(), {
+    icebergMetastore = new PgMetastore(t.database.connection.pool.acquire(), {
       multiTenant: false,
       schema: 'storage',
     })
@@ -107,15 +108,19 @@ describe('Iceberg Catalog', () => {
 
     expect(response.statusCode).toBe(200)
 
-    const deletedCatalog = await t.database.connection.pool
-      .acquire()
-      .withSchema('storage')
-      .table('buckets_analytics')
-      .select('deleted_at')
-      .where('id', bucket.id)
-      .first<{ deleted_at: Date | string | null }>()
+    const deletedCatalog = await t.database.connection.pool.acquire().query<{
+      deleted_at: Date | string | null
+    }>({
+      text: `
+        SELECT deleted_at
+        FROM storage.buckets_analytics
+        WHERE id = $1
+        LIMIT 1
+      `,
+      values: [bucket.id],
+    })
 
-    expect(deletedCatalog?.deleted_at).toBeTruthy()
+    expect(deletedCatalog.rows[0]?.deleted_at).toBeTruthy()
   })
 
   it('can empty analytic bucket resources after deletion starts', async () => {
@@ -156,7 +161,14 @@ describe('Iceberg Catalog', () => {
         createStorage(payload: unknown): Promise<typeof t.storage>
       },
       'createStorage'
-    ).mockResolvedValue(t.storage)
+    ).mockResolvedValue({
+      ...t.storage,
+      db: {
+        ...t.storage.db,
+        connection: t.storage.db.connection,
+        destroyConnection: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as typeof t.storage)
 
     await DeleteIcebergResources.handle({
       id: 'test-delete-iceberg-resources',

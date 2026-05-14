@@ -1,9 +1,9 @@
 import { getTenantConfig } from '@internal/database'
+import { PgExecutor } from '@internal/database/pg-connection'
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { queueJobScheduled, queueJobSchedulingTime } from '@internal/monitoring/metrics'
-import { KnexQueueDB } from '@internal/queue/database'
-import { Knex } from 'knex'
+import { PgQueueDB } from '@internal/queue/database'
 import PgBoss, { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../config'
 import { SYSTEM_TENANT_REF } from './constants'
@@ -22,6 +22,7 @@ export interface BasePayload {
 }
 
 const { pgQueueEnable, region, isMultitenant } = getConfig()
+type TransactionalQueueDb = PgExecutor
 
 function withPayloadVersion<TPayload extends BasePayload>(
   payload: TPayload,
@@ -133,7 +134,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
   static send<TPayload extends BasePayload>(
     this: StaticThis<TPayload>,
     payload: Omit<TPayload, '$version'>,
-    opts?: SendOptions & { tnx?: Knex }
+    opts?: SendOptions & { tnx?: TransactionalQueueDb }
   ) {
     const that = new this(withPayloadVersion(payload as TPayload, this.version))
     return that.send(opts)
@@ -245,7 +246,9 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     })
   }
 
-  async send(customSendOptions?: SendOptions & { tnx?: Knex }): Promise<string | void | null> {
+  async send(
+    customSendOptions?: SendOptions & { tnx?: TransactionalQueueDb }
+  ): Promise<string | void | null> {
     const eventClass = this.constructor as typeof Event
 
     const shouldSend = await eventClass.shouldSend(this.payload)
@@ -291,7 +294,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       const queue = customSendOptions?.tnx
         ? Queue.createPgBoss({
             enableWorkers: false,
-            db: new KnexQueueDB(customSendOptions.tnx),
+            db: createTransactionQueueDB(customSendOptions.tnx),
           })
         : Queue.getInstance()
 
@@ -350,4 +353,8 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       })
     }
   }
+}
+
+function createTransactionQueueDB(tnx: TransactionalQueueDb) {
+  return new PgQueueDB(tnx)
 }

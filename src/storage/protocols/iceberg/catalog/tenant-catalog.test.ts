@@ -1,7 +1,7 @@
 import { ERRORS, ErrorCode } from '@internal/errors'
 import type { Sharder } from '@internal/sharding'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Metastore } from '../knex'
+import type { Metastore } from '../metastore'
 import { IcebergErrorType } from './errors'
 import type { CatalogAuthType } from './rest-catalog-client'
 import { TenantAwareRestCatalog } from './tenant-catalog'

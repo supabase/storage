@@ -6,7 +6,6 @@ import {
 } from '@internal/cache'
 import { createMutexByKey } from '@internal/concurrency'
 import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
-import { Knex } from 'knex'
 import objectSizeOf from 'object-sizeof'
 import { JwksConfig, JwksConfigKeyOCT } from '../../../config'
 import { TENANTS_JWKS_UPDATE_CHANNEL } from './channels'
@@ -42,8 +41,8 @@ function getJwkIdFromKid(kid: string): string {
   return kid.split(JWK_KID_SEPARATOR).pop() as string
 }
 
-export class JWKSManager {
-  constructor(private storage: JWKSManagerStore<Knex.Transaction>) {}
+export class JWKSManager<TRX> {
+  constructor(private storage: JWKSManagerStore<TRX>) {}
 
   /**
    * Keeps the in memory config cache up to date
@@ -64,7 +63,7 @@ export class JWKSManager {
    * @param tenantId
    * @param trx optional transaction to add the jwk within
    */
-  async generateUrlSigningJwk(tenantId: string, trx?: Knex.Transaction): Promise<{ kid: string }> {
+  async generateUrlSigningJwk(tenantId: string, trx?: TRX): Promise<{ kid: string }> {
     const content = encrypt(JSON.stringify(await generateHS512JWK()))
     const id = await this.storage.insert(tenantId, content, JWK_KIND_STORAGE_URL_SIGNING, true, trx)
     return { kid: createJwkKid({ kind: JWK_KIND_STORAGE_URL_SIGNING, id }) }

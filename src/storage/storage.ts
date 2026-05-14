@@ -126,7 +126,12 @@ export class Storage {
       return this.createIcebergBucket(icebergBucketData)
     }
 
-    const bucketData: Parameters<Database['createBucket']>[0] = data
+    const bucketData = { ...data } as Parameters<Database['createBucket']>[0] & {
+      fileSizeLimit?: unknown
+      allowedMimeTypes?: unknown
+    }
+    delete bucketData.fileSizeLimit
+    delete bucketData.allowedMimeTypes
 
     if (typeof data.fileSizeLimit === 'number' || typeof data.fileSizeLimit === 'string') {
       bucketData.file_size_limit = await this.parseMaxSizeLimit(data.fileSizeLimit)
@@ -200,7 +205,12 @@ export class Storage {
       throw ERRORS.NoContentProvided()
     }
 
-    const bucketData: Parameters<Database['updateBucket']>[1] = data
+    const bucketData = { ...data } as Parameters<Database['updateBucket']>[1] & {
+      fileSizeLimit?: unknown
+      allowedMimeTypes?: unknown
+    }
+    delete bucketData.fileSizeLimit
+    delete bucketData.allowedMimeTypes
 
     if (typeof data.fileSizeLimit === 'number' || typeof data.fileSizeLimit === 'string') {
       bucketData.file_size_limit = await this.parseMaxSizeLimit(data.fileSizeLimit)

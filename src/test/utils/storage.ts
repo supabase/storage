@@ -1,40 +1,53 @@
 import { CreateBucketCommand, HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
-import { getPostgresConnection, getServiceKeyUser, TenantConnection } from '@internal/database'
+import {
+  getPostgresConnection,
+  getServiceKeyUser,
+  PgPoolExecutor,
+  PgTenantConnection,
+  PgTransaction,
+} from '@internal/database'
+import { runMigrationsOnTenant } from '@internal/database/migrations'
 import { isS3Error } from '@internal/errors'
 import { createStorageBackend, StorageBackendAdapter } from '@storage/backend'
-import { Database, StorageKnexDB } from '@storage/database'
+import { Database, StoragePgDB } from '@storage/database'
 import { StorageObjectLocator, TenantLocation } from '@storage/locator'
 import { ObjectScanner } from '@storage/scanner/scanner'
 import { Storage } from '@storage/storage'
 import { Uploader } from '@storage/uploader'
-import { Knex } from 'knex'
 import { getConfig } from '../../config'
 
 // import { CreateBucketCommand, HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
 // import { isS3Error } from '@internal/errors'
 
-const { tenantId, storageBackendType, storageS3Bucket } = getConfig()
+const { databaseURL, tenantId, storageBackendType, storageS3Bucket } = getConfig()
 
 /**
  * Helper function to execute raw database operations in tests with storage.allow_delete_query set
  * This is needed because raw queries bypass the normal connection scope setting
  */
-export async function withDeleteEnabled<T>(db: Knex, fn: (db: Knex) => Promise<T>): Promise<T> {
-  // Wrap in a transaction to ensure set_config applies to all operations
-  const tnx = await db.transaction()
+export async function withDeleteEnabled<T>(
+  db: PgPoolExecutor | PgTransaction,
+  fn: (db: PgTransaction) => Promise<T>
+): Promise<T> {
+  const existingTransaction = db instanceof PgTransaction
+  const tnx = existingTransaction ? db : await db.beginTransaction()
   try {
-    await tnx.raw(`SELECT set_config('storage.allow_delete_query', 'true', true)`)
+    await tnx.query(`SELECT set_config('storage.allow_delete_query', 'true', true)`)
     const result = await fn(tnx)
-    await tnx.commit()
+    if (!existingTransaction) {
+      await tnx.commit()
+    }
     return result
   } catch (e) {
-    await tnx.rollback()
+    if (!existingTransaction) {
+      await tnx.rollback()
+    }
     throw e
   }
 }
 
-export function useStorage() {
-  let connection: TenantConnection
+export function useStorage(options: { ensureMigrations?: boolean } = {}) {
+  let connection: PgTenantConnection
   let storage: Storage
   let adapter: StorageBackendAdapter
   let database: Database
@@ -43,18 +56,29 @@ export function useStorage() {
   let location: StorageObjectLocator
 
   beforeAll(async () => {
+    if (options.ensureMigrations !== false) {
+      await runMigrationsOnTenant({
+        databaseUrl: databaseURL!,
+        tenantId,
+        waitForLock: true,
+      })
+    }
+
     const adminUser = await getServiceKeyUser(tenantId)
-    connection = await getPostgresConnection({
+    const connectionOptions = {
       tenantId,
       user: adminUser,
       superUser: adminUser,
       host: 'localhost',
       disableHostCheck: true,
-    })
-    database = new StorageKnexDB(connection, {
+    }
+    connection = await getPostgresConnection(connectionOptions)
+
+    const databaseOptions = {
       tenantId,
       host: 'localhost',
-    })
+    }
+    database = new StoragePgDB(connection, databaseOptions) as unknown as Database
     location = new TenantLocation(storageS3Bucket)
     adapter = createStorageBackend(storageBackendType)
     storage = new Storage(adapter, database, location)

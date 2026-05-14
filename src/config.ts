@@ -4,6 +4,7 @@ import { SignJWT } from 'jose'
 
 export type StorageBackendType = 'file' | 's3'
 export type IcebergCatalogAuthType = 'sigv4' | 'token'
+export type DatabasePoolMode = 'single_use' | 'recycled'
 export enum MultitenantMigrationStrategy {
   PROGRESSIVE = 'progressive',
   ON_REQUEST = 'on_request',
@@ -96,9 +97,10 @@ type StorageConfigType = {
   databaseURL: string
   databaseSSLRootCert?: string
   databasePoolURL?: string
-  databasePoolMode?: 'single_use' | 'recycle'
+  databasePoolMode?: DatabasePoolMode
   databaseMaxConnections: number
   databaseFreePoolAfterInactivity: number
+  databasePoolDrainTimeout: number
   databaseConnectionTimeout: number
   databaseEnableQueryCancellation: boolean
   databaseStatementTimeout: number
@@ -238,6 +240,28 @@ function getConfigFromEnv(key: string, fallbackEnv?: string): string {
   return value
 }
 
+export function normalizeDatabasePoolMode(
+  mode: string | null | undefined
+): DatabasePoolMode | null | undefined {
+  if (mode === null || mode === undefined) {
+    return mode
+  }
+
+  if (mode === '') {
+    return undefined
+  }
+
+  if (mode === 'single_use') {
+    return 'single_use'
+  }
+
+  if (mode === 'recycled' || mode === 'recycle') {
+    return 'recycled'
+  }
+
+  throw new Error(`Invalid database pool mode "${mode}". Expected "single_use" or "recycled".`)
+}
+
 function getOptionalIfMultitenantConfigFromEnv(key: string, fallback?: string): string | undefined {
   return getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
     ? getOptionalConfigFromEnv(key, fallback)
@@ -252,7 +276,16 @@ export function setEnvPaths(paths: string[]) {
 }
 
 export function mergeConfig(newConfig: Partial<StorageConfigType>) {
-  config = { ...config, ...(newConfig as Required<StorageConfigType>) }
+  const normalizedConfig = { ...newConfig } as Partial<StorageConfigType> & {
+    databasePoolMode?: string | null
+  }
+
+  if ('databasePoolMode' in normalizedConfig) {
+    normalizedConfig.databasePoolMode =
+      normalizeDatabasePoolMode(normalizedConfig.databasePoolMode) ?? undefined
+  }
+
+  config = { ...config, ...(normalizedConfig as Required<StorageConfigType>) }
 }
 
 export function getConfig(options?: { reload?: boolean }): StorageConfigType {
@@ -261,6 +294,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   }
 
   envPaths.map((envPath) => dotenv.config({ path: envPath, override: false }))
+
   const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
 
   config = {
@@ -428,7 +462,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     databaseSSLRootCert: getOptionalConfigFromEnv('DATABASE_SSL_ROOT_CERT'),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
     databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
-    databasePoolMode: getOptionalConfigFromEnv('DATABASE_POOL_MODE'),
+    databasePoolMode: normalizeDatabasePoolMode(getOptionalConfigFromEnv('DATABASE_POOL_MODE')),
     databaseMaxConnections: parseInt(
       getOptionalConfigFromEnv('DATABASE_MAX_CONNECTIONS') || '20',
       10
@@ -436,6 +470,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     databaseFreePoolAfterInactivity: parseInt(
       getOptionalConfigFromEnv('DATABASE_FREE_POOL_AFTER_INACTIVITY') || (1000 * 60).toString(),
       10
+    ),
+    databasePoolDrainTimeout: envPositiveInteger(
+      getOptionalConfigFromEnv('DATABASE_POOL_DRAIN_TIMEOUT'),
+      30_000
     ),
     databaseConnectionTimeout: parseInt(
       getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '3000',

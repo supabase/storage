@@ -1,9 +1,9 @@
-import { getTenantConfig, multitenantKnex } from '@internal/database'
+import { getTenantConfig, multitenantPgExecutor } from '@internal/database'
 import { ERRORS } from '@internal/errors'
-import { KnexShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
+import { PgShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 import {
   createS3VectorClient,
-  KnexVectorMetadataDB,
+  PgVectorMetadataDB,
   S3Vector,
   VectorStoreManager,
 } from '@storage/protocols/vector'
@@ -38,10 +38,9 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
       maxIndexCount = features?.vectorBuckets?.maxIndexes || vectorMaxIndexesCount
     }
 
-    const db = req.db.pool.acquire()
-    const store = new KnexVectorMetadataDB(db)
+    const store = new PgVectorMetadataDB(req.db)
     const shard = isMultitenant
-      ? new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
+      ? new ShardCatalog(new PgShardStoreFactory(multitenantPgExecutor))
       : new SingleShard({
           shardKey: vectorS3Buckets[0],
           capacity: 10000,

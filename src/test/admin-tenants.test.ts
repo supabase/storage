@@ -1,5 +1,5 @@
+import { closeMultitenantPg } from '@internal/database'
 import * as migrations from '@internal/database/migrations'
-import { multitenantKnex } from '@internal/database/multitenant-db'
 import { adminApp } from './common'
 
 describe('admin tenant delete route', () => {
@@ -9,7 +9,7 @@ describe('admin tenant delete route', () => {
 
   afterAll(async () => {
     await adminApp.close()
-    await multitenantKnex.destroy()
+    await closeMultitenantPg()
   })
 
   it('accepts an empty json delete request', async () => {

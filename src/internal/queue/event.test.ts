@@ -2,6 +2,7 @@ import { vi } from 'vitest'
 
 type EventModule = typeof import('./event')
 type QueueModule = typeof import('./queue')
+type DatabaseModule = typeof import('./database')
 
 type TestPayload = {
   name: string
@@ -24,8 +25,9 @@ async function loadQueueModules(opts?: { pgQueueEnable?: boolean }) {
 
   const eventModule = (await import('./event')) as EventModule
   const queueModule = (await import('./queue')) as QueueModule
+  const databaseModule = (await import('./database')) as DatabaseModule
 
-  return { eventModule, queueModule }
+  return { databaseModule, eventModule, queueModule }
 }
 
 function defineTestEvent(EventBase: EventModule['Event']) {
@@ -137,5 +139,39 @@ describe('Event payload versioning', () => {
         startAfter: new Date('2026-04-07T10:00:00.000Z'),
       }),
     ])
+  })
+
+  it('uses the pg transaction queue adapter when sending inside a pg transaction', async () => {
+    const { databaseModule, eventModule, queueModule } = await loadQueueModules({
+      pgQueueEnable: true,
+    })
+    const TestEvent = defineTestEvent(eventModule.Event)
+    const payload = createPayload()
+    const send = vi.fn().mockResolvedValue('job-id')
+    const pgTnx = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+    }
+
+    const createPgBossSpy = vi.spyOn(queueModule.Queue, 'createPgBoss').mockReturnValue({
+      send,
+    } as unknown as ReturnType<typeof queueModule.Queue.createPgBoss>)
+
+    await TestEvent.send(payload, { tnx: pgTnx })
+
+    expect(createPgBossSpy).toHaveBeenCalledWith({
+      enableWorkers: false,
+      db: expect.any(databaseModule.PgQueueDB),
+    })
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'test-event',
+        data: expect.objectContaining({
+          $version: 'v-test',
+          tenant: expect.objectContaining({
+            ref: 'test-tenant',
+          }),
+        }),
+      })
+    )
   })
 })

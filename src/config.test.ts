@@ -6,6 +6,7 @@ const CONFIG_ENV_KEYS = [
   'TENANT_POOL_CACHE_TTL_MS',
   'TENANT_POOL_CACHE_HIT_LOG_SAMPLE_RATE',
   'TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE',
+  'DATABASE_POOL_DRAIN_TIMEOUT',
 ] as const
 
 type ConfigEnvKey = (typeof CONFIG_ENV_KEYS)[number]
@@ -54,6 +55,33 @@ describe('tenant pool cache config parsing', () => {
     expect(config.tenantPoolCacheTtlMs).toBe(1000 * 10)
     expect(config.tenantPoolCacheHitLogSampleRate).toBe(0)
     expect(config.tenantPoolCacheMissLogSampleRate).toBe(0)
+    expect(config.databasePoolDrainTimeout).toBe(30_000)
+  })
+
+  test('parses database pool drain timeout in milliseconds', async () => {
+    setConfigEnv({
+      DATABASE_POOL_DRAIN_TIMEOUT: '45000',
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.databasePoolDrainTimeout).toBe(45_000)
+  })
+
+  test.each([
+    '0',
+    '-1',
+    'nope',
+  ])('falls back to the default database pool drain timeout for %s', async (timeout) => {
+    setConfigEnv({
+      DATABASE_POOL_DRAIN_TIMEOUT: timeout,
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.databasePoolDrainTimeout).toBe(30_000)
   })
 
   test('parses tenant pool cache ttl in milliseconds', async () => {

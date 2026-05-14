@@ -9,20 +9,25 @@ describe('Storage operation helpers', () => {
     currentOperation?: string
   ): Promise<boolean> {
     const db = tHelper.database.connection.pool.acquire()
-    const tnx = await db.transaction()
+    const tnx = await db.beginTransaction()
 
     try {
       if (currentOperation) {
-        await tnx.raw(`SELECT set_config('storage.operation', ?, true)`, [currentOperation])
+        await tnx.query(`SELECT set_config('storage.operation', $1, true)`, [currentOperation])
       }
 
-      const result = await tnx.raw(sql, bindings)
+      const result = await tnx.query(toPgPlaceholders(sql), bindings)
       return result.rows[0].allowed
     } finally {
       if (!tnx.isCompleted()) {
         await tnx.rollback()
       }
     }
+  }
+
+  function toPgPlaceholders(sql: string) {
+    let index = 0
+    return sql.replace(/\?/g, () => `$${++index}`)
   }
 
   it('matches canonical operations through short and full names', async () => {

@@ -13,11 +13,12 @@ mergeConfig({
 })
 
 import { encrypt, signJWT } from '@internal/auth'
+import { JWKSManagerStorePg } from '@internal/auth/jwks'
 import { TENANTS_JWKS_UPDATE_CHANNEL } from '@internal/auth/jwks/channels'
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
-import { JWKSManagerStoreKnex } from '@internal/auth/jwks/store-knex'
 import { TENANT_JWKS_CACHE_NAME } from '@internal/cache'
 import {
+  closeMultitenantPg,
   deleteTenantConfig,
   getJwtSecret,
   jwksManager,
@@ -27,9 +28,7 @@ import { cacheRequestsTotal } from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
-import { multitenantKnex } from '../internal/database/multitenant-db'
 import { adminApp, mockQueue } from './common'
-import { createMockKnexReturning } from './mocks/knex-mock'
 import { assertLogicalLookupMetrics } from './utils/cache-metrics'
 import { mockCreateLruCache } from './utils/cache-mock'
 import { waitForEventually } from './utils/promise'
@@ -158,7 +157,7 @@ afterEach(async () => {
 afterAll(async () => {
   await adminApp.close()
   await pubSub.close()
-  await multitenantKnex.destroy()
+  await closeMultitenantPg()
 })
 
 describe('Tenant jwks configs', () => {
@@ -610,13 +609,20 @@ describe('Tenant jwks configs', () => {
   })
 
   test('Storage.insert correctly throws if insert fails when not idempotent', async () => {
-    const storage = new JWKSManagerStoreKnex(createMockKnexReturning([]))
+    const storage = new JWKSManagerStorePg({
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+    } as never)
     const insert = storage.insert('tenant-id', 'encrypted', 'kind')
     await expect(insert).rejects.toThrow('failed to insert jwk')
   })
 
   test('Storage.insert correctly throws if fails to find conflicting row during idempotent insert', async () => {
-    const storage = new JWKSManagerStoreKnex(createMockKnexReturning({}))
+    const storage = new JWKSManagerStorePg({
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{}] }),
+    } as never)
     const insert = storage.insert('tenant-id', 'encrypted', 'kind', true)
     await expect(insert).rejects.toThrow('failed to find existing jwk on idempotent insert')
   })

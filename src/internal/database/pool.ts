@@ -262,9 +262,7 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
   rebalance(tenantId: string, data: PoolRebalanceOptions) {
     const pool = tenantPools.get(tenantId)
     if (pool) {
-      pool.rebalance({
-        clusterSize: data.clusterSize,
-      })
+      pool.rebalance({ ...data })
     }
   }
 

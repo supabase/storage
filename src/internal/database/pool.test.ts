@@ -704,6 +704,35 @@ describe('PoolManager cache lifecycle', () => {
     expect(recreated).not.toBe(first)
   })
 
+  test('passes all tenant rebalance options to the cached pool', async () => {
+    const poolModule = await loadPoolModule(10_000)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: Record<string, TestPool> = {}
+
+      protected newPool(settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created[settings.tenantId] = pool
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const pool = poolManager.getPool(createPoolSettings('tenant-rebalance-options'))
+
+    poolManager.rebalance('tenant-rebalance-options', {
+      clusterSize: 3,
+      maxConnections: 14,
+    })
+
+    expect(pool.rebalance).toHaveBeenCalledWith({
+      clusterSize: 3,
+      maxConnections: 14,
+    })
+
+    await poolManager.destroyAll()
+  })
+
   test('propagates explicit destroy failures without double-destroying pools', async () => {
     const poolModule = await loadPoolModule(10_000)
 

@@ -377,7 +377,9 @@ export class PgMetastore implements Metastore<PgTransaction> {
         INSERT INTO ${this.table('iceberg_namespaces')} (${columns.join(', ')})
         VALUES (${values.map((_, index) => `$${index + 1}`).join(', ')})
         ON CONFLICT (${conflictColumns.join(', ')})
-        DO UPDATE SET updated_at = now()
+        DO UPDATE SET
+          updated_at = now(),
+          metadata = ${this.table('iceberg_namespaces')}.metadata || EXCLUDED.metadata
         RETURNING *
       `,
       values
@@ -388,14 +390,7 @@ export class PgMetastore implements Metastore<PgTransaction> {
       throw ERRORS.NoSuchKey(params.name)
     }
 
-    return {
-      name: params.name,
-      catalog_id: params.bucketId,
-      bucket_name: params.bucketName,
-      metadata: params.metadata,
-      ...(this.ops.multiTenant ? { tenant_id: params.tenantId } : {}),
-      id: namespace.id,
-    }
+    return namespace
   }
 
   async listNamespaces(params: ListNamespaceParams): Promise<NamespaceIndex[]> {

@@ -77,10 +77,10 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
           tenantId: job.data.tenant.ref,
         })
 
-        if (catalog.deleted_at) {
+        if (!catalog.deleted_at) {
           throw ERRORS.UnableToEmptyBucket(
             job.data.catalogId,
-            `Catalog ${job.data.catalogId} is already being deleted`
+            `Catalog ${job.data.catalogId} is not marked for deletion`
           )
         }
 

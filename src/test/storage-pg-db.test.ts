@@ -1115,14 +1115,27 @@ describe('StoragePgDB bucket metadata', () => {
     })
 
     let releaseLock: (() => void) | undefined
+    let resolveLockReady: (() => void) | undefined
+    let rejectLockReady: ((error: unknown) => void) | undefined
+    const lockReady = new Promise<void>((resolve, reject) => {
+      resolveLockReady = resolve
+      rejectLockReady = reject
+    })
     const lockHolder = db.withTransaction(async (tx) => {
-      await tx.mustLockObject(bucketId, `${runId}-must-lock`)
+      try {
+        await tx.mustLockObject(bucketId, `${runId}-must-lock`)
+        resolveLockReady?.()
+      } catch (e) {
+        rejectLockReady?.(e)
+        throw e
+      }
       await new Promise<void>((resolve) => {
         releaseLock = resolve
       })
     })
 
     try {
+      await lockReady
       await expect(db.mustLockObject(bucketId, `${runId}-must-lock`)).rejects.toMatchObject({
         code: 'ResourceLocked',
       })

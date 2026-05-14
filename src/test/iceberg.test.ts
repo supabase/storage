@@ -161,7 +161,14 @@ describe('Iceberg Catalog', () => {
         createStorage(payload: unknown): Promise<typeof t.storage>
       },
       'createStorage'
-    ).mockResolvedValue(t.storage)
+    ).mockResolvedValue({
+      ...t.storage,
+      db: {
+        ...t.storage.db,
+        connection: t.storage.db.connection,
+        destroyConnection: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as typeof t.storage)
 
     await DeleteIcebergResources.handle({
       id: 'test-delete-iceberg-resources',

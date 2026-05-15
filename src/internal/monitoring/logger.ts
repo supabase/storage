@@ -104,12 +104,14 @@ export interface EventLog extends RequestLogContext {
   type: 'event'
   event: string
   payload: string
+  metadata?: string
   objectPath: string
   resources?: string[]
 }
 
 interface ErrorLog extends RequestLogContext {
   type: string
+  event?: string
   error?: Error | unknown
   metadata?: string
 }
@@ -121,7 +123,7 @@ interface InfoLog extends RequestLogContext {
 
 export const logSchema = {
   info: (logger: FastifyBaseLogger, message: string, log: InfoLog) => logger.info(log, message),
-  warning: (logger: FastifyBaseLogger, message: string, log: InfoLog | ErrorLog) =>
+  warning: (logger: FastifyBaseLogger, message: string, log: InfoLog | ErrorLog | EventLog) =>
     logger.warn(log, message),
   request: (logger: FastifyBaseLogger, message: string, log: RequestLog) => {
     if (!log.res) {

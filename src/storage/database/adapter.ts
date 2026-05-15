@@ -28,6 +28,25 @@ export interface FindObjectFilters {
   dontErrorOnEmpty?: boolean
 }
 
+export interface ObjectSignatureCursor {
+  bucketId: string
+  objectName: string
+}
+
+export interface ObjectSignatureRow {
+  bucket_id: string
+  name: string
+  version?: string | null
+}
+
+export interface ListObjectsForSignatureGenerationOptions {
+  bucketId?: string
+  objectNames?: string[]
+  force?: boolean
+  cursor?: ObjectSignatureCursor
+  limit: number
+}
+
 export interface TransactionOptions {
   isolation?: string
   retry?: number
@@ -184,6 +203,17 @@ export interface Database {
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Obj | undefined : Obj>
 
   searchObjects(bucketId: string, prefix: string, options: SearchObjectOption): Promise<Obj[]>
+
+  listObjectsForSignatureGeneration(
+    options: ListObjectsForSignatureGenerationOptions
+  ): Promise<ObjectSignatureRow[]>
+
+  updateObjectSignature(
+    bucketId: string,
+    objectName: string,
+    version: string | undefined,
+    signature: Buffer
+  ): Promise<boolean>
 
   healthcheck(): Promise<void>
 

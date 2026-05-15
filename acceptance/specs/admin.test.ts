@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { ListBucketsCommand } from '@aws-sdk/client-s3'
 import { describeAcceptance, getAcceptanceConfig, requireConfigValue } from '../support/config'
 import { AcceptanceHttpClient, createAdminClient } from '../support/http'
+import { uniqueBucketName, uniqueObjectKey } from '../support/resources'
 import { createAcceptanceS3Client } from '../support/s3'
 
 interface TenantSummary {
@@ -69,6 +70,10 @@ interface TenantHealthResponse {
 
 interface MessageResponse {
   message?: string
+}
+
+interface GenerateSignaturesResponse extends MessageResponse {
+  jobId?: string
 }
 
 interface TenantMigrationRunResponse {
@@ -501,6 +506,43 @@ describeAcceptance(
             })
             .catch(() => undefined)
         }
+      }
+    })
+
+    it('covers object signature generation scheduling for a scoped object name', async () => {
+      const config = getAcceptanceConfig()
+      const client = createAdminClient()
+      const headers = {
+        apikey: requireConfigValue(config.adminApiKey, 'ACCEPTANCE_ADMIN_API_KEY'),
+      }
+      const tenantId = await resolveTenantId(client, headers)
+      const bucketName = uniqueBucketName('sig')
+      const objectKey = uniqueObjectKey('sig')
+      const expectScheduling = config.target === 'local' && process.env.PG_QUEUE_ENABLE === 'true'
+
+      const scheduled = await client.request<GenerateSignaturesResponse>(
+        'POST',
+        `/tenants/${tenantId}/storage/generate-signatures`,
+        {
+          body: {
+            bucketId: bucketName,
+            force: true,
+            objectNames: [objectKey],
+          },
+          expectedStatus: expectScheduling ? 200 : [200, 400],
+          headers,
+        }
+      )
+
+      if (scheduled.status === 200) {
+        expect(scheduled.json?.message).toBe('Object signature generation scheduled')
+        expect(typeof scheduled.json?.jobId).toBe('string')
+        expect(scheduled.json?.jobId?.length).toBeGreaterThan(0)
+      } else {
+        expect(expectScheduling).toBe(false)
+        expect(scheduled.json?.message).toMatch(
+          /^(Queue is not enabled|Tenant migrations must include add-objects-signature before generating signatures)$/
+        )
       }
     })
   }

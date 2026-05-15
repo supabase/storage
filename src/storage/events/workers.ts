@@ -7,6 +7,10 @@ import { Webhook } from './lifecycle/webhook'
 import { ResetMigrationsOnTenant } from './migrations/reset-migrations'
 import { RunMigrationsOnTenants } from './migrations/run-migrations'
 import { BackupObjectEvent } from './objects/backup-object'
+import {
+  GenerateObjectSignature,
+  GenerateObjectSignatures,
+} from './objects/generate-object-signature'
 import { ObjectAdminDelete } from './objects/object-admin-delete'
 import { ObjectAdminDeleteAllBefore } from './objects/object-admin-delete-all-before'
 import { MoveJobs } from './pgboss/move-jobs'
@@ -19,6 +23,8 @@ export function registerWorkers() {
   Queue.register(ObjectAdminDeleteAllBefore)
   Queue.register(RunMigrationsOnTenants)
   Queue.register(BackupObjectEvent)
+  Queue.register(GenerateObjectSignatures)
+  Queue.register(GenerateObjectSignature)
   Queue.register(ResetMigrationsOnTenant)
   Queue.register(JwksCreateSigningSecret)
   Queue.register(JwksRollUrlSigningKey)

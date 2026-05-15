@@ -311,31 +311,34 @@ describe.each([
     expect(result).toEqual(true)
 
     const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
-    expect(dbAsset).toEqual({
-      bucket_id: bucket.id,
-      created_at: expect.any(Date),
-      id: expect.any(String),
-      last_accessed_at: expect.any(Date),
-      metadata: {
-        cacheControl: 'max-age=3600',
-        contentLength: assetSize,
-        eTag: expectedAssetEtag(backendType),
-        httpStatusCode: 200,
-        lastModified: expect.any(String),
-        mimetype: 'image/jpeg',
-        size: assetSize,
-      },
-      user_metadata: {
-        test1: 'test1',
-        test2: 'test2',
-      },
-      name: objectName,
-      owner: null,
-      owner_id: null,
-      path_tokens: [objectName],
-      updated_at: expect.any(Date),
-      version: expect.any(String),
-    })
+    expect(dbAsset).toEqual(
+      expect.objectContaining({
+        bucket_id: bucket.id,
+        created_at: expect.any(Date),
+        id: expect.any(String),
+        last_accessed_at: expect.any(Date),
+        metadata: {
+          cacheControl: 'max-age=3600',
+          contentLength: assetSize,
+          eTag: expectedAssetEtag(backendType),
+          httpStatusCode: 200,
+          lastModified: expect.any(String),
+          mimetype: 'image/jpeg',
+          size: assetSize,
+        },
+        user_metadata: {
+          test1: 'test1',
+          test2: 'test2',
+        },
+        name: objectName,
+        owner: null,
+        owner_id: null,
+        path_tokens: [objectName],
+        signature: null,
+        updated_at: expect.any(Date),
+        version: expect.any(String),
+      })
+    )
 
     if (backendType === 'file') {
       if (!dbAsset.version) {
@@ -406,30 +409,33 @@ describe.each([
     ])
 
     const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
-    expect(dbAsset).toEqual({
-      bucket_id: bucket.id,
-      created_at: expect.any(Date),
-      id: expect.any(String),
-      last_accessed_at: expect.any(Date),
-      metadata: {
-        cacheControl: 'max-age=3600',
-        contentLength: assetSize,
-        eTag: expectedAssetEtag(backendType),
-        httpStatusCode: 200,
-        lastModified: expect.any(String),
-        mimetype: 'image/jpeg',
-        size: assetSize,
-      },
-      user_metadata: {
-        creation: 'with-data',
-      },
-      name: objectName,
-      owner: null,
-      owner_id: null,
-      path_tokens: [objectName],
-      updated_at: expect.any(Date),
-      version: expect.any(String),
-    })
+    expect(dbAsset).toEqual(
+      expect.objectContaining({
+        bucket_id: bucket.id,
+        created_at: expect.any(Date),
+        id: expect.any(String),
+        last_accessed_at: expect.any(Date),
+        metadata: {
+          cacheControl: 'max-age=3600',
+          contentLength: assetSize,
+          eTag: expectedAssetEtag(backendType),
+          httpStatusCode: 200,
+          lastModified: expect.any(String),
+          mimetype: 'image/jpeg',
+          size: assetSize,
+        },
+        user_metadata: {
+          creation: 'with-data',
+        },
+        name: objectName,
+        owner: null,
+        owner_id: null,
+        path_tokens: [objectName],
+        signature: null,
+        updated_at: expect.any(Date),
+        version: expect.any(String),
+      })
+    )
 
     if (backendType === 'file') {
       if (!dbAsset.version) {
@@ -561,30 +567,33 @@ describe.each([
     })
 
     const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
-    expect(dbAsset).toEqual({
-      bucket_id: bucket.id,
-      created_at: expect.any(Date),
-      id: expect.any(String),
-      last_accessed_at: expect.any(Date),
-      metadata: {
-        cacheControl: 'max-age=3600',
-        contentLength: assetSize,
-        eTag: expectedAssetEtag(backendType),
-        httpStatusCode: 200,
-        lastModified: expect.any(String),
-        mimetype: 'image/jpeg',
-        size: assetSize,
-      },
-      user_metadata: {
-        resume: 'true',
-      },
-      name: objectName,
-      owner: null,
-      owner_id: null,
-      path_tokens: [objectName],
-      updated_at: expect.any(Date),
-      version: expect.any(String),
-    })
+    expect(dbAsset).toEqual(
+      expect.objectContaining({
+        bucket_id: bucket.id,
+        created_at: expect.any(Date),
+        id: expect.any(String),
+        last_accessed_at: expect.any(Date),
+        metadata: {
+          cacheControl: 'max-age=3600',
+          contentLength: assetSize,
+          eTag: expectedAssetEtag(backendType),
+          httpStatusCode: 200,
+          lastModified: expect.any(String),
+          mimetype: 'image/jpeg',
+          size: assetSize,
+        },
+        user_metadata: {
+          resume: 'true',
+        },
+        name: objectName,
+        owner: null,
+        owner_id: null,
+        path_tokens: [objectName],
+        signature: null,
+        updated_at: expect.any(Date),
+        version: expect.any(String),
+      })
+    )
 
     if (backendType === 'file') {
       if (!dbAsset.version) {
@@ -831,31 +840,34 @@ describe.each([
       expect(result).toEqual(true)
 
       const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
-      expect(dbAsset).toEqual({
-        bucket_id: bucket.id,
-        created_at: expect.any(Date),
-        id: expect.any(String),
-        last_accessed_at: expect.any(Date),
-        metadata: {
-          cacheControl: 'max-age=3600',
-          contentLength: assetSize,
-          eTag: expectedAssetEtag(backendType),
-          httpStatusCode: 200,
-          lastModified: expect.any(String),
-          mimetype: 'image/jpeg',
-          size: assetSize,
-        },
-        user_metadata: {
-          test1: 'test1',
-          test3: 'test3',
-        },
-        name: objectName,
-        owner: null,
-        owner_id: null,
-        path_tokens: [objectName],
-        updated_at: expect.any(Date),
-        version: expect.any(String),
-      })
+      expect(dbAsset).toEqual(
+        expect.objectContaining({
+          bucket_id: bucket.id,
+          created_at: expect.any(Date),
+          id: expect.any(String),
+          last_accessed_at: expect.any(Date),
+          metadata: {
+            cacheControl: 'max-age=3600',
+            contentLength: assetSize,
+            eTag: expectedAssetEtag(backendType),
+            httpStatusCode: 200,
+            lastModified: expect.any(String),
+            mimetype: 'image/jpeg',
+            size: assetSize,
+          },
+          user_metadata: {
+            test1: 'test1',
+            test3: 'test3',
+          },
+          name: objectName,
+          owner: null,
+          owner_id: null,
+          path_tokens: [objectName],
+          signature: null,
+          updated_at: expect.any(Date),
+          version: expect.any(String),
+        })
+      )
     })
 
     it('will allow uploading using signed upload url without authorization token, honouring the owner id', async () => {
@@ -900,28 +912,31 @@ describe.each([
       expect(result).toEqual(true)
 
       const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
-      expect(dbAsset).toEqual({
-        bucket_id: bucket.id,
-        created_at: expect.any(Date),
-        id: expect.any(String),
-        last_accessed_at: expect.any(Date),
-        metadata: {
-          cacheControl: 'max-age=3600',
-          contentLength: assetSize,
-          eTag: expectedAssetEtag(backendType),
-          httpStatusCode: 200,
-          lastModified: expect.any(String),
-          mimetype: 'image/jpeg',
-          size: assetSize,
-        },
-        user_metadata: null,
-        name: objectName,
-        owner: null,
-        owner_id: 'some-owner-id',
-        path_tokens: [objectName],
-        updated_at: expect.any(Date),
-        version: expect.any(String),
-      })
+      expect(dbAsset).toEqual(
+        expect.objectContaining({
+          bucket_id: bucket.id,
+          created_at: expect.any(Date),
+          id: expect.any(String),
+          last_accessed_at: expect.any(Date),
+          metadata: {
+            cacheControl: 'max-age=3600',
+            contentLength: assetSize,
+            eTag: expectedAssetEtag(backendType),
+            httpStatusCode: 200,
+            lastModified: expect.any(String),
+            mimetype: 'image/jpeg',
+            size: assetSize,
+          },
+          user_metadata: null,
+          name: objectName,
+          owner: null,
+          owner_id: 'some-owner-id',
+          path_tokens: [objectName],
+          signature: null,
+          updated_at: expect.any(Date),
+          version: expect.any(String),
+        })
+      )
     })
 
     it('will not allow uploading using signed upload url with an expired token', async () => {

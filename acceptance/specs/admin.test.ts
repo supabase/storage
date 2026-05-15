@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { ListBucketsCommand } from '@aws-sdk/client-s3'
+import { CreateBucketCommand, ListBucketsCommand, PutObjectCommand } from '@aws-sdk/client-s3'
 import { describeAcceptance, getAcceptanceConfig, requireConfigValue } from '../support/config'
 import { AcceptanceHttpClient, createAdminClient } from '../support/http'
-import { createAcceptanceS3Client } from '../support/s3'
+import { uniqueBucketName, uniqueObjectKey } from '../support/resources'
+import { cleanupS3Bucket, createAcceptanceS3Client } from '../support/s3'
 
 interface TenantSummary {
   fileSizeLimit?: number
@@ -69,6 +70,10 @@ interface TenantHealthResponse {
 
 interface MessageResponse {
   message?: string
+}
+
+interface GenerateSignaturesResponse extends MessageResponse {
+  jobId?: string
 }
 
 interface TenantMigrationRunResponse {
@@ -501,6 +506,102 @@ describeAcceptance(
             })
             .catch(() => undefined)
         }
+      }
+    })
+
+    it('covers object signature generation scheduling for an uploaded object', async () => {
+      const config = getAcceptanceConfig()
+      const client = createAdminClient()
+      const headers = {
+        apikey: requireConfigValue(config.adminApiKey, 'ACCEPTANCE_ADMIN_API_KEY'),
+      }
+      const tenantId = await resolveTenantId(client, headers)
+      const credentialDescription = `acceptance-signature-${config.runId}`
+      const credentialIds = new Set<string>()
+      const bucketName = uniqueBucketName('sig')
+      const objectKey = uniqueObjectKey('sig')
+      const expectScheduling = config.target === 'local' && process.env.PG_QUEUE_ENABLE === 'true'
+
+      let credentialClient: ReturnType<typeof createAcceptanceS3Client> | undefined
+      let bucketCreated = false
+
+      try {
+        const credential = await client.request<S3CredentialResponse>(
+          'POST',
+          `/s3/${tenantId}/credentials`,
+          {
+            body: {
+              claims: {
+                role: 'service_role',
+                sub: `acceptance-signature-${config.runId}`,
+              },
+              description: credentialDescription,
+            },
+            expectedStatus: 201,
+            headers,
+          }
+        )
+        const credentialId = credential.json?.id
+        expect(credentialId).toBeTruthy()
+        if (!credentialId) {
+          throw new Error('Admin S3 credential response did not include an id')
+        }
+        credentialIds.add(credentialId)
+
+        const accessKeyId = credential.json?.access_key
+        const secretAccessKey = credential.json?.secret_key
+        if (!accessKeyId || !secretAccessKey) {
+          throw new Error('Admin S3 credential response did not include access and secret keys')
+        }
+
+        credentialClient = createAcceptanceS3Client({
+          accessKeyId,
+          secretAccessKey,
+        })
+
+        await credentialClient.send(new CreateBucketCommand({ Bucket: bucketName }))
+        bucketCreated = true
+        await credentialClient.send(
+          new PutObjectCommand({
+            Body: `signature acceptance ${config.runId}`,
+            Bucket: bucketName,
+            ContentType: 'text/plain',
+            Key: objectKey,
+          })
+        )
+
+        const scheduled = await client.request<GenerateSignaturesResponse>(
+          'POST',
+          `/tenants/${tenantId}/storage/generate-signatures`,
+          {
+            body: {
+              bucketId: bucketName,
+              force: true,
+              objectNames: [objectKey],
+            },
+            expectedStatus: expectScheduling ? 200 : [200, 400],
+            headers,
+          }
+        )
+
+        if (scheduled.status === 200) {
+          expect(scheduled.json?.message).toBe('Object signature generation scheduled')
+          expect(typeof scheduled.json?.jobId).toBe('string')
+          expect(scheduled.json?.jobId?.length).toBeGreaterThan(0)
+        } else {
+          expect(expectScheduling).toBe(false)
+          expect(scheduled.json?.message).toMatch(
+            /^(Queue is not enabled|Tenant migrations must include add-objects-signature before generating signatures)$/
+          )
+        }
+      } finally {
+        if (credentialClient) {
+          if (bucketCreated) {
+            await cleanupS3Bucket(credentialClient, bucketName)
+          }
+          credentialClient.destroy()
+        }
+        await cleanupS3Credentials(client, tenantId, headers, credentialIds, credentialDescription)
       }
     })
   }

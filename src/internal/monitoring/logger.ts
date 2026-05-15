@@ -104,12 +104,14 @@ export interface EventLog extends RequestLogContext {
   type: 'event'
   event: string
   payload: string
+  metadata?: string
   objectPath: string
   resources?: string[]
 }
 
 interface ErrorLog extends RequestLogContext {
   type: string
+  event?: string
   error?: Error | unknown
   metadata?: string
 }

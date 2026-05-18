@@ -15,7 +15,9 @@ export class DBError extends StorageBackendError implements RenderableError {
     switch (pgError.code) {
       case '42501':
         return ERRORS.AccessDenied(
-          'new row violates row-level security policy',
+          pgError.message.includes('row-level security')
+            ? 'new row violates row-level security policy'
+            : pgError.message,
           pgError
         ).withMetadata({
           query,

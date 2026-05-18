@@ -10,6 +10,34 @@ describe('escapeLike', () => {
 })
 
 describe('DBError', () => {
+  test('preserves non-RLS permission failure messages', () => {
+    const error = createPgError('42501', 'permission denied for table objects')
+
+    expect(DBError.fromDBError(error, 'SELECT * FROM storage.objects')).toMatchObject({
+      code: 'AccessDenied',
+      message: 'permission denied for table objects',
+      originalError: error,
+      metadata: {
+        query: 'SELECT * FROM storage.objects',
+        code: '42501',
+      },
+    })
+  })
+
+  test('normalizes RLS permission failures', () => {
+    const error = createPgError('42501', 'new row violates row-level security policy for table')
+
+    expect(DBError.fromDBError(error, 'INSERT INTO storage.objects')).toMatchObject({
+      code: 'AccessDenied',
+      message: 'new row violates row-level security policy',
+      originalError: error,
+      metadata: {
+        query: 'INSERT INTO storage.objects',
+        code: '42501',
+      },
+    })
+  })
+
   test('maps aborted transactions to a typed database error', () => {
     const error = createPgError('25P02', 'current transaction is aborted')
 

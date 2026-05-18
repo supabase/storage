@@ -4,6 +4,7 @@ import { getConfig, normalizeDatabasePoolMode } from '../../config'
 import { PgTenantConnection } from './pg-connection'
 import { User } from './pool'
 import { getTenantConfig } from './tenant'
+import { getWattPostgresConnection, hasDatabaseWattMessaging } from './watt-connection'
 
 interface ConnectionOptions {
   host: string
@@ -32,7 +33,50 @@ export async function getPgPostgresConnection(
   })
 }
 
-export const getPostgresConnection = getPgPostgresConnection
+export async function getPostgresConnection(options: ConnectionOptions): Promise<PgTenantConnection> {
+  if (!hasDatabaseWattMessaging()) {
+    return getPgPostgresConnection(options)
+  }
+
+  validateConnectionOptions(options)
+  const { databaseMaxConnections } = getConfig()
+
+  return getWattPostgresConnection({
+    ...options,
+    dbUrl: '',
+    isExternalPool: false,
+    isSingleUse: false,
+    maxConnections: options.maxConnections ?? databaseMaxConnections,
+  })
+}
+
+function validateConnectionOptions(options: ConnectionOptions): void {
+  const { isMultitenant, requestXForwardedHostRegExp } = getConfig()
+
+  if (!isMultitenant) {
+    return
+  }
+
+  if (!options.tenantId) {
+    throw ERRORS.InvalidTenantId()
+  }
+
+  if (!requestXForwardedHostRegExp || options.disableHostCheck) {
+    return
+  }
+
+  const xForwardedHost = options.host
+
+  if (typeof xForwardedHost !== 'string') {
+    throw ERRORS.InvalidXForwardedHeader('X-Forwarded-Host header is not a string')
+  }
+
+  if (!new RegExp(requestXForwardedHostRegExp).test(xForwardedHost)) {
+    throw ERRORS.InvalidXForwardedHeader(
+      'X-Forwarded-Host header does not match regular expression'
+    )
+  }
+}
 
 async function getDbSettings(
   tenantId: string,

@@ -26,7 +26,7 @@ import {
   SearchObjectOption,
   TransactionOptions,
 } from './adapter'
-import { DBError, escapeLike, mapPgTransactionAbortedError } from './errors'
+import { DBError, mapPgTransactionAbortedError } from './errors'
 
 const { isMultitenant } = getConfig()
 // Scanner cache tables are unlogged scratch tables, not session temp tables.
@@ -35,6 +35,10 @@ const S3_KEYS_SCRATCH_TABLE_SCHEMA = 'storage'
 const S3_KEYS_SCRATCH_TABLE_PREFIX = '_s3_remote_keys_'
 const S3_KEYS_SCRATCH_TABLE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const S3_KEYS_SCRATCH_TABLE_PATTERN = `^${S3_KEYS_SCRATCH_TABLE_PREFIX}([0-9]{13})(?:_[A-Za-z0-9_]+)?$`
+
+export function escapeLike(str: string) {
+  return str.replace(/([%_])/g, '\\$1')
+}
 
 interface PgDatabaseOptions {
   tenantId: string

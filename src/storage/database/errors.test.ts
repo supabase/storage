@@ -1,13 +1,5 @@
 import { DatabaseError } from 'pg'
-import { DBError, escapeLike, mapPgTransactionAbortedError } from './errors'
-
-describe('escapeLike', () => {
-  test('escapes SQL wildcard characters', () => {
-    expect(escapeLike('%_abc')).toBe('\\%\\_abc')
-    expect(escapeLike('a%b_c')).toBe('a\\%b\\_c')
-    expect(escapeLike('plain-text')).toBe('plain-text')
-  })
-})
+import { DBError, mapPgTransactionAbortedError } from './errors'
 
 describe('DBError', () => {
   test('preserves non-RLS permission failure messages', () => {

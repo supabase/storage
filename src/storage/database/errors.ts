@@ -1,10 +1,6 @@
 import { ERRORS, RenderableError, StorageBackendError, StorageErrorOptions } from '@internal/errors'
 import { DatabaseError } from 'pg'
 
-export function escapeLike(str: string) {
-  return str.replace(/([%_])/g, '\\$1')
-}
-
 export class DBError extends StorageBackendError implements RenderableError {
   constructor(options: StorageErrorOptions) {
     super(options)

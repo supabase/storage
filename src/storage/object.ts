@@ -38,6 +38,7 @@ interface CopyObjectParams {
   destinationKey: string
   owner?: string
   copyMetadata?: boolean
+  preserveUnspecifiedFileMetadata?: boolean
   upsert?: boolean
   uploadType: 'standard' | 's3' | 'resumable'
   metadata?: {
@@ -292,6 +293,7 @@ export class ObjectStorage {
    * @param owner
    * @param conditions
    * @param copyMetadata
+   * @param preserveUnspecifiedFileMetadata
    * @param upsert
    * @param fileMetadata
    * @param userMetadata
@@ -302,7 +304,8 @@ export class ObjectStorage {
     destinationKey,
     owner,
     conditions,
-    copyMetadata,
+    copyMetadata = true,
+    preserveUnspecifiedFileMetadata,
     upsert,
     uploadType,
     metadata: fileMetadata,
@@ -330,12 +333,21 @@ export class ObjectStorage {
     )
 
     const baseMetadata = originObject.metadata || {}
-    const destinationMetadata = copyMetadata
-      ? baseMetadata
-      : {
-          ...baseMetadata,
-          ...(fileMetadata || {}),
-        }
+    const destinationMetadata = { ...baseMetadata }
+
+    if (!copyMetadata) {
+      if (!preserveUnspecifiedFileMetadata) {
+        delete destinationMetadata.cacheControl
+        delete destinationMetadata.mimetype
+      }
+
+      if (fileMetadata?.cacheControl !== undefined) {
+        destinationMetadata.cacheControl = fileMetadata.cacheControl
+      }
+      if (fileMetadata?.mimetype !== undefined) {
+        destinationMetadata.mimetype = fileMetadata.mimetype
+      }
+    }
 
     const destinationUserMetadata = copyMetadata ? originObject.user_metadata : userMetadata
 
@@ -356,7 +368,8 @@ export class ObjectStorage {
         s3DestinationKey,
         newVersion,
         destinationMetadata,
-        conditions
+        conditions,
+        { copyMetadata }
       )
 
       const metadata = await this.backend.headObject(

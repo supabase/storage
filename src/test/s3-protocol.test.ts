@@ -2524,6 +2524,9 @@ describe('S3 Protocol', () => {
           CopySource: `${bucketName}/test-copy-1.jpg`,
           ContentType: 'image/png',
           CacheControl: 'max-age=2009',
+          Metadata: {
+            color: 'blue',
+          },
           MetadataDirective: 'REPLACE',
         })
 
@@ -2538,6 +2541,33 @@ describe('S3 Protocol', () => {
         const headObj = await client.send(headObjectCommand)
         expect(headObj.ContentType).toBe('image/png')
         expect(headObj.CacheControl).toBe('max-age=2009')
+        expect(headObj.Metadata).toMatchObject({ color: 'blue' })
+      })
+
+      it('will not preserve omitted metadata when replacing it', async () => {
+        const bucketName = await createBucket(client)
+        await uploadFile(client, bucketName, 'test-copy-1.jpg', 1)
+
+        await client.send(
+          new CopyObjectCommand({
+            Bucket: bucketName,
+            Key: 'test-copied-2.jpg',
+            CopySource: `${bucketName}/test-copy-1.jpg`,
+            CacheControl: 'max-age=2009',
+            MetadataDirective: 'REPLACE',
+          })
+        )
+
+        const copiedObject = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: 'test-copied-2.jpg',
+          })
+        )
+        await copiedObject.Body?.transformToByteArray()
+
+        expect(copiedObject.CacheControl).toBe('max-age=2009')
+        expect(copiedObject.ContentType).toBe('binary/octet-stream')
       })
 
       it('will allow copying an object in the same path, just altering its metadata', async () => {

@@ -37,6 +37,7 @@ export default function CopyObject(s3Router: S3Router) {
     { schema: CopyObjectInput, operation: ROUTE_OPERATIONS.S3_COPY_OBJECT },
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+      const metadata = s3Protocol.parseMetadataHeaders(req.Headers)
 
       return s3Protocol.copyObject({
         Bucket: req.Params.Bucket,
@@ -44,6 +45,7 @@ export default function CopyObject(s3Router: S3Router) {
         CopySource: req.Headers['x-amz-copy-source'],
         ContentType: req.Headers['content-type'],
         CacheControl: req.Headers['cache-control'],
+        Metadata: metadata,
         MetadataDirective: req.Headers['x-amz-metadata-directive'] as MetadataDirective | undefined,
         Expires: req.Headers.expires ? new Date(req.Headers.expires) : undefined,
         ContentEncoding: req.Headers['content-encoding'],

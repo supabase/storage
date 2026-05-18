@@ -2,13 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { DatabaseError, QueryResult, QueryResultRow } from 'pg'
 import { TransactionOptions } from '@storage/database'
 import {
-  PgExecutor,
   PgPoolExecutor,
   PgPoolStrategy,
   PgQueryOptions,
   PgStatement,
   PgTenantConnection,
   PgTransaction,
+  PgTransactionalExecutor,
 } from './pg-connection'
 import { TenantConnectionOptions } from './pool'
 
@@ -75,14 +75,14 @@ class WattPgTenantConnection extends PgTenantConnection {
     statement: string | PgStatement,
     options?: PgQueryArgument
   ): Promise<QueryResult<T>> {
-    return (this.pool.acquire() as unknown as WattPgExecutor).query<T>(
+    return (this.pool.acquire() as unknown as DatabaseWattPgExecutor).query<T>(
       statement,
       mergeSignalOptions(options, this.wattAbortSignal)
     )
   }
 
   override async beginTransaction(options?: TransactionOptions): Promise<PgTransaction> {
-    return (this.pool.acquire() as unknown as WattPgExecutor).beginTransaction(options)
+    return (this.pool.acquire() as unknown as DatabaseWattPgExecutor).beginTransaction(options)
   }
 
   override asSuperUser(): PgTenantConnection {
@@ -108,11 +108,11 @@ class WattPgTenantConnection extends PgTenantConnection {
 }
 
 class WattPgPoolStrategy extends PgPoolStrategy {
-  private readonly executor: WattPgExecutor
+  private readonly executor: DatabaseWattPgExecutor
 
   constructor(options: TenantConnectionOptions) {
     super(options)
-    this.executor = new WattPgExecutor(options.tenantId, options.operation)
+    this.executor = new DatabaseWattPgExecutor(options.tenantId, options.operation)
   }
 
   override acquire(): PgPoolExecutor {
@@ -128,7 +128,7 @@ class WattPgPoolStrategy extends PgPoolStrategy {
   }
 }
 
-class WattPgExecutor extends PgPoolExecutor implements PgExecutor {
+export class DatabaseWattPgExecutor extends PgPoolExecutor implements PgTransactionalExecutor {
   private readonly destination: string
   private readonly operation?: () => string | undefined
 

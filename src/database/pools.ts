@@ -10,6 +10,13 @@ type PoolEntry = {
   pool: Pool
 }
 
+export type PoolRegistryStats = {
+  pools: number
+  totalConnections: number
+  inUseConnections: number
+  waitingRequests: number
+}
+
 export class PoolRegistry {
   private readonly config: DatabaseConfig
   private readonly pools = new Map<string, PoolEntry>()
@@ -67,16 +74,19 @@ export class PoolRegistry {
     }
   }
 
-  getStats(): { pools: number; totalConnections: number; waitingRequests: number } {
+  getStats(): PoolRegistryStats {
+    let inUseConnections = 0
     let totalConnections = 0
     let waitingRequests = 0
 
     for (const entry of this.pools.values()) {
+      inUseConnections += Math.max(entry.pool.totalCount - entry.pool.idleCount, 0)
       totalConnections += entry.pool.totalCount
       waitingRequests += entry.pool.waitingCount
     }
 
     return {
+      inUseConnections,
       pools: this.pools.size,
       totalConnections,
       waitingRequests,

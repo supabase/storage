@@ -11,6 +11,7 @@ export type DatabaseConfig = {
   idlePoolTimeoutMs: number
   lockIdleTimeoutMs: number
   lockMaxLifetimeMs: number
+  masterIsExternalPool: boolean
   masterConnectionString?: string
   masterMaxConnections: number
   maxActivePools: number
@@ -52,9 +53,11 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): DatabaseConfig
     ),
     lockIdleTimeoutMs: readPositiveInteger(env.DATABASE_WATT_LOCK_IDLE_TIMEOUT, 30_000),
     lockMaxLifetimeMs: readPositiveInteger(env.DATABASE_WATT_LOCK_MAX_LIFETIME, 120_000),
-    masterConnectionString: isTruthy(env.MULTI_TENANT) || isTruthy(env.IS_MULTITENANT)
-      ? env.DATABASE_MULTITENANT_POOL_URL || env.DATABASE_MULTITENANT_URL
-      : undefined,
+    masterConnectionString:
+      isTruthy(env.MULTI_TENANT) || isTruthy(env.IS_MULTITENANT)
+        ? env.DATABASE_MULTITENANT_POOL_URL || env.DATABASE_MULTITENANT_URL
+        : undefined,
+    masterIsExternalPool: Boolean(env.DATABASE_MULTITENANT_POOL_URL),
     masterMaxConnections: readPositiveInteger(
       env.DATABASE_MULTITENANT_MAX_CONNECTIONS || env.DATABASE_WATT_MASTER_MAX_CONNECTIONS,
       10

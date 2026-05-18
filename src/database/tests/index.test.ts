@@ -150,6 +150,38 @@ describe('database Watt application messaging handlers', () => {
     expect(clients[0].query).toHaveBeenCalledWith('SELECT 1', undefined)
   })
 
+  it('resolves the reserved master destination directly to the master database', async () => {
+    const { clients, handlers, pools } = await loadApp({
+      env: { DATABASE_MULTITENANT_URL: 'postgres://master', MULTI_TENANT: 'true' },
+    })
+
+    const response = await handlers.get('database.query')?.({
+      destination: 'master',
+      sql: 'SELECT 1',
+    })
+
+    expect(response).toEqual({ rowCount: 1, rows: [{ ok: true }] })
+    expect(pools[0].config).toMatchObject({ connectionString: 'postgres://master' })
+    expect(pools[0].queries).toHaveLength(0)
+    expect(clients[0].query).toHaveBeenCalledWith('SELECT 1', undefined)
+  })
+
+  it('returns DESTINATION_UNKNOWN for the master destination without master config', async () => {
+    const { handlers } = await loadApp({
+      env: { DATABASE_MULTITENANT_URL: '', MULTI_TENANT: 'true' },
+    })
+
+    const response = (await handlers.get('database.query')?.({
+      destination: 'master',
+      sql: 'SELECT 1',
+    })) as DatabaseErrorResponse
+
+    expect(response).toMatchObject({
+      code: 'DESTINATION_UNKNOWN',
+      destination: 'master',
+    })
+  })
+
   it('returns DESTINATION_UNKNOWN for missing tenants', async () => {
     const { handlers } = await loadApp({
       env: { DATABASE_MULTITENANT_URL: 'postgres://master', MULTI_TENANT: 'true' },
@@ -164,6 +196,27 @@ describe('database Watt application messaging handlers', () => {
     expect(response).toMatchObject({
       code: 'DESTINATION_UNKNOWN',
       destination: 'missing',
+    })
+  })
+
+  it('closes pools and rejects new work after shutdown starts', async () => {
+    const { app, handlers, pools } = await loadApp()
+
+    await handlers.get('database.query')?.({
+      destination: 'default',
+      sql: 'SELECT 1',
+    })
+    await app.close()
+
+    const response = (await handlers.get('database.query')?.({
+      destination: 'default',
+      sql: 'SELECT 1',
+    })) as DatabaseErrorResponse
+
+    expect(pools[0].ended).toBe(true)
+    expect(response).toMatchObject({
+      code: 'SHUTDOWN',
+      message: 'Database application is shutting down',
     })
   })
 })

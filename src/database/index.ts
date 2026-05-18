@@ -3,6 +3,7 @@ import { CancellationRegistry } from './cancellation.js'
 import { DestinationResolver } from './destinations.js'
 import { DatabaseWattError, toErrorResponse } from './errors.js'
 import { LockRegistry } from './locks.js'
+import { registerDatabaseWattMetrics } from './metrics.js'
 import { PoolRegistry, runQuery } from './pools.js'
 import { enforceResultLimits } from './result-limits.js'
 import { startTestServer, type DatabaseWattTestServer } from './test-server.js'
@@ -52,6 +53,7 @@ const stats = {
   rollbackTransaction: 0,
 }
 
+registerDatabaseWattMetrics(pools)
 registerHandlers()
 
 export async function close(): Promise<void> {

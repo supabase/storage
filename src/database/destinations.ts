@@ -20,6 +20,10 @@ export class DestinationResolver {
   }
 
   async resolve(destination: string): Promise<DestinationConfig> {
+    if (destination === 'master') {
+      return this.resolveMasterDestination()
+    }
+
     if (this.config.masterConnectionString) {
       return this.resolveTenant(destination)
     }
@@ -73,6 +77,20 @@ export class DestinationResolver {
       isExternalPool: Boolean(tenant.database_pool_url),
       maxConnections: tenant.max_connections || this.config.destinationMaxConnections,
       poolMode: tenant.database_pool_mode,
+    }
+  }
+
+  private resolveMasterDestination(): DestinationConfig {
+    const connectionString = this.config.masterConnectionString
+    if (!connectionString) {
+      throw new DatabaseWattError('DESTINATION_UNKNOWN', 'No multitenant database configured')
+    }
+
+    return {
+      connectionString,
+      id: 'master',
+      isExternalPool: this.config.masterIsExternalPool,
+      maxConnections: this.config.masterMaxConnections,
     }
   }
 

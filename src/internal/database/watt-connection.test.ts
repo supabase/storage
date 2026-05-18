@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getWattPostgresConnection, hasDatabaseWattMessaging } from './watt-connection'
+import {
+  DatabaseWattPgExecutor,
+  getWattPostgresConnection,
+  hasDatabaseWattMessaging,
+} from './watt-connection'
 import type { TenantConnectionOptions } from './pool'
 
 type SentMessage = {
@@ -138,6 +142,51 @@ describe('Watt PostgreSQL connection adapter', () => {
 
     expect(sent[0].data.destination).toBe('tenant-a')
     expect(connection.asSuperUser().role).toBe('service_role')
+  })
+
+  it('sends master executor queries through Database Watt messaging', async () => {
+    const { sent } = installMessagingMock({
+      'database.query': { rowCount: 1, rows: [{ id: 'master' }] },
+    })
+    const executor = new DatabaseWattPgExecutor('master', () => 'master-operation')
+
+    const result = await executor.query<{ id: string }>('SELECT current_database()')
+
+    expect(result.rows).toEqual([{ id: 'master' }])
+    expect(sent[0]).toMatchObject({
+      application: 'database',
+      message: 'database.query',
+      data: {
+        destination: 'master',
+        operationName: 'master-operation',
+        sql: 'SELECT current_database()',
+      },
+    })
+  })
+
+  it('runs master executor transactions through Database Watt messaging', async () => {
+    const { sent } = installMessagingMock({
+      'database.beginTransaction': { lockId: 'master-lock' },
+      'database.lockedQuery': { rowCount: 1, rows: [{ ok: true }] },
+      'database.commitTransaction': { committed: true },
+    })
+    const executor = new DatabaseWattPgExecutor('master')
+
+    const tx = await executor.beginTransaction({ isolation: 'serializable', readOnly: true })
+    await tx.query('SELECT 1')
+    await tx.commit()
+
+    expect(sent.map((message) => message.message)).toEqual([
+      'database.beginTransaction',
+      'database.lockedQuery',
+      'database.commitTransaction',
+    ])
+    expect(sent[0].data).toMatchObject({
+      destination: 'master',
+      isolationLevel: 'serializable',
+      readOnly: true,
+    })
+    expect(sent[1].data).toMatchObject({ lockId: 'master-lock', sql: 'SELECT 1' })
   })
 })
 

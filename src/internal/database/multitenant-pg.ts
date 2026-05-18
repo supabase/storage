@@ -3,6 +3,7 @@ import { Pool, PoolConfig } from 'pg'
 import { getConfig } from '../../config'
 import { PgPoolExecutor, PgTransactionalExecutor } from './pg-connection'
 import { getSslSettings } from './ssl'
+import { DatabaseWattPgExecutor, hasDatabaseWattMessaging } from './watt-connection'
 
 function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): PoolConfig {
   const {
@@ -156,14 +157,23 @@ function getPoolConfigSignature(config: PoolConfig): string {
 }
 
 const multitenantPgPoolOwner = new MultitenantPgPoolOwner()
+const multitenantWattExecutor = new DatabaseWattPgExecutor('master', () => 'multitenant-pg')
 
 export const multitenantPgExecutor: PgTransactionalExecutor = {
   async query(statement, options) {
-    return multitenantPgPoolOwner.getExecutor().query(statement, options)
+    return getMultitenantPgExecutor().query(statement, options)
   },
   async beginTransaction(options) {
-    return multitenantPgPoolOwner.getExecutor().beginTransaction(options)
+    return getMultitenantPgExecutor().beginTransaction(options)
   },
+}
+
+function getMultitenantPgExecutor(): PgTransactionalExecutor {
+  if (hasDatabaseWattMessaging()) {
+    return multitenantWattExecutor
+  }
+
+  return multitenantPgPoolOwner.getExecutor()
 }
 
 export function closeMultitenantPg(): Promise<void> {

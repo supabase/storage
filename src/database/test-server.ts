@@ -52,6 +52,63 @@ export async function startTestServer({ handlers, resetStats, stats }: DatabaseW
     )
   })
 
+  server.post('/master-query', async (_request, reply) => {
+    return sendDatabaseResult(
+      reply,
+      await handlers.handleQuery({
+        destination: 'master',
+        requestId: randomUUID(),
+        sql: 'SELECT 1 as value',
+      })
+    )
+  })
+
+  server.post('/master-transaction', async () => {
+    const tx = await beginTransaction(handlers, 'master')
+
+    try {
+      const result = await checkedLockedQuery<{ rows: Array<{ value: number }> }>(handlers, tx.lockId, {
+        text: 'SELECT 1 as value',
+      })
+      await checkedResult(handlers.handleCommitTransaction({ lockId: tx.lockId }))
+      return { value: result.rows[0]?.value }
+    } catch (error) {
+      await handlers.handleRollbackTransaction({ lockId: tx.lockId }).catch(() => undefined)
+      throw error
+    }
+  })
+
+  server.post('/missing-destination', async (_request, reply) => {
+    return sendDatabaseResult(
+      reply,
+      await handlers.handleQuery({
+        destination: `missing-${randomUUID()}`,
+        requestId: randomUUID(),
+        sql: 'SELECT 1',
+      })
+    )
+  })
+
+  server.post('/concurrent-queries', async (_request, reply) => {
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        handlers.handleQuery({
+          destination: testDestination(),
+          requestId: randomUUID(),
+          sql: 'SELECT 1 as value',
+        })
+      )
+    )
+
+    for (const result of results) {
+      if (isDatabaseError(result)) {
+        return sendDatabaseResult(reply, result)
+      }
+    }
+
+    return { count: results.length }
+  })
+
   server.post('/sleep', async (_request, reply) => {
     const requestId = randomUUID()
     const query = handlers.handleQuery({
@@ -114,20 +171,23 @@ export async function startTestServer({ handlers, resetStats, stats }: DatabaseW
   return server
 }
 
-async function beginTransaction(handlers: DatabaseWattHandlers): Promise<LockResponse> {
+async function beginTransaction(
+  handlers: DatabaseWattHandlers,
+  destination = testDestination()
+): Promise<LockResponse> {
   return checkedResult(
     handlers.handleBeginTransaction({
-      destination: testDestination(),
+      destination,
       requestId: randomUUID(),
     })
   )
 }
 
-async function checkedLockedQuery(
+async function checkedLockedQuery<T = unknown>(
   handlers: DatabaseWattHandlers,
   lockId: string,
   query: { text: string; values?: unknown[] }
-): Promise<unknown> {
+): Promise<T> {
   return checkedResult(
     handlers.handleLockedQuery({
       lockId,
@@ -141,7 +201,8 @@ async function checkedLockedQuery(
 async function checkedResult<T = unknown>(resultPromise: Promise<unknown>): Promise<T> {
   const result = await resultPromise
   if (isDatabaseError(result)) {
-    throw new Error(result.message)
+    const error = result as { message: string }
+    throw new Error(error.message)
   }
   return result as T
 }

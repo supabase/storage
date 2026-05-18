@@ -35,6 +35,16 @@ type SavepointResponse = {
   outerBucket: string
 }
 
+type QueryRowsResponse = {
+  rows: Array<{ value: number }>
+}
+
+type ErrorResponse = {
+  code: string
+  destination?: string
+  message: string
+}
+
 describeAcceptance(
   'Database Watt E2E',
   {
@@ -46,13 +56,53 @@ describeAcceptance(
       const databaseClient = createDatabaseWattClient()
       await resetDatabaseWattStats(databaseClient)
 
-      const response = await databaseClient.request<{ rows: Array<{ value: number }> }>('POST', '/query', {
+      const response = await databaseClient.request<QueryRowsResponse>('POST', '/query', {
         expectedStatus: 200,
       })
       const stats = await getDatabaseWattStats(databaseClient)
 
       expect(response.json?.rows[0]).toEqual({ value: 1 })
       expect(stats.query).toBeGreaterThanOrEqual(1)
+    })
+
+    it('executes master database queries through Database Watt', async () => {
+      const config = getAcceptanceConfig()
+      const databaseClient = createDatabaseWattClient()
+
+      if (!config.tenantId) {
+        expect(config.tenantId).toBeUndefined()
+        return
+      }
+
+      await resetDatabaseWattStats(databaseClient)
+      const response = await databaseClient.request<QueryRowsResponse>('POST', '/master-query', {
+        expectedStatus: 200,
+      })
+      const stats = await getDatabaseWattStats(databaseClient)
+
+      expect(response.json?.rows[0]).toEqual({ value: 1 })
+      expect(stats.query).toBeGreaterThanOrEqual(1)
+    })
+
+    it('executes master database transactions through Database Watt', async () => {
+      const config = getAcceptanceConfig()
+      const databaseClient = createDatabaseWattClient()
+
+      if (!config.tenantId) {
+        expect(config.tenantId).toBeUndefined()
+        return
+      }
+
+      await resetDatabaseWattStats(databaseClient)
+      const response = await databaseClient.request<{ value: number }>('POST', '/master-transaction', {
+        expectedStatus: 200,
+      })
+      const stats = await getDatabaseWattStats(databaseClient)
+
+      expect(response.json).toEqual({ value: 1 })
+      expect(stats.beginTransaction).toBeGreaterThanOrEqual(1)
+      expect(stats.lockedQuery).toBeGreaterThanOrEqual(1)
+      expect(stats.commitTransaction).toBeGreaterThanOrEqual(1)
     })
 
     it('commits REST object changes through Database Watt transactions', async () => {
@@ -179,6 +229,37 @@ describeAcceptance(
 
       expect(response.status).toBe(500)
       expect(stats.cancel).toBeGreaterThanOrEqual(1)
+    })
+
+    it('returns typed destination errors through the Database Watt worker', async () => {
+      const config = getAcceptanceConfig()
+      const databaseClient = createDatabaseWattClient()
+
+      if (!config.tenantId) {
+        expect(config.tenantId).toBeUndefined()
+        return
+      }
+
+      await resetDatabaseWattStats(databaseClient)
+      const response = await databaseClient.request<ErrorResponse>('POST', '/missing-destination', {
+        expectedStatus: 500,
+      })
+
+      expect(response.json).toMatchObject({ code: 'DESTINATION_UNKNOWN' })
+      expect(response.json?.destination).toEqual(expect.stringMatching(/^missing-/))
+    })
+
+    it('handles concurrent Database Watt query load', async () => {
+      const databaseClient = createDatabaseWattClient()
+      await resetDatabaseWattStats(databaseClient)
+
+      const response = await databaseClient.request<{ count: number }>('POST', '/concurrent-queries', {
+        expectedStatus: 200,
+      })
+      const stats = await getDatabaseWattStats(databaseClient)
+
+      expect(response.json).toEqual({ count: 5 })
+      expect(stats.query).toBeGreaterThanOrEqual(5)
     })
 
     it('exercises multitenant destination resolution when the target is multitenant', async () => {

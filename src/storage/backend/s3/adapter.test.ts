@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { CopyObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
@@ -218,6 +218,86 @@ describe('S3Backend', () => {
       expect(getSignedUrl).toHaveBeenCalledWith(privateAssetClient, privateAssetCommand, {
         expiresIn: 600,
       })
+    })
+  })
+
+  describe('copyObject', () => {
+    test('uses REPLACE metadata directive when metadata should be overwritten', async () => {
+      mockSend.mockResolvedValue({
+        CopyObjectResult: {
+          ETag: '"copy-etag"',
+          LastModified: new Date('2026-05-18T00:00:00Z'),
+        },
+        $metadata: {
+          httpStatusCode: 200,
+        },
+      })
+
+      const backend = createBackend()
+      await backend.copyObject(
+        'test-bucket',
+        'source-key',
+        'source-version',
+        'destination-key',
+        'destination-version',
+        {
+          cacheControl: 'max-age=999',
+          mimetype: 'image/gif',
+        },
+        undefined,
+        { copyMetadata: false }
+      )
+
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      expect(mockSend.mock.calls[0][0]).toBeInstanceOf(CopyObjectCommand)
+      const input = mockSend.mock.calls[0][0].input
+      expect(input).toMatchObject({
+        Bucket: 'test-bucket',
+        Key: withOptionalVersion('destination-key', 'destination-version'),
+        CacheControl: 'max-age=999',
+        ContentType: 'image/gif',
+        MetadataDirective: 'REPLACE',
+      })
+      expect(input.Metadata).toBeUndefined()
+    })
+
+    test('uses COPY metadata directive when metadata should be preserved', async () => {
+      mockSend.mockResolvedValue({
+        CopyObjectResult: {
+          ETag: '"copy-etag"',
+          LastModified: new Date('2026-05-18T00:00:00Z'),
+        },
+        $metadata: {
+          httpStatusCode: 200,
+        },
+      })
+
+      const backend = createBackend()
+      await backend.copyObject(
+        'test-bucket',
+        'source-key',
+        'source-version',
+        'destination-key',
+        'destination-version',
+        {
+          cacheControl: 'max-age=999',
+          mimetype: 'image/gif',
+        },
+        undefined,
+        { copyMetadata: true }
+      )
+
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      expect(mockSend.mock.calls[0][0]).toBeInstanceOf(CopyObjectCommand)
+      const input = mockSend.mock.calls[0][0].input
+      expect(input).toMatchObject({
+        Bucket: 'test-bucket',
+        Key: withOptionalVersion('destination-key', 'destination-version'),
+        MetadataDirective: 'COPY',
+      })
+      expect(input.CacheControl).toBeUndefined()
+      expect(input.ContentType).toBeUndefined()
+      expect(input.Metadata).toBeUndefined()
     })
   })
 

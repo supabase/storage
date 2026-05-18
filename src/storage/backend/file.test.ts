@@ -310,6 +310,112 @@ describe('FileBackend traversal protection', () => {
   })
 })
 
+describe('FileBackend copy metadata options', () => {
+  let tmpDir: string
+  let backend: FileBackend
+  let originalStoragePath: string | undefined
+  let originalFilePath: string | undefined
+  let originalPlatformDescriptor: PropertyDescriptor | undefined
+
+  beforeEach(async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
+    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
+    originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+    })
+    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
+    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
+    getConfig({ reload: true })
+    backend = new FileBackend()
+
+    await backend.uploadObject(
+      'bucket',
+      'source.txt',
+      'v1',
+      Readable.from('source-body'),
+      'text/plain',
+      'max-age=60'
+    )
+
+    const xattrGet = xattr.get as unknown as Mock
+    xattrGet.mockImplementation((_file: string, attribute: string) => {
+      if (attribute === 'user.supabase.cache-control') {
+        return Promise.resolve(Buffer.from('max-age=60'))
+      }
+      if (attribute === 'user.supabase.content-type') {
+        return Promise.resolve(Buffer.from('text/plain'))
+      }
+      return Promise.resolve(undefined)
+    })
+  })
+
+  afterEach(async () => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor)
+    }
+    if (originalStoragePath === undefined) {
+      delete process.env.STORAGE_FILE_BACKEND_PATH
+    } else {
+      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
+    }
+    if (originalFilePath === undefined) {
+      delete process.env.FILE_STORAGE_BACKEND_PATH
+    } else {
+      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
+    }
+    await removePath(tmpDir)
+  })
+
+  it('preserves source metadata when copyMetadata is true', async () => {
+    const setMetadataSpy = vi.spyOn(backend, 'setFileMetadata')
+
+    await backend.copyObject(
+      'bucket',
+      'source.txt',
+      'v1',
+      'copy-preserve.txt',
+      undefined,
+      {
+        cacheControl: 'max-age=999',
+        mimetype: 'image/gif',
+      },
+      undefined,
+      { copyMetadata: true }
+    )
+
+    expect(setMetadataSpy).toHaveBeenCalledWith(expect.any(String), {
+      cacheControl: 'max-age=60',
+      contentType: 'text/plain',
+    })
+  })
+
+  it('overwrites file metadata when copyMetadata is false', async () => {
+    const setMetadataSpy = vi.spyOn(backend, 'setFileMetadata')
+
+    await backend.copyObject(
+      'bucket',
+      'source.txt',
+      'v1',
+      'copy-replace.txt',
+      undefined,
+      {
+        cacheControl: 'max-age=999',
+        mimetype: 'image/gif',
+      },
+      undefined,
+      { copyMetadata: false }
+    )
+
+    expect(setMetadataSpy).toHaveBeenCalledWith(expect.any(String), {
+      cacheControl: 'max-age=999',
+      contentType: 'image/gif',
+    })
+  })
+})
+
 describe('FileBackend lastModified', () => {
   let tmpDir: string
   let backend: FileBackend

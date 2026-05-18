@@ -12,6 +12,7 @@ import { getConfig } from '../../config'
 import { parseRangeHeader } from '../range'
 import {
   BrowserCacheHeaders,
+  CopyObjectOptions,
   ObjectMetadata,
   ObjectResponse,
   StorageBackendAdapter,
@@ -244,8 +245,15 @@ export class FileBackend implements StorageBackendAdapter {
     source: string,
     version: string | undefined,
     destination: string,
-    destinationVersion: string,
-    metadata: { cacheControl?: string; contentType?: string }
+    destinationVersion: string | undefined,
+    metadata?: { cacheControl?: string; contentType?: string; mimetype?: string },
+    _conditions?: {
+      ifMatch?: string
+      ifNoneMatch?: string
+      ifModifiedSince?: Date
+      ifUnmodifiedSince?: Date
+    },
+    options?: CopyObjectOptions
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     const srcFile = this.resolveSecurePath(withOptionalVersion(`${bucket}/${source}`, version))
     const destFile = this.resolveSecurePath(
@@ -256,7 +264,16 @@ export class FileBackend implements StorageBackendAdapter {
     await fsp.copyFile(srcFile, destFile)
 
     const originalMetadata = await this.getFileMetadata(srcFile)
-    await this.setFileMetadata(destFile, Object.assign({}, originalMetadata, metadata))
+    // Moves call backend copy without metadata; preserve source metadata for that path.
+    const copyMetadata = options?.copyMetadata ?? !metadata
+    const destinationMetadata = copyMetadata
+      ? originalMetadata
+      : {
+          ...originalMetadata,
+          cacheControl: metadata?.cacheControl ?? originalMetadata.cacheControl,
+          contentType: metadata?.contentType ?? metadata?.mimetype ?? originalMetadata.contentType,
+        }
+    await this.setFileMetadata(destFile, destinationMetadata)
 
     const fileStat = await fsp.lstat(destFile)
     const eTag = await this.etag(destFile, fileStat)

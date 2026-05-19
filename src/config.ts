@@ -51,6 +51,7 @@ export interface JwksConfig {
 }
 
 type StorageConfigType = {
+  serviceName: string
   isProduction: boolean
   version: string
   numWorkers: number
@@ -264,6 +265,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
 
   config = {
+    serviceName: getOptionalConfigFromEnv('SERVICE_NAME') || 'storage_api',
     numWorkers: envNumber(getOptionalConfigFromEnv('WORKERS_NUM'), 1),
     isProduction: process.env.NODE_ENV === 'production',
     exposeDocs: getOptionalConfigFromEnv('EXPOSE_DOCS') !== 'false',

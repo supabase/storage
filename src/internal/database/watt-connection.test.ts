@@ -1,16 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   DatabaseWattPgExecutor,
   getWattPostgresConnection,
-  hasDatabaseWattMessaging,
+  hasWattMessaging,
 } from './watt-connection'
+import { installWattMessagingMock } from '../../test/utils/watt-messaging'
 import type { TenantConnectionOptions } from './pool'
-
-type SentMessage = {
-  application: string
-  data: Record<string, unknown>
-  message: string
-}
 
 const originalPlatformatic = (globalThis as typeof globalThis & { platformatic?: unknown }).platformatic
 
@@ -21,14 +16,14 @@ afterEach(() => {
 describe('Watt PostgreSQL connection adapter', () => {
   it('detects Database Watt messaging availability', () => {
     delete (globalThis as typeof globalThis & { platformatic?: unknown }).platformatic
-    expect(hasDatabaseWattMessaging()).toBe(false)
+    expect(hasWattMessaging()).toBe(false)
 
-    installMessagingMock()
-    expect(hasDatabaseWattMessaging()).toBe(true)
+    installWattMessagingMock()
+    expect(hasWattMessaging()).toBe(true)
   })
 
   it('sends stateless queries through Database Watt messaging', async () => {
-    const { sent } = installMessagingMock({
+    const { sent } = installWattMessagingMock({
       'database.query': { rowCount: 1, rows: [{ id: 1 }] },
     })
     const connection = await getWattPostgresConnection(createConnectionOptions())
@@ -51,7 +46,7 @@ describe('Watt PostgreSQL connection adapter', () => {
   })
 
   it('runs transaction lifecycle through lock-bound messages', async () => {
-    const { sent } = installMessagingMock({
+    const { sent } = installWattMessagingMock({
       'database.beginTransaction': { lockId: 'lock-a' },
       'database.lockedQuery': { rowCount: 1, rows: [{ ok: true }] },
       'database.commitTransaction': { committed: true },
@@ -78,7 +73,7 @@ describe('Watt PostgreSQL connection adapter', () => {
   })
 
   it('rolls back transactions through Database Watt messaging', async () => {
-    const { sent } = installMessagingMock({
+    const { sent } = installWattMessagingMock({
       'database.beginTransaction': { lockId: 'lock-a' },
       'database.rollbackTransaction': { rolledBack: true },
     })
@@ -95,7 +90,7 @@ describe('Watt PostgreSQL connection adapter', () => {
   })
 
   it('maps PostgreSQL error responses back to pg DatabaseError', async () => {
-    installMessagingMock({
+    installWattMessagingMock({
       'database.query': {
         code: 'POSTGRES_ERROR',
         message: 'duplicate key value violates unique constraint',
@@ -112,7 +107,7 @@ describe('Watt PostgreSQL connection adapter', () => {
 
   it('sends explicit cancellation when an AbortSignal fires', async () => {
     let resolveQuery!: (value: unknown) => void
-    const { sent } = installMessagingMock({
+    const { sent } = installWattMessagingMock({
       'database.query':
         new Promise((resolve) => {
           resolveQuery = resolve
@@ -133,7 +128,7 @@ describe('Watt PostgreSQL connection adapter', () => {
   })
 
   it('creates superuser connections with service role credentials', async () => {
-    const { sent } = installMessagingMock({
+    const { sent } = installWattMessagingMock({
       'database.query': { rowCount: 1, rows: [] },
     })
     const connection = await getWattPostgresConnection(createConnectionOptions())
@@ -145,7 +140,7 @@ describe('Watt PostgreSQL connection adapter', () => {
   })
 
   it('sends master executor queries through Database Watt messaging', async () => {
-    const { sent } = installMessagingMock({
+    const { sent } = installWattMessagingMock({
       'database.query': { rowCount: 1, rows: [{ id: 'master' }] },
     })
     const executor = new DatabaseWattPgExecutor('master', () => 'master-operation')
@@ -165,7 +160,7 @@ describe('Watt PostgreSQL connection adapter', () => {
   })
 
   it('runs master executor transactions through Database Watt messaging', async () => {
-    const { sent } = installMessagingMock({
+    const { sent } = installWattMessagingMock({
       'database.beginTransaction': { lockId: 'master-lock' },
       'database.lockedQuery': { rowCount: 1, rows: [{ ok: true }] },
       'database.commitTransaction': { committed: true },
@@ -189,22 +184,6 @@ describe('Watt PostgreSQL connection adapter', () => {
     expect(sent[1].data).toMatchObject({ lockId: 'master-lock', sql: 'SELECT 1' })
   })
 })
-
-function installMessagingMock(responses: Record<string, unknown> = {}): { sent: SentMessage[] } {
-  const sent: SentMessage[] = []
-
-  ;(globalThis as typeof globalThis & { platformatic?: unknown }).platformatic = {
-    messaging: {
-      send: vi.fn(async (application: string, message: string, data: Record<string, unknown>) => {
-        sent.push({ application, data, message })
-        const response = responses[message]
-        return response instanceof Promise ? response : response
-      }),
-    },
-  }
-
-  return { sent }
-}
 
 function createConnectionOptions(): TenantConnectionOptions {
   return {

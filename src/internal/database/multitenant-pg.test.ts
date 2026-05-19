@@ -309,7 +309,7 @@ function mockWattConnectionModule(hasWattMessaging: boolean): void {
 
     return {
       DatabaseWattPgExecutor: MockDatabaseWattPgExecutor,
-      hasDatabaseWattMessaging: () => hasWattMessaging,
+      hasWattMessaging: () => hasWattMessaging,
     }
   })
 }

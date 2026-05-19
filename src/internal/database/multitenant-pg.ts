@@ -3,7 +3,7 @@ import { Pool, PoolConfig } from 'pg'
 import { getConfig } from '../../config'
 import { PgPoolExecutor, PgTransactionalExecutor } from './pg-connection'
 import { getSslSettings } from './ssl'
-import { DatabaseWattPgExecutor, hasDatabaseWattMessaging } from './watt-connection'
+import { DatabaseWattPgExecutor, hasWattMessaging } from './watt-connection'
 
 function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): PoolConfig {
   const {
@@ -169,7 +169,7 @@ export const multitenantPgExecutor: PgTransactionalExecutor = {
 }
 
 function getMultitenantPgExecutor(): PgTransactionalExecutor {
-  if (hasDatabaseWattMessaging()) {
+  if (hasWattMessaging()) {
     return multitenantWattExecutor
   }
 

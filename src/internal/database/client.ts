@@ -4,7 +4,7 @@ import { getConfig, normalizeDatabasePoolMode } from '../../config'
 import { PgTenantConnection } from './pg-connection'
 import { User } from './pool'
 import { getTenantConfig } from './tenant'
-import { getWattPostgresConnection, hasDatabaseWattMessaging } from './watt-connection'
+import { getWattPostgresConnection, hasWattMessaging } from './watt-connection'
 
 interface ConnectionOptions {
   host: string
@@ -36,7 +36,7 @@ export async function getPgPostgresConnection(
 export async function getPostgresConnection(
   options: ConnectionOptions
 ): Promise<PgTenantConnection> {
-  if (!hasDatabaseWattMessaging()) {
+  if (!hasWattMessaging()) {
     return getPgPostgresConnection(options)
   }
 

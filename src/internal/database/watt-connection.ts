@@ -40,7 +40,7 @@ type PgQueryArgument = PgQueryOptions | unknown[]
 
 const databaseApplicationId = 'database'
 
-export function hasDatabaseWattMessaging(): boolean {
+export function hasWattMessaging(): boolean {
   const platformatic = (globalThis as typeof globalThis & { platformatic?: PlatformaticGlobal })
     .platformatic
   return Boolean(platformatic?.messaging)
@@ -275,15 +275,17 @@ async function sendDatabaseMessage<T>(
 
   const requestId = typeof data.requestId === 'string' ? data.requestId : randomUUID()
   const payload = { ...data, requestId }
+  const request = getMessaging().send(databaseApplicationId, message, payload)
+
+  if (!signal) {
+    const response = await request
+    return parseDatabaseMessageResponse<T>(response)
+  }
+
   let abortListener: (() => void) | undefined
   let settled = false
 
-  const request = getMessaging().send(databaseApplicationId, message, payload)
   const abortPromise = new Promise<never>((_, reject) => {
-    if (!signal) {
-      return
-    }
-
     abortListener = () => {
       if (settled) {
         return
@@ -298,17 +300,21 @@ async function sendDatabaseMessage<T>(
 
   try {
     const response = await Promise.race([request, abortPromise])
-    if (isDatabaseErrorResponse(response)) {
-      throw toDatabaseError(response)
-    }
-
-    return response as T
+    return parseDatabaseMessageResponse<T>(response)
   } finally {
     settled = true
-    if (signal && abortListener) {
+    if (abortListener) {
       signal.removeEventListener('abort', abortListener)
     }
   }
+}
+
+function parseDatabaseMessageResponse<T>(response: unknown): T {
+  if (isDatabaseErrorResponse(response)) {
+    throw toDatabaseError(response)
+  }
+
+  return response as T
 }
 
 function getMessaging(): NonNullable<PlatformaticGlobal['messaging']> {

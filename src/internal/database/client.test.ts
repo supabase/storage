@@ -112,7 +112,7 @@ async function loadClient(options: LoadClientOptions = {}) {
   vi.doMock('./tenant', () => ({ getTenantConfig }))
   vi.doMock('./watt-connection', () => ({
     getWattPostgresConnection,
-    hasDatabaseWattMessaging: () => options.hasWattMessaging ?? false,
+    hasWattMessaging: () => options.hasWattMessaging ?? false,
   }))
 
   const client = await import('./client')

@@ -357,7 +357,8 @@ export class ObjectStorage {
         s3DestinationKey,
         newVersion,
         destinationMetadata,
-        conditions
+        conditions,
+        { copyMetadata }
       )
 
       const metadata = await this.backend.headObject(

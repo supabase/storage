@@ -1506,6 +1506,18 @@ describe('testing copy object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(String),
+      null,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({
+        cacheControl: 'no-cache',
+      }),
+      undefined,
+      { copyMetadata: true }
+    )
     const jsonResponse = response.json()
     expect(jsonResponse.Key).toBe(`bucket2/authenticated/${copiedKey}`)
 
@@ -1550,6 +1562,19 @@ describe('testing copy object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({
+        cacheControl: 'max-age=999',
+        mimetype: 'image/gif',
+      }),
+      undefined,
+      { copyMetadata: false }
+    )
     const parsedBody = JSON.parse(response.body)
 
     expect(parsedBody.Key).toBe(`bucket2/authenticated/${copiedKey}`)

@@ -27,6 +27,7 @@ import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
 import { getConfig } from '../../../config'
 import {
   BrowserCacheHeaders,
+  CopyObjectOptions,
   ObjectMetadata,
   ObjectResponse,
   StorageBackendAdapter,
@@ -366,9 +367,12 @@ export class S3Backend implements StorageBackendAdapter {
       ifNoneMatch?: string
       ifModifiedSince?: Date
       ifUnmodifiedSince?: Date
-    }
+    },
+    options?: CopyObjectOptions
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     try {
+      // Moves call backend copy without metadata; preserve source metadata for that path.
+      const copyMetadata = options?.copyMetadata ?? !metadata
       const command = new CopyObjectCommand({
         Bucket: bucket,
         CopySource: encodeURIComponent(`${bucket}/${withOptionalVersion(source, version)}`),
@@ -377,8 +381,9 @@ export class S3Backend implements StorageBackendAdapter {
         CopySourceIfNoneMatch: conditions?.ifNoneMatch,
         CopySourceIfModifiedSince: conditions?.ifModifiedSince,
         CopySourceIfUnmodifiedSince: conditions?.ifUnmodifiedSince,
-        ContentType: metadata?.mimetype,
-        CacheControl: metadata?.cacheControl,
+        ContentType: copyMetadata ? undefined : metadata?.mimetype,
+        CacheControl: copyMetadata ? undefined : metadata?.cacheControl,
+        MetadataDirective: copyMetadata ? 'COPY' : 'REPLACE',
       })
       const data = await this.client.send(command)
       return {

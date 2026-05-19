@@ -526,6 +526,9 @@ describeAcceptance(
             ContentType: 'application/json',
             CopySource: `${bucketName}/${keyA}`,
             Key: metadataReplacedKey,
+            Metadata: {
+              copied: 'yes',
+            },
             MetadataDirective: 'REPLACE',
           })
         )
@@ -534,6 +537,7 @@ describeAcceptance(
         )
         expect(metadataReplaced.CacheControl).toBe('max-age=91')
         expect(metadataReplaced.ContentType).toBe('application/json')
+        expect(metadataReplaced.Metadata).toMatchObject({ copied: 'yes' })
 
         const multipartCopy = await client.send(
           new CreateMultipartUploadCommand({

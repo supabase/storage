@@ -2082,6 +2082,9 @@ describe('S3 Protocol', () => {
           CopySource: `${bucketName}/test-copy-1.jpg`,
           ContentType: 'image/png',
           CacheControl: 'max-age=2009',
+          Metadata: {
+            color: 'blue',
+          },
           MetadataDirective: 'REPLACE',
         })
 
@@ -2096,6 +2099,7 @@ describe('S3 Protocol', () => {
         const headObj = await client.send(headObjectCommand)
         expect(headObj.ContentType).toBe('image/png')
         expect(headObj.CacheControl).toBe('max-age=2009')
+        expect(headObj.Metadata).toMatchObject({ color: 'blue' })
       })
 
       it('will allow copying an object in the same path, just altering its metadata', async () => {

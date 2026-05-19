@@ -24,6 +24,7 @@ interface BucketResponse {
 
 interface ObjectInfoResponse {
   bucket_id?: string
+  cache_control?: string | null
   metadata?: Record<string, unknown> | null
   name?: string
 }
@@ -731,6 +732,74 @@ describeAcceptance(
       } finally {
         await cleanupRestResources(sourceBucket, sourceKeys, client)
         await cleanupRestResources(destinationBucket, destinationKeys, client)
+      }
+    })
+
+    it('serves updated cache-control after copy overwrites object metadata', async () => {
+      const client = createRestClient()
+      const token = requireServiceKey()
+      const bucketName = uniqueBucketName('copycache')
+      const objectKey = uniqueObjectKey('copy-cache')
+      const initialCacheControl = 'max-age=60'
+      const updatedCacheControl = 'max-age=604800'
+      const payload = 'cache-control-copy-body'
+
+      try {
+        await createRestBucket(bucketName, { isPublic: false })
+
+        await client.request('POST', `/object/${bucketName}/${encodePathSegments(objectKey)}`, {
+          body: payload,
+          expectedStatus: 200,
+          headers: {
+            'cache-control': initialCacheControl,
+            'content-type': 'text/plain',
+            'x-upsert': 'true',
+          },
+          token,
+        })
+
+        const beforeCopy = await client.request(
+          'GET',
+          `/object/authenticated/${bucketName}/${encodePathSegments(objectKey)}`,
+          { expectedStatus: 200, token }
+        )
+        expect(beforeCopy.body).toBe(payload)
+        expect(beforeCopy.headers.get('cache-control')).toBe(initialCacheControl)
+
+        await client.request('POST', '/object/copy', {
+          body: {
+            bucketId: bucketName,
+            copyMetadata: false,
+            destinationKey: objectKey,
+            metadata: {
+              cacheControl: updatedCacheControl,
+              mimetype: 'text/plain',
+            },
+            sourceKey: objectKey,
+          },
+          expectedStatus: 200,
+          headers: {
+            'x-upsert': 'true',
+          },
+          token,
+        })
+
+        const afterCopy = await client.request(
+          'GET',
+          `/object/authenticated/${bucketName}/${encodePathSegments(objectKey)}`,
+          { expectedStatus: 200, token }
+        )
+        expect(afterCopy.body).toBe(payload)
+        expect(afterCopy.headers.get('cache-control')).toBe(updatedCacheControl)
+
+        const info = await client.request<ObjectInfoResponse>(
+          'GET',
+          `/object/info/authenticated/${bucketName}/${encodePathSegments(objectKey)}`,
+          { expectedStatus: 200, token }
+        )
+        expect(info.json?.cache_control).toBe(updatedCacheControl)
+      } finally {
+        await cleanupRestResources(bucketName, [objectKey], client)
       }
     })
 

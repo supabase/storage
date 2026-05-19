@@ -22,8 +22,8 @@
     },
     {
       "id": "database",
-      "path": "./src/database",
-      "config": "watt.json",
+      "path": ".",
+      "config": "watt.database.json",
       "workers": 1
     }
   ]

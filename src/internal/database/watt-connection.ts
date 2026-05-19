@@ -2,15 +2,16 @@ import { randomUUID } from 'node:crypto'
 import { DatabaseError, QueryResult, QueryResultRow } from 'pg'
 import { TransactionOptions } from '@storage/database'
 import {
-  PgPoolExecutor,
-  PgPoolStrategy,
   PgQueryOptions,
   PgStatement,
+  PgExecutor,
   PgTenantConnection,
+  PgTenantConnectionLike,
   PgTransaction,
+  PgTransactionLike,
   PgTransactionalExecutor,
 } from './pg-connection'
-import { TenantConnectionOptions } from './pool'
+import { searchPath, TenantConnectionOptions } from './pool'
 
 type PlatformaticGlobal = {
   messaging?: {
@@ -48,92 +49,97 @@ export function hasDatabaseWattMessaging(): boolean {
 export async function getWattPostgresConnection(
   options: TenantConnectionOptions
 ): Promise<PgTenantConnection> {
-  return new WattPgTenantConnection(options)
+  return new WattPgTenantConnection(options) as unknown as PgTenantConnection
 }
 
-class WattPgTenantConnection extends PgTenantConnection {
+class WattPgTenantConnection implements PgTenantConnectionLike {
+  readonly role: string
+  private readonly executor: DatabaseWattPgExecutor
   private wattAbortSignal?: AbortSignal
 
-  constructor(options: TenantConnectionOptions) {
-    const pool = new WattPgPoolStrategy(options)
-    super(pool, options)
+  constructor(private readonly options: TenantConnectionOptions) {
+    this.role = options.user.payload.role || 'anon'
+    this.executor = new DatabaseWattPgExecutor(options.tenantId, options.operation)
   }
 
-  override dispose(): Promise<void> {
+  dispose(): Promise<void> {
     return Promise.resolve()
   }
 
-  override setAbortSignal(signal: AbortSignal): void {
+  setAbortSignal(signal: AbortSignal): void {
     this.wattAbortSignal = signal
   }
 
-  override getAbortSignal(): AbortSignal | undefined {
+  getAbortSignal(): AbortSignal | undefined {
     return this.wattAbortSignal
   }
 
-  override async query<T extends QueryResultRow = QueryResultRow>(
+  async query<T extends QueryResultRow = QueryResultRow>(
     statement: string | PgStatement,
     options?: PgQueryArgument
   ): Promise<QueryResult<T>> {
-    return (this.pool.acquire() as unknown as DatabaseWattPgExecutor).query<T>(
-      statement,
-      mergeSignalOptions(options, this.wattAbortSignal)
-    )
+    return this.executor.query<T>(statement, mergeSignalOptions(options, this.wattAbortSignal))
   }
 
-  override async beginTransaction(options?: TransactionOptions): Promise<PgTransaction> {
-    return (this.pool.acquire() as unknown as DatabaseWattPgExecutor).beginTransaction(options)
+  async beginTransaction(options?: TransactionOptions): Promise<PgTransactionLike> {
+    return this.executor.beginTransaction(options)
   }
 
-  override asSuperUser(): PgTenantConnection {
+  asSuperUser(): PgTenantConnection {
     const connection = new WattPgTenantConnection({
-      ...this.getConnectionOptions(),
-      user: this.getConnectionOptions().superUser,
+      ...this.options,
+      user: this.options.superUser,
     })
 
     if (this.wattAbortSignal) {
       connection.setAbortSignal(this.wattAbortSignal)
     }
 
-    return connection
+    return connection as unknown as PgTenantConnection
   }
 
-  override async transaction(opts?: TransactionOptions): Promise<PgTransaction> {
-    return this.beginTransaction(opts)
+  async transaction(opts?: TransactionOptions): Promise<PgTransaction> {
+    return this.beginTransaction(opts) as Promise<PgTransaction>
   }
 
-  private getConnectionOptions(): TenantConnectionOptions {
-    return (this as unknown as { options: TenantConnectionOptions }).options
+  async setScope(tnx: PgExecutor): Promise<void> {
+    const headers = JSON.stringify(this.options.headers || {})
+    await tnx.query({
+      text: `
+        SELECT
+          set_config('role', $1, true),
+          set_config('request.jwt.claim.role', $2, true),
+          set_config('request.jwt', $3, true),
+          set_config('request.jwt.claim.sub', $4, true),
+          set_config('request.jwt.claims', $5, true),
+          set_config('request.headers', $6, true),
+          set_config('request.method', $7, true),
+          set_config('request.path', $8, true),
+          set_config('storage.operation', $9, true),
+          set_config('storage.allow_delete_query', 'true', true),
+          set_config('search_path', $10, true);
+      `,
+      values: [
+        this.role,
+        this.role,
+        this.options.user.jwt || '',
+        this.options.user.payload.sub || '',
+        JSON.stringify(this.options.user.payload),
+        headers,
+        this.options.method || '',
+        this.options.path || '',
+        this.options.operation?.() || '',
+        searchPath.join(','),
+      ],
+    })
   }
 }
 
-class WattPgPoolStrategy extends PgPoolStrategy {
-  private readonly executor: DatabaseWattPgExecutor
-
-  constructor(options: TenantConnectionOptions) {
-    super(options)
-    this.executor = new DatabaseWattPgExecutor(options.tenantId, options.operation)
-  }
-
-  override acquire(): PgPoolExecutor {
-    return this.executor
-  }
-
-  override async destroy(): Promise<void> {}
-
-  override rebalance(): void {}
-
-  override getPoolStats(): null {
-    return null
-  }
-}
-
-export class DatabaseWattPgExecutor extends PgPoolExecutor implements PgTransactionalExecutor {
+export class DatabaseWattPgExecutor implements PgTransactionalExecutor {
   private readonly destination: string
   private readonly operation?: () => string | undefined
 
   constructor(destination: string, operation?: () => string | undefined) {
-    super(createUnusedPool())
     this.destination = destination
     this.operation = operation
   }
@@ -166,11 +172,11 @@ export class DatabaseWattPgExecutor extends PgPoolExecutor implements PgTransact
       readOnly: options?.readOnly,
     })
 
-    return new WattPgTransaction(response.lockId, this.operation)
+    return new WattPgTransaction(response.lockId, this.operation) as unknown as PgTransaction
   }
 }
 
-class WattPgTransaction extends PgTransaction {
+class WattPgTransaction implements PgTransactionLike {
   private wattCompleted = false
   private readonly lockId: string
   private readonly operation?: () => string | undefined
@@ -179,16 +185,15 @@ class WattPgTransaction extends PgTransaction {
     lockId: string,
     operation?: () => string | undefined
   ) {
-    super(createUnusedPoolClient())
     this.lockId = lockId
     this.operation = operation
   }
 
-  override isCompleted(): boolean {
+  isCompleted(): boolean {
     return this.wattCompleted
   }
 
-  override async query<T extends QueryResultRow = QueryResultRow>(
+  async query<T extends QueryResultRow = QueryResultRow>(
     statement: string | PgStatement,
     options?: PgQueryArgument
   ): Promise<QueryResult<T>> {
@@ -213,7 +218,7 @@ class WattPgTransaction extends PgTransaction {
     return toPgQueryResult(response)
   }
 
-  override async commit(): Promise<void> {
+  async commit(): Promise<void> {
     if (this.wattCompleted) {
       return
     }
@@ -225,7 +230,7 @@ class WattPgTransaction extends PgTransaction {
     }
   }
 
-  override async rollback(): Promise<void> {
+  async rollback(): Promise<void> {
     if (this.wattCompleted) {
       return
     }
@@ -391,21 +396,4 @@ function toPgQueryResult<T extends QueryResultRow = QueryResultRow>(
     rowCount: response.rowCount,
     rows: response.rows,
   }
-}
-
-function createUnusedPoolClient(): never {
-  return {
-    query() {
-      throw new Error('Unused Watt transaction placeholder client')
-    },
-    release() {},
-  } as never
-}
-
-function createUnusedPool(): never {
-  return {
-    connect() {
-      throw new Error('Unused Watt executor placeholder pool')
-    },
-  } as never
 }

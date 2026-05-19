@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
 
+// Loopback-only HTTP surface used by Watt-managed acceptance tests. It is never
+// started unless DATABASE_WATT_TEST_SERVER=true and keeps Database Watt test
+// probes out of the public storage application.
+
 type DatabaseWattStats = {
   acquire: number
   beginTransaction: number

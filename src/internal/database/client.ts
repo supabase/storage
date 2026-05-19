@@ -33,7 +33,9 @@ export async function getPgPostgresConnection(
   })
 }
 
-export async function getPostgresConnection(options: ConnectionOptions): Promise<PgTenantConnection> {
+export async function getPostgresConnection(
+  options: ConnectionOptions
+): Promise<PgTenantConnection> {
   if (!hasDatabaseWattMessaging()) {
     return getPgPostgresConnection(options)
   }

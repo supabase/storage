@@ -238,7 +238,7 @@ if (otelMetricsEnabled) {
 
   if (prometheusMetricsEnabled) {
     prometheusExporter = new PrometheusExporter({
-      prefix: 'storage_api',
+      prefix: serviceName,
       preventServerStart: true,
       withResourceConstantLabels: /^(region|instance|metric\.version|service\.name)$/,
     })

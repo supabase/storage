@@ -27,6 +27,7 @@ const {
   otelMetricsTemporality,
   prometheusMetricsEnabled,
   region,
+  serviceName,
 } = getConfig()
 
 let prometheusExporter: PrometheusExporter | undefined
@@ -79,7 +80,7 @@ Object.keys(exporterHeaders).forEach((key) => {
 })
 
 const resource = resourceFromAttributes({
-  [ATTR_SERVICE_NAME]: 'storage_api',
+  [ATTR_SERVICE_NAME]: serviceName,
   [ATTR_SERVICE_VERSION]: version,
   'metric.version': '1',
   region,
@@ -237,9 +238,9 @@ if (otelMetricsEnabled) {
 
   if (prometheusMetricsEnabled) {
     prometheusExporter = new PrometheusExporter({
-      prefix: 'storage_api',
+      prefix: serviceName,
       preventServerStart: true,
-      withResourceConstantLabels: /^(region|instance|metric\.version)$/,
+      withResourceConstantLabels: /^(region|instance|metric\.version|service\.name)$/,
     })
     readers.push(prometheusExporter)
   }

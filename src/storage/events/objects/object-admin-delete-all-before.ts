@@ -72,14 +72,11 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
             moreObjectsToDelete = true
           }
 
-          await storage.db.withTransaction(async (trx) => {
-            const deleted = await trx.deleteObjects(
-              bucketId,
-              objects.map(({ id }) => id!),
-              'id'
-            )
-
-            if (deleted && deleted.length > 0) {
+          await storage.db.deleteObjectsWithCallbacks(
+            bucketId,
+            objects.map(({ id }) => id!),
+            'id',
+            async (deleted) => {
               const prefixes: string[] = []
 
               for (const { name, version } of deleted) {
@@ -104,7 +101,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
                 )
               )
             }
-          })
+          )
         }
 
         if (!moreObjectsToDelete) {

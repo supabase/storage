@@ -13,7 +13,7 @@ type CompleteUploadResult = Awaited<ReturnType<Uploader['completeUpload']>>
 function createUploader(
   backend: Partial<UploaderBackend> & Pick<UploaderBackend, 'uploadObject'>,
   db: Partial<UploaderDatabase> &
-    Pick<UploaderDatabase, 'tenantId' | 'reqId' | 'tenant' | 'testPermission'>
+    Pick<UploaderDatabase, 'tenantId' | 'reqId' | 'tenant' | 'testObjectPermission'>
 ) {
   return new Uploader(
     backend as UploaderBackend,
@@ -305,7 +305,7 @@ describe('fileUploadFromRequest', () => {
         tenantId: 'stub-tenant',
         reqId: 'req-1',
         tenant: () => ({ ref: 'stub-tenant', host: 'stub-tenant.local' }),
-        testPermission: vi.fn().mockResolvedValue(undefined),
+        testObjectPermission: vi.fn().mockResolvedValue(undefined),
       }
     )
 
@@ -344,16 +344,9 @@ describe('fileUploadFromRequest', () => {
       tenantId: 'stub-tenant',
       reqId: 'req-1',
       tenant: () => ({ ref: 'stub-tenant', host: 'stub-tenant.local' }),
-      testPermission: vi.fn(async (fn) =>
-        fn({
-          createObject: vi.fn(async (payload: { metadata?: { contentLength?: number } }) => {
-            capturedWrites.push(payload)
-          }),
-          upsertObject: vi.fn(async (payload: { metadata?: { contentLength?: number } }) => {
-            capturedWrites.push(payload)
-          }),
-        })
-      ),
+      testObjectPermission: vi.fn(async (payload) => {
+        capturedWrites.push(payload as { metadata?: { contentLength?: number } })
+      }),
     })
     const completeUploadSpy = vi.spyOn(uploader, 'completeUpload').mockResolvedValue({
       metadata: { eTag: '"etag"' },

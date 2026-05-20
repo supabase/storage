@@ -671,15 +671,11 @@ export class S3ProtocolHandler {
       }
     } catch (e) {
       try {
-        await this.storage.db.asSuperUser().withTransaction(async (db) => {
-          const multipart = await db.findMultipartUpload(UploadId, 'in_progress_size', {
-            forUpdate: true,
-          })
-
-          const diff = multipart.in_progress_size - ContentLength
-          const signature = this.uploadSignature({ in_progress_size: diff })
-          await db.updateMultipartUploadProgress(UploadId, diff, signature)
-        })
+        await this.storage.db
+          .asSuperUser()
+          .adjustMultipartUploadProgress(UploadId, -ContentLength, (progress) =>
+            this.uploadSignature({ in_progress_size: progress })
+          )
       } catch (e) {
         logSchema.error(logger, 'Failed to update multipart upload progress', {
           type: 's3',
@@ -1283,12 +1279,10 @@ export class S3ProtocolHandler {
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
 
-    const [destinationBucket] = await this.storage.db.asSuperUser().withTransaction(async (db) => {
-      return Promise.all([
-        db.findBucketById(Bucket, 'file_size_limit'),
-        db.findBucketById(sourceBucketName, 'id'),
-      ])
-    })
+    const [destinationBucket] = await Promise.all([
+      this.storage.db.asSuperUser().findBucketById(Bucket, 'file_size_limit'),
+      this.storage.db.asSuperUser().findBucketById(sourceBucketName, 'id'),
+    ])
     const maxFileSize = await getFileSizeLimit(
       this.storage.db.tenantId,
       destinationBucket?.file_size_limit
@@ -1392,31 +1386,19 @@ export class S3ProtocolHandler {
     contentLength: number,
     maxFileSize: number
   ) {
-    return this.storage.db.asSuperUser().withTransaction(async (db) => {
-      const multipart = await db.findMultipartUpload(
-        uploadId,
-        'in_progress_size,version,upload_signature,user_metadata,metadata',
-        {
-          forUpdate: true,
+    return this.storage.db.asSuperUser().prepareMultipartUploadPart(
+      uploadId,
+      contentLength,
+      maxFileSize,
+      (signature, storedProgress) => {
+        const { progress } = this.decryptUploadSignature(signature)
+
+        if (progress !== storedProgress) {
+          throw ERRORS.InvalidUploadSignature()
         }
-      )
-
-      const { progress } = this.decryptUploadSignature(multipart.upload_signature)
-
-      if (progress !== multipart.in_progress_size) {
-        throw ERRORS.InvalidUploadSignature()
-      }
-
-      const currentProgress = multipart.in_progress_size + contentLength
-
-      if (currentProgress > maxFileSize) {
-        throw ERRORS.EntityTooLarge()
-      }
-
-      const signature = this.uploadSignature({ in_progress_size: currentProgress })
-      await db.updateMultipartUploadProgress(uploadId, currentProgress, signature)
-      return multipart
-    })
+      },
+      (progress) => this.uploadSignature({ in_progress_size: progress })
+    )
   }
 }
 

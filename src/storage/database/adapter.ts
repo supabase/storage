@@ -66,12 +66,95 @@ export interface Database {
 
   asSuperUser(): Database
 
-  withTransaction<T>(
-    fn: (db: Database) => Promise<T>,
-    transactionOptions?: TransactionOptions
-  ): Promise<T>
+  testObjectPermission(
+    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & {
+      bucket_id: string
+      name: string
+      version: string
+    },
+    isUpsert?: boolean
+  ): Promise<void>
 
-  testPermission<T>(fn: (db: Database) => T | Promise<T>): Promise<Awaited<T>>
+  testMoveObjectPermission(
+    sourceBucketId: string,
+    sourceObjectName: string,
+    data: Pick<Obj, 'name' | 'bucket_id' | 'owner' | 'version'>
+  ): Promise<void>
+
+  testDeleteObjectPermission(bucketId: string, objectName: string): Promise<void>
+
+  createAnalyticsBucketWithEvent(
+    data: Pick<Bucket, 'name'>,
+    onCreate: (bucket: IcebergCatalog, tenant: { ref: string; host: string }) => Promise<void>
+  ): Promise<IcebergCatalog>
+
+  deleteEmptyBucket(bucketId: string): Promise<number>
+
+  deleteObjectWithLock(
+    bucketId: string,
+    objectName: string,
+    onDelete: (object: Obj, tenantId: string) => Promise<void>
+  ): Promise<Obj>
+
+  deleteObjectsWithCallbacks(
+    bucketId: string,
+    objectNames: string[],
+    by: keyof Obj,
+    onDelete: (
+      objects: Obj[],
+      tenant: { ref: string; host: string },
+      tenantId: string
+    ) => Promise<void>
+  ): Promise<Obj[]>
+
+  completeUploadTransaction(
+    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & {
+      bucket_id: string
+      name: string
+      version: string
+    },
+    onComplete: (newObject: Obj, currentObject: Obj | undefined, isNew: boolean) => Promise<void>
+  ): Promise<{ obj: Obj; isNew: boolean }>
+
+  upsertCopyDestination(
+    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & {
+      bucket_id: string
+      name: string
+      version: string
+    },
+    onReplaced: (object: Obj) => Promise<void>
+  ): Promise<Obj>
+
+  moveObjectDestination(
+    sourceBucketId: string,
+    sourceObjectName: string,
+    destinationBucketId: string,
+    destinationObjectName: string,
+    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & { version: string },
+    onMoved: (sourceObject: Obj) => Promise<void>
+  ): Promise<Pick<Obj, 'id' | 'name' | 'bucket_id' | 'version' | 'owner' | 'metadata'>>
+
+  acquireObjectLockForTransaction(
+    bucketId: string,
+    objectName: string,
+    version: string | undefined,
+    hold: () => Promise<void>,
+    transactionOptions?: TransactionOptions
+  ): Promise<void>
+
+  adjustMultipartUploadProgress(
+    uploadId: string,
+    diff: number,
+    signProgress: (progress: number) => string
+  ): Promise<void>
+
+  prepareMultipartUploadPart(
+    uploadId: string,
+    contentLength: number,
+    maxFileSize: number,
+    verifySignature: (signature: string, progress: number) => void,
+    signProgress: (progress: number) => string
+  ): Promise<S3MultipartUpload>
 
   createBucket(
     data: Pick<

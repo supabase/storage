@@ -64,10 +64,10 @@ export class StorageKnexDB implements Database {
     this.latestMigration = options.latestMigration
   }
 
-  async withTransaction<T>(
-    fn: (db: Database) => Promise<T>,
+  private async withTransaction<T extends (db: Database) => Promise<unknown>>(
+    fn: T,
     opts?: TransactionOptions
-  ): Promise<T> {
+  ): Promise<Awaited<ReturnType<T>>> {
     const tnx = await this.connection.transactionProvider(this.options.tnx, opts)()
 
     try {
@@ -80,7 +80,7 @@ export class StorageKnexDB implements Database {
       const opts = { ...this.options, tnx }
       const storageWithTnx = new StorageKnexDB(this.connection, opts)
 
-      const result = await fn(storageWithTnx)
+      const result = (await fn(storageWithTnx)) as Awaited<ReturnType<T>>
       await tnx.commit()
       return result
     } catch (e) {
@@ -104,7 +104,7 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async testPermission<T>(fn: (db: Database) => T | Promise<T>): Promise<Awaited<T>> {
+  private async testPermission<T>(fn: (db: Database) => T | Promise<T>): Promise<Awaited<T>> {
     return this.withTransaction(async (db) => {
       const result = await fn(db)
       throw new TestPermissionRollbackError(result)
@@ -114,6 +114,247 @@ export class StorageKnexDB implements Database {
       }
 
       throw e
+    })
+  }
+
+  async testObjectPermission(
+    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & {
+      bucket_id: string
+      name: string
+      version: string
+    },
+    isUpsert?: boolean
+  ) {
+    await this.testPermission((db) => {
+      return isUpsert ? db.upsertObject(data) : db.createObject(data)
+    })
+  }
+
+  async testMoveObjectPermission(
+    sourceBucketId: string,
+    sourceObjectName: string,
+    data: Pick<Obj, 'name' | 'bucket_id' | 'owner' | 'version'>
+  ) {
+    await this.testPermission((db) => {
+      return Promise.all([
+        db.findObject(sourceBucketId, sourceObjectName, 'id'),
+        db.updateObject(sourceBucketId, sourceObjectName, data),
+      ])
+    })
+  }
+
+  async testDeleteObjectPermission(bucketId: string, objectName: string) {
+    await this.testPermission(async (db) => {
+      const deleted = await db.deleteObject(bucketId, objectName)
+
+      if (!deleted) {
+        throw ERRORS.NoSuchKey(objectName)
+      }
+    })
+  }
+
+  createAnalyticsBucketWithEvent(
+    data: Pick<Bucket, 'name'>,
+    onCreate: (bucket: IcebergCatalog, tenant: { ref: string; host: string }) => Promise<void>
+  ) {
+    return this.withTransaction(async (db) => {
+      const result = await db.createAnalyticsBucket(data)
+      await onCreate(result, { ref: db.tenantId, host: db.tenantHost })
+      return result
+    })
+  }
+
+  deleteEmptyBucket(bucketId: string) {
+    return this.withTransaction(async (db) => {
+      await db.asSuperUser().findBucketById(bucketId, 'id', { forUpdate: true })
+      const countObjects = await db.asSuperUser().countObjectsInBucket(bucketId, 1)
+
+      if (countObjects && countObjects > 0) {
+        throw ERRORS.BucketNotEmpty(bucketId)
+      }
+
+      const deleted = await db.deleteBucket(bucketId)
+
+      if (!deleted) {
+        throw ERRORS.NoSuchBucket(bucketId)
+      }
+
+      return deleted
+    })
+  }
+
+  deleteObjectWithLock(
+    bucketId: string,
+    objectName: string,
+    onDelete: (object: Obj, tenantId: string) => Promise<void>
+  ) {
+    return this.withTransaction(async (db) => {
+      const obj = await db.asSuperUser().findObject(bucketId, objectName, 'id,version,metadata', {
+        forUpdate: true,
+      })
+
+      const deleted = await db.deleteObject(bucketId, objectName)
+
+      if (!deleted) {
+        throw ERRORS.AccessDenied('Access denied')
+      }
+
+      await onDelete(obj, db.tenantId)
+      return obj
+    })
+  }
+
+  deleteObjectsWithCallbacks(
+    bucketId: string,
+    objectNames: string[],
+    by: keyof Obj,
+    onDelete: (
+      objects: Obj[],
+      tenant: { ref: string; host: string },
+      tenantId: string
+    ) => Promise<void>
+  ) {
+    return this.withTransaction(async (db) => {
+      const deleted = await db.deleteObjects(bucketId, objectNames, by)
+      if (deleted.length > 0) {
+        await onDelete(deleted, db.tenant(), db.tenantId)
+      }
+      return deleted
+    })
+  }
+
+  completeUploadTransaction(
+    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & {
+      bucket_id: string
+      name: string
+      version: string
+    },
+    onComplete: (newObject: Obj, currentObject: Obj | undefined, isNew: boolean) => Promise<void>
+  ) {
+    return this.withTransaction(async (db) => {
+      await db.waitObjectLock(data.bucket_id, data.name, undefined, { timeout: 5000 })
+      const currentObj = await db.findObject(data.bucket_id, data.name, 'id, version, metadata', {
+        forUpdate: true,
+        dontErrorOnEmpty: true,
+      })
+      const isNew = !Boolean(currentObj)
+      const newObject = await db.upsertObject(data)
+      await onComplete(newObject, currentObj, isNew)
+      return { obj: newObject, isNew }
+    })
+  }
+
+  upsertCopyDestination(
+    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & {
+      bucket_id: string
+      name: string
+      version: string
+    },
+    onReplaced: (object: Obj) => Promise<void>
+  ) {
+    return this.withTransaction(async (db) => {
+      await db.waitObjectLock(data.bucket_id, data.name, undefined, { timeout: 3000 })
+      const existingDestObject = await db.findObject(
+        data.bucket_id,
+        data.name,
+        'id,name,metadata,version,bucket_id',
+        { dontErrorOnEmpty: true, forUpdate: true }
+      )
+      const destinationObject = await db.upsertObject(data)
+      if (existingDestObject) {
+        await onReplaced(existingDestObject)
+      }
+      return destinationObject
+    })
+  }
+
+  moveObjectDestination(
+    sourceBucketId: string,
+    sourceObjectName: string,
+    destinationBucketId: string,
+    destinationObjectName: string,
+    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & { version: string },
+    onMoved: (sourceObject: Obj) => Promise<void>
+  ) {
+    return this.withTransaction(async (db) => {
+      await db.waitObjectLock(sourceBucketId, destinationObjectName, undefined, { timeout: 5000 })
+      const sourceObject = await db.findObject(
+        sourceBucketId,
+        sourceObjectName,
+        'id,version,metadata,user_metadata',
+        { forUpdate: true, dontErrorOnEmpty: false }
+      )
+      await db.updateObject(sourceBucketId, sourceObjectName, {
+        name: destinationObjectName,
+        bucket_id: destinationBucketId,
+        version: data.version,
+        owner: data.owner,
+        metadata: data.metadata,
+        user_metadata: data.user_metadata,
+      })
+      await onMoved(sourceObject)
+      return {
+        id: sourceObject.id,
+        name: destinationObjectName,
+        bucket_id: destinationBucketId,
+        version: data.version,
+        owner: data.owner,
+        metadata: data.metadata,
+      }
+    })
+  }
+
+  acquireObjectLockForTransaction(
+    bucketId: string,
+    objectName: string,
+    version: string | undefined,
+    hold: () => Promise<void>,
+    transactionOptions?: TransactionOptions
+  ) {
+    return this.withTransaction(async (db) => {
+      await db.mustLockObject(bucketId, objectName, version)
+      await hold()
+    }, transactionOptions)
+  }
+
+  adjustMultipartUploadProgress(
+    uploadId: string,
+    diff: number,
+    signProgress: (progress: number) => string
+  ) {
+    return this.withTransaction(async (db) => {
+      const multipart = await db.findMultipartUpload(uploadId, 'in_progress_size', {
+        forUpdate: true,
+      })
+      const progress = multipart.in_progress_size + diff
+      await db.updateMultipartUploadProgress(uploadId, progress, signProgress(progress))
+    })
+  }
+
+  prepareMultipartUploadPart(
+    uploadId: string,
+    contentLength: number,
+    maxFileSize: number,
+    verifySignature: (signature: string, progress: number) => void,
+    signProgress: (progress: number) => string
+  ) {
+    return this.withTransaction(async (db) => {
+      const multipart = await db.findMultipartUpload(
+        uploadId,
+        'in_progress_size,version,upload_signature,user_metadata,metadata',
+        { forUpdate: true }
+      )
+      verifySignature(multipart.upload_signature, multipart.in_progress_size)
+      const currentProgress = multipart.in_progress_size + contentLength
+      if (currentProgress > maxFileSize) {
+        throw ERRORS.EntityTooLarge()
+      }
+      await db.updateMultipartUploadProgress(
+        uploadId,
+        currentProgress,
+        signProgress(currentProgress)
+      )
+      return multipart
     })
   }
 

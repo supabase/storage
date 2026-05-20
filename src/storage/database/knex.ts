@@ -1,3 +1,4 @@
+import { decrypt, encrypt } from '@internal/auth'
 import { TenantConnection } from '@internal/database'
 import { DBMigration, tenantHasMigrations } from '@internal/database/migrations'
 import {
@@ -153,14 +154,9 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  createAnalyticsBucketWithEvent(
-    data: Pick<Bucket, 'name'>,
-    onCreate: (bucket: IcebergCatalog, tenant: { ref: string; host: string }) => Promise<void>
-  ) {
+  createAnalyticsBucketTransaction(data: Pick<Bucket, 'name'>) {
     return this.withTransaction(async (db) => {
-      const result = await db.createAnalyticsBucket(data)
-      await onCreate(result, { ref: db.tenantId, host: db.tenantHost })
-      return result
+      return db.createAnalyticsBucket(data)
     })
   }
 
@@ -183,11 +179,7 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  deleteObjectWithLock(
-    bucketId: string,
-    objectName: string,
-    onDelete: (object: Obj, tenantId: string) => Promise<void>
-  ) {
+  deleteObjectWithLock(bucketId: string, objectName: string) {
     return this.withTransaction(async (db) => {
       const obj = await db.asSuperUser().findObject(bucketId, objectName, 'id,version,metadata', {
         forUpdate: true,
@@ -199,27 +191,13 @@ export class StorageKnexDB implements Database {
         throw ERRORS.AccessDenied('Access denied')
       }
 
-      await onDelete(obj, db.tenantId)
       return obj
     })
   }
 
-  deleteObjectsWithCallbacks(
-    bucketId: string,
-    objectNames: string[],
-    by: keyof Obj,
-    onDelete: (
-      objects: Obj[],
-      tenant: { ref: string; host: string },
-      tenantId: string
-    ) => Promise<void>
-  ) {
+  deleteObjectsTransaction(bucketId: string, objectNames: string[], by: keyof Obj) {
     return this.withTransaction(async (db) => {
-      const deleted = await db.deleteObjects(bucketId, objectNames, by)
-      if (deleted.length > 0) {
-        await onDelete(deleted, db.tenant(), db.tenantId)
-      }
-      return deleted
+      return db.deleteObjects(bucketId, objectNames, by)
     })
   }
 
@@ -228,8 +206,7 @@ export class StorageKnexDB implements Database {
       bucket_id: string
       name: string
       version: string
-    },
-    onComplete: (newObject: Obj, currentObject: Obj | undefined, isNew: boolean) => Promise<void>
+    }
   ) {
     return this.withTransaction(async (db) => {
       await db.waitObjectLock(data.bucket_id, data.name, undefined, { timeout: 5000 })
@@ -239,8 +216,7 @@ export class StorageKnexDB implements Database {
       })
       const isNew = !Boolean(currentObj)
       const newObject = await db.upsertObject(data)
-      await onComplete(newObject, currentObj, isNew)
-      return { obj: newObject, isNew }
+      return { obj: newObject, isNew, previousObject: currentObj }
     })
   }
 
@@ -249,8 +225,7 @@ export class StorageKnexDB implements Database {
       bucket_id: string
       name: string
       version: string
-    },
-    onReplaced: (object: Obj) => Promise<void>
+    }
   ) {
     return this.withTransaction(async (db) => {
       await db.waitObjectLock(data.bucket_id, data.name, undefined, { timeout: 3000 })
@@ -261,10 +236,7 @@ export class StorageKnexDB implements Database {
         { dontErrorOnEmpty: true, forUpdate: true }
       )
       const destinationObject = await db.upsertObject(data)
-      if (existingDestObject) {
-        await onReplaced(existingDestObject)
-      }
-      return destinationObject
+      return { destinationObject, replacedObject: existingDestObject }
     })
   }
 
@@ -273,8 +245,7 @@ export class StorageKnexDB implements Database {
     sourceObjectName: string,
     destinationBucketId: string,
     destinationObjectName: string,
-    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & { version: string },
-    onMoved: (sourceObject: Obj) => Promise<void>
+    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & { version: string }
   ) {
     return this.withTransaction(async (db) => {
       await db.waitObjectLock(sourceBucketId, destinationObjectName, undefined, { timeout: 5000 })
@@ -292,14 +263,16 @@ export class StorageKnexDB implements Database {
         metadata: data.metadata,
         user_metadata: data.user_metadata,
       })
-      await onMoved(sourceObject)
       return {
-        id: sourceObject.id,
-        name: destinationObjectName,
-        bucket_id: destinationBucketId,
-        version: data.version,
-        owner: data.owner,
-        metadata: data.metadata,
+        destObject: {
+          id: sourceObject.id,
+          name: destinationObjectName,
+          bucket_id: destinationBucketId,
+          version: data.version,
+          owner: data.owner,
+          metadata: data.metadata,
+        },
+        sourceObject,
       }
     })
   }
@@ -308,43 +281,39 @@ export class StorageKnexDB implements Database {
     bucketId: string,
     objectName: string,
     version: string | undefined,
-    hold: () => Promise<void>,
     transactionOptions?: TransactionOptions
   ) {
     return this.withTransaction(async (db) => {
       await db.mustLockObject(bucketId, objectName, version)
-      await hold()
     }, transactionOptions)
   }
 
-  adjustMultipartUploadProgress(
-    uploadId: string,
-    diff: number,
-    signProgress: (progress: number) => string
-  ) {
+  adjustMultipartUploadProgress(uploadId: string, diff: number) {
     return this.withTransaction(async (db) => {
       const multipart = await db.findMultipartUpload(uploadId, 'in_progress_size', {
         forUpdate: true,
       })
       const progress = multipart.in_progress_size + diff
-      await db.updateMultipartUploadProgress(uploadId, progress, signProgress(progress))
+      await db.updateMultipartUploadProgress(
+        uploadId,
+        progress,
+        multipartUploadProgressSignature(progress)
+      )
     })
   }
 
-  prepareMultipartUploadPart(
-    uploadId: string,
-    contentLength: number,
-    maxFileSize: number,
-    verifySignature: (signature: string, progress: number) => void,
-    signProgress: (progress: number) => string
-  ) {
+  prepareMultipartUploadPart(uploadId: string, contentLength: number, maxFileSize: number) {
     return this.withTransaction(async (db) => {
       const multipart = await db.findMultipartUpload(
         uploadId,
         'in_progress_size,version,upload_signature,user_metadata,metadata',
         { forUpdate: true }
       )
-      verifySignature(multipart.upload_signature, multipart.in_progress_size)
+
+      if (multipartUploadProgress(multipart.upload_signature) !== multipart.in_progress_size) {
+        throw ERRORS.InvalidUploadSignature()
+      }
+
       const currentProgress = multipart.in_progress_size + contentLength
       if (currentProgress > maxFileSize) {
         throw ERRORS.EntityTooLarge()
@@ -352,7 +321,7 @@ export class StorageKnexDB implements Database {
       await db.updateMultipartUploadProgress(
         uploadId,
         currentProgress,
-        signProgress(currentProgress)
+        multipartUploadProgressSignature(currentProgress)
       )
       return multipart
     })
@@ -1159,7 +1128,6 @@ export class StorageKnexDB implements Database {
     bucketId: string,
     objectName: string,
     version: string,
-    signature: string,
     owner?: string,
     userMetadata?: Record<string, string | null>,
     metadata?: Partial<ObjectMetadata>
@@ -1170,7 +1138,7 @@ export class StorageKnexDB implements Database {
         bucket_id: bucketId,
         key: objectName,
         version,
-        upload_signature: signature,
+        upload_signature: multipartUploadProgressSignature(0),
         owner_id: owner,
         user_metadata: userMetadata,
       }
@@ -1374,6 +1342,16 @@ export class StorageKnexDB implements Database {
       throw e
     }
   }
+}
+
+function multipartUploadProgressSignature(progress: number) {
+  return `${encrypt('progress:' + progress.toString())}`
+}
+
+function multipartUploadProgress(signature: string) {
+  const originalSignature = decrypt(signature)
+  const [, value] = originalSignature.split(':')
+  return parseInt(value, 10)
 }
 
 export class DBError extends StorageBackendError implements RenderableError {

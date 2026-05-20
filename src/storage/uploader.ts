@@ -199,71 +199,68 @@ export class Uploader {
       const abController = new AbortController()
       db.connection.setAbortSignal(abController.signal)
 
-      const result = await db.completeUploadTransaction(
-        {
-          bucket_id: bucketId,
-          name: objectName,
-          metadata: objectMetadata,
-          user_metadata: userMetadata,
-          version,
-          owner,
-        },
-        async (_newObject, currentObj, isNew) => {
-          const events: Promise<unknown>[] = []
+      const result = await db.completeUploadTransaction({
+        bucket_id: bucketId,
+        name: objectName,
+        metadata: objectMetadata,
+        user_metadata: userMetadata,
+        version,
+        owner,
+      })
 
-          // schedule the deletion of the previous file
-          if (currentObj && currentObj.version !== version) {
-            events.push(
-              ObjectAdminDelete.send({
+      const events: Promise<unknown>[] = []
+
+      // schedule the deletion of the previous file
+      if (result.previousObject && result.previousObject.version !== version) {
+        events.push(
+          ObjectAdminDelete.send({
+            name: objectName,
+            bucketId,
+            tenant: this.db.tenant(),
+            version: result.previousObject.version,
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
+          })
+        )
+      }
+
+      const event = isUpsert && !result.isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
+
+      events.push(
+        event
+          .sendWebhook({
+            tenant: this.db.tenant(),
+            name: objectName,
+            version,
+            bucketId,
+            metadata: objectMetadata,
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
+            uploadType,
+          })
+          .catch((e) => {
+            logSchema.error(logger, 'Failed to send webhook', {
+              type: 'event',
+              error: e,
+              project: this.db.tenantId,
+              sbReqId: this.db.sbReqId,
+              metadata: JSON.stringify({
                 name: objectName,
-                bucketId,
-                tenant: this.db.tenant(),
-                version: currentObj.version,
-                reqId: this.db.reqId,
-                sbReqId: this.db.sbReqId,
-              })
-            )
-          }
-
-          const event = isUpsert && !isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
-
-          events.push(
-            event
-              .sendWebhook({
-                tenant: this.db.tenant(),
-                name: objectName,
-                version,
                 bucketId,
                 metadata: objectMetadata,
                 reqId: this.db.reqId,
-                sbReqId: this.db.sbReqId,
                 uploadType,
-              })
-              .catch((e) => {
-                logSchema.error(logger, 'Failed to send webhook', {
-                  type: 'event',
-                  error: e,
-                  project: this.db.tenantId,
-                  sbReqId: this.db.sbReqId,
-                  metadata: JSON.stringify({
-                    name: objectName,
-                    bucketId,
-                    metadata: objectMetadata,
-                    reqId: this.db.reqId,
-                    uploadType,
-                  }),
-                })
-              })
-          )
-
-          await Promise.all(events)
-
-          fileUploadedSuccess.add(1, {
-            uploadType,
-            tenantId: this.db.tenantId,
+              }),
+            })
           })
-        }
       )
+
+      await Promise.all(events)
+
+      fileUploadedSuccess.add(1, {
+        uploadType,
+        tenantId: this.db.tenantId,
+      })
 
       return { ...result, metadata: objectMetadata }
     } catch (e) {

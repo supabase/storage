@@ -111,15 +111,12 @@ export class PgLock implements Lock {
                 uploadId.bucket,
                 uploadId.objectName,
                 uploadId.version,
-                async () => {
-                  this.isLocked = true
-                  await new Promise<void>((innerResolve) => {
-                    this.tnxResolver = innerResolve
-                    resolve()
-                  })
-                },
-                { timeout: 5 * 60 * 1000 }
+                {
+                  timeout: 5 * 60 * 1000,
+                }
               )
+              this.isLocked = true
+              resolve()
               return true
             } catch (e) {
               if (e instanceof StorageBackendError && e.code === ErrorCode.ResourceLocked) {

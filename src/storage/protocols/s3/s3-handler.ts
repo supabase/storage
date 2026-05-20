@@ -17,7 +17,6 @@ import {
   UploadPartCommandInput,
   UploadPartCopyCommandInput,
 } from '@aws-sdk/client-s3'
-import { decrypt, encrypt } from '@internal/auth'
 import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { PassThrough, Readable } from 'stream'
@@ -445,19 +444,11 @@ export class S3ProtocolHandler {
       throw ERRORS.InvalidUploadId(uploadId)
     }
 
-    const signature = this.uploadSignature({ in_progress_size: 0 })
     await this.storage.db
       .asSuperUser()
-      .createMultipartUpload(
-        uploadId,
-        Bucket,
-        Key,
-        version,
-        signature,
-        this.owner,
-        command.Metadata,
-        { mimetype: command.ContentType }
-      )
+      .createMultipartUpload(uploadId, Bucket, Key, version, this.owner, command.Metadata, {
+        mimetype: command.ContentType,
+      })
 
     return {
       responseBody: {
@@ -671,11 +662,7 @@ export class S3ProtocolHandler {
       }
     } catch (e) {
       try {
-        await this.storage.db
-          .asSuperUser()
-          .adjustMultipartUploadProgress(UploadId, -ContentLength, (progress) =>
-            this.uploadSignature({ in_progress_size: progress })
-          )
+        await this.storage.db.asSuperUser().adjustMultipartUploadProgress(UploadId, -ContentLength)
       } catch (e) {
         logSchema.error(logger, 'Failed to update multipart upload progress', {
           type: 's3',
@@ -1368,37 +1355,14 @@ export class S3ProtocolHandler {
     return metadata
   }
 
-  protected uploadSignature({ in_progress_size }: { in_progress_size: number }) {
-    return `${encrypt('progress:' + in_progress_size.toString())}`
-  }
-
-  protected decryptUploadSignature(signature: string) {
-    const originalSignature = decrypt(signature)
-    const [, value] = originalSignature.split(':')
-
-    return {
-      progress: parseInt(value, 10),
-    }
-  }
-
   protected async shouldAllowPartUpload(
     uploadId: string,
     contentLength: number,
     maxFileSize: number
   ) {
-    return this.storage.db.asSuperUser().prepareMultipartUploadPart(
-      uploadId,
-      contentLength,
-      maxFileSize,
-      (signature, storedProgress) => {
-        const { progress } = this.decryptUploadSignature(signature)
-
-        if (progress !== storedProgress) {
-          throw ERRORS.InvalidUploadSignature()
-        }
-      },
-      (progress) => this.uploadSignature({ in_progress_size: progress })
-    )
+    return this.storage.db
+      .asSuperUser()
+      .prepareMultipartUploadPart(uploadId, contentLength, maxFileSize)
   }
 }
 

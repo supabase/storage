@@ -145,32 +145,35 @@ export class Storage {
   }
 
   async createIcebergBucket(data: Parameters<Database['createAnalyticsBucket']>[0]) {
-    return this.db.createAnalyticsBucketWithEvent(data, async (result, tenant) => {
-      await BucketCreatedEvent.invokeOrSend(
-        {
-          bucketId: result.id,
-          bucketName: result.name,
-          type: 'ANALYTICS',
-          tenant,
-          sbReqId: this.db.sbReqId,
-        },
-        {
-          sendWhenError: (error) => {
-            if (error instanceof StorageBackendError) {
-              return false
-            }
+    const result = await this.db.createAnalyticsBucketTransaction(data)
+    const tenant = this.db.tenant()
 
-            logSchema.error(logger, 'Failed to invoke BucketCreatedEvent handler', {
-              project: tenant.ref,
-              type: 'event',
-              error,
-              sbReqId: this.db.sbReqId,
-            })
-            return true
-          },
-        }
-      )
-    })
+    await BucketCreatedEvent.invokeOrSend(
+      {
+        bucketId: result.id,
+        bucketName: result.name,
+        type: 'ANALYTICS',
+        tenant,
+        sbReqId: this.db.sbReqId,
+      },
+      {
+        sendWhenError: (error) => {
+          if (error instanceof StorageBackendError) {
+            return false
+          }
+
+          logSchema.error(logger, 'Failed to invoke BucketCreatedEvent handler', {
+            project: tenant.ref,
+            type: 'event',
+            error,
+            sbReqId: this.db.sbReqId,
+          })
+          return true
+        },
+      }
+    )
+
+    return result
   }
 
   /**

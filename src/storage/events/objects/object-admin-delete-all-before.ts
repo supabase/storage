@@ -72,36 +72,37 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
             moreObjectsToDelete = true
           }
 
-          await storage.db.deleteObjectsWithCallbacks(
+          const deleted = await storage.db.deleteObjectsTransaction(
             bucketId,
             objects.map(({ id }) => id!),
-            'id',
-            async (deleted) => {
-              const prefixes: string[] = []
-
-              for (const { name, version } of deleted) {
-                const fileName = withOptionalVersion(`${tenantId}/${bucketId}/${name}`, version)
-                prefixes.push(fileName)
-                prefixes.push(fileName + '.info')
-              }
-
-              await backend.deleteObjects(storageS3Bucket, prefixes)
-
-              await Promise.allSettled(
-                deleted.map((object) =>
-                  ObjectRemoved.sendWebhook({
-                    tenant: job.data.tenant,
-                    name: object.name,
-                    bucketId,
-                    reqId: job.data.reqId,
-                    sbReqId: job.data.sbReqId,
-                    version: object.version,
-                    metadata: object.metadata,
-                  })
-                )
-              )
-            }
+            'id'
           )
+
+          if (deleted.length > 0) {
+            const prefixes: string[] = []
+
+            for (const { name, version } of deleted) {
+              const fileName = withOptionalVersion(`${tenantId}/${bucketId}/${name}`, version)
+              prefixes.push(fileName)
+              prefixes.push(fileName + '.info')
+            }
+
+            await backend.deleteObjects(storageS3Bucket, prefixes)
+
+            await Promise.allSettled(
+              deleted.map((object) =>
+                ObjectRemoved.sendWebhook({
+                  tenant: job.data.tenant,
+                  name: object.name,
+                  bucketId,
+                  reqId: job.data.reqId,
+                  sbReqId: job.data.sbReqId,
+                  version: object.version,
+                  metadata: object.metadata,
+                })
+              )
+            )
+          }
         }
 
         if (!moreObjectsToDelete) {

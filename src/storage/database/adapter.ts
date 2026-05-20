@@ -54,6 +54,41 @@ export interface ListBucketOptions {
   search?: string
 }
 
+type ObjectWriteData = Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & {
+  bucket_id: string
+  name: string
+  version: string
+}
+
+type ObjectMoveData = Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & { version: string }
+
+type DeletedObject = Pick<Obj, 'name' | 'version' | 'metadata'>
+
+type LockedDeletedObject = Pick<Obj, 'version' | 'metadata'>
+
+type UploadObject = Pick<
+  Obj,
+  | 'id'
+  | 'name'
+  | 'bucket_id'
+  | 'owner'
+  | 'owner_id'
+  | 'metadata'
+  | 'user_metadata'
+  | 'version'
+  | 'created_at'
+  | 'updated_at'
+  | 'last_accessed_at'
+>
+
+type PreviousUploadObject = Pick<Obj, 'id' | 'version' | 'metadata'>
+
+type ReplacedObject = Pick<Obj, 'name' | 'bucket_id' | 'version'>
+
+type MovedObject = Pick<Obj, 'id' | 'name' | 'bucket_id' | 'version' | 'owner' | 'metadata'>
+
+type SourceMoveObject = Pick<Obj, 'id' | 'version' | 'metadata' | 'user_metadata'>
+
 export interface Database {
   tenantHost: string
   tenantId: string
@@ -66,14 +101,7 @@ export interface Database {
 
   asSuperUser(): Database
 
-  testObjectPermission(
-    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & {
-      bucket_id: string
-      name: string
-      version: string
-    },
-    isUpsert?: boolean
-  ): Promise<void>
+  testObjectPermission(data: ObjectWriteData, isUpsert?: boolean): Promise<void>
 
   testMoveObjectPermission(
     sourceBucketId: string,
@@ -87,35 +115,31 @@ export interface Database {
 
   deleteEmptyBucket(bucketId: string): Promise<number>
 
-  deleteObjectWithLock(bucketId: string, objectName: string): Promise<Obj>
+  deleteObjectWithLock(bucketId: string, objectName: string): Promise<LockedDeletedObject>
 
-  deleteObjectsTransaction(bucketId: string, objectNames: string[], by: keyof Obj): Promise<Obj[]>
+  deleteObjectsTransaction(
+    bucketId: string,
+    objectNames: string[],
+    by: keyof Obj
+  ): Promise<DeletedObject[]>
 
   completeUploadTransaction(
-    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & {
-      bucket_id: string
-      name: string
-      version: string
-    }
-  ): Promise<{ obj: Obj; isNew: boolean; previousObject?: Obj }>
+    data: ObjectWriteData
+  ): Promise<{ obj: UploadObject; isNew: boolean; previousObject?: PreviousUploadObject }>
 
   upsertCopyDestination(
-    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & {
-      bucket_id: string
-      name: string
-      version: string
-    }
-  ): Promise<{ destinationObject: Obj; replacedObject?: Obj }>
+    data: ObjectWriteData
+  ): Promise<{ destinationObject: UploadObject; replacedObject?: ReplacedObject }>
 
   moveObjectDestination(
     sourceBucketId: string,
     sourceObjectName: string,
     destinationBucketId: string,
     destinationObjectName: string,
-    data: Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & { version: string }
+    data: ObjectMoveData
   ): Promise<{
-    destObject: Pick<Obj, 'id' | 'name' | 'bucket_id' | 'version' | 'owner' | 'metadata'>
-    sourceObject: Obj
+    destObject: MovedObject
+    sourceObject: SourceMoveObject
   }>
 
   acquireObjectLockForTransaction(

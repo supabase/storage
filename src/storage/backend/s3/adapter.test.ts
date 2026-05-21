@@ -8,6 +8,8 @@ import { getConfig } from '../../../config'
 import { withOptionalVersion } from '../adapter'
 import { MAX_PUT_OBJECT_SIZE, S3Backend } from './adapter'
 
+const DEFAULT_S3_UPLOAD_PART_SIZE = 16 * 1024 * 1024
+
 vi.mock('@aws-sdk/client-s3', async () => {
   const originalModule =
     await vi.importActual<typeof import('@aws-sdk/client-s3')>('@aws-sdk/client-s3')
@@ -35,6 +37,7 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({
 }))
 
 type UploadOptionsShape = {
+  partSize?: number
   queueSize?: number
 }
 
@@ -322,6 +325,8 @@ describe('S3Backend', () => {
       )
 
       expect(Upload).toHaveBeenCalledTimes(1)
+      expect(getConfig().storageS3UploadPartSize).toBe(DEFAULT_S3_UPLOAD_PART_SIZE)
+      expect(uploadInstances[0].options.partSize).toBe(getConfig().storageS3UploadPartSize)
       expect(uploadInstances[0].options.queueSize).toBe(getConfig().storageS3UploadQueueSize)
       expect(mockSend).toHaveBeenCalledTimes(1)
       expect(mockSend.mock.calls[0][0]).toBeInstanceOf(HeadObjectCommand)
@@ -348,6 +353,8 @@ describe('S3Backend', () => {
       )
 
       expect(Upload).toHaveBeenCalledTimes(1)
+      expect(getConfig().storageS3UploadPartSize).toBe(DEFAULT_S3_UPLOAD_PART_SIZE)
+      expect(uploadInstances[0].options.partSize).toBe(getConfig().storageS3UploadPartSize)
       expect(uploadInstances[0].options.queueSize).toBe(getConfig().storageS3UploadQueueSize)
       expect(mockSend).not.toHaveBeenCalled()
       expect(result).toMatchObject({

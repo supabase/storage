@@ -48,15 +48,15 @@ export default function UploadPart(s3Router: S3Router) {
     async (req, ctx) => {
       const icebergBucketName = ctx.req.internalIcebergBucketName
 
+      const passThrough = new PassThrough()
+      passThrough.on('error', () => {})
+
+      ctx.req.raw.pipe(passThrough)
+      ctx.req.raw.on('error', (err) => {
+        passThrough.destroy(err)
+      })
+
       if (ctx.req.streamingSignatureV4) {
-        const passThrough = new PassThrough()
-        passThrough.on('error', () => {})
-
-        ctx.req.raw.pipe(passThrough)
-        ctx.req.raw.on('error', (err) => {
-          passThrough.destroy(err)
-        })
-
         return pipeline(
           passThrough,
           ctx.req.streamingSignatureV4,
@@ -83,21 +83,13 @@ export default function UploadPart(s3Router: S3Router) {
         )
       }
 
-      const passThrough = new PassThrough()
-      passThrough.on('error', () => {})
-
-      ctx.req.raw.pipe(passThrough)
-      ctx.req.raw.on('error', (err) => {
-        passThrough.destroy(err)
-      })
-
       const part = await ctx.req.storage.backend.uploadPart(
         icebergBucketName!,
         req.Params['*'],
         '',
         req.Querystring.uploadId,
         req.Querystring.partNumber,
-        ctx.req.raw as Readable,
+        passThrough as Readable,
         req.Headers?.['content-length'],
         ctx.signals.body
       )

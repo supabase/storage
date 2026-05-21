@@ -6,7 +6,6 @@ import { vi } from 'vitest'
 
 const mockedMetricsModules = [
   '../../config',
-  '@internal/monitoring/cgroup-cpu-metrics',
   '@internal/monitoring/logger',
   '@internal/monitoring/system',
   '@opentelemetry/api',
@@ -92,7 +91,6 @@ describe('otel metrics', () => {
     const StorageNodeInstrumentation = vi.fn(function () {
       return {}
     })
-    const installCgroupCpuMetrics = vi.fn()
     const logger = {
       info: vi.fn(),
     }
@@ -110,9 +108,6 @@ describe('otel metrics', () => {
         prometheusMetricsEnabled: true,
         region: 'local',
       })),
-    }))
-    vi.doMock('@internal/monitoring/cgroup-cpu-metrics', () => ({
-      installCgroupCpuMetrics,
     }))
     vi.doMock('@internal/monitoring/logger', () => ({
       logger,
@@ -212,9 +207,6 @@ describe('otel metrics', () => {
         prometheusMetricsEnabled: false,
         region: 'local',
       })),
-    }))
-    vi.doMock('@internal/monitoring/cgroup-cpu-metrics', () => ({
-      installCgroupCpuMetrics: vi.fn(),
     }))
     vi.doMock('@internal/monitoring/logger', () => ({
       logger: { info: vi.fn() },

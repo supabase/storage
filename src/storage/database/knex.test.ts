@@ -34,8 +34,9 @@ function createStorageKnexTestHarness() {
 describe('StorageKnexDB.testPermission', () => {
   it('returns the callback result after rolling back the transaction', async () => {
     const { db, connection, transaction } = createStorageKnexTestHarness()
+    const testPermission = db['testPermission'].bind(db)
 
-    const result = await db.testPermission(async (txDb) => {
+    const result = await testPermission(async (txDb) => {
       expect(txDb).toBeInstanceOf(StorageKnexDB)
       expect(txDb).not.toBe(db)
       return 'allowed'
@@ -52,8 +53,10 @@ describe('StorageKnexDB.testPermission', () => {
     const { db, transaction } = createStorageKnexTestHarness()
     const error = new Error('permission denied')
 
+    const testPermission = db['testPermission'].bind(db)
+
     await expect(
-      db.testPermission(async () => {
+      testPermission(async () => {
         throw error
       })
     ).rejects.toBe(error)

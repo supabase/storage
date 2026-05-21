@@ -6,31 +6,18 @@ import { StorageObjectLocator } from './locator'
 import { ObjectStorage } from './object'
 
 function createObjectStorage({
-  findObject = vi.fn().mockResolvedValue({
-    id: 'object-id',
-    version: 'version-1',
-  }),
-  deleteObject = vi.fn().mockResolvedValue({
-    name: 'private/file.txt',
+  deleteObjectWithLock = vi.fn().mockResolvedValue({
     version: 'version-1',
   }),
 }: {
-  findObject?: ReturnType<typeof vi.fn>
-  deleteObject?: ReturnType<typeof vi.fn>
+  deleteObjectWithLock?: ReturnType<typeof vi.fn>
 } = {}) {
   const backend = {
     deleteObject: vi.fn(),
   } as unknown as StorageBackendAdapter
-  const superUserDb = {
-    findObject,
-  }
-  const scopedDb = {
-    asSuperUser: vi.fn(() => superUserDb),
-    deleteObject,
-  }
   const db = {
     tenantId: 'tenant-id',
-    withTransaction: vi.fn((fn) => fn(scopedDb)),
+    deleteObjectWithLock,
   } as unknown as Database
   const location = {
     getRootLocation: vi.fn(() => 'root-bucket'),
@@ -40,8 +27,7 @@ function createObjectStorage({
 
   return {
     backend,
-    deleteObject,
-    findObject,
+    deleteObjectWithLock,
     location,
     storage,
   }
@@ -49,8 +35,8 @@ function createObjectStorage({
 
 describe('ObjectStorage.deleteObject', () => {
   it('throws AccessDenied when the object exists but scoped delete is blocked by RLS', async () => {
-    const { backend, deleteObject, findObject, storage } = createObjectStorage({
-      deleteObject: vi.fn().mockResolvedValue(undefined),
+    const { backend, deleteObjectWithLock, storage } = createObjectStorage({
+      deleteObjectWithLock: vi.fn().mockRejectedValue(ERRORS.AccessDenied('Access denied')),
     })
 
     await expect(storage.deleteObject('private/file.txt')).rejects.toMatchObject({
@@ -59,16 +45,13 @@ describe('ObjectStorage.deleteObject', () => {
       message: 'Access denied',
     })
 
-    expect(findObject).toHaveBeenCalledWith('bucket', 'private/file.txt', 'id,version', {
-      forUpdate: true,
-    })
-    expect(deleteObject).toHaveBeenCalledWith('bucket', 'private/file.txt')
+    expect(deleteObjectWithLock).toHaveBeenCalledWith('bucket', 'private/file.txt')
     expect(backend.deleteObject).not.toHaveBeenCalled()
   })
 
   it('keeps true missing objects as NoSuchKey before attempting scoped delete', async () => {
-    const { backend, deleteObject, storage } = createObjectStorage({
-      findObject: vi.fn().mockRejectedValue(ERRORS.NoSuchKey('missing.txt')),
+    const { backend, deleteObjectWithLock, storage } = createObjectStorage({
+      deleteObjectWithLock: vi.fn().mockRejectedValue(ERRORS.NoSuchKey('missing.txt')),
     })
 
     await expect(storage.deleteObject('missing.txt')).rejects.toMatchObject({
@@ -76,7 +59,7 @@ describe('ObjectStorage.deleteObject', () => {
       httpStatusCode: 404,
     })
 
-    expect(deleteObject).not.toHaveBeenCalled()
+    expect(deleteObjectWithLock).toHaveBeenCalledWith('bucket', 'missing.txt')
     expect(backend.deleteObject).not.toHaveBeenCalled()
   })
 })

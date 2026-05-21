@@ -73,42 +73,7 @@ export class PgLock implements Lock {
 
   async lock(stopSignal: AbortSignal, cancelReq: RequestRelease): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      this.db
-        .withTransaction(
-          async (db) => {
-            const abortController = new AbortController()
-            let onAbort: (() => void) | undefined
-
-            try {
-              onAbort = () => {
-                abortController.abort()
-              }
-              stopSignal.addEventListener('abort', onAbort)
-
-              const acquired = await Promise.race([
-                this.waitTimeout(5000, abortController.signal),
-                this.acquireLock(db, this.id, abortController.signal),
-              ])
-
-              if (!acquired) {
-                throw ERRORS.LockTimeout()
-              }
-
-              this.isLocked = true
-
-              await new Promise<void>((innerResolve) => {
-                this.tnxResolver = innerResolve
-                resolve()
-              })
-            } finally {
-              abortController.abort()
-            }
-          },
-          {
-            timeout: 5 * 60 * 1000, // 5 minutes
-          }
-        )
-        .catch(reject)
+      this.holdLockTransaction(stopSignal, resolve).catch(reject)
     })
 
     this.notifier.onRelease(this.id, () => cancelReq())
@@ -129,31 +94,57 @@ export class PgLock implements Lock {
     }
   }
 
-  protected async acquireLock(db: Database, id: string, signal: AbortSignal) {
-    const uploadId = UploadId.fromString(id)
+  protected async holdLockTransaction(stopSignal: AbortSignal, resolve: () => void) {
+    const abortController = new AbortController()
+    const uploadId = UploadId.fromString(this.id)
+    const onAbort = () => abortController.abort()
 
-    while (!signal.aborted) {
-      try {
-        await db.mustLockObject(uploadId.bucket, uploadId.objectName, uploadId.version)
-        return true
-      } catch (e) {
-        if (e instanceof StorageBackendError && e.code === ErrorCode.ResourceLocked) {
-          await this.notifier.release(id)
-          await new Promise((resolve) => {
-            const timeoutId = setTimeout(resolve, 500)
-            const cleanup = () => {
-              clearTimeout(timeoutId)
-              signal.removeEventListener('abort', cleanup)
+    try {
+      stopSignal.addEventListener('abort', onAbort)
+
+      const acquired = await Promise.race([
+        this.waitTimeout(5000, abortController.signal),
+        (async () => {
+          while (!abortController.signal.aborted) {
+            try {
+              await this.db.acquireObjectLockForTransaction(
+                uploadId.bucket,
+                uploadId.objectName,
+                uploadId.version,
+                {
+                  timeout: 5 * 60 * 1000,
+                }
+              )
+              this.isLocked = true
+              resolve()
+              return true
+            } catch (e) {
+              if (e instanceof StorageBackendError && e.code === ErrorCode.ResourceLocked) {
+                await this.notifier.release(this.id)
+                await new Promise((resolve) => {
+                  const timeoutId = setTimeout(resolve, 500)
+                  const cleanup = () => {
+                    clearTimeout(timeoutId)
+                    abortController.signal.removeEventListener('abort', cleanup)
+                  }
+                  abortController.signal.addEventListener('abort', cleanup, { once: true })
+                })
+                continue
+              }
+              throw e
             }
-            signal.addEventListener('abort', cleanup, { once: true })
-          })
-          continue
-        }
-        throw e
-      }
-    }
+          }
+          return false
+        })(),
+      ])
 
-    return false
+      if (!acquired) {
+        throw ERRORS.LockTimeout()
+      }
+    } finally {
+      abortController.abort()
+      stopSignal.removeEventListener('abort', onAbort)
+    }
   }
 
   protected waitTimeout(timeout: number, signal: AbortSignal) {

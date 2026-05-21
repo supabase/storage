@@ -2948,7 +2948,6 @@ describe('Migration compatibility', () => {
             bucketId,
             'test-pre-migration.txt',
             randomUUID(),
-            'sig',
             undefined,
             undefined,
             {
@@ -2981,7 +2980,6 @@ describe('Migration compatibility', () => {
             bucketId,
             'test-post-migration.txt',
             randomUUID(),
-            'sig',
             undefined,
             undefined,
             metadata
@@ -3004,7 +3002,6 @@ describe('Migration compatibility', () => {
           bucketId,
           'test-find.txt',
           randomUUID(),
-          'sig',
           undefined,
           undefined,
           {

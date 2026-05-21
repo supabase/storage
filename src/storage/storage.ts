@@ -145,39 +145,35 @@ export class Storage {
   }
 
   async createIcebergBucket(data: Parameters<Database['createAnalyticsBucket']>[0]) {
-    return this.db.withTransaction(async (db) => {
-      const result = await db.createAnalyticsBucket(data)
+    const result = await this.db.createAnalyticsBucketTransaction(data)
+    const tenant = this.db.tenant()
 
-      await BucketCreatedEvent.invokeOrSend(
-        {
-          bucketId: result.id,
-          bucketName: result.name,
-          type: 'ANALYTICS',
-          tenant: {
-            ref: db.tenantId,
-            host: db.tenantHost,
-          },
-          sbReqId: db.sbReqId,
+    await BucketCreatedEvent.invokeOrSend(
+      {
+        bucketId: result.id,
+        bucketName: result.name,
+        type: 'ANALYTICS',
+        tenant,
+        sbReqId: this.db.sbReqId,
+      },
+      {
+        sendWhenError: (error) => {
+          if (error instanceof StorageBackendError) {
+            return false
+          }
+
+          logSchema.error(logger, 'Failed to invoke BucketCreatedEvent handler', {
+            project: tenant.ref,
+            type: 'event',
+            error,
+            sbReqId: this.db.sbReqId,
+          })
+          return true
         },
-        {
-          sendWhenError: (error) => {
-            if (error instanceof StorageBackendError) {
-              return false
-            }
+      }
+    )
 
-            logSchema.error(logger, 'Failed to invoke BucketCreatedEvent handler', {
-              project: db.tenantId,
-              type: 'event',
-              error,
-              sbReqId: db.sbReqId,
-            })
-            return true
-          },
-        }
-      )
-
-      return result
-    })
+    return result
   }
 
   /**
@@ -223,25 +219,7 @@ export class Storage {
    * @param id
    */
   async deleteBucket(id: string) {
-    return this.db.withTransaction(async (db) => {
-      await db.asSuperUser().findBucketById(id, 'id', {
-        forUpdate: true,
-      })
-
-      const countObjects = await db.asSuperUser().countObjectsInBucket(id, 1)
-
-      if (countObjects && countObjects > 0) {
-        throw ERRORS.BucketNotEmpty(id)
-      }
-
-      const deleted = await db.deleteBucket(id)
-
-      if (!deleted) {
-        throw ERRORS.NoSuchBucket(id)
-      }
-
-      return deleted
-    })
+    return this.db.deleteEmptyBucket(id)
   }
 
   async deleteIcebergBucket(name: string) {
@@ -291,13 +269,7 @@ export class Storage {
     }
 
     // ensure delete permissions
-    await this.db.testPermission(async (db) => {
-      const deleted = await db.deleteObject(bucketId, objects[0].name)
-
-      if (!deleted) {
-        throw ERRORS.NoSuchKey(objects[0].name)
-      }
-    })
+    await this.db.testDeleteObjectPermission(bucketId, objects[0].name)
 
     // use queue to recursively delete all objects created before the specified time
     await ObjectAdminDeleteAllBefore.send({

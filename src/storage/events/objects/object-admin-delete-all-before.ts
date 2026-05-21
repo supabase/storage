@@ -72,39 +72,37 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
             moreObjectsToDelete = true
           }
 
-          await storage.db.withTransaction(async (trx) => {
-            const deleted = await trx.deleteObjects(
-              bucketId,
-              objects.map(({ id }) => id!),
-              'id'
-            )
+          const deleted = await storage.db.deleteObjectsTransaction(
+            bucketId,
+            objects.map(({ id }) => id!),
+            'id'
+          )
 
-            if (deleted && deleted.length > 0) {
-              const prefixes: string[] = []
+          if (deleted.length > 0) {
+            const prefixes: string[] = []
 
-              for (const { name, version } of deleted) {
-                const fileName = withOptionalVersion(`${tenantId}/${bucketId}/${name}`, version)
-                prefixes.push(fileName)
-                prefixes.push(fileName + '.info')
-              }
-
-              await backend.deleteObjects(storageS3Bucket, prefixes)
-
-              await Promise.allSettled(
-                deleted.map((object) =>
-                  ObjectRemoved.sendWebhook({
-                    tenant: job.data.tenant,
-                    name: object.name,
-                    bucketId,
-                    reqId: job.data.reqId,
-                    sbReqId: job.data.sbReqId,
-                    version: object.version,
-                    metadata: object.metadata,
-                  })
-                )
-              )
+            for (const { name, version } of deleted) {
+              const fileName = withOptionalVersion(`${tenantId}/${bucketId}/${name}`, version)
+              prefixes.push(fileName)
+              prefixes.push(fileName + '.info')
             }
-          })
+
+            await backend.deleteObjects(storageS3Bucket, prefixes)
+
+            await Promise.allSettled(
+              deleted.map((object) =>
+                ObjectRemoved.sendWebhook({
+                  tenant: job.data.tenant,
+                  name: object.name,
+                  bucketId,
+                  reqId: job.data.reqId,
+                  sbReqId: job.data.sbReqId,
+                  version: object.version,
+                  metadata: object.metadata,
+                })
+              )
+            )
+          }
         }
 
         if (!moreObjectsToDelete) {

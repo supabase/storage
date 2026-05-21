@@ -54,6 +54,41 @@ export interface ListBucketOptions {
   search?: string
 }
 
+type ObjectWriteData = Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & {
+  bucket_id: string
+  name: string
+  version: string
+}
+
+type ObjectMoveData = Pick<Obj, 'owner' | 'metadata' | 'user_metadata'> & { version: string }
+
+type DeletedObject = Pick<Obj, 'name' | 'version' | 'metadata'>
+
+type LockedDeletedObject = Pick<Obj, 'version' | 'metadata'>
+
+type UploadObject = Pick<
+  Obj,
+  | 'id'
+  | 'name'
+  | 'bucket_id'
+  | 'owner'
+  | 'owner_id'
+  | 'metadata'
+  | 'user_metadata'
+  | 'version'
+  | 'created_at'
+  | 'updated_at'
+  | 'last_accessed_at'
+>
+
+type PreviousUploadObject = Pick<Obj, 'id' | 'version' | 'metadata'>
+
+type ReplacedObject = Pick<Obj, 'name' | 'bucket_id' | 'version'>
+
+type MovedObject = Pick<Obj, 'id' | 'name' | 'bucket_id' | 'version' | 'owner' | 'metadata'>
+
+type SourceMoveObject = Pick<Obj, 'id' | 'version' | 'metadata' | 'user_metadata'>
+
 export interface Database {
   tenantHost: string
   tenantId: string
@@ -66,12 +101,61 @@ export interface Database {
 
   asSuperUser(): Database
 
-  withTransaction<T>(
-    fn: (db: Database) => Promise<T>,
-    transactionOptions?: TransactionOptions
-  ): Promise<T>
+  testObjectPermission(data: ObjectWriteData, isUpsert?: boolean): Promise<void>
 
-  testPermission<T>(fn: (db: Database) => T | Promise<T>): Promise<Awaited<T>>
+  testMoveObjectPermission(
+    sourceBucketId: string,
+    sourceObjectName: string,
+    data: Pick<Obj, 'name' | 'bucket_id' | 'owner' | 'version'>
+  ): Promise<void>
+
+  testDeleteObjectPermission(bucketId: string, objectName: string): Promise<void>
+
+  createAnalyticsBucketTransaction(data: Pick<Bucket, 'name'>): Promise<IcebergCatalog>
+
+  deleteEmptyBucket(bucketId: string): Promise<number>
+
+  deleteObjectWithLock(bucketId: string, objectName: string): Promise<LockedDeletedObject>
+
+  deleteObjectsTransaction(
+    bucketId: string,
+    objectNames: string[],
+    by: keyof Obj
+  ): Promise<DeletedObject[]>
+
+  completeUploadTransaction(
+    data: ObjectWriteData
+  ): Promise<{ obj: UploadObject; isNew: boolean; previousObject?: PreviousUploadObject }>
+
+  upsertCopyDestination(
+    data: ObjectWriteData
+  ): Promise<{ destinationObject: UploadObject; replacedObject?: ReplacedObject }>
+
+  moveObjectDestination(
+    sourceBucketId: string,
+    sourceObjectName: string,
+    destinationBucketId: string,
+    destinationObjectName: string,
+    data: ObjectMoveData
+  ): Promise<{
+    destObject: MovedObject
+    sourceObject: SourceMoveObject
+  }>
+
+  acquireObjectLockForTransaction(
+    bucketId: string,
+    objectName: string,
+    version: string | undefined,
+    transactionOptions?: TransactionOptions
+  ): Promise<void>
+
+  adjustMultipartUploadProgress(uploadId: string, diff: number): Promise<void>
+
+  prepareMultipartUploadPart(
+    uploadId: string,
+    contentLength: number,
+    maxFileSize: number
+  ): Promise<S3MultipartUpload>
 
   createBucket(
     data: Pick<
@@ -194,7 +278,6 @@ export interface Database {
     bucketId: string,
     objectName: string,
     version: string,
-    signature: string,
     owner?: string,
     userMetadata?: Record<string, string | null>,
     metadata?: Partial<ObjectMetadata>

@@ -333,6 +333,7 @@ describe.each([
       owner: null,
       owner_id: null,
       path_tokens: [objectName],
+      signature: null,
       updated_at: expect.any(Date),
       version: expect.any(String),
     })
@@ -427,6 +428,7 @@ describe.each([
       owner: null,
       owner_id: null,
       path_tokens: [objectName],
+      signature: null,
       updated_at: expect.any(Date),
       version: expect.any(String),
     })
@@ -582,6 +584,7 @@ describe.each([
       owner: null,
       owner_id: null,
       path_tokens: [objectName],
+      signature: null,
       updated_at: expect.any(Date),
       version: expect.any(String),
     })
@@ -853,6 +856,7 @@ describe.each([
         owner: null,
         owner_id: null,
         path_tokens: [objectName],
+        signature: null,
         updated_at: expect.any(Date),
         version: expect.any(String),
       })
@@ -919,6 +923,7 @@ describe.each([
         owner: null,
         owner_id: 'some-owner-id',
         path_tokens: [objectName],
+        signature: null,
         updated_at: expect.any(Date),
         version: expect.any(String),
       })

@@ -60,4 +60,6 @@ export const DBMigration = {
   'operation-ergonomics': 58,
   'drop-unused-functions': 59,
   'optimize-existing-functions-again': 60,
+  'add-objects-signature': 61,
+  'add-objects-signature-index': 62,
 } as const

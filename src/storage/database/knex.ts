@@ -22,6 +22,8 @@ import {
   FindBucketFilters,
   FindObjectFilters,
   ListBucketOptions,
+  ListObjectsForSignatureGenerationOptions,
+  ObjectSignatureRow,
   SearchObjectOption,
   TransactionOptions,
 } from './adapter'
@@ -612,6 +614,7 @@ export class StorageKnexDB implements Database {
             version: data.version,
             owner: isUuid(data.owner || '') ? data.owner : undefined,
             owner_id: data.owner,
+            signature: null,
           })
         )
         .returning('*')
@@ -913,6 +916,63 @@ export class StorageKnexDB implements Database {
     })
   }
 
+  async listObjectsForSignatureGeneration(
+    options: ListObjectsForSignatureGenerationOptions
+  ): Promise<ObjectSignatureRow[]> {
+    return this.runQuery('ListObjectsForSignatureGeneration', async (knex, signal) => {
+      const query = knex
+        .from('objects')
+        .select<ObjectSignatureRow[]>('bucket_id', 'name', 'version')
+        .orderBy('bucket_id', 'asc')
+        .orderBy('name', 'asc')
+        .limit(options.limit)
+
+      if (options.bucketId) {
+        query.where('bucket_id', options.bucketId)
+      }
+
+      if (options.objectNames && options.objectNames.length > 0) {
+        query.whereIn('name', options.objectNames)
+      }
+
+      if (!options.force) {
+        query.whereNull('signature')
+      }
+
+      if (options.cursor) {
+        query.andWhere((builder) => {
+          builder.where('bucket_id', '>', options.cursor!.bucketId).orWhere((nested) => {
+            nested
+              .where('bucket_id', options.cursor!.bucketId)
+              .andWhere('name', '>', options.cursor!.objectName)
+          })
+        })
+      }
+
+      return query.abortOnSignal(signal)
+    })
+  }
+
+  async updateObjectSignature(
+    bucketId: string,
+    objectName: string,
+    version: string | undefined,
+    signature: Buffer
+  ) {
+    return this.runQuery('UpdateObjectSignature', async (knex, signal) => {
+      const query = knex.from('objects').where('bucket_id', bucketId).where('name', objectName)
+
+      if (version === undefined) {
+        query.whereNull('version')
+      } else {
+        query.where('version', version)
+      }
+
+      const updated = await query.update({ signature }).abortOnSignal(signal)
+      return updated > 0
+    })
+  }
+
   async createMultipartUpload(
     uploadId: string,
     bucketId: string,
@@ -1051,10 +1111,13 @@ export class StorageKnexDB implements Database {
       return columns
     }
 
-    const rules = [{ migration: 'custom-metadata', newColumns: ['user_metadata'] }]
+    const rules: { migration: keyof typeof DBMigration; newColumns: string[] }[] = [
+      { migration: 'custom-metadata', newColumns: ['user_metadata'] },
+      { migration: 'add-objects-signature', newColumns: ['signature'] },
+    ]
 
     rules.forEach((rule) => {
-      if (DBMigration[latestMigration] < DBMigration[rule.migration as keyof typeof DBMigration]) {
+      if (DBMigration[latestMigration] < DBMigration[rule.migration]) {
         const value = rule.newColumns
 
         if (typeof columns === 'string') {

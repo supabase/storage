@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import { Meter } from '@opentelemetry/api'
 import { afterEach, beforeEach, describe, expect, Mock, test, vi } from 'vitest'
-import { installCgroupCpuMetrics, parseCpuStat } from './cgroup-cpu-metrics'
+import { CgroupCpuCollector, parseCpuStat } from './cgroup-cpu-collector'
 
 vi.mock('@internal/monitoring/logger', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -41,12 +41,15 @@ throttled_time 7500000
 
 interface CapturedInstrument {
   name: string
-  callback: (observable: { observe: (value: number) => void }) => void
+  callback: (observable: {
+    observe: (value: number, labels?: Record<string, string>) => void
+  }) => void
 }
 
 interface CapturedObservation {
   name: string
   value: number
+  labels?: Record<string, string>
 }
 
 function createMockMeter(): {
@@ -70,7 +73,10 @@ function createMockMeter(): {
 
   const invoke = (name: string): CapturedObservation[] => {
     const observations: CapturedObservation[] = []
-    const observable = { observe: (value: number) => observations.push({ name, value }) }
+    const observable = {
+      observe: (value: number, labels?: Record<string, string>) =>
+        observations.push({ name, value, labels }),
+    }
     for (const inst of instruments) {
       if (inst.name === name) inst.callback(observable)
     }
@@ -102,7 +108,7 @@ describe('parseCpuStat', () => {
   })
 })
 
-describe('installCgroupCpuMetrics', () => {
+describe('CgroupCpuCollector', () => {
   const originalPlatform = process.platform
 
   beforeEach(() => {
@@ -118,7 +124,9 @@ describe('installCgroupCpuMetrics', () => {
     Object.defineProperty(process, 'platform', { value: 'darwin' })
 
     const { meter, instruments } = createMockMeter()
-    installCgroupCpuMetrics(meter)
+    const collector = new CgroupCpuCollector({})
+    collector.enable()
+    collector.updateMetricInstruments(meter)
 
     expect(instruments).toHaveLength(0)
     expect(readFileSync).not.toHaveBeenCalled()
@@ -131,10 +139,12 @@ describe('installCgroupCpuMetrics', () => {
     readFileSync.mockReturnValue(V2_BLOB)
 
     const { meter, invoke } = createMockMeter()
-    installCgroupCpuMetrics(meter)
+    const collector = new CgroupCpuCollector({})
+    collector.enable()
+    collector.updateMetricInstruments(meter)
 
     expect(invoke('process.cpu.cfs.throttled_ratio')).toEqual([
-      { name: 'process.cpu.cfs.throttled_ratio', value: 0 },
+      { name: 'process.cpu.cfs.throttled_ratio', value: 0, labels: {} },
     ])
   })
 
@@ -144,7 +154,9 @@ describe('installCgroupCpuMetrics', () => {
     readFileSync.mockReturnValue(V2_BLOB)
 
     const { meter, invoke } = createMockMeter()
-    installCgroupCpuMetrics(meter)
+    const collector = new CgroupCpuCollector({})
+    collector.enable()
+    collector.updateMetricInstruments(meter)
 
     // First sample → 0
     invoke('process.cpu.cfs.throttled_ratio')
@@ -155,11 +167,11 @@ nr_throttled 30
 throttled_usec 5000
 `)
     const second = invoke('process.cpu.cfs.throttled_ratio')
-    expect(second).toEqual([{ name: 'process.cpu.cfs.throttled_ratio', value: 0.05 }])
+    expect(second).toEqual([{ name: 'process.cpu.cfs.throttled_ratio', value: 0.05, labels: {} }])
 
     // Third sample identical → no new periods → 0, not NaN
     const third = invoke('process.cpu.cfs.throttled_ratio')
-    expect(third).toEqual([{ name: 'process.cpu.cfs.throttled_ratio', value: 0 }])
+    expect(third).toEqual([{ name: 'process.cpu.cfs.throttled_ratio', value: 0, labels: {} }])
   })
 
   test('observes counter values parsed from cpu.stat', () => {
@@ -168,16 +180,54 @@ throttled_usec 5000
     readFileSync.mockReturnValue(V2_BLOB)
 
     const { meter, invoke } = createMockMeter()
-    installCgroupCpuMetrics(meter)
+    const collector = new CgroupCpuCollector({})
+    collector.enable()
+    collector.updateMetricInstruments(meter)
 
     expect(invoke('process.cpu.cfs.periods')).toEqual([
-      { name: 'process.cpu.cfs.periods', value: 1000 },
+      { name: 'process.cpu.cfs.periods', value: 1000, labels: {} },
     ])
     expect(invoke('process.cpu.cfs.throttled_periods')).toEqual([
-      { name: 'process.cpu.cfs.throttled_periods', value: 25 },
+      { name: 'process.cpu.cfs.throttled_periods', value: 25, labels: {} },
     ])
     expect(invoke('process.cpu.cfs.throttled_time')).toEqual([
-      { name: 'process.cpu.cfs.throttled_time', value: 5_000_000 },
+      { name: 'process.cpu.cfs.throttled_time', value: 5_000_000, labels: {} },
     ])
+  })
+
+  test('applies configured prefix and labels to instrument names and observations', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' })
+    existsSync.mockReturnValue(true)
+    readFileSync.mockReturnValue(V2_BLOB)
+
+    const { meter, invoke } = createMockMeter()
+    const collector = new CgroupCpuCollector({
+      prefix: 'storage',
+      labels: { region: 'eu-west-1' },
+    })
+    collector.enable()
+    collector.updateMetricInstruments(meter)
+
+    expect(invoke('storage.process.cpu.cfs.periods')).toEqual([
+      {
+        name: 'storage.process.cpu.cfs.periods',
+        value: 1000,
+        labels: { region: 'eu-west-1' },
+      },
+    ])
+  })
+
+  test('does not observe when disabled', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' })
+    existsSync.mockReturnValue(true)
+    readFileSync.mockReturnValue(V2_BLOB)
+
+    const { meter, invoke } = createMockMeter()
+    const collector = new CgroupCpuCollector({})
+    collector.enable()
+    collector.updateMetricInstruments(meter)
+    collector.disable()
+
+    expect(invoke('process.cpu.cfs.periods')).toEqual([])
   })
 })

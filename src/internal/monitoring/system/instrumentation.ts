@@ -1,5 +1,6 @@
 import { InstrumentationBase, InstrumentationConfig } from '@opentelemetry/instrumentation'
 import { CollectorConfig, MetricCollector } from './base-collector'
+import { CgroupCpuCollector } from './cgroup-cpu-collector'
 import { CpuCollector } from './cpu-collector'
 import { FileDescriptorCollector } from './file-descriptor-collector'
 import { HandlesCollector } from './handles-collector'
@@ -43,6 +44,7 @@ export class StorageNodeInstrumentation extends InstrumentationBase<StorageNodeI
       new ProcessStartCollector(collectorConfig),
       new ExternalMemoryCollector(collectorConfig),
       new FileDescriptorCollector(collectorConfig),
+      new CgroupCpuCollector(collectorConfig),
     ]
 
     // Enable collectors if instrumentation is enabled (matches RuntimeNodeInstrumentation pattern)

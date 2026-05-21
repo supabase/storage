@@ -1,4 +1,5 @@
 export { BaseCollector, CollectorConfig, MetricCollector } from './base-collector'
+export { CgroupCpuCollector } from './cgroup-cpu-collector'
 export { CpuCollector } from './cpu-collector'
 export { HandlesCollector } from './handles-collector'
 export { StorageNodeInstrumentation, StorageNodeInstrumentationConfig } from './instrumentation'

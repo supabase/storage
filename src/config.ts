@@ -4,6 +4,9 @@ import { SignJWT } from 'jose'
 
 export type StorageBackendType = 'file' | 's3'
 export type IcebergCatalogAuthType = 'sigv4' | 'token'
+const DEFAULT_S3_UPLOAD_PART_SIZE = 16 * 1024 * 1024
+const MIN_S3_UPLOAD_PART_SIZE = 5 * 1024 * 1024
+
 export enum MultitenantMigrationStrategy {
   PROGRESSIVE = 'progressive',
   ON_REQUEST = 'on_request',
@@ -68,6 +71,7 @@ type StorageConfigType = {
   storageS3InternalTracesEnabled?: boolean
   storageS3MaxSockets: number
   storageS3DisableChecksum: boolean
+  storageS3UploadPartSize: number
   storageS3UploadQueueSize: number
   storageS3Bucket: string
   storageS3Endpoint?: string
@@ -374,6 +378,11 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       10
     ),
     storageS3DisableChecksum: getOptionalConfigFromEnv('STORAGE_S3_DISABLE_CHECKSUM') === 'true',
+    storageS3UploadPartSize: Math.max(
+      envNumber(getOptionalConfigFromEnv('STORAGE_S3_UPLOAD_PART_SIZE')) ??
+        DEFAULT_S3_UPLOAD_PART_SIZE,
+      MIN_S3_UPLOAD_PART_SIZE
+    ),
     storageS3UploadQueueSize:
       envNumber(getOptionalConfigFromEnv('STORAGE_S3_UPLOAD_QUEUE_SIZE')) ?? 2,
     storageS3InternalTracesEnabled:

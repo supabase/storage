@@ -100,10 +100,7 @@ const histogramAggregation = {
 // GC pauses span sub-millisecond incremental slices to multi-second major
 // collections, so the default 4-boundary [10ms, 100ms, 1s, 10s] histogram is
 // too coarse to distinguish incremental/minor GC and lacks resolution above 1s.
-const gcDurationBuckets = [
-  0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
-  30,
-]
+const gcDurationBuckets = [0.0001, 0.00025, ...durationBuckets, 30]
 
 const gcHistogramAggregation = {
   type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,

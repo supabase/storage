@@ -191,7 +191,6 @@ type StorageConfigType = {
     upload: boolean
   }
   prometheusMetricsEnabled: boolean
-  prometheusMetricsIncludeTenantId: boolean
   tenantPoolCacheTtlMs: number
   tenantPoolCacheHitLogSampleRate: number
   tenantPoolCacheMissLogSampleRate: number
@@ -500,8 +499,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
     // OpenTelemetry Metrics
     prometheusMetricsEnabled: getOptionalConfigFromEnv('PROMETHEUS_METRICS_ENABLED') === 'true',
-    prometheusMetricsIncludeTenantId:
-      getOptionalConfigFromEnv('PROMETHEUS_METRICS_INCLUDE_TENANT') === 'true',
     otelMetricsEnabled: getOptionalConfigFromEnv('OTEL_METRICS_ENABLED') === 'true',
     otelMetricsTemporality: getOptionalConfigFromEnv('OTEL_METRICS_TEMPORALITY') || 'CUMULATIVE',
     otelMetricsExportIntervalMs: parseInt(

@@ -1,4 +1,5 @@
 import * as grpc from '@grpc/grpc-js'
+import { installCgroupCpuMetrics } from '@internal/monitoring/cgroup-cpu-metrics'
 import { logger, logSchema } from '@internal/monitoring/logger'
 import { StorageNodeInstrumentation } from '@internal/monitoring/system'
 import { metrics } from '@opentelemetry/api'
@@ -253,6 +254,9 @@ if (otelMetricsEnabled) {
 
   // Register as global provider IMMEDIATELY so metrics.ts instruments work
   metrics.setGlobalMeterProvider(meterProvider)
+
+  // Register cgroup CFS throttling metrics (Linux container environments only).
+  installCgroupCpuMetrics(meterProvider.getMeter('storage-api-cgroup'))
 
   logger.info(
     { type: 'otel-metrics', otlpEndpoint, exportIntervalMs: otelMetricsExportIntervalMs },

@@ -129,6 +129,9 @@ function createDrainablePoolForTest(
     stats.ended = true
   })
   const pool = {
+    options: {
+      max: 8,
+    },
     get waitingCount() {
       return stats.waitingCount
     },
@@ -503,7 +506,7 @@ describe('PgPoolStrategy', () => {
     expect(pool.ended).toBe(true)
   })
 
-  it('drops the current pg pool and recreates a smaller one after rebalance', async () => {
+  it('updates the current pg pool max after cluster-size rebalance', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
 
     try {
@@ -512,17 +515,16 @@ describe('PgPoolStrategy', () => {
 
       strategy.rebalance({ clusterSize: 4 })
 
-      expect(originalPool.ended).toBe(true)
-
       const rebalancedPool = strategy.getCurrentPoolForTest()
-      expect(rebalancedPool).not.toBe(originalPool)
+      expect(rebalancedPool).toBe(originalPool)
+      expect(originalPool.ended).toBe(false)
       expect(rebalancedPool.options.max).toBe(2)
     } finally {
       await strategy.destroy()
     }
   })
 
-  it('recreates the current pg pool with updated max connections after rebalance', async () => {
+  it('updates the current pg pool max after max-connections rebalance', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
 
     try {
@@ -531,20 +533,22 @@ describe('PgPoolStrategy', () => {
 
       strategy.rebalance({ maxConnections: 12 })
 
-      expect(originalPool.ended).toBe(true)
-
       const rebalancedPool = strategy.getCurrentPoolForTest()
-      expect(rebalancedPool).not.toBe(originalPool)
+      expect(rebalancedPool).toBe(originalPool)
+      expect(originalPool.ended).toBe(false)
       expect(rebalancedPool.options.max).toBe(12)
     } finally {
       await strategy.destroy()
     }
   })
 
-  it('logs old pool drain failures after rebalance', async () => {
+  it('does not drain the current pg pool after rebalance', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const error = new Error('pool drain failed')
     const originalPool = {
+      options: {
+        max: 8,
+      },
       end: vi.fn().mockRejectedValue(error),
     } as unknown as Pool
     const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
@@ -554,22 +558,19 @@ describe('PgPoolStrategy', () => {
       strategy.rebalance({ clusterSize: 2 })
       await new Promise((resolve) => setImmediate(resolve))
 
-      expect(logSpy).toHaveBeenCalledWith(
+      expect(originalPool.end).not.toHaveBeenCalled()
+      expect(originalPool.options.max).toBe(4)
+      expect(logSpy).not.toHaveBeenCalledWith(
         logger,
         '[PgPoolStrategy] Failed to drain old pool during rebalance',
-        expect.objectContaining({
-          type: 'db',
-          tenantId: 'pg-pool-strategy-test',
-          project: 'pg-pool-strategy-test',
-          error,
-        })
+        expect.anything()
       )
     } finally {
       logSpy.mockRestore()
     }
   })
 
-  it('keeps the old pg pool open during rebalance until queued acquires finish', async () => {
+  it('keeps queued acquires on the current pg pool after rebalance', async () => {
     vi.useFakeTimers()
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const { pool, end, setStats } = createDrainablePoolForTest({
@@ -592,7 +593,8 @@ describe('PgPoolStrategy', () => {
       })
       await vi.advanceTimersByTimeAsync(200)
 
-      expect(end).toHaveBeenCalledTimes(1)
+      expect(pool.options.max).toBe(4)
+      expect(end).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }

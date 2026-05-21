@@ -99,34 +99,24 @@ export class PgPoolStrategy {
   }
 
   rebalance(options: PoolRebalanceOptions): void {
-    let shouldReplacePool = false
+    let shouldUpdatePoolMax = false
 
     if (options.clusterSize !== undefined && options.clusterSize !== 0) {
       this.options.clusterSize = options.clusterSize
-      shouldReplacePool = true
+      shouldUpdatePoolMax = true
     }
 
     if (options.maxConnections !== undefined) {
       this.options.maxConnections = options.maxConnections
-      shouldReplacePool = true
+      shouldUpdatePoolMax = true
     }
 
-    if (!shouldReplacePool) {
+    if (!shouldUpdatePoolMax) {
       return
     }
 
-    const originalPool = this.pool
-    this.pool = undefined
-
-    if (originalPool) {
-      void this.drainPool(originalPool, 'rebalance').catch((error) => {
-        logSchema.warning(logger, '[PgPoolStrategy] Failed to drain old pool during rebalance', {
-          type: 'db',
-          tenantId: this.options.tenantId,
-          project: this.options.tenantId,
-          error,
-        })
-      })
+    if (this.pool) {
+      this.pool.options.max = this.getSettings().maxConnections
     }
   }
 

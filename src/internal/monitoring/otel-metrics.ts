@@ -110,7 +110,6 @@ const gcHistogramAggregation = {
 const dropAggregation = { type: AggregationType.DROP } as const
 
 // Views — custom histogram buckets + drop auto-instrumentation duplicates.
-// Tenant attribute stripping is handled by registerMetric() in metrics.ts.
 const views = [
   {
     meterName: 'storage-api',

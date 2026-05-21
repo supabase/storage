@@ -660,20 +660,28 @@ describe('PoolManager cache lifecycle', () => {
     expect(recreated).not.toBe(first)
   })
 
-  test('recreates cached tenant pool with updated max connections after rebalance', async () => {
+  test('updates cached tenant pool max connections in place after rebalance', async () => {
     const poolModule = await loadPoolModule(10_000)
     const poolManager = new poolModule.PoolManager()
     const pool = poolManager.getPool(createPoolSettings('tenant-max-connections-rebalance'))
 
     try {
       const originalKnex = pool.acquire()
+      const destroySpy = vi.spyOn(originalKnex, 'destroy')
       expect((originalKnex.client.pool as { max: number }).max).toBe(10)
 
       pool.rebalance({ maxConnections: 14 })
 
       const rebalancedKnex = pool.acquire()
-      expect(rebalancedKnex).not.toBe(originalKnex)
+      expect(rebalancedKnex).toBe(originalKnex)
+      expect(destroySpy).not.toHaveBeenCalled()
       expect((rebalancedKnex.client.pool as { max: number }).max).toBe(14)
+
+      pool.rebalance({ clusterSize: 2 })
+
+      expect(pool.acquire()).toBe(originalKnex)
+      expect(destroySpy).not.toHaveBeenCalled()
+      expect((originalKnex.client.pool as { max: number }).max).toBe(7)
     } finally {
       await poolManager.destroyAll()
     }

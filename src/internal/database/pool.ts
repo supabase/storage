@@ -85,6 +85,11 @@ const multiTenantTtlConfig = {
 
 const manuallyDestroyedPools = new WeakSet<PoolStrategy>()
 
+type RebalanceableTarnPool = {
+  max: number
+  _tryAcquireOrCreate?: () => void
+}
+
 function logPoolDestroyError(error: unknown): void {
   logSchema.error(logger, 'pool was not able to be destroyed', {
     type: 'db',
@@ -387,32 +392,26 @@ class TenantPool implements PoolStrategy {
   }
 
   rebalance(options: PoolRebalanceOptions) {
-    let shouldReplacePool = false
+    let shouldUpdatePoolMax = false
 
     if (options.clusterSize !== undefined && options.clusterSize !== 0) {
       this.options.clusterSize = options.clusterSize
-      shouldReplacePool = true
+      shouldUpdatePoolMax = true
     }
 
     if (options.maxConnections !== undefined) {
       this.options.maxConnections = options.maxConnections
-      shouldReplacePool = true
+      shouldUpdatePoolMax = true
     }
 
-    if (!shouldReplacePool) {
+    if (!shouldUpdatePoolMax) {
       return
     }
 
-    const originalPool = this.pool
-    this.pool = undefined
-
-    if (originalPool) {
-      this.drainPool(originalPool).catch((e) => {
-        logSchema.error(logger, 'Error draining tenant pool', {
-          type: 'pool',
-          error: e,
-        })
-      })
+    const tarnPool = this.pool?.client?.pool as RebalanceableTarnPool | undefined
+    if (tarnPool) {
+      tarnPool.max = this.getSettings().maxConnections
+      tarnPool._tryAcquireOrCreate?.()
     }
   }
 

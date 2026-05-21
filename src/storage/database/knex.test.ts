@@ -1,5 +1,12 @@
 import { TenantConnection } from '../../internal/database/connection'
+import { dbQueryPerformance } from '../../internal/monitoring/metrics'
 import { escapeLike, StorageKnexDB } from './knex'
+
+class TestStorageKnexDB extends StorageKnexDB {
+  runTestQuery() {
+    return this.runQuery('TestQuery', async () => 'allowed')
+  }
+}
 
 describe('escapeLike', () => {
   test('escapes SQL wildcard characters', () => {
@@ -23,7 +30,7 @@ function createStorageKnexTestHarness() {
     getAbortSignal: vi.fn().mockReturnValue(undefined),
   } as unknown as TenantConnection
 
-  const db = new StorageKnexDB(connection, {
+  const db = new TestStorageKnexDB(connection, {
     tenantId: 'test-tenant',
     host: 'localhost',
   })
@@ -31,7 +38,7 @@ function createStorageKnexTestHarness() {
   return { db, connection, transaction }
 }
 
-describe('StorageKnexDB.testPermission', () => {
+describe('StorageKnexDB', () => {
   it('returns the callback result after rolling back the transaction', async () => {
     const { db, connection, transaction } = createStorageKnexTestHarness()
 
@@ -60,5 +67,20 @@ describe('StorageKnexDB.testPermission', () => {
 
     expect(transaction.rollback).toHaveBeenCalledTimes(1)
     expect(transaction.commit).not.toHaveBeenCalled()
+  })
+
+  it('records query performance attributes without tenant id labels', async () => {
+    const { db } = createStorageKnexTestHarness()
+    const recordSpy = vi.spyOn(dbQueryPerformance, 'record')
+
+    try {
+      await db.runTestQuery()
+
+      expect(recordSpy).toHaveBeenCalledWith(expect.any(Number), {
+        name: 'TestQuery',
+      })
+    } finally {
+      recordSpy.mockRestore()
+    }
   })
 })

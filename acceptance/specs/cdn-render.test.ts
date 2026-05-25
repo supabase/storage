@@ -42,6 +42,7 @@ describeAcceptance(
       const client = createRestClient()
       const bucketName = uniqueBucketName('cdn')
       const objectKey = uniqueObjectKey('cdn')
+      const missingObjectKey = uniqueObjectKey('cdn-missing')
 
       try {
         await createRestBucket(bucketName, { isPublic: true })
@@ -57,8 +58,17 @@ describeAcceptance(
         )
         expect(purge.json).toMatchObject({
           message: 'success',
-          statusCode: '200',
         })
+
+        const missingPurge = await client.request(
+          'DELETE',
+          `/cdn/${bucketName}/${encodePathSegments(missingObjectKey)}`,
+          {
+            expectedStatus: [400, 404],
+            token: requireServiceKey(),
+          }
+        )
+        expect(missingPurge.json).toBeTruthy()
       } finally {
         await cleanupRestResources(bucketName, [objectKey], client)
       }
@@ -92,6 +102,17 @@ describeAcceptance(
             config.baseUrl,
             `/render/image/public/${bucketName}/${encodePathSegments(objectKey)}?width=1&height=1`
           )
+        )
+
+        await expectRenderedImage(
+          joinUrl(
+            config.baseUrl,
+            `/render/image/public/${bucketName}/${encodePathSegments(
+              objectKey
+            )}?width=1&height=1&format=webp`
+          ),
+          undefined,
+          'image/webp'
         )
 
         await expectRenderedImage(
@@ -133,10 +154,59 @@ describeAcceptance(
         await cleanupRestResources(bucketName, [objectKey], client)
       }
     })
+
+    it('rejects non-image input and invalid transformations', async () => {
+      const config = getAcceptanceConfig()
+      const client = createRestClient()
+      const bucketName = uniqueBucketName('render-errors')
+      const objectKey = uniqueObjectKey('render-text', 'txt')
+
+      try {
+        await createRestBucket(bucketName, { isPublic: true })
+        await uploadRestObject(bucketName, objectKey, 'not an image', {
+          contentType: 'text/plain',
+        })
+
+        const invalidTransform = await fetchRenderedImage(
+          joinUrl(
+            config.baseUrl,
+            `/render/image/public/${bucketName}/${encodePathSegments(objectKey)}?width=-1`
+          )
+        )
+        expect(invalidTransform.status).toBe(400)
+        expect(invalidTransform.contentType).not.toMatch(/^image\//)
+        expect(invalidTransform.bodyText).toContain('width')
+
+        const nonImage = await fetchRenderedImage(
+          joinUrl(
+            config.baseUrl,
+            `/render/image/public/${bucketName}/${encodePathSegments(objectKey)}?width=1&height=1`
+          )
+        )
+        expect([400, 415, 422]).toContain(nonImage.status)
+        expect(nonImage.contentType).not.toMatch(/^image\//)
+        expect(nonImage.bodyText.length).toBeGreaterThan(0)
+      } finally {
+        await cleanupRestResources(bucketName, [objectKey], client)
+      }
+    })
   }
 )
 
-async function expectRenderedImage(url: string, token?: string) {
+async function expectRenderedImage(url: string, token?: string, expectedContentType?: string) {
+  const rendered = await fetchRenderedImage(url, token)
+  const failureBody = rendered.contentType.startsWith('image/') ? '' : rendered.bodyText
+
+  expect(rendered.status, failureBody).toBe(200)
+  if (expectedContentType) {
+    expect(rendered.contentType, failureBody).toBe(expectedContentType)
+  } else {
+    expect(rendered.contentType, failureBody).toMatch(/^image\//)
+  }
+  expect(rendered.body.byteLength, failureBody).toBeGreaterThan(0)
+}
+
+async function fetchRenderedImage(url: string, token?: string) {
   let response: Response | undefined
   try {
     response = await fetch(url, {
@@ -151,12 +221,14 @@ async function expectRenderedImage(url: string, token?: string) {
 
     const contentType = response.headers.get('content-type') ?? ''
     const body = await response.arrayBuffer()
-    const isImageResponse = /^image\//.test(contentType)
-    const failureBody = isImageResponse ? '' : new TextDecoder().decode(body)
+    const bodyText = /^image\//.test(contentType) ? '' : new TextDecoder().decode(body)
 
-    expect(response.status, failureBody).toBe(200)
-    expect(contentType, failureBody).toMatch(/^image\//)
-    expect(body.byteLength, failureBody).toBeGreaterThan(0)
+    return {
+      body,
+      bodyText,
+      contentType,
+      status: response.status,
+    }
   } finally {
     if (response && !response.bodyUsed) {
       await response.body?.cancel()

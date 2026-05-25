@@ -81,11 +81,11 @@ jobs:
         env:
           ACCEPTANCE_ADMIN_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5001' || '' }}
           ACCEPTANCE_ENABLE_ADMIN: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
-          ACCEPTANCE_ENABLE_PATH_EDGES: ${{ matrix.storage_backend == 'file' && 'true' || 'false' }}
           ACCEPTANCE_INFRA_RESTART_SCRIPT: ${{ matrix.database == 'oriole' && 'infra:restart:ci:oriole' || 'infra:restart:ci' }}
           ACCEPTANCE_PROFILE: ${{ inputs.profile || 'full' }}
           ACCEPTANCE_X_FORWARDED_HOST: ${{ matrix.tenancy == 'multitenant' && 'bjhaohmqunupljrqypxz.local.dev' || '' }}
           MULTI_TENANT: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
+          PG_QUEUE_ENABLE: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           REQUEST_X_FORWARDED_HOST_REGEXP: ${{ matrix.tenancy == 'multitenant' && '^([a-z]{20})[.]local[.](?:com|dev)$' || '' }}
           STORAGE_PUBLIC_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5000' || '' }}
           STORAGE_BACKEND: ${{ matrix.storage_backend }}
@@ -130,7 +130,6 @@ jobs:
           ACCEPTANCE_ENABLE_ADMIN: ${{ vars.ACCEPTANCE_ENABLE_ADMIN }}
           ACCEPTANCE_ENABLE_CDN: ${{ vars.ACCEPTANCE_ENABLE_CDN }}
           ACCEPTANCE_ENABLE_ICEBERG: ${{ vars.ACCEPTANCE_ENABLE_ICEBERG }}
-          ACCEPTANCE_ENABLE_PATH_EDGES: ${{ vars.ACCEPTANCE_ENABLE_PATH_EDGES }}
           ACCEPTANCE_ENABLE_RENDER: ${{ vars.ACCEPTANCE_ENABLE_RENDER }}
           ACCEPTANCE_ENABLE_RLS_SETUP: ${{ vars.ACCEPTANCE_ENABLE_RLS_SETUP }}
           ACCEPTANCE_ENABLE_TUS: ${{ vars.ACCEPTANCE_ENABLE_TUS }}

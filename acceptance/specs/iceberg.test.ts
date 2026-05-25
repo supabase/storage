@@ -61,8 +61,10 @@ describeAcceptance(
       const suffix = randomUUID().replace(/-/g, '').slice(0, 12)
       const namespaceName = `ns${suffix}`
       const tableName = `tbl${suffix}`
+      const secondTableName = `tblb${suffix}`
       let namespaceCreated = false
       let tableCreated = false
+      let secondTableCreated = false
 
       try {
         const createdBucket = await client.request<IcebergBucket>('POST', '/iceberg/bucket', {
@@ -117,7 +119,8 @@ describeAcceptance(
             body: {
               namespace: namespaceName,
               properties: {
-                purpose: 'acceptance',
+                stable: 'kept',
+                overwrite: 'old',
               },
             },
             expectedStatus: 200,
@@ -161,40 +164,7 @@ describeAcceptance(
           'POST',
           `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables`,
           {
-            body: {
-              name: tableName,
-              properties: {
-                purpose: 'acceptance',
-              },
-              schema: {
-                fields: [
-                  {
-                    id: 1,
-                    name: 'id',
-                    required: false,
-                    type: 'long',
-                  },
-                  {
-                    id: 2,
-                    name: 'name',
-                    required: false,
-                    type: 'string',
-                  },
-                ],
-                'identifier-field-ids': [],
-                'schema-id': 0,
-                type: 'struct',
-              },
-              spec: {
-                fields: [],
-                'spec-id': 0,
-              },
-              'stage-create': false,
-              'write-order': {
-                fields: [],
-                'order-id': 0,
-              },
-            },
+            body: createTablePayload(tableName),
             expectedStatus: 200,
             token,
           }
@@ -202,6 +172,19 @@ describeAcceptance(
         tableCreated = true
         expect(createdTable.json?.metadata).toBeTruthy()
         expect(createdTable.json?.['metadata-location']).toBeTruthy()
+
+        const createdSecondTable = await client.request<IcebergTableResponse>(
+          'POST',
+          `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables`,
+          {
+            body: createTablePayload(secondTableName),
+            expectedStatus: 200,
+            token,
+          }
+        )
+        secondTableCreated = true
+        expect(createdSecondTable.json?.metadata).toBeTruthy()
+        expect(createdSecondTable.json?.['metadata-location']).toBeTruthy()
 
         const tables = await client.request<IcebergTableList>(
           'GET',
@@ -211,7 +194,19 @@ describeAcceptance(
             token,
           }
         )
-        expect(tables.json?.identifiers?.map((table) => table.name)).toContain(tableName)
+        expect(tables.json?.identifiers?.map((table) => table.name)).toEqual(
+          expect.arrayContaining([tableName, secondTableName])
+        )
+
+        const limitedTables = await client.request<IcebergTableList>(
+          'GET',
+          `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables?pageSize=1`,
+          {
+            expectedStatus: 200,
+            token,
+          }
+        )
+        expect(limitedTables.json?.identifiers).toHaveLength(1)
 
         const table = await client.request<IcebergTableResponse>(
           'GET',
@@ -253,6 +248,30 @@ describeAcceptance(
         )
         expect(committed.json?.metadata).toBeTruthy()
 
+        const conflictingCommit = await client.request<IcebergErrorResponse>(
+          'POST',
+          `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables/${tableName}`,
+          {
+            body: {
+              requirements: [
+                {
+                  type: 'assert-current-schema-id',
+                  'current-schema-id': 999_999,
+                },
+              ],
+              updates: [
+                {
+                  action: 'set-properties',
+                  updates: { 'acceptance.commit': 'conflict' },
+                },
+              ],
+            },
+            expectedStatus: 409,
+            token,
+          }
+        )
+        expect(conflictingCommit.json?.error?.code).toBe(409)
+
         const missingNamespace = await client.request<IcebergErrorResponse>(
           'GET',
           `/iceberg/v1/${bucketName}/namespaces/missing${suffix}`,
@@ -262,6 +281,22 @@ describeAcceptance(
           }
         )
         expect(missingNamespace.json).toMatchObject({
+          error: {
+            code: 404,
+            message: 'Namespace not found',
+            type: 'NoSuchNamespaceException',
+          },
+        })
+
+        const dropMissingNamespace = await client.request<IcebergErrorResponse>(
+          'DELETE',
+          `/iceberg/v1/${bucketName}/namespaces/missing${suffix}`,
+          {
+            expectedStatus: 404,
+            token,
+          }
+        )
+        expect(dropMissingNamespace.json).toMatchObject({
           error: {
             code: 404,
             message: 'Namespace not found',
@@ -285,24 +320,27 @@ describeAcceptance(
           },
         })
 
+        const dropMissingTable = await client.request<IcebergErrorResponse>(
+          'DELETE',
+          `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables/missing${suffix}`,
+          {
+            expectedStatus: 404,
+            token,
+          }
+        )
+        expect(dropMissingTable.json).toMatchObject({
+          error: {
+            code: 404,
+            message: 'Table not found',
+            type: 'NoSuchTableException',
+          },
+        })
+
         const duplicateTable = await client.request<IcebergErrorResponse>(
           'POST',
           `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables`,
           {
-            body: {
-              name: tableName,
-              schema: {
-                type: 'struct',
-                fields: [
-                  {
-                    id: 1,
-                    name: 'id',
-                    required: false,
-                    type: 'long',
-                  },
-                ],
-              },
-            },
+            body: createTablePayload(tableName),
             expectedStatus: 409,
             token,
           }
@@ -314,7 +352,75 @@ describeAcceptance(
             type: 'AlreadyExistsException',
           },
         })
+
+        // The pg metastore upserts namespaces on conflict and merges metadata:
+        // existing keys are preserved, colliding keys use the re-create value,
+        // and new keys are added.
+        const reCreated = await client.request<IcebergNamespaceResponse>(
+          'POST',
+          `/iceberg/v1/${bucketName}/namespaces`,
+          {
+            body: {
+              namespace: namespaceName,
+              properties: {
+                overwrite: 'new',
+                added: 'value',
+              },
+            },
+            expectedStatus: 200,
+            token,
+          }
+        )
+        expect(reCreated.json?.namespace).toEqual([namespaceName])
+        expect(reCreated.json?.properties).toMatchObject({
+          stable: 'kept',
+          overwrite: 'new',
+          added: 'value',
+        })
+
+        const namespaceAfterRecreate = await client.request<IcebergNamespaceResponse>(
+          'GET',
+          `/iceberg/v1/${bucketName}/namespaces/${namespaceName}`,
+          {
+            expectedStatus: 200,
+            token,
+          }
+        )
+        expect(namespaceAfterRecreate.json?.namespace).toEqual([namespaceName])
+        expect(namespaceAfterRecreate.json?.properties).toMatchObject({
+          stable: 'kept',
+          overwrite: 'new',
+          added: 'value',
+        })
+
+        // Dropping a namespace that still owns tables must fail with the
+        // storage-level resource-not-empty contract (HTTP 400 +
+        // type=IcebergResourceNotEmpty per the iceberg error formatter).
+        const dropNonEmpty = await client.request<IcebergErrorResponse>(
+          'DELETE',
+          `/iceberg/v1/${bucketName}/namespaces/${namespaceName}`,
+          { expectedStatus: 400, token }
+        )
+        expect(dropNonEmpty.json).toMatchObject({
+          error: {
+            code: 400,
+            type: 'IcebergResourceNotEmpty',
+          },
+        })
       } finally {
+        if (secondTableCreated) {
+          await client
+            .request(
+              'DELETE',
+              `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables/${secondTableName}`,
+              {
+                expectedStatus: [204, 400, 404],
+                token,
+              }
+            )
+            .catch(() => undefined)
+        }
+
         if (tableCreated) {
           await client
             .request(
@@ -347,3 +453,40 @@ describeAcceptance(
     })
   }
 )
+
+function createTablePayload(tableName: string) {
+  return {
+    name: tableName,
+    properties: {
+      purpose: 'acceptance',
+    },
+    schema: {
+      fields: [
+        {
+          id: 1,
+          name: 'id',
+          required: false,
+          type: 'long',
+        },
+        {
+          id: 2,
+          name: 'name',
+          required: false,
+          type: 'string',
+        },
+      ],
+      'identifier-field-ids': [],
+      'schema-id': 0,
+      type: 'struct',
+    },
+    spec: {
+      fields: [],
+      'spec-id': 0,
+    },
+    'stage-create': false,
+    'write-order': {
+      fields: [],
+      'order-id': 0,
+    },
+  }
+}

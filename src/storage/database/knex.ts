@@ -1084,7 +1084,6 @@ export class StorageKnexDB implements Database {
       const duration = Number(process.hrtime.bigint() - startTime) / 1e9
       dbQueryPerformance.record(duration, {
         name: queryName,
-        tenantId: this.tenantId,
       })
     }
 
@@ -1145,7 +1144,9 @@ export class DBError extends StorageBackendError implements RenderableError {
     switch (pgError.code) {
       case '42501':
         return ERRORS.AccessDenied(
-          'new row violates row-level security policy',
+          pgError.message.includes('row-level security')
+            ? 'new row violates row-level security policy'
+            : pgError.message,
           pgError
         ).withMetadata({
           query,

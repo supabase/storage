@@ -1,6 +1,6 @@
 import { encrypt, signJWT } from '@internal/auth'
 import { TENANT_CONFIG_CACHE_NAME } from '@internal/cache'
-import { jwksManager } from '@internal/database'
+import { jwksManager, TenantConnection } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import {
   deleteTenantConfig,
@@ -8,6 +8,7 @@ import {
   getFileSizeLimit,
   getServiceKey,
   getTenantConfig,
+  onTenantConfigChange,
 } from '@internal/database/tenant'
 import { cacheRequestsTotal } from '@internal/monitoring/metrics'
 import dotenv from 'dotenv'
@@ -762,6 +763,65 @@ describe('Tenant configs', () => {
       vi.doUnmock('@internal/cache')
       vi.resetModules()
       knexTableSpy.mockRestore()
+    }
+  })
+
+  test('Tenant config maxConnections change rebalances cached pool without destroying it', async () => {
+    const tenantId = 'pool-max-connections-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://tenant'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: null,
+      max_connections: 20,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const queryBuilder = {
+      first: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      abortOnSignal: vi
+        .fn()
+        .mockResolvedValueOnce(encryptedTenant)
+        .mockResolvedValueOnce({
+          ...encryptedTenant,
+          max_connections: 40,
+        }),
+    }
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const rebalanceSpy = vi.spyOn(TenantConnection.poolManager, 'rebalance')
+
+    try {
+      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
+
+      await getTenantConfig(tenantId)
+      await onTenantConfigChange(tenantId)
+
+      expect(rebalanceSpy).toHaveBeenCalledWith(tenantId, { maxConnections: 40 })
+      expect(destroySpy).not.toHaveBeenCalled()
+    } finally {
+      deleteTenantConfig(tenantId)
+      knexTableSpy.mockRestore()
+      destroySpy.mockRestore()
+      rebalanceSpy.mockRestore()
     }
   })
 

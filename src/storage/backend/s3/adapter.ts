@@ -35,6 +35,7 @@ import {
 } from './../adapter'
 
 const {
+  storageS3UploadPartSize,
   storageS3UploadQueueSize,
   tracingFeatures,
   storageS3MaxSockets,
@@ -249,6 +250,7 @@ export class S3Backend implements StorageBackendAdapter {
 
     const upload = new Upload({
       client: this.client,
+      partSize: storageS3UploadPartSize,
       queueSize: storageS3UploadQueueSize,
       params: {
         Bucket: bucketName,

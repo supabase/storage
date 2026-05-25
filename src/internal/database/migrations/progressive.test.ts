@@ -67,7 +67,7 @@ const mockRunMigrationsBatchSend = vi.mocked(RunMigrationsOnTenants.batchSend)
 
 describe('ProgressiveMigrations', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
 
     mockGetTenantConfig.mockResolvedValue({
       migrationStatus: undefined,
@@ -76,7 +76,7 @@ describe('ProgressiveMigrations', () => {
     mockAreMigrationsUpToDate.mockResolvedValue(false)
   })
 
-  it('keeps queued tenants and resets emittingJobs when batchSend fails', async () => {
+  it('keeps batchSend-failed tenants queued and resets emittingJobs', async () => {
     mockRunMigrationsBatchSend
       .mockRejectedValueOnce(new Error('queue unavailable'))
       .mockResolvedValueOnce(undefined as never)
@@ -89,9 +89,16 @@ describe('ProgressiveMigrations', () => {
 
     migrations.seed('tenant-a')
 
-    await expect(migrations.flush(1)).rejects.toThrow('queue unavailable')
+    await expect(migrations.flush(1)).resolves.toBeUndefined()
     expect(migrations.pending()).toEqual(['tenant-a'])
     expect(migrations.isEmitting()).toBe(false)
+    expect(mockError).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] Error sending migration jobs batch',
+      expect.objectContaining({
+        type: 'migrations',
+      })
+    )
 
     await expect(migrations.flush(1)).resolves.toBeUndefined()
     expect(migrations.pending()).toEqual([])
@@ -99,7 +106,7 @@ describe('ProgressiveMigrations', () => {
     expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(2)
   })
 
-  it('logs batch enqueue failures at the caller boundary', async () => {
+  it('logs batch enqueue failures inside the batch handler', async () => {
     mockRunMigrationsBatchSend.mockRejectedValueOnce(new Error('queue unavailable'))
 
     const migrations = new TestProgressiveMigrations({
@@ -117,7 +124,7 @@ describe('ProgressiveMigrations', () => {
     expect(mockError).toHaveBeenCalledTimes(1)
     expect(mockError).toHaveBeenCalledWith(
       expect.anything(),
-      '[Migrations] Error creating migration jobs',
+      '[Migrations] Error sending migration jobs batch',
       expect.objectContaining({
         type: 'migrations',
       })
@@ -282,6 +289,48 @@ describe('ProgressiveMigrations', () => {
       tenantId: 'tenant-a',
     })
     expect(migrations.pending()).toEqual(['tenant-b'])
+  })
+
+  it('moves batchSend-failed jobs behind unscheduled tenants and still drops terminal prep failures', async () => {
+    mockRunMigrationsBatchSend.mockRejectedValueOnce(new Error('queue unavailable'))
+    mockGetTenantConfig.mockImplementation(async (tenantId) => {
+      if (tenantId === 'tenant-b') {
+        throw ERRORS.MissingTenantConfig(tenantId)
+      }
+
+      if (tenantId === 'tenant-c') {
+        throw new Error('tenant lookup failed')
+      }
+
+      return {
+        migrationStatus: undefined,
+        syncMigrationsDone: false,
+      } as Awaited<ReturnType<typeof getTenantConfig>>
+    })
+
+    const migrations = new TestProgressiveMigrations({
+      maxSize: 3,
+      interval: 1000,
+      watch: false,
+    })
+
+    migrations.seed('tenant-a', 'tenant-b', 'tenant-c', 'tenant-d')
+
+    await expect(migrations.flush(3)).resolves.toBeUndefined()
+
+    expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(1)
+    expect(mockRunMigrationsBatchSend.mock.calls[0][0]).toHaveLength(1)
+    expect(
+      (
+        mockRunMigrationsBatchSend.mock.calls[0][0][0] as unknown as {
+          payload: { tenantId: string }
+        }
+      ).payload
+    ).toMatchObject({
+      tenantId: 'tenant-a',
+    })
+    expect(migrations.pending()).toEqual(['tenant-d', 'tenant-a', 'tenant-c'])
+    expect(migrations.isEmitting()).toBe(false)
   })
 
   it('keeps tenants queued when preparing a migration job fails', async () => {

@@ -1,3 +1,5 @@
+import { Readable } from 'node:stream'
+import { setTimeout as sleep } from 'node:timers/promises'
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
@@ -35,12 +37,17 @@ import { StorageKnexDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
 import { createHash, createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
-import { ReadableStreamBuffer } from 'stream-buffers'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
 import { EMPTY_SHA256_HASH, SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
 
-const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
+const {
+  anonKeyAsync,
+  s3ProtocolAccessKeySecret,
+  s3ProtocolAccessKeyId,
+  storageS3Region,
+  tenantId,
+} = getConfig()
 const STREAMING_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
 const STREAMING_TRAILER_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER'
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
@@ -1518,13 +1525,17 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const readable = new ReadableStreamBuffer({
-          frequency: 500,
-          chunkSize: 1024 * 3,
-        })
-
-        readable.put(Buffer.alloc(1024 * 12))
-        readable.stop()
+        const readable = Readable.from(
+          (async function* () {
+            const buffer = Buffer.alloc(1024 * 12)
+            const chunkSize = 1024 * 3
+            for (let i = 0; i < buffer.length; i += chunkSize) {
+              await sleep(500)
+              yield buffer.subarray(i, i + chunkSize)
+            }
+          })(),
+          { objectMode: false }
+        )
 
         const uploadPart = new UploadPartCommand({
           Bucket: bucketName,
@@ -1744,7 +1755,8 @@ describe('S3 Protocol', () => {
           Key: key,
         })
 
-        await client.send(deleteObject)
+        const deleteResp = await client.send(deleteObject)
+        expect(deleteResp.$metadata.httpStatusCode).toEqual(204)
 
         const getObject = new GetObjectCommand({
           Bucket: bucketName,
@@ -1755,6 +1767,34 @@ describe('S3 Protocol', () => {
           await client.send(getObject)
         } catch (e) {
           expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+        }
+      })
+
+      it('can delete non-existing object', async () => {
+        const bucketName = await createBucket(client)
+
+        const deleteObject = new DeleteObjectCommand({
+          Bucket: bucketName,
+          Key: crypto.randomUUID() + '.jpg',
+        })
+
+        const deleteResp = await client.send(deleteObject)
+        expect(deleteResp.$metadata.httpStatusCode).toEqual(204)
+      })
+
+      it('does not treat a missing bucket as an idempotent object delete', async () => {
+        const deleteObject = new DeleteObjectCommand({
+          Bucket: `missing-bucket-${randomUUID()}`,
+          Key: crypto.randomUUID() + '.jpg',
+        })
+
+        try {
+          await client.send(deleteObject)
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toBe('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+          expect((e as S3ServiceException).name).toEqual('NoSuchBucket')
         }
       })
     })
@@ -1865,19 +1905,14 @@ describe('S3 Protocol', () => {
           {
             Key: 'test-1.jpg',
           },
-        ])
-        expect(deleteResp.Errors).toEqual([
           {
             Key: 'test-2.jpg',
-            Code: 'AccessDenied',
-            Message: "You do not have permission to delete this object or the object doesn't exist",
           },
           {
             Key: 'test-3.jpg',
-            Code: 'AccessDenied',
-            Message: "You do not have permission to delete this object or the object doesn't exist",
           },
         ])
+        expect(deleteResp.Errors ?? []).toEqual([])
 
         const listObjectsCommand = new ListObjectsV2Command({
           Bucket: bucketName,
@@ -1885,6 +1920,125 @@ describe('S3 Protocol', () => {
 
         const resp = await client.send(listObjectsCommand)
         expect(resp.Contents).toBe(undefined)
+      })
+
+      it('does not treat a missing bucket as a successful bulk delete', async () => {
+        const deleteObjectsCommand = new DeleteObjectsCommand({
+          Bucket: `missing-bucket-${randomUUID()}`,
+          Delete: {
+            Objects: [{ Key: 'test-1.jpg' }],
+          },
+        })
+
+        try {
+          await client.send(deleteObjectsCommand)
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toBe('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+          expect((e as S3ServiceException).name).toEqual('NoSuchBucket')
+        }
+      })
+
+      it('returns AccessDenied for existing objects blocked by RLS', async () => {
+        const bucketName = await createBucket(client, 'delete-permission', false)
+        const allowedKey = 'allowed/delete-me.jpg'
+        const deniedKey = 'denied/keep-me.jpg'
+        const missingKey = 'missing/not-there.jpg'
+        const policyName = `s3_delete_objects_${randomUUID().replaceAll('-', '_')}`
+        const adminUser = await getServiceKeyUser(tenantId)
+        const connection = await getPostgresConnection({
+          tenantId,
+          user: adminUser,
+          superUser: adminUser,
+          host: 'localhost',
+        })
+        const db = connection.pool.acquire()
+        const anonKey = await anonKeyAsync
+        const anonClient = new S3Client({
+          endpoint: `${baseUrl}/s3`,
+          forcePathStyle: true,
+          region: storageS3Region,
+          credentials: {
+            accessKeyId: tenantId,
+            secretAccessKey: anonKey,
+            sessionToken: anonKey,
+          },
+        })
+
+        try {
+          await Promise.all([
+            uploadFile(client, bucketName, allowedKey, 1),
+            uploadFile(client, bucketName, deniedKey, 1),
+          ])
+
+          await db.raw(`
+            CREATE POLICY "${policyName}_select"
+            ON storage.objects
+            AS PERMISSIVE
+            FOR SELECT
+            TO "anon"
+            USING (bucket_id = '${bucketName}' AND name = '${allowedKey}')
+          `)
+          await db.raw(`
+            CREATE POLICY "${policyName}_delete"
+            ON storage.objects
+            AS PERMISSIVE
+            FOR DELETE
+            TO "anon"
+            USING (bucket_id = '${bucketName}' AND name = '${allowedKey}')
+          `)
+
+          const deleteResp = await anonClient.send(
+            new DeleteObjectsCommand({
+              Bucket: bucketName,
+              Delete: {
+                Objects: [{ Key: allowedKey }, { Key: missingKey }, { Key: deniedKey }],
+              },
+            })
+          )
+
+          expect(deleteResp.Deleted).toEqual([{ Key: allowedKey }, { Key: missingKey }])
+          expect(deleteResp.Errors).toEqual([
+            {
+              Key: deniedKey,
+              Code: 'AccessDenied',
+              Message: 'Access Denied',
+            },
+          ])
+
+          const allowedListResp = await client.send(
+            new ListObjectsV2Command({
+              Bucket: bucketName,
+              Prefix: allowedKey,
+            })
+          )
+          expect(allowedListResp.Contents).toBe(undefined)
+
+          const deniedListResp = await client.send(
+            new ListObjectsV2Command({
+              Bucket: bucketName,
+              Prefix: deniedKey,
+            })
+          )
+          expect(deniedListResp.Contents?.map((object) => object.Key)).toEqual([deniedKey])
+        } finally {
+          anonClient.destroy()
+          await db.raw(`DROP POLICY IF EXISTS "${policyName}_select" ON storage.objects`)
+          await db.raw(`DROP POLICY IF EXISTS "${policyName}_delete" ON storage.objects`)
+          await connection.dispose()
+          await client
+            .send(
+              new DeleteObjectsCommand({
+                Bucket: bucketName,
+                Delete: {
+                  Objects: [{ Key: allowedKey }, { Key: deniedKey }],
+                },
+              })
+            )
+            .catch(() => undefined)
+          await client.send(new DeleteBucketCommand({ Bucket: bucketName })).catch(() => undefined)
+        }
       })
     })
 

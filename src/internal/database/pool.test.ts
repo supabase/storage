@@ -660,6 +660,25 @@ describe('PoolManager cache lifecycle', () => {
     expect(recreated).not.toBe(first)
   })
 
+  test('recreates cached tenant pool with updated max connections after rebalance', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool(createPoolSettings('tenant-max-connections-rebalance'))
+
+    try {
+      const originalKnex = pool.acquire()
+      expect((originalKnex.client.pool as { max: number }).max).toBe(10)
+
+      pool.rebalance({ maxConnections: 14 })
+
+      const rebalancedKnex = pool.acquire()
+      expect(rebalancedKnex).not.toBe(originalKnex)
+      expect((rebalancedKnex.client.pool as { max: number }).max).toBe(14)
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
   test('propagates explicit destroy failures without double-destroying pools', async () => {
     const poolModule = await loadPoolModule(10_000)
 

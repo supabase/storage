@@ -1,4 +1,5 @@
 import { IcebergError } from '@storage/protocols/iceberg/catalog/errors'
+import { DatabaseError } from 'pg'
 import { StorageBackendError } from './storage-error'
 
 export enum ErrorCode {
@@ -20,7 +21,6 @@ export enum ErrorCode {
   KeyAlreadyExists = 'KeyAlreadyExists',
   BucketAlreadyExists = 'BucketAlreadyExists',
   DatabaseTimeout = 'DatabaseTimeout',
-  DatabaseConnectionLimit = 'DatabaseConnectionLimit',
   DatabaseReadOnly = 'DatabaseReadOnly',
   DatabaseInvalidObjectDefinition = 'DatabaseInvalidObjectDefinition',
   DatabaseSchemaMismatch = 'DatabaseSchemaMismatch',
@@ -386,15 +386,6 @@ export const ERRORS = {
       originalError: e,
     }),
 
-  DatabaseConnectionLimit: (e?: Error) =>
-    new StorageBackendError({
-      code: ErrorCode.DatabaseConnectionLimit,
-      httpStatusCode: 503,
-      message:
-        'The database has reached its maximum number of connections. Please try again later.',
-      originalError: e,
-    }),
-
   DatabaseReadOnly: (e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.DatabaseReadOnly,
@@ -411,13 +402,20 @@ export const ERRORS = {
       originalError: e,
     }),
 
-  DatabaseSchemaMismatch: (e?: Error) =>
-    new StorageBackendError({
-      code: ErrorCode.DatabaseSchemaMismatch,
-      httpStatusCode: 503,
-      message: 'The database schema is out of sync. Please run migrations or contact support.',
-      originalError: e,
-    }),
+  DatabaseSchemaMismatch: (e: DatabaseError) =>
+    e.internalQuery && e.internalPosition // originates in trigger or RLS
+      ? new StorageBackendError({
+          code: ErrorCode.DatabaseSchemaMismatch,
+          httpStatusCode: 503,
+          message: 'There is a database schema mismatch in a trigger or RLS policy: ' + e.where,
+          originalError: e,
+        })
+      : new StorageBackendError({
+          code: ErrorCode.DatabaseSchemaMismatch,
+          httpStatusCode: 503,
+          message: 'The database schema is out of sync. Please run migrations or contact support.',
+          originalError: e,
+        }),
 
   ResourceLocked: (e?: Error) =>
     new StorageBackendError({

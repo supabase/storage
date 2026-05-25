@@ -48,7 +48,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.post<MoveJobsRequestInterface>(
     '/move',
-    { schema: { tags: ['queue'] } },
+    { schema: { ...moveJobsSchema, tags: ['queue'] } },
     async (req, reply) => {
       if (!pgQueueEnable) {
         return reply.status(400).send({ message: 'Queue is not enabled' })

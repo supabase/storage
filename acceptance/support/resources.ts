@@ -17,12 +17,16 @@ export function uniqueObjectKey(kind: string, extension = 'txt'): string {
   return `${config.resourcePrefix}/${kind}-${suffix}.${extension}`
 }
 
-export async function createRestBucket(bucketName: string, options: { isPublic?: boolean } = {}) {
+export async function createRestBucket(
+  bucketName: string,
+  options: { fileSizeLimit?: number | string | null; isPublic?: boolean } = {}
+) {
   const config = getAcceptanceConfig()
   const client = createRestClient()
 
   await client.request('POST', '/bucket', {
     body: {
+      file_size_limit: options.fileSizeLimit,
       id: bucketName,
       name: bucketName,
       public: options.isPublic ?? false,

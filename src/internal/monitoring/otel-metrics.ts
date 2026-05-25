@@ -27,6 +27,7 @@ const {
   otelMetricsTemporality,
   prometheusMetricsEnabled,
   region,
+  serviceName,
 } = getConfig()
 
 let prometheusExporter: PrometheusExporter | undefined
@@ -79,7 +80,7 @@ Object.keys(exporterHeaders).forEach((key) => {
 })
 
 const resource = resourceFromAttributes({
-  [ATTR_SERVICE_NAME]: 'storage_api',
+  [ATTR_SERVICE_NAME]: serviceName,
   [ATTR_SERVICE_VERSION]: version,
   'metric.version': '1',
   region,
@@ -96,10 +97,19 @@ const histogramAggregation = {
   options: { boundaries: durationBuckets },
 } as const
 
+// GC pauses span sub-millisecond incremental slices to multi-second major
+// collections, so the default 4-boundary [10ms, 100ms, 1s, 10s] histogram is
+// too coarse to distinguish incremental/minor GC and lacks resolution above 1s.
+const gcDurationBuckets = [0.0001, 0.00025, ...durationBuckets, 30]
+
+const gcHistogramAggregation = {
+  type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+  options: { boundaries: gcDurationBuckets },
+} as const
+
 const dropAggregation = { type: AggregationType.DROP } as const
 
 // Views — custom histogram buckets + drop auto-instrumentation duplicates.
-// Tenant attribute stripping is handled by registerMetric() in metrics.ts.
 const views = [
   {
     meterName: 'storage-api',
@@ -125,6 +135,13 @@ const views = [
     meterName: 'storage-api',
     instrumentName: 's3_upload_part_seconds',
     aggregation: histogramAggregation,
+  },
+  // Override the RuntimeNodeInstrumentation default GC buckets ([10ms, 100ms,
+  // 1s, 10s]) with sub-ms boundaries so incremental/minor pauses are visible.
+  {
+    meterName: '@opentelemetry/instrumentation-runtime-node',
+    instrumentName: 'v8js.gc.duration',
+    aggregation: gcHistogramAggregation,
   },
   // Drop duplicate HTTP metrics from auto-instrumentations — we have our own in metrics.ts
   {
@@ -237,9 +254,9 @@ if (otelMetricsEnabled) {
 
   if (prometheusMetricsEnabled) {
     prometheusExporter = new PrometheusExporter({
-      prefix: 'storage_api',
+      prefix: serviceName,
       preventServerStart: true,
-      withResourceConstantLabels: /^(region|instance|metric\.version)$/,
+      withResourceConstantLabels: /^(region|instance|metric\.version|service\.name)$/,
     })
     readers.push(prometheusExporter)
   }

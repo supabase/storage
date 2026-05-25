@@ -134,7 +134,7 @@ export class ObjectStorage {
       const deleted = await db.deleteObject(this.bucketId, objectName)
 
       if (!deleted) {
-        throw ERRORS.NoSuchKey(objectName)
+        throw ERRORS.AccessDenied('Access denied')
       }
 
       await this.backend.deleteObject(

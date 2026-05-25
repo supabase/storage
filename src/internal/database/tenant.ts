@@ -87,6 +87,7 @@ const {
   icebergEnabled,
   vectorEnabled,
   multitenantDatabaseQueryTimeout,
+  databaseMaxConnections,
 } = getConfig()
 
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
@@ -421,7 +422,7 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
  * Handles the tenant config change event
  * @param cacheKey
  */
-async function onTenantConfigChange(cacheKey: string) {
+export async function onTenantConfigChange(cacheKey: string) {
   const oldConfig = tenantConfigCache.get(cacheKey, { recordMetrics: false })
   tenantConfigCache.delete(cacheKey)
 
@@ -443,10 +444,12 @@ async function onTenantConfigChange(cacheKey: string) {
       })
     }
 
-    // Rebalance the pool if the max connections changed
-    if (newConfig.maxConnections && newConfig.maxConnections !== oldConfig.maxConnections) {
+    if (
+      normalizeMaxConnections(newConfig.maxConnections) !==
+      normalizeMaxConnections(oldConfig.maxConnections)
+    ) {
       TenantConnection.poolManager.rebalance(cacheKey, {
-        clusterSize: newConfig.maxConnections,
+        maxConnections: resolveMaxConnections(newConfig.maxConnections),
       })
     }
   } catch {
@@ -455,4 +458,12 @@ async function onTenantConfigChange(cacheKey: string) {
     // or if the tenant was updated and the cache was invalidated
     // before we could get the new config
   }
+}
+
+function normalizeMaxConnections(maxConnections: number | null | undefined): number | null {
+  return maxConnections ?? null
+}
+
+function resolveMaxConnections(maxConnections: number | null | undefined): number {
+  return maxConnections ?? databaseMaxConnections
 }

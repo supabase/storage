@@ -1,6 +1,7 @@
 import assert from 'node:assert'
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { isS3Error } from '@internal/errors'
+import { DeleteIcebergResources } from '@storage/events/iceberg/delete-iceberg-resources'
 import {
   CreateTableResponse,
   LoadTableResult,
@@ -8,7 +9,6 @@ import {
 } from '@storage/protocols/iceberg/catalog'
 import { KnexMetastore, Metastore } from '@storage/protocols/iceberg/knex'
 import { FastifyInstance } from 'fastify'
-import makeApp from '../app'
 import { getConfig, mergeConfig } from '../config'
 import { createBucketIfNotExists, useStorage } from './utils/storage'
 
@@ -20,21 +20,24 @@ const {
   s3ProtocolAccessKeySecret,
 } = getConfig()
 
+const icebergLimitOverrides = {
+  icebergMaxCatalogsCount: 1e8,
+  icebergMaxNamespaceCount: 1e8,
+}
+
 describe('Iceberg Catalog', () => {
   const t = useStorage()
 
   let app: FastifyInstance
   let icebergMetastore: Metastore
-  beforeAll(() => {
+  beforeAll(async () => {
+    mergeConfig(icebergLimitOverrides)
+
+    const { default: makeApp } = await import('../app')
     app = makeApp()
     icebergMetastore = new KnexMetastore(t.database.connection.pool.acquire(), {
       multiTenant: false,
       schema: 'storage',
-    })
-
-    mergeConfig({
-      icebergMaxCatalogsCount: 1e8,
-      icebergMaxNamespaceCount: 1e8,
     })
   })
 
@@ -89,7 +92,7 @@ describe('Iceberg Catalog', () => {
 
   it('can delete analytic bucket', async () => {
     const bucketName = t.random.name('ice-bucket')
-    await t.storage.createIcebergBucket({
+    const bucket = await t.storage.createIcebergBucket({
       name: bucketName,
     })
 
@@ -103,6 +106,101 @@ describe('Iceberg Catalog', () => {
     })
 
     expect(response.statusCode).toBe(200)
+
+    const deletedCatalog = await t.database.connection.pool
+      .acquire()
+      .withSchema('storage')
+      .table('buckets_analytics')
+      .select('deleted_at')
+      .where('id', bucket.id)
+      .first<{ deleted_at: Date | string | null }>()
+
+    expect(deletedCatalog?.deleted_at).toBeTruthy()
+  })
+
+  it('can empty analytic bucket resources after deletion starts', async () => {
+    const bucketName = t.random.name('ice-bucket')
+    const bucket = await t.storage.createIcebergBucket({
+      name: bucketName,
+    })
+
+    const namespaceName = t.random.name('namespace')
+    const namespace = await icebergMetastore.createNamespace({
+      name: namespaceName,
+      bucketName: bucket.name,
+      bucketId: bucket.id,
+      tenantId: '',
+      metadata: {},
+    })
+
+    const tableName = t.random.name('table')
+    await icebergMetastore.createTable({
+      name: tableName,
+      bucketName: bucket.name,
+      bucketId: bucket.id,
+      location: `s3://${bucketName}/tables/${tableName}`,
+      namespaceId: namespace.id,
+      shardId: 'my-warehouse',
+      shardKey: 'my-warehouse',
+    })
+
+    await t.database.deleteAnalyticsBucket(bucket.id, { soft: true })
+
+    const dropTable = vi.spyOn(RestCatalogClient.prototype, 'dropTable').mockResolvedValue()
+    const listTables = vi.spyOn(RestCatalogClient.prototype, 'listTables').mockResolvedValue({
+      identifiers: [],
+    })
+    const dropNamespace = vi.spyOn(RestCatalogClient.prototype, 'dropNamespace').mockResolvedValue()
+    vi.spyOn(
+      DeleteIcebergResources as unknown as {
+        createStorage(payload: unknown): Promise<typeof t.storage>
+      },
+      'createStorage'
+    ).mockResolvedValue(t.storage)
+
+    await DeleteIcebergResources.handle({
+      id: 'test-delete-iceberg-resources',
+      name: DeleteIcebergResources.getQueueName(),
+      data: {
+        catalogId: bucket.id,
+        tenant: {
+          ref: '',
+          host: 'localhost',
+        },
+      },
+    } as Parameters<typeof DeleteIcebergResources.handle>[0])
+
+    expect(dropTable).toHaveBeenCalledWith({
+      namespace: namespace.name,
+      table: tableName,
+      purgeRequested: true,
+      warehouse: 'my-warehouse',
+    })
+    expect(listTables).toHaveBeenCalledWith({
+      namespace: `_${namespace.id.replaceAll('-', '_')}`,
+      pageSize: 1,
+      warehouse: 'my-warehouse',
+    })
+    expect(dropNamespace).toHaveBeenCalledWith({
+      namespace: namespace.name,
+      warehouse: 'my-warehouse',
+    })
+
+    await expect(
+      icebergMetastore.findCatalogById({
+        id: bucket.id,
+        tenantId: '',
+        deleted: true,
+      })
+    ).rejects.toThrow()
+
+    await expect(
+      icebergMetastore.findNamespaceByName({
+        name: namespace.name,
+        catalogId: bucket.id,
+        tenantId: '',
+      })
+    ).rejects.toThrow()
   })
 
   it('can create a table bucket', async () => {
@@ -196,12 +294,91 @@ describe('Iceberg Catalog', () => {
         },
       })
 
-      expect(response.statusCode).toBe(200)
+      expect(response.statusCode, response.body).toBe(200)
       const resp = await response.json()
       expect(resp).toEqual({
         namespace: [namespaceName],
         properties: {
           test: 'hello',
+        },
+      })
+    })
+
+    it('updates namespace properties when creating an existing namespace', async () => {
+      const bucketName = t.random.name('ice-bucket')
+      await t.storage.createIcebergBucket({
+        name: bucketName,
+      })
+
+      const namespaceName = t.random.name('namespace')
+
+      const createResponse = await app.inject({
+        method: 'POST',
+        url: `/iceberg/v1/${bucketName}/namespaces`,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+        payload: {
+          namespace: namespaceName,
+          properties: {
+            stable: 'kept',
+            overwrite: 'old',
+          },
+        },
+      })
+
+      expect(createResponse.statusCode, createResponse.body).toBe(200)
+      expect(await createResponse.json()).toEqual({
+        namespace: [namespaceName],
+        properties: {
+          stable: 'kept',
+          overwrite: 'old',
+        },
+      })
+
+      const updateResponse = await app.inject({
+        method: 'POST',
+        url: `/iceberg/v1/${bucketName}/namespaces`,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+        payload: {
+          namespace: namespaceName,
+          properties: {
+            overwrite: 'new',
+            added: 'value',
+          },
+        },
+      })
+
+      expect(updateResponse.statusCode).toBe(200)
+      expect(await updateResponse.json()).toEqual({
+        namespace: [namespaceName],
+        properties: {
+          stable: 'kept',
+          overwrite: 'new',
+          added: 'value',
+        },
+      })
+
+      const loadResponse = await app.inject({
+        method: 'GET',
+        url: `/iceberg/v1/${bucketName}/namespaces/${namespaceName}`,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(loadResponse.statusCode).toBe(200)
+      expect(await loadResponse.json()).toEqual({
+        namespace: [namespaceName],
+        properties: {
+          stable: 'kept',
+          overwrite: 'new',
+          added: 'value',
         },
       })
     })
@@ -406,6 +583,8 @@ describe('Iceberg Catalog', () => {
       })
 
       const tableName = t.random.name('table')
+      const tableLocation = `s3://${bucketName}/tables/${tableName}`
+      const tableMetadataLocation = `${tableLocation}/metadata/00000-2eed5277-661d-47b5-84c0-30ce9dbad149.metadata.json`
       const loadTable: CreateTableResponse = {
         metadata: {
           'current-schema-id': 0,
@@ -413,7 +592,7 @@ describe('Iceberg Catalog', () => {
           'format-version': 2,
           'last-column-id': 2,
           'last-updated-ms': 1752062419286,
-          location: 's3://821c6598-0032-4345-h1sokpwnexm17nfi7n1axwxmnncg1aps1b--table-s3',
+          location: tableLocation,
           'metadata-log': Array.from([]),
           'partition-specs': Array.from([
             {
@@ -446,8 +625,7 @@ describe('Iceberg Catalog', () => {
           ]),
           'table-uuid': 'b734865e-f9a5-4654-8b0b-e15683fcb195',
         },
-        'metadata-location':
-          's3://821c6598-0032-4345-h1sokpwnexm17nfi7n1axwxmnncg1aps1b--table-s3/metadata/00000-2eed5277-661d-47b5-84c0-30ce9dbad149.metadata.json',
+        'metadata-location': tableMetadataLocation,
       } as const
 
       vi.spyOn(RestCatalogClient.prototype, 'createTable').mockResolvedValue(loadTable)

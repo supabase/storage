@@ -106,7 +106,6 @@ export class Uploader {
     await this.canUpload(options)
     fileUploadStarted.add(1, {
       uploadType: options.uploadType,
-      tenantId: this.db.tenantId,
     })
 
     return randomUUID()
@@ -284,7 +283,6 @@ export class Uploader {
 
         fileUploadedSuccess.add(1, {
           uploadType,
-          tenantId: this.db.tenantId,
         })
 
         return { obj: newObject, isNew, metadata: objectMetadata }

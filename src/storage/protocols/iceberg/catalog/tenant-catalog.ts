@@ -501,7 +501,7 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
         tenantId: this.options.tenantId,
       })
 
-      return { namespace: [namespace.name], properties: params.properties || {} }
+      return { namespace: [namespace.name], properties: namespace.metadata || {} }
     })
   }
 

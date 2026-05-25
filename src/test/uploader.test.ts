@@ -2,7 +2,8 @@ import { once } from 'events'
 import { FastifyRequest } from 'fastify'
 import { PassThrough, Readable } from 'stream'
 import { ErrorCode, isStorageError, StorageBackendError } from '../internal/errors'
-import { ObjectAdminDelete } from '../storage/events'
+import { fileUploadedSuccess, fileUploadStarted } from '../internal/monitoring/metrics'
+import { ObjectAdminDelete, ObjectCreatedPostEvent } from '../storage/events'
 import { TenantLocation } from '../storage/locator'
 import { fileUploadFromRequest, Uploader } from '../storage/uploader'
 
@@ -21,6 +22,21 @@ function createUploader(
     new TenantLocation('test-bucket')
   )
 }
+
+function createUploaderDb(overrides: Partial<UploaderDatabase> = {}) {
+  const db = {
+    tenantId: 'stub-tenant',
+    reqId: 'req-1',
+    sbReqId: 'sb-req-1',
+    tenant: () => ({ ref: 'stub-tenant', host: 'stub-tenant.local' }),
+    testPermission: vi.fn(async () => undefined),
+    ...overrides,
+  } as Partial<UploaderDatabase> &
+    Pick<UploaderDatabase, 'tenantId' | 'reqId' | 'tenant' | 'testPermission'>
+
+  return db
+}
+
 describe('fileUploadFromRequest', () => {
   test('keeps multipart/form-data file size undefined even when the request content-length exceeds 5GB', async () => {
     const file = Readable.from(['payload']) as Readable & { truncated: boolean }
@@ -378,5 +394,85 @@ describe('fileUploadFromRequest', () => {
     expect(backend.uploadObject.mock.calls[0][7]).toBeUndefined()
 
     completeUploadSpy.mockRestore()
+  })
+})
+
+describe('Uploader metrics', () => {
+  test('prepareUpload records upload start attributes without tenant id labels', async () => {
+    const addSpy = vi.spyOn(fileUploadStarted, 'add')
+    const uploader = createUploader(
+      {
+        uploadObject: vi.fn(),
+      },
+      createUploaderDb()
+    )
+
+    try {
+      await uploader.prepareUpload({
+        bucketId: 'bucket',
+        objectName: 'test.txt',
+        owner: undefined,
+        isUpsert: false,
+        userMetadata: undefined,
+        metadata: undefined,
+        uploadType: 'standard',
+      })
+
+      expect(addSpy).toHaveBeenCalledWith(1, { uploadType: 'standard' })
+    } finally {
+      addSpy.mockRestore()
+    }
+  })
+
+  test('completeUpload records upload success attributes without tenant id labels', async () => {
+    const addSpy = vi.spyOn(fileUploadedSuccess, 'add')
+    const sendWebhookSpy = vi
+      .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+      .mockResolvedValue(undefined)
+    const transactionDb = {
+      waitObjectLock: vi.fn().mockResolvedValue(undefined),
+      findObject: vi.fn().mockResolvedValue(undefined),
+      upsertObject: vi.fn().mockResolvedValue({ id: 'object-id' }),
+    }
+    const db = createUploaderDb({
+      asSuperUser: vi.fn().mockReturnValue({
+        connection: {
+          setAbortSignal: vi.fn(),
+        },
+        withTransaction: vi.fn(async (fn) => fn(transactionDb)),
+      }),
+    })
+    const uploader = createUploader(
+      {
+        uploadObject: vi.fn(),
+      },
+      db
+    )
+
+    try {
+      await uploader.completeUpload({
+        version: 'version-1',
+        bucketId: 'bucket',
+        objectName: 'test.txt',
+        owner: undefined,
+        objectMetadata: {
+          eTag: '"etag"',
+          mimetype: 'text/plain',
+          cacheControl: 'max-age=3600',
+          lastModified: new Date(),
+          contentLength: 7,
+          httpStatusCode: 200,
+          size: 7,
+        },
+        uploadType: 'standard',
+        isUpsert: false,
+        userMetadata: undefined,
+      })
+
+      expect(addSpy).toHaveBeenCalledWith(1, { uploadType: 'standard' })
+    } finally {
+      addSpy.mockRestore()
+      sendWebhookSpy.mockRestore()
+    }
   })
 })

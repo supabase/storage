@@ -93,7 +93,6 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
           operation:
             request.operation?.type || request.routeOptions?.config?.operation?.type || 'unknown',
           status_code: statusCode,
-          tenantId: request.tenantId || '',
         }
 
         // Record duration (histogram count replaces httpRequestsTotal)

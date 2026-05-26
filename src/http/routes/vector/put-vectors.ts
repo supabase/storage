@@ -34,7 +34,7 @@ const putVector = {
             metadata: {
               type: 'object',
               additionalProperties: {
-                oneOf: [{ type: 'string' }, { type: 'boolean' }, { type: 'number' }],
+                anyOf: [{ type: 'string' }, { type: 'boolean' }, { type: 'number' }],
               },
             },
             key: { type: 'string' },

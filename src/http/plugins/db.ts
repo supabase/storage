@@ -67,6 +67,10 @@ export const db = fastifyPlugin(
         request.db.dispose().catch((e) => {
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
+            tenantId: request.tenantId,
+            project: request.tenantId,
+            reqId: request.id,
+            sbReqId: request.sbReqId,
             error: e,
           })
         })
@@ -79,6 +83,10 @@ export const db = fastifyPlugin(
         request.db.dispose().catch((e) => {
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
+            tenantId: request.tenantId,
+            project: request.tenantId,
+            reqId: request.id,
+            sbReqId: request.sbReqId,
             error: e,
           })
         })
@@ -90,6 +98,10 @@ export const db = fastifyPlugin(
         request.db.dispose().catch((e) => {
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
+            tenantId: request.tenantId,
+            project: request.tenantId,
+            reqId: request.id,
+            sbReqId: request.sbReqId,
             error: e,
           })
         })
@@ -136,6 +148,10 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
         request.db.dispose().catch((e) => {
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
+            tenantId: request.tenantId,
+            project: request.tenantId,
+            reqId: request.id,
+            sbReqId: request.sbReqId,
             error: e,
           })
         })
@@ -149,6 +165,10 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
         request.db.dispose().catch((e) => {
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
+            tenantId: request.tenantId,
+            project: request.tenantId,
+            reqId: request.id,
+            sbReqId: request.sbReqId,
             error: e,
           })
         })
@@ -160,6 +180,10 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
         request.db.dispose().catch((e) => {
           logSchema.error(request.log, 'Error disposing db connection', {
             type: 'db-connection',
+            tenantId: request.tenantId,
+            project: request.tenantId,
+            reqId: request.id,
+            sbReqId: request.sbReqId,
             error: e,
           })
         })

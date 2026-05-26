@@ -17,9 +17,26 @@ export interface RenderOptions {
 }
 
 export interface AssetResponse {
-  body?: Readable | ReadableStream<any> | Blob | Buffer | Record<any, any>
-  metadata: ObjectMetadata
+  body?: Readable | ReadableStream<unknown> | Blob | Buffer | Record<string, unknown>
+  metadata: AssetMetadata
   transformations?: string[]
+}
+
+export type AssetMetadata = Omit<
+  ObjectMetadata,
+  'cacheControl' | 'contentLength' | 'eTag' | 'mimetype' | 'size'
+> & {
+  cacheControl?: string
+  contentLength?: number
+  eTag?: string
+  mimetype?: string
+  size?: number
+}
+
+type HttpMetadataError = {
+  $metadata?: {
+    httpStatusCode?: number
+  }
 }
 
 const { requestEtagHeaders, responseSMaxAge } = getConfig()
@@ -40,23 +57,34 @@ export abstract class Renderer {
    * @param response
    * @param options
    */
-  async render(request: FastifyRequest<any>, response: FastifyReply<any>, options: RenderOptions) {
+  async render(request: FastifyRequest, response: FastifyReply, options: RenderOptions) {
     try {
       if (options.signal?.aborted) {
-        return response.send({ error: 'Request aborted', statusCode: '499' })
+        return this.sendRequestAborted(response)
       }
 
       const data = await this.getAsset(request, options)
 
-      this.setHeaders(request, response, data, options)
+      if (options.signal?.aborted) {
+        destroyAssetBody(data.body)
+        return this.sendRequestAborted(response)
+      }
 
-      return response.send(data.body)
-    } catch (err: any) {
-      if (err.$metadata?.httpStatusCode === 304) {
+      try {
+        this.setHeaders(request, response, data, options)
+        return response.send(data.body)
+      } catch (err) {
+        destroyAssetBody(data.body)
+        throw err
+      }
+    } catch (err: unknown) {
+      const metadata = getErrorMetadata(err)
+
+      if (metadata?.httpStatusCode === 304) {
         return response.status(304).send()
       }
 
-      if (err.$metadata?.httpStatusCode === 404) {
+      if (metadata?.httpStatusCode === 404) {
         response.header('cache-control', 'no-store')
         return response.status(400).send({
           error: 'Not found',
@@ -65,13 +93,17 @@ export abstract class Renderer {
         })
       }
 
+      if (isCallerAbort(err, options.signal)) {
+        return this.sendRequestAborted(response)
+      }
+
       throw err
     }
   }
 
   protected setHeaders(
-    request: FastifyRequest<any>,
-    response: FastifyReply<any>,
+    request: FastifyRequest,
+    response: FastifyReply,
     data: AssetResponse,
     options: RenderOptions
   ) {
@@ -89,9 +121,10 @@ export abstract class Renderer {
       .header('Accept-Ranges', 'bytes')
       .header('Content-Type', normalizeContentType(data.metadata.mimetype))
       .header('ETag', data.metadata.eTag)
-      .header('Content-Length', data.metadata.contentLength)
-      .header('Last-Modified', data.metadata.lastModified?.toUTCString())
       .header('X-Robots-Tag', xRobotsTag)
+
+    this.setLastModifiedHeader(response, data.metadata.lastModified)
+    this.setContentLengthHeader(response, data.metadata.contentLength)
 
     if (options.expires) {
       response.header('Expires', options.expires)
@@ -110,7 +143,7 @@ export abstract class Renderer {
     this.handleDownload(response, options.download)
   }
 
-  protected handleDownload(response: FastifyReply<any>, download?: string) {
+  protected handleDownload(response: FastifyReply, download?: string) {
     if (typeof download !== 'undefined') {
       if (download === '') {
         response.header('Content-Disposition', 'attachment;')
@@ -126,16 +159,16 @@ export abstract class Renderer {
   }
 
   protected handleCacheControl(
-    request: FastifyRequest<any>,
-    response: FastifyReply<any>,
-    metadata: ObjectMetadata
+    request: FastifyRequest,
+    response: FastifyReply,
+    metadata: AssetMetadata
   ) {
     const etag = this.findEtagHeader(request)
 
     const cacheControl = [metadata.cacheControl]
 
     if (!etag) {
-      response.header('Cache-Control', cacheControl.join(', '))
+      this.setCacheControlHeader(response, cacheControl)
       return
     }
 
@@ -147,10 +180,33 @@ export abstract class Renderer {
       cacheControl.push('stale-while-revalidate=30')
     }
 
-    response.header('Cache-Control', cacheControl.join(', '))
+    this.setCacheControlHeader(response, cacheControl)
   }
 
-  protected findEtagHeader(request: FastifyRequest<any>) {
+  protected setContentLengthHeader(response: FastifyReply, contentLength: number | undefined) {
+    if (contentLength !== undefined) {
+      response.header('Content-Length', contentLength)
+    }
+  }
+
+  protected setLastModifiedHeader(response: FastifyReply, lastModified: Date | undefined) {
+    if (lastModified && !Number.isNaN(lastModified.getTime())) {
+      response.header('Last-Modified', lastModified.toUTCString())
+    }
+  }
+
+  protected setCacheControlHeader(response: FastifyReply, values: Array<string | undefined>) {
+    const cacheControl = values.filter((value) => typeof value === 'string' && value.length > 0)
+    if (cacheControl.length > 0) {
+      response.header('Cache-Control', cacheControl.join(', '))
+    }
+  }
+
+  protected sendRequestAborted(response: FastifyReply) {
+    return response.status(499).send({ error: 'Request aborted', statusCode: '499' })
+  }
+
+  protected findEtagHeader(request: FastifyRequest) {
     for (const header of requestEtagHeaders) {
       const etag = request.headers[header]
       if (etag) {
@@ -160,9 +216,107 @@ export abstract class Renderer {
   }
 }
 
+function isCallerAbort(error: unknown, signal: AbortSignal | undefined) {
+  if (!signal?.aborted) {
+    return false
+  }
+
+  if (signal.reason === undefined) {
+    return isAbortError(error)
+  }
+
+  if (error === signal.reason || hasErrorCause(error, signal.reason)) {
+    return true
+  }
+
+  // AWS SDK via @smithy/node-http-handler creates a fresh AbortError without
+  // preserving the original reason. Once our signal is aborted, treat that as
+  // caller-driven to surface 499 instead of 500.
+  return isAbortError(error)
+}
+
+function isAbortError(error: unknown) {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+
+  const name = readErrorProperty(error, 'name')
+  return (
+    name === 'AbortError' &&
+    (error instanceof Error ||
+      (typeof DOMException !== 'undefined' && error instanceof DOMException))
+  )
+}
+
+function hasErrorCause(error: unknown, cause: unknown): boolean {
+  if (cause === undefined) {
+    return false
+  }
+
+  const seen = new WeakSet<object>()
+  const stack: unknown[] = [error]
+  let visited = 0
+
+  while (stack.length > 0 && visited < 10_000) {
+    const current = stack.pop()
+    if (!current || typeof current !== 'object' || seen.has(current)) {
+      continue
+    }
+
+    seen.add(current)
+    visited += 1
+
+    const nestedCause = readErrorProperty(current, 'cause')
+    const originalError = readErrorProperty(current, 'originalError')
+    if (nestedCause === cause || originalError === cause) {
+      return true
+    }
+
+    stack.push(nestedCause, originalError)
+  }
+
+  return false
+}
+
+function readErrorProperty(error: object, property: 'cause' | 'name' | 'originalError') {
+  try {
+    return (error as Record<typeof property, unknown>)[property]
+  } catch {
+    return undefined
+  }
+}
+
+function destroyAssetBody(body: AssetResponse['body']) {
+  if (!body || typeof body !== 'object') {
+    return
+  }
+
+  if (body instanceof Readable) {
+    body.destroy()
+    return
+  }
+
+  if (isReadableStream(body)) {
+    const result = body.cancel()
+    void result.catch(() => {})
+  }
+}
+
+function isReadableStream(body: object): body is ReadableStream {
+  return typeof ReadableStream !== 'undefined' && body instanceof ReadableStream
+}
+
 function normalizeContentType(contentType: string | undefined): string | undefined {
   if (contentType?.includes('text/html')) {
     return 'text/plain'
   }
   return contentType
+}
+
+function getErrorMetadata(error: unknown): HttpMetadataError['$metadata'] {
+  if (!error || typeof error !== 'object') {
+    return undefined
+  }
+
+  return (error as HttpMetadataError).$metadata
 }

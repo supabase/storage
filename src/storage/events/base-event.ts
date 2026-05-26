@@ -11,6 +11,7 @@ import { Storage } from '../storage'
 const { storageS3Bucket, storageS3MaxSockets, storageBackendType, region } = getConfig()
 
 let storageBackend: StorageBackendAdapter | undefined = undefined
+let Webhook: Awaited<typeof import('./lifecycle/webhook')>['Webhook'] | undefined = undefined
 
 export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends QueueBaseEvent<T> {
   static onStart() {
@@ -25,20 +26,24 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
    * Sends a message as a webhook
    * @param payload
    */
-  static async sendWebhook<T extends Event<any>>(
-    this: StaticThis<T>,
-    payload: Omit<T['payload'], '$version'>
-  ) {
-    // biome-ignore lint/style/noCommonJs: build script runs as CommonJS
-    const { Webhook } = require('./lifecycle/webhook')
-    const eventType = this.eventName()
+  static async sendWebhook<
+    TPayload extends BasePayload & {
+      bucketId: string
+      name: string
+    },
+  >(this: StaticThis<TPayload>, payload: Omit<TPayload, '$version'>) {
+    if (!Webhook) {
+      Webhook = (await import('./lifecycle/webhook')).Webhook
+    }
+    const eventClass = this as typeof Event
+    const eventType = eventClass.eventName()
 
     try {
       await Webhook.send({
         event: {
           type: eventType,
           region,
-          $version: this.version,
+          $version: eventClass.version,
           applyTime: Date.now(),
           payload,
         },
@@ -48,9 +53,10 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
       logger.error(
         {
           error: e,
+          sbReqId: payload.sbReqId,
           event: {
             type: eventType,
-            $version: this.version,
+            $version: eventClass.version,
             applyTime: Date.now(),
             payload: JSON.stringify(payload),
           },
@@ -75,6 +81,8 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     const db = new StorageKnexDB(client, {
       tenantId: payload.tenant.ref,
       host: payload.tenant.host,
+      reqId: payload.reqId,
+      sbReqId: payload.sbReqId,
     })
 
     return new Storage(this.getOrCreateStorageBackend(), db, new TenantLocation(storageS3Bucket))

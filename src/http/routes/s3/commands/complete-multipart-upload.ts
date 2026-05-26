@@ -82,7 +82,7 @@ export default function CompleteMultipartUpload(s3Router: S3Router) {
             Bucket: req.Params.Bucket,
             Key: req.Params['*'],
             ChecksumCRC32: resp.ChecksumCRC32,
-            ChecksumCRC32C: resp.ChecksumCRC32,
+            ChecksumCRC32C: resp.ChecksumCRC32C,
             ChecksumSHA1: resp.ChecksumSHA1,
             ChecksumSHA256: resp.ChecksumSHA256,
             ETag: resp.ETag,

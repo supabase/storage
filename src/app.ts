@@ -32,6 +32,15 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
           description: 'API documentation for Supabase Storage',
           version,
         },
+        components: {
+          securitySchemes: {
+            bearerAuth: {
+              type: 'http',
+              scheme: 'bearer',
+              bearerFormat: 'jwt',
+            },
+          },
+        },
         tags: [
           { name: 'object', description: 'Object end-points' },
           { name: 'bucket', description: 'Bucket end-points' },
@@ -64,6 +73,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.addSchema(schemas.authSchema)
   app.addSchema(schemas.errorSchema)
 
+  app.register(plugins.requestContext)
   app.register(plugins.signals)
   app.register(plugins.tenantId)
   app.register(

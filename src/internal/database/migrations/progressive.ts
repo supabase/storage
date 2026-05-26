@@ -202,9 +202,26 @@ export class ProgressiveMigrations {
       .filter((job) => job)
 
     if (validJobs.length > 0) {
-      await RunMigrationsOnTenants.batchSend(validJobs as RunMigrationsOnTenants[])
+      try {
+        await RunMigrationsOnTenants.batchSend(validJobs as RunMigrationsOnTenants[])
+      } catch (e) {
+        // batchSend failure: treat the would-be-completed tenants as retryable,
+        // but still honor terminal drops (TenantNotFound).
+        for (const tenant of completedTenants) {
+          retryableFailedTenants.add(tenant)
+        }
+        completedTenants.clear()
+        logSchema.error(logger, '[Migrations] Error sending migration jobs batch', {
+          type: 'migrations',
+          error: e,
+          metadata: JSON.stringify({
+            strategy: 'progressive',
+          }),
+        })
+      }
     }
 
+    // Cleanup runs whether batchSend succeeded or not.
     if (completedTenants.size > 0 || droppedTenants.size > 0 || retryableFailedTenants.size > 0) {
       const remainingTenants = this.tenants.filter(
         (tenant) =>

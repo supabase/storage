@@ -5,7 +5,7 @@ import {
   TENANT_JWKS_CACHE_NAME,
 } from '@internal/cache'
 import { createMutexByKey } from '@internal/concurrency'
-import { PubSubAdapter } from '@internal/pubsub'
+import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
 import { Knex } from 'knex'
 import objectSizeOf from 'object-sizeof'
 import { JwksConfig, JwksConfigKeyOCT } from '../../../config'
@@ -50,6 +50,10 @@ export class JWKSManager {
    */
   async listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void> {
     await pubSub.subscribe(TENANTS_JWKS_UPDATE_CHANNEL, (cacheKey) => {
+      if (!isStringMessage(cacheKey)) {
+        return
+      }
+
       tenantJwksConfigCache.delete(cacheKey)
     })
   }
@@ -64,6 +68,30 @@ export class JWKSManager {
     const content = encrypt(JSON.stringify(await generateHS512JWK()))
     const id = await this.storage.insert(tenantId, content, JWK_KIND_STORAGE_URL_SIGNING, true, trx)
     return { kid: createJwkKid({ kind: JWK_KIND_STORAGE_URL_SIGNING, id }) }
+  }
+
+  /**
+   * Atomically rolls the URL signing JWK by deactivating the current key and creating a new one
+   * @param tenantId
+   */
+  async rollUrlSigningJwk(tenantId: string): Promise<{ oldKid: string | null; newKid: string }> {
+    return this.storage.transaction(async (trx) => {
+      const currentKeys = await this.storage.listActive(tenantId, JWK_KIND_STORAGE_URL_SIGNING, trx)
+      const currentKey = currentKeys[0]
+
+      if (currentKey) {
+        await this.storage.toggleActive(tenantId, currentKey.id, false, trx)
+      }
+
+      const { kid: newKid } = await this.generateUrlSigningJwk(tenantId, trx)
+
+      return {
+        oldKid: currentKey
+          ? createJwkKid({ kind: JWK_KIND_STORAGE_URL_SIGNING, id: currentKey.id })
+          : null,
+        newKid,
+      }
+    })
   }
 
   /**

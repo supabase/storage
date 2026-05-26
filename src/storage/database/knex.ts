@@ -33,7 +33,7 @@ export function escapeLike(str: string) {
 }
 
 class TestPermissionRollbackError extends Error {
-  constructor() {
+  constructor(readonly result: unknown) {
     super('Rollback test permission transaction')
     this.name = 'TestPermissionRollbackError'
     Object.setPrototypeOf(this, TestPermissionRollbackError.prototype)
@@ -48,6 +48,7 @@ export class StorageKnexDB implements Database {
   public readonly tenantHost: string
   public readonly tenantId: string
   public readonly reqId: string | undefined
+  public readonly sbReqId: string | undefined
   public readonly role?: string
   public readonly latestMigration?: keyof typeof DBMigration
 
@@ -58,14 +59,15 @@ export class StorageKnexDB implements Database {
     this.tenantHost = options.host
     this.tenantId = options.tenantId
     this.reqId = options.reqId
+    this.sbReqId = options.sbReqId
     this.role = connection?.role
     this.latestMigration = options.latestMigration
   }
 
-  async withTransaction<T extends (db: Database) => Promise<any>>(
-    fn: T,
+  async withTransaction<T>(
+    fn: (db: Database) => Promise<T>,
     opts?: TransactionOptions
-  ) {
+  ): Promise<T> {
     const tnx = await this.connection.transactionProvider(this.options.tnx, opts)()
 
     try {
@@ -78,7 +80,7 @@ export class StorageKnexDB implements Database {
       const opts = { ...this.options, tnx }
       const storageWithTnx = new StorageKnexDB(this.connection, opts)
 
-      const result: Awaited<ReturnType<T>> = await fn(storageWithTnx)
+      const result = await fn(storageWithTnx)
       await tnx.commit()
       return result
     } catch (e) {
@@ -102,19 +104,17 @@ export class StorageKnexDB implements Database {
     })
   }
 
-  async testPermission<T extends (db: Database) => any>(fn: T) {
-    let result: any
-    try {
-      await this.withTransaction(async (db) => {
-        result = await fn(db)
-        throw new TestPermissionRollbackError()
-      })
-    } catch (e) {
+  async testPermission<T>(fn: (db: Database) => T | Promise<T>): Promise<Awaited<T>> {
+    return this.withTransaction(async (db) => {
+      const result = await fn(db)
+      throw new TestPermissionRollbackError(result)
+    }).catch((e) => {
       if (e instanceof TestPermissionRollbackError) {
-        return result
+        return e.result as Awaited<T>
       }
+
       throw e
-    }
+    })
   }
 
   deleteAnalyticsBucket(id: string, opts?: { soft: boolean }): Promise<IcebergCatalog> {
@@ -1044,7 +1044,7 @@ export class StorageKnexDB implements Database {
    * @param columns
    * @protected
    */
-  protected normalizeColumns<T extends string | Record<string, any>>(columns: T): T {
+  protected normalizeColumns<T extends string | Record<string, unknown>>(columns: T): T {
     const latestMigration = this.latestMigration
 
     if (!latestMigration) {
@@ -1066,7 +1066,7 @@ export class StorageKnexDB implements Database {
 
         if (typeof columns === 'object') {
           value.forEach((column: string) => {
-            delete (columns as Record<string, object>)[column]
+            delete (columns as Record<string, unknown>)[column]
           })
         }
       }
@@ -1075,15 +1075,15 @@ export class StorageKnexDB implements Database {
     return columns
   }
 
-  protected async runQuery<
-    T extends (...args: [db: Knex.Transaction, signal?: AbortSignal]) => Promise<any>,
-  >(queryName: string, fn: T): Promise<Awaited<ReturnType<T>>> {
+  protected async runQuery<T>(
+    queryName: string,
+    fn: (db: Knex.Transaction, signal?: AbortSignal) => Promise<T>
+  ): Promise<T> {
     const startTime = process.hrtime.bigint()
     const recordDuration = () => {
       const duration = Number(process.hrtime.bigint() - startTime) / 1e9
       dbQueryPerformance.record(duration, {
         name: queryName,
-        tenantId: this.tenantId,
       })
     }
 
@@ -1109,7 +1109,7 @@ export class StorageKnexDB implements Database {
         await this.connection.setScope(tnx)
       }
 
-      const result: Awaited<ReturnType<T>> = await fn(tnx, abortSignal)
+      const result = await fn(tnx, abortSignal)
 
       if (needsNewTransaction) {
         await tnx.commit()
@@ -1144,7 +1144,9 @@ export class DBError extends StorageBackendError implements RenderableError {
     switch (pgError.code) {
       case '42501':
         return ERRORS.AccessDenied(
-          'new row violates row-level security policy',
+          pgError.message.includes('row-level security')
+            ? 'new row violates row-level security policy'
+            : pgError.message,
           pgError
         ).withMetadata({
           query,

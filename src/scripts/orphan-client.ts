@@ -1,59 +1,279 @@
 import { NdJsonTransform } from '@internal/streams/ndjson'
-import axios from 'axios'
 import path from 'path'
-import { Transform, TransformCallback } from 'stream'
+import { Readable } from 'stream'
+import type { ReadableStream as NodeReadableStream } from 'stream/web'
 import { OrphanStreamEvent, writeStreamToJsonArray } from './orphan-client-stream'
 
-const ADMIN_URL = process.env.ADMIN_URL
-const ADMIN_API_KEY = process.env.ADMIN_API_KEY
-const TENANT_ID = process.env.TENANT_ID
-// bucket id to search, can handle multiple comma delimited buckets (aaa,bbb,ccc)
-const BUCKET_ID = process.env.BUCKET_ID
+const DEFAULT_DELETE_LIMIT = 1000000
 
-// limits the number of delete operations to avoid overwhelming our queue
-const DELETE_LIMIT = parseInt(process.env.DELETE_LIMIT || '1000000', 10)
+type OrphanAction = 'list' | 'delete'
 
-const BEFORE = undefined // new Date().toISOString()
+interface OrphanClientConfig {
+  adminUrl: string
+  adminApiKey: string
+  tenantId: string
 
-const FILE_PATH = (operation: string, bucketId: string) =>
-  `../../dist/${operation}-${TENANT_ID}-${bucketId}-${Date.now()}-orphan-objects.json`
+  // bucket id to search, can handle multiple comma delimited buckets (aaa,bbb,ccc)
+  bucketId: string
 
-const client = axios.create({
-  baseURL: ADMIN_URL,
-  headers: {
-    ApiKey: ADMIN_API_KEY,
-  },
-})
+  // limits the number of delete operations to avoid overwhelming our queue
+  deleteLimit: number
 
-async function main() {
-  const action = process.argv[2]
+  // optional cutoff override for orphan list/delete requests
+  before?: string
+}
 
-  if (!action) {
-    console.error('Please provide an action: list or delete')
-    return
+interface FetchOrphanStreamOptions {
+  action: OrphanAction
+  adminApiKey?: string
+  adminUrl: string
+  before?: string
+  bucketId: string
+  tenantId: string
+}
+
+interface WriteListOrphanStreamOptions {
+  requestStream: Readable
+  cancel: () => void
+  filePath: string
+}
+
+interface WriteDeleteOrphanStreamOptions {
+  requestStream: Readable
+  cancel: () => void
+  deleteLimit: number
+  filePath: string
+}
+
+const FILE_PATH = (operation: string, tenantId: string, bucketId: string) =>
+  `../../dist/${operation}-${tenantId}-${bucketId}-${Date.now()}-orphan-objects.json`
+
+export function parseConfig(env: NodeJS.ProcessEnv): OrphanClientConfig | string {
+  const { ADMIN_URL, ADMIN_API_KEY, TENANT_ID, BUCKET_ID, DELETE_LIMIT, ORPHAN_BEFORE } = env
+  const rawDeleteLimit = DELETE_LIMIT?.trim() || String(DEFAULT_DELETE_LIMIT)
+  const deleteLimit = Number.parseInt(rawDeleteLimit, 10)
+
+  if (!ADMIN_URL) return 'Please provide an admin URL'
+  if (!ADMIN_API_KEY) return 'Please provide an admin API key'
+  if (!TENANT_ID) return 'Please provide a tenant ID'
+  if (!BUCKET_ID) return 'Please provide a bucket ID'
+  if (!/^\d+$/.test(rawDeleteLimit) || !Number.isSafeInteger(deleteLimit) || deleteLimit <= 0) {
+    return 'Please provide a valid positive integer for DELETE_LIMIT'
   }
 
-  if (!TENANT_ID) {
-    console.error('Please provide a tenant ID')
-    return
+  return {
+    adminUrl: ADMIN_URL,
+    adminApiKey: ADMIN_API_KEY,
+    tenantId: TENANT_ID,
+    bucketId: BUCKET_ID,
+    deleteLimit,
+    before: ORPHAN_BEFORE,
+  }
+}
+
+export function resolveAdminUrl(
+  baseUrl: string,
+  requestPath: string,
+  query?: Record<string, string | undefined>
+): URL {
+  const url = new URL(`${baseUrl.replace(/\/+$/, '')}/${requestPath.replace(/^\/+/, '')}`)
+
+  for (const [key, value] of Object.entries(query ?? {})) {
+    if (value !== undefined) {
+      url.searchParams.set(key, value)
+    }
   }
 
-  if (!BUCKET_ID) {
-    console.error('Please provide a bucket ID')
-    return
+  return url
+}
+
+async function assertStreamResponse(response: Response, context: string) {
+  if (!response.ok) {
+    const body = await response.text()
+    const details = body ? `: ${body}` : ''
+
+    throw new Error(`${context} failed with ${response.status} ${response.statusText}${details}`)
   }
 
-  const buckets = BUCKET_ID.split(',')
+  if (!response.body) {
+    throw new Error(`${context} returned an empty response body`)
+  }
+}
+
+export async function fetchOrphanStream(options: FetchOrphanStreamOptions) {
+  const requestPath = `/tenants/${options.tenantId}/buckets/${options.bucketId}/orphan-objects`
+  const url = resolveAdminUrl(
+    options.adminUrl,
+    requestPath,
+    options.action === 'list' ? { before: options.before } : undefined
+  )
+  const headers = new Headers()
+
+  if (options.adminApiKey) {
+    headers.set('ApiKey', options.adminApiKey)
+  }
+
+  const requestBody =
+    options.action === 'delete'
+      ? JSON.stringify({
+          deleteS3Keys: true,
+          before: options.before,
+        })
+      : undefined
+
+  if (requestBody) {
+    headers.set('Content-Type', 'application/json')
+  }
+
+  const controller = new AbortController()
+  const response = await fetch(url, {
+    method: options.action === 'list' ? 'GET' : 'DELETE',
+    headers,
+    body: requestBody,
+    signal: controller.signal,
+  })
+
+  await assertStreamResponse(response, `${options.action.toUpperCase()} ${url}`)
+
+  const stream = Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>)
+  let completed = false
+
+  stream.once('end', () => {
+    completed = true
+  })
+
+  stream.once('close', () => {
+    if (!completed && !controller.signal.aborted) {
+      controller.abort()
+    }
+  })
+
+  return {
+    stream,
+    cancel: () => {
+      if (!stream.destroyed) {
+        stream.destroy()
+      }
+
+      if (!controller.signal.aborted) {
+        controller.abort()
+      }
+    },
+  }
+}
+
+export async function writeListOrphanStream(options: WriteListOrphanStreamOptions) {
+  let cancelled = false
+  const cancelRequest = () => {
+    if (!cancelled) {
+      cancelled = true
+      options.cancel()
+    }
+  }
+
+  const transformStream = new NdJsonTransform()
+  options.requestStream.on('error', (err: Error) => {
+    transformStream.emit('error', err)
+  })
+
+  const jsonStream = options.requestStream.pipe(transformStream)
+
+  try {
+    await writeStreamToJsonArray(jsonStream, options.filePath)
+  } finally {
+    cancelRequest()
+  }
+}
+
+export async function writeDeleteOrphanStream(options: WriteDeleteOrphanStreamOptions) {
+  let cancelled = false
+  const cancelRequest = () => {
+    if (!cancelled) {
+      cancelled = true
+      options.cancel()
+    }
+  }
+
+  const transformStream = new NdJsonTransform()
+  let deleteLimitReached = false
+
+  options.requestStream.on('error', (err: Error) => {
+    if (deleteLimitReached) {
+      return
+    }
+
+    transformStream.emit('error', err)
+  })
+
+  const jsonStream = options.requestStream.pipe(transformStream)
+
+  let itemCount = 0
+  const limitedStream = Readable.from(
+    (async function* () {
+      for await (const chunk of jsonStream as AsyncIterable<OrphanStreamEvent>) {
+        yield chunk
+
+        if (chunk.event === 'data' && chunk.value && Array.isArray(chunk.value)) {
+          itemCount += chunk.value.length
+
+          if (itemCount >= options.deleteLimit) {
+            deleteLimitReached = true
+            console.log(
+              `Delete limit of ${options.deleteLimit} reached. Stopping after this batch. Ensure these operations complete before queuing additional jobs.`
+            )
+            cancelRequest()
+            return
+          }
+        }
+      }
+    })(),
+    { objectMode: true }
+  )
+
+  try {
+    await writeStreamToJsonArray(limitedStream, options.filePath)
+  } finally {
+    cancelRequest()
+  }
+}
+
+function failCli(message: string) {
+  process.exitCode = 1
+  console.error(message)
+  return false
+}
+
+export async function main(
+  env: NodeJS.ProcessEnv = process.env,
+  argv: string[] = process.argv
+): Promise<boolean> {
+  const action = argv[2]
+
+  if (action !== 'list' && action !== 'delete') {
+    return failCli('Please provide an action: list or delete')
+  }
+
+  const config = parseConfig(env)
+  if (typeof config === 'string') {
+    return failCli(config)
+  }
+
+  const buckets = config.bucketId
+    .split(',')
+    .map((bucketId) => bucketId.trim())
+    .filter(Boolean)
 
   for (const bucket of buckets) {
     console.log(' ')
     console.log(`${action} items in bucket ${bucket}...`)
     if (action === 'list') {
-      await listOrphans(TENANT_ID, bucket)
+      await listOrphans(config, bucket)
     } else {
-      await deleteS3Orphans(TENANT_ID, bucket)
+      await deleteS3Orphans(config, bucket)
     }
   }
+
+  return true
 }
 
 /**
@@ -61,22 +281,21 @@ async function main() {
  * @param tenantId
  * @param bucketId
  */
-async function listOrphans(tenantId: string, bucketId: string) {
-  const request = await client.get(`/tenants/${tenantId}/buckets/${bucketId}/orphan-objects`, {
-    responseType: 'stream',
-    params: {
-      before: BEFORE,
-    },
+async function listOrphans(config: OrphanClientConfig, bucketId: string) {
+  const { stream: requestStream, cancel } = await fetchOrphanStream({
+    action: 'list',
+    adminApiKey: config.adminApiKey,
+    adminUrl: config.adminUrl,
+    before: config.before,
+    bucketId,
+    tenantId: config.tenantId,
   })
 
-  const transformStream = new NdJsonTransform()
-  request.data.on('error', (err: Error) => {
-    transformStream.emit('error', err)
+  await writeListOrphanStream({
+    requestStream,
+    cancel,
+    filePath: path.resolve(__dirname, FILE_PATH('list', config.tenantId, bucketId)),
   })
-
-  const jsonStream = request.data.pipe(transformStream)
-
-  await writeStreamToJsonArray(jsonStream, path.resolve(__dirname, FILE_PATH('list', bucketId)))
 }
 
 /**
@@ -84,60 +303,33 @@ async function listOrphans(tenantId: string, bucketId: string) {
  * @param tenantId
  * @param bucketId
  */
-async function deleteS3Orphans(tenantId: string, bucketId: string) {
-  const request = await client.delete(`/tenants/${tenantId}/buckets/${bucketId}/orphan-objects`, {
-    responseType: 'stream',
-    data: {
-      deleteS3Keys: true,
-      before: BEFORE,
-    },
+async function deleteS3Orphans(config: OrphanClientConfig, bucketId: string) {
+  const { stream: requestStream, cancel } = await fetchOrphanStream({
+    action: 'delete',
+    adminApiKey: config.adminApiKey,
+    adminUrl: config.adminUrl,
+    before: config.before,
+    bucketId,
+    tenantId: config.tenantId,
   })
 
-  const transformStream = new NdJsonTransform()
-  request.data.on('error', (err: Error) => {
-    transformStream.emit('error', err)
+  await writeDeleteOrphanStream({
+    requestStream,
+    cancel,
+    deleteLimit: config.deleteLimit,
+    filePath: path.resolve(__dirname, FILE_PATH('delete', config.tenantId, bucketId)),
   })
-
-  const jsonStream = request.data.pipe(transformStream)
-
-  // Apply DELETE_LIMIT for delete operations
-  let itemCount = 0
-  const limitedStream = new Transform({
-    objectMode: true,
-    transform(chunk: OrphanStreamEvent, _encoding: string, callback: TransformCallback) {
-      if (chunk.event === 'data' && chunk.value && Array.isArray(chunk.value)) {
-        itemCount += chunk.value.length
-
-        if (itemCount >= DELETE_LIMIT) {
-          console.log(
-            `Delete limit of ${DELETE_LIMIT} reached. Stopping after this batch. Ensure these operations complete before queuing additional jobs.`
-          )
-          this.push(chunk)
-          callback()
-          process.nextTick(() => {
-            // Destroy the underlying HTTP request to stop further processing
-            request.data.destroy()
-            this.emit('error', new Error('DELETE_LIMIT_REACHED'))
-          })
-          return
-        }
-      }
-      this.push(chunk)
-      callback()
-    },
-  })
-
-  await writeStreamToJsonArray(
-    jsonStream.pipe(limitedStream),
-    path.resolve(__dirname, FILE_PATH('delete', bucketId))
-  )
 }
 
-main()
-  .then(() => {
-    console.log('Done')
-  })
-  .catch((e) => {
-    process.exitCode = 1
-    console.error('Error:', e)
-  })
+if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.main === module) {
+  void main()
+    .then((ok) => {
+      if (ok) {
+        console.log('Done')
+      }
+    })
+    .catch((e) => {
+      process.exitCode = 1
+      console.error('Error:', e)
+    })
+}

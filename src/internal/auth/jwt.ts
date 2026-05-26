@@ -24,6 +24,7 @@ const JWT_HMAC_ALGOS = ['HS256', 'HS384', 'HS512']
 const JWT_RSA_ALGOS = ['RS256', 'RS384', 'RS512']
 const JWT_ECC_ALGOS = ['ES256', 'ES384', 'ES512']
 const JWT_ED_ALGOS = ['EdDSA']
+const MAX_ABSOLUTE_JWT_EXPIRATION_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000)
 
 export type SignedToken = {
   url: string
@@ -39,6 +40,7 @@ export type SignedUploadToken = {
 }
 
 const jwtJwksFingerprintCache = new WeakMap<object, string>()
+const encoder = new TextEncoder()
 
 async function findJWKFromHeader(
   header: JWTHeaderParameters,
@@ -46,7 +48,7 @@ async function findJWKFromHeader(
   jwks: JwksConfig | null
 ) {
   if (!jwks || !jwks.keys) {
-    return new TextEncoder().encode(secret)
+    return encoder.encode(secret)
   }
 
   if (JWT_HMAC_ALGOS.indexOf(header.alg) > -1) {
@@ -54,7 +56,7 @@ async function findJWKFromHeader(
 
     if (!header.kid && header.alg === jwtAlgorithm) {
       // jwt is probably signed with the static secret
-      return new TextEncoder().encode(secret)
+      return encoder.encode(secret)
     }
 
     // find the first key without a kid or with the matching kid and the "oct" type
@@ -64,7 +66,7 @@ async function findJWKFromHeader(
 
     if (!jwk) {
       // jwt is probably signed with the static secret
-      return new TextEncoder().encode(secret)
+      return encoder.encode(secret)
     }
 
     return Buffer.from(jwk.k, 'base64')
@@ -86,7 +88,7 @@ async function findJWKFromHeader(
 
   if (!jwk) {
     // couldn't find a matching JWK, try to use the secret
-    return new TextEncoder().encode(secret)
+    return encoder.encode(secret)
   }
   return await importJWK(jwk)
 }
@@ -230,19 +232,54 @@ export async function signJWT(
   expiresIn: string | number | undefined
 ): Promise<string> {
   const signer = new SignJWT(payload).setIssuedAt()
-  if (expiresIn) {
-    const expiresInStr = typeof expiresIn === 'string' ? expiresIn : Math.floor(expiresIn) + 's'
-    signer.setExpirationTime(expiresInStr)
+  if (expiresIn !== undefined) {
+    const expiresInStr = getJWTExpirationTime(expiresIn)
+    try {
+      signer.setExpirationTime(expiresInStr)
+    } catch (e) {
+      throw ERRORS.InvalidParameter('expiresIn', { error: e as Error })
+    }
   }
 
   if (typeof secret === 'string') {
-    const signingSecret = new TextEncoder().encode(secret)
+    const signingSecret = encoder.encode(secret)
     return signer.setProtectedHeader({ alg: jwtAlgorithm }).sign(signingSecret)
   } else {
     const signingSecret = await importJWK(secret)
     return signer
       .setProtectedHeader({ kid: secret.kid, alg: secret.alg || jwtAlgorithm })
       .sign(signingSecret)
+  }
+}
+
+function getJWTExpirationTime(expiresIn: string | number) {
+  if (typeof expiresIn === 'string') {
+    return expiresIn
+  }
+
+  assertValidNumericJWTExpiration(expiresIn)
+  return `${Math.floor(expiresIn)}s`
+}
+
+export function getMaxNumericJWTExpiration(nowMs = Date.now()) {
+  const nowSeconds = Math.floor(nowMs / 1000)
+  return Math.max(0, MAX_ABSOLUTE_JWT_EXPIRATION_SECONDS - nowSeconds)
+}
+
+export function assertValidNumericJWTExpiration(expiresIn: number, nowMs = Date.now()) {
+  if (!Number.isFinite(expiresIn)) {
+    throw ERRORS.InvalidParameter('expiresIn')
+  }
+
+  const expiresInSeconds = Math.floor(expiresIn)
+  const maxRelativeExpirationSeconds = getMaxNumericJWTExpiration(nowMs)
+
+  if (
+    !Number.isSafeInteger(expiresInSeconds) ||
+    expiresInSeconds < 1 ||
+    expiresInSeconds > maxRelativeExpirationSeconds
+  ) {
+    throw ERRORS.InvalidParameter('expiresIn')
   }
 }
 

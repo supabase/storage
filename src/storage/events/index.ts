@@ -1,5 +1,6 @@
 export * from './base-event'
 export * from './jwks/jwks-create-signing-secret'
+export * from './jwks/jwks-roll-url-signing-key'
 export * from './lifecycle/bucket-created'
 export * from './lifecycle/bucket-deleted'
 export * from './lifecycle/object-created'

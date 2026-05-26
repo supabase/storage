@@ -5,7 +5,7 @@ import { BaseEvent } from '../base-event'
 interface ObjectUpdatedMetadataEvent extends BasePayload {
   name: string
   bucketId: string
-  version: string
+  version?: string
   metadata: ObjectMetadata
 }
 

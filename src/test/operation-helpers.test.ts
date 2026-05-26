@@ -1,5 +1,3 @@
-'use strict'
-
 import { useStorage } from './utils/storage'
 
 describe('Storage operation helpers', () => {

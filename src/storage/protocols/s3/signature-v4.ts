@@ -49,6 +49,9 @@ interface Credentials {
   service: string
 }
 
+type SignatureHeaders = Record<string, string | string[] | undefined>
+type SignatureQuery = Record<string, unknown>
+
 export interface Policy {
   expiration: string
   conditions: PolicyConditions
@@ -94,6 +97,8 @@ export const ALWAYS_UNSIGNABLE_QUERY_PARAMS = {
   'X-Amz-Signature': true,
 }
 
+export const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+
 export class SignatureV4 {
   public readonly serverCredentials: SignatureV4Options['credentials']
   enforceRegion: boolean
@@ -101,6 +106,7 @@ export class SignatureV4 {
   allowBodyHashing?: boolean
   nonCanonicalForwardedHost?: string
   publicUrl?: URL
+  private readonly signingKeyCache = new Map<string, Buffer>()
 
   constructor(options: SignatureV4Options) {
     this.serverCredentials = options.credentials
@@ -111,7 +117,7 @@ export class SignatureV4 {
     this.publicUrl = options.publicUrl
   }
 
-  static parseAuthorizationHeader(headers: Record<string, any>) {
+  static parseAuthorizationHeader(headers: SignatureHeaders) {
     const clientSignature = headers.authorization
     if (typeof clientSignature !== 'string') {
       throw ERRORS.InvalidSignature('Missing authorization header')
@@ -127,15 +133,20 @@ export class SignatureV4 {
     const signedHeadersPart = params.get('SignedHeaders')
     const signature = params.get('Signature')
     const longDate = headers['x-amz-date']
-    const contentSha = headers['x-amz-content-sha256']
-    const sessionToken = headers['x-amz-security-token']
+    const contentSha = coerceOptionalString(headers['x-amz-content-sha256'])
+    const sessionToken = coerceOptionalString(headers['x-amz-security-token'])
 
-    if (!validateTypeOfStrings(credentialPart, signedHeadersPart, signature, longDate)) {
+    if (
+      !isString(credentialPart) ||
+      !isString(signedHeadersPart) ||
+      !isString(signature) ||
+      !isString(longDate)
+    ) {
       throw ERRORS.InvalidSignature('Invalid signature format')
     }
 
-    const signedHeaders = signedHeadersPart?.split(';') || []
-    const credentialsPart = credentialPart?.split('/') || []
+    const signedHeaders = signedHeadersPart.split(';')
+    const credentialsPart = credentialPart.split('/')
 
     if (credentialsPart.length !== 5) {
       throw ERRORS.InvalidSignature('Invalid credentials')
@@ -145,14 +156,14 @@ export class SignatureV4 {
     return {
       credentials: { accessKey, shortDate, region, service },
       signedHeaders,
-      signature: signature as string,
+      signature,
       longDate,
       contentSha,
       sessionToken,
     }
   }
 
-  static isChunkedUpload(headers: Record<string, any>): boolean {
+  static isChunkedUpload(headers: SignatureHeaders): boolean {
     const sha = headers['x-amz-content-sha256']
     if (typeof sha !== 'string') return false
     // If it exactly matches or starts with streaming prefix...
@@ -162,16 +173,21 @@ export class SignatureV4 {
     )
   }
 
-  static parseQuerySignature(query: Record<string, any>) {
+  static parseQuerySignature(query: SignatureQuery) {
     const credentialPart = query['X-Amz-Credential']
-    const signedHeaders: string = query['X-Amz-SignedHeaders']
-    const signature: string = query['X-Amz-Signature']
-    const longDate: string = query['X-Amz-Date']
-    const contentSha: string = query['X-Amz-Content-Sha256']
-    const sessionToken: string | undefined = query['X-Amz-Security-Token']
-    const expires = query['X-Amz-Expires']
+    const signedHeaders = query['X-Amz-SignedHeaders']
+    const signature = query['X-Amz-Signature']
+    const longDate = query['X-Amz-Date']
+    const contentSha = coerceOptionalString(query['X-Amz-Content-Sha256'])
+    const sessionToken = coerceOptionalString(query['X-Amz-Security-Token'])
+    const expires = coerceOptionalString(query['X-Amz-Expires'])
 
-    if (!validateTypeOfStrings(credentialPart, signedHeaders, signature, longDate)) {
+    if (
+      !isString(credentialPart) ||
+      !isString(signedHeaders) ||
+      !isString(signature) ||
+      !isString(longDate)
+    ) {
       throw ERRORS.InvalidSignature('Invalid signature format')
     }
 
@@ -179,7 +195,7 @@ export class SignatureV4 {
       this.checkExpiration(longDate, expires)
     }
 
-    const credentialsPart = credentialPart.split('/') as string[]
+    const credentialsPart = credentialPart.split('/')
     if (credentialsPart.length !== 5) {
       throw ERRORS.InvalidSignature('Invalid credentials')
     }
@@ -196,14 +212,19 @@ export class SignatureV4 {
   }
 
   static parseMultipartSignature(form: FormData) {
-    const credentialPart = form.get('X-Amz-Credential') as string
-    const signature = form.get('X-Amz-Signature') as string
-    const longDate = form.get('X-Amz-Date') as string
-    const contentSha = form.get('X-Amz-Content-Sha256') as string
-    const sessionToken = form.get('X-Amz-Security-Token') as string
-    const policy = form.get('Policy') as string
+    const credentialPart = form.get('X-Amz-Credential')
+    const signature = form.get('X-Amz-Signature')
+    const longDate = form.get('X-Amz-Date')
+    const policy = form.get('Policy')
+    const contentSha = coerceOptionalString(form.get('X-Amz-Content-Sha256'))
+    const sessionToken = coerceOptionalString(form.get('X-Amz-Security-Token'))
 
-    if (!validateTypeOfStrings(credentialPart, signature, policy, longDate)) {
+    if (
+      !isString(credentialPart) ||
+      !isString(signature) ||
+      !isString(policy) ||
+      !isString(longDate)
+    ) {
       throw ERRORS.InvalidSignature('Invalid signature format')
     }
 
@@ -213,7 +234,7 @@ export class SignatureV4 {
       this.checkExpiration(longDate, xPolicy.expiration)
     }
 
-    const credentialsPart = credentialPart.split('/') as string[]
+    const credentialsPart = credentialPart.split('/')
     if (credentialsPart.length !== 5) {
       throw ERRORS.InvalidSignature('Invalid credentials')
     }
@@ -299,11 +320,8 @@ export class SignatureV4 {
     chunkSignature: string,
     prevSignature: string = clientSignature.signature
   ): boolean {
-    const { secretKey } = this.serverCredentials
     const { shortDate, region, service } = clientSignature.credentials
-    const signingKey = this.signingKey(secretKey, shortDate, region, service)
-
-    const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+    const signingKey = this.getCachedSigningKey(shortDate, region, service)
 
     // Build the “String to Sign” for this chunk exactly per AWS:
     //    AWS4-HMAC-SHA256-PAYLOAD
@@ -318,7 +336,7 @@ export class SignatureV4 {
       clientSignature.longDate,
       scope,
       prevSignature,
-      emptyHash,
+      EMPTY_SHA256_HASH,
       chunkHash,
     ].join('\n')
 
@@ -334,8 +352,7 @@ export class SignatureV4 {
     this.validateCredentials(clientSignature.credentials)
     const selectedRegion = this.getSelectedRegion(clientSignature.credentials.region)
 
-    const signingKey = this.signingKey(
-      serverCredentials.secretKey,
+    const signingKey = this.getCachedSigningKey(
       clientSignature.credentials.shortDate,
       selectedRegion,
       serverCredentials.service
@@ -374,8 +391,7 @@ export class SignatureV4 {
       canonicalRequest
     )
 
-    const signingKey = this.signingKey(
-      serverCredentials.secretKey,
+    const signingKey = this.getCachedSigningKey(
       clientSignature.credentials.shortDate,
       selectedRegion,
       serverCredentials.service
@@ -399,7 +415,7 @@ export class SignatureV4 {
 
     // If the body is undefined, use the hash of an empty string
     if (body === null || body === undefined) {
-      return 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+      return EMPTY_SHA256_HASH
     }
 
     // Calculate the SHA256 hash of the body
@@ -590,6 +606,23 @@ export class SignatureV4 {
     return this.hmac(kService, 'aws4_request')
   }
 
+  private getCachedSigningKey(dateStamp: string, regionName: string, serviceName: string) {
+    const cacheKey = `${dateStamp}\0${regionName}\0${serviceName}`
+    let signingKey = this.signingKeyCache.get(cacheKey)
+
+    if (!signingKey) {
+      signingKey = this.signingKey(
+        this.serverCredentials.secretKey,
+        dateStamp,
+        regionName,
+        serviceName
+      )
+      this.signingKeyCache.set(cacheKey, signingKey)
+    }
+
+    return signingKey
+  }
+
   protected async sha256OfRequest(req: Readable) {
     const hash = createHash('sha256')
     for await (const chunk of req) {
@@ -611,6 +644,14 @@ export class SignatureV4 {
   }
 }
 
-function validateTypeOfStrings(...values: any[]) {
-  return values.every((value) => typeof value === 'string')
+function isString(value: unknown): value is string {
+  return typeof value === 'string'
+}
+
+function coerceOptionalString(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined
+  }
+
+  return String(value)
 }

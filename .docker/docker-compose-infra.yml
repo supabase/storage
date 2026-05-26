@@ -2,7 +2,7 @@
 
 services:
   tenant_db:
-    image: postgres:15
+    image: pgvector/pgvector:pg15
     shm_size: "1gb"
     ports:
       - "5432:5432"
@@ -176,11 +176,12 @@ services:
       - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/
       - IMGPROXY_USE_ETAG=true
       - IMGPROXY_ENABLE_WEBP_DETECTION=true
+      - IMGPROXY_ALLOW_SECURITY_OPTIONS=true
       - IMGPROXY_PRESETS=default=width:3000/height:8192
       - IMGPROXY_FORMAT_QUALITY=jpeg=80,avif=62,webp=80
 
   rest-catalog:
-    image: tabulario/iceberg-rest
+    image: apache/iceberg-rest-fixture:1.10.1
     container_name: iceberg-rest
     depends_on:
       - minio_setup
@@ -203,21 +204,29 @@ services:
 
   # Optional for tracing
   otel:
+    profiles:
+      - monitoring
     extends:
       service: otel-collector
       file: ./.docker/docker-compose-monitoring.yml
 
   jaeger:
+    profiles:
+      - monitoring
     extends:
       service: jaeger
       file: ./.docker/docker-compose-monitoring.yml
 
   grafana:
+    profiles:
+      - monitoring
     extends:
       service: grafana
       file: ./.docker/docker-compose-monitoring.yml
 
   prometheus:
+    profiles:
+      - monitoring
     extends:
       service: prometheus
       file: ./.docker/docker-compose-monitoring.yml

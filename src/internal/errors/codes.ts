@@ -1,3 +1,5 @@
+import { IcebergError } from '@storage/protocols/iceberg/catalog/errors'
+import { DatabaseError } from 'pg'
 import { StorageBackendError } from './storage-error'
 
 export enum ErrorCode {
@@ -19,7 +21,6 @@ export enum ErrorCode {
   KeyAlreadyExists = 'KeyAlreadyExists',
   BucketAlreadyExists = 'BucketAlreadyExists',
   DatabaseTimeout = 'DatabaseTimeout',
-  DatabaseConnectionLimit = 'DatabaseConnectionLimit',
   DatabaseReadOnly = 'DatabaseReadOnly',
   DatabaseInvalidObjectDefinition = 'DatabaseInvalidObjectDefinition',
   DatabaseSchemaMismatch = 'DatabaseSchemaMismatch',
@@ -49,7 +50,7 @@ export enum ErrorCode {
   IcebergMaximumResourceLimit = 'IcebergMaximumResourceLimit',
   IcebergResourceNotEmpty = 'IcebergResourceNotEmpty',
   NoSuchCatalog = 'NoSuchCatalog',
-
+  UnknownError = 'UnknownError',
   S3VectorConflictException = 'ConflictException',
   S3VectorNotFoundException = 'NotFoundException',
   S3VectorBucketNotEmpty = 'VectorBucketNotEmpty',
@@ -58,6 +59,7 @@ export enum ErrorCode {
   NoAvailableShard = 'NoAvailableShard',
   ShardNotFound = 'ShardNotFound',
 }
+const KNOWN_ERROR_CODES = new Set<string>(Object.values(ErrorCode))
 
 export const ERRORS = {
   BucketNotEmpty: (bucket: string, e?: Error) =>
@@ -84,7 +86,7 @@ export const ERRORS = {
     }),
   FeatureNotEnabled: (resource: string, feature: string, e?: Error) =>
     new StorageBackendError({
-      code: ErrorCode.InvalidRequest,
+      code: ErrorCode.FeatureNotEnabled,
       resource,
       httpStatusCode: 409,
       message: `The feature ${feature} is not enabled for this resource`,
@@ -92,7 +94,7 @@ export const ERRORS = {
     }),
   NotSupported: (feature: string, e?: Error) =>
     new StorageBackendError({
-      code: ErrorCode.InvalidRequest,
+      code: ErrorCode.NotSupported,
       httpStatusCode: 409,
       message: `The feature ${feature} is not enabled for this resource`,
       originalError: e,
@@ -141,10 +143,18 @@ export const ERRORS = {
 
   InvalidParameter: (parameter: string, opts?: { error?: Error; message?: string }) =>
     new StorageBackendError({
-      code: ErrorCode.MissingParameter,
+      code: ErrorCode.InvalidParameter,
       httpStatusCode: 400,
       message: opts?.message || `Invalid Parameter ${parameter}`,
       originalError: opts?.error,
+    }),
+
+  InvalidRequest: (message: string, error?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidRequest,
+      httpStatusCode: 400,
+      message: message || 'Invalid Request',
+      originalError: error,
     }),
 
   InvalidJWT: (e?: Error) =>
@@ -376,15 +386,6 @@ export const ERRORS = {
       originalError: e,
     }),
 
-  DatabaseConnectionLimit: (e?: Error) =>
-    new StorageBackendError({
-      code: ErrorCode.DatabaseConnectionLimit,
-      httpStatusCode: 503,
-      message:
-        'The database has reached its maximum number of connections. Please try again later.',
-      originalError: e,
-    }),
-
   DatabaseReadOnly: (e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.DatabaseReadOnly,
@@ -401,13 +402,20 @@ export const ERRORS = {
       originalError: e,
     }),
 
-  DatabaseSchemaMismatch: (e?: Error) =>
-    new StorageBackendError({
-      code: ErrorCode.DatabaseSchemaMismatch,
-      httpStatusCode: 503,
-      message: 'The database schema is out of sync. Please run migrations or contact support.',
-      originalError: e,
-    }),
+  DatabaseSchemaMismatch: (e: DatabaseError) =>
+    e.internalQuery && e.internalPosition // originates in trigger or RLS
+      ? new StorageBackendError({
+          code: ErrorCode.DatabaseSchemaMismatch,
+          httpStatusCode: 503,
+          message: 'There is a database schema mismatch in a trigger or RLS policy: ' + e.where,
+          originalError: e,
+        })
+      : new StorageBackendError({
+          code: ErrorCode.DatabaseSchemaMismatch,
+          httpStatusCode: 503,
+          message: 'The database schema is out of sync. Please run migrations or contact support.',
+          originalError: e,
+        }),
 
   ResourceLocked: (e?: Error) =>
     new StorageBackendError({
@@ -550,30 +558,70 @@ export const ERRORS = {
   },
 }
 
-export function isStorageError(errorType: ErrorCode, error: any): error is StorageBackendError {
+const ERROR_CODE_MAP: Record<string, ErrorCode> = {
+  FST_ERR_VALIDATION: ErrorCode.InvalidRequest,
+  FST_ERR_CTP_EMPTY_JSON_BODY: ErrorCode.InvalidRequest,
+  FST_ERR_CTP_INVALID_JSON_BODY: ErrorCode.InvalidRequest,
+  FST_ERR_CTP_INVALID_CONTENT_LENGTH: ErrorCode.InvalidRequest,
+  FST_ERR_CTP_INVALID_MEDIA_TYPE: ErrorCode.InvalidMimeType,
+  FST_ERR_CTP_BODY_TOO_LARGE: ErrorCode.EntityTooLarge,
+}
+
+export function isStorageError(errorType: ErrorCode, error: unknown): error is StorageBackendError {
   return error instanceof StorageBackendError && error.code === errorType
 }
 
-function hasStatusCode(error: Error): error is Error & { statusCode: number } {
-  return 'statusCode' in error && typeof (error as any).statusCode === 'number'
+function hasNumericStatusCode(error: Error): error is Error & { statusCode: number } {
+  return 'statusCode' in error && typeof error.statusCode === 'number'
 }
 
-export function normalizeRawError(error: any) {
-  if (error instanceof Error) {
-    let statusCode = 0
-    if (error instanceof StorageBackendError && error.httpStatusCode) {
-      statusCode = error.httpStatusCode
-    } else if (hasStatusCode(error)) {
-      // Fastify validation errors include statusCode we can use
-      statusCode = error.statusCode
+function hasStringErrorCode(error: Error): error is Error & { code: string } {
+  return 'code' in error && typeof error.code === 'string'
+}
+
+function getErrorCode(error: Error): string {
+  if (error instanceof IcebergError && error.error) {
+    return error.error
+  }
+  if (hasStringErrorCode(error)) {
+    if (KNOWN_ERROR_CODES.has(error.code)) {
+      return error.code as ErrorCode
     }
+    if (error.code in ERROR_CODE_MAP) {
+      return ERROR_CODE_MAP[error.code]
+    }
+  }
+  return ErrorCode.UnknownError
+}
+
+function getErrorStatusCode(error: Error): number {
+  if (error instanceof StorageBackendError && error.httpStatusCode) {
+    return error.httpStatusCode
+  }
+  if (error instanceof IcebergError) {
+    return error.code
+  }
+  if (hasNumericStatusCode(error)) {
+    // Fastify validation errors include statusCode we can use
+    return error.statusCode
+  }
+  return 0
+}
+
+export function normalizeRawError(error: unknown, logLevel: string) {
+  if (error instanceof Error) {
+    const statusCode = getErrorStatusCode(error)
+    const errorCode = getErrorCode(error)
+    const includeStack =
+      logLevel === 'debug' || statusCode >= 500 || errorCode === ErrorCode.UnknownError
 
     return {
       raw: JSON.stringify(error),
       name: error.name,
       message: error.message,
-      stack: error.stack,
+      stack: includeStack ? error.stack || '' : '',
       statusCode,
+      errorCode,
     }
   }
 

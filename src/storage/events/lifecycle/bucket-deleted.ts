@@ -64,6 +64,7 @@ export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
         {
           tenant: job.data.tenant,
           catalogId: job.data.bucketId,
+          sbReqId: job.data.sbReqId,
         },
         {
           tnx: isMultitenant ? metastoreTx.getTnx() : undefined,

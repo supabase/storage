@@ -6,6 +6,7 @@ import { KnexQueueDB } from '@internal/queue/database'
 import { Knex } from 'knex'
 import PgBoss, { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../config'
+import { SYSTEM_TENANT_REF } from './constants'
 import { PG_BOSS_SCHEMA, Queue } from './queue'
 
 export interface BasePayload {
@@ -13,6 +14,7 @@ export interface BasePayload {
   singletonKey?: string
   scheduleAt?: Date
   reqId?: string
+  sbReqId?: string
   tenant: {
     ref: string
     host: string
@@ -21,20 +23,24 @@ export interface BasePayload {
 
 const { pgQueueEnable, region, isMultitenant } = getConfig()
 
-export type StaticThis<T extends Event<any>> = BaseEventConstructor<T>
+function withPayloadVersion<TPayload extends BasePayload>(
+  payload: TPayload,
+  version: string
+): TPayload {
+  return {
+    ...payload,
+    $version: payload.$version ?? version,
+  }
+}
 
-interface BaseEventConstructor<Base extends Event<any>> {
+export type EventInputPayload = Omit<BasePayload, '$version'>
+export type QueueEvent<T extends EventInputPayload = EventInputPayload> = Event<T>
+export type StaticThis<TPayload extends BasePayload> = BaseEventConstructor<TPayload>
+
+interface BaseEventConstructor<TPayload extends BasePayload> {
   version: string
 
-  new (...args: any): Base
-
-  send(
-    this: StaticThis<Base>,
-    payload: Omit<Base['payload'], '$version'>
-  ): Promise<string | void | null>
-
-  eventName(): string
-  getWorkerOptions(): WorkOptions
+  new (payload: TPayload): QueueEvent<Omit<TPayload, '$version'>>
 }
 
 /**
@@ -67,7 +73,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     return undefined
   }
 
-  static getSendOptions<T extends Event<any>>(payload: T['payload']): SendOptions | undefined {
+  static getSendOptions(payload: BasePayload): SendOptions | undefined {
     return undefined
   }
 
@@ -83,15 +89,20 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     // no-op
   }
 
-  static batchSend<T extends Event<any>[]>(messages: T) {
+  static batchSend<TPayload extends BasePayload>(
+    this: StaticThis<TPayload>,
+    messages: Array<{ payload: TPayload; send(): Promise<string | void | null> }>
+  ) {
+    const eventClass = this as typeof Event
+
     if (!pgQueueEnable) {
-      if (this.allowSync) {
+      if (eventClass.allowSync) {
         return Promise.all(messages.map((message) => message.send()))
       } else {
         logger.warn(
           {
             type: 'queue',
-            eventType: this.eventName(),
+            eventType: eventClass.eventName(),
           },
           '[Queue] skipped sending batch messages'
         )
@@ -101,68 +112,55 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
 
     return Queue.getInstance().insert(
       messages.map((message) => {
-        const sendOptions = (this.getSendOptions(message.payload) as PgBoss.JobInsert) || {}
-        if (!message.payload.$version) {
-          ;(message.payload as (typeof message)['payload']).$version = this.version
-        }
+        const payloadWithVersion = withPayloadVersion(message.payload, eventClass.version)
+        const sendOptions =
+          (eventClass.getSendOptions(payloadWithVersion) as PgBoss.JobInsert) || {}
 
-        if (message.payload.scheduleAt) {
-          sendOptions.startAfter = new Date(message.payload.scheduleAt)
+        if (payloadWithVersion.scheduleAt) {
+          sendOptions.startAfter = new Date(payloadWithVersion.scheduleAt)
         }
 
         return {
           ...sendOptions,
-          name: this.getQueueName(),
-          data: message.payload,
-          deadLetter: this.deadLetterQueueName(),
+          name: eventClass.getQueueName(),
+          data: payloadWithVersion,
+          deadLetter: eventClass.deadLetterQueueName(),
         }
       })
     )
   }
 
-  static send<T extends Event<any>>(
-    this: StaticThis<T>,
-    payload: Omit<T['payload'], '$version'>,
+  static send<TPayload extends BasePayload>(
+    this: StaticThis<TPayload>,
+    payload: Omit<TPayload, '$version'>,
     opts?: SendOptions & { tnx?: Knex }
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
+    const that = new this(withPayloadVersion(payload as TPayload, this.version))
     return that.send(opts)
   }
 
-  static invoke<T extends Event<any>>(
-    this: StaticThis<T>,
-    payload: Omit<T['payload'], '$version'>
+  static invoke<TPayload extends BasePayload>(
+    this: StaticThis<TPayload>,
+    payload: Omit<TPayload, '$version'>
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
+    const that = new this(withPayloadVersion(payload as TPayload, this.version))
     return that.invoke()
   }
 
-  static invokeOrSend<T extends Event<any>>(
-    this: StaticThis<T>,
-    payload: Omit<T['payload'], '$version'>,
+  static invokeOrSend<TPayload extends BasePayload>(
+    this: StaticThis<TPayload>,
+    payload: Omit<TPayload, '$version'>,
     options?: SendOptions & { sendWhenError?: (error: unknown) => boolean }
   ) {
-    if (!payload.$version) {
-      ;(payload as T['payload']).$version = this.version
-    }
-    const that = new this(payload)
+    const that = new this(withPayloadVersion(payload as TPayload, this.version))
     return that.invokeOrSend(options)
   }
 
-  static handle(
-    job: Job<Event<any>['payload']> | Job<Event<any>['payload']>[],
-    opts?: { signal?: AbortSignal }
-  ) {
+  static handle(job: Job<BasePayload> | Job<BasePayload>[], opts?: { signal?: AbortSignal }) {
     throw new Error('not implemented')
   }
 
-  static async shouldSend(payload: any) {
+  static async shouldSend(payload: BasePayload) {
     if (isMultitenant && payload?.tenant?.ref) {
       // Do not send an event if disabled for this specific tenant
       const tenant = await getTenantConfig(payload.tenant.ref)
@@ -215,11 +213,13 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       if (sendOptions?.sendWhenError && !sendOptions.sendWhenError(e)) {
         throw e
       }
+
       logSchema.error(logger, '[Queue] Error invoking event synchronously, sending to queue', {
         type: 'queue',
-        project: this.payload.tenant?.ref,
+        project: this.payload.tenant?.ref || SYSTEM_TENANT_REF,
         error: e,
         metadata: JSON.stringify(this.payload),
+        sbReqId: this.payload.sbReqId,
       })
 
       return this.send(sendOptions)
@@ -322,8 +322,10 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         `[Queue Sender] Error while sending job to queue, sending synchronously`,
         {
           type: 'queue',
+          project: this.payload.tenant?.ref || SYSTEM_TENANT_REF,
           error: e,
           metadata: JSON.stringify(this.payload),
+          sbReqId: this.payload.sbReqId,
         }
       )
 

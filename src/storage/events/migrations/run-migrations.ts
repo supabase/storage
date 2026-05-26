@@ -46,6 +46,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
 
   static async handle(job: JobWithMetadata<RunMigrationsPayload>) {
     const tenantId = job.data.tenant.ref
+    const { sbReqId } = job.data
     deleteTenantConfig(tenantId)
     const tenant = await getTenantConfig(tenantId)
 
@@ -59,6 +60,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
       logSchema.info(logger, `[Migrations] running for tenant ${tenantId}`, {
         type: 'migrations',
         project: tenantId,
+        sbReqId,
       })
       await runMigrationsOnTenant({
         databaseUrl: tenant.databaseUrl,
@@ -74,12 +76,14 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
       logSchema.info(logger, `[Migrations] completed for tenant ${tenantId}`, {
         type: 'migrations',
         project: tenantId,
+        sbReqId,
       })
     } catch (e) {
       if (e instanceof StorageBackendError && e.code === ErrorCode.LockTimeout) {
         logSchema.info(logger, `[Migrations] lock timeout for tenant ${tenantId}`, {
           type: 'migrations',
           project: tenantId,
+          sbReqId,
         })
         return
       }
@@ -88,6 +92,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
         type: 'migrations',
         error: e,
         project: tenantId,
+        sbReqId,
       })
 
       if (job.retryCount === job.retryLimit) {
@@ -106,6 +111,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
           type: 'migrations',
           error: e,
           project: tenantId,
+          sbReqId,
         })
         return
       }

@@ -6,6 +6,7 @@ import { ROUTE_OPERATIONS } from '../operations'
 
 const updateBucketBodySchema = {
   type: 'object',
+  minProperties: 1,
   properties: {
     public: { type: 'boolean', examples: [false] },
     file_size_limit: {
@@ -20,6 +21,11 @@ const updateBucketBodySchema = {
       items: { type: 'string', examples: [['image/png', 'image/jpg']] },
     },
   },
+  anyOf: [
+    { required: ['public'] },
+    { required: ['file_size_limit'] },
+    { required: ['allowed_mime_types'] },
+  ],
 } as const
 const updateBucketParamsSchema = {
   type: 'object',

@@ -1,7 +1,8 @@
+import { FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 import { getConfig } from '../../config'
 
-export default fastifyPlugin(
+const apiKeyPlugin = fastifyPlugin(
   async (fastify) => {
     const { adminApiKeys } = getConfig()
     const apiKeys = new Set(adminApiKeys.split(','))
@@ -13,3 +14,11 @@ export default fastifyPlugin(
   },
   { name: 'auth-admin-api-key' }
 )
+
+export function registerApiKeyAuth(fastify: FastifyInstance) {
+  fastify.addHook('onRoute', (routeOptions) => {
+    routeOptions.schema = routeOptions.schema || {}
+    routeOptions.schema.security = [{ apiKeyAuth: [] }]
+  })
+  fastify.register(apiKeyPlugin)
+}

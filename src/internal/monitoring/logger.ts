@@ -5,6 +5,35 @@ import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from 'fastify'
 import pino, { Logger } from 'pino'
 import { getConfig } from '../../config'
 
+const serializedRequestLogSymbol: unique symbol = Symbol('SerializedRequestLog')
+const serializedReplyLogSymbol: unique symbol = Symbol('SerializedReplyLog')
+
+export type SafeLogHeaders = Record<string, string>
+
+interface SerializedRequestLogShape {
+  region: string
+  traceId: string
+  method: string
+  url: string
+  headers: SafeLogHeaders
+  hostname: string
+  remoteAddress: string
+  remotePort?: number
+}
+
+export interface SerializedRequestLog extends SerializedRequestLogShape {
+  readonly [serializedRequestLogSymbol]: true
+}
+
+interface SerializedReplyLogShape {
+  statusCode: number
+  headers: SafeLogHeaders
+}
+
+export interface SerializedReplyLog extends SerializedReplyLogShape {
+  readonly [serializedReplyLogSymbol]: true
+}
+
 const {
   logLevel,
   logflareApiKey,
@@ -12,19 +41,14 @@ const {
   logflareEnabled,
   logflareBatchSize,
   region,
+  version: appVersion,
 } = getConfig()
 
 export const baseLogger = pino({
   transport: buildTransport(),
   serializers: {
     error(error) {
-      return normalizeRawError(error)
-    },
-    res(reply) {
-      return {
-        statusCode: reply.statusCode,
-        headers: whitelistHeaders(reply.getHeaders()),
-      }
+      return normalizeRawError(error, logLevel)
     },
     reqMetadata(metadata?: Record<string, unknown>) {
       if (!metadata) {
@@ -37,38 +61,33 @@ export const baseLogger = pino({
         // no-op
       }
     },
-    req(request) {
-      return {
-        region,
-        traceId: request.id,
-        method: request.method,
-        url: redactQueryParamFromRequest(request, [
-          'token',
-          'X-Amz-Credential',
-          'X-Amz-Signature',
-          'X-Amz-Security-Token',
-        ]),
-        headers: whitelistHeaders(request.headers),
-        hostname: request.hostname,
-        remoteAddress: request.ip,
-        remotePort: request.socket?.remotePort,
-      }
-    },
+    // doRequestLog passes branded values from serializeRequestLog/serializeReplyLog,
+    // so the common path is a passthrough. If Fastify's auto-logger ever emits raw
+    // FastifyRequest/Reply values, fall back to the safe serializers.
+    req: serializeRequestLogValue,
+    res: serializeReplyLogValue,
   },
   level: logLevel,
   timestamp: pino.stdTimeFunctions.isoTime,
 })
 
-export let logger = baseLogger.child({ region })
+export let logger = baseLogger.child({ region, appVersion })
 
 export function setLogger(newLogger: Logger) {
   logger = newLogger
 }
 
-export interface RequestLog {
+export interface RequestLogContext {
+  tenantId?: string
+  project?: string
+  reqId?: string
+  sbReqId?: string
+}
+
+export interface RequestLog extends RequestLogContext {
   type: 'request'
-  req: FastifyRequest
-  res?: FastifyReply
+  req: SerializedRequestLog
+  res?: SerializedReplyLog
   reqMetadata?: Record<string, unknown>
   responseTime: number
   executionTime?: number
@@ -80,28 +99,23 @@ export interface RequestLog {
   serverTimes?: { spanName: string; duration: number }[]
 }
 
-export interface EventLog {
-  jodId: string
+export interface EventLog extends RequestLogContext {
+  jobId: string
   type: 'event'
   event: string
   payload: string
   objectPath: string
-  tenantId: string
-  project: string
   resources?: string[]
-  reqId?: string
 }
 
-interface ErrorLog {
+interface ErrorLog extends RequestLogContext {
   type: string
   error?: Error | unknown
-  project?: string
   metadata?: string
 }
 
-interface InfoLog {
+interface InfoLog extends RequestLogContext {
   type: string
-  project?: string
   metadata?: string
 }
 
@@ -165,64 +179,161 @@ export function buildTransport(): pino.TransportMultiOptions {
   }
 }
 
-const allowlistedHeaders = new Set([
-  'accept',
-  'cf-connecting-ip',
-  'cf-ipcountry',
-  'host',
-  'user-agent',
-  'x-forwarded-proto',
-  'x-forwarded-host',
-  'x-forwarded-port',
-  'x-forwarded-prefix',
-  'referer',
-  'content-length',
-  'x-real-ip',
-  'x-client-info',
-  'x-forwarded-user-agent',
-  'x-client-trace-id',
-  'x-upsert',
-  'content-type',
-  'if-none-match',
-  'if-modified-since',
-  'upload-metadata',
-  'upload-length',
-  'upload-offset',
-  'tus-resumable',
-  'range',
-  'cf-cache-status',
-  'cf-ray',
-  'location',
-  'cache-control',
-  'content-location',
-  'content-range',
-  'date',
-  'transfer-encoding',
-  'x-kong-proxy-latency',
-  'x-kong-upstream-latency',
-  'sb-gateway-mode',
-  'sb-gateway-version',
-  'x-transformations',
-  'expires',
-  'etag',
-  'content-disposition',
-  'last-modified',
-])
+const allowlistedHeaderKeys = new Map<string, string>(
+  [
+    'accept',
+    'cf-connecting-ip',
+    'cf-ipcountry',
+    'host',
+    'user-agent',
+    'x-forwarded-proto',
+    'x-forwarded-host',
+    'x-forwarded-port',
+    'x-forwarded-prefix',
+    'referer',
+    'content-length',
+    'x-real-ip',
+    'x-client-info',
+    'x-forwarded-user-agent',
+    'x-client-trace-id',
+    'x-upsert',
+    'content-type',
+    'if-none-match',
+    'if-modified-since',
+    'upload-metadata',
+    'upload-length',
+    'upload-offset',
+    'tus-resumable',
+    'range',
+    'cf-cache-status',
+    'cf-ray',
+    'location',
+    'cache-control',
+    'content-location',
+    'content-range',
+    'date',
+    'transfer-encoding',
+    'x-kong-proxy-latency',
+    'x-kong-upstream-latency',
+    'sb-request-id',
+    'sb-gateway-mode',
+    'sb-gateway-version',
+    'x-transformations',
+    'expires',
+    'etag',
+    'content-disposition',
+    'last-modified',
+  ].map((header) => [header, header.replaceAll('-', '_')])
+)
 
-const whitelistHeaders = (headers: Record<string, unknown>) => {
-  const responseMetadata: Record<string, unknown> = {}
+const redactedQueryParams = ['token', 'X-Amz-Credential', 'X-Amz-Signature', 'X-Amz-Security-Token']
+
+const whitelistHeaders = (headers: Record<string, unknown>): SafeLogHeaders => {
+  const responseMetadata: SafeLogHeaders = {}
 
   for (const header in headers) {
-    if (allowlistedHeaders.has(header)) {
-      responseMetadata[header.replaceAll('-', '_')] = `${headers[header]}`
+    const safeKey = allowlistedHeaderKeys.get(header)
+    if (safeKey !== undefined) {
+      responseMetadata[safeKey] = `${headers[header]}`
     }
   }
 
   return responseMetadata
 }
 
-export function redactQueryParamFromRequest(req: FastifyRequest, params: string[]) {
-  const url = req.url
+export function serializeRequestLog(req: FastifyRequest): SerializedRequestLog {
+  const log: SerializedRequestLogShape = {
+    region,
+    traceId: req.id,
+    method: req.method,
+    url: redactLogUrl(req.url),
+    headers: whitelistHeaders(req.headers),
+    hostname: req.hostname,
+    remoteAddress: req.ip,
+    remotePort: req.socket?.remotePort,
+  }
+  return markSerializedRequestLog(log)
+}
+
+export function serializeReplyLog(reply: FastifyReply | undefined): SerializedReplyLog | undefined {
+  if (!reply) {
+    return undefined
+  }
+
+  const log: SerializedReplyLogShape = {
+    statusCode: reply.statusCode,
+    headers: whitelistHeaders(reply.getHeaders()),
+  }
+  return markSerializedReplyLog(log)
+}
+
+function serializeRequestLogValue(request: unknown) {
+  if (isRecord(request) && request[serializedRequestLogSymbol] === true) {
+    return request
+  }
+
+  if (isFastifyRequestLogValue(request)) {
+    return serializeRequestLog(request)
+  }
+}
+
+function serializeReplyLogValue(reply: unknown) {
+  if (isRecord(reply) && reply[serializedReplyLogSymbol] === true) {
+    return reply
+  }
+
+  if (isFastifyReplyLogValue(reply)) {
+    return serializeReplyLog(reply)
+  }
+
+  if (isPartialReplyLogValue(reply)) {
+    return markSerializedReplyLog({
+      statusCode: reply.statusCode,
+      headers: {},
+    })
+  }
+}
+
+function isFastifyRequestLogValue(request: unknown): request is FastifyRequest {
+  return (
+    isRecord(request) &&
+    typeof request.id === 'string' &&
+    typeof request.method === 'string' &&
+    typeof request.url === 'string' &&
+    isRecord(request.headers) &&
+    typeof request.hostname === 'string' &&
+    typeof request.ip === 'string' &&
+    typeof request.protocol === 'string'
+  )
+}
+
+function isFastifyReplyLogValue(reply: unknown): reply is FastifyReply {
+  return (
+    isRecord(reply) &&
+    typeof reply.statusCode === 'number' &&
+    typeof reply.getHeaders === 'function'
+  )
+}
+
+function isPartialReplyLogValue(reply: unknown): reply is { statusCode: number } {
+  return isRecord(reply) && typeof reply.statusCode === 'number'
+}
+
+function markSerializedRequestLog(log: SerializedRequestLogShape): SerializedRequestLog {
+  Object.defineProperty(log, serializedRequestLogSymbol, { value: true })
+  return log as SerializedRequestLog
+}
+
+function markSerializedReplyLog(log: SerializedReplyLogShape): SerializedReplyLog {
+  Object.defineProperty(log, serializedReplyLogSymbol, { value: true })
+  return log as SerializedReplyLog
+}
+
+function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function redactLogUrl(url: string) {
   const qIdx = url.indexOf('?')
 
   // Fast path: no query string, nothing to redact
@@ -230,10 +341,10 @@ export function redactQueryParamFromRequest(req: FastifyRequest, params: string[
 
   const query = url.slice(qIdx + 1)
   // Fast path: no sensitive params present
-  if (!params.some((p) => query.includes(p))) return url
+  if (!redactedQueryParams.some((p) => query.includes(p))) return url
 
-  const lUrl = new URL(url, `${req.protocol}://${req.hostname}`)
-  params.forEach((param) => {
+  const lUrl = new URL(url, 'http://storage.local')
+  redactedQueryParams.forEach((param) => {
     if (lUrl.searchParams.has(param)) {
       lUrl.searchParams.set(param, 'redacted')
     }

@@ -5,6 +5,7 @@ import {
   getTenantConfig,
   jwksManager,
   multitenantKnex,
+  TenantMigrationStatus,
 } from '@internal/database'
 import {
   isDBMigrationName,
@@ -21,7 +22,7 @@ import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey } from '../../../config'
 import { dbSuperUser, storage } from '../../plugins'
-import apiKey from '../../plugins/apikey'
+import { registerApiKeyAuth } from '../../plugins/apikey'
 import { registerJsonParserAllowingEmptyBody } from '../../plugins/empty-json-body'
 
 const patchSchema = {
@@ -135,8 +136,15 @@ const { dbMigrationFreezeAt, icebergEnabled, vectorEnabled, adminReturnTenantSen
   getConfig()
 const migrationQueueName = RunMigrationsOnTenants.getQueueName()
 
+async function markTenantMigrationsCompleted(tenantId: string) {
+  await updateTenantMigrationsState(tenantId, {
+    migration: dbMigrationFreezeAt,
+    state: TenantMigrationStatus.COMPLETED,
+  })
+}
+
 export default async function routes(fastify: FastifyInstance) {
-  fastify.register(apiKey)
+  registerApiKeyAuth(fastify)
 
   fastify.get('/', { schema: { tags: ['tenant'] } }, async () => {
     const tenants = await multitenantKnex('tenants').select()
@@ -322,7 +330,7 @@ export default async function routes(fastify: FastifyInstance) {
       } = request.body
 
       await multitenantKnex.transaction(async (trx) => {
-        await multitenantKnex('tenants').insert({
+        await trx('tenants').insert({
           id: tenantId,
           anon_key: encrypt(anonKey),
           database_url: encrypt(databaseUrl),
@@ -361,7 +369,7 @@ export default async function routes(fastify: FastifyInstance) {
           tenantId,
           upToMigration: dbMigrationFreezeAt,
         })
-        await updateTenantMigrationsState(tenantId)
+        await markTenantMigrationsCompleted(tenantId)
       } catch {
         progressiveMigrations.addTenant(tenantId)
       }
@@ -431,7 +439,7 @@ export default async function routes(fastify: FastifyInstance) {
             tenantId,
             upToMigration: dbMigrationFreezeAt,
           })
-          await updateTenantMigrationsState(tenantId)
+          await markTenantMigrationsCompleted(tenantId)
         } catch (e) {
           if (e instanceof Error) {
             request.executionError = e
@@ -536,7 +544,7 @@ export default async function routes(fastify: FastifyInstance) {
           tenantId,
           upToMigration: dbMigrationFreezeAt,
         })
-        await updateTenantMigrationsState(tenantId)
+        await markTenantMigrationsCompleted(tenantId)
       } catch (e) {
         request.executionError = e as Error
         progressiveMigrations.addTenant(tenantId)
@@ -577,8 +585,10 @@ export default async function routes(fastify: FastifyInstance) {
         return
       }
 
+      const latestMigration = dbMigrationFreezeAt || (await lastLocalMigrationName())
+
       reply.send({
-        isLatest: (await lastLocalMigrationName()) === migrationsInfo?.migrations_version,
+        isLatest: latestMigration === migrationsInfo?.migrations_version,
         migrationsVersion: migrationsInfo?.migrations_version,
         migrationsStatus: migrationsInfo?.migrations_status,
       })
@@ -611,7 +621,7 @@ export default async function routes(fastify: FastifyInstance) {
           tenantId,
           upToMigration: dbMigrationFreezeAt,
         })
-        await updateTenantMigrationsState(tenantId)
+        await markTenantMigrationsCompleted(tenantId)
         return reply.send({
           migrated: true,
         })

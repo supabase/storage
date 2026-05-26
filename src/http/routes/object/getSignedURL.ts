@@ -1,3 +1,4 @@
+import { assertValidNumericJWTExpiration } from '@internal/auth'
 import { isImageTransformationEnabled } from '@storage/limits'
 import { ImageRenderer } from '@storage/renderer'
 import { FastifyInstance } from 'fastify'
@@ -18,7 +19,11 @@ const getSignedURLParamsSchema = {
 const getSignedURLBodySchema = {
   type: 'object',
   properties: {
-    expiresIn: { type: 'integer', minimum: 1, examples: [60000] },
+    expiresIn: {
+      type: 'integer',
+      minimum: 1,
+      examples: [60000],
+    },
     transform: {
       type: 'object',
       properties: transformationOptionsSchema,
@@ -66,6 +71,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const objectName = request.params['*']
       const { expiresIn } = request.body
+      assertValidNumericJWTExpiration(expiresIn)
 
       const urlPath = request.url.split('?').shift()
       const imageTransformationEnabled = await isImageTransformationEnabled(request.tenantId)

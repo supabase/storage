@@ -1,10 +1,15 @@
 import { TenantConnection } from '@internal/database'
 import { getConfig, mergeConfig } from '../config'
 
+vi.hoisted(() => {
+  process.env.PG_QUEUE_ENABLE = 'true'
+})
+
 const { serviceKeyAsync, tenantId } = getConfig()
 
 mergeConfig({
   pgQueueEnable: true,
+  requestTraceHeader: 'trace-id',
 })
 
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
@@ -13,7 +18,9 @@ import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import FormData from 'form-data'
 import fs from 'fs'
+import type { MockInstance } from 'vitest'
 import app from '../app'
+import { ObjectAdminDeleteAllBefore } from '../storage/events/objects/object-admin-delete-all-before'
 import { mockQueue, useMockObject } from './common'
 
 describe('Webhooks', () => {
@@ -31,7 +38,7 @@ describe('Webhooks', () => {
   })
 
   let appInstance: FastifyInstance
-  let sendSpy: jest.SpyInstance
+  let sendSpy: MockInstance
   beforeEach(() => {
     const mocks = mockQueue()
     sendSpy = mocks.sendSpy
@@ -40,7 +47,7 @@ describe('Webhooks', () => {
 
   afterEach(async () => {
     await appInstance.close()
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   it('will emit a webhook upon object creation', async () => {
@@ -87,6 +94,7 @@ describe('Webhooks', () => {
                 size: 3746,
               }),
               name: `public/${fileName}.png`,
+              uploadType: 'standard',
               tenant: expect.objectContaining({
                 ref: 'bjhaohmqunupljrqypxz',
               }),
@@ -98,6 +106,36 @@ describe('Webhooks', () => {
         }),
       })
     )
+  })
+
+  it('keeps trace reqId separate from sbReqId in queued webhook payloads', async () => {
+    const form = new FormData()
+
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization,
+      'trace-id': 'trace-123',
+      'sb-request-id': 'sb-req-123',
+    })
+
+    const fileName = (Math.random() + 1).toString(36).substring(7)
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/bucket6/public/${fileName}.png`,
+      headers,
+      payload: form,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+    const queuedWebhook = sendSpy.mock.calls[0][0].data
+
+    expect(queuedWebhook).not.toHaveProperty('sbReqId') // not top level
+    expect(queuedWebhook.event.payload.reqId).toEqual(expect.any(String))
+    expect(queuedWebhook.event.payload.sbReqId).toBe('sb-req-123')
+    expect(queuedWebhook.event.payload.reqId).not.toBe(queuedWebhook.event.payload.sbReqId)
   })
 
   it('will emit a webhook upon object deletion', async () => {
@@ -183,6 +221,15 @@ describe('Webhooks', () => {
             applyTime: expect.any(Number),
             payload: expect.objectContaining({
               bucketId: 'bucket6',
+              metadata: expect.objectContaining({
+                cacheControl: 'no-cache',
+                contentLength: 3746,
+                eTag: 'abc',
+                lastModified: expect.any(String),
+                httpStatusCode: 200,
+                mimetype: 'image/png',
+                size: 3746,
+              }),
               name: obj.name,
               version: expect.any(String),
               tenant: {
@@ -385,10 +432,95 @@ describe('Webhooks', () => {
       })
     )
   })
+
+  it('will emit webhooks for each deleted object during empty bucket operation', async () => {
+    const emptyTestBucketName = 'bucket-empty-webhook-test'
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    // Create a dedicated bucket for this test
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization,
+      },
+      payload: {
+        name: emptyTestBucketName,
+      },
+    })
+
+    const objects = await Promise.all([
+      createObject(pg, emptyTestBucketName),
+      createObject(pg, emptyTestBucketName),
+      createObject(pg, emptyTestBucketName),
+    ])
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/bucket/${emptyTestBucketName}/empty`,
+      headers: {
+        authorization,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    // Pass call invoked by empty on to the job handler to trigger the webhooks
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+    const deleteJobCall = sendSpy.mock.calls[0][0]
+    expect(deleteJobCall.name).toBe(ObjectAdminDeleteAllBefore.queueName)
+    await ObjectAdminDeleteAllBefore.handle(deleteJobCall)
+
+    // Check ObjectRemoved:Delete webhooks were sent as expected
+    expect(sendSpy).toHaveBeenCalledTimes(1 + objects.length) // 1 for the delete job + 3 for webhooks
+    objects.forEach((obj) => {
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'webhooks',
+          options: expect.objectContaining({
+            deadLetter: 'webhooks-dead-letter',
+            expireInSeconds: expect.any(Number),
+          }),
+          data: expect.objectContaining({
+            $version: 'v1',
+            event: expect.objectContaining({
+              $version: 'v1',
+              type: 'ObjectRemoved:Delete',
+              applyTime: expect.any(Number),
+              payload: expect.objectContaining({
+                bucketId: emptyTestBucketName,
+                name: obj.name,
+                version: obj.version,
+                metadata: obj.metadata,
+                tenant: {
+                  host: undefined,
+                  ref: 'bjhaohmqunupljrqypxz',
+                },
+                reqId: expect.any(String),
+              }),
+            }),
+            tenant: {
+              host: undefined,
+              ref: 'bjhaohmqunupljrqypxz',
+            },
+          }),
+        })
+      )
+    })
+
+    // Clean up: delete the bucket
+    await appInstance.inject({
+      method: 'DELETE',
+      url: `/bucket/${emptyTestBucketName}`,
+      headers: {
+        authorization,
+      },
+    })
+  })
 })
 
 async function createObject(pg: TenantConnection, bucketId: string) {
-  const objectName = Date.now()
+  const objectName = randomUUID()
   const tnx = await pg.transaction()
 
   const [data] = await tnx

@@ -1,9 +1,10 @@
 import { render } from '@internal/errors'
+import { logSchema } from '@internal/monitoring'
 import { ObjectScanner } from '@storage/scanner/scanner'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FastifyReply } from 'fastify/types/reply'
 import { dbSuperUser, storage } from '../../plugins'
-import apiKey from '../../plugins/apikey'
+import { registerApiKeyAuth } from '../../plugins/apikey'
 
 const listOrphanedObjects = {
   description: 'List Orphaned Objects',
@@ -71,7 +72,7 @@ interface SyncOrphanObjectsRequest extends RequestGenericInterface {
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.register(apiKey)
+  registerApiKeyAuth(fastify)
   fastify.register(dbSuperUser, {
     disableHostCheck: true,
     maxConnections: 5,
@@ -121,7 +122,15 @@ export default async function routes(fastify: FastifyInstance) {
           }
         }
       } catch (e) {
-        req.log.error({ err: e, bucket }, 'list orphaned objects stream failed')
+        logSchema.error(req.log, 'list orphaned objects stream failed', {
+          type: 'orphan',
+          tenantId: req.tenantId,
+          project: req.tenantId,
+          reqId: req.id,
+          sbReqId: req.sbReqId,
+          error: e,
+          metadata: JSON.stringify({ bucket }),
+        })
         writeNdjson(reply, {
           event: 'error',
           error: render(e),
@@ -149,6 +158,11 @@ export default async function routes(fastify: FastifyInstance) {
       const bucket = `${req.params.bucketId}`
       let before = req.body.before ? new Date(req.body.before as string) : undefined
 
+      if (before && isNaN(before.getTime())) {
+        return reply.status(400).send({
+          error: 'Invalid date format',
+        })
+      }
       if (!before) {
         before = new Date()
         before.setHours(before.getHours() - 1)
@@ -176,7 +190,15 @@ export default async function routes(fastify: FastifyInstance) {
           })
         }
       } catch (e) {
-        req.log.error({ err: e, bucket }, 'delete orphaned objects stream failed')
+        logSchema.error(req.log, 'delete orphaned objects stream failed', {
+          type: 'orphan',
+          tenantId: req.tenantId,
+          project: req.tenantId,
+          reqId: req.id,
+          sbReqId: req.sbReqId,
+          error: e,
+          metadata: JSON.stringify({ bucket }),
+        })
         writeNdjson(reply, {
           event: 'error',
           error: render(e),

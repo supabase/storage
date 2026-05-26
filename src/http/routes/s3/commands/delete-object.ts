@@ -103,7 +103,9 @@ export default function DeleteObject(s3Router: S3Router) {
 
         await ctx.req.storage.backend.deleteObject(internalBucketName, req.Params['*'], undefined)
 
-        return {}
+        return {
+          statusCode: 204,
+        }
       }
     )
   }

@@ -5,6 +5,7 @@ import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
 import { Storage } from '../../index'
 import { BaseEvent } from '../base-event'
+import { ObjectRemoved } from '../lifecycle/object-removed'
 
 const DELETE_JOB_TIME_LIMIT_MS = 10_000
 
@@ -44,7 +45,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
         logger,
         `[Admin]: ObjectAdminDeleteAllBefore ${bucketId} ${before.toUTCString()}`,
         {
-          jodId: job.id,
+          jobId: job.id,
           type: 'event',
           event: 'ObjectAdminDeleteAllBefore',
           payload: JSON.stringify(job.data),
@@ -52,6 +53,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
           tenantId,
           project: tenantId,
           reqId: job.data.reqId,
+          sbReqId: job.data.sbReqId,
         }
       )
 
@@ -87,6 +89,20 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
               }
 
               await backend.deleteObjects(storageS3Bucket, prefixes)
+
+              await Promise.allSettled(
+                deleted.map((object) =>
+                  ObjectRemoved.sendWebhook({
+                    tenant: job.data.tenant,
+                    name: object.name,
+                    bucketId,
+                    reqId: job.data.reqId,
+                    sbReqId: job.data.sbReqId,
+                    version: object.version,
+                    metadata: object.metadata,
+                  })
+                )
+              )
             }
           })
         }
@@ -99,10 +115,11 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
       if (moreObjectsToDelete) {
         // delete next batch
         await ObjectAdminDeleteAllBefore.send({
-          before,
+          before: before.toISOString(),
           bucketId,
           tenant: job.data.tenant,
           reqId: job.data.reqId,
+          sbReqId: job.data.sbReqId,
         })
       }
     } catch (e) {
@@ -117,6 +134,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
           tenantId,
           project: tenantId,
           reqId: job.data.reqId,
+          sbReqId: job.data.sbReqId,
         },
         `[Admin]: ObjectAdminDeleteAllBefore ${bucketId} ${before.toUTCString()} - FAILED`
       )
@@ -131,7 +149,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
           })
           .catch((e) => {
             logger.error(
-              { error: e },
+              { error: e, sbReqId: job.data.sbReqId },
               `[Admin]: ObjectAdminDeleteAllBefore ${tenant.ref} - FAILED DISPOSING CONNECTION`
             )
           })

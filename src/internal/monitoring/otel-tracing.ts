@@ -7,6 +7,7 @@ const {
   requestXForwardedHostRegExp,
   tenantId: defaultTenantId,
   region,
+  serviceName,
   storageS3InternalTracesEnabled,
 } = getConfig()
 
@@ -32,11 +33,21 @@ const exporterHeaders = headersEnv
   .filter(Boolean)
   .reduce(
     (all, header) => {
-      const [name, value] = header.split('=')
+      const separator = header.indexOf('=')
+      if (separator <= 0 || separator === header.length - 1) {
+        return all
+      }
+
+      const name = header.slice(0, separator).trim()
+      const value = header.slice(separator + 1).trim()
+      if (!name || !value) {
+        return all
+      }
+
       all[name] = value
       return all
     },
-    {} as Record<string, any>
+    {} as Record<string, string>
   )
 
 const grpcMetadata = new grpc.Metadata()
@@ -104,7 +115,7 @@ if (tracingEnabled && traceExporter && spanProcessors.length > 0) {
   // Configure the OpenTelemetry Node SDK
   tracingSdk = new NodeSDK({
     resource: resourceFromAttributes({
-      [ATTR_SERVICE_NAME]: 'storage',
+      [ATTR_SERVICE_NAME]: serviceName,
       [ATTR_SERVICE_VERSION]: version,
     }),
     spanProcessors,

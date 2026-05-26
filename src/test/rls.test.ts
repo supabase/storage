@@ -118,8 +118,6 @@ let appInstance: FastifyInstance
 let currentUserId: string
 let currentStorage: Storage
 
-jest.setTimeout(10000)
-
 describe('RLS policies', () => {
   let db: Knex
 
@@ -175,7 +173,7 @@ describe('RLS policies', () => {
 
   afterEach(async () => {
     await appInstance.close()
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   afterAll(async () => {
@@ -637,8 +635,11 @@ async function tusUploadFile(
   } catch (e) {
     if (!(e instanceof DetailedError)) throw e
 
-    statusCode = e.originalResponse.getStatus()
-    message = e.originalResponse.getBody()
+    const response = e.originalResponse
+    if (!response) throw e
+
+    statusCode = response.getStatus()
+    message = response.getBody()
   }
 
   const body = message ? { message } : {}

@@ -5,52 +5,39 @@ import { getConfig } from '../../../config'
 
 const { dbMigrationFreezeAt } = getConfig()
 
-export const loadMigrationFilesCached = memoizePromise(loadMigrationFiles)
+const migrationFilesCache = new Map<string, ReturnType<typeof loadMigrationFiles>>()
 
-export const localMigrationFiles = () => loadMigrationFiles('./migrations/tenant')
+export function loadMigrationFilesCached(directory: string) {
+  let promise = migrationFilesCache.get(directory)
 
-export async function lastLocalMigrationName() {
-  const migrations = await loadMigrationFilesCached('./migrations/tenant')
-
-  if (!dbMigrationFreezeAt) {
-    return migrations[migrations.length - 1].name as keyof typeof DBMigration
+  if (!promise) {
+    promise = loadMigrationFiles(directory).catch((error) => {
+      migrationFilesCache.delete(directory)
+      throw error
+    })
+    migrationFilesCache.set(directory, promise)
   }
 
-  const migrationIndex = migrations.findIndex((m) => m.name === dbMigrationFreezeAt)
-  if (migrationIndex === -1) {
-    throw ERRORS.InternalError(undefined, `Migration ${dbMigrationFreezeAt} not found`)
-  }
-  return migrations[migrationIndex].name as keyof typeof DBMigration
+  return promise
 }
 
-/**
- * Memoizes a promise
- * @param func
- */
-function memoizePromise<T, Args extends unknown[]>(
-  func: (...args: Args) => Promise<T>
-): (...args: Args) => Promise<T> {
-  const cache = new Map<string, Promise<T>>()
+export const localMigrationFiles = () => loadMigrationFilesCached('./migrations/tenant')
 
-  function generateKey(args: Args): string {
-    return args
-      .map((arg) => {
-        if (typeof arg === 'object' && arg !== null) {
-          return Object.entries(arg).sort().toString()
-        }
-        return String(arg)
-      })
-      .join('|')
+export async function lastLocalMigrationName() {
+  const migrations = await localMigrationFiles()
+  const latestMigration = migrations.at(-1)
+
+  if (!latestMigration) {
+    throw ERRORS.InternalError(undefined, 'No local migrations found')
   }
 
-  return async function (...args: Args): Promise<T> {
-    const key = generateKey(args)
-    if (cache.has(key)) {
-      return cache.get(key)!
-    }
-
-    const result = func(...args)
-    cache.set(key, result)
-    return result
+  if (!dbMigrationFreezeAt) {
+    return latestMigration.name as keyof typeof DBMigration
   }
+
+  const frozenMigration = migrations.find((m) => m.name === dbMigrationFreezeAt)
+  if (!frozenMigration) {
+    throw ERRORS.InternalError(undefined, `Migration ${dbMigrationFreezeAt} not found`)
+  }
+  return frozenMigration.name as keyof typeof DBMigration
 }

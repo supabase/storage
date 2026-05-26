@@ -3,7 +3,11 @@ import dotenv from 'dotenv'
 import { SignJWT } from 'jose'
 
 export type StorageBackendType = 'file' | 's3'
+export type VectorBucketProvider = 's3' | 'pgvector'
 export type IcebergCatalogAuthType = 'sigv4' | 'token'
+const DEFAULT_S3_UPLOAD_PART_SIZE = 16 * 1024 * 1024
+const MIN_S3_UPLOAD_PART_SIZE = 5 * 1024 * 1024
+
 export enum MultitenantMigrationStrategy {
   PROGRESSIVE = 'progressive',
   ON_REQUEST = 'on_request',
@@ -51,6 +55,7 @@ export interface JwksConfig {
 }
 
 type StorageConfigType = {
+  serviceName: string
   isProduction: boolean
   version: string
   numWorkers: number
@@ -68,9 +73,11 @@ type StorageConfigType = {
   storageS3InternalTracesEnabled?: boolean
   storageS3MaxSockets: number
   storageS3DisableChecksum: boolean
+  storageS3UploadPartSize: number
   storageS3UploadQueueSize: number
   storageS3Bucket: string
   storageS3Endpoint?: string
+  storageS3PrivateAssetEndpoint?: string
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
   storageS3ClientTimeout: number
@@ -117,7 +124,7 @@ type StorageConfigType = {
   requestXForwardedHostRegExp?: string
   requestAllowXForwardedPrefix?: boolean
   storagePublicUrl?: string
-  logLevel?: string
+  logLevel: string
   logflareEnabled?: boolean
   logflareApiKey?: string
   logflareSourceToken?: string
@@ -186,7 +193,9 @@ type StorageConfigType = {
     upload: boolean
   }
   prometheusMetricsEnabled: boolean
-  prometheusMetricsIncludeTenantId: boolean
+  tenantPoolCacheTtlMs: number
+  tenantPoolCacheHitLogSampleRate: number
+  tenantPoolCacheMissLogSampleRate: number
   otelMetricsEnabled: boolean
   otelMetricsTemporality: 'DELTA' | 'CUMULATIVE'
   otelMetricsExportIntervalMs: number
@@ -207,8 +216,11 @@ type StorageConfigType = {
   icebergS3DeleteEnabled: boolean
 
   vectorEnabled: boolean
+  vectorBucketProvider: VectorBucketProvider
   vectorS3Buckets: string[]
   vectorBucketRegion?: string
+  vectorDatabaseURL?: string
+  vectorStoreMigrationsEnabled: boolean
   vectorMaxBucketsCount: number
   vectorMaxIndexesCount: number
 }
@@ -261,6 +273,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
 
   config = {
+    serviceName: getOptionalConfigFromEnv('SERVICE_NAME') || 'storage_api',
     numWorkers: envNumber(getOptionalConfigFromEnv('WORKERS_NUM'), 1),
     isProduction: process.env.NODE_ENV === 'production',
     exposeDocs: getOptionalConfigFromEnv('EXPOSE_DOCS') !== 'false',
@@ -372,12 +385,21 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       10
     ),
     storageS3DisableChecksum: getOptionalConfigFromEnv('STORAGE_S3_DISABLE_CHECKSUM') === 'true',
+    storageS3UploadPartSize: Math.max(
+      envNumber(getOptionalConfigFromEnv('STORAGE_S3_UPLOAD_PART_SIZE')) ??
+        DEFAULT_S3_UPLOAD_PART_SIZE,
+      MIN_S3_UPLOAD_PART_SIZE
+    ),
     storageS3UploadQueueSize:
       envNumber(getOptionalConfigFromEnv('STORAGE_S3_UPLOAD_QUEUE_SIZE')) ?? 2,
     storageS3InternalTracesEnabled:
       getOptionalConfigFromEnv('STORAGE_S3_ENABLED_METRICS') === 'true',
     storageS3Bucket: getOptionalConfigFromEnv('STORAGE_S3_BUCKET', 'GLOBAL_S3_BUCKET'),
     storageS3Endpoint: getOptionalConfigFromEnv('STORAGE_S3_ENDPOINT', 'GLOBAL_S3_ENDPOINT'),
+    storageS3PrivateAssetEndpoint: getOptionalConfigFromEnv(
+      'STORAGE_S3_PRIVATE_ASSET_ENDPOINT',
+      'GLOBAL_S3_PRIVATE_ASSET_ENDPOINT'
+    ),
     storageS3ForcePathStyle:
       getOptionalConfigFromEnv('STORAGE_S3_FORCE_PATH_STYLE', 'GLOBAL_S3_FORCE_PATH_STYLE') ===
       'true',
@@ -459,6 +481,18 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
     logflareBatchSize: parseInt(getOptionalConfigFromEnv('LOGFLARE_BATCH_SIZE') || '200', 10),
+    tenantPoolCacheTtlMs: envPositiveInteger(
+      getOptionalConfigFromEnv('TENANT_POOL_CACHE_TTL_MS'),
+      1000 * 10
+    ),
+    tenantPoolCacheHitLogSampleRate: envSampleRate(
+      getOptionalConfigFromEnv('TENANT_POOL_CACHE_HIT_LOG_SAMPLE_RATE'),
+      0
+    ),
+    tenantPoolCacheMissLogSampleRate: envSampleRate(
+      getOptionalConfigFromEnv('TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE'),
+      0
+    ),
     tracingEnabled: getOptionalConfigFromEnv('TRACING_ENABLED') === 'true',
     tracingMode: getOptionalConfigFromEnv('TRACING_MODE') ?? 'basic',
     tracingTimeMinDuration: parseFloat(
@@ -472,8 +506,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
     // OpenTelemetry Metrics
     prometheusMetricsEnabled: getOptionalConfigFromEnv('PROMETHEUS_METRICS_ENABLED') === 'true',
-    prometheusMetricsIncludeTenantId:
-      getOptionalConfigFromEnv('PROMETHEUS_METRICS_INCLUDE_TENANT') === 'true',
     otelMetricsEnabled: getOptionalConfigFromEnv('OTEL_METRICS_ENABLED') === 'true',
     otelMetricsTemporality: getOptionalConfigFromEnv('OTEL_METRICS_TEMPORALITY') || 'CUMULATIVE',
     otelMetricsExportIntervalMs: parseInt(
@@ -598,8 +630,13 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     icebergS3DeleteEnabled: getOptionalConfigFromEnv('ICEBERG_S3_DELETE_ENABLED') === 'true',
 
     vectorEnabled: getOptionalConfigFromEnv('VECTOR_ENABLED') === 'true',
+    vectorBucketProvider: (getOptionalConfigFromEnv('VECTOR_BUCKET_PROVIDER') ||
+      's3') as VectorBucketProvider,
     vectorS3Buckets: getOptionalConfigFromEnv('VECTOR_S3_BUCKETS')?.trim()?.split(',') || [],
     vectorBucketRegion: getOptionalConfigFromEnv('VECTOR_BUCKET_REGION') || undefined,
+    vectorDatabaseURL: getOptionalConfigFromEnv('VECTOR_DATABASE_URL') || undefined,
+    vectorStoreMigrationsEnabled:
+      getOptionalConfigFromEnv('VECTOR_STORE_MIGRATIONS_ENABLED') === 'true',
     vectorMaxBucketsCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_BUCKETS') || '10', 10),
     vectorMaxIndexesCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_INDEXES') || '20', 10),
   } as StorageConfigType
@@ -648,4 +685,23 @@ function envNumber(value: string | undefined, defaultValue?: number): number | u
     return defaultValue
   }
   return parsed
+}
+
+function envPositiveInteger(value: string | undefined, defaultValue: number): number {
+  const parsed = envNumber(value, defaultValue)
+
+  return parsed && parsed > 0 ? parsed : defaultValue
+}
+
+function envSampleRate(value: string | undefined, defaultValue: number): number {
+  if (!value) {
+    return defaultValue
+  }
+
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) {
+    return defaultValue
+  }
+
+  return Math.min(Math.max(parsed, 0), 1)
 }

@@ -8,6 +8,7 @@ describe('admin tenant delete route', () => {
   })
 
   afterAll(async () => {
+    await adminApp.close()
     await multitenantKnex.destroy()
   })
 

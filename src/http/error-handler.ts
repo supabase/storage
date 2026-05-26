@@ -1,7 +1,7 @@
 import { FastifyError } from '@fastify/error'
 import { ErrorCode, isRenderableError, StorageBackendError, StorageError } from '@internal/errors'
+import { isDatabaseSlowDownError } from '@internal/errors/database-error'
 import { FastifyInstance } from 'fastify'
-import { DatabaseError } from 'pg'
 
 /**
  * The global error handler for all the uncaught exceptions within a request.
@@ -14,7 +14,7 @@ export const setErrorHandler = (
   app: FastifyInstance,
   options?: {
     respectStatusCode?: boolean
-    formatter?: (error: StorageError) => Record<string, any>
+    formatter?: (error: StorageError) => Record<string, unknown>
   }
 ) => {
   app.setErrorHandler<Error>(function (error, request, reply) {
@@ -24,17 +24,7 @@ export const setErrorHandler = (
     request.executionError = error
 
     // database error
-    if (
-      error instanceof DatabaseError &&
-      [
-        'Authentication error', // supavisor specific
-        'Max client connections reached',
-        'remaining connection slots are reserved for non-replication superuser connections',
-        'no more connections allowed',
-        'sorry, too many clients already',
-        'server login has been failing, try again later',
-      ].some((msg) => (error as DatabaseError).message.includes(msg))
-    ) {
+    if (isDatabaseSlowDownError(error)) {
       return reply.status(429).send(
         formatter({
           statusCode: `429`,

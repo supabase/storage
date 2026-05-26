@@ -2,16 +2,47 @@ import { once } from 'events'
 import { FastifyRequest } from 'fastify'
 import { PassThrough, Readable } from 'stream'
 import { ErrorCode, isStorageError, StorageBackendError } from '../internal/errors'
-import { ObjectAdminDelete } from '../storage/events'
+import { fileUploadedSuccess, fileUploadStarted } from '../internal/monitoring/metrics'
+import { ObjectAdminDelete, ObjectCreatedPostEvent } from '../storage/events'
 import { TenantLocation } from '../storage/locator'
 import { fileUploadFromRequest, Uploader } from '../storage/uploader'
+
+type UploaderBackend = ConstructorParameters<typeof Uploader>[0]
+type UploaderDatabase = ConstructorParameters<typeof Uploader>[1]
+type CompleteUploadResult = Awaited<ReturnType<Uploader['completeUpload']>>
+
+function createUploader(
+  backend: Partial<UploaderBackend> & Pick<UploaderBackend, 'uploadObject'>,
+  db: Partial<UploaderDatabase> &
+    Pick<UploaderDatabase, 'tenantId' | 'reqId' | 'tenant' | 'testPermission'>
+) {
+  return new Uploader(
+    backend as UploaderBackend,
+    db as UploaderDatabase,
+    new TenantLocation('test-bucket')
+  )
+}
+
+function createUploaderDb(overrides: Partial<UploaderDatabase> = {}) {
+  const db = {
+    tenantId: 'stub-tenant',
+    reqId: 'req-1',
+    sbReqId: 'sb-req-1',
+    tenant: () => ({ ref: 'stub-tenant', host: 'stub-tenant.local' }),
+    testPermission: vi.fn(async () => undefined),
+    ...overrides,
+  } as Partial<UploaderDatabase> &
+    Pick<UploaderDatabase, 'tenantId' | 'reqId' | 'tenant' | 'testPermission'>
+
+  return db
+}
 
 describe('fileUploadFromRequest', () => {
   test('keeps multipart/form-data file size undefined even when the request content-length exceeds 5GB', async () => {
     const file = Readable.from(['payload']) as Readable & { truncated: boolean }
     file.truncated = false
 
-    const requestFile = jest.fn().mockResolvedValue({
+    const requestFile = vi.fn().mockResolvedValue({
       file,
       fields: {
         cacheControl: { value: '3600' },
@@ -275,24 +306,23 @@ describe('fileUploadFromRequest', () => {
       }
     )
 
-    const objectAdminDeleteSendSpy = jest
+    const objectAdminDeleteSendSpy = vi
       .spyOn(ObjectAdminDelete, 'send')
       .mockResolvedValue(undefined)
 
-    const uploader = new Uploader(
+    const uploader = createUploader(
       {
-        uploadObject: jest.fn(async (_bucket, _key, _version, body: Readable) => {
+        uploadObject: vi.fn(async (_bucket, _key, _version, body: Readable) => {
           body.destroy(new Error('stream pipeline failed'))
           throw StorageBackendError.fromError(new Error('socket hang up'))
         }),
-      } as any,
+      },
       {
         tenantId: 'stub-tenant',
         reqId: 'req-1',
-        tenant: () => ({ ref: 'stub-tenant' }),
-        testPermission: jest.fn().mockResolvedValue(undefined),
-      } as any,
-      new TenantLocation('test-bucket')
+        tenant: () => ({ ref: 'stub-tenant', host: 'stub-tenant.local' }),
+        testPermission: vi.fn().mockResolvedValue(undefined),
+      }
     )
 
     try {
@@ -315,7 +345,7 @@ describe('fileUploadFromRequest', () => {
   test('keeps declared request size for permission checks but omits backend size for request-backed uploads', async () => {
     const capturedWrites: Array<{ metadata?: { contentLength?: number } }> = []
     const backend = {
-      uploadObject: jest.fn().mockResolvedValue({
+      uploadObject: vi.fn().mockResolvedValue({
         httpStatusCode: 200,
         cacheControl: 'no-cache',
         eTag: '"etag"',
@@ -326,29 +356,25 @@ describe('fileUploadFromRequest', () => {
         contentRange: undefined,
       }),
     }
-    const uploader = new Uploader(
-      backend as any,
-      {
-        tenantId: 'stub-tenant',
-        reqId: 'req-1',
-        tenant: () => ({ ref: 'stub-tenant' }),
-        testPermission: jest.fn(async (fn) =>
-          fn({
-            createObject: jest.fn(async (payload: { metadata?: { contentLength?: number } }) => {
-              capturedWrites.push(payload)
-            }),
-            upsertObject: jest.fn(async (payload: { metadata?: { contentLength?: number } }) => {
-              capturedWrites.push(payload)
-            }),
-          })
-        ),
-      } as any,
-      new TenantLocation('test-bucket')
-    )
-    const completeUploadSpy = jest.spyOn(uploader, 'completeUpload').mockResolvedValue({
+    const uploader = createUploader(backend, {
+      tenantId: 'stub-tenant',
+      reqId: 'req-1',
+      tenant: () => ({ ref: 'stub-tenant', host: 'stub-tenant.local' }),
+      testPermission: vi.fn(async (fn) =>
+        fn({
+          createObject: vi.fn(async (payload: { metadata?: { contentLength?: number } }) => {
+            capturedWrites.push(payload)
+          }),
+          upsertObject: vi.fn(async (payload: { metadata?: { contentLength?: number } }) => {
+            capturedWrites.push(payload)
+          }),
+        })
+      ),
+    })
+    const completeUploadSpy = vi.spyOn(uploader, 'completeUpload').mockResolvedValue({
       metadata: { eTag: '"etag"' },
       obj: { id: 'obj-id' },
-    } as any)
+    } as CompleteUploadResult)
 
     await uploader.upload({
       bucketId: 'bucket',
@@ -368,5 +394,85 @@ describe('fileUploadFromRequest', () => {
     expect(backend.uploadObject.mock.calls[0][7]).toBeUndefined()
 
     completeUploadSpy.mockRestore()
+  })
+})
+
+describe('Uploader metrics', () => {
+  test('prepareUpload records upload start attributes without tenant id labels', async () => {
+    const addSpy = vi.spyOn(fileUploadStarted, 'add')
+    const uploader = createUploader(
+      {
+        uploadObject: vi.fn(),
+      },
+      createUploaderDb()
+    )
+
+    try {
+      await uploader.prepareUpload({
+        bucketId: 'bucket',
+        objectName: 'test.txt',
+        owner: undefined,
+        isUpsert: false,
+        userMetadata: undefined,
+        metadata: undefined,
+        uploadType: 'standard',
+      })
+
+      expect(addSpy).toHaveBeenCalledWith(1, { uploadType: 'standard' })
+    } finally {
+      addSpy.mockRestore()
+    }
+  })
+
+  test('completeUpload records upload success attributes without tenant id labels', async () => {
+    const addSpy = vi.spyOn(fileUploadedSuccess, 'add')
+    const sendWebhookSpy = vi
+      .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+      .mockResolvedValue(undefined)
+    const transactionDb = {
+      waitObjectLock: vi.fn().mockResolvedValue(undefined),
+      findObject: vi.fn().mockResolvedValue(undefined),
+      upsertObject: vi.fn().mockResolvedValue({ id: 'object-id' }),
+    }
+    const db = createUploaderDb({
+      asSuperUser: vi.fn().mockReturnValue({
+        connection: {
+          setAbortSignal: vi.fn(),
+        },
+        withTransaction: vi.fn(async (fn) => fn(transactionDb)),
+      }),
+    })
+    const uploader = createUploader(
+      {
+        uploadObject: vi.fn(),
+      },
+      db
+    )
+
+    try {
+      await uploader.completeUpload({
+        version: 'version-1',
+        bucketId: 'bucket',
+        objectName: 'test.txt',
+        owner: undefined,
+        objectMetadata: {
+          eTag: '"etag"',
+          mimetype: 'text/plain',
+          cacheControl: 'max-age=3600',
+          lastModified: new Date(),
+          contentLength: 7,
+          httpStatusCode: 200,
+          size: 7,
+        },
+        uploadType: 'standard',
+        isUpsert: false,
+        userMetadata: undefined,
+      })
+
+      expect(addSpy).toHaveBeenCalledWith(1, { uploadType: 'standard' })
+    } finally {
+      addSpy.mockRestore()
+      sendWebhookSpy.mockRestore()
+    }
   })
 })

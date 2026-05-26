@@ -1,0 +1,368 @@
+import {
+  ConflictException,
+  CreateIndexCommandOutput,
+  DeleteIndexCommandOutput,
+  DeleteVectorsOutput,
+  GetVectorsCommandOutput,
+  ListVectorsOutput,
+  PutVectorsOutput,
+  QueryVectorsOutput,
+} from '@aws-sdk/client-s3vectors'
+import { ERRORS } from '@internal/errors'
+import { Sharder } from '@internal/sharding'
+import { VectorBucket } from '@storage/schemas'
+import { type Mocked, vi } from 'vitest'
+import { type VectorStore } from './adapter/s3-vector'
+import {
+  type KnexVectorMetadataDB,
+  type VectorLockResourceType,
+  type VectorMetadataDB,
+} from './knex'
+import { VECTOR_BUCKET_COUNT_LOCK, VectorStoreManager } from './vector-store'
+
+function createMockVectorStore(): Mocked<VectorStore> {
+  return {
+    createVectorIndex: vi.fn().mockResolvedValue({} as CreateIndexCommandOutput),
+    deleteVectorIndex: vi.fn().mockResolvedValue({} as DeleteIndexCommandOutput),
+    putVectors: vi.fn().mockResolvedValue({} as PutVectorsOutput),
+    listVectors: vi.fn().mockResolvedValue({} as ListVectorsOutput),
+    queryVectors: vi.fn().mockResolvedValue({} as QueryVectorsOutput),
+    deleteVectors: vi.fn().mockResolvedValue({} as DeleteVectorsOutput),
+    getVectors: vi.fn().mockResolvedValue({} as GetVectorsCommandOutput),
+  }
+}
+
+function createMockSharder(): Mocked<Sharder> {
+  return {
+    createShard: vi.fn(),
+    setShardStatus: vi.fn(),
+    reserve: vi.fn(),
+    confirm: vi.fn(),
+    cancel: vi.fn(),
+    expireLeases: vi.fn(),
+    freeByLocation: vi.fn(),
+    freeByResource: vi.fn(),
+    shardStats: vi.fn(),
+    findShardByResourceId: vi.fn(),
+    listShardByKind: vi.fn(),
+    withTnx: vi.fn(),
+  } as unknown as Mocked<Sharder>
+}
+
+function createMockVectorDb(): Mocked<VectorMetadataDB> {
+  return {
+    withTransaction: vi.fn(),
+    lockResource: vi.fn(),
+    findVectorBucket: vi.fn(),
+    createVectorBucket: vi.fn(),
+    deleteVectorBucket: vi.fn(),
+    listBuckets: vi.fn(),
+    countBuckets: vi.fn(),
+    countIndexes: vi.fn(),
+    createVectorIndex: vi.fn(),
+    getIndex: vi.fn(),
+    listIndexes: vi.fn(),
+    deleteVectorIndex: vi.fn(),
+    findVectorIndexForBucket: vi.fn(),
+  } as unknown as Mocked<VectorMetadataDB>
+}
+
+function createVectorBucketRecord(bucketName: string): VectorBucket {
+  return {
+    id: bucketName,
+    created_at: new Date(),
+    updated_at: new Date().toISOString(),
+  } as unknown as VectorBucket
+}
+
+function createDeterministicVectorDb(options: {
+  bucketCount: number
+  existingBuckets?: string[]
+  onLockResource?: (
+    resourceType: VectorLockResourceType,
+    resourceId: string
+  ) => Promise<void> | void
+  onCreateVectorBucket?: (bucketName: string) => Promise<void> | void
+  onDeleteVectorBucket?: (bucketName: string) => Promise<void> | void
+}): VectorMetadataDB {
+  const state = {
+    bucketCount: options.bucketCount,
+    existingBuckets: new Set(options.existingBuckets ?? []),
+    countLockHeld: false,
+    countLockWaiters: [] as Array<() => void>,
+  }
+
+  async function acquireCountLock() {
+    if (!state.countLockHeld) {
+      state.countLockHeld = true
+      return
+    }
+
+    await new Promise<void>((resolve) => {
+      state.countLockWaiters.push(resolve)
+    })
+  }
+
+  function releaseCountLock() {
+    const next = state.countLockWaiters.shift()
+    if (next) {
+      next()
+      return
+    }
+
+    state.countLockHeld = false
+  }
+
+  return {
+    async withTransaction<T>(fn: (db: KnexVectorMetadataDB) => T): Promise<T> {
+      let holdsCountLock = false
+
+      const tx: Partial<VectorMetadataDB> = {
+        lockResource: async (resourceType: VectorLockResourceType, resourceId: string) => {
+          await options.onLockResource?.(resourceType, resourceId)
+
+          if (resourceType === 'global' && resourceId === VECTOR_BUCKET_COUNT_LOCK) {
+            await acquireCountLock()
+            holdsCountLock = true
+          }
+        },
+        findVectorBucket: async (bucketName: string) => {
+          if (state.existingBuckets.has(bucketName)) {
+            return createVectorBucketRecord(bucketName)
+          }
+
+          throw ERRORS.S3VectorNotFoundException('vector bucket', bucketName)
+        },
+        countBuckets: async () => state.bucketCount,
+        createVectorBucket: async (bucketName: string) => {
+          await options.onCreateVectorBucket?.(bucketName)
+
+          if (state.existingBuckets.has(bucketName)) {
+            throw new ConflictException({
+              message: `vector bucket "${bucketName}" already exists`,
+              $metadata: {},
+            })
+          }
+
+          state.existingBuckets.add(bucketName)
+          state.bucketCount += 1
+        },
+        listIndexes: async () => ({ indexes: [] }),
+        deleteVectorBucket: async (bucketName: string) => {
+          await options.onDeleteVectorBucket?.(bucketName)
+
+          if (state.existingBuckets.delete(bucketName)) {
+            state.bucketCount -= 1
+          }
+        },
+      }
+
+      try {
+        return await fn(tx as KnexVectorMetadataDB)
+      } finally {
+        if (holdsCountLock) {
+          releaseCountLock()
+        }
+      }
+    },
+    lockResource: async () => undefined,
+    findVectorBucket: async () => {
+      throw new Error('not implemented')
+    },
+    createVectorBucket: async () => undefined,
+    deleteVectorBucket: async () => undefined,
+    listBuckets: async () => ({ vectorBuckets: [] }),
+    countBuckets: async () => state.bucketCount,
+    countIndexes: async () => 0,
+    createVectorIndex: async () => {
+      throw new Error('not implemented')
+    },
+    getIndex: async () => {
+      throw new Error('not implemented')
+    },
+    listIndexes: async () => ({ indexes: [] }),
+    deleteVectorIndex: async () => undefined,
+    findVectorIndexForBucket: async () => {
+      throw new Error('not implemented')
+    },
+  }
+}
+
+describe('VectorStoreManager bucket lifecycle', () => {
+  it('serializes concurrent creates for the final bucket slot', async () => {
+    const releaseFirstCreate = Promise.withResolvers<void>()
+    const firstCreateStarted = Promise.withResolvers<void>()
+
+    const db = createDeterministicVectorDb({
+      bucketCount: 1,
+      existingBuckets: ['existing-bucket'],
+      onCreateVectorBucket: async (bucketName) => {
+        if (bucketName === 'bucket-a') {
+          firstCreateStarted.resolve()
+          await releaseFirstCreate.promise
+        }
+      },
+    })
+
+    const manager = new VectorStoreManager(createMockVectorStore(), db, createMockSharder(), {
+      tenantId: 'test-tenant',
+      maxBucketCount: 2,
+      maxIndexCount: Infinity,
+    })
+
+    const createA = manager.createBucket('bucket-a')
+    await firstCreateStarted.promise
+
+    const createB = manager.createBucket('bucket-b')
+    releaseFirstCreate.resolve()
+
+    const results = await Promise.allSettled([createA, createB])
+
+    expect(results).toEqual([
+      { status: 'fulfilled', value: undefined },
+      {
+        status: 'rejected',
+        reason: expect.objectContaining({ code: 'S3VectorMaxBucketsExceeded' }),
+      },
+    ])
+  })
+
+  it('keeps createBucket idempotent for an existing bucket even when at capacity', async () => {
+    const db = createDeterministicVectorDb({
+      bucketCount: 1,
+      existingBuckets: ['bucket-a'],
+    })
+
+    const manager = new VectorStoreManager(createMockVectorStore(), db, createMockSharder(), {
+      tenantId: 'test-tenant',
+      maxBucketCount: 1,
+      maxIndexCount: Infinity,
+    })
+
+    await expect(manager.createBucket('bucket-a')).resolves.toBeUndefined()
+    await expect(manager.createBucket('bucket-b')).rejects.toMatchObject({
+      code: 'S3VectorMaxBucketsExceeded',
+    })
+  })
+
+  it('shares the bucket-count lock between delete and create so capacity is observed after delete commits', async () => {
+    const releaseDelete = Promise.withResolvers<void>()
+    const deleteReachedRemoval = Promise.withResolvers<void>()
+
+    const db = createDeterministicVectorDb({
+      bucketCount: 1,
+      existingBuckets: ['bucket-to-delete'],
+      onDeleteVectorBucket: async (bucketName) => {
+        if (bucketName === 'bucket-to-delete') {
+          deleteReachedRemoval.resolve()
+          await releaseDelete.promise
+        }
+      },
+    })
+
+    const manager = new VectorStoreManager(createMockVectorStore(), db, createMockSharder(), {
+      tenantId: 'test-tenant',
+      maxBucketCount: 1,
+      maxIndexCount: Infinity,
+    })
+
+    const deletePromise = manager.deleteBucket('bucket-to-delete')
+    await deleteReachedRemoval.promise
+
+    const createPromise = manager.createBucket('bucket-new')
+    releaseDelete.resolve()
+
+    await expect(deletePromise).resolves.toBeUndefined()
+    await expect(createPromise).resolves.toBeUndefined()
+  })
+
+  it('does not block unrelated creates while delete waits on the target bucket lock', async () => {
+    const releaseBucketLock = Promise.withResolvers<void>()
+    const deleteWaitingOnBucketLock = Promise.withResolvers<void>()
+
+    const db = createDeterministicVectorDb({
+      bucketCount: 1,
+      existingBuckets: ['bucket-a'],
+      onLockResource: async (resourceType, resourceId) => {
+        if (resourceType === 'bucket' && resourceId === 'bucket-a') {
+          deleteWaitingOnBucketLock.resolve()
+          await releaseBucketLock.promise
+        }
+      },
+    })
+
+    const manager = new VectorStoreManager(createMockVectorStore(), db, createMockSharder(), {
+      tenantId: 'test-tenant',
+      maxBucketCount: 2,
+      maxIndexCount: Infinity,
+    })
+
+    const deletePromise = manager.deleteBucket('bucket-a')
+    await deleteWaitingOnBucketLock.promise
+
+    await expect(manager.createBucket('bucket-b')).resolves.toBeUndefined()
+
+    releaseBucketLock.resolve()
+    await expect(deletePromise).resolves.toBeUndefined()
+  })
+
+  it('takes the per-bucket lock before the global count lock during bucket deletion', async () => {
+    const callOrder: string[] = []
+    const db = createDeterministicVectorDb({
+      bucketCount: 1,
+      existingBuckets: ['bucket-a'],
+      onLockResource: (resourceType, resourceId) => {
+        callOrder.push(`${resourceType}:${resourceId}`)
+      },
+      onDeleteVectorBucket: () => {
+        callOrder.push('delete')
+      },
+    })
+
+    const manager = new VectorStoreManager(createMockVectorStore(), db, createMockSharder(), {
+      tenantId: 'test-tenant',
+      maxBucketCount: Infinity,
+      maxIndexCount: Infinity,
+    })
+
+    await manager.deleteBucket('bucket-a')
+
+    expect(callOrder).toEqual(['bucket:bucket-a', `global:${VECTOR_BUCKET_COUNT_LOCK}`, 'delete'])
+  })
+
+  it('re-checks bucket existence after taking the bucket lock before creating an index', async () => {
+    const db = createMockVectorDb()
+    const sharder = createMockSharder()
+    const vectorStore = createMockVectorStore()
+
+    db.findVectorBucket
+      .mockResolvedValueOnce(createVectorBucketRecord('bucket-a'))
+      .mockRejectedValueOnce(ERRORS.S3VectorNotFoundException('vector bucket', 'bucket-a'))
+    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
+      fn(db as unknown as KnexVectorMetadataDB)
+    )
+
+    const manager = new VectorStoreManager(vectorStore, db, sharder, {
+      tenantId: 'test-tenant',
+      maxBucketCount: Infinity,
+      maxIndexCount: Infinity,
+    })
+
+    await expect(
+      manager.createVectorIndex({
+        dataType: 'float32',
+        dimension: 4,
+        distanceMetric: 'cosine',
+        indexName: 'index-a',
+        vectorBucketName: 'bucket-a',
+      })
+    ).rejects.toMatchObject({ code: 'NotFoundException' })
+
+    expect(db.lockResource).toHaveBeenCalledWith('bucket', 'bucket-a')
+    expect(db.findVectorBucket).toHaveBeenCalledTimes(2)
+    expect(db.countIndexes).not.toHaveBeenCalled()
+    expect(db.createVectorIndex).not.toHaveBeenCalled()
+    expect(sharder.reserve).not.toHaveBeenCalled()
+    expect(vectorStore.createVectorIndex).not.toHaveBeenCalled()
+  })
+})

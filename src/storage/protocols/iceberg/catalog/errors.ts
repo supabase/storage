@@ -114,7 +114,17 @@ export class IcebergError extends Error {
 
     const message = String(errorObj.message || 'Unknown error')
     const type = (errorObj.type as IcebergErrorType) || IcebergErrorType.InternalServerError
-    const code = (errorObj.code as number) || IcebergHttpStatusCode.InternalServerError
+    const rawCode = errorObj.code
+    const parsedCode =
+      typeof rawCode === 'number'
+        ? rawCode
+        : typeof rawCode === 'string'
+          ? Number(rawCode)
+          : IcebergHttpStatusCode.InternalServerError
+    const code =
+      Number.isInteger(parsedCode) && parsedCode > 0
+        ? parsedCode
+        : IcebergHttpStatusCode.InternalServerError
 
     return new IcebergError(message, type, code)
   }

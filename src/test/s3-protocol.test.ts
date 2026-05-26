@@ -1,3 +1,5 @@
+import { Readable } from 'node:stream'
+import { setTimeout as sleep } from 'node:timers/promises'
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
@@ -33,18 +35,21 @@ import { DBMigration } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
 import { StorageKnexDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
-import axios from 'axios'
 import { createHash, createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
-import { ReadableStreamBuffer } from 'stream-buffers'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
-import { SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
+import { EMPTY_SHA256_HASH, SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
 
-const { s3ProtocolAccessKeySecret, s3ProtocolAccessKeyId, storageS3Region } = getConfig()
+const {
+  anonKeyAsync,
+  s3ProtocolAccessKeySecret,
+  s3ProtocolAccessKeyId,
+  storageS3Region,
+  tenantId,
+} = getConfig()
 const STREAMING_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
-const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-
+const STREAMING_TRAILER_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER'
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
   let bucketName: string
   if (!name) {
@@ -157,6 +162,53 @@ async function sendAwsChunkedRequest(options: {
     headers: {
       'content-encoding': 'aws-chunked',
       'x-amz-decoded-content-length': options.payload.length.toString(),
+    },
+  })
+  const chunk = createSignedChunk(options.payload, signedRequest.signature, {
+    longDate: signedRequest.longDate,
+    shortDate: signedRequest.shortDate,
+    region: storageS3Region,
+    service: signedRequest.service,
+    secretKey: s3ProtocolAccessKeySecret!,
+  })
+  const endChunk = createSignedChunk(Buffer.alloc(0), chunk.signature, {
+    longDate: signedRequest.longDate,
+    shortDate: signedRequest.shortDate,
+    region: storageS3Region,
+    service: signedRequest.service,
+    secretKey: s3ProtocolAccessKeySecret!,
+  })
+  const encodedBody = Buffer.concat([chunk.encoded, endChunk.encoded])
+
+  const response = await fetch(signedRequest.requestUrl, {
+    method: 'PUT',
+    headers: {
+      ...signedRequest.headers,
+      'content-length': encodedBody.length.toString(),
+    },
+    body: encodedBody,
+  })
+
+  return {
+    status: response.status,
+    data: await response.text(),
+  }
+}
+
+async function sendAwsChunkedTrailerModeWithoutTrailerRequest(options: {
+  baseUrl: string
+  path: string
+  payload: Buffer
+}) {
+  const signedRequest = await createSignedS3Request({
+    baseUrl: options.baseUrl,
+    path: options.path,
+    method: 'PUT',
+    contentSha: STREAMING_TRAILER_PAYLOAD_ALGORITHM,
+    headers: {
+      'content-encoding': 'aws-chunked',
+      'x-amz-decoded-content-length': options.payload.length.toString(),
+      'x-amz-trailer': 'x-amz-checksum-crc32',
     },
   })
   const chunk = createSignedChunk(options.payload, signedRequest.signature, {
@@ -338,8 +390,6 @@ async function expectMultipartUploadToRemainPending(
   expect(listPartsResp.Parts?.[0].PartNumber).toBe(1)
   expect(listPartsResp.Parts?.[0].ETag).toBe(options.partETag)
 }
-
-jest.setTimeout(10 * 1000)
 
 describe('S3 Protocol', () => {
   describe('Bucket', () => {
@@ -527,6 +577,58 @@ describe('S3 Protocol', () => {
         const resp2 = await client.send(listObjects2)
         expect(resp2.CommonPrefixes?.length).toBe(2)
         expect(resp2.Contents?.length).toBe(1)
+      })
+
+      it('omits NextMarker when truncated without a delimiter', async () => {
+        const bucket = await createBucket(client)
+
+        await Promise.all([
+          uploadFile(client, bucket, 'a.jpg', 1),
+          uploadFile(client, bucket, 'b.jpg', 1),
+          uploadFile(client, bucket, 'c.jpg', 1),
+        ])
+
+        const truncated = await client.send(new ListObjectsCommand({ Bucket: bucket, MaxKeys: 2 }))
+        expect(truncated.IsTruncated).toBe(true)
+        // Per the S3 spec, NextMarker is only returned when the Delimiter
+        // request parameter is specified.
+        expect(truncated.NextMarker).toBeUndefined()
+      })
+
+      it('omits NextMarker when the response is not truncated', async () => {
+        const bucket = await createBucket(client)
+
+        await uploadFile(client, bucket, 'only.jpg', 1)
+
+        const resp = await client.send(new ListObjectsCommand({ Bucket: bucket }))
+        expect(resp.IsTruncated).toBe(false)
+        expect(resp.NextMarker).toBeUndefined()
+      })
+
+      it('sets NextMarker when truncated with a delimiter', async () => {
+        const bucket = await createBucket(client)
+
+        await Promise.all([
+          uploadFile(client, bucket, 'p1/test-1.jpg', 1),
+          uploadFile(client, bucket, 'p2/test-1.jpg', 1),
+          uploadFile(client, bucket, 'p3/test-1.jpg', 1),
+        ])
+
+        const resp = await client.send(
+          new ListObjectsCommand({ Bucket: bucket, Delimiter: '/', MaxKeys: 1 })
+        )
+        expect(resp.IsTruncated).toBe(true)
+        expect(resp.NextMarker).toBeDefined()
+
+        const next = await client.send(
+          new ListObjectsCommand({
+            Bucket: bucket,
+            Delimiter: '/',
+            MaxKeys: 10,
+            Marker: resp.NextMarker,
+          })
+        )
+        expect(next.CommonPrefixes?.length).toBeGreaterThan(0)
       })
     })
 
@@ -834,9 +936,7 @@ describe('S3 Protocol', () => {
         const data = Buffer.alloc(1024)
         formData.set('file', new Blob([data]), 'test.jpg')
 
-        const resp = await axios.post(signedURL.url, formData, {
-          validateStatus: () => true,
-        })
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
 
         expect(resp.status).toBe(200)
       })
@@ -863,9 +963,7 @@ describe('S3 Protocol', () => {
         const data = Buffer.alloc(1024 * 2)
         formData.set('file', new Blob([data]), 'test.jpg')
 
-        const resp = await axios.post(signedURL.url, formData, {
-          validateStatus: () => true,
-        })
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
 
         expect(resp.status).toBe(413)
         expect(resp.statusText).toBe('Payload Too Large')
@@ -978,7 +1076,7 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const part1Body = Buffer.alloc(5 * 1024 * 1024, 'a')
+        const part1Body = Buffer.alloc(1024 * 5, 'a')
 
         const part1 = await client.send(
           new UploadPartCommand({
@@ -1058,7 +1156,7 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const part1Body = Buffer.alloc(5 * 1024 * 1024, 'b')
+        const part1Body = Buffer.alloc(1024 * 5, 'b')
 
         const part1 = await client.send(
           new UploadPartCommand({
@@ -1140,7 +1238,7 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const part1Body = Buffer.alloc(5 * 1024 * 1024, 'c')
+        const part1Body = Buffer.alloc(1024 * 5, 'c')
 
         const part1 = await client.send(
           new UploadPartCommand({
@@ -1348,6 +1446,37 @@ describe('S3 Protocol', () => {
         expect(headObject.ContentLength).toBe(payload.length)
       })
 
+      it('rejects trailer-mode aws-chunked putObject bodies without a trailer block', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-aws-chunked-put-object-empty-trailer.jpg'
+        const payload = Buffer.alloc(123, 1)
+
+        mergeConfig({
+          uploadFileSizeLimit: 150,
+        })
+
+        const response = await sendAwsChunkedTrailerModeWithoutTrailerRequest({
+          baseUrl,
+          path: `/s3/${bucketName}/${key}`,
+          payload,
+        })
+
+        expect(response.status).toBeGreaterThanOrEqual(400)
+
+        try {
+          await client.send(
+            new HeadObjectCommand({
+              Bucket: bucketName,
+              Key: key,
+            })
+          )
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+        }
+      })
+
       it('will not allow uploading a file that exceeded the maxFileSize', async () => {
         const bucketName = await createBucket(client)
 
@@ -1396,13 +1525,17 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const readable = new ReadableStreamBuffer({
-          frequency: 500,
-          chunkSize: 1024 * 3,
-        })
-
-        readable.put(Buffer.alloc(1024 * 12))
-        readable.stop()
+        const readable = Readable.from(
+          (async function* () {
+            const buffer = Buffer.alloc(1024 * 12)
+            const chunkSize = 1024 * 3
+            for (let i = 0; i < buffer.length; i += chunkSize) {
+              await sleep(500)
+              yield buffer.subarray(i, i + chunkSize)
+            }
+          })(),
+          { objectMode: false }
+        )
 
         const uploadPart = new UploadPartCommand({
           Bucket: bucketName,
@@ -1521,7 +1654,7 @@ describe('S3 Protocol', () => {
         )
         expect(part1Resp.ETag).toBeTruthy()
 
-        const canUploadSpy = jest
+        const canUploadSpy = vi
           .spyOn(Uploader.prototype, 'canUpload')
           .mockRejectedValueOnce(ERRORS.AccessDenied('upload'))
 
@@ -1622,7 +1755,8 @@ describe('S3 Protocol', () => {
           Key: key,
         })
 
-        await client.send(deleteObject)
+        const deleteResp = await client.send(deleteObject)
+        expect(deleteResp.$metadata.httpStatusCode).toEqual(204)
 
         const getObject = new GetObjectCommand({
           Bucket: bucketName,
@@ -1633,6 +1767,34 @@ describe('S3 Protocol', () => {
           await client.send(getObject)
         } catch (e) {
           expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+        }
+      })
+
+      it('can delete non-existing object', async () => {
+        const bucketName = await createBucket(client)
+
+        const deleteObject = new DeleteObjectCommand({
+          Bucket: bucketName,
+          Key: crypto.randomUUID() + '.jpg',
+        })
+
+        const deleteResp = await client.send(deleteObject)
+        expect(deleteResp.$metadata.httpStatusCode).toEqual(204)
+      })
+
+      it('does not treat a missing bucket as an idempotent object delete', async () => {
+        const deleteObject = new DeleteObjectCommand({
+          Bucket: `missing-bucket-${randomUUID()}`,
+          Key: crypto.randomUUID() + '.jpg',
+        })
+
+        try {
+          await client.send(deleteObject)
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toBe('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+          expect((e as S3ServiceException).name).toEqual('NoSuchBucket')
         }
       })
     })
@@ -1743,19 +1905,14 @@ describe('S3 Protocol', () => {
           {
             Key: 'test-1.jpg',
           },
-        ])
-        expect(deleteResp.Errors).toEqual([
           {
             Key: 'test-2.jpg',
-            Code: 'AccessDenied',
-            Message: "You do not have permission to delete this object or the object doesn't exist",
           },
           {
             Key: 'test-3.jpg',
-            Code: 'AccessDenied',
-            Message: "You do not have permission to delete this object or the object doesn't exist",
           },
         ])
+        expect(deleteResp.Errors ?? []).toEqual([])
 
         const listObjectsCommand = new ListObjectsV2Command({
           Bucket: bucketName,
@@ -1763,6 +1920,125 @@ describe('S3 Protocol', () => {
 
         const resp = await client.send(listObjectsCommand)
         expect(resp.Contents).toBe(undefined)
+      })
+
+      it('does not treat a missing bucket as a successful bulk delete', async () => {
+        const deleteObjectsCommand = new DeleteObjectsCommand({
+          Bucket: `missing-bucket-${randomUUID()}`,
+          Delete: {
+            Objects: [{ Key: 'test-1.jpg' }],
+          },
+        })
+
+        try {
+          await client.send(deleteObjectsCommand)
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toBe('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+          expect((e as S3ServiceException).name).toEqual('NoSuchBucket')
+        }
+      })
+
+      it('returns AccessDenied for existing objects blocked by RLS', async () => {
+        const bucketName = await createBucket(client, 'delete-permission', false)
+        const allowedKey = 'allowed/delete-me.jpg'
+        const deniedKey = 'denied/keep-me.jpg'
+        const missingKey = 'missing/not-there.jpg'
+        const policyName = `s3_delete_objects_${randomUUID().replaceAll('-', '_')}`
+        const adminUser = await getServiceKeyUser(tenantId)
+        const connection = await getPostgresConnection({
+          tenantId,
+          user: adminUser,
+          superUser: adminUser,
+          host: 'localhost',
+        })
+        const db = connection.pool.acquire()
+        const anonKey = await anonKeyAsync
+        const anonClient = new S3Client({
+          endpoint: `${baseUrl}/s3`,
+          forcePathStyle: true,
+          region: storageS3Region,
+          credentials: {
+            accessKeyId: tenantId,
+            secretAccessKey: anonKey,
+            sessionToken: anonKey,
+          },
+        })
+
+        try {
+          await Promise.all([
+            uploadFile(client, bucketName, allowedKey, 1),
+            uploadFile(client, bucketName, deniedKey, 1),
+          ])
+
+          await db.raw(`
+            CREATE POLICY "${policyName}_select"
+            ON storage.objects
+            AS PERMISSIVE
+            FOR SELECT
+            TO "anon"
+            USING (bucket_id = '${bucketName}' AND name = '${allowedKey}')
+          `)
+          await db.raw(`
+            CREATE POLICY "${policyName}_delete"
+            ON storage.objects
+            AS PERMISSIVE
+            FOR DELETE
+            TO "anon"
+            USING (bucket_id = '${bucketName}' AND name = '${allowedKey}')
+          `)
+
+          const deleteResp = await anonClient.send(
+            new DeleteObjectsCommand({
+              Bucket: bucketName,
+              Delete: {
+                Objects: [{ Key: allowedKey }, { Key: missingKey }, { Key: deniedKey }],
+              },
+            })
+          )
+
+          expect(deleteResp.Deleted).toEqual([{ Key: allowedKey }, { Key: missingKey }])
+          expect(deleteResp.Errors).toEqual([
+            {
+              Key: deniedKey,
+              Code: 'AccessDenied',
+              Message: 'Access Denied',
+            },
+          ])
+
+          const allowedListResp = await client.send(
+            new ListObjectsV2Command({
+              Bucket: bucketName,
+              Prefix: allowedKey,
+            })
+          )
+          expect(allowedListResp.Contents).toBe(undefined)
+
+          const deniedListResp = await client.send(
+            new ListObjectsV2Command({
+              Bucket: bucketName,
+              Prefix: deniedKey,
+            })
+          )
+          expect(deniedListResp.Contents?.map((object) => object.Key)).toEqual([deniedKey])
+        } finally {
+          anonClient.destroy()
+          await db.raw(`DROP POLICY IF EXISTS "${policyName}_select" ON storage.objects`)
+          await db.raw(`DROP POLICY IF EXISTS "${policyName}_delete" ON storage.objects`)
+          await connection.dispose()
+          await client
+            .send(
+              new DeleteObjectsCommand({
+                Bucket: bucketName,
+                Delete: {
+                  Objects: [{ Key: allowedKey }, { Key: deniedKey }],
+                },
+              })
+            )
+            .catch(() => undefined)
+          await client.send(new DeleteBucketCommand({ Bucket: bucketName })).catch(() => undefined)
+        }
       })
     })
 
@@ -2176,6 +2452,128 @@ describe('S3 Protocol', () => {
     })
 
     describe('UploadPartCopyCommand', () => {
+      it('copies inclusive source ranges without dropping boundary bytes', async () => {
+        const bucket = await createBucket(client)
+
+        const sourceKey = `source-${randomUUID()}.txt`
+        const payload = Buffer.from('0123456789')
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: sourceKey,
+            Body: payload,
+            ContentType: 'text/plain',
+          })
+        )
+
+        const rangeCases: Array<[string, Buffer]> = [
+          ['bytes=0-0', Buffer.from('0')],
+          ['bytes=9-9', Buffer.from('9')],
+          ['bytes=0-9', payload],
+          ['bytes=2-5', Buffer.from('2345')],
+        ]
+
+        for (const [copySourceRange, expected] of rangeCases) {
+          const targetKey = `range-copy-${randomUUID()}.txt`
+          const multipart = await client.send(
+            new CreateMultipartUploadCommand({
+              Bucket: bucket,
+              Key: targetKey,
+              ContentType: 'text/plain',
+            })
+          )
+
+          const copiedPart = await client.send(
+            new UploadPartCopyCommand({
+              Bucket: bucket,
+              Key: targetKey,
+              UploadId: multipart.UploadId,
+              PartNumber: 1,
+              CopySource: `${bucket}/${sourceKey}`,
+              CopySourceRange: copySourceRange,
+            })
+          )
+
+          expect(copiedPart.CopyPartResult?.ETag).toBeTruthy()
+
+          await client.send(
+            new CompleteMultipartUploadCommand({
+              Bucket: bucket,
+              Key: targetKey,
+              UploadId: multipart.UploadId,
+              MultipartUpload: {
+                Parts: [
+                  {
+                    PartNumber: 1,
+                    ETag: copiedPart.CopyPartResult?.ETag,
+                  },
+                ],
+              },
+            })
+          )
+
+          const copiedObject = await client.send(
+            new GetObjectCommand({
+              Bucket: bucket,
+              Key: targetKey,
+            })
+          )
+          const copiedBytes = await copiedObject.Body?.transformToByteArray()
+
+          expect(copiedObject.ContentLength).toBe(expected.length)
+          expect(Buffer.from(copiedBytes || [])).toEqual(expected)
+        }
+      })
+
+      it('accounts source ranges inclusively when enforcing max file size', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `source-${randomUUID()}.txt`
+        const targetKey = `range-copy-limit-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: sourceKey,
+            Body: Buffer.from('0123456789'),
+            ContentType: 'text/plain',
+          })
+        )
+
+        mergeConfig({
+          uploadFileSizeLimit: 1,
+        })
+
+        const multipart = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucket,
+            Key: targetKey,
+            ContentType: 'text/plain',
+          })
+        )
+
+        try {
+          await client.send(
+            new UploadPartCopyCommand({
+              Bucket: bucket,
+              Key: targetKey,
+              UploadId: multipart.UploadId,
+              PartNumber: 1,
+              CopySource: `${bucket}/${sourceKey}`,
+              CopySourceRange: 'bytes=0-1',
+            })
+          )
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toEqual('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(413)
+          expect((e as S3ServiceException).message).toEqual(
+            'The object exceeded the maximum allowed size'
+          )
+          expect((e as S3ServiceException).name).toEqual('EntityTooLarge')
+        }
+      })
+
       it('will copy a part from an existing object and upload it as a part', async () => {
         const bucket = await createBucket(client)
 

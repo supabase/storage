@@ -1,4 +1,5 @@
 import accepts from '@fastify/accepts'
+import { ERRORS } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 import xml from 'xml2js'
@@ -61,7 +62,9 @@ export const xmlParser = fastifyPlugin(
             },
             (err: Error | null, parsed: unknown) => {
               if (err) {
-                const parseError: RequestError = new Error(`Invalid XML payload: ${err.message}`)
+                const parseError: RequestError = ERRORS.InvalidRequest(
+                  `Invalid XML payload: ${err.message}`
+                )
                 parseError.statusCode = 400
                 done(parseError)
                 return

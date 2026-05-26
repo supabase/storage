@@ -1,5 +1,3 @@
-'use strict'
-
 import {
   CreateIndexCommandOutput,
   DeleteVectorsOutput,
@@ -12,6 +10,7 @@ import { signJWT } from '@internal/auth'
 import { SingleShard } from '@internal/sharding'
 import { KnexVectorMetadataDB, VectorStore, VectorStoreManager } from '@storage/protocols/vector'
 import { FastifyInstance } from 'fastify'
+import type { Mocked } from 'vitest'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
 import { useMockObject, useMockQueue } from './common'
@@ -24,31 +23,42 @@ const vectorBucketS3 = vectorS3Buckets[0]
 let appInstance: FastifyInstance
 let serviceToken: string
 
+type ListVectorBucketsResponse = Awaited<ReturnType<VectorStoreManager['listBuckets']>>
+type GetVectorBucketResponse = Awaited<ReturnType<VectorStoreManager['getBucket']>>
+type ListIndexesResponse = Awaited<ReturnType<VectorStoreManager['listIndexes']>>
+type ErrorResponse = {
+  error: string
+}
+
+function parseJsonBody<Body>(body: string): Body {
+  return JSON.parse(body) as Body
+}
+
 // Use the common mock helpers
 useMockObject()
 useMockQueue()
 
-jest.mock('@storage/protocols/vector/adapter/s3-vector', () => {
-  const mockS3Vector = {
-    deleteVectorIndex: jest.fn().mockResolvedValue({} as CreateIndexCommandOutput),
-    createVectorIndex: jest.fn().mockResolvedValue({} as CreateIndexCommandOutput),
-    putVectors: jest.fn().mockResolvedValue({} as PutVectorsOutput),
-    listVectors: jest.fn().mockResolvedValue({} as ListVectorsOutput),
-    queryVectors: jest.fn().mockResolvedValue({} as QueryVectorsOutput),
-    deleteVectors: jest.fn().mockResolvedValue({} as DeleteVectorsOutput),
-    getVectors: jest.fn().mockResolvedValue({} as GetVectorsCommandOutput),
-    createS3VectorClient: jest.fn().mockReturnValue({}),
-  }
+const { mockVectorStore } = vi.hoisted(() => ({
+  mockVectorStore: {
+    deleteVectorIndex: vi.fn().mockResolvedValue({} as CreateIndexCommandOutput),
+    createVectorIndex: vi.fn().mockResolvedValue({} as CreateIndexCommandOutput),
+    putVectors: vi.fn().mockResolvedValue({} as PutVectorsOutput),
+    listVectors: vi.fn().mockResolvedValue({} as ListVectorsOutput),
+    queryVectors: vi.fn().mockResolvedValue({} as QueryVectorsOutput),
+    deleteVectors: vi.fn().mockResolvedValue({} as DeleteVectorsOutput),
+    getVectors: vi.fn().mockResolvedValue({} as GetVectorsCommandOutput),
+  } as Mocked<VectorStore>,
+}))
 
+vi.mock('@storage/protocols/vector/adapter/s3-vector', () => {
   return {
-    S3Vector: jest.fn().mockImplementation(() => mockS3Vector),
-    ...mockS3Vector,
+    S3Vector: vi.fn(function () {
+      return mockVectorStore
+    }),
+    createS3VectorClient: vi.fn().mockReturnValue({}),
+    ...mockVectorStore,
   }
 })
-
-const mockVectorStore = jest.mocked<VectorStore>(
-  jest.requireMock('@storage/protocols/vector/adapter/s3-vector')
-)
 
 let vectorBucketName: string
 let s3Vector: VectorStoreManager
@@ -84,8 +94,8 @@ describe('Vectors API', () => {
   })
 
   beforeEach(async () => {
-    jest.clearAllMocks()
-    jest.resetAllMocks()
+    vi.clearAllMocks()
+    vi.resetAllMocks()
 
     getConfig({ reload: true })
     mergeConfig({ vectorMaxBucketsCount: Infinity, vectorMaxIndexesCount: Infinity })
@@ -283,24 +293,52 @@ describe('Vectors API', () => {
     })
 
     it('should handle vector service not configured', async () => {
-      // Mock app without s3Vector service
-      const appWithoutVector = app()
       mergeConfig({ vectorEnabled: false })
 
-      const response = await appWithoutVector.inject({
-        method: 'POST',
-        url: '/vector/CreateIndex',
-        headers: {
-          authorization: `Bearer ${serviceToken}`,
-        },
-        payload: validCreateIndexRequest,
-      })
+      const appWithoutVector = app()
 
-      expect(response.statusCode).toBe(404)
-      const body = JSON.parse(response.body)
-      expect(body.error).toBe('Not Found')
+      try {
+        const response = await appWithoutVector.inject({
+          method: 'POST',
+          url: '/vector/CreateIndex',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: validCreateIndexRequest,
+        })
 
-      await appWithoutVector.close()
+        expect(response.statusCode).toBe(404)
+        const body = JSON.parse(response.body)
+        expect(body.error).toBe('Not Found')
+      } finally {
+        await appWithoutVector.close()
+      }
+    })
+
+    it('should return FeatureNotEnabled when the vector backend is not configured', async () => {
+      mergeConfig({ vectorEnabled: true, vectorS3Buckets: [] })
+
+      const appWithoutVector = app()
+
+      try {
+        const response = await appWithoutVector.inject({
+          method: 'POST',
+          url: '/vector/CreateIndex',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: validCreateIndexRequest,
+        })
+
+        expect(response.statusCode).toBe(409)
+        expect(JSON.parse(response.body)).toMatchObject({
+          statusCode: '409',
+          code: 'FeatureNotEnabled',
+          error: 'FeatureNotEnabled',
+        })
+      } finally {
+        await appWithoutVector.close()
+      }
     })
 
     it('should handle S3Vector service errors', async () => {
@@ -509,7 +547,7 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(400)
-      const body = JSON.parse(response.body)
+      const body = JSON.parse(response.body) as ErrorResponse
       expect(body.error).toBe('VectorBucketNotEmpty')
     })
 
@@ -573,13 +611,13 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
+      const body = parseJsonBody<ListVectorBucketsResponse>(response.body)
       expect(body.vectorBuckets).toBeDefined()
       expect(Array.isArray(body.vectorBuckets)).toBe(true)
       expect(body.vectorBuckets.length).toBeGreaterThan(0)
 
       // Verify structure of bucket objects
-      body.vectorBuckets.forEach((bucket: any) => {
+      body.vectorBuckets.forEach((bucket) => {
         expect(bucket.vectorBucketName).toBeDefined()
         expect(bucket.creationTime).toBeDefined()
         expect(typeof bucket.creationTime).toBe('number')
@@ -599,7 +637,7 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
+      const body = JSON.parse(response.body) as ListVectorBucketsResponse
       expect(body.vectorBuckets.length).toBeLessThanOrEqual(2)
       if (body.vectorBuckets.length === 2) {
         expect(body.nextToken).toBeDefined()
@@ -660,8 +698,8 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
-      body.vectorBuckets.forEach((bucket: any) => {
+      const body = parseJsonBody<ListVectorBucketsResponse>(response.body)
+      body.vectorBuckets.forEach((bucket) => {
         expect(bucket.vectorBucketName).toMatch(new RegExp(`^${prefix}`))
       })
     })
@@ -779,8 +817,8 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
-      const names = body.vectorBuckets.map((bucket: any) => bucket.vectorBucketName)
+      const body = parseJsonBody<ListVectorBucketsResponse>(response.body)
+      const names = body.vectorBuckets.map((bucket) => bucket.vectorBucketName)
       expect(names).toContain(matchingBucket)
       expect(names).not.toContain(nonMatchingBucket)
     })
@@ -806,8 +844,8 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
-      const names = body.vectorBuckets.map((bucket: any) => bucket.vectorBucketName)
+      const body = parseJsonBody<ListVectorBucketsResponse>(response.body)
+      const names = body.vectorBuckets.map((bucket) => bucket.vectorBucketName)
       expect(names).toContain(matchingBucket)
       expect(names).not.toContain(nonMatchingBucket)
     })
@@ -837,7 +875,7 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
+      const body = JSON.parse(response.body) as GetVectorBucketResponse
       expect(body.vectorBucket).toBeDefined()
       expect(body.vectorBucket.vectorBucketName).toBe(vectorBucketName)
       expect(body.vectorBucket.creationTime).toBeDefined()
@@ -1046,13 +1084,13 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
+      const body = parseJsonBody<ListIndexesResponse>(response.body)
       expect(body.indexes).toBeDefined()
       expect(Array.isArray(body.indexes)).toBe(true)
       expect(body.indexes.length).toBeGreaterThanOrEqual(2)
 
       // Verify structure of index objects
-      body.indexes.forEach((index: any) => {
+      body.indexes.forEach((index) => {
         expect(index.indexName).toBeDefined()
         expect(index.vectorBucketName).toBe(vectorBucketName)
         expect(index.creationTime).toBeDefined()
@@ -1074,7 +1112,7 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
+      const body = JSON.parse(response.body) as ListIndexesResponse
       expect(body.indexes.length).toBeLessThanOrEqual(1)
     })
 
@@ -1130,8 +1168,8 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      const body = JSON.parse(response.body)
-      body.indexes.forEach((index: any) => {
+      const body = parseJsonBody<ListIndexesResponse>(response.body)
+      body.indexes.forEach((index) => {
         expect(index.indexName).toMatch(new RegExp(`^${prefix}`))
       })
     })
@@ -1774,6 +1812,30 @@ describe('Vectors API', () => {
       )
     })
 
+    it('should reject reserved logical operator keys used as field names', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/QueryVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          queryVector: {
+            float32: [1.0, 2.0, 3.0],
+          },
+          topK: 5,
+          filter: {
+            $and: true,
+          },
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.queryVectors).not.toHaveBeenCalled()
+    })
+
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
@@ -1828,6 +1890,9 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(400)
+      const body = parseJsonBody<{ message: string }>(response.body)
+      expect(body.message).toContain('queryVector')
+      expect(body.message).toContain('float32')
     })
 
     it('should handle non-existent index', async () => {

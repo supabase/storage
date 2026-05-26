@@ -3,6 +3,8 @@ FROM node:24-alpine3.23 AS base
 RUN apk add --no-cache g++ make python3
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY scripts/ensure-npm-version.cjs ./scripts/ensure-npm-version.cjs
+RUN node scripts/ensure-npm-version.cjs
 
 # Dependencies stage - install and cache all dependencies
 FROM base AS dependencies

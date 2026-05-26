@@ -1,6 +1,14 @@
-'use strict'
+vi.hoisted(() => {
+  process.env.PG_QUEUE_ENABLE = 'true'
+})
 
-import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
+import {
+  generateHS512JWK,
+  getMaxNumericJWTExpiration,
+  SignedToken,
+  signJWT,
+  verifyJWT,
+} from '@internal/auth'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
 import { randomUUID } from 'crypto'
@@ -84,7 +92,7 @@ describe('testing GET object', () => {
   })
 
   test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
-    const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
+    const mockGetObject = vi.spyOn(S3Backend.prototype, 'getObject')
     mockGetObject.mockRejectedValue({
       $metadata: {
         httpStatusCode: 304,
@@ -134,6 +142,24 @@ describe('testing GET object', () => {
     expect(response.headers['last-modified']).toBe('Wed, 12 Oct 2022 11:17:02 GMT')
     expect(response.headers['content-length']).toBe('3746')
     expect(response.headers['cache-control']).toBe('no-cache')
+  })
+
+  test('get authenticated object info returns NoSuchKey for a missing object', async () => {
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: '/object/info/authenticated/bucket2/authenticated/notfound-info.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'not_found',
+      message: 'Object not found',
+    })
+    expect(S3Backend.prototype.headObject).not.toHaveBeenCalled()
   })
 
   test('cannot get authenticated object info without the /authenticated prefix if no jwt is provided', async () => {
@@ -592,7 +618,7 @@ describe('testing POST object via multipart upload', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  test('return 400 when uploading an object with a not allowed mime-type', async () => {
+  test('return 400 when uploading an object with a not allowed mime-type (binary path)', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
@@ -614,6 +640,86 @@ describe('testing POST object via multipart upload', () => {
       statusCode: '415',
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('return 400 when uploading a multipart form-data object with a not allowed mime-type', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    form.append('contentType', 'image/png')
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${await serviceKeyAsync}`,
+      'x-upsert': 'true',
+    })
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/public-limit-mime-types/sadcat-upload23.png',
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(await response.json()).toEqual({
+      error: 'invalid_mime_type',
+      message: `mime type image/png is not supported`,
+      statusCode: '415',
+    })
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('enforces allowed mime types set through bucket update', async () => {
+    const bucketId = `allowed-mime-${randomUUID()}`
+    const authHeader = { authorization: `Bearer ${await serviceKeyAsync}` }
+
+    try {
+      const createBucketResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/bucket',
+        headers: authHeader,
+        payload: {
+          name: bucketId,
+        },
+      })
+      expect(createBucketResponse.statusCode).toBe(200)
+
+      const updateBucketResponse = await appInstance.inject({
+        method: 'PUT',
+        url: `/bucket/${bucketId}`,
+        headers: authHeader,
+        payload: {
+          allowed_mime_types: ['image/jpeg'],
+        },
+      })
+      expect(updateBucketResponse.statusCode).toBe(200)
+
+      const form = new FormData()
+      form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+      form.append('contentType', 'image/png')
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/${bucketId}/sadcat-upload23.png`,
+        headers: {
+          ...form.getHeaders(),
+          ...authHeader,
+          'x-upsert': 'true',
+        },
+        payload: form,
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toEqual({
+        error: 'invalid_mime_type',
+        message: `mime type image/png is not supported`,
+        statusCode: '415',
+      })
+      expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+    } finally {
+      const db = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(db, async (db) => {
+        await db.from<Obj>('objects').where({ bucket_id: bucketId }).delete()
+        await db.from('buckets').where({ id: bucketId }).delete()
+      })
+    }
   })
 
   test('return 400 when uploading an object with a malformed mime-type', async () => {
@@ -728,7 +834,7 @@ describe('testing POST object via multipart upload', () => {
 
   test('should not add row to database if upload fails', async () => {
     // Mock S3 upload failure.
-    jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
+    vi.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
       StorageBackendError.fromError({
         name: 'S3ServiceException',
         message: 'Unknown error',
@@ -1022,7 +1128,7 @@ describe('testing POST object via binary upload', () => {
 
   test('should not add row to database if upload fails', async () => {
     // Mock S3 upload failure.
-    jest.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
+    vi.spyOn(S3Backend.prototype, 'uploadObject').mockRejectedValue(
       StorageBackendError.fromError({
         name: 'S3ServiceException',
         message: 'Unknown error',
@@ -1200,6 +1306,63 @@ describe('testing PUT object via binary upload', () => {
         Key: 'bucket2/authenticated/cat.jpg',
       })
     )
+  })
+
+  test('replaces custom metadata when updating an object', async () => {
+    const path = './src/test/assets/sadcat.jpg'
+    const { size } = fs.statSync(path)
+    const objectName = `metadata-replace/${randomUUID()}.jpg`
+    const initialMetadata = { keep: false, stale: 'removed' }
+    const replacementMetadata = { keep: true, fresh: 'present' }
+
+    try {
+      const createResponse = await appInstance.inject({
+        method: 'POST',
+        url: `/object/bucket2/${objectName}`,
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+          'Content-Length': size,
+          'Content-Type': 'image/jpeg',
+          'x-metadata': Buffer.from(JSON.stringify(initialMetadata)).toString('base64'),
+        },
+        payload: fs.createReadStream(path),
+      })
+      expect(createResponse.statusCode).toBe(200)
+
+      const updateResponse = await appInstance.inject({
+        method: 'PUT',
+        url: `/object/bucket2/${objectName}`,
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+          'Content-Length': size,
+          'Content-Type': 'image/jpeg',
+          'x-metadata': Buffer.from(JSON.stringify(replacementMetadata)).toString('base64'),
+        },
+        payload: fs.createReadStream(path),
+      })
+      expect(updateResponse.statusCode).toBe(200)
+
+      const infoResponse = await appInstance.inject({
+        method: 'GET',
+        url: `/object/info/bucket2/${objectName}`,
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+      expect(infoResponse.statusCode).toBe(200)
+      expect(infoResponse.json().metadata).toEqual(replacementMetadata)
+    } finally {
+      const db = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(db, async (db) => {
+        await db
+          .from<Obj>('objects')
+          .where({
+            name: objectName,
+            bucket_id: 'bucket2',
+          })
+          .delete()
+      })
+    }
   })
 
   test('check if RLS policies are respected: anon user is not able to update authenticated resource', async () => {
@@ -1806,6 +1969,38 @@ describe('testing generating signed URL', () => {
     })
     expect(response.statusCode).toBe(400)
   })
+
+  test('rejects oversized expiresIn values for signed URLs before jwt signing', async () => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2/authenticated/cat.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1e21,
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.body).message).toContain('expiresIn')
+  })
+
+  test('rejects expiresIn values above the current runtime maximum for signed URLs', async () => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2/authenticated/cat.jpg',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: getMaxNumericJWTExpiration() + 10,
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.body).message).toContain('expiresIn')
+  })
 })
 
 /**
@@ -2010,7 +2205,7 @@ describe('testing uploading with generated signed upload URL', () => {
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
-    const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, -1)
+    const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, '-1s')
     const response = await appInstance.inject({
       method: 'PUT',
       url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
@@ -2018,6 +2213,39 @@ describe('testing uploading with generated signed upload URL', () => {
       payload: form,
     })
     expect(response.statusCode).toBe(400)
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('upload object with a tampered signed upload token', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      'content-type': 'image/jpeg',
+    })
+
+    const BUCKET_ID = 'bucket2'
+    const OBJECT_NAME = 'public/sadcat-upload1.png'
+    const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
+    const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
+    const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, 100)
+    const signatureStart = jwtToken.lastIndexOf('.') + 1
+    const signatureChar = jwtToken[signatureStart]
+    const tamperedToken = `${jwtToken.slice(0, signatureStart)}${
+      signatureChar === 'a' ? 'b' : 'a'
+    }${jwtToken.slice(signatureStart + 1)}`
+
+    const response = await appInstance.inject({
+      method: 'PUT',
+      url: `/object/upload/sign/${urlToSign}?token=${tamperedToken}`,
+      headers,
+      payload: form,
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      statusCode: '400',
+      error: ErrorCode.InvalidJWT,
+    })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
@@ -2183,6 +2411,23 @@ describe('testing generating signed URLs', () => {
     const result = JSON.parse(response.body)
     expect(result[0].error).toBe('Either the object does not exist or you do not have access to it')
   })
+
+  test('rejects oversized expiresIn values for batch signed URLs before jwt signing', async () => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1e21,
+        paths: ['authenticated/cat.jpg'],
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.body).message).toContain('expiresIn')
+  })
 })
 
 /**
@@ -2223,7 +2468,7 @@ describe('testing retrieving signed URL', () => {
   })
 
   test('forward 304 and If-Modified-Since/If-None-Match headers', async () => {
-    const mockGetObject = jest.spyOn(S3Backend.prototype, 'getObject')
+    const mockGetObject = vi.spyOn(S3Backend.prototype, 'getObject')
     mockGetObject.mockRejectedValue({
       $metadata: {
         httpStatusCode: 304,
@@ -2276,7 +2521,7 @@ describe('testing retrieving signed URL', () => {
 
   test('get object with an expired JWT', async () => {
     const urlToSign = 'bucket2/public/sadcat-upload.png'
-    const expiredJWT = await signJWT({ url: urlToSign }, jwtSecret, -1)
+    const expiredJWT = await signJWT({ url: urlToSign }, jwtSecret, '-1s')
     const response = await appInstance.inject({
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${expiredJWT}`,
@@ -2287,6 +2532,7 @@ describe('testing retrieving signed URL', () => {
 
 describe('testing move object', () => {
   test('check if RLS policies are respected: authenticated user is able to move an authenticated object', async () => {
+    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
     const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
@@ -2301,10 +2547,11 @@ describe('testing move object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
-    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+    expect(objectAdminDeleteSendSpy).toHaveBeenCalled()
   })
 
   test('can move objects across buckets respecting RLS', async () => {
+    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
     const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
@@ -2320,7 +2567,7 @@ describe('testing move object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
-    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+    expect(objectAdminDeleteSendSpy).toHaveBeenCalled()
   })
 
   test('cross-bucket move rollback should cleanup destination bucket object', async () => {
@@ -2328,7 +2575,7 @@ describe('testing move object', () => {
     const sourceKey = `authenticated/move-orig-rollback-${runId}.png`
     const destinationKey = `authenticated/move-new-rollback-${runId}.png`
     const destinationBucket = 'bucket3'
-    const objectAdminDeleteSendSpy = jest.spyOn(ObjectAdminDelete, 'send')
+    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
 
     const seedTx = await getSuperuserPostgrestClient()
     await seedTx.from<Obj>('objects').insert({
@@ -2341,9 +2588,9 @@ describe('testing move object', () => {
     await seedTx.commit()
     tnx = undefined
 
-    jest
-      .spyOn(S3Backend.prototype, 'headObject')
-      .mockRejectedValueOnce(new Error('forced move failure'))
+    vi.spyOn(S3Backend.prototype, 'headObject').mockRejectedValueOnce(
+      new Error('forced move failure')
+    )
 
     const response = await appInstance.inject({
       method: 'POST',

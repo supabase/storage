@@ -3,7 +3,7 @@ import { ERRORS } from '@internal/errors'
 import { isUuid } from '@storage/limits'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import apiKey from '../../plugins/apikey'
+import { registerApiKeyAuth } from '../../plugins/apikey'
 
 const createCredentialsSchema = {
   description: 'Create S3 Credentials',
@@ -82,7 +82,7 @@ interface ListCredentialsRequest extends RequestGenericInterface {
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.register(apiKey)
+  registerApiKeyAuth(fastify)
 
   fastify.post<CreateCredentialsRequest>(
     '/:tenantId/credentials',

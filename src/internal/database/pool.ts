@@ -1,8 +1,10 @@
-import { createTtlCache } from '@internal/cache'
+import { type CacheLookupOutcome, createTtlCache, TENANT_POOL_CACHE_NAME } from '@internal/cache'
 import { wait } from '@internal/concurrency'
 import { getSslSettings } from '@internal/database/ssl'
 import { logger, logSchema } from '@internal/monitoring'
 import {
+  cacheEvictionsTotal,
+  cacheRequestsTotal,
   dbActiveConnection,
   dbActivePool,
   dbInUseConnection,
@@ -22,7 +24,13 @@ const {
   dbSearchPath,
   dbPostgresVersion,
   databaseApplicationName,
+  tenantPoolCacheTtlMs,
+  tenantPoolCacheHitLogSampleRate,
+  tenantPoolCacheMissLogSampleRate,
 } = getConfig()
+
+export const TENANT_POOL_CACHE_LOOKUP_LOG_TYPE = 'cache'
+export const TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE = '[Cache] Tenant pool lookup'
 
 export interface TenantConnectionOptions {
   user: User
@@ -53,9 +61,14 @@ export interface PoolStats {
   total: number
 }
 
+export interface PoolRebalanceOptions {
+  clusterSize?: number
+  maxConnections?: number
+}
+
 export interface PoolStrategy {
   acquire(): Knex
-  rebalance(options: { clusterSize: number }): void
+  rebalance(options: PoolRebalanceOptions): void
   destroy(): Promise<void>
   getPoolStats(): PoolStats | null
 }
@@ -65,7 +78,7 @@ export const searchPath = ['storage', 'public', 'extensions', ...dbSearchPath.sp
 )
 
 const multiTenantTtlConfig = {
-  ttl: 1000 * 10,
+  ttl: tenantPoolCacheTtlMs,
   updateAgeOnGet: true,
   checkAgeOnGet: true,
 }
@@ -91,12 +104,62 @@ async function destroyPoolSafely(pool: PoolStrategy): Promise<void> {
   }
 }
 
+function recordTenantPoolCacheEviction(reason: string): void {
+  // Explicit destroy paths are filtered before this helper is called.
+  if (reason === 'stale' || reason === 'evict' || reason === 'delete') {
+    cacheEvictionsTotal.add(1, {
+      cache: TENANT_POOL_CACHE_NAME,
+    })
+  }
+}
+
+function recordTenantPoolCacheRequest(outcome: string): void {
+  cacheRequestsTotal.add(1, {
+    cache: TENANT_POOL_CACHE_NAME,
+    outcome,
+  })
+}
+
+function shouldLogTenantPoolCacheLookup(sampleRate: number): boolean {
+  return sampleRate >= 1 || (sampleRate > 0 && Math.random() < sampleRate)
+}
+
+function logTenantPoolCacheLookup(
+  settings: TenantConnectionOptions,
+  isCacheable: boolean,
+  outcome: CacheLookupOutcome
+): void {
+  const sampleRate =
+    outcome === 'hit' ? tenantPoolCacheHitLogSampleRate : tenantPoolCacheMissLogSampleRate
+
+  if (!shouldLogTenantPoolCacheLookup(sampleRate)) {
+    return
+  }
+
+  const log = {
+    type: TENANT_POOL_CACHE_LOOKUP_LOG_TYPE,
+    cache: TENANT_POOL_CACHE_NAME,
+    tenantId: settings.tenantId,
+    project: settings.tenantId,
+    outcome,
+    sampleRate,
+    sampleWeight: 1 / sampleRate,
+    isCacheable,
+    isExternalPool: Boolean(settings.isExternalPool),
+    isSingleUse: Boolean(settings.isSingleUse),
+  }
+
+  logSchema.info(logger, TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE, log)
+}
+
 const tenantPools = createTtlCache<string, PoolStrategy>({
   ...(isMultitenant ? multiTenantTtlConfig : { max: 1, ttl: Infinity }),
-  dispose: async (pool) => {
+  dispose: async (pool, _tenantId, reason) => {
     if (!pool || manuallyDestroyedPools.has(pool)) {
       return
     }
+
+    recordTenantPoolCacheEviction(reason)
 
     await destroyPoolSafely(pool)
   },
@@ -197,26 +260,34 @@ export class PoolManager {
     }
   }
 
-  rebalance(tenantId: string, data: { clusterSize: number }) {
+  rebalance(tenantId: string, data: PoolRebalanceOptions) {
     const pool = tenantPools.get(tenantId)
     if (pool) {
-      pool.rebalance({
-        clusterSize: data.clusterSize,
-      })
+      pool.rebalance({ ...data })
     }
   }
 
   getPool(settings: TenantConnectionOptions) {
-    const existingPool = tenantPools.get(settings.tenantId)
+    const isCacheable = (settings.isSingleUse && !settings.isExternalPool) || !settings.isSingleUse
+    const { value: existingPool, outcome } = tenantPools.getWithOutcome(settings.tenantId)
+
     if (existingPool) {
+      recordTenantPoolCacheRequest(outcome)
+      logTenantPoolCacheLookup(settings, isCacheable, outcome)
+
       return existingPool
     }
 
+    if (!isCacheable) {
+      return this.newPool({ ...settings, numWorkers: this.numWorkers })
+    }
+
+    recordTenantPoolCacheRequest(outcome)
+    logTenantPoolCacheLookup(settings, isCacheable, outcome)
+
     const newPool = this.newPool({ ...settings, numWorkers: this.numWorkers })
 
-    if ((settings.isSingleUse && !settings.isExternalPool) || !settings.isSingleUse) {
-      tenantPools.set(settings.tenantId, newPool)
-    }
+    tenantPools.set(settings.tenantId, newPool)
     return newPool
   }
 
@@ -247,7 +318,7 @@ export class PoolManager {
     return Promise.allSettled(promises)
   }
 
-  protected newPool(settings: TenantConnectionOptions) {
+  protected newPool(settings: TenantConnectionOptions): PoolStrategy {
     return new TenantPool(settings)
   }
 }
@@ -315,19 +386,32 @@ class TenantPool implements PoolStrategy {
     }
   }
 
-  rebalance(options: { clusterSize: number }) {
-    if (options.clusterSize === 0) {
+  rebalance(options: PoolRebalanceOptions) {
+    let shouldReplacePool = false
+
+    if (options.clusterSize !== undefined && options.clusterSize !== 0) {
+      this.options.clusterSize = options.clusterSize
+      shouldReplacePool = true
+    }
+
+    if (options.maxConnections !== undefined) {
+      this.options.maxConnections = options.maxConnections
+      shouldReplacePool = true
+    }
+
+    if (!shouldReplacePool) {
       return
     }
 
     const originalPool = this.pool
-
-    this.options.clusterSize = options.clusterSize
     this.pool = undefined
 
     if (originalPool) {
       this.drainPool(originalPool).catch((e) => {
-        logger.error({ type: 'pool', error: e })
+        logSchema.error(logger, 'Error draining tenant pool', {
+          type: 'pool',
+          error: e,
+        })
       })
     }
   }

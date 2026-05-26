@@ -1,8 +1,16 @@
-'use strict'
+vi.hoisted(() => {
+  process.env.MULTI_TENANT = 'true'
+  process.env.IS_MULTITENANT = 'true'
+  process.env.REQUEST_X_FORWARDED_HOST_REGEXP = '^([a-z]{20})\\.supabase\\.(?:co|in|net)$'
+})
+
+import { signJWT } from '@internal/auth'
+import { StorageKnexDB } from '@storage/database'
 import { getConfig, mergeConfig } from '../config'
 import * as tenant from '../internal/database/tenant'
+import { adminApp } from './common'
 
-jest.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
+vi.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
   anonKey: process.env.ANON_KEY || '',
   databaseUrl: process.env.DATABASE_URL || '',
   serviceKey: process.env.SERVICE_KEY || '',
@@ -40,39 +48,60 @@ jest.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
 }))
 
 // Mock module with inline implementation that doesn't depend on variables
-jest.mock('@storage/database', () => ({
-  StorageKnexDB: jest.fn().mockImplementation(() => ({
-    listBuckets: jest.fn().mockResolvedValue([{ id: 'abc123', name: 'def456' }]),
-  })),
+vi.mock('@storage/database', () => ({
+  StorageKnexDB: vi.fn(function () {
+    return {
+      listBuckets: vi.fn().mockResolvedValue([{ id: 'abc123', name: 'def456' }]),
+    }
+  }),
 }))
 
-// Access the mock after it's been created by the Jest runtime
-// biome-ignore lint/style/noCommonJs: build script runs as CommonJS
-const storageDbMock = require('@storage/database').StorageKnexDB
-
-// Use this reference in tests
+const storageDbMock = vi.mocked(StorageKnexDB)
+const fallbackTenantId = `x-forwarded-default-${Date.now()}`
+const fallbackTenantJwtSecret = 'fallback-jwt-secret'
+let fallbackAuthenticatedJwt = ''
 
 getConfig()
 mergeConfig({
   isMultitenant: true,
+  tenantId: fallbackTenantId,
   requestXForwardedHostRegExp: '^([a-z]{20})\\.supabase\\.(?:co|in|net)$',
 })
 
-import { FastifyInstance } from 'fastify'
-import app from '../app'
 import * as migrate from '../internal/database/migrations/migrate'
 import { multitenantKnex } from '../internal/database/multitenant-db'
-import { adminApp } from './common'
 
-let appInstance: FastifyInstance
+let appInstance: import('fastify').FastifyInstance
+let buildApp: typeof import('../app').default
 
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
-  jest.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
 
-  jest
-    .spyOn(tenant, 'getServiceKey')
-    .mockResolvedValue(Promise.resolve(process.env.SERVICE_KEY || ''))
+  vi.spyOn(tenant, 'getServiceKey').mockResolvedValue(process.env.SERVICE_KEY || '')
+
+  buildApp = (await import('../app')).default
+
+  const fallbackTenantCreateResponse = await adminApp.inject({
+    method: 'POST',
+    url: `/tenants/` + fallbackTenantId,
+    payload: {
+      anonKey: 'fallback-anon',
+      databaseUrl: 'fallback-db',
+      jwtSecret: fallbackTenantJwtSecret,
+      serviceKey: 'fallback-service',
+    },
+    headers: {
+      apikey: process.env.ADMIN_API_KEYS,
+    },
+  })
+  expect(fallbackTenantCreateResponse.statusCode).toBe(201)
+
+  fallbackAuthenticatedJwt = await signJWT(
+    { role: 'authenticated', sub: 'user-id' },
+    fallbackTenantJwtSecret,
+    100
+  )
 })
 
 beforeEach(() => {
@@ -80,7 +109,7 @@ beforeEach(() => {
     isMultitenant: true,
     requestXForwardedHostRegExp: '^([a-z]{20})\\.supabase\\.(?:co|in|net)$',
   })
-  appInstance = app()
+  appInstance = buildApp()
 })
 
 afterEach(async () => {
@@ -88,14 +117,31 @@ afterEach(async () => {
 })
 
 afterAll(async () => {
+  await adminApp.inject({
+    method: 'DELETE',
+    url: '/tenants/' + fallbackTenantId,
+    headers: {
+      apikey: process.env.ADMIN_API_KEYS,
+    },
+  })
+  await adminApp.close()
   await multitenantKnex.destroy()
-  jest.restoreAllMocks()
+  vi.restoreAllMocks()
 })
 
 describe('with X-Forwarded-Host header', () => {
   test('PostgREST URL is constructed using X-Forwarded-Host if regexp matches', async () => {
     const tenantId = 'abcdefghijklmnzzzzzz'
     const host = tenantId + '.supabase.co'
+
+    await adminApp.inject({
+      method: 'DELETE',
+      url: '/tenants/' + tenantId,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
     const tenantCreateResponse = await adminApp.inject({
       method: 'POST',
       url: `/tenants/` + tenantId,
@@ -111,11 +157,13 @@ describe('with X-Forwarded-Host header', () => {
     })
     expect(tenantCreateResponse.statusCode).toBe(201)
 
+    const authenticatedJwt = await signJWT({ role: 'authenticated', sub: 'user-id' }, 'c', 100)
+
     const response = await appInstance.inject({
       method: 'GET',
       url: `/bucket`,
       headers: {
-        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        authorization: `Bearer ${authenticatedJwt}`,
         'x-forwarded-host': host,
       },
     })
@@ -131,10 +179,17 @@ describe('with X-Forwarded-Host header', () => {
 
     // check that x-forwarded-host tenant id was passed all the way to the database correctly
     expect(storageDbMock).toHaveBeenCalledTimes(1)
-    expect(storageDbMock.mock.calls[0][0].options.tenantId).toBe(tenantId)
-    expect(storageDbMock.mock.calls[0][0].options.host).toBe(host)
-    expect(storageDbMock.mock.calls[0][1].tenantId).toBe(tenantId)
-    expect(storageDbMock.mock.calls[0][1].host).toBe(host)
+
+    const [tenantConnectionArgs, tenantConnectionOptions] = storageDbMock.mock
+      .calls[0] as unknown as [
+      { options: { tenantId: string; host: string } },
+      { tenantId: string; host: string },
+    ]
+
+    expect(tenantConnectionArgs.options.tenantId).toBe(tenantId)
+    expect(tenantConnectionArgs.options.host).toBe(host)
+    expect(tenantConnectionOptions.tenantId).toBe(tenantId)
+    expect(tenantConnectionOptions.host).toBe(host)
   })
 
   test('Error is thrown if X-Forwarded-Host is not present', async () => {
@@ -142,7 +197,7 @@ describe('with X-Forwarded-Host header', () => {
       method: 'GET',
       url: `/bucket`,
       headers: {
-        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        authorization: `Bearer ${fallbackAuthenticatedJwt}`,
       },
     })
     expect(response.statusCode).toBe(400)
@@ -155,7 +210,7 @@ describe('with X-Forwarded-Host header', () => {
       method: 'GET',
       url: `/bucket`,
       headers: {
-        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        authorization: `Bearer ${fallbackAuthenticatedJwt}`,
         'x-forwarded-host': 'abcdefghijklmnopqrst.supabase.com',
       },
     })

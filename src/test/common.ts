@@ -1,32 +1,67 @@
 import { HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import { isS3Error } from '@internal/errors'
 import { Queue } from '@internal/queue'
+import type { FastifyInstance } from 'fastify'
 import path from 'path'
-import app from '../admin-app'
 import { S3Backend } from '../storage/backend'
 
-export const adminApp = app({})
-
-const ENV = process.env
+const ENV = { ...process.env }
 const projectRoot = path.join(__dirname, '..', '..')
 
+let sharedAdminAppPromise: Promise<FastifyInstance> | undefined
+
+export async function createAdminApp(): Promise<FastifyInstance> {
+  const { default: app } = await import('../admin-app')
+  return app({})
+}
+
+async function getSharedAdminApp() {
+  if (!sharedAdminAppPromise) {
+    const appPromise = createAdminApp()
+    sharedAdminAppPromise = appPromise.catch((error) => {
+      if (sharedAdminAppPromise === appPromise) {
+        sharedAdminAppPromise = undefined
+      }
+
+      throw error
+    })
+  }
+
+  return sharedAdminAppPromise
+}
+
+type SharedAdminApp = Pick<FastifyInstance, 'inject' | 'close'>
+
+export const adminApp: SharedAdminApp = {
+  inject: ((...args: Parameters<FastifyInstance['inject']>) =>
+    getSharedAdminApp().then((app) => app.inject(...args))) as FastifyInstance['inject'],
+  close: (async (...args: Parameters<FastifyInstance['close']>) => {
+    if (!sharedAdminAppPromise) {
+      return
+    }
+
+    const appPromise = sharedAdminAppPromise
+    sharedAdminAppPromise = undefined
+    const app = await appPromise
+
+    return app.close(...args)
+  }) as FastifyInstance['close'],
+}
+
 export function useMockQueue() {
-  const queueSpy: jest.SpyInstance | undefined = undefined
   beforeEach(() => {
     mockQueue()
   })
-
-  return queueSpy
 }
 
 export function mockQueue() {
-  const sendSpy = jest.fn()
-  const insertSpy = jest.fn()
-  const queueSpy = jest.fn().mockReturnValue({
+  const sendSpy = vi.fn()
+  const insertSpy = vi.fn()
+  const queueSpy = vi.fn().mockReturnValue({
     send: sendSpy,
     insert: insertSpy,
   })
-  jest.spyOn(Queue, 'getInstance').mockImplementation(queueSpy)
+  vi.spyOn(Queue, 'getInstance').mockImplementation(queueSpy)
 
   return { queueSpy, sendSpy, insertSpy }
 }
@@ -35,8 +70,8 @@ export function useMockObject() {
   beforeEach(() => {
     process.env = { ...ENV }
 
-    jest.clearAllMocks()
-    jest.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
+    vi.clearAllMocks()
+    vi.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
       metadata: {
         httpStatusCode: 200,
         size: 3746,
@@ -50,7 +85,7 @@ export function useMockObject() {
       body: Buffer.from(''),
     })
 
-    jest.spyOn(S3Backend.prototype, 'uploadObject').mockResolvedValue({
+    vi.spyOn(S3Backend.prototype, 'uploadObject').mockResolvedValue({
       httpStatusCode: 200,
       size: 3746,
       mimetype: 'image/png',
@@ -60,17 +95,17 @@ export function useMockObject() {
       contentLength: 3746,
     })
 
-    jest.spyOn(S3Backend.prototype, 'copyObject').mockResolvedValue({
+    vi.spyOn(S3Backend.prototype, 'copyObject').mockResolvedValue({
       httpStatusCode: 200,
       lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
       eTag: 'abc',
     })
 
-    jest.spyOn(S3Backend.prototype, 'deleteObject').mockResolvedValue()
+    vi.spyOn(S3Backend.prototype, 'deleteObject').mockResolvedValue()
 
-    jest.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue()
+    vi.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue()
 
-    jest.spyOn(S3Backend.prototype, 'headObject').mockResolvedValue({
+    vi.spyOn(S3Backend.prototype, 'headObject').mockResolvedValue({
       httpStatusCode: 200,
       size: 3746,
       mimetype: 'image/png',
@@ -80,13 +115,13 @@ export function useMockObject() {
       contentLength: 3746,
     })
 
-    jest
-      .spyOn(S3Backend.prototype, 'privateAssetUrl')
-      .mockResolvedValue(`local:///${projectRoot}/data/sadcat.jpg`)
+    vi.spyOn(S3Backend.prototype, 'privateAssetUrl').mockResolvedValue(
+      `local:///${projectRoot}/data/sadcat.jpg`
+    )
   })
 
   afterEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 }
 

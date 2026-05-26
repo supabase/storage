@@ -60,8 +60,9 @@ export const classInstrumentations = [
     enabled: true,
     methodsToInstrument: ['send', 'batchSend'],
     setName: (name, attrs, eventClass) => {
-      if (attrs.constructor.name) {
-        return name + '.' + eventClass.constructor.name
+      const eventName = eventClass.constructor?.name
+      if (eventName) {
+        return name + '.' + eventName
       }
       return name
     },
@@ -101,7 +102,7 @@ export const classInstrumentations = [
     enabled: true,
     methodsToInstrument: ['runQuery'],
     setName: (name, attrs) => {
-      if (attrs.queryName) {
+      if (typeof attrs.queryName === 'string') {
         return name + '.' + attrs.queryName
       }
       return name
@@ -109,7 +110,7 @@ export const classInstrumentations = [
     setAttributes: {
       runQuery: (queryName) => {
         return {
-          queryName,
+          queryName: String(queryName),
         }
       },
     },
@@ -139,17 +140,18 @@ export const classInstrumentations = [
     targetClass: StreamSplitter,
     enabled: true,
     methodsToInstrument: ['emitEvent'],
-    setName: (name: string, attrs: any) => {
-      if (attrs.event) {
+    setName: (name, attrs) => {
+      if (typeof attrs.event === 'string') {
         return name + '.' + attrs.event
       }
       return name
     },
     setAttributes: {
-      emitEvent(event) {
+      emitEvent(this: unknown, event) {
+        const splitter = this as unknown as StreamSplitter
         return {
-          part: this.part as any,
-          event,
+          part: splitter.part,
+          event: String(event),
         }
       },
     },
@@ -176,11 +178,12 @@ export const classInstrumentations = [
     setAttributes: {
       send: (command) => {
         return {
-          operation: command.constructor.name as string,
+          operation: getConstructorName(command),
         }
       },
     },
-    setName: (name, attrs) => 'S3.' + attrs.operation,
+    setName: (name, attrs) =>
+      typeof attrs.operation === 'string' ? 'S3.' + attrs.operation : name,
   }),
   new ClassInstrumentation({
     targetClass: Upload,
@@ -193,6 +196,14 @@ export const classInstrumentations = [
     ],
   }),
 ]
+
+function getConstructorName(value: unknown): string {
+  if (value && typeof value === 'object' && value.constructor?.name) {
+    return value.constructor.name
+  }
+
+  return 'unknown'
+}
 
 export async function loadClassInstrumentations() {
   return classInstrumentations

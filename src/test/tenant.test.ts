@@ -1,6 +1,6 @@
-'use strict'
 import { encrypt, signJWT } from '@internal/auth'
 import { TENANT_CONFIG_CACHE_NAME } from '@internal/cache'
+import { jwksManager, TenantConnection } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import {
   deleteTenantConfig,
@@ -8,6 +8,7 @@ import {
   getFileSizeLimit,
   getServiceKey,
   getTenantConfig,
+  onTenantConfigChange,
 } from '@internal/database/tenant'
 import { cacheRequestsTotal } from '@internal/monitoring/metrics'
 import dotenv from 'dotenv'
@@ -112,11 +113,12 @@ const payload2 = {
 
 type TenantModule = typeof import('../internal/database/tenant')
 type MultitenantDbModule = typeof import('../internal/database/multitenant-db')
+type TenantQueryBuilder = ReturnType<(typeof multitenantKnex)['table']>
 
 async function loadTenantModule(
   maxItems: number
 ): Promise<{ tenantModule: TenantModule; multitenantDbModule: MultitenantDbModule }> {
-  jest.resetModules()
+  vi.resetModules()
   mockCreateLruCache({ max: maxItems })
 
   return {
@@ -127,7 +129,7 @@ async function loadTenantModule(
 
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
-  jest.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
   payload.serviceKey = await signJWT(serviceKeyPayload, payload.jwtSecret, 100)
 })
 
@@ -152,6 +154,7 @@ afterEach(async () => {
 })
 
 afterAll(async () => {
+  await adminApp.close()
   await multitenantKnex.destroy()
 })
 
@@ -234,11 +237,9 @@ describe('Tenant configs', () => {
     process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA = 'false'
 
     try {
-      let isolatedApp: ReturnType<typeof import('../admin-app').default> | undefined
-      await jest.isolateModulesAsync(async () => {
-        const { default: createApp } = await import('../admin-app')
-        isolatedApp = createApp({})
-      })
+      vi.resetModules()
+      const { default: createApp } = await import('../admin-app')
+      const isolatedApp = createApp({})
 
       const singleResponse = await isolatedApp!.inject({
         method: 'GET',
@@ -359,6 +360,36 @@ describe('Tenant configs', () => {
     expect(secondInsertResponse.statusCode).toBe(500)
   })
 
+  test('Create tenant config rolls back when jwk generation fails', async () => {
+    const generateUrlSigningJwkSpy = vi
+      .spyOn(jwksManager, 'generateUrlSigningJwk')
+      .mockRejectedValueOnce(new Error('jwk insert failed'))
+    const runMigrationsOnTenantMock = vi.mocked(migrate.runMigrationsOnTenant)
+    runMigrationsOnTenantMock.mockClear()
+
+    try {
+      const response = await adminApp.inject({
+        method: 'POST',
+        url: `/tenants/abc`,
+        payload,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      expect(response.statusCode).toBe(500)
+      expect(generateUrlSigningJwkSpy).toHaveBeenCalledWith('abc', expect.anything())
+      expect(runMigrationsOnTenantMock).not.toHaveBeenCalled()
+
+      await expect(multitenantKnex('tenants').where({ id: 'abc' }).first()).resolves.toBeUndefined()
+      await expect(
+        multitenantKnex('tenants_jwks').where({ tenant_id: 'abc' }).select('id')
+      ).resolves.toEqual([])
+    } finally {
+      generateUrlSigningJwkSpy.mockRestore()
+    }
+  })
+
   test('Update tenant config', async () => {
     await adminApp.inject({
       method: 'POST',
@@ -386,6 +417,63 @@ describe('Tenant configs', () => {
     })
     const getResponseJSON = JSON.parse(getResponse.body)
     expect(getResponseJSON).toEqual(payload2)
+  })
+
+  test('Update tenant config keeps changes when tenant migrations fail', async () => {
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    const runMigrationsOnTenantMock = vi.mocked(migrate.runMigrationsOnTenant)
+    const updateTenantMigrationsStateSpy = vi.spyOn(migrate, 'updateTenantMigrationsState')
+    const addTenantSpy = vi
+      .spyOn(migrate.progressiveMigrations, 'addTenant')
+      .mockImplementation(() => undefined)
+
+    runMigrationsOnTenantMock.mockClear()
+    updateTenantMigrationsStateSpy.mockClear()
+
+    try {
+      runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
+
+      const patchResponse = await adminApp.inject({
+        method: 'PATCH',
+        url: `/tenants/abc`,
+        payload: payload2,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      expect(patchResponse.statusCode).toBe(204)
+      expect(runMigrationsOnTenantMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          databaseUrl: payload2.databaseUrl,
+          tenantId: 'abc',
+        })
+      )
+      expect(updateTenantMigrationsStateSpy).not.toHaveBeenCalled()
+      expect(addTenantSpy).toHaveBeenCalledWith('abc')
+
+      const getResponse = await adminApp.inject({
+        method: 'GET',
+        url: `/tenants/abc`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      expect(getResponse.statusCode).toBe(200)
+      expect(JSON.parse(getResponse.body)).toEqual(payload2)
+    } finally {
+      addTenantSpy.mockRestore()
+      updateTenantMigrationsStateSpy.mockRestore()
+    }
   })
 
   test('Update tenant config partially', async () => {
@@ -663,7 +751,7 @@ describe('Tenant configs', () => {
       },
     })
 
-    const knexTableSpy = jest.spyOn(multitenantKnex, 'table')
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
     try {
       await getTenantConfig(tenantId)
       expect(knexTableSpy).toHaveBeenCalledTimes(1)
@@ -719,15 +807,15 @@ describe('Tenant configs', () => {
     }
 
     const { tenantModule, multitenantDbModule } = await loadTenantModule(2)
-    const knexTableSpy = jest.spyOn(multitenantDbModule.multitenantKnex, 'table')
+    const knexTableSpy = vi.spyOn(multitenantDbModule.multitenantKnex, 'table')
     const queryBuilder = {
-      first: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnThis(),
-      abortOnSignal: jest.fn().mockResolvedValue(encryptedTenant),
+      first: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      abortOnSignal: vi.fn().mockResolvedValue(encryptedTenant),
     }
 
     try {
-      knexTableSpy.mockReturnValue(queryBuilder as any)
+      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
 
       for (const tenantId of tenantIds) {
         await tenantModule.getTenantConfig(tenantId)
@@ -742,15 +830,74 @@ describe('Tenant configs', () => {
       tenantIds.forEach((tenantId) => {
         tenantModule.deleteTenantConfig(tenantId)
       })
-      jest.dontMock('@internal/cache')
-      jest.resetModules()
+      vi.doUnmock('@internal/cache')
+      vi.resetModules()
       knexTableSpy.mockRestore()
     }
   })
 
+  test('Tenant config maxConnections change rebalances cached pool without destroying it', async () => {
+    const tenantId = 'pool-max-connections-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://tenant'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: null,
+      max_connections: 20,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const queryBuilder = {
+      first: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      abortOnSignal: vi
+        .fn()
+        .mockResolvedValueOnce(encryptedTenant)
+        .mockResolvedValueOnce({
+          ...encryptedTenant,
+          max_connections: 40,
+        }),
+    }
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const rebalanceSpy = vi.spyOn(TenantConnection.poolManager, 'rebalance')
+
+    try {
+      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
+
+      await getTenantConfig(tenantId)
+      await onTenantConfigChange(tenantId)
+
+      expect(rebalanceSpy).toHaveBeenCalledWith(tenantId, { maxConnections: 40 })
+      expect(destroySpy).not.toHaveBeenCalled()
+    } finally {
+      deleteTenantConfig(tenantId)
+      knexTableSpy.mockRestore()
+      destroySpy.mockRestore()
+      rebalanceSpy.mockRestore()
+    }
+  })
+
   test('Get tenant config records one cache request per logical lookup', async () => {
-    const knexTableSpy = jest.spyOn(multitenantKnex, 'table')
-    const addSpy = jest.spyOn(cacheRequestsTotal, 'add')
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
     const tenantId = 'cache-metrics-lookup'
     const encryptedTenant = {
       anon_key: encrypt('anon'),
@@ -781,13 +928,13 @@ describe('Tenant configs', () => {
 
     const tenantQuery = Promise.withResolvers<typeof encryptedTenant>()
     const queryBuilder = {
-      first: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnThis(),
-      abortOnSignal: jest.fn().mockImplementation(() => tenantQuery.promise),
+      first: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      abortOnSignal: vi.fn().mockImplementation(() => tenantQuery.promise),
     }
 
     try {
-      knexTableSpy.mockReturnValue(queryBuilder as any)
+      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
       await assertLogicalLookupMetrics({
         addSpy,
         backendCallSpy: queryBuilder.abortOnSignal,

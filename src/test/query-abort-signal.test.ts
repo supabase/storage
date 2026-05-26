@@ -17,7 +17,8 @@ describe('Query Abort Signal', () => {
   })
 
   async function withIsolatedConnection<T>(run: (conn: TestConnection) => Promise<T>) {
-    // Force fresh, cache is checked before isSingleUse.
+    // Force fresh because single-use external requests still reuse
+    // an already cached pool for the same tenant.
     await poolManager.destroy(tenantId)
 
     // Use an uncached single-use pool so aborted queries can't
@@ -105,13 +106,15 @@ describe('Query Abort Signal', () => {
 
         try {
           await queryPromise
-          fail('Expected query to be aborted')
+          throw new Error('Expected query to be aborted')
         } catch (error: unknown) {
-          expect(error).toMatchObject({
-            name: 'AbortError',
-            code: 'ABORT_ERR',
-            message: 'Query was aborted',
-          })
+          expect(error).toBeInstanceOf(Error)
+          if (!(error instanceof Error)) {
+            throw error
+          }
+          expect(error.name).toBe('AbortError')
+          expect('code' in error ? error.code : undefined).toBe('ABORT_ERR')
+          expect(error.message).toBe('Query was aborted')
         } finally {
           clearTimeout(abortTimeout)
         }

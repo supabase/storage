@@ -18,12 +18,13 @@ import {
   UploadPartCopyCommandInput,
 } from '@aws-sdk/client-s3'
 import { decrypt, encrypt } from '@internal/auth'
-import { ERRORS } from '@internal/errors'
+import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getConfig } from '../../../config'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
+import { parseCopySourceRangeHeader } from '../../range'
 import { S3MultipartUpload } from '../../schemas'
 import { Storage } from '../../storage'
 import { Uploader, validateMimeType } from '../../uploader'
@@ -170,17 +171,25 @@ export class S3ProtocolHandler {
       cursorV1: true,
     })
 
+    const v2Result = list.responseBody.ListBucketResult
+
     return {
       responseBody: {
         ListBucketResult: {
-          Name: list.responseBody.ListBucketResult.Name,
-          Prefix: list.responseBody.ListBucketResult.Prefix,
-          Marker: list.responseBody.ListBucketResult.NextContinuationToken,
-          MaxKeys: list.responseBody.ListBucketResult.MaxKeys,
-          IsTruncated: list.responseBody.ListBucketResult.IsTruncated,
-          Contents: list.responseBody.ListBucketResult.Contents,
-          CommonPrefixes: list.responseBody.ListBucketResult.CommonPrefixes,
-          EncodingType: list.responseBody.ListBucketResult.EncodingType,
+          Name: v2Result.Name,
+          Prefix: v2Result.Prefix,
+          Marker: v2Result.NextContinuationToken,
+          // NextMarker is returned only when the response is truncated AND the
+          // Delimiter request parameter is specified, per the S3 ListObjects V1
+          // reference.
+          ...(v2Result.IsTruncated && v2Result.NextContinuationToken && command.Delimiter
+            ? { NextMarker: v2Result.NextContinuationToken }
+            : {}),
+          MaxKeys: v2Result.MaxKeys,
+          IsTruncated: v2Result.IsTruncated,
+          Contents: v2Result.Contents,
+          CommonPrefixes: v2Result.CommonPrefixes,
+          EncodingType: v2Result.EncodingType,
         },
       },
     }
@@ -417,6 +426,7 @@ export class S3ProtocolHandler {
       metadata: {
         mimetype: command.ContentType,
       },
+      uploadType: 's3',
     })
 
     const uploadId = await this.storage.backend.createMultiPartUpload(
@@ -546,7 +556,7 @@ export class S3ProtocolHandler {
           Bucket,
           Key,
           ChecksumCRC32: resp.ChecksumCRC32,
-          ChecksumCRC32C: resp.ChecksumCRC32,
+          ChecksumCRC32C: resp.ChecksumCRC32C,
           ChecksumSHA1: resp.ChecksumSHA1,
           ChecksumSHA256: resp.ChecksumSHA256,
           ETag: resp.ETag,
@@ -791,7 +801,7 @@ export class S3ProtocolHandler {
     }
 
     if (!Key) {
-      throw ERRORS.MissingParameter('Bucket')
+      throw ERRORS.MissingParameter('Key')
     }
 
     const r = await this.storage.backend.headObject(Bucket, Key, undefined)
@@ -823,7 +833,7 @@ export class S3ProtocolHandler {
     }
 
     if (!Key) {
-      throw ERRORS.MissingParameter('Bucket')
+      throw ERRORS.MissingParameter('Key')
     }
 
     const object = await this.storage
@@ -972,7 +982,7 @@ export class S3ProtocolHandler {
     return {
       headers,
       responseBody: response.body,
-      statusCode: command.Range ? 206 : 200,
+      statusCode: response.httpStatusCode,
     }
   }
 
@@ -994,9 +1004,19 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Key')
     }
 
-    await this.storage.from(Bucket).deleteObject(Key)
+    try {
+      await this.storage.from(Bucket).deleteObject(Key)
+    } catch (e) {
+      if (!isStorageError(ErrorCode.NoSuchKey, e)) {
+        throw e
+      }
 
-    return {}
+      await this.storage.asSuperUser().findBucket(Bucket)
+    }
+
+    return {
+      statusCode: 204,
+    }
   }
 
   /**
@@ -1022,24 +1042,46 @@ export class S3ProtocolHandler {
     }
 
     if (Delete.Objects.length === 0) {
-      return {}
+      await this.storage.asSuperUser().findBucket(Bucket)
+      return { responseBody: { DeleteResult: { Deleted: [], Error: [] } } }
     }
 
-    const deletedResult = await this.storage
-      .from(Bucket)
-      .deleteObjects(Delete.Objects.map((o) => o.Key || ''))
-
-    const deleted = Delete.Objects.filter((o) => deletedResult.find((d) => d.name === o.Key)).map(
-      (o) => ({ Key: o.Key })
+    const requestedKeys = Delete.Objects.filter((object) => object.Key !== undefined).map(
+      (object) => object.Key || ''
     )
 
-    const errors = Delete.Objects.filter((o) => !deletedResult.find((d) => d.name === o.Key)).map(
-      (o) => ({
-        Key: o.Key,
-        Code: 'AccessDenied',
-        Message: "You do not have permission to delete this object or the object doesn't exist",
-      })
-    )
+    const deletedObjects = await this.storage.from(Bucket).deleteObjects(requestedKeys)
+    const deletedNames = new Set(deletedObjects.map((object) => object.name))
+    const unresolvedKeys = requestedKeys.filter((key) => !deletedNames.has(key))
+
+    const remainingObjects =
+      unresolvedKeys.length > 0
+        ? await this.storage.asSuperUser().from(Bucket).findObjects(unresolvedKeys, 'name')
+        : []
+
+    if (deletedObjects.length === 0 && remainingObjects.length === 0) {
+      await this.storage.asSuperUser().findBucket(Bucket)
+    }
+
+    const remainingNames = new Set(remainingObjects.map((object) => object.name))
+
+    const deleted: { Key: string }[] = []
+    const errors: { Key?: string; Code: string; Message: string }[] = []
+
+    for (const object of Delete.Objects) {
+      if (
+        object.Key !== undefined &&
+        (deletedNames.has(object.Key) || !remainingNames.has(object.Key))
+      ) {
+        deleted.push({ Key: object.Key })
+      } else {
+        errors.push({
+          Key: object.Key,
+          Code: 'AccessDenied',
+          Message: 'Access Denied',
+        })
+      }
+    }
 
     return {
       responseBody: {
@@ -1113,6 +1155,7 @@ export class S3ProtocolHandler {
       },
       userMetadata: command.Metadata,
       copyMetadata: command.MetadataDirective === 'COPY',
+      uploadType: 's3',
     })
 
     return {
@@ -1204,10 +1247,6 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    if (!CopySourceRange) {
-      throw ERRORS.MissingParameter('CopySourceRange')
-    }
-
     const sourceBucketName = (
       CopySource.startsWith('/') ? CopySource.replace('/', '').split('/') : CopySource.split('/')
     ).shift()
@@ -1232,25 +1271,14 @@ export class S3ProtocolHandler {
       'id,name,version,metadata'
     )
 
-    let copySize = copySource.metadata?.size || 0
+    const sourceSize = Number(copySource.metadata?.size ?? 0)
+    let copySize = sourceSize
     let rangeBytes: { fromByte: number; toByte: number } | undefined = undefined
 
     if (CopySourceRange) {
-      const bytes = CopySourceRange.split('=')[1].split('-')
-
-      if (bytes.length !== 2) {
-        throw ERRORS.InvalidRange()
-      }
-
-      const fromByte = Number(bytes[0])
-      const toByte = Number(bytes[1])
-
-      if (isNaN(fromByte) || isNaN(toByte)) {
-        throw ERRORS.InvalidRange()
-      }
-
-      rangeBytes = { fromByte, toByte }
-      copySize = toByte - fromByte
+      const range = parseCopySourceRangeHeader(CopySourceRange, sourceSize)
+      rangeBytes = range
+      copySize = range.size
     }
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
@@ -1404,7 +1432,7 @@ const HEADER_NAME_RE = /^[!#$%&'*+\-.\^_`|~0-9A-Za-z]+$/
 const HEADER_VALUE_RE = /^[\t\x20-\x7e\x80-\xff]+$/
 
 export function isValidHeader(name: string, value: string | string[]): boolean {
-  if (Buffer.from(`${name}`).byteLength < MAX_HEADER_NAME_LENGTH && !HEADER_NAME_RE.test(name)) {
+  if (Buffer.from(`${name}`).byteLength > MAX_HEADER_NAME_LENGTH || !HEADER_NAME_RE.test(name)) {
     return false
   }
   const values = Array.isArray(value) ? value : [value]
@@ -1450,7 +1478,7 @@ function decodeContinuationToken(token: string) {
   const decoded = Buffer.from(token, 'base64').toString().split(':')
 
   if (decoded.length === 0) {
-    throw new Error('Invalid continuation token')
+    throw ERRORS.InvalidParameter('continuation token')
   }
 
   return decoded[1]

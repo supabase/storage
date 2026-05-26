@@ -1,6 +1,6 @@
 import { multitenantKnex } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload, PG_BOSS_SCHEMA, Queue } from '@internal/queue'
+import { BasePayload, PG_BOSS_SCHEMA, Queue, SYSTEM_TENANT_REF } from '@internal/queue'
 import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
 import { BaseEvent } from '../base-event'
 
@@ -38,6 +38,8 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
   }
 
   static async handle(job: Job<MoveJobsPayload>) {
+    const { sbReqId } = job.data
+
     await multitenantKnex.transaction(async (tnx) => {
       const resultLock = await tnx.raw('SELECT pg_try_advisory_xact_lock(-5525285245963000611)')
       const lockAcquired = resultLock.rows.shift()?.pg_try_advisory_xact_lock || false
@@ -53,6 +55,8 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
       if (!toQueue) {
         logSchema.error(logger, `[PgBoss] Target queue ${job.data.toQueue} does not exist`, {
           type: 'pgboss',
+          project: job.data.tenant?.ref || SYSTEM_TENANT_REF,
+          sbReqId,
         })
         return
       }
@@ -116,6 +120,8 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
         logSchema.error(logger, '[PgBoss] Error while copying jobs', {
           type: 'pgboss',
           error,
+          project: job.data.tenant?.ref || SYSTEM_TENANT_REF,
+          sbReqId,
         })
       }
     })

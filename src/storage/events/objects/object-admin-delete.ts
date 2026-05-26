@@ -42,7 +42,7 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
       })
 
       logSchema.event(logger, `[Admin]: ObjectAdminDelete ${s3Key}`, {
-        jodId: job.id,
+        jobId: job.id,
         type: 'event',
         event: 'ObjectAdminDelete',
         payload: JSON.stringify(job.data),
@@ -51,6 +51,7 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
         tenantId: job.data.tenant.ref,
         project: job.data.tenant.ref,
         reqId: job.data.reqId,
+        sbReqId: job.data.sbReqId,
       })
 
       await storage.backend.deleteObjects(storageS3Bucket, [
@@ -72,6 +73,7 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
           tenantId: job.data.tenant.ref,
           project: job.data.tenant.ref,
           reqId: job.data.reqId,
+          sbReqId: job.data.sbReqId,
         },
         `[Admin]: ObjectAdminDelete ${s3Key} - FAILED`
       )
@@ -86,7 +88,7 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
           })
           .catch((e) => {
             logger.error(
-              { error: e },
+              { error: e, sbReqId: job.data.sbReqId },
               `[Admin]: ObjectAdminDelete ${tenant.ref} - FAILED DISPOSING CONNECTION`
             )
           })

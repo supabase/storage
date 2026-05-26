@@ -40,11 +40,13 @@ export class ResetMigrationsOnTenant extends BaseEvent<ResetMigrationsPayload> {
 
   static async handle(job: JobWithMetadata<ResetMigrationsPayload>) {
     const tenantId = job.data.tenant.ref
+    const { sbReqId } = job.data
     const tenant = await getTenantConfig(tenantId)
 
     logSchema.info(logger, `[Migrations] resetting migrations for ${tenantId}`, {
       type: 'migrations',
       project: tenantId,
+      sbReqId,
     })
 
     const reset = await resetMigration({
@@ -59,14 +61,17 @@ export class ResetMigrationsOnTenant extends BaseEvent<ResetMigrationsPayload> {
         tenantId,
         tenant: {
           ref: tenantId,
+          host: '',
         },
         singletonKey: tenantId,
+        sbReqId,
       })
     }
 
     logSchema.info(logger, `[Migrations] reset successful for ${tenantId}`, {
       type: 'migrations',
       project: tenantId,
+      sbReqId,
     })
   }
 }

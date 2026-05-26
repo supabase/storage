@@ -2,6 +2,7 @@ import { Queue } from '@internal/queue'
 import { DeleteIcebergResources } from './iceberg/delete-iceberg-resources'
 import { ReconcileIcebergCatalog } from './iceberg/reconcile-catalog'
 import { JwksCreateSigningSecret } from './jwks/jwks-create-signing-secret'
+import { JwksRollUrlSigningKey } from './jwks/jwks-roll-url-signing-key'
 import { Webhook } from './lifecycle/webhook'
 import { ResetMigrationsOnTenant } from './migrations/reset-migrations'
 import { RunMigrationsOnTenants } from './migrations/run-migrations'
@@ -20,6 +21,7 @@ export function registerWorkers() {
   Queue.register(BackupObjectEvent)
   Queue.register(ResetMigrationsOnTenant)
   Queue.register(JwksCreateSigningSecret)
+  Queue.register(JwksRollUrlSigningKey)
   Queue.register(UpgradePgBossV10)
   Queue.register(MoveJobs)
   Queue.register(ReconcileIcebergCatalog)

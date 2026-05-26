@@ -1,4 +1,5 @@
 import fastifyMultipart from '@fastify/multipart'
+import { ERRORS } from '@internal/errors'
 import { FastifyInstance, RouteHandlerMethod } from 'fastify'
 import { JSONSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
@@ -66,22 +67,21 @@ export default async function routes(fastify: FastifyInstance) {
                   req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)
                 }
 
-                const data: RequestInput<any> = {
+                const data = {
                   Params: req.params,
                   Body: req.body,
                   Headers: req.headers,
                   Querystring: req.query,
-                }
+                } as RequestInput<typeof route.schema>
                 const compiler = route.compiledSchema()
                 const isValid = compiler(data)
 
                 if (!isValid) {
-                  const validationError = new Error('Invalid request') as Error & {
+                  const validationError = ERRORS.InvalidRequest('Invalid request') as Error & {
                     validation?: unknown
-                    statusCode?: number
                   }
+                  // validation property is required to send correct reply in error-handler.ts
                   validationError.validation = compiler.errors
-                  validationError.statusCode = 400
                   throw validationError
                 }
 

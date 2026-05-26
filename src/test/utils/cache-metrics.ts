@@ -1,3 +1,5 @@
+import type { Mock, MockInstance } from 'vitest'
+
 type CacheMetricAttributes = {
   cache?: string
   outcome?: string
@@ -6,8 +8,8 @@ type CacheMetricAttributes = {
 type CacheRequestMetricCall = [number, { cache: string; outcome: string }]
 
 type AssertLogicalLookupMetricsOptions<T> = {
-  addSpy: jest.SpyInstance
-  backendCallSpy: jest.Mock | jest.SpyInstance
+  addSpy: MockInstance
+  backendCallSpy: Mock | MockInstance
   cacheName: string
   startLookups: () => [Promise<T>, Promise<T>, Promise<T>]
   resolveBackend: () => void
@@ -20,10 +22,11 @@ async function waitForImmediate(): Promise<void> {
 }
 
 export function getCacheRequestCalls(
-  addSpy: jest.SpyInstance,
+  addSpy: MockInstance,
   cacheName: string
 ): CacheRequestMetricCall[] {
-  return addSpy.mock.calls.filter(([, attrs]) => {
+  return addSpy.mock.calls.filter((call) => {
+    const [, attrs] = call as [number, CacheMetricAttributes | undefined]
     const metricAttrs = attrs as CacheMetricAttributes | undefined
 
     return Boolean(

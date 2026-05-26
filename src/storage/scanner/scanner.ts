@@ -340,6 +340,7 @@ export class ObjectScanner {
             version: obj.version,
             size: obj.size,
             reqId: this.storage.db.reqId,
+            sbReqId: this.storage.db.sbReqId,
           })
         })
       )

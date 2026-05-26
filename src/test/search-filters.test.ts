@@ -1,10 +1,7 @@
-'use strict'
-
 import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import app from '../app'
 import { getConfig } from '../config'
-import { escapeLike } from '../storage/database/knex'
 
 const { serviceKeyAsync } = getConfig()
 
@@ -19,12 +16,6 @@ describe('search filter wildcard escaping', () => {
 
   afterAll(async () => {
     await appInstance.close()
-  })
-
-  test('escapeLike should escape SQL wildcard characters', () => {
-    expect(escapeLike('%_abc')).toBe('\\%\\_abc')
-    expect(escapeLike('a%b_c')).toBe('a\\%b\\_c')
-    expect(escapeLike('plain-text')).toBe('plain-text')
   })
 
   test('bucket search should treat % as a literal character', async () => {

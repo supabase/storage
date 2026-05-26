@@ -1,11 +1,13 @@
-jest.mock('@internal/database/migrations', () => {
-  const actual = jest.requireActual('@internal/database/migrations')
+vi.mock('@internal/database/migrations', async () => {
+  const actual = await vi.importActual<typeof import('@internal/database/migrations')>(
+    '@internal/database/migrations'
+  )
   return {
     ...actual,
-    resetMigrationsOnTenants: jest.fn(),
-    resetMigration: jest.fn(),
-    runMigrationsOnAllTenants: jest.fn(),
-    runMigrationsOnTenant: jest.fn(),
+    resetMigrationsOnTenants: vi.fn(),
+    resetMigration: vi.fn(),
+    runMigrationsOnAllTenants: vi.fn(),
+    runMigrationsOnTenant: vi.fn(),
   }
 })
 
@@ -17,12 +19,7 @@ import { mergeConfig } from '../config'
 import { multitenantKnex } from '../internal/database/multitenant-db'
 import { PG_BOSS_SCHEMA, Queue } from '../internal/queue/queue'
 import { RunMigrationsOnTenants } from '../storage/events/migrations/run-migrations'
-
-mergeConfig({
-  pgQueueEnable: true,
-})
-
-import { adminApp } from './common'
+import { createAdminApp } from './common'
 
 const tenantId = 'admin-migrations-test-tenant'
 const createdJobIds = new Set<string>()
@@ -44,6 +41,8 @@ function trackJobId(jobId: string) {
   return jobId
 }
 
+let adminApp: FastifyInstance
+
 async function createTenant(currentTenantId: string) {
   createdTenantIds.add(currentTenantId)
   const response = await adminApp.inject({
@@ -58,6 +57,9 @@ async function createTenant(currentTenantId: string) {
 
 describe('Admin migrations routes', () => {
   beforeAll(async () => {
+    mergeConfig({
+      pgQueueEnable: true,
+    })
     await migrations.runMultitenantMigrations()
     await multitenantKnex.raw(`CREATE SCHEMA IF NOT EXISTS ${PG_BOSS_SCHEMA}`)
     await multitenantKnex.raw(`
@@ -69,11 +71,12 @@ describe('Admin migrations routes', () => {
         data jsonb NOT NULL DEFAULT '{}'::jsonb
       )
     `)
+    adminApp = await createAdminApp()
   })
 
   afterEach(async () => {
-    jest.restoreAllMocks()
-    jest.clearAllMocks()
+    vi.restoreAllMocks()
+    vi.clearAllMocks()
 
     if (createdJobIds.size > 0) {
       await multitenantKnex(pgBossJobTable).whereIn('id', Array.from(createdJobIds)).delete()
@@ -93,11 +96,12 @@ describe('Admin migrations routes', () => {
   })
 
   afterAll(async () => {
+    await adminApp?.close()
     await multitenantKnex.destroy()
   })
 
   test('rejects invalid markCompletedTillMigration for fleet reset', async () => {
-    const resetSpy = jest.mocked(migrations.resetMigrationsOnTenants).mockResolvedValue(undefined)
+    const resetSpy = vi.mocked(migrations.resetMigrationsOnTenants).mockResolvedValue(undefined)
 
     const response = await adminApp.inject({
       method: 'POST',
@@ -117,7 +121,7 @@ describe('Admin migrations routes', () => {
   test('rejects invalid markCompletedTillMigration for tenant reset', async () => {
     await createTenant(tenantId)
 
-    const resetSpy = jest.mocked(migrations.resetMigration).mockResolvedValue(false)
+    const resetSpy = vi.mocked(migrations.resetMigration).mockResolvedValue(false)
 
     const response = await adminApp.inject({
       method: 'POST',
@@ -135,7 +139,7 @@ describe('Admin migrations routes', () => {
   })
 
   test('accepts untilMigration that maps to numeric id 0 for fleet reset', async () => {
-    const resetSpy = jest.mocked(migrations.resetMigrationsOnTenants).mockResolvedValue(undefined)
+    const resetSpy = vi.mocked(migrations.resetMigrationsOnTenants).mockResolvedValue(undefined)
 
     const response = await adminApp.inject({
       method: 'POST',
@@ -143,7 +147,10 @@ describe('Admin migrations routes', () => {
       payload: {
         untilMigration: 'create-migrations-table' satisfies keyof typeof DBMigration,
       },
-      headers,
+      headers: {
+        ...headers,
+        'sb-request-id': 'sb-req-123',
+      },
     })
 
     expect(response.statusCode).toBe(200)
@@ -152,6 +159,27 @@ describe('Admin migrations routes', () => {
       till: 'create-migrations-table',
       markCompletedTillMigration: undefined,
       signal: expect.any(AbortSignal),
+      sbReqId: 'sb-req-123',
+    })
+  })
+
+  test('passes sbReqId to fleet migrate scheduling', async () => {
+    const runSpy = vi.mocked(migrations.runMigrationsOnAllTenants).mockResolvedValue(undefined)
+
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: '/migrations/migrate/fleet',
+      headers: {
+        ...headers,
+        'sb-request-id': 'sb-req-123',
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.body)).toEqual({ message: 'Migrations scheduled' })
+    expect(runSpy).toHaveBeenCalledWith({
+      signal: expect.any(AbortSignal),
+      sbReqId: 'sb-req-123',
     })
   })
 
@@ -212,26 +240,24 @@ describe('Admin migrations routes', () => {
       migrations_status: null,
     })
 
-    jest.resetModules()
+    vi.resetModules()
 
     try {
-      await jest.isolateModulesAsync(async () => {
-        const config = await import('../config')
-        config.getConfig({ reload: true })
-        config.mergeConfig({
-          pgQueueEnable: true,
-          dbMigrationFreezeAt: frozenMigration,
-        })
-
-        const isolatedMigrations = await import('@internal/database/migrations')
-        jest.mocked(isolatedMigrations.runMigrationsOnTenant).mockResolvedValue(undefined)
-
-        const multitenantDb = await import('../internal/database/multitenant-db')
-        isolatedMultitenantKnex = multitenantDb.multitenantKnex
-
-        const adminAppModule = await import('../admin-app')
-        isolatedAdminApp = adminAppModule.default({})
+      const config = await import('../config')
+      config.getConfig({ reload: true })
+      config.mergeConfig({
+        pgQueueEnable: true,
+        dbMigrationFreezeAt: frozenMigration,
       })
+
+      const isolatedMigrations = await import('@internal/database/migrations')
+      vi.mocked(isolatedMigrations.runMigrationsOnTenant).mockResolvedValue(undefined)
+
+      const multitenantDb = await import('../internal/database/multitenant-db')
+      isolatedMultitenantKnex = multitenantDb.multitenantKnex
+
+      const adminAppModule = await import('../admin-app')
+      isolatedAdminApp = adminAppModule.default({})
 
       if (!isolatedAdminApp) {
         throw new Error('Failed to build isolated admin app')
@@ -273,7 +299,7 @@ describe('Admin migrations routes', () => {
       if (isolatedMultitenantKnex && isolatedMultitenantKnex !== multitenantKnex) {
         await isolatedMultitenantKnex.destroy()
       }
-      jest.resetModules()
+      vi.resetModules()
     }
   })
 
@@ -408,8 +434,8 @@ describe('Admin migrations routes', () => {
   })
 
   test('returns queue progress for the current migration queue', async () => {
-    const getQueueSize = jest.fn().mockResolvedValue(7)
-    jest.spyOn(Queue, 'getInstance').mockReturnValue({
+    const getQueueSize = vi.fn().mockResolvedValue(7)
+    vi.spyOn(Queue, 'getInstance').mockReturnValue({
       getQueueSize,
     } as never)
 
@@ -473,6 +499,20 @@ describe('Admin migrations routes', () => {
         }),
       ],
     })
+  })
+
+  test.each([
+    '/migrations/failed?cursor=cursor-NaN',
+    '/migrations/failed?cursor=-1',
+  ])('rejects invalid failed-migrations cursor for %s', async (url) => {
+    const response = await adminApp.inject({
+      method: 'GET',
+      url,
+      headers,
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(JSON.parse(response.body)).toEqual({ message: 'Invalid cursor' })
   })
 
   test('marks only active fleet migration jobs from the current queue as completed', async () => {

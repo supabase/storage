@@ -7,6 +7,8 @@ updates:
     # Check for updates once a week
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3
 
   # Enable version updates for Docker
   - package-ecosystem: "docker"
@@ -15,3 +17,5 @@ updates:
     # Check for updates once a week
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3

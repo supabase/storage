@@ -1,9 +1,14 @@
 import { S3ServiceException } from '@aws-sdk/client-s3'
 import { FastifyError } from '@fastify/error'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { isDatabaseSlowDownError } from '@internal/errors/database-error'
 import { FastifyReply } from 'fastify/types/reply'
 import { FastifyRequest } from 'fastify/types/request'
-import { DatabaseError } from 'pg'
+
+type ValidationIssue = {
+  instancePath?: string
+  message?: string
+}
 
 export const s3ErrorHandler = (
   error: FastifyError | Error,
@@ -11,6 +16,7 @@ export const s3ErrorHandler = (
   reply: FastifyReply
 ) => {
   request.executionError = error
+  const validation = getValidationIssues(error)
 
   const resource = request.url
     .split('?')[0]
@@ -19,12 +25,12 @@ export const s3ErrorHandler = (
     .filter((e) => e)
     .join('/')
 
-  if ('validation' in error) {
+  if (validation) {
     return reply.status(400).send({
       Error: {
         Resource: resource,
         Code: ErrorCode.InvalidRequest,
-        Message: formatValidationError(error.validation).message,
+        Message: formatValidationError(validation).message,
       },
     })
   }
@@ -40,16 +46,7 @@ export const s3ErrorHandler = (
   }
 
   // database error
-  if (
-    error instanceof DatabaseError &&
-    [
-      'Max client connections reached',
-      'remaining connection slots are reserved for non-replication superuser connections',
-      'no more connections allowed',
-      'sorry, too many clients already',
-      'server login has been failing, try again later',
-    ].some((msg) => (error as DatabaseError).message.includes(msg))
-  ) {
+  if (isDatabaseSlowDownError(error)) {
     return reply.status(429).send({
       Error: {
         Resource: resource,
@@ -91,7 +88,32 @@ export const s3ErrorHandler = (
   })
 }
 
-function formatValidationError(errors: any) {
+function isValidationIssueArray(value: unknown): value is ValidationIssue[] {
+  return Array.isArray(value) && value.every(isValidationIssue)
+}
+
+function isValidationIssue(value: unknown): value is ValidationIssue {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const issue = value as ValidationIssue
+  return (
+    (issue.instancePath === undefined || typeof issue.instancePath === 'string') &&
+    (issue.message === undefined || typeof issue.message === 'string')
+  )
+}
+
+function getValidationIssues(error: FastifyError | Error): ValidationIssue[] | undefined {
+  if (!('validation' in error)) {
+    return undefined
+  }
+
+  const value = error.validation
+  return isValidationIssueArray(value) ? value : undefined
+}
+
+function formatValidationError(errors: readonly ValidationIssue[]) {
   let text = ''
   const separator = ', '
 

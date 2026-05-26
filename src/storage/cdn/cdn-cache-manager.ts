@@ -1,27 +1,25 @@
 import { ERRORS } from '@internal/errors'
 import { Storage } from '@storage/storage'
-import { HttpsAgent } from 'agentkeepalive'
-import axios, { AxiosError } from 'axios'
+import { Agent } from 'undici'
 
 import { getConfig } from '../../config'
 
 const { cdnPurgeEndpointURL, cdnPurgeEndpointKey } = getConfig()
 
-const httpsAgent = new HttpsAgent({
-  keepAlive: true,
-  maxFreeSockets: 20,
-  maxSockets: 200,
-  freeSocketTimeout: 1000 * 2,
+const CDN_PURGE_TIMEOUT_MS = 10_000
+
+const dispatcher = new Agent({
+  connections: 200,
+  keepAliveTimeout: 1000 * 2,
+  keepAliveMaxTimeout: 1000 * 2,
 })
 
-const client = axios.create({
-  baseURL: cdnPurgeEndpointURL,
-  httpsAgent,
-  headers: {
-    Authorization: `Bearer ${cdnPurgeEndpointKey}`,
-    'Content-Type': 'application/json',
-  },
+const defaultHeaders = new Headers({
+  'Content-Type': 'application/json',
+  ...(cdnPurgeEndpointKey ? { Authorization: `Bearer ${cdnPurgeEndpointKey}` } : {}),
 })
+
+const cdnPurgeUrl = cdnPurgeEndpointURL ? resolvePurgeUrl(cdnPurgeEndpointURL) : undefined
 
 export interface PurgeCacheInput {
   tenant: string
@@ -29,11 +27,28 @@ export interface PurgeCacheInput {
   objectName: string
 }
 
+function resolvePurgeUrl(baseURL: string) {
+  const url = new URL(baseURL)
+  url.pathname = url.pathname.endsWith('/') ? `${url.pathname}purge` : `${url.pathname}/purge`
+  url.search = ''
+  url.hash = ''
+
+  return url.toString()
+}
+
+async function assertOkResponse(response: Response) {
+  if (response.ok) {
+    return
+  }
+
+  throw new Error(`Request failed with status code ${response.status}`)
+}
+
 export class CdnCacheManager {
   constructor(protected readonly storage: Storage) {}
 
   async purge(opts: PurgeCacheInput) {
-    if (!cdnPurgeEndpointURL) {
+    if (!cdnPurgeUrl) {
       throw ERRORS.MissingParameter('CDN_PURGE_ENDPOINT_URL is not set')
     }
 
@@ -42,19 +57,32 @@ export class CdnCacheManager {
 
     // Purge cache
     try {
-      await client.post('/purge', {
-        tenant: {
-          ref: opts.tenant,
-        },
-        bucketId: opts.bucket,
-        objectName: opts.objectName,
-      })
-    } catch (e) {
-      if (e instanceof AxiosError) {
-        throw ERRORS.InternalError(e, 'Error purging cache')
+      const requestInit: RequestInit & { dispatcher: Agent } = {
+        method: 'POST',
+        headers: defaultHeaders,
+        body: JSON.stringify({
+          tenant: {
+            ref: opts.tenant,
+          },
+          bucketId: opts.bucket,
+          objectName: opts.objectName,
+        }),
+        dispatcher,
+        signal: AbortSignal.timeout(CDN_PURGE_TIMEOUT_MS),
       }
 
-      throw e
+      const response = await fetch(cdnPurgeUrl, requestInit)
+
+      try {
+        await assertOkResponse(response)
+      } finally {
+        await response.body?.cancel().catch(() => {})
+      }
+    } catch (e) {
+      throw ERRORS.InternalError(
+        e instanceof Error ? e : new Error(String(e)),
+        'Error purging cache'
+      )
     }
   }
 }

@@ -28,6 +28,28 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Verify committed OpenAPI snapshots exist
+        run: |
+          missing=()
+          for f in static/api.json static/api-admin.json; do
+            if ! git ls-files --error-unmatch "$f" > /dev/null 2>&1; then
+              missing+=("$f")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::OpenAPI snapshots are not yet committed to the repository."
+            for f in "${missing[@]}"; do
+              echo "  missing: $f"
+            done
+            echo ""
+            echo "Bootstrap one-time: run 'npm run docs:export' locally and commit"
+            echo "static/api.json and static/api-admin.json. Or download the"
+            echo "'openapi-specs' artifact from a previous run on this PR and"
+            echo "commit those files."
+            exit 1
+          fi
+
       - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ~/.npm

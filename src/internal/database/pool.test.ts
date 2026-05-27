@@ -1,4 +1,5 @@
 import { TENANT_POOL_CACHE_NAME } from '@internal/cache/names'
+import { Knex } from 'knex'
 import { type Mock, vi } from 'vitest'
 import type { PoolStrategy, TenantConnectionOptions } from './pool'
 
@@ -10,6 +11,24 @@ type TestPool = {
 }
 
 type PoolModule = typeof import('./pool')
+
+// Mirrors enough of tarn.js's Pool internals for tests to read state and stub IO
+// without standing up a real database. Names match tarn 3.0.2.
+type TarnPoolLike = {
+  max: number
+  min: number
+  creator: (...args: unknown[]) => Promise<unknown>
+  destroyer: (resource: unknown) => Promise<void>
+  validate: (resource: unknown) => boolean | Promise<boolean>
+  acquire: () => { promise: Promise<unknown>; abort: () => void }
+  release: (resource: unknown) => boolean
+  numUsed: () => number
+  numFree: () => number
+  numPendingAcquires: () => number
+  numPendingValidations: () => number
+  numPendingCreates: () => number
+  _tryAcquireOrCreate: () => void
+}
 
 function isTenantPoolCacheLookupCall(message: string) {
   return (call: unknown[]) => call[1] === message
@@ -23,6 +42,23 @@ function createPoolSettings(tenantId: string) {
     user: { jwt: 'jwt', payload: { role: 'authenticated' } },
     superUser: { jwt: 'service', payload: { role: 'service_role' } },
   }
+}
+
+function getTarnPool(knex: Knex): TarnPoolLike {
+  return knex.client.pool as unknown as TarnPoolLike
+}
+
+/**
+ * Replace the tarn pool's create/destroy/validate so we can exercise the real
+ * acquire flow under fake timers without touching a database.
+ */
+function stubTarnIo(knex: Knex): TarnPoolLike {
+  const tarnPool = getTarnPool(knex)
+  let counter = 0
+  tarnPool.creator = () => Promise.resolve({ id: ++counter })
+  tarnPool.destroyer = () => Promise.resolve()
+  tarnPool.validate = () => true
+  return tarnPool
 }
 
 function createTestPool(stats: { used: number; total: number } | null = null): TestPool {
@@ -682,6 +718,423 @@ describe('PoolManager cache lifecycle', () => {
       expect(pool.acquire()).toBe(originalKnex)
       expect(destroySpy).not.toHaveBeenCalled()
       expect((originalKnex.client.pool as { max: number }).max).toBe(7)
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('scales max connections down in place without destroying the Knex instance', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-scale-down-max'),
+      maxConnections: 20,
+    })
+
+    try {
+      const knex = pool.acquire()
+      const destroySpy = vi.spyOn(knex, 'destroy')
+      const tarnPool = getTarnPool(knex)
+
+      expect(tarnPool.max).toBe(20)
+
+      pool.rebalance({ maxConnections: 4 })
+
+      expect(pool.acquire()).toBe(knex)
+      expect(tarnPool.max).toBe(4)
+      expect(tarnPool.min).toBe(0)
+      expect(destroySpy).not.toHaveBeenCalled()
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('scales max up when clusterSize shrinks', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-cluster-shrink'),
+      maxConnections: 12,
+      clusterSize: 4,
+    })
+
+    try {
+      const knex = pool.acquire()
+      const destroySpy = vi.spyOn(knex, 'destroy')
+      const tarnPool = getTarnPool(knex)
+
+      expect(tarnPool.max).toBe(3) // ceil(12 / 4)
+
+      pool.rebalance({ clusterSize: 2 })
+
+      expect(pool.acquire()).toBe(knex)
+      expect(tarnPool.max).toBe(6) // ceil(12 / 2)
+      expect(destroySpy).not.toHaveBeenCalled()
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('applies clusterSize and maxConnections together in a single rebalance', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-combined'),
+      maxConnections: 10,
+      clusterSize: 1,
+    })
+
+    try {
+      const knex = pool.acquire()
+      const tarnPool = getTarnPool(knex)
+      expect(tarnPool.max).toBe(10)
+
+      pool.rebalance({ maxConnections: 30, clusterSize: 3 })
+
+      expect(pool.acquire()).toBe(knex)
+      expect(tarnPool.max).toBe(10) // ceil(30 / 3)
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('treats an empty rebalance call as a no-op', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-empty'),
+      maxConnections: 8,
+    })
+
+    try {
+      const knex = pool.acquire()
+      const tarnPool = getTarnPool(knex)
+      const tryAcquireSpy = vi.spyOn(tarnPool, '_tryAcquireOrCreate')
+
+      pool.rebalance({})
+
+      expect(tarnPool.max).toBe(8)
+      expect(tryAcquireSpy).not.toHaveBeenCalled()
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('treats clusterSize=0 as skipping the cluster dimension', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-cluster-zero'),
+      maxConnections: 6,
+      clusterSize: 2,
+    })
+
+    try {
+      const knex = pool.acquire()
+      const tarnPool = getTarnPool(knex)
+      expect(tarnPool.max).toBe(3) // ceil(6 / 2)
+
+      // clusterSize=0 is ignored — the previous clusterSize (2) is preserved
+      pool.rebalance({ clusterSize: 0 })
+      expect(tarnPool.max).toBe(3)
+
+      // ...and a maxConnections change in the same call still applies against
+      // the preserved clusterSize.
+      pool.rebalance({ clusterSize: 0, maxConnections: 8 })
+      expect(tarnPool.max).toBe(4) // ceil(8 / 2)
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('is safe when called before the underlying Knex pool exists', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-no-pool'),
+      maxConnections: 10,
+    })
+
+    try {
+      // No acquire yet — TenantPool.pool is undefined. The rebalance should
+      // still update the in-memory settings without throwing.
+      expect(() => pool.rebalance({ maxConnections: 30 })).not.toThrow()
+
+      const knex = pool.acquire()
+      expect(getTarnPool(knex).max).toBe(30)
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('keeps min at 0 across rebalances', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-min'),
+      maxConnections: 10,
+    })
+
+    try {
+      const knex = pool.acquire()
+      const tarnPool = getTarnPool(knex)
+
+      expect(tarnPool.min).toBe(0)
+
+      pool.rebalance({ maxConnections: 1 })
+      expect(tarnPool.min).toBe(0)
+
+      pool.rebalance({ maxConnections: 50 })
+      expect(tarnPool.min).toBe(0)
+
+      // ceil(50 / 100) = 1 — verifies that even pushing toward 1 doesn't bump min.
+      pool.rebalance({ clusterSize: 100 })
+      expect(tarnPool.min).toBe(0)
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('invokes the tarn _tryAcquireOrCreate hook after mutating max', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-tryacquire-hook'),
+      maxConnections: 10,
+    })
+
+    try {
+      const knex = pool.acquire()
+      const tarnPool = getTarnPool(knex)
+      const tryAcquireSpy = vi.spyOn(tarnPool, '_tryAcquireOrCreate')
+
+      pool.rebalance({ maxConnections: 15 })
+      expect(tryAcquireSpy).toHaveBeenCalledTimes(1)
+
+      pool.rebalance({ clusterSize: 3 })
+      expect(tryAcquireSpy).toHaveBeenCalledTimes(2)
+
+      // No-op rebalances should NOT poke the tarn hook.
+      pool.rebalance({})
+      pool.rebalance({ clusterSize: 0 })
+      expect(tryAcquireSpy).toHaveBeenCalledTimes(2)
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('keeps the same Knex instance across many consecutive rebalances', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-consecutive'),
+      maxConnections: 10,
+    })
+
+    try {
+      const knex = pool.acquire()
+      const destroySpy = vi.spyOn(knex, 'destroy')
+
+      for (let next = 1; next <= 10; next++) {
+        pool.rebalance({ maxConnections: next })
+        expect(pool.acquire()).toBe(knex)
+        expect(getTarnPool(knex).max).toBe(next)
+      }
+
+      expect(destroySpy).not.toHaveBeenCalled()
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('falls back to databaseMaxConnections when rebalanced with maxConnections=0', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-fallback'),
+      maxConnections: 5,
+    })
+
+    try {
+      const knex = pool.acquire()
+      const tarnPool = getTarnPool(knex)
+      expect(tarnPool.max).toBe(5)
+
+      // 0 is falsy → getSettings falls back to databaseMaxConnections (default 20).
+      pool.rebalance({ maxConnections: 0 })
+      expect(tarnPool.max).toBe(20)
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('rebalanceAll mutates max for all cached pools in place', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const poolA = poolManager.getPool({
+      ...createPoolSettings('rebalance-all-a'),
+      maxConnections: 12,
+    })
+    const poolB = poolManager.getPool({
+      ...createPoolSettings('rebalance-all-b'),
+      maxConnections: 12,
+    })
+
+    try {
+      const knexA = poolA.acquire()
+      const knexB = poolB.acquire()
+      const destroyA = vi.spyOn(knexA, 'destroy')
+      const destroyB = vi.spyOn(knexB, 'destroy')
+
+      poolManager.rebalanceAll({ clusterSize: 3 })
+
+      expect(poolA.acquire()).toBe(knexA)
+      expect(poolB.acquire()).toBe(knexB)
+      expect(getTarnPool(knexA).max).toBe(4) // ceil(12 / 3)
+      expect(getTarnPool(knexB).max).toBe(4)
+      expect(destroyA).not.toHaveBeenCalled()
+      expect(destroyB).not.toHaveBeenCalled()
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('per-tenant rebalance is a safe no-op for uncached tenants', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+
+    expect(() =>
+      poolManager.rebalance('tenant-never-cached', { maxConnections: 10, clusterSize: 2 })
+    ).not.toThrow()
+
+    await poolManager.destroyAll()
+  })
+
+  test('serves a queued acquire immediately after scaling max up', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-scale-up-serves-queue'),
+      maxConnections: 2,
+    })
+
+    try {
+      const knex = pool.acquire()
+      const tarnPool = stubTarnIo(knex)
+
+      const first = tarnPool.acquire()
+      const second = tarnPool.acquire()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(tarnPool.numUsed()).toBe(2)
+      expect(tarnPool.numPendingAcquires()).toBe(0)
+
+      // 3rd acquire is queued behind max=2.
+      const blocked = tarnPool.acquire()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(tarnPool.numPendingAcquires()).toBe(1)
+      expect(tarnPool.numUsed()).toBe(2)
+
+      // Raising max should immediately serve the queued acquire via
+      // _tryAcquireOrCreate, without waiting for a release or reap tick.
+      pool.rebalance({ maxConnections: 4 })
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(tarnPool.max).toBe(4)
+      expect(tarnPool.numPendingAcquires()).toBe(0)
+      expect(tarnPool.numUsed()).toBe(3)
+
+      const resources = await Promise.all([first.promise, second.promise, blocked.promise])
+      for (const r of resources) {
+        tarnPool.release(r)
+      }
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('blocks new acquires above the new max after scaling down', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-scale-down-blocks'),
+      maxConnections: 4,
+    })
+
+    try {
+      const knex = pool.acquire()
+      const tarnPool = stubTarnIo(knex)
+
+      const a = tarnPool.acquire()
+      const b = tarnPool.acquire()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(tarnPool.numUsed()).toBe(2)
+
+      // Scale below the current used count, but above 1 so we have headroom
+      // for one more. Existing in-use connections are untouched; the cap
+      // only constrains future creations.
+      pool.rebalance({ maxConnections: 2 })
+      expect(tarnPool.max).toBe(2)
+      expect(tarnPool.numUsed()).toBe(2)
+
+      // A new acquire above the new ceiling is queued, not created.
+      const blocked = tarnPool.acquire()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(tarnPool.numUsed()).toBe(2)
+      expect(tarnPool.numPendingAcquires()).toBe(1)
+      expect(tarnPool.numPendingCreates()).toBe(0)
+
+      // Releasing one of the in-use resources frees a slot, which is then
+      // handed to the queued acquire — proving the cap is enforced going
+      // forward but does not strand pending callers.
+      const aResource = await a.promise
+      tarnPool.release(aResource)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(tarnPool.numPendingAcquires()).toBe(0)
+      expect(tarnPool.numUsed()).toBe(2)
+
+      const remaining = await Promise.all([b.promise, blocked.promise])
+      for (const r of remaining) {
+        tarnPool.release(r)
+      }
+    } finally {
+      await poolManager.destroyAll()
+    }
+  })
+
+  test('does not destroy in-use resources when scaling max down', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+    const pool = poolManager.getPool({
+      ...createPoolSettings('rebalance-scale-down-keeps-used'),
+      maxConnections: 4,
+    })
+
+    try {
+      const knex = pool.acquire()
+      const tarnPool = stubTarnIo(knex)
+      const destroyerSpy = vi.spyOn(tarnPool, 'destroyer')
+
+      const ops = [tarnPool.acquire(), tarnPool.acquire(), tarnPool.acquire(), tarnPool.acquire()]
+      await vi.advanceTimersByTimeAsync(0)
+      expect(tarnPool.numUsed()).toBe(4)
+
+      // Aggressively scale down to well below the in-use count. The PR's
+      // contract is: the cap is a soft ceiling going forward — existing
+      // checked-out resources are NOT torn down.
+      pool.rebalance({ maxConnections: 1 })
+
+      expect(tarnPool.max).toBe(1)
+      expect(tarnPool.numUsed()).toBe(4)
+      expect(destroyerSpy).not.toHaveBeenCalled()
+
+      const resources = await Promise.all(ops.map((op) => op.promise))
+      for (const r of resources) {
+        tarnPool.release(r)
+      }
     } finally {
       await poolManager.destroyAll()
     }

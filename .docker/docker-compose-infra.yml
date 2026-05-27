@@ -2,7 +2,7 @@
 
 services:
   tenant_db:
-    image: postgres:15
+    image: pgvector/pgvector:pg15
     shm_size: "1gb"
     ports:
       - "5432:5432"

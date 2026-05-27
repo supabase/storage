@@ -766,7 +766,7 @@ describe('Tenant configs', () => {
     }
   })
 
-  test('Tenant config maxConnections change rebalances cached pool without destroying it', async () => {
+  test('Tenant config maxConnections change recycles cached pool without destroying it', async () => {
     const tenantId = 'pool-max-connections-change'
     const encryptedTenant = {
       anon_key: encrypt('anon'),
@@ -807,7 +807,9 @@ describe('Tenant configs', () => {
     }
     const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
     const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const rebalanceSpy = vi.spyOn(TenantConnection.poolManager, 'rebalance')
+    const recycleSpy = vi
+      .spyOn(TenantConnection.poolManager, 'recycle')
+      .mockReturnValue({} as never)
 
     try {
       knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
@@ -815,13 +817,206 @@ describe('Tenant configs', () => {
       await getTenantConfig(tenantId)
       await onTenantConfigChange(tenantId)
 
-      expect(rebalanceSpy).toHaveBeenCalledWith(tenantId, { maxConnections: 40 })
+      expect(recycleSpy).toHaveBeenCalledWith(
+        tenantId,
+        expect.objectContaining({
+          tenantId,
+          dbUrl: 'postgres://tenant',
+          maxConnections: 40,
+          isExternalPool: false,
+        })
+      )
       expect(destroySpy).not.toHaveBeenCalled()
     } finally {
       deleteTenantConfig(tenantId)
       knexTableSpy.mockRestore()
       destroySpy.mockRestore()
-      rebalanceSpy.mockRestore()
+      recycleSpy.mockRestore()
+    }
+  })
+
+  test('Tenant config databaseUrl change destroys the cached pool', async () => {
+    const tenantId = 'pool-dburl-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://old-host'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: null,
+      max_connections: 20,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const queryBuilder = {
+      first: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      abortOnSignal: vi
+        .fn()
+        .mockResolvedValueOnce(encryptedTenant)
+        .mockResolvedValueOnce({
+          ...encryptedTenant,
+          database_url: encrypt('postgres://new-host'),
+        }),
+    }
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const recycleSpy = vi
+      .spyOn(TenantConnection.poolManager, 'recycle')
+      .mockReturnValue({} as never)
+
+    try {
+      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
+
+      await getTenantConfig(tenantId)
+      await onTenantConfigChange(tenantId)
+
+      expect(destroySpy).toHaveBeenCalledWith(tenantId)
+      expect(recycleSpy).not.toHaveBeenCalled()
+    } finally {
+      deleteTenantConfig(tenantId)
+      knexTableSpy.mockRestore()
+      destroySpy.mockRestore()
+      recycleSpy.mockRestore()
+    }
+  })
+
+  test('Tenant config databasePoolUrl change destroys the cached pool', async () => {
+    const tenantId = 'pool-dbpoolurl-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://tenant'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: encrypt('postgres://old-pooler'),
+      max_connections: 20,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const queryBuilder = {
+      first: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      abortOnSignal: vi
+        .fn()
+        .mockResolvedValueOnce(encryptedTenant)
+        .mockResolvedValueOnce({
+          ...encryptedTenant,
+          database_pool_url: encrypt('postgres://new-pooler'),
+        }),
+    }
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const recycleSpy = vi
+      .spyOn(TenantConnection.poolManager, 'recycle')
+      .mockReturnValue({} as never)
+
+    try {
+      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
+
+      await getTenantConfig(tenantId)
+      await onTenantConfigChange(tenantId)
+
+      expect(destroySpy).toHaveBeenCalledWith(tenantId)
+      expect(recycleSpy).not.toHaveBeenCalled()
+    } finally {
+      deleteTenantConfig(tenantId)
+      knexTableSpy.mockRestore()
+      destroySpy.mockRestore()
+      recycleSpy.mockRestore()
+    }
+  })
+
+  test('Tenant config dbUrl change with maxConnections change destroys (does not recycle)', async () => {
+    const tenantId = 'pool-dburl-and-max-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://old-host'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: null,
+      max_connections: 20,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const queryBuilder = {
+      first: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      abortOnSignal: vi
+        .fn()
+        .mockResolvedValueOnce(encryptedTenant)
+        .mockResolvedValueOnce({
+          ...encryptedTenant,
+          database_url: encrypt('postgres://new-host'),
+          max_connections: 40,
+        }),
+    }
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const recycleSpy = vi
+      .spyOn(TenantConnection.poolManager, 'recycle')
+      .mockReturnValue({} as never)
+
+    try {
+      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
+
+      await getTenantConfig(tenantId)
+      await onTenantConfigChange(tenantId)
+
+      // dbUrl is checked first — destroy wins, recycle skipped.
+      expect(destroySpy).toHaveBeenCalledWith(tenantId)
+      expect(recycleSpy).not.toHaveBeenCalled()
+    } finally {
+      deleteTenantConfig(tenantId)
+      knexTableSpy.mockRestore()
+      destroySpy.mockRestore()
+      recycleSpy.mockRestore()
     }
   })
 

@@ -127,9 +127,11 @@ export class ObjectStorage {
    */
   async deleteObject(objectName: string) {
     const obj = await this.db.withTransaction(async (db) => {
-      const obj = await db.asSuperUser().findObject(this.bucketId, objectName, 'id,version', {
-        forUpdate: true,
-      })
+      const obj = await db
+        .asSuperUser()
+        .findObject(this.bucketId, objectName, 'id,version,metadata', {
+          forUpdate: true,
+        })
 
       const deleted = await db.deleteObject(this.bucketId, objectName)
 

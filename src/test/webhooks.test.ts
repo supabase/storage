@@ -517,6 +517,165 @@ describe('Webhooks', () => {
       },
     })
   })
+
+  it('will emit webhook for single object deletion', async () => {
+    const deleteTestBucketName = 'bucket-delete-object-webhook-test'
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    // Create a dedicated bucket for this test
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization,
+      },
+      payload: {
+        name: deleteTestBucketName,
+      },
+    })
+
+    // Create a single object
+    const obj = await createObject(pg, deleteTestBucketName)
+
+    // Delete the object via the deleteObject endpoint
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: `/object/${deleteTestBucketName}/${obj.name}`,
+      headers: {
+        authorization,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    // Check ObjectRemoved:Delete webhook was sent
+    expect(sendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'webhooks',
+        options: expect.objectContaining({
+          deadLetter: 'webhooks-dead-letter',
+          expireInSeconds: expect.any(Number),
+        }),
+        data: expect.objectContaining({
+          $version: 'v1',
+          event: expect.objectContaining({
+            $version: 'v1',
+            type: 'ObjectRemoved:Delete',
+            applyTime: expect.any(Number),
+            payload: expect.objectContaining({
+              bucketId: deleteTestBucketName,
+              name: obj.name,
+              version: obj.version,
+              metadata: obj.metadata,
+              tenant: {
+                host: undefined,
+                ref: tenantId,
+              },
+              reqId: expect.any(String),
+            }),
+          }),
+          tenant: {
+            host: undefined,
+            ref: tenantId,
+          },
+        }),
+      })
+    )
+
+    // Clean up: delete the bucket
+    await appInstance.inject({
+      method: 'DELETE',
+      url: `/bucket/${deleteTestBucketName}`,
+      headers: {
+        authorization,
+      },
+    })
+  })
+
+  it('will emit webhooks for multiple object deletions', async () => {
+    const deleteMultipleTestBucketName = 'bucket-delete-objects-webhook-test'
+    const authorization = `Bearer ${await serviceKeyAsync}`
+
+    // Create a dedicated bucket for this test
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket`,
+      headers: {
+        authorization,
+      },
+      payload: {
+        name: deleteMultipleTestBucketName,
+      },
+    })
+
+    // Create multiple objects
+    const objects = await Promise.all([
+      createObject(pg, deleteMultipleTestBucketName),
+      createObject(pg, deleteMultipleTestBucketName),
+      createObject(pg, deleteMultipleTestBucketName),
+    ])
+
+    // Delete the objects via the deleteObjects endpoint
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: `/object/${deleteMultipleTestBucketName}`,
+      headers: {
+        authorization,
+        'Content-Type': 'application/json',
+      },
+      payload: {
+        prefixes: objects.map((obj) => obj.name),
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    // Check ObjectRemoved:Delete webhooks were sent for each object
+    expect(sendSpy).toHaveBeenCalledTimes(objects.length)
+    objects.forEach((obj) => {
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'webhooks',
+          options: expect.objectContaining({
+            deadLetter: 'webhooks-dead-letter',
+            expireInSeconds: expect.any(Number),
+          }),
+          data: expect.objectContaining({
+            $version: 'v1',
+            event: expect.objectContaining({
+              $version: 'v1',
+              type: 'ObjectRemoved:Delete',
+              applyTime: expect.any(Number),
+              payload: expect.objectContaining({
+                bucketId: deleteMultipleTestBucketName,
+                name: obj.name,
+                version: obj.version,
+                metadata: obj.metadata,
+                tenant: {
+                  host: undefined,
+                  ref: tenantId,
+                },
+                reqId: expect.any(String),
+              }),
+            }),
+            tenant: {
+              host: undefined,
+              ref: tenantId,
+            },
+          }),
+        })
+      )
+    })
+
+    // Clean up: delete the bucket
+    await appInstance.inject({
+      method: 'DELETE',
+      url: `/bucket/${deleteMultipleTestBucketName}`,
+      headers: {
+        authorization,
+      },
+    })
+  })
 })
 
 async function createObject(pg: TenantConnection, bucketId: string) {

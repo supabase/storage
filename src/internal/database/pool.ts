@@ -32,10 +32,13 @@ const {
 export const TENANT_POOL_CACHE_LOOKUP_LOG_TYPE = 'cache'
 export const TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE = '[Cache] Tenant pool lookup'
 
-export interface TenantConnectionOptions {
-  user: User
-  superUser: User
-
+/**
+ * Pool-level settings: everything required to build the underlying Knex/tarn
+ * pool. No request-scoped fields (JWT, headers, route). Internal callers that
+ * (re)build a pool outside of a request — e.g. recycle from a tenant-config
+ * change — operate on this narrower shape.
+ */
+export interface PoolOptions {
   tenantId: string
   dbUrl: string
   isExternalPool?: boolean
@@ -45,6 +48,15 @@ export interface TenantConnectionOptions {
   maxConnections: number
   clusterSize?: number
   numWorkers?: number
+}
+
+/**
+ * Full settings for a tenant connection: pool options plus the request-scoped
+ * JWT/route context that `TenantConnection` consumes when running queries.
+ */
+export interface TenantConnectionOptions extends PoolOptions {
+  user: User
+  superUser: User
   headers?: Record<string, string | undefined | string[]>
   method?: string
   path?: string
@@ -84,6 +96,11 @@ const multiTenantTtlConfig = {
 }
 
 const manuallyDestroyedPools = new WeakSet<PoolStrategy>()
+
+type RebalanceableTarnPool = {
+  max: number
+  _tryAcquireOrCreate?: () => void
+}
 
 function logPoolDestroyError(error: unknown): void {
   logSchema.error(logger, 'pool was not able to be destroyed', {
@@ -260,13 +277,6 @@ export class PoolManager {
     }
   }
 
-  rebalance(tenantId: string, data: PoolRebalanceOptions) {
-    const pool = tenantPools.get(tenantId)
-    if (pool) {
-      pool.rebalance({ ...data })
-    }
-  }
-
   getPool(settings: TenantConnectionOptions) {
     const isCacheable = (settings.isSingleUse && !settings.isExternalPool) || !settings.isSingleUse
     const { value: existingPool, outcome } = tenantPools.getWithOutcome(settings.tenantId)
@@ -303,6 +313,41 @@ export class PoolManager {
     return Promise.resolve()
   }
 
+  /**
+   * Replace the cached pool for a tenant with a fresh one built from `settings`.
+   *
+   * The new pool is swapped into the cache synchronously so any subsequent
+   * `getPool()` call observes it immediately. The old pool (if any) is drained
+   * and destroyed in the background via `TenantPool.destroy()` → `drainPool`,
+   * which waits for in-flight acquires/queries to settle before tearing down.
+   *
+   * Use this for tenant-config changes where the underlying DB endpoint is
+   * unchanged but the pool needs to be rebuilt with new settings (e.g.
+   * `maxConnections`). For endpoint changes (dbUrl/credentials), use
+   * `destroy()` instead — the next `getPool()` will rebuild from current
+   * settings rather than reusing the cached connection string.
+   */
+  recycle(tenantId: string, settings: PoolOptions): PoolStrategy {
+    const oldPool = tenantPools.get(tenantId)
+    const newPool = this.newPool({ ...settings, numWorkers: this.numWorkers })
+
+    // Mark the old pool so the cache `dispose` hook (fired by the `set` below
+    // for the replaced entry) doesn't race our explicit destroy.
+    if (oldPool) {
+      manuallyDestroyedPools.add(oldPool)
+    }
+
+    tenantPools.set(tenantId, newPool)
+
+    if (oldPool) {
+      void destroyPoolSafely(oldPool).finally(() => {
+        manuallyDestroyedPools.delete(oldPool)
+      })
+    }
+
+    return newPool
+  }
+
   destroyAll() {
     const promises: Promise<void>[] = []
 
@@ -318,7 +363,7 @@ export class PoolManager {
     return Promise.allSettled(promises)
   }
 
-  protected newPool(settings: TenantConnectionOptions): PoolStrategy {
+  protected newPool(settings: PoolOptions): PoolStrategy {
     return new TenantPool(settings)
   }
 }
@@ -330,7 +375,7 @@ export class PoolManager {
 class TenantPool implements PoolStrategy {
   protected pool?: Knex
 
-  constructor(protected readonly options: TenantConnectionOptions) {}
+  constructor(protected readonly options: PoolOptions) {}
 
   acquire() {
     if (this.pool) {
@@ -387,32 +432,26 @@ class TenantPool implements PoolStrategy {
   }
 
   rebalance(options: PoolRebalanceOptions) {
-    let shouldReplacePool = false
+    let shouldUpdatePoolMax = false
 
     if (options.clusterSize !== undefined && options.clusterSize !== 0) {
       this.options.clusterSize = options.clusterSize
-      shouldReplacePool = true
+      shouldUpdatePoolMax = true
     }
 
     if (options.maxConnections !== undefined) {
       this.options.maxConnections = options.maxConnections
-      shouldReplacePool = true
+      shouldUpdatePoolMax = true
     }
 
-    if (!shouldReplacePool) {
+    if (!shouldUpdatePoolMax) {
       return
     }
 
-    const originalPool = this.pool
-    this.pool = undefined
-
-    if (originalPool) {
-      this.drainPool(originalPool).catch((e) => {
-        logSchema.error(logger, 'Error draining tenant pool', {
-          type: 'pool',
-          error: e,
-        })
-      })
+    const tarnPool = this.pool?.client?.pool as RebalanceableTarnPool | undefined
+    if (tarnPool) {
+      tarnPool.max = this.getSettings().maxConnections
+      tarnPool._tryAcquireOrCreate?.()
     }
   }
 

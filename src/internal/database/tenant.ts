@@ -3,8 +3,10 @@ import {
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_CONFIG_CACHE_NAME,
 } from '@internal/cache'
+import { Cluster } from '@internal/cluster'
 import { TenantConnection } from '@internal/database/connection'
 import { lastLocalMigrationName } from '@internal/database/migrations/files'
+import type { PoolOptions } from '@internal/database/pool'
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import {
@@ -88,6 +90,7 @@ const {
   vectorEnabled,
   multitenantDatabaseQueryTimeout,
   databaseMaxConnections,
+  databasePoolMode: globalDatabasePoolMode,
 } = getConfig()
 
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
@@ -433,30 +436,58 @@ export async function onTenantConfigChange(cacheKey: string) {
   try {
     const newConfig = await getTenantConfig(cacheKey, { recordMetrics: false })
 
+    // 1. Pool mode flipped recycled → single_use: tear down the long-lived pool.
     if (newConfig.databasePoolMode === 'single_use' && oldConfig.databasePoolMode === 'recycled') {
-      // if the pool mode changed to single use, we need destroy the current pool
-      return TenantConnection.poolManager.destroy(cacheKey).catch((e) => {
-        logSchema.error(logger, 'Error destroying the pool', {
-          type: 'pool',
-          error: e as Error,
-          project: cacheKey,
-        })
-      })
+      return destroyTenantPool(cacheKey)
     }
 
+    // 2. DB endpoint changed: the cached pool's connection string is stale, and
+    //    so are its open sockets. Hard destroy so the next request rebuilds
+    //    against the new endpoint.
+    if (
+      newConfig.databaseUrl !== oldConfig.databaseUrl ||
+      newConfig.databasePoolUrl !== oldConfig.databasePoolUrl
+    ) {
+      return destroyTenantPool(cacheKey)
+    }
+
+    // 3. Max connections changed: endpoint is fine, only the budget moved.
+    //    Recycle so new traffic immediately sees the new budget while
+    //    in-flight queries on the old pool drain naturally in the background.
     if (
       normalizeMaxConnections(newConfig.maxConnections) !==
       normalizeMaxConnections(oldConfig.maxConnections)
     ) {
-      TenantConnection.poolManager.rebalance(cacheKey, {
-        maxConnections: resolveMaxConnections(newConfig.maxConnections),
-      })
+      TenantConnection.poolManager.recycle(cacheKey, buildPoolSettings(cacheKey, newConfig))
     }
   } catch {
     // if the tenant config is not found, we can ignore it
     // this can happen if the tenant was deleted
     // or if the tenant was updated and the cache was invalidated
     // before we could get the new config
+  }
+}
+
+function destroyTenantPool(cacheKey: string): Promise<void> {
+  return TenantConnection.poolManager.destroy(cacheKey).catch((e) => {
+    logSchema.error(logger, 'Error destroying the pool', {
+      type: 'pool',
+      error: e as Error,
+      project: cacheKey,
+    })
+  })
+}
+
+function buildPoolSettings(tenantId: string, config: TenantConfig): PoolOptions {
+  return {
+    tenantId,
+    dbUrl: config.databasePoolUrl || config.databaseUrl,
+    isExternalPool: Boolean(config.databasePoolUrl),
+    isSingleUse: config.databasePoolMode
+      ? config.databasePoolMode !== 'recycled'
+      : !globalDatabasePoolMode || globalDatabasePoolMode === 'single_use',
+    maxConnections: resolveMaxConnections(config.maxConnections),
+    clusterSize: Cluster.size,
   }
 }
 

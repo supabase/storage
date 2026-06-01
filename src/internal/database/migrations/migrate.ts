@@ -809,16 +809,18 @@ function runMigrations({
       const icebergDefaultShard = icebergShards.length > 0 ? icebergShards[0] : ''
 
       if (migrationsToRun.length > 0) {
-        await client.query(SQL`SELECT
-          set_config('storage.install_roles', ${dbInstallRoles}, false),
-          set_config('storage.multitenant', ${isMultitenant ? 'true' : 'false'}, false),
-          set_config('storage.anon_role', ${dbAnonRole}, false),
-          set_config('storage.authenticated_role', ${dbAuthenticatedRole}, false),
-          set_config('storage.service_role', ${dbServiceRole}, false),
-          set_config('storage.super_user', ${dbSuperUser}, false),
-          set_config('storage.iceberg_default_shard', ${icebergDefaultShard}, false),
-          set_config('storage.iceberg_shards', ${icebergShardVar}, false),
-          set_config('storage.vector_bucket_provider', ${vectorBucketProvider}, false);
+        // set_config requires literal values, not bound parameters.
+        const lit = (v: string | boolean) => `'${String(v).replace(/'/g, "''")}'`
+        await client.query(`SELECT
+          set_config('storage.install_roles', ${lit(dbInstallRoles)}, false),
+          set_config('storage.multitenant', ${lit(isMultitenant ? 'true' : 'false')}, false),
+          set_config('storage.anon_role', ${lit(dbAnonRole)}, false),
+          set_config('storage.authenticated_role', ${lit(dbAuthenticatedRole)}, false),
+          set_config('storage.service_role', ${lit(dbServiceRole)}, false),
+          set_config('storage.super_user', ${lit(dbSuperUser)}, false),
+          set_config('storage.iceberg_default_shard', ${lit(icebergDefaultShard)}, false),
+          set_config('storage.iceberg_shards', ${lit(icebergShardVar)}, false),
+          set_config('storage.vector_bucket_provider', ${lit(vectorBucketProvider)}, false);
         `)
       }
 

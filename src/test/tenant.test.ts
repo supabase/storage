@@ -223,6 +223,76 @@ describe('Tenant configs', () => {
     await expect(getFeatures('abc')).resolves.toEqual(payload.features)
   })
 
+  test('Get tenant config omits sensitive data when ADMIN_RETURN_TENANT_SENSITIVE_DATA is false', async () => {
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    const previousValue = process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA
+    process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA = 'false'
+
+    try {
+      vi.resetModules()
+      const { default: createApp } = await import('../admin-app')
+      const isolatedApp = createApp({})
+
+      const singleResponse = await isolatedApp!.inject({
+        method: 'GET',
+        url: `/tenants/abc`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(singleResponse.statusCode).toBe(200)
+      const singleJSON = JSON.parse(singleResponse.body)
+
+      expect(singleJSON.anonKey).toBeUndefined()
+      expect(singleJSON.databaseUrl).toBeUndefined()
+      expect(singleJSON.databasePoolUrl).toBeUndefined()
+      expect(singleJSON.jwtSecret).toBeUndefined()
+      expect(singleJSON.jwks).toBeUndefined()
+      expect(singleJSON.serviceKey).toBeUndefined()
+
+      // Non-sensitive fields are still returned
+      expect(singleJSON.fileSizeLimit).toBe(payload.fileSizeLimit)
+      expect(singleJSON.maxConnections).toBe(payload.maxConnections)
+      expect(singleJSON.features).toEqual(payload.features)
+      expect(singleJSON.tracingMode).toBe(payload.tracingMode)
+
+      const listResponse = await isolatedApp!.inject({
+        method: 'GET',
+        url: `/tenants`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(listResponse.statusCode).toBe(200)
+      const listJSON = JSON.parse(listResponse.body)
+      expect(listJSON).toHaveLength(1)
+      expect(listJSON[0].id).toBe('abc')
+      expect(listJSON[0].anonKey).toBeUndefined()
+      expect(listJSON[0].databaseUrl).toBeUndefined()
+      expect(listJSON[0].databasePoolUrl).toBeUndefined()
+      expect(listJSON[0].jwtSecret).toBeUndefined()
+      expect(listJSON[0].jwks).toBeUndefined()
+      expect(listJSON[0].serviceKey).toBeUndefined()
+      expect(listJSON[0].fileSizeLimit).toBe(payload.fileSizeLimit)
+
+      await isolatedApp!.close()
+    } finally {
+      if (previousValue === undefined) {
+        delete process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA
+      } else {
+        process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA = previousValue
+      }
+    }
+  })
+
   test('Create tenant config preserves disableEvents and image transformation maxResolution', async () => {
     const createPayload = {
       ...payload,
@@ -766,7 +836,7 @@ describe('Tenant configs', () => {
     }
   })
 
-  test('Tenant config maxConnections change rebalances cached pool without destroying it', async () => {
+  test('Tenant config maxConnections change recycles cached pool without destroying it', async () => {
     const tenantId = 'pool-max-connections-change'
     const encryptedTenant = {
       anon_key: encrypt('anon'),
@@ -807,7 +877,9 @@ describe('Tenant configs', () => {
     }
     const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
     const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const rebalanceSpy = vi.spyOn(TenantConnection.poolManager, 'rebalance')
+    const recycleSpy = vi
+      .spyOn(TenantConnection.poolManager, 'recycle')
+      .mockReturnValue({} as never)
 
     try {
       knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
@@ -815,13 +887,206 @@ describe('Tenant configs', () => {
       await getTenantConfig(tenantId)
       await onTenantConfigChange(tenantId)
 
-      expect(rebalanceSpy).toHaveBeenCalledWith(tenantId, { maxConnections: 40 })
+      expect(recycleSpy).toHaveBeenCalledWith(
+        tenantId,
+        expect.objectContaining({
+          tenantId,
+          dbUrl: 'postgres://tenant',
+          maxConnections: 40,
+          isExternalPool: false,
+        })
+      )
       expect(destroySpy).not.toHaveBeenCalled()
     } finally {
       deleteTenantConfig(tenantId)
       knexTableSpy.mockRestore()
       destroySpy.mockRestore()
-      rebalanceSpy.mockRestore()
+      recycleSpy.mockRestore()
+    }
+  })
+
+  test('Tenant config databaseUrl change destroys the cached pool', async () => {
+    const tenantId = 'pool-dburl-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://old-host'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: null,
+      max_connections: 20,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const queryBuilder = {
+      first: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      abortOnSignal: vi
+        .fn()
+        .mockResolvedValueOnce(encryptedTenant)
+        .mockResolvedValueOnce({
+          ...encryptedTenant,
+          database_url: encrypt('postgres://new-host'),
+        }),
+    }
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const recycleSpy = vi
+      .spyOn(TenantConnection.poolManager, 'recycle')
+      .mockReturnValue({} as never)
+
+    try {
+      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
+
+      await getTenantConfig(tenantId)
+      await onTenantConfigChange(tenantId)
+
+      expect(destroySpy).toHaveBeenCalledWith(tenantId)
+      expect(recycleSpy).not.toHaveBeenCalled()
+    } finally {
+      deleteTenantConfig(tenantId)
+      knexTableSpy.mockRestore()
+      destroySpy.mockRestore()
+      recycleSpy.mockRestore()
+    }
+  })
+
+  test('Tenant config databasePoolUrl change destroys the cached pool', async () => {
+    const tenantId = 'pool-dbpoolurl-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://tenant'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: encrypt('postgres://old-pooler'),
+      max_connections: 20,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const queryBuilder = {
+      first: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      abortOnSignal: vi
+        .fn()
+        .mockResolvedValueOnce(encryptedTenant)
+        .mockResolvedValueOnce({
+          ...encryptedTenant,
+          database_pool_url: encrypt('postgres://new-pooler'),
+        }),
+    }
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const recycleSpy = vi
+      .spyOn(TenantConnection.poolManager, 'recycle')
+      .mockReturnValue({} as never)
+
+    try {
+      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
+
+      await getTenantConfig(tenantId)
+      await onTenantConfigChange(tenantId)
+
+      expect(destroySpy).toHaveBeenCalledWith(tenantId)
+      expect(recycleSpy).not.toHaveBeenCalled()
+    } finally {
+      deleteTenantConfig(tenantId)
+      knexTableSpy.mockRestore()
+      destroySpy.mockRestore()
+      recycleSpy.mockRestore()
+    }
+  })
+
+  test('Tenant config dbUrl change with maxConnections change destroys (does not recycle)', async () => {
+    const tenantId = 'pool-dburl-and-max-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://old-host'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: null,
+      max_connections: 20,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const queryBuilder = {
+      first: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      abortOnSignal: vi
+        .fn()
+        .mockResolvedValueOnce(encryptedTenant)
+        .mockResolvedValueOnce({
+          ...encryptedTenant,
+          database_url: encrypt('postgres://new-host'),
+          max_connections: 40,
+        }),
+    }
+    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const recycleSpy = vi
+      .spyOn(TenantConnection.poolManager, 'recycle')
+      .mockReturnValue({} as never)
+
+    try {
+      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
+
+      await getTenantConfig(tenantId)
+      await onTenantConfigChange(tenantId)
+
+      // dbUrl is checked first — destroy wins, recycle skipped.
+      expect(destroySpy).toHaveBeenCalledWith(tenantId)
+      expect(recycleSpy).not.toHaveBeenCalled()
+    } finally {
+      deleteTenantConfig(tenantId)
+      knexTableSpy.mockRestore()
+      destroySpy.mockRestore()
+      recycleSpy.mockRestore()
     }
   })
 

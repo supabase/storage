@@ -26,6 +26,7 @@
     "acceptance:typecheck": "tsc -p acceptance/tsconfig.json --noEmit",
     "test": "npm run test:unit && npm run infra:restart && npm run test:dummy-data && npm run test:integration",
     "test:oriole": "npm run infra:restart:oriole && npm run test:dummy-data && npm run test:integration",
+    "test:multigres": "npm run infra:restart:multigres && npm run test:dummy-data && npm run test:integration",
     "test:coverage": "npm run infra:restart && npm run test:dummy-data && npm run test:integration:coverage",
     "test:coverage:ci": "npm run infra:restart:ci && npm run test:dummy-data && npm run test:integration:coverage",
     "infra:stop": "docker compose --project-directory . --profile monitoring -f ./.docker/docker-compose-infra.yml down --remove-orphans",
@@ -33,11 +34,16 @@
     "infra:start:ci": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml up -d && sleep 5 && npm run migration:run",
     "infra:start:oriole": "docker compose --project-directory . --profile monitoring -f ./.docker/docker-compose-infra.yml -f ./.docker/docker-compose-infra-oriole-override.yml up -d && sleep 5 && npm run migration:run",
     "infra:start:ci:oriole": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml -f ./.docker/docker-compose-infra-oriole-override.yml up -d && sleep 5 && npm run migration:run",
+    "infra:start:multigres": "docker compose --project-directory . --profile monitoring -f ./.docker/docker-compose-infra.yml -f ./.docker/docker-compose-infra-multigres-override.yml up -d && docker compose --project-directory . --profile monitoring -f ./.docker/docker-compose-infra.yml -f ./.docker/docker-compose-infra-multigres-override.yml up -d --wait --wait-timeout 180 tenant_db && npm run migration:run",
+    "infra:start:ci:multigres": "docker compose --project-directory . -f ./.docker/docker-compose-infra.yml -f ./.docker/docker-compose-infra-multigres-override.yml up -d && docker compose --project-directory . -f ./.docker/docker-compose-infra.yml -f ./.docker/docker-compose-infra-multigres-override.yml up -d --wait --wait-timeout 180 tenant_db && npm run migration:run",
     "infra:restart": "npm run infra:stop && npm run infra:start",
     "infra:restart:ci": "npm run infra:stop && npm run infra:start:ci",
     "infra:restart:oriole": "npm run infra:stop && npm run infra:start:oriole",
     "infra:restart:ci:oriole": "npm run infra:stop && npm run infra:start:ci:oriole",
-    "test:oriole:ci": "npm run infra:restart:ci:oriole && npm run test:dummy-data && npm run test:integration"
+    "infra:restart:multigres": "npm run infra:stop && npm run infra:start:multigres",
+    "infra:restart:ci:multigres": "npm run infra:stop && npm run infra:start:ci:multigres",
+    "test:oriole:ci": "npm run infra:restart:ci:oriole && npm run test:dummy-data && npm run test:integration",
+    "test:multigres:ci": "npm run infra:restart:ci:multigres && npm run test:dummy-data && npm run test:integration"
   },
   "dependencies": {
     "@aws-sdk/client-ecs": "^3.1041.0",

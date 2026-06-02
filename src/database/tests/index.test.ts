@@ -40,6 +40,8 @@ describe('database Watt application messaging handlers', () => {
       'database.query',
       'database.release',
       'database.rollbackTransaction',
+      'database.test.resetStats',
+      'database.test.stats',
     ])
   })
 

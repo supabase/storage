@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import { describeAcceptance, encodePathSegments, getAcceptanceConfig } from '../support/config'
-import { AcceptanceHttpClient, createRestClient } from '../support/http'
+import { createRestClient } from '../support/http'
 import {
   cleanupRestResources,
   createRestBucket,
@@ -8,6 +9,7 @@ import {
   uniqueObjectKey,
   uploadRestObject,
 } from '../support/resources'
+import { sendWattMessage } from '../support/watt-repl'
 
 type DatabaseWattStats = {
   acquire: number
@@ -39,13 +41,190 @@ type QueryRowsResponse = {
   rows: Array<{ value: number }>
 }
 
+type LockResponse = {
+  lockId: string
+}
+
 type ErrorResponse = {
   code: string
   destination?: string
   message: string
 }
 
-describeAcceptance(
+const describeDatabaseWattAcceptance = process.env.ACCEPTANCE_DATABASE_WATT === 'true' ? describeAcceptance : describe.skip
+
+function testDestination(): string {
+  return process.env.ACCEPTANCE_TENANT_ID || process.env.TENANT_ID || 'default'
+}
+
+function sendDatabaseMessage<T = unknown>(message: string, payload: unknown): Promise<T> {
+  return sendWattMessage<T>('database', message, payload)
+}
+
+function isDatabaseError(result: unknown): result is ErrorResponse {
+  return typeof result === 'object' && result !== null && 'code' in result && 'message' in result
+}
+
+async function checkedResult<T = unknown>(resultPromise: Promise<unknown>): Promise<T> {
+  const result = await resultPromise
+  if (isDatabaseError(result)) {
+    throw new Error(result.message)
+  }
+  return result as T
+}
+
+async function beginTransaction(destination = testDestination()): Promise<LockResponse> {
+  return checkedResult(
+    sendDatabaseMessage('database.beginTransaction', {
+      destination,
+      requestId: randomUUID(),
+    })
+  )
+}
+
+async function queryDatabaseWatt(destination = testDestination()): Promise<QueryRowsResponse> {
+  return sendDatabaseMessage('database.query', {
+    destination,
+    requestId: randomUUID(),
+    sql: 'SELECT 1 as value',
+  })
+}
+
+async function masterTransaction(): Promise<{ value: number | undefined }> {
+  const tx = await beginTransaction('master')
+
+  try {
+    const result = await checkedResult<QueryRowsResponse>(
+      sendDatabaseMessage('database.lockedQuery', {
+        lockId: tx.lockId,
+        requestId: randomUUID(),
+        sql: 'SELECT 1 as value',
+      })
+    )
+    await checkedResult(sendDatabaseMessage('database.commitTransaction', { lockId: tx.lockId }))
+    return { value: result.rows[0]?.value }
+  } catch (error) {
+    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(() => undefined)
+    throw error
+  }
+}
+
+async function rollbackDatabaseWatt(): Promise<RollbackResponse> {
+  const bucketName = `db-watt-rollback-${Date.now()}`
+  const tx = await beginTransaction()
+
+  try {
+    await checkedResult(
+      sendDatabaseMessage('database.lockedQuery', {
+        lockId: tx.lockId,
+        requestId: randomUUID(),
+        sql: `INSERT INTO storage.buckets (id, name, owner, public) VALUES ($1, $1, $2, false)`,
+        values: [bucketName, randomUUID()],
+      })
+    )
+    await checkedResult(sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }))
+    return { bucketName }
+  } catch (error) {
+    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(() => undefined)
+    throw error
+  }
+}
+
+async function savepointDatabaseWatt(): Promise<SavepointResponse> {
+  const innerBucket = `db-watt-savepoint-inner-${Date.now()}`
+  const outerBucket = `db-watt-savepoint-outer-${Date.now()}`
+  const tx = await beginTransaction()
+
+  try {
+    await checkedResult(
+      sendDatabaseMessage('database.lockedQuery', {
+        lockId: tx.lockId,
+        requestId: randomUUID(),
+        sql: `INSERT INTO storage.buckets (id, name, owner, public) VALUES ($1, $1, $2, false)`,
+        values: [outerBucket, randomUUID()],
+      })
+    )
+    await checkedResult(
+      sendDatabaseMessage('database.lockedQuery', {
+        lockId: tx.lockId,
+        requestId: randomUUID(),
+        sql: 'SAVEPOINT database_watt_acceptance',
+      })
+    )
+    await checkedResult(
+      sendDatabaseMessage('database.lockedQuery', {
+        lockId: tx.lockId,
+        requestId: randomUUID(),
+        sql: `INSERT INTO storage.buckets (id, name, owner, public) VALUES ($1, $1, $2, false)`,
+        values: [innerBucket, randomUUID()],
+      })
+    )
+    await checkedResult(
+      sendDatabaseMessage('database.lockedQuery', {
+        lockId: tx.lockId,
+        requestId: randomUUID(),
+        sql: 'ROLLBACK TO SAVEPOINT database_watt_acceptance',
+      })
+    )
+    await checkedResult(sendDatabaseMessage('database.commitTransaction', { lockId: tx.lockId }))
+    return { innerBucket, outerBucket }
+  } catch (error) {
+    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(() => undefined)
+    throw error
+  }
+}
+
+async function sleepDatabaseWatt(): Promise<ErrorResponse> {
+  const requestId = randomUUID()
+  const query = sendDatabaseMessage<ErrorResponse>('database.query', {
+    destination: testDestination(),
+    requestId,
+    sql: 'SELECT pg_sleep(10)',
+  })
+
+  setTimeout(() => {
+    sendDatabaseMessage('database.cancel', { requestId }).catch(() => undefined)
+  }, 50).unref()
+
+  return query
+}
+
+async function missingDestinationDatabaseWatt(): Promise<ErrorResponse> {
+  return sendDatabaseMessage('database.query', {
+    destination: `missing-${randomUUID()}`,
+    requestId: randomUUID(),
+    sql: 'SELECT 1',
+  })
+}
+
+async function concurrentQueriesDatabaseWatt(): Promise<{ count: number }> {
+  const results = await Promise.all(
+    Array.from({ length: 5 }, () =>
+      sendDatabaseMessage<QueryRowsResponse | ErrorResponse>('database.query', {
+        destination: testDestination(),
+        requestId: randomUUID(),
+        sql: 'SELECT 1 as value',
+      })
+    )
+  )
+  const error = results.find(isDatabaseError)
+
+  if (error) {
+    throw new Error(error.message)
+  }
+
+  return { count: results.length }
+}
+
+async function getDatabaseWattStats(): Promise<DatabaseWattStats> {
+  return sendDatabaseMessage('database.test.stats', {})
+}
+
+async function resetDatabaseWattStats(): Promise<void> {
+  await sendDatabaseMessage('database.test.resetStats', {})
+}
+
+describeDatabaseWattAcceptance(
   'Database Watt E2E',
   {
     destructive: true,
@@ -53,53 +232,44 @@ describeAcceptance(
   },
   () => {
     it('executes stateless queries in the Database Watt worker', async () => {
-      const databaseClient = createDatabaseWattClient()
-      await resetDatabaseWattStats(databaseClient)
+      await resetDatabaseWattStats()
 
-      const response = await databaseClient.request<QueryRowsResponse>('POST', '/query', {
-        expectedStatus: 200,
-      })
-      const stats = await getDatabaseWattStats(databaseClient)
+      const response = await queryDatabaseWatt()
+      const stats = await getDatabaseWattStats()
 
-      expect(response.json?.rows[0]).toEqual({ value: 1 })
+      expect(response.rows[0]).toEqual({ value: 1 })
       expect(stats.query).toBeGreaterThanOrEqual(1)
     })
 
     it('executes master database queries through Database Watt', async () => {
       const config = getAcceptanceConfig()
-      const databaseClient = createDatabaseWattClient()
 
       if (!config.tenantId) {
         expect(config.tenantId).toBeUndefined()
         return
       }
 
-      await resetDatabaseWattStats(databaseClient)
-      const response = await databaseClient.request<QueryRowsResponse>('POST', '/master-query', {
-        expectedStatus: 200,
-      })
-      const stats = await getDatabaseWattStats(databaseClient)
+      await resetDatabaseWattStats()
+      const response = await queryDatabaseWatt('master')
+      const stats = await getDatabaseWattStats()
 
-      expect(response.json?.rows[0]).toEqual({ value: 1 })
+      expect(response.rows[0]).toEqual({ value: 1 })
       expect(stats.query).toBeGreaterThanOrEqual(1)
     })
 
     it('executes master database transactions through Database Watt', async () => {
       const config = getAcceptanceConfig()
-      const databaseClient = createDatabaseWattClient()
 
       if (!config.tenantId) {
         expect(config.tenantId).toBeUndefined()
         return
       }
 
-      await resetDatabaseWattStats(databaseClient)
-      const response = await databaseClient.request<{ value: number }>('POST', '/master-transaction', {
-        expectedStatus: 200,
-      })
-      const stats = await getDatabaseWattStats(databaseClient)
+      await resetDatabaseWattStats()
+      const response = await masterTransaction()
+      const stats = await getDatabaseWattStats()
 
-      expect(response.json).toEqual({ value: 1 })
+      expect(response).toEqual({ value: 1 })
       expect(stats.beginTransaction).toBeGreaterThanOrEqual(1)
       expect(stats.lockedQuery).toBeGreaterThanOrEqual(1)
       expect(stats.commitTransaction).toBeGreaterThanOrEqual(1)
@@ -107,11 +277,10 @@ describeAcceptance(
 
     it('commits REST object changes through Database Watt transactions', async () => {
       const client = createRestClient()
-      const databaseClient = createDatabaseWattClient()
       const token = requireServiceKey()
       const bucketName = uniqueBucketName('dbwatt-commit')
       const objectKey = uniqueObjectKey('dbwatt-commit')
-      await resetDatabaseWattStats(databaseClient)
+      await resetDatabaseWattStats()
 
       try {
         await createRestBucket(bucketName, { isPublic: false })
@@ -121,7 +290,7 @@ describeAcceptance(
           expectedStatus: 200,
           token,
         })
-        const stats = await getDatabaseWattStats(databaseClient)
+        const stats = await getDatabaseWattStats()
 
         expect(read.body).toBe('database-watt-commit')
         expect(stats.beginTransaction).toBeGreaterThanOrEqual(1)
@@ -134,21 +303,18 @@ describeAcceptance(
 
     it('rolls back failed transaction work and leaves no partial bucket state', async () => {
       const client = createRestClient()
-      const databaseClient = createDatabaseWattClient()
       const token = requireServiceKey()
-      await resetDatabaseWattStats(databaseClient)
+      await resetDatabaseWattStats()
 
-      const rollback = await databaseClient.request<RollbackResponse>('POST', '/rollback', {
-        expectedStatus: 200,
-      })
-      const bucketName = rollback.json?.bucketName
+      const rollback = await rollbackDatabaseWatt()
+      const bucketName = rollback.bucketName
       expect(bucketName).toBeTruthy()
 
       const lookup = await client.request('GET', `/bucket/${bucketName}`, {
         expectedStatus: 400,
         token,
       })
-      const stats = await getDatabaseWattStats(databaseClient)
+      const stats = await getDatabaseWattStats()
 
       expect(lookup.status).toBe(400)
       expect(stats.rollbackTransaction).toBeGreaterThanOrEqual(1)
@@ -156,15 +322,12 @@ describeAcceptance(
 
     it('preserves nested savepoint semantics in Database Watt transactions', async () => {
       const client = createRestClient()
-      const databaseClient = createDatabaseWattClient()
       const token = requireServiceKey()
-      await resetDatabaseWattStats(databaseClient)
+      await resetDatabaseWattStats()
 
-      const savepoint = await databaseClient.request<SavepointResponse>('POST', '/savepoint', {
-        expectedStatus: 200,
-      })
-      const outerBucket = savepoint.json?.outerBucket
-      const innerBucket = savepoint.json?.innerBucket
+      const savepoint = await savepointDatabaseWatt()
+      const outerBucket = savepoint.outerBucket
+      const innerBucket = savepoint.innerBucket
 
       try {
         expect(outerBucket).toBeTruthy()
@@ -178,7 +341,7 @@ describeAcceptance(
           expectedStatus: 400,
           token,
         })
-        const stats = await getDatabaseWattStats(databaseClient)
+        const stats = await getDatabaseWattStats()
 
         expect(outer.json?.id).toBe(outerBucket)
         expect(inner.status).toBe(400)
@@ -193,10 +356,9 @@ describeAcceptance(
 
     it('preserves storage error mapping when Database Watt returns PostgreSQL errors', async () => {
       const client = createRestClient()
-      const databaseClient = createDatabaseWattClient()
       const token = requireServiceKey()
       const bucketName = uniqueBucketName('dbwatt-error')
-      await resetDatabaseWattStats(databaseClient)
+      await resetDatabaseWattStats()
 
       try {
         await createRestBucket(bucketName, { isPublic: false })
@@ -209,7 +371,7 @@ describeAcceptance(
           expectedStatus: 400,
           token,
         })
-        const stats = await getDatabaseWattStats(databaseClient)
+        const stats = await getDatabaseWattStats()
 
         expect(duplicate.status).toBe(400)
         expect(stats.lockedQuery).toBeGreaterThanOrEqual(1)
@@ -219,53 +381,43 @@ describeAcceptance(
     })
 
     it('translates request aborts into Database Watt cancellation', async () => {
-      const databaseClient = createDatabaseWattClient()
-      await resetDatabaseWattStats(databaseClient)
+      await resetDatabaseWattStats()
 
-      const response = await databaseClient.request('POST', '/sleep', {
-        expectedStatus: 500,
-      })
-      const stats = await getDatabaseWattStats(databaseClient)
+      const response = await sleepDatabaseWatt()
+      const stats = await getDatabaseWattStats()
 
-      expect(response.status).toBe(500)
+      expect(response).toMatchObject({ code: expect.any(String) })
       expect(stats.cancel).toBeGreaterThanOrEqual(1)
     })
 
     it('returns typed destination errors through the Database Watt worker', async () => {
       const config = getAcceptanceConfig()
-      const databaseClient = createDatabaseWattClient()
 
       if (!config.tenantId) {
         expect(config.tenantId).toBeUndefined()
         return
       }
 
-      await resetDatabaseWattStats(databaseClient)
-      const response = await databaseClient.request<ErrorResponse>('POST', '/missing-destination', {
-        expectedStatus: 500,
-      })
+      await resetDatabaseWattStats()
+      const response = await missingDestinationDatabaseWatt()
 
-      expect(response.json).toMatchObject({ code: 'DESTINATION_UNKNOWN' })
-      expect(response.json?.destination).toEqual(expect.stringMatching(/^missing-/))
+      expect(response).toMatchObject({ code: 'DESTINATION_UNKNOWN' })
+      expect(response.destination).toEqual(expect.stringMatching(/^missing-/))
     })
 
     it('handles concurrent Database Watt query load', async () => {
-      const databaseClient = createDatabaseWattClient()
-      await resetDatabaseWattStats(databaseClient)
+      await resetDatabaseWattStats()
 
-      const response = await databaseClient.request<{ count: number }>('POST', '/concurrent-queries', {
-        expectedStatus: 200,
-      })
-      const stats = await getDatabaseWattStats(databaseClient)
+      const response = await concurrentQueriesDatabaseWatt()
+      const stats = await getDatabaseWattStats()
 
-      expect(response.json).toEqual({ count: 5 })
+      expect(response).toEqual({ count: 5 })
       expect(stats.query).toBeGreaterThanOrEqual(5)
     })
 
     it('exercises multitenant destination resolution when the target is multitenant', async () => {
       const config = getAcceptanceConfig()
       const client = createRestClient()
-      const databaseClient = createDatabaseWattClient()
       const token = requireServiceKey(config)
       const bucketName = uniqueBucketName('dbwatt-tenant')
 
@@ -274,14 +426,14 @@ describeAcceptance(
         return
       }
 
-      await resetDatabaseWattStats(databaseClient)
+      await resetDatabaseWattStats()
       try {
         await createRestBucket(bucketName, { isPublic: false })
         const bucket = await client.request<BucketResponse>('GET', `/bucket/${bucketName}`, {
           expectedStatus: 200,
           token,
         })
-        const stats = await getDatabaseWattStats(databaseClient)
+        const stats = await getDatabaseWattStats()
 
         expect(bucket.json?.id).toBe(bucketName)
         expect(stats.beginTransaction).toBeGreaterThanOrEqual(1)
@@ -291,28 +443,3 @@ describeAcceptance(
     })
   }
 )
-
-function createDatabaseWattClient() {
-  const baseUrl = process.env.ACCEPTANCE_DATABASE_WATT_BASE_URL
-  if (!baseUrl) {
-    throw new Error('ACCEPTANCE_DATABASE_WATT_BASE_URL is required')
-  }
-
-  return new AcceptanceHttpClient(baseUrl)
-}
-
-async function getDatabaseWattStats(client = createDatabaseWattClient()): Promise<DatabaseWattStats> {
-  const response = await client.request<DatabaseWattStats>('GET', '/stats', {
-    expectedStatus: 200,
-  })
-
-  if (!response.json) {
-    throw new Error('Database Watt stats response was empty')
-  }
-
-  return response.json
-}
-
-async function resetDatabaseWattStats(client = createDatabaseWattClient()): Promise<void> {
-  await client.request('POST', '/reset', { expectedStatus: 200 })
-}

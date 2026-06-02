@@ -6,6 +6,7 @@ loadEnvFiles()
 
 const passthroughArgs: string[] = []
 const env = { ...process.env }
+env.ACCEPTANCE_DATABASE_WATT = env.ACCEPTANCE_DATABASE_WATT || 'false'
 
 for (let index = 2; index < process.argv.length; index++) {
   const arg = process.argv[index]

@@ -6,7 +6,6 @@ import { LockRegistry } from './locks.js'
 import { registerDatabaseWattMetrics } from './metrics.js'
 import { PoolRegistry, runQuery } from './pools.js'
 import { enforceResultLimits } from './result-limits.js'
-import { startTestServer, type DatabaseWattTestServer } from './test-server.js'
 import type {
   AcquireConnectionRequest,
   BeginTransactionRequest,
@@ -40,7 +39,6 @@ const pools = new PoolRegistry(config)
 const locks = new LockRegistry(config)
 const cancellations = new CancellationRegistry()
 let shuttingDown = false
-let testServer: DatabaseWattTestServer | undefined
 
 const stats = {
   acquire: 0,
@@ -60,9 +58,7 @@ export async function close(): Promise<void> {
   shuttingDown = true
 
   await withShutdownTimeout(
-    Promise.allSettled([testServer?.close(), locks.close(), pools.close(), resolver.close()]).then(
-      () => undefined
-    ),
+    Promise.allSettled([locks.close(), pools.close(), resolver.close()]).then(() => undefined),
     config.shutdownTimeoutMs
   )
 }
@@ -212,29 +208,17 @@ function registerHandlers(): void {
   messaging.handle('database.commitTransaction', wrapHandler(handleCommitTransaction))
   messaging.handle('database.rollbackTransaction', wrapHandler(handleRollbackTransaction))
   messaging.handle('database.cancel', wrapHandler(handleCancel))
-
+  messaging.handle('database.test.stats', () => ({ ...stats }))
+  messaging.handle('database.test.resetStats', () => {
+    resetStats()
+    return { reset: true }
+  })
 }
 
 function resetStats(): void {
   for (const key of Object.keys(stats) as Array<keyof typeof stats>) {
     stats[key] = 0
   }
-}
-
-function startDatabaseTestServer(): void {
-  if (process.env.DATABASE_WATT_TEST_SERVER !== 'true') {
-    return
-  }
-
-  startTestServer({ handlers: databaseApp, resetStats, stats })
-    .then((server) => {
-      testServer = server
-    })
-    .catch((error) => {
-      process.nextTick(() => {
-        throw error
-      })
-    })
 }
 
 function wrapHandler(
@@ -341,5 +325,3 @@ export const databaseApp = {
   handleRelease,
   handleRollbackTransaction,
 }
-
-startDatabaseTestServer()

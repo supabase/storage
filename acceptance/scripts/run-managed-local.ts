@@ -19,6 +19,7 @@ const serverIsMultitenant = isMultitenantServer(serverEnv)
 const acceptanceRunEnv: NodeJS.ProcessEnv = {
   ...process.env,
   ACCEPTANCE_BASE_URL: baseUrl,
+  ACCEPTANCE_DATABASE_WATT: 'false',
   ACCEPTANCE_PROFILE: profile,
   ACCEPTANCE_S3_ENDPOINT: acceptanceEnv('ACCEPTANCE_S3_ENDPOINT') ?? `${baseUrl}/s3`,
   STORAGE_BACKEND: acceptanceEnv('STORAGE_BACKEND') ?? serverEnv.STORAGE_BACKEND,

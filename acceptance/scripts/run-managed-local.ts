@@ -277,7 +277,11 @@ function closeHttpServer(server: HttpServer): Promise<void> {
 
 function resolveInfraRestartScript() {
   const script = acceptanceEnv('ACCEPTANCE_INFRA_RESTART_SCRIPT') ?? 'infra:restart:ci'
-  const allowed = new Set(['infra:restart:ci', 'infra:restart:ci:oriole'])
+  const allowed = new Set([
+    'infra:restart:ci',
+    'infra:restart:ci:oriole',
+    'infra:restart:ci:oriole:pgvector',
+  ])
 
   if (!allowed.has(script)) {
     throw new Error(`Unsupported ACCEPTANCE_INFRA_RESTART_SCRIPT: ${script}`)

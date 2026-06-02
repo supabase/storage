@@ -28,6 +28,7 @@ export async function handlePgVectorError<T>(
     //   42P01  undefined_table  → index/bucket missing
     //   42P07  duplicate_table  → CREATE TABLE on already-existing index
     //   23505  unique_violation → key collision (we use upsert, but defensively map)
+    //   21000  cardinality_violation → duplicate source keys in an upsert batch
     //   22P02  invalid_text_representation → e.g. dimension mismatch on vector cast
     //   22023  invalid_parameter_value → pgvector dimension mismatch
     switch (e.code) {
@@ -36,6 +37,10 @@ export async function handlePgVectorError<T>(
       case '42P07':
       case '23505':
         throw ERRORS.S3VectorConflictException(resource.type, resource.name)
+      case '21000':
+        throw ERRORS.InvalidParameter(resource.name, {
+          message: e.message ?? 'duplicate keys in pgvector upsert batch',
+        })
       case '22P02':
       case '22023':
         throw ERRORS.InvalidParameter(resource.name, {

@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { compileNoCoercionValidator } from './validation'
 
 const getVectorBucket = {
   type: 'object',
@@ -21,9 +22,12 @@ interface getVectorBucketRequest extends AuthenticatedRequest {
 }
 
 export default async function routes(fastify: FastifyInstance) {
+  const getVectorBucketValidator = compileNoCoercionValidator(getVectorBucket.body)
+
   fastify.post<getVectorBucketRequest>(
     '/GetVectorBucket',
     {
+      validatorCompiler: getVectorBucketValidator,
       config: {
         operation: { type: ROUTE_OPERATIONS.GET_VECTOR_BUCKET },
       },

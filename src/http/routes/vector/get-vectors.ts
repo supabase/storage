@@ -1,8 +1,10 @@
 import { ERRORS } from '@internal/errors'
+import { MAX_GET_VECTOR_KEYS, MAX_VECTOR_KEY_LENGTH } from '@storage/protocols/vector/limits'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { compileNoCoercionValidator } from './validation'
 
 const getVectors = {
   type: 'object',
@@ -10,7 +12,12 @@ const getVectors = {
     type: 'object',
     properties: {
       indexName: { type: 'string' },
-      keys: { type: 'array', items: { type: 'string' } },
+      keys: {
+        type: 'array',
+        minItems: 1,
+        maxItems: MAX_GET_VECTOR_KEYS,
+        items: { type: 'string', minLength: 1, maxLength: MAX_VECTOR_KEY_LENGTH },
+      },
       returnData: { type: 'boolean', default: false },
       returnMetadata: { type: 'boolean', default: false },
       vectorBucketName: { type: 'string' },
@@ -25,9 +32,12 @@ interface getVectorsRequest extends AuthenticatedRequest {
 }
 
 export default async function routes(fastify: FastifyInstance) {
+  const getVectorsValidator = compileNoCoercionValidator(getVectors.body)
+
   fastify.post<getVectorsRequest>(
     '/GetVectors',
     {
+      validatorCompiler: getVectorsValidator,
       config: {
         operation: { type: ROUTE_OPERATIONS.GET_VECTORS },
       },

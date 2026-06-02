@@ -1,5 +1,11 @@
 import { FastifyError } from '@fastify/error'
-import { ErrorCode, isRenderableError, StorageBackendError, StorageError } from '@internal/errors'
+import {
+  ErrorCode,
+  getErrorCode,
+  isRenderableError,
+  StorageBackendError,
+  StorageError,
+} from '@internal/errors'
 import { isDatabaseSlowDownError } from '@internal/errors/database-error'
 import { FastifyInstance } from 'fastify'
 
@@ -83,11 +89,17 @@ export const setErrorHandler = (
         )
       }
 
-      return reply.status(err.statusCode || 500).send(
+      const errorCode = getErrorCode(err)
+      const responseErrorCode = (
+        errorCode === ErrorCode.UnknownError ? ErrorCode.InternalError : errorCode
+      ) as ErrorCode
+      const responseStatusCode = err.statusCode || 500
+
+      return reply.status(responseStatusCode).send(
         formatter({
-          statusCode: `${err.statusCode}`,
+          statusCode: `${responseStatusCode}`,
           error: err.name,
-          code: ErrorCode.InternalError,
+          code: responseErrorCode,
           message: err.message,
         })
       )

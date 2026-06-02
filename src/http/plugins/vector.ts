@@ -10,6 +10,7 @@ import {
 } from '@internal/sharding'
 import {
   createS3VectorClient,
+  createVectorTransactionKnexResolver,
   KnexVectorMetadataDB,
   PgVectorStore,
   S3Vector,
@@ -90,7 +91,9 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
     // uses the singleton; s3 uses the singleton S3 client.
     let adapter: VectorStore
     if (vectorBucketProvider === 'pgvector') {
-      adapter = isMultitenant ? new PgVectorStore(db) : stPgVectorAdapter!
+      adapter = isMultitenant
+        ? new PgVectorStore(createVectorTransactionKnexResolver(db))
+        : stPgVectorAdapter!
     } else {
       adapter = s3Adapter!
     }

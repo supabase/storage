@@ -579,7 +579,7 @@ function hasStringErrorCode(error: Error): error is Error & { code: string } {
   return 'code' in error && typeof error.code === 'string'
 }
 
-function getErrorCode(error: Error): string {
+export function getErrorCode(error: Error): string {
   if (error instanceof IcebergError && error.error) {
     return error.error
   }

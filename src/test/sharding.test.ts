@@ -191,6 +191,28 @@ describe('Sharding System', () => {
       expect(resv.status).toBe('cancelled')
     })
 
+    it('should not cancel a confirmed reservation', async () => {
+      const reservation = await catalog.reserve({
+        kind: 'vector',
+        tenantId: 'tenant-1',
+        bucketName: 'bucket-1',
+        logicalName: 'index-1',
+      })
+
+      await catalog.confirm(reservation.reservationId, {
+        kind: 'vector',
+        tenantId: 'tenant-1',
+        bucketName: 'bucket-1',
+        logicalName: 'index-1',
+      })
+
+      await catalog.cancel(reservation.reservationId)
+
+      const resv = await db('shard_reservation').where({ id: reservation.reservationId }).first()
+
+      expect(resv.status).toBe('confirmed')
+    })
+
     it('should throw error when confirming non-existent reservation', async () => {
       await expect(
         catalog.confirm(randomUUID(), {

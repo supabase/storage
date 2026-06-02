@@ -69,16 +69,11 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
 
   afterAll(async () => {
     if (!pgvectorAvailable) return
-    // Best-effort cleanup; the per-test cleanups already drop indexes/buckets.
-    try {
-      await metadataDb
-        .withTransaction(async (tx) => {
-          await tx.deleteVectorBucket(bucketName)
-        })
-        .catch(() => undefined)
-    } catch {
-      /* swallow */
-    }
+    await metadataDb
+      .withTransaction(async (tx) => {
+        await tx.deleteVectorBucket(bucketName)
+      })
+      .catch(() => undefined)
     await knex.destroy()
   })
 
@@ -228,7 +223,7 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
     await manager.putVectors({
       vectorBucketName: bucketName,
       indexName,
-      vectors: Array.from({ length: 5 }, (_, i) => ({
+      vectors: Array.from({ length: 4 }, (_, i) => ({
         key: `k-${i.toString().padStart(2, '0')}`,
         data: { float32: [i, 0] },
         metadata: { i },
@@ -250,9 +245,62 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
       nextToken: firstPage.nextToken,
     })
     expect(secondPage.vectors).toHaveLength(2)
-    expect(secondPage.vectors?.[0].key).not.toBe(firstPage.vectors?.[0].key)
+    expect(secondPage.vectors?.map((vector) => vector.key)).toEqual(['k-02', 'k-03'])
+    expect(secondPage.nextToken).toBeUndefined()
 
     await manager.deleteIndex({ vectorBucketName: bucketName, indexName })
+  }, 30_000)
+
+  it('listVectors returns disjoint keysets for parallel segments', async () => {
+    const segmentBucketName = `pgvector-it-segments-${Date.now()}`
+    const indexName = `it-segments-${Date.now()}`
+    const insertedKeys = Array.from({ length: 32 }, (_, i) => `k-${i.toString().padStart(2, '0')}`)
+
+    await manager.createBucket(segmentBucketName)
+    await manager.createVectorIndex({
+      vectorBucketName: segmentBucketName,
+      indexName,
+      dataType: 'float32',
+      dimension: 2,
+      distanceMetric: 'euclidean',
+    })
+
+    try {
+      await manager.putVectors({
+        vectorBucketName: segmentBucketName,
+        indexName,
+        vectors: insertedKeys.map((key, i) => ({
+          key,
+          data: { float32: [i, 0] },
+        })),
+      })
+
+      const segments = await Promise.all(
+        [0, 1].map((segmentIndex) =>
+          manager.listVectors({
+            vectorBucketName: segmentBucketName,
+            indexName,
+            maxResults: 1000,
+            segmentCount: 2,
+            segmentIndex,
+          })
+        )
+      )
+      const segmentKeys = segments.map(
+        (segment) => segment.vectors?.map((vector) => vector.key) ?? []
+      )
+      const combinedKeys = segmentKeys.flat()
+
+      expect(segmentKeys[0].length).toBeGreaterThan(0)
+      expect(segmentKeys[1].length).toBeGreaterThan(0)
+      expect(new Set(combinedKeys).size).toBe(combinedKeys.length)
+      expect(combinedKeys.sort()).toEqual(insertedKeys)
+    } finally {
+      await manager
+        .deleteIndex({ vectorBucketName: segmentBucketName, indexName })
+        .catch(() => undefined)
+      await manager.deleteBucket(segmentBucketName).catch(() => undefined)
+    }
   }, 30_000)
 
   it('rejects creating an index inside a missing bucket', async () => {

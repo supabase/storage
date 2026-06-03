@@ -48,6 +48,7 @@ describe('CdnCacheManager', () => {
     const storage = createStorageMock()
 
     await new CdnCacheManager(storage.storage).purge({
+      type: 'object',
       tenant: 'tenant-ref',
       bucket: 'bucket-id',
       objectName: 'folder/image.png',
@@ -68,6 +69,7 @@ describe('CdnCacheManager', () => {
     expect(headers.get('authorization')).toBe('Bearer test-key')
     expect(headers.get('content-type')).toBe('application/json')
     expect(JSON.parse(requestInit.body as string)).toEqual({
+      type: 'object',
       tenant: {
         ref: 'tenant-ref',
       },
@@ -90,6 +92,7 @@ describe('CdnCacheManager', () => {
     const storage = createStorageMock()
 
     await new CdnCacheManager(storage.storage).purge({
+      type: 'object',
       tenant: 'tenant-ref',
       bucket: 'bucket-id',
       objectName: 'folder/image.png',
@@ -121,6 +124,7 @@ describe('CdnCacheManager', () => {
 
     await expect(
       new CdnCacheManager(storage.storage).purge({
+        type: 'object',
         tenant: 'tenant-ref',
         bucket: 'bucket-id',
         objectName: 'folder/image.png',
@@ -149,6 +153,7 @@ describe('CdnCacheManager', () => {
 
     await expect(
       new CdnCacheManager(storage.storage).purge({
+        type: 'object',
         tenant: 'tenant-ref',
         bucket: 'bucket-id',
         objectName: 'folder/image.png',
@@ -175,6 +180,7 @@ describe('CdnCacheManager', () => {
 
     await expect(
       new CdnCacheManager(storage.storage).purge({
+        type: 'object',
         tenant: 'tenant-ref',
         bucket: 'bucket-id',
         objectName: 'folder/image.png',
@@ -202,6 +208,7 @@ describe('CdnCacheManager', () => {
 
     await expect(
       new CdnCacheManager(storage.storage).purge({
+        type: 'object',
         tenant: 'tenant-ref',
         bucket: 'bucket-id',
         objectName: 'missing.png',
@@ -222,6 +229,7 @@ describe('CdnCacheManager', () => {
 
     await expect(
       new CdnCacheManager(storage.storage).purge({
+        type: 'object',
         tenant: 'tenant-ref',
         bucket: 'bucket-id',
         objectName: 'folder/image.png',
@@ -233,5 +241,189 @@ describe('CdnCacheManager', () => {
 
     expect(storage.from).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('sends a purge request for an entire bucket', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { CdnCacheManager } = await importCdnCacheManager({
+      cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
+      cdnPurgeEndpointKey: 'test-key',
+    })
+    const storage = createStorageMock()
+
+    await new CdnCacheManager(storage.storage).purge({
+      type: 'bucket',
+      tenant: 'tenant-ref',
+      bucket: 'bucket-id',
+    })
+
+    expect(storage.from).not.toHaveBeenCalled()
+    expect(storage.findObject).not.toHaveBeenCalled()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const [input, init] = fetchMock.mock.calls[0]
+    const requestInit = init as RequestInit
+    const headers = requestInit.headers as Headers
+
+    expect(input.toString()).toBe('https://cdn.example.com/stub/cache/purge')
+    expect(requestInit.method).toBe('POST')
+    expect(headers.get('authorization')).toBe('Bearer test-key')
+    expect(JSON.parse(requestInit.body as string)).toEqual({
+      type: 'bucket',
+      tenant: {
+        ref: 'tenant-ref',
+      },
+      bucketId: 'bucket-id',
+    })
+  })
+
+  it('sends a purge request for an entire tenant', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { CdnCacheManager } = await importCdnCacheManager({
+      cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
+      cdnPurgeEndpointKey: 'test-key',
+    })
+    const storage = createStorageMock()
+
+    await new CdnCacheManager(storage.storage).purge({
+      type: 'tenant',
+      tenant: 'tenant-ref',
+    })
+
+    expect(storage.from).not.toHaveBeenCalled()
+    expect(storage.findObject).not.toHaveBeenCalled()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const [input, init] = fetchMock.mock.calls[0]
+    const requestInit = init as RequestInit
+    const headers = requestInit.headers as Headers
+
+    expect(input.toString()).toBe('https://cdn.example.com/stub/cache/purge')
+    expect(requestInit.method).toBe('POST')
+    expect(headers.get('authorization')).toBe('Bearer test-key')
+    expect(JSON.parse(requestInit.body as string)).toEqual({
+      type: 'tenant',
+      tenant: {
+        ref: 'tenant-ref',
+      },
+    })
+  })
+
+  it('sends a purge request for object transformations', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { CdnCacheManager } = await importCdnCacheManager({
+      cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
+      cdnPurgeEndpointKey: 'test-key',
+    })
+    const storage = createStorageMock()
+
+    await new CdnCacheManager(storage.storage).purge({
+      type: 'object-transforms',
+      tenant: 'tenant-ref',
+      bucket: 'bucket-id',
+      objectName: 'folder/image.png',
+    })
+
+    expect(storage.from).toHaveBeenCalledWith('bucket-id')
+    expect(storage.asSuperUser).toHaveBeenCalledTimes(1)
+    expect(storage.findObject).toHaveBeenCalledWith('folder/image.png')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const [input, init] = fetchMock.mock.calls[0]
+    const requestInit = init as RequestInit
+    const headers = requestInit.headers as Headers
+
+    expect(input.toString()).toBe('https://cdn.example.com/stub/cache/purge')
+    expect(requestInit.method).toBe('POST')
+    expect(headers.get('authorization')).toBe('Bearer test-key')
+    expect(JSON.parse(requestInit.body as string)).toEqual({
+      type: 'object-transforms',
+      tenant: {
+        ref: 'tenant-ref',
+      },
+      bucketId: 'bucket-id',
+      objectName: 'folder/image.png',
+    })
+  })
+
+  it('sends a purge request for bucket transformations', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { CdnCacheManager } = await importCdnCacheManager({
+      cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
+      cdnPurgeEndpointKey: 'test-key',
+    })
+    const storage = createStorageMock()
+
+    await new CdnCacheManager(storage.storage).purge({
+      type: 'bucket-transforms',
+      tenant: 'tenant-ref',
+      bucket: 'bucket-id',
+    })
+
+    expect(storage.from).not.toHaveBeenCalled()
+    expect(storage.findObject).not.toHaveBeenCalled()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const [input, init] = fetchMock.mock.calls[0]
+    const requestInit = init as RequestInit
+    const headers = requestInit.headers as Headers
+
+    expect(input.toString()).toBe('https://cdn.example.com/stub/cache/purge')
+    expect(requestInit.method).toBe('POST')
+    expect(headers.get('authorization')).toBe('Bearer test-key')
+    expect(JSON.parse(requestInit.body as string)).toEqual({
+      type: 'bucket-transforms',
+      tenant: {
+        ref: 'tenant-ref',
+      },
+      bucketId: 'bucket-id',
+    })
+  })
+
+  it('sends a purge request for tenant transformations', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { CdnCacheManager } = await importCdnCacheManager({
+      cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
+      cdnPurgeEndpointKey: 'test-key',
+    })
+    const storage = createStorageMock()
+
+    await new CdnCacheManager(storage.storage).purge({
+      type: 'tenant-transforms',
+      tenant: 'tenant-ref',
+    })
+
+    expect(storage.from).not.toHaveBeenCalled()
+    expect(storage.findObject).not.toHaveBeenCalled()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const [input, init] = fetchMock.mock.calls[0]
+    const requestInit = init as RequestInit
+    const headers = requestInit.headers as Headers
+
+    expect(input.toString()).toBe('https://cdn.example.com/stub/cache/purge')
+    expect(requestInit.method).toBe('POST')
+    expect(headers.get('authorization')).toBe('Bearer test-key')
+    expect(JSON.parse(requestInit.body as string)).toEqual({
+      type: 'tenant-transforms',
+      tenant: {
+        ref: 'tenant-ref',
+      },
+    })
   })
 })

@@ -21,11 +21,47 @@ const defaultHeaders = new Headers({
 
 const cdnPurgeUrl = cdnPurgeEndpointURL ? resolvePurgeUrl(cdnPurgeEndpointURL) : undefined
 
-export interface PurgeCacheInput {
+interface BasePurgeInput {
   tenant: string
+}
+
+interface PurgeObjectInput extends BasePurgeInput {
+  type: 'object'
   bucket: string
   objectName: string
 }
+
+interface PurgeBucketInput extends BasePurgeInput {
+  type: 'bucket'
+  bucket: string
+}
+
+interface PurgeTenantInput extends BasePurgeInput {
+  type: 'tenant'
+}
+
+interface PurgeObjectTransformsInput extends BasePurgeInput {
+  type: 'object-transforms'
+  bucket: string
+  objectName: string
+}
+
+interface PurgeBucketTransformsInput extends BasePurgeInput {
+  type: 'bucket-transforms'
+  bucket: string
+}
+
+interface PurgeTenantTransformsInput extends BasePurgeInput {
+  type: 'tenant-transforms'
+}
+
+export type PurgeCacheInput =
+  | PurgeObjectInput
+  | PurgeBucketInput
+  | PurgeTenantInput
+  | PurgeObjectTransformsInput
+  | PurgeBucketTransformsInput
+  | PurgeTenantTransformsInput
 
 function resolvePurgeUrl(baseURL: string) {
   const url = new URL(baseURL)
@@ -48,30 +84,47 @@ export class CdnCacheManager {
   constructor(protected readonly storage: Storage) {}
 
   async purge(opts: PurgeCacheInput) {
+    console.log('PURGE CACHE!!!!!!!!')
     if (!cdnPurgeUrl) {
       throw ERRORS.MissingParameter('CDN_PURGE_ENDPOINT_URL is not set')
     }
 
-    // Check if object exists
-    await this.storage.from(opts.bucket).asSuperUser().findObject(opts.objectName)
+    // Check if object exists (only for object-level purges)
+    if (opts.type === 'object' || opts.type === 'object-transforms') {
+      await this.storage.from(opts.bucket).asSuperUser().findObject(opts.objectName)
+    }
 
+    // Build request body based on purge type
+    const requestBody: Record<string, unknown> = {
+      type: opts.type,
+      tenant: {
+        ref: opts.tenant,
+      },
+    }
+
+    if ('bucket' in opts) {
+      requestBody.bucketId = opts.bucket
+    }
+
+    if ('objectName' in opts) {
+      requestBody.objectName = opts.objectName
+    }
+
+    console.log('PURGE CACHE!!!!!!!!... 2')
     // Purge cache
     try {
       const requestInit: RequestInit & { dispatcher: Agent } = {
         method: 'POST',
         headers: defaultHeaders,
-        body: JSON.stringify({
-          tenant: {
-            ref: opts.tenant,
-          },
-          bucketId: opts.bucket,
-          objectName: opts.objectName,
-        }),
+        body: JSON.stringify(requestBody),
         dispatcher,
         signal: AbortSignal.timeout(CDN_PURGE_TIMEOUT_MS),
       }
 
+      console.log('SENDING!! url=', cdnPurgeUrl)
       const response = await fetch(cdnPurgeUrl, requestInit)
+
+      console.log('GOT RESPONSE', response.status, response.statusText)
 
       try {
         await assertOkResponse(response)
@@ -79,6 +132,7 @@ export class CdnCacheManager {
         await response.body?.cancel().catch(() => {})
       }
     } catch (e) {
+      console.log('ERRROR', e)
       throw ERRORS.InternalError(
         e instanceof Error ? e : new Error(String(e)),
         'Error purging cache'

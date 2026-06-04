@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { compileNoCoercionValidator } from './validation'
 
 const deleteVectorIndex = {
   type: 'object',
@@ -29,9 +30,12 @@ interface deleteVectorIndexRequest extends AuthenticatedRequest {
 }
 
 export default async function routes(fastify: FastifyInstance) {
+  const deleteVectorIndexValidator = compileNoCoercionValidator(deleteVectorIndex.body)
+
   fastify.post<deleteVectorIndexRequest>(
     '/DeleteIndex',
     {
+      validatorCompiler: deleteVectorIndexValidator,
       config: {
         operation: { type: ROUTE_OPERATIONS.DELETE_VECTOR_INDEX },
       },

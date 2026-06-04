@@ -81,7 +81,8 @@ jobs:
         env:
           ACCEPTANCE_ADMIN_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5001' || '' }}
           ACCEPTANCE_ENABLE_ADMIN: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
-          ACCEPTANCE_INFRA_RESTART_SCRIPT: ${{ matrix.database == 'oriole' && 'infra:restart:ci:oriole' || 'infra:restart:ci' }}
+          ACCEPTANCE_ENABLE_VECTOR: "true"
+          ACCEPTANCE_INFRA_RESTART_SCRIPT: ${{ matrix.database == 'oriole' && 'infra:restart:ci:oriole:pgvector' || 'infra:restart:ci' }}
           ACCEPTANCE_PROFILE: ${{ inputs.profile || 'full' }}
           ACCEPTANCE_X_FORWARDED_HOST: ${{ matrix.tenancy == 'multitenant' && 'bjhaohmqunupljrqypxz.local.dev' || '' }}
           MULTI_TENANT: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
@@ -89,6 +90,9 @@ jobs:
           REQUEST_X_FORWARDED_HOST_REGEXP: ${{ matrix.tenancy == 'multitenant' && '^([a-z]{20})[.]local[.](?:com|dev)$' || '' }}
           STORAGE_PUBLIC_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5000' || '' }}
           STORAGE_BACKEND: ${{ matrix.storage_backend }}
+          VECTOR_BUCKET_PROVIDER: pgvector
+          VECTOR_DATABASE_URL: ${{ matrix.tenancy == 'single' && 'postgresql://postgres:postgres@127.0.0.1:5432/postgres' || '' }}
+          VECTOR_STORE_MIGRATIONS_ENABLED: "true"
         run: |
           mkdir -p data coverage/acceptance
           chmod -R 777 data

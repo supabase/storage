@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { compileNoCoercionValidator } from './validation'
 
 const createVectorBucket = {
   type: 'object',
@@ -16,14 +17,17 @@ const createVectorBucket = {
   summary: 'Create a vector bucket',
 } as const
 
-interface createVectorIndexRequest extends AuthenticatedRequest {
+interface createVectorBucketRequest extends AuthenticatedRequest {
   Body: FromSchema<(typeof createVectorBucket)['body']>
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  fastify.post<createVectorIndexRequest>(
+  const createVectorBucketValidator = compileNoCoercionValidator(createVectorBucket.body)
+
+  fastify.post<createVectorBucketRequest>(
     '/CreateVectorBucket',
     {
+      validatorCompiler: createVectorBucketValidator,
       config: {
         operation: { type: ROUTE_OPERATIONS.CREATE_VECTOR_BUCKET },
       },

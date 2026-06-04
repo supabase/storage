@@ -13,8 +13,23 @@ interface VectorListIndexesResponse {
   nextToken?: string
 }
 
-interface VectorListResponse {
-  vectors?: Array<{ key?: string }>
+interface VectorResponse {
+  distanceMetric?: string
+  nextToken?: string
+  vectors?: Array<{
+    data?: { float32?: number[] }
+    distance?: number
+    key?: string
+    metadata?: Record<string, unknown>
+  }>
+}
+
+function fixedLengthVectorKey(prefix: string, length: number): string {
+  if (prefix.length > length) {
+    throw new Error(`Vector key prefix is longer than ${length} characters`)
+  }
+
+  return `${prefix}${'x'.repeat(length - prefix.length)}`
 }
 
 describeAcceptance(
@@ -35,7 +50,23 @@ describeAcceptance(
       const secondaryVectorBucketName = `${vectorPrefix}-b`
       const indexName = `idx-${suffix}-a`
       const secondaryIndexName = `idx-${suffix}-b`
+      const defaultPageIndexName = `bulk-${suffix}`
       const vectorKeys = [`vec-a-${suffix}`, `vec-b-${suffix}`]
+      const maxLengthVectorKey = fixedLengthVectorKey(`vec-max-${suffix}-`, 1024)
+      const tooLongVectorKey = fixedLengthVectorKey(`vec-too-long-${suffix}-`, 1025)
+      const defaultPageVectorKeys = [
+        maxLengthVectorKey,
+        ...Array.from({ length: 127 }, (_, i) => `bulk-${i.toString().padStart(3, '0')}-${suffix}`),
+      ]
+      const euclideanVectorKeys = [
+        `vec-origin-${suffix}`,
+        `vec-near-${suffix}`,
+        `vec-far-${suffix}`,
+      ]
+      const euclideanDistractorVectorKeys = Array.from(
+        { length: 32 },
+        (_, i) => `vec-far-${i.toString().padStart(2, '0')}-${suffix}`
+      )
 
       try {
         await client.request('POST', '/vector/CreateVectorBucket', {
@@ -104,6 +135,21 @@ describeAcceptance(
             dimension: 2,
             distanceMetric: 'cosine',
             indexName,
+            metadataConfiguration: {
+              nonFilterableMetadataKeys: ['private-note'],
+            },
+            vectorBucketName,
+          },
+          expectedStatus: 200,
+          token,
+        })
+
+        await client.request('POST', '/vector/CreateIndex', {
+          body: {
+            dataType: 'float32',
+            dimension: 2,
+            distanceMetric: 'euclidean',
+            indexName: secondaryIndexName,
             vectorBucketName,
           },
           expectedStatus: 200,
@@ -115,7 +161,7 @@ describeAcceptance(
             dataType: 'float32',
             dimension: 2,
             distanceMetric: 'cosine',
-            indexName: secondaryIndexName,
+            indexName: defaultPageIndexName,
             vectorBucketName,
           },
           expectedStatus: 200,
@@ -179,6 +225,10 @@ describeAcceptance(
                 key: vectorKeys[0],
                 metadata: {
                   group: 'acceptance',
+                  'private-note': `private-${suffix}-a`,
+                  role: 'primary',
+                  score: 0.75,
+                  'user-id': `user-${suffix}-a`,
                 },
               },
               {
@@ -188,6 +238,9 @@ describeAcceptance(
                 key: vectorKeys[1],
                 metadata: {
                   group: 'acceptance',
+                  role: 'secondary',
+                  score: 10,
+                  'user-id': `user-${suffix}-b`,
                 },
               },
             ],
@@ -196,9 +249,10 @@ describeAcceptance(
           token,
         })
 
-        const vectors = await client.request<VectorListResponse>('POST', '/vector/ListVectors', {
+        const vectors = await client.request<VectorResponse>('POST', '/vector/ListVectors', {
           body: {
             indexName,
+            maxResults: 1,
             returnData: true,
             returnMetadata: true,
             vectorBucketName,
@@ -206,11 +260,137 @@ describeAcceptance(
           expectedStatus: 200,
           token,
         })
-        expect(vectors.json?.vectors?.map((vector) => vector.key)).toEqual(
+        expect(vectors.json?.vectors).toHaveLength(1)
+        expect(vectors.json?.nextToken).toBeTruthy()
+
+        const vectorsSecondPage = await client.request<VectorResponse>(
+          'POST',
+          '/vector/ListVectors',
+          {
+            body: {
+              indexName,
+              maxResults: 1,
+              nextToken: vectors.json?.nextToken,
+              returnData: true,
+              returnMetadata: true,
+              vectorBucketName,
+            },
+            expectedStatus: 200,
+            token,
+          }
+        )
+        expect(
+          [...(vectors.json?.vectors ?? []), ...(vectorsSecondPage.json?.vectors ?? [])].map(
+            (vector) => vector.key
+          )
+        ).toEqual(expect.arrayContaining(vectorKeys))
+        expect(vectorsSecondPage.json?.nextToken).toBeUndefined()
+
+        await client.request('POST', '/vector/PutVectors', {
+          body: {
+            indexName: defaultPageIndexName,
+            vectorBucketName,
+            vectors: defaultPageVectorKeys.map((key, i) => ({
+              data: {
+                float32: [i, 0],
+              },
+              key,
+            })),
+          },
+          expectedStatus: 200,
+          token,
+        })
+
+        const defaultPageVectors = await client.request<VectorResponse>(
+          'POST',
+          '/vector/ListVectors',
+          {
+            body: {
+              indexName: defaultPageIndexName,
+              vectorBucketName,
+            },
+            expectedStatus: 200,
+            token,
+          }
+        )
+        expect(defaultPageVectors.json?.vectors).toHaveLength(defaultPageVectorKeys.length)
+        expect(defaultPageVectors.json?.nextToken).toBeUndefined()
+        expect(defaultPageVectors.json?.vectors?.map((vector) => vector.key)).toEqual(
+          expect.arrayContaining(defaultPageVectorKeys)
+        )
+
+        await client.request('POST', '/vector/PutVectors', {
+          body: {
+            indexName: defaultPageIndexName,
+            vectorBucketName,
+            vectors: [
+              {
+                data: {
+                  float32: [0, 0],
+                },
+              },
+            ],
+          },
+          expectedStatus: 400,
+          token,
+        })
+
+        await client.request('POST', '/vector/PutVectors', {
+          body: {
+            indexName: defaultPageIndexName,
+            vectorBucketName,
+            vectors: [
+              {
+                data: {
+                  float32: [0, 0],
+                },
+                key: tooLongVectorKey,
+              },
+            ],
+          },
+          expectedStatus: 400,
+          token,
+        })
+
+        const largePageVectors = await client.request<VectorResponse>(
+          'POST',
+          '/vector/ListVectors',
+          {
+            body: {
+              indexName,
+              maxResults: 1000,
+              vectorBucketName,
+            },
+            expectedStatus: 200,
+            token,
+          }
+        )
+        expect(largePageVectors.json?.vectors?.map((vector) => vector.key)).toEqual(
           expect.arrayContaining(vectorKeys)
         )
 
-        const fetched = await client.request<VectorListResponse>('POST', '/vector/GetVectors', {
+        const segmentedVectors = await Promise.all(
+          [0, 1].map((segmentIndex) =>
+            client.request<VectorResponse>('POST', '/vector/ListVectors', {
+              body: {
+                indexName,
+                maxResults: 1000,
+                segmentCount: 2,
+                segmentIndex,
+                vectorBucketName,
+              },
+              expectedStatus: 200,
+              token,
+            })
+          )
+        )
+        const segmentedKeys = segmentedVectors.flatMap(
+          (segment) => segment.json?.vectors?.map((vector) => vector.key ?? '') ?? []
+        )
+        expect(new Set(segmentedKeys).size).toBe(segmentedKeys.length)
+        expect(segmentedKeys).toEqual(expect.arrayContaining(vectorKeys))
+
+        const fetched = await client.request<VectorResponse>('POST', '/vector/GetVectors', {
           body: {
             indexName,
             keys: vectorKeys,
@@ -224,8 +404,27 @@ describeAcceptance(
         expect(fetched.json?.vectors?.map((vector) => vector.key)).toEqual(
           expect.arrayContaining(vectorKeys)
         )
+        const fetchedPrimary = fetched.json?.vectors?.find((vector) => vector.key === vectorKeys[0])
+        expect(fetchedPrimary?.metadata).toMatchObject({
+          group: 'acceptance',
+          role: 'primary',
+          score: 0.75,
+          'user-id': `user-${suffix}-a`,
+        })
+        expect(fetchedPrimary?.data?.float32?.[0]).toBeCloseTo(1, 5)
+        expect(fetchedPrimary?.data?.float32?.[1]).toBeCloseTo(0, 5)
 
-        const query = await client.request<VectorListResponse>('POST', '/vector/QueryVectors', {
+        await client.request('POST', '/vector/GetVectors', {
+          body: {
+            indexName,
+            keys: Array.from({ length: 101 }, (_, i) => `missing-${i}-${suffix}`),
+            vectorBucketName,
+          },
+          expectedStatus: 400,
+          token,
+        })
+
+        const query = await client.request<VectorResponse>('POST', '/vector/QueryVectors', {
           body: {
             filter: {
               group: 'acceptance',
@@ -243,6 +442,135 @@ describeAcceptance(
           token,
         })
         expect(query.json?.vectors?.map((vector) => vector.key)).toContain(vectorKeys[0])
+
+        const hyphenKeyFilter = await client.request<VectorResponse>(
+          'POST',
+          '/vector/QueryVectors',
+          {
+            body: {
+              filter: {
+                'user-id': `user-${suffix}-a`,
+              },
+              indexName,
+              queryVector: {
+                float32: [1, 0],
+              },
+              returnMetadata: true,
+              topK: 2,
+              vectorBucketName,
+            },
+            expectedStatus: 200,
+            token,
+          }
+        )
+        expect(hyphenKeyFilter.json?.vectors?.map((vector) => vector.key)).toEqual([vectorKeys[0]])
+        expect(hyphenKeyFilter.json?.vectors?.[0]?.distance).toBeUndefined()
+
+        await client.request('POST', '/vector/QueryVectors', {
+          body: {
+            filter: {
+              'private-note': `private-${suffix}-a`,
+            },
+            indexName,
+            queryVector: {
+              float32: [1, 0],
+            },
+            topK: 2,
+            vectorBucketName,
+          },
+          expectedStatus: 400,
+          token,
+        })
+
+        const numericFilter = await client.request<VectorResponse>('POST', '/vector/QueryVectors', {
+          body: {
+            filter: {
+              score: {
+                $gte: 5,
+              },
+            },
+            indexName,
+            queryVector: {
+              float32: [1, 0],
+            },
+            returnMetadata: true,
+            topK: 2,
+            vectorBucketName,
+          },
+          expectedStatus: 200,
+          token,
+        })
+        expect(numericFilter.json?.vectors?.map((vector) => vector.key)).toEqual([vectorKeys[1]])
+
+        await client.request('POST', '/vector/PutVectors', {
+          body: {
+            indexName: secondaryIndexName,
+            vectorBucketName,
+            vectors: [
+              {
+                data: {
+                  float32: [0, 0],
+                },
+                key: euclideanVectorKeys[0],
+              },
+              {
+                data: {
+                  float32: [3, 4],
+                },
+                key: euclideanVectorKeys[1],
+              },
+              {
+                data: {
+                  float32: [8, 15],
+                },
+                key: euclideanVectorKeys[2],
+              },
+              ...euclideanDistractorVectorKeys.map((key, i) => ({
+                data: {
+                  float32: [100 + i, -100 - i],
+                },
+                key,
+              })),
+            ],
+          },
+          expectedStatus: 200,
+          token,
+        })
+
+        const euclideanQuery = await client.request<VectorResponse>(
+          'POST',
+          '/vector/QueryVectors',
+          {
+            body: {
+              indexName: secondaryIndexName,
+              queryVector: {
+                float32: [0, 0],
+              },
+              returnDistance: true,
+              topK: 3,
+              vectorBucketName,
+            },
+            expectedStatus: 200,
+            token,
+          }
+        )
+        expect(euclideanQuery.json?.distanceMetric).toBe('euclidean')
+        expect(euclideanQuery.json?.vectors?.map((vector) => vector.key)).toEqual(
+          euclideanVectorKeys
+        )
+        expect(euclideanQuery.json?.vectors?.[0]?.distance).toBeCloseTo(0, 5)
+        expect(euclideanQuery.json?.vectors?.[1]?.distance).toBeCloseTo(5, 3)
+        expect(euclideanQuery.json?.vectors?.[2]?.distance).toBeCloseTo(17, 3)
+
+        await client.request('POST', '/vector/DeleteVectors', {
+          body: {
+            indexName,
+            keys: Array.from({ length: 501 }, (_, i) => `missing-${i}-${suffix}`),
+            vectorBucketName,
+          },
+          expectedStatus: 400,
+          token,
+        })
 
         await client.request('POST', '/vector/DeleteVectors', {
           body: {
@@ -268,6 +596,16 @@ describeAcceptance(
           .request('POST', '/vector/DeleteIndex', {
             body: {
               indexName: secondaryIndexName,
+              vectorBucketName,
+            },
+            expectedStatus: [200, 400, 404],
+            token,
+          })
+          .catch(() => undefined)
+        await client
+          .request('POST', '/vector/DeleteIndex', {
+            body: {
+              indexName: defaultPageIndexName,
               vectorBucketName,
             },
             expectedStatus: [200, 400, 404],

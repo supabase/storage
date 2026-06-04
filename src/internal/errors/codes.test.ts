@@ -1,5 +1,5 @@
 import { IcebergError, IcebergErrorType } from '@storage/protocols/iceberg/catalog/errors'
-import { ErrorCode, normalizeRawError } from './codes'
+import { ErrorCode, getErrorCode, normalizeRawError } from './codes'
 import { StorageBackendError } from './storage-error'
 
 describe('normalizeRawError', () => {
@@ -107,5 +107,21 @@ describe('normalizeRawError', () => {
     const result = normalizeRawError(circular, 'info')
 
     expect(result.raw).toBe('Failed to stringify error')
+  })
+})
+
+describe('getErrorCode', () => {
+  it.each([
+    ['FST_ERR_VALIDATION', ErrorCode.InvalidRequest],
+    ['FST_ERR_CTP_EMPTY_JSON_BODY', ErrorCode.InvalidRequest],
+    ['FST_ERR_CTP_INVALID_JSON_BODY', ErrorCode.InvalidRequest],
+    ['FST_ERR_CTP_INVALID_CONTENT_LENGTH', ErrorCode.InvalidRequest],
+    ['FST_ERR_CTP_INVALID_MEDIA_TYPE', ErrorCode.InvalidMimeType],
+    ['FST_ERR_CTP_BODY_TOO_LARGE', ErrorCode.EntityTooLarge],
+  ])('maps Fastify error code %s to %s', (fastifyCode, expectedErrorCode) => {
+    const error = new Error('Fastify error')
+    Object.assign(error, { code: fastifyCode })
+
+    expect(getErrorCode(error)).toBe(expectedErrorCode)
   })
 })

@@ -449,10 +449,11 @@ describe('Webhooks', () => {
       },
     })
 
+    const objectCreatedAt = new Date(Date.now() - 1_000)
     const objects = await Promise.all([
-      createObject(pg, emptyTestBucketName),
-      createObject(pg, emptyTestBucketName),
-      createObject(pg, emptyTestBucketName),
+      createObject(pg, emptyTestBucketName, objectCreatedAt),
+      createObject(pg, emptyTestBucketName, objectCreatedAt),
+      createObject(pg, emptyTestBucketName, objectCreatedAt),
     ])
 
     const response = await appInstance.inject({
@@ -678,9 +679,10 @@ describe('Webhooks', () => {
   })
 })
 
-async function createObject(pg: TenantConnection, bucketId: string) {
+async function createObject(pg: TenantConnection, bucketId: string, createdAt?: Date) {
   const objectName = randomUUID()
   const tnx = await pg.transaction()
+  const createdAtIso = createdAt?.toISOString()
 
   const [data] = await tnx
     .from<Obj>('objects')
@@ -689,6 +691,9 @@ async function createObject(pg: TenantConnection, bucketId: string) {
         name: objectName.toString(),
         bucket_id: bucketId,
         version: randomUUID(),
+        created_at: createdAtIso,
+        updated_at: createdAtIso,
+        last_accessed_at: createdAtIso,
         metadata: {
           cacheControl: 'no-cache',
           contentLength: 3746,

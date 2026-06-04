@@ -412,11 +412,13 @@ async function ensureVectorDatabaseExists(
   maintenanceUrl: string,
   ssl: ClientConfig['ssl']
 ): Promise<void> {
+  let defaultAccessMethod = ''
   const client = await connect({
     connectionString: maintenanceUrl,
     ssl,
   })
   try {
+    defaultAccessMethod = await getDefaultAccessMethod(client)
     const exists = await client.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [
       VECTOR_DATABASE_NAME,
     ])
@@ -428,6 +430,42 @@ async function ensureVectorDatabaseExists(
         type: 'migrations',
       })
     }
+  } finally {
+    await client.end()
+  }
+
+  await configureVectorDatabaseAccessMethod({
+    databaseUrl: deriveVectorDatabaseUrl(maintenanceUrl),
+    defaultAccessMethod,
+    ssl,
+  })
+}
+
+async function configureVectorDatabaseAccessMethod({
+  databaseUrl,
+  defaultAccessMethod,
+  ssl,
+}: {
+  databaseUrl: string
+  defaultAccessMethod: string
+  ssl: ClientConfig['ssl']
+}): Promise<void> {
+  if (defaultAccessMethod !== 'orioledb') {
+    return
+  }
+
+  const client = await connect({
+    connectionString: databaseUrl,
+    ssl,
+  })
+  try {
+    await client.query('CREATE EXTENSION IF NOT EXISTS orioledb')
+    await client.query(
+      `ALTER DATABASE "${VECTOR_DATABASE_NAME}" SET default_table_access_method = 'orioledb'`
+    )
+    logSchema.info(logger, `[Migrations] Configured database ${VECTOR_DATABASE_NAME} for Oriole`, {
+      type: 'migrations',
+    })
   } finally {
     await client.end()
   }

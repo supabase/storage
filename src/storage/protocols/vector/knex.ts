@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { ListVectorBucketsInput } from '@aws-sdk/client-s3vectors'
 import { wait } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
@@ -7,6 +8,7 @@ import { VectorBucket } from '@storage/schemas'
 import { VectorIndex } from '@storage/schemas/vector'
 import { Knex } from 'knex'
 import { DatabaseError } from 'pg'
+import { paginateNPlusOne } from './pagination'
 
 type DBVectorIndex = VectorIndex & { id: string; created_at: Date; updated_at: Date }
 export type VectorLockResourceType = 'bucket' | 'index' | 'global'
@@ -61,8 +63,26 @@ export interface VectorMetadataDB {
   findVectorIndexForBucket(vectorBucketName: string, indexName: string): Promise<DBVectorIndex>
 }
 
+const vectorTransactionStorage = new AsyncLocalStorage<{ root: Knex; transaction: Knex }>()
+
+export function createVectorTransactionKnexResolver(knex: Knex): {
+  resolve: () => Knex
+  root: () => Knex
+} {
+  return {
+    resolve: () => {
+      const transaction = vectorTransactionStorage.getStore()
+      return transaction?.root === knex ? transaction.transaction : knex
+    },
+    root: () => knex,
+  }
+}
+
 export class KnexVectorMetadataDB implements VectorMetadataDB {
-  constructor(protected readonly knex: Knex) {}
+  constructor(
+    protected readonly knex: Knex,
+    private readonly rootKnex: Knex = knex
+  ) {}
 
   lockResource(resourceType: VectorLockResourceType, resourceId: string): Promise<void> {
     const lockId = hashStringToInt(`vector:${resourceType}:${resourceId}`)
@@ -101,14 +121,15 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
     const maxResults = param.maxResults ? Math.min(param.maxResults, 500) : 500
 
     const result = await query.orderBy('id', 'asc').limit(maxResults + 1)
-
-    const hasMore = result.length > maxResults
-
-    const buckets = result.slice(0, maxResults)
+    const { pageRows: buckets, nextToken } = paginateNPlusOne(
+      result,
+      maxResults,
+      (bucket) => bucket.id
+    )
 
     return {
       vectorBuckets: buckets,
-      nextToken: hasMore ? buckets[buckets.length - 1].id : undefined,
+      nextToken,
     }
   }
 
@@ -179,13 +200,15 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
     }
 
     const result = await query.limit(maxResults + 1)
-    const hasMore = result.length > maxResults
-
-    const indexes = result.slice(0, maxResults)
+    const { pageRows: indexes, nextToken } = paginateNPlusOne(
+      result,
+      maxResults,
+      (index) => index.name
+    )
 
     return {
       indexes,
-      nextToken: hasMore ? indexes[indexes.length - 1].name : undefined,
+      nextToken,
     }
   }
 
@@ -205,7 +228,7 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
 
   async createVectorIndex(data: CreateVectorIndexParams) {
     try {
-      return await this.knex
+      const rows = await this.knex
         .withSchema('storage')
         .table<DBVectorIndex>('vector_indexes')
         .insert<DBVectorIndex>({
@@ -216,6 +239,9 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
           distance_metric: data.distanceMetric,
           metadata_configuration: data.metadataConfiguration,
         })
+        .returning('*')
+
+      return rows[0]
     } catch (e) {
       if (e instanceof Error && e instanceof DatabaseError) {
         if (e.code === '23505') {
@@ -237,9 +263,11 @@ export class KnexVectorMetadataDB implements VectorMetadataDB {
     while (attempt < maxRetries) {
       try {
         return await this.knex.transaction(async (trx) => {
-          const trxDb = new KnexVectorMetadataDB(trx)
-          const result = await fn(trxDb)
-          return result
+          const transaction = trx as unknown as Knex
+          const trxDb = new KnexVectorMetadataDB(transaction, this.rootKnex)
+          return vectorTransactionStorage.run({ root: this.rootKnex, transaction }, async () =>
+            fn(trxDb)
+          )
         }, config)
       } catch (error) {
         attempt++

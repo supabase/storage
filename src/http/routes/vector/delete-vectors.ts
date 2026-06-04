@@ -1,8 +1,10 @@
 import { ERRORS } from '@internal/errors'
+import { MAX_DELETE_VECTOR_KEYS, MAX_VECTOR_KEY_LENGTH } from '@storage/protocols/vector/limits'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { compileNoCoercionValidator } from './validation'
 
 const deleteVector = {
   body: {
@@ -10,7 +12,12 @@ const deleteVector = {
     properties: {
       vectorBucketName: { type: 'string' },
       indexName: { type: 'string' },
-      keys: { type: 'array', items: { type: 'string' } },
+      keys: {
+        type: 'array',
+        minItems: 1,
+        maxItems: MAX_DELETE_VECTOR_KEYS,
+        items: { type: 'string', minLength: 1, maxLength: MAX_VECTOR_KEY_LENGTH },
+      },
     },
     required: ['vectorBucketName', 'indexName', 'keys'],
   },
@@ -22,9 +29,12 @@ interface deleteVectorRequest extends AuthenticatedRequest {
 }
 
 export default async function routes(fastify: FastifyInstance) {
+  const deleteVectorsValidator = compileNoCoercionValidator(deleteVector.body)
+
   fastify.post<deleteVectorRequest>(
     '/DeleteVectors',
     {
+      validatorCompiler: deleteVectorsValidator,
       config: {
         operation: { type: ROUTE_OPERATIONS.DELETE_VECTORS },
       },

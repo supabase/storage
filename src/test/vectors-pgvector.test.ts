@@ -1,5 +1,11 @@
+import { createHash } from 'node:crypto'
 import { BucketScopedSingleShard } from '@internal/sharding'
-import { KnexVectorMetadataDB, PgVectorStore, VectorStoreManager } from '@storage/protocols/vector'
+import {
+  createVectorTransactionKnexResolver,
+  KnexVectorMetadataDB,
+  PgVectorStore,
+  VectorStoreManager,
+} from '@storage/protocols/vector'
 import Knex from 'knex'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
@@ -18,6 +24,18 @@ const TEST_DATABASE_URL =
   process.env.VECTOR_DATABASE_URL ||
   process.env.DATABASE_URL ||
   'postgresql://postgres:postgres@127.0.0.1/postgres'
+
+function quoteIdent(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`
+}
+
+function pgvectorTableName(vectorBucketName: string, indexName: string): string {
+  const hash = createHash('sha256')
+    .update(`${vectorBucketName}\x00${indexName}`)
+    .digest('hex')
+    .slice(0, 24)
+  return `vector_${hash}`
+}
 
 let pgvectorAvailable = false
 const tenantId = 'pgvector-it-tenant'
@@ -69,21 +87,67 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
 
   afterAll(async () => {
     if (!pgvectorAvailable) return
-    // Best-effort cleanup; the per-test cleanups already drop indexes/buckets.
-    try {
-      await metadataDb
-        .withTransaction(async (tx) => {
-          await tx.deleteVectorBucket(bucketName)
-        })
-        .catch(() => undefined)
-    } catch {
-      /* swallow */
-    }
+    await metadataDb
+      .withTransaction(async (tx) => {
+        await tx.deleteVectorBucket(bucketName)
+      })
+      .catch(() => undefined)
     await knex.destroy()
   })
 
   beforeEach(async (ctx) => {
     if (!pgvectorAvailable) return ctx.skip()
+  })
+
+  it('persists metadata when transactional createIndex adopts an existing physical table', async () => {
+    const bucket = `pgvector-it-adopt-${Date.now()}`
+    const indexName = `it-adopt-${Date.now()}`
+    const physicalBucket = `pgvector__${bucket}`
+    const physicalIndex = `${tenantId}-${indexName}`
+    const physicalTable = pgvectorTableName(physicalBucket, physicalIndex)
+    const qualifiedTable = `storage_vectors.${quoteIdent(physicalTable)}`
+    const shard = new BucketScopedSingleShard({
+      keyPrefix: 'pgvector__',
+      capacity: Number.MAX_SAFE_INTEGER,
+    })
+    const transactionalManager = new VectorStoreManager(
+      new PgVectorStore(createVectorTransactionKnexResolver(knex)),
+      metadataDb,
+      shard,
+      {
+        tenantId,
+        maxBucketCount: Infinity,
+        maxIndexCount: Infinity,
+      }
+    )
+
+    try {
+      await knex('storage.buckets_vectors').insert({ id: bucket }).onConflict('id').ignore()
+      await knex.raw(`CREATE TABLE ${qualifiedTable}
+        (
+          key text PRIMARY KEY,
+          embedding halfvec(4) NOT NULL,
+          metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+        )`)
+
+      await transactionalManager.createVectorIndex({
+        vectorBucketName: bucket,
+        indexName,
+        dataType: 'float32',
+        dimension: 4,
+        distanceMetric: 'cosine',
+      })
+
+      const metadataRows = await knex('storage.vector_indexes')
+        .where({ bucket_id: bucket, name: indexName })
+        .select('name', 'bucket_id')
+
+      expect(metadataRows).toEqual([{ name: indexName, bucket_id: bucket }])
+    } finally {
+      await knex.raw(`DROP TABLE IF EXISTS ${qualifiedTable}`)
+      await knex('storage.vector_indexes').where({ bucket_id: bucket, name: indexName }).del()
+      await knex('storage.buckets_vectors').where({ id: bucket }).del()
+    }
   })
 
   it('createBucket → createVectorIndex → putVectors → queryVectors → getVectors → deleteVectors → deleteIndex', async () => {
@@ -228,7 +292,7 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
     await manager.putVectors({
       vectorBucketName: bucketName,
       indexName,
-      vectors: Array.from({ length: 5 }, (_, i) => ({
+      vectors: Array.from({ length: 4 }, (_, i) => ({
         key: `k-${i.toString().padStart(2, '0')}`,
         data: { float32: [i, 0] },
         metadata: { i },
@@ -250,9 +314,62 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
       nextToken: firstPage.nextToken,
     })
     expect(secondPage.vectors).toHaveLength(2)
-    expect(secondPage.vectors?.[0].key).not.toBe(firstPage.vectors?.[0].key)
+    expect(secondPage.vectors?.map((vector) => vector.key)).toEqual(['k-02', 'k-03'])
+    expect(secondPage.nextToken).toBeUndefined()
 
     await manager.deleteIndex({ vectorBucketName: bucketName, indexName })
+  }, 30_000)
+
+  it('listVectors returns disjoint keysets for parallel segments', async () => {
+    const segmentBucketName = `pgvector-it-segments-${Date.now()}`
+    const indexName = `it-segments-${Date.now()}`
+    const insertedKeys = Array.from({ length: 32 }, (_, i) => `k-${i.toString().padStart(2, '0')}`)
+
+    await manager.createBucket(segmentBucketName)
+    await manager.createVectorIndex({
+      vectorBucketName: segmentBucketName,
+      indexName,
+      dataType: 'float32',
+      dimension: 2,
+      distanceMetric: 'euclidean',
+    })
+
+    try {
+      await manager.putVectors({
+        vectorBucketName: segmentBucketName,
+        indexName,
+        vectors: insertedKeys.map((key, i) => ({
+          key,
+          data: { float32: [i, 0] },
+        })),
+      })
+
+      const segments = await Promise.all(
+        [0, 1].map((segmentIndex) =>
+          manager.listVectors({
+            vectorBucketName: segmentBucketName,
+            indexName,
+            maxResults: 1000,
+            segmentCount: 2,
+            segmentIndex,
+          })
+        )
+      )
+      const segmentKeys = segments.map(
+        (segment) => segment.vectors?.map((vector) => vector.key) ?? []
+      )
+      const combinedKeys = segmentKeys.flat()
+
+      expect(segmentKeys[0].length).toBeGreaterThan(0)
+      expect(segmentKeys[1].length).toBeGreaterThan(0)
+      expect(new Set(combinedKeys).size).toBe(combinedKeys.length)
+      expect(combinedKeys.sort()).toEqual(insertedKeys)
+    } finally {
+      await manager
+        .deleteIndex({ vectorBucketName: segmentBucketName, indexName })
+        .catch(() => undefined)
+      await manager.deleteBucket(segmentBucketName).catch(() => undefined)
+    }
   }, 30_000)
 
   it('rejects creating an index inside a missing bucket', async () => {

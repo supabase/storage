@@ -749,6 +749,7 @@ describe('StoragePgDB bucket metadata', () => {
     const storage = new StoragePgDB(connection, {
       tenantId,
       host: 'localhost',
+      databaseEngine: 'postgres',
     })
 
     await expect(
@@ -794,6 +795,7 @@ describe('StoragePgDB bucket metadata', () => {
     const storage = new StoragePgDB(connection, {
       tenantId,
       host: 'localhost',
+      databaseEngine: 'postgres',
     })
 
     await expect(
@@ -809,6 +811,52 @@ describe('StoragePgDB bucket metadata', () => {
     expect(statementText(queries[0])).toContain('pg_advisory_xact_lock($1)')
     expect(statementText(queries[0])).toContain(`set_config('lock_timeout', value, true)`)
     expect(statementValues(queries[0])).toEqual([expect.any(Number), '123ms'])
+  })
+
+  it('uses top-level lock_timeout statements for Multigres waitObjectLock', async () => {
+    const queries: Array<string | PgStatement> = []
+    const transaction = {
+      query: vi.fn(async (statement: string | PgStatement) => {
+        queries.push(statement)
+
+        const text = typeof statement === 'string' ? statement : statement.text
+        if (text.includes(`current_setting('lock_timeout')`)) {
+          return { rows: [{ value: '2s' }] }
+        }
+
+        return { rows: [] }
+      }),
+      commit: vi.fn().mockResolvedValue(undefined),
+      rollback: vi.fn().mockResolvedValue(undefined),
+      isCompleted: vi.fn().mockReturnValue(false),
+    } as unknown as PgTransaction
+    const connection = {
+      role: superUser.payload.role,
+      getAbortSignal: vi.fn().mockReturnValue(undefined),
+      transaction: vi.fn().mockResolvedValue(transaction),
+      setScope: vi.fn().mockResolvedValue(undefined),
+    } as unknown as PgTenantConnection
+    const storage = new StoragePgDB(connection, {
+      tenantId,
+      host: 'localhost',
+      databaseEngine: 'multigres',
+    } as ConstructorParameters<typeof StoragePgDB>[1])
+
+    await expect(
+      storage.waitObjectLock('bucket', 'object', undefined, { timeout: 123 })
+    ).resolves.toBe(true)
+
+    expect(transaction.rollback).not.toHaveBeenCalled()
+    expect(transaction.commit).toHaveBeenCalledTimes(1)
+    expect(queries).toHaveLength(4)
+    expect(statementText(queries[0])).toContain(`current_setting('lock_timeout')`)
+    expect(statementValues(queries[0])).toEqual([])
+    expect(statementText(queries[1])).toContain(`set_config('lock_timeout', $1, true)`)
+    expect(statementValues(queries[1])).toEqual(['123ms'])
+    expect(statementText(queries[2])).toContain('pg_advisory_xact_lock($1)')
+    expect(statementValues(queries[2])).toEqual([expect.any(Number)])
+    expect(statementText(queries[3])).toContain(`set_config('lock_timeout', $1, true)`)
+    expect(statementValues(queries[3])).toEqual(['2s'])
   })
 
   it('preserves original metastore errors when top-level rollback fails', async () => {

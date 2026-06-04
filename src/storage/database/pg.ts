@@ -14,7 +14,7 @@ import { logger, logSchema } from '@internal/monitoring'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { ObjectMetadata } from '@storage/backend'
 import { DatabaseError, QueryResultRow } from 'pg'
-import { getConfig } from '../../config'
+import { DatabaseEngine, getConfig } from '../../config'
 import { isUuid } from '../limits'
 import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
 import {
@@ -28,7 +28,7 @@ import {
 } from './adapter'
 import { DBError, mapPgTransactionAbortedError } from './errors'
 
-const { isMultitenant } = getConfig()
+const { databaseEngine, isMultitenant } = getConfig()
 // Scanner cache tables are unlogged scratch tables, not session temp tables.
 // They must survive across pooled pg clients used by separate unscoped queries.
 const S3_KEYS_SCRATCH_TABLE_SCHEMA = 'storage'
@@ -45,6 +45,7 @@ interface PgDatabaseOptions {
   reqId?: string
   sbReqId?: string
   latestMigration?: keyof typeof DBMigration
+  databaseEngine?: DatabaseEngine
   host: string
   tnx?: PgTransaction
   parentTnx?: PgTransaction
@@ -1183,6 +1184,11 @@ export class StoragePgDB implements Database {
       const lockTimeout = opts?.timeout
 
       if (lockTimeout && lockTimeout > 0) {
+        if (this.isMultigresDatabase()) {
+          await this.waitObjectLockWithTopLevelLockTimeout(db, hash, lockTimeout, signal)
+          return true
+        }
+
         // Single round-trip: read current -> set new -> acquire -> restore.
         // MATERIALIZED forces each CTE to materialize before the next scans,
         // which sequences the side-effecting set_config and pg_advisory_xact_lock
@@ -1250,6 +1256,69 @@ export class StoragePgDB implements Database {
 
       return true
     })
+  }
+
+  private isMultigresDatabase(): boolean {
+    return (this.options.databaseEngine ?? databaseEngine) === 'multigres'
+  }
+
+  private async waitObjectLockWithTopLevelLockTimeout(
+    db: PgExecutor,
+    hash: number,
+    lockTimeout: number,
+    signal?: AbortSignal
+  ): Promise<void> {
+    let previousLockTimeout: string
+
+    try {
+      const currentLockTimeout = await db.query<{ value: string }>(
+        {
+          text: `SELECT current_setting('lock_timeout') AS value`,
+          values: [],
+        },
+        { signal }
+      )
+
+      previousLockTimeout = currentLockTimeout.rows[0]?.value ?? '0'
+
+      await db.query(
+        {
+          text: `SELECT set_config('lock_timeout', $1, true)`,
+          values: [`${lockTimeout}ms`],
+        },
+        { signal }
+      )
+    } catch (e) {
+      throw mapPgError(e, 'WaitObjectLock Multigres setup')
+    }
+
+    try {
+      await db.query(
+        {
+          text: 'SELECT pg_advisory_xact_lock($1)',
+          values: [hash],
+        },
+        { signal }
+      )
+    } catch (e) {
+      if (isPgLockTimeoutError(e)) {
+        throw ERRORS.LockTimeout(e)
+      }
+
+      throw mapPgError(e, 'WaitObjectLock Multigres lock')
+    }
+
+    try {
+      await db.query(
+        {
+          text: `SELECT set_config('lock_timeout', $1, true)`,
+          values: [previousLockTimeout],
+        },
+        { signal }
+      )
+    } catch (e) {
+      throw mapPgError(e, 'WaitObjectLock Multigres restore')
+    }
   }
 
   async searchObjects(bucketId: string, prefix: string, options: SearchObjectOption) {

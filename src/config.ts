@@ -6,6 +6,7 @@ export type StorageBackendType = 'file' | 's3'
 export type VectorBucketProvider = 's3' | 'pgvector'
 export type IcebergCatalogAuthType = 'sigv4' | 'token'
 export type DatabasePoolMode = 'single_use' | 'recycled'
+export type DatabaseEngine = 'postgres' | 'multigres'
 const DEFAULT_S3_UPLOAD_PART_SIZE = 16 * 1024 * 1024
 const MIN_S3_UPLOAD_PART_SIZE = 5 * 1024 * 1024
 export enum MultitenantMigrationStrategy {
@@ -102,6 +103,7 @@ type StorageConfigType = {
   dbPostgresVersion?: string
   databaseURL: string
   databaseSSLRootCert?: string
+  databaseEngine: DatabaseEngine
   databasePoolURL?: string
   databasePoolMode?: DatabasePoolMode
   databaseMaxConnections: number
@@ -267,6 +269,18 @@ export function normalizeDatabasePoolMode(
   }
 
   throw new Error(`Invalid database pool mode "${mode}". Expected "single_use" or "recycled".`)
+}
+
+export function normalizeDatabaseEngine(engine: string | null | undefined): DatabaseEngine {
+  if (engine === null || engine === undefined || engine === '') {
+    return 'postgres'
+  }
+
+  if (engine === 'postgres' || engine === 'multigres') {
+    return engine
+  }
+
+  throw new Error(`Invalid database engine "${engine}". Expected "postgres" or "multigres".`)
 }
 
 function getOptionalIfMultitenantConfigFromEnv(key: string, fallback?: string): string | undefined {
@@ -475,6 +489,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       10_000
     ),
     databaseSSLRootCert: getOptionalConfigFromEnv('DATABASE_SSL_ROOT_CERT'),
+    databaseEngine: normalizeDatabaseEngine(getOptionalConfigFromEnv('DATABASE_ENGINE')),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
     databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
     databasePoolMode: normalizeDatabasePoolMode(getOptionalConfigFromEnv('DATABASE_POOL_MODE')),

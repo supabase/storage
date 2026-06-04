@@ -37,7 +37,7 @@ const S3_KEYS_SCRATCH_TABLE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const S3_KEYS_SCRATCH_TABLE_PATTERN = `^${S3_KEYS_SCRATCH_TABLE_PREFIX}([0-9]{13})(?:_[A-Za-z0-9_]+)?$`
 
 export function escapeLike(str: string) {
-  return str.replace(/([%_])/g, '\\$1')
+  return str.replace(/\\/g, '\\\\').replace(/([%_])/g, '\\$1')
 }
 
 interface PgDatabaseOptions {

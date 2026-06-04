@@ -15,6 +15,11 @@ describe('escapeLike', () => {
     expect(escapeLike('a%b_c')).toBe('a\\%b\\_c')
     expect(escapeLike('plain-text')).toBe('plain-text')
   })
+
+  test('escapes backslashes before SQL wildcard characters', () => {
+    expect(escapeLike('path\\name')).toBe(String.raw`path\\name`)
+    expect(escapeLike(String.raw`a\%b_c`)).toBe(String.raw`a\\\%b\_c`)
+  })
 })
 
 describe('StoragePgDB metrics', () => {

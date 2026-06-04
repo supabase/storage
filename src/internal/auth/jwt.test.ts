@@ -9,6 +9,10 @@ import {
   assertValidNumericJWTExpiration,
   generateHS512JWK,
   getMaxNumericJWTExpiration,
+  isDownloadScopedToken,
+  isUploadScopedToken,
+  SIGNED_URL_SCOPE_DOWNLOAD,
+  SIGNED_URL_SCOPE_UPLOAD,
   signJWT,
   verifyJWT,
   verifyJWTWithCache,
@@ -390,6 +394,53 @@ describe('JWT', () => {
         vi.doUnmock('jose')
         vi.resetModules()
       }
+    })
+  })
+})
+
+describe('signed URL scope predicates', () => {
+  describe('isUploadScopedToken', () => {
+    it('accepts an explicit upload scope', () => {
+      expect(isUploadScopedToken({ scope: SIGNED_URL_SCOPE_UPLOAD })).toBe(true)
+    })
+
+    it('accepts a legacy upload token (no scope, with upsert)', () => {
+      expect(isUploadScopedToken({ upsert: false } as never)).toBe(true)
+      expect(isUploadScopedToken({ upsert: true } as never)).toBe(true)
+    })
+
+    it('rejects a legacy download-shaped token (no scope, no upsert)', () => {
+      expect(isUploadScopedToken({ url: 'b/o' } as never)).toBe(false)
+    })
+
+    it('rejects an explicit download scope', () => {
+      expect(isUploadScopedToken({ scope: SIGNED_URL_SCOPE_DOWNLOAD })).toBe(false)
+    })
+
+    it('rejects an unknown scope even when upsert is present', () => {
+      expect(isUploadScopedToken({ scope: 'something-else', upsert: true } as never)).toBe(false)
+    })
+  })
+
+  describe('isDownloadScopedToken', () => {
+    it('accepts an explicit download scope', () => {
+      expect(isDownloadScopedToken({ scope: SIGNED_URL_SCOPE_DOWNLOAD })).toBe(true)
+    })
+
+    it('accepts a legacy download token (no scope, no upsert)', () => {
+      expect(isDownloadScopedToken({ url: 'b/o' } as never)).toBe(true)
+    })
+
+    it('rejects a legacy upload-shaped token (no scope, with upsert)', () => {
+      expect(isDownloadScopedToken({ upsert: false } as never)).toBe(false)
+    })
+
+    it('rejects an explicit upload scope', () => {
+      expect(isDownloadScopedToken({ scope: SIGNED_URL_SCOPE_UPLOAD })).toBe(false)
+    })
+
+    it('rejects an unknown scope', () => {
+      expect(isDownloadScopedToken({ scope: 'something-else' } as never)).toBe(false)
     })
   })
 })

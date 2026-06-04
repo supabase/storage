@@ -1,4 +1,5 @@
 import fastifyMultipart from '@fastify/multipart'
+import { SIGNED_URL_SCOPE_UPLOAD } from '@internal/auth'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { ROUTE_OPERATIONS } from '../operations'
@@ -85,7 +86,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       const { owner, upsert } = await request.storage
         .from(bucketName)
-        .verifyObjectSignature(token, objectName)
+        .verifyObjectSignature(token, objectName, SIGNED_URL_SCOPE_UPLOAD)
 
       const { objectMetadata, path } = await request.storage
         .asSuperUser()

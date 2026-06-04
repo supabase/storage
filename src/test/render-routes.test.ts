@@ -1,6 +1,12 @@
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { generateHS512JWK, SignedToken, signJWT, verifyJWT } from '@internal/auth'
+import {
+  generateHS512JWK,
+  SIGNED_URL_SCOPE_UPLOAD,
+  SignedToken,
+  signJWT,
+  verifyJWT,
+} from '@internal/auth'
 import dotenv from 'dotenv'
 import { FastifyInstance } from 'fastify'
 import fs from 'fs/promises'
@@ -322,6 +328,26 @@ describe('image rendering routes', () => {
     expect(response.statusCode).toBe(400)
     const body = response.json<{ error: string }>()
     expect(body.error).toBe('InvalidJWT')
+  })
+
+  it('will reject an upload-scoped token on the signed render endpoint', async () => {
+    const token = await signJWT(
+      {
+        url: 'bucket2/authenticated/casestudy.png',
+        owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+        upsert: false,
+        scope: SIGNED_URL_SCOPE_UPLOAD,
+      },
+      jwtSecret,
+      100
+    )
+    const url = '/render/image/sign/bucket2/authenticated/casestudy.png?token=' + token
+    const response = await appInstance.inject({ method: 'GET', url })
+
+    expect(S3Backend.prototype.privateAssetUrl).not.toHaveBeenCalled()
+    expect(response.statusCode).toBe(400)
+    const body = response.json<{ error: string }>()
+    expect(body.error).toBe('InvalidSignature')
   })
 
   it('will reject jwt with incorrect url payload', async () => {

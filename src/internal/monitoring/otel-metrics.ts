@@ -16,6 +16,7 @@ import {
   PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics'
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
+import { getGlobal } from '@platformatic/globals'
 import { FastifyReply, FastifyRequest } from 'fastify'
 import * as os from 'os'
 import { getConfig } from '../../config'
@@ -39,6 +40,39 @@ interface OTelMetricsGlobalState {
   __otelMetricsShutdown?: () => Promise<void>
 }
 
+const SERVICE_INSTANCE_ID_ATTRIBUTE = 'service.instance.id'
+const PROCESS_PID_ATTRIBUTE = 'process.pid'
+const WORKER_ID_ATTRIBUTE = 'worker.id'
+const PLATFORMATIC_APPLICATION_ID_ATTRIBUTE = 'platformatic.application.id'
+
+function normalizeMetricIdentityPart(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return `${value}`
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed === '' ? undefined : trimmed
+  }
+
+  return undefined
+}
+
+function resolveMetricIdentity() {
+  const hostname = os.hostname()
+  const platformatic = getGlobal()
+  const applicationId = normalizeMetricIdentityPart(platformatic?.applicationId)
+  const workerId = normalizeMetricIdentityPart(platformatic?.workerId)
+  const runtimeId = workerId === undefined ? `pid:${process.pid}` : `worker:${workerId}`
+
+  return {
+    instance: hostname,
+    serviceInstanceId: [hostname, applicationId, runtimeId].filter(Boolean).join(':'),
+    applicationId,
+    workerId,
+  }
+}
+
 function unregisterMetricInstrumentation(unregister: (() => void) | undefined) {
   if (!unregister) {
     return
@@ -57,7 +91,8 @@ function unregisterMetricInstrumentation(unregister: (() => void) | undefined) {
 // =============================================================================
 // Shared config
 // =============================================================================
-const instance = os.hostname()
+const metricIdentity = resolveMetricIdentity()
+const instance = metricIdentity.instance
 const headersEnv = process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS || ''
 const otlpEndpoint =
   process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT || process.env.OTEL_EXPORTER_OTLP_ENDPOINT
@@ -85,6 +120,12 @@ const resource = resourceFromAttributes({
   'metric.version': '1',
   region,
   instance,
+  [SERVICE_INSTANCE_ID_ATTRIBUTE]: metricIdentity.serviceInstanceId,
+  [PROCESS_PID_ATTRIBUTE]: process.pid,
+  ...(metricIdentity.workerId ? { [WORKER_ID_ATTRIBUTE]: metricIdentity.workerId } : {}),
+  ...(metricIdentity.applicationId
+    ? { [PLATFORMATIC_APPLICATION_ID_ATTRIBUTE]: metricIdentity.applicationId }
+    : {}),
 })
 
 // Bucket boundaries for duration histograms (in seconds)
@@ -256,7 +297,8 @@ if (otelMetricsEnabled) {
     prometheusExporter = new PrometheusExporter({
       prefix: serviceName,
       preventServerStart: true,
-      withResourceConstantLabels: /^(region|instance|metric\.version|service\.name)$/,
+      withResourceConstantLabels:
+        /^(region|instance|metric\.version|service\.name|service\.instance\.id|worker\.id|platformatic\.application\.id)$/,
     })
     readers.push(prometheusExporter)
   }

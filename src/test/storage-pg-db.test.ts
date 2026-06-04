@@ -937,12 +937,12 @@ describe('StoragePgDB bucket metadata', () => {
         expect.any(Number),
         expect.objectContaining({
           name: 'AbortedStoragePgQueryMetric',
-          tenantId,
           requestAborted: true,
           requestAbortedBeforeStart: true,
           requestAbortedAfterStart: false,
         })
       )
+      expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
     } finally {
       recordSpy.mockRestore()
     }
@@ -970,10 +970,10 @@ describe('StoragePgDB bucket metadata', () => {
         expect.any(Number),
         expect.objectContaining({
           name: 'TransactionSetupFailureMetric',
-          tenantId,
           requestAborted: false,
         })
       )
+      expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
     } finally {
       recordSpy.mockRestore()
     }
@@ -1002,12 +1002,12 @@ describe('StoragePgDB bucket metadata', () => {
         expect.any(Number),
         expect.objectContaining({
           name: 'RequestAbortAfterStartMetric',
-          tenantId,
           requestAborted: true,
           requestAbortedBeforeStart: false,
           requestAbortedAfterStart: true,
         })
       )
+      expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
     } finally {
       recordSpy.mockRestore()
     }

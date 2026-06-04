@@ -147,6 +147,10 @@ function tableCapabilityCache(db: Knex): Map<string, Promise<PgVectorTableCapabi
 }
 
 function capabilityForAccessMethod(accessMethod: unknown): PgVectorTableCapability {
+  if (typeof accessMethod !== 'string') {
+    return UNKNOWN_TABLE_CAPABILITY
+  }
+
   return accessMethod === 'orioledb' ? BRIDGED_HNSW_TABLE_CAPABILITY : STANDARD_TABLE_CAPABILITY
 }
 
@@ -172,6 +176,9 @@ async function resolveTableCapability(db: Knex, table: string): Promise<PgVector
       [SCHEMA, table]
     )
     .then((result: { rows?: Array<Record<string, unknown>> }) => {
+      if (result.rows?.[0]?.amname === undefined && cache.get(table) === capabilityProbe) {
+        cache.delete(table)
+      }
       return capabilityForAccessMethod(result.rows?.[0]?.amname)
     })
     .catch(() => {
@@ -209,15 +216,9 @@ function hasRootKnexResolver(r: KnexResolver): boolean {
   return 'resolve' in r && typeof r.resolve === 'function' && typeof r.root === 'function'
 }
 
-function isKnexTransaction(db: Knex): boolean {
-  return Boolean((db as { isTransaction?: boolean }).isTransaction)
-}
-
 async function withPgTransaction<T>(db: Knex, fn: (trx: Knex) => Promise<T>): Promise<T> {
-  if (isKnexTransaction(db)) {
-    return fn(db)
-  }
-
+  // Knex transaction handles create a savepoint when transaction() is called on
+  // them. Keep statement failures from poisoning the caller's outer transaction.
   return db.transaction(async (trx) => fn(trx as unknown as Knex))
 }
 
@@ -537,12 +538,10 @@ export class PgVectorStore implements VectorStore {
   ): Promise<{ rows: unknown[] }> {
     const capability = await resolveTableCapability(db, table)
     if (!capability.requiresExactQueryScan) {
-      if (topK <= DEFAULT_HNSW_EF_SEARCH) {
-        return db.raw(sql, params)
-      }
-
       return withPgTransaction(db, async (trx): Promise<{ rows: unknown[] }> => {
-        await trx.raw(`SELECT set_config('hnsw.ef_search', ?, true)`, [String(topK)])
+        await trx.raw(`SELECT set_config('hnsw.ef_search', ?, true)`, [
+          String(Math.max(topK, DEFAULT_HNSW_EF_SEARCH)),
+        ])
         return trx.raw(sql, params)
       })
     }

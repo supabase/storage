@@ -1,5 +1,11 @@
+import { createHash } from 'node:crypto'
 import { BucketScopedSingleShard } from '@internal/sharding'
-import { KnexVectorMetadataDB, PgVectorStore, VectorStoreManager } from '@storage/protocols/vector'
+import {
+  createVectorTransactionKnexResolver,
+  KnexVectorMetadataDB,
+  PgVectorStore,
+  VectorStoreManager,
+} from '@storage/protocols/vector'
 import Knex from 'knex'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
@@ -18,6 +24,18 @@ const TEST_DATABASE_URL =
   process.env.VECTOR_DATABASE_URL ||
   process.env.DATABASE_URL ||
   'postgresql://postgres:postgres@127.0.0.1/postgres'
+
+function quoteIdent(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`
+}
+
+function pgvectorTableName(vectorBucketName: string, indexName: string): string {
+  const hash = createHash('sha256')
+    .update(`${vectorBucketName}\x00${indexName}`)
+    .digest('hex')
+    .slice(0, 24)
+  return `vector_${hash}`
+}
 
 let pgvectorAvailable = false
 const tenantId = 'pgvector-it-tenant'
@@ -79,6 +97,57 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
 
   beforeEach(async (ctx) => {
     if (!pgvectorAvailable) return ctx.skip()
+  })
+
+  it('persists metadata when transactional createIndex adopts an existing physical table', async () => {
+    const bucket = `pgvector-it-adopt-${Date.now()}`
+    const indexName = `it-adopt-${Date.now()}`
+    const physicalBucket = `pgvector__${bucket}`
+    const physicalIndex = `${tenantId}-${indexName}`
+    const physicalTable = pgvectorTableName(physicalBucket, physicalIndex)
+    const qualifiedTable = `storage_vectors.${quoteIdent(physicalTable)}`
+    const shard = new BucketScopedSingleShard({
+      keyPrefix: 'pgvector__',
+      capacity: Number.MAX_SAFE_INTEGER,
+    })
+    const transactionalManager = new VectorStoreManager(
+      new PgVectorStore(createVectorTransactionKnexResolver(knex)),
+      metadataDb,
+      shard,
+      {
+        tenantId,
+        maxBucketCount: Infinity,
+        maxIndexCount: Infinity,
+      }
+    )
+
+    try {
+      await knex('storage.buckets_vectors').insert({ id: bucket }).onConflict('id').ignore()
+      await knex.raw(`CREATE TABLE ${qualifiedTable}
+        (
+          key text PRIMARY KEY,
+          embedding halfvec(4) NOT NULL,
+          metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+        )`)
+
+      await transactionalManager.createVectorIndex({
+        vectorBucketName: bucket,
+        indexName,
+        dataType: 'float32',
+        dimension: 4,
+        distanceMetric: 'cosine',
+      })
+
+      const metadataRows = await knex('storage.vector_indexes')
+        .where({ bucket_id: bucket, name: indexName })
+        .select('name', 'bucket_id')
+
+      expect(metadataRows).toEqual([{ name: indexName, bucket_id: bucket }])
+    } finally {
+      await knex.raw(`DROP TABLE IF EXISTS ${qualifiedTable}`)
+      await knex('storage.vector_indexes').where({ bucket_id: bucket, name: indexName }).del()
+      await knex('storage.buckets_vectors').where({ id: bucket }).del()
+    }
   })
 
   it('createBucket → createVectorIndex → putVectors → queryVectors → getVectors → deleteVectors → deleteIndex', async () => {

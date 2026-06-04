@@ -308,7 +308,10 @@ describe('PgVectorStore (real pgvector)', () => {
       }
       return { rows: [] }
     })
-    const localStore = new PgVectorStore({ raw } as unknown as Knex.Knex)
+    const transaction = vi.fn(async (fn: (trx: { raw: typeof raw }) => Promise<unknown>) =>
+      fn({ raw })
+    )
+    const localStore = new PgVectorStore({ raw, transaction } as unknown as Knex.Knex)
 
     await expect(
       localStore.putVectors({
@@ -390,7 +393,10 @@ describe('PgVectorStore (real pgvector)', () => {
       }
       return { rows: [] }
     })
-    const localStore = new PgVectorStore({ raw } as unknown as Knex.Knex)
+    const transaction = vi.fn(async (fn: (trx: { raw: typeof raw }) => Promise<unknown>) =>
+      fn({ raw })
+    )
+    const localStore = new PgVectorStore({ raw, transaction } as unknown as Knex.Knex)
 
     await expect(
       localStore.putVectors({
@@ -466,6 +472,44 @@ describe('PgVectorStore (real pgvector)', () => {
     expect(efSearchCall?.[1]).toEqual(['100'])
   })
 
+  it('sets hnsw ef_search to the default floor for standard scans below the default', async () => {
+    const localBucket = `bucket-top-k-floor-${Date.now()}-${Math.random()}`
+    const localIndex = `index-top-k-floor-${Date.now()}-${Math.random()}`
+    const raw = vi.fn(async (sql: string, _params?: unknown[]) => {
+      const text = String(sql)
+      if (text.includes('FROM pg_index')) {
+        return { rows: [{ opcname: 'halfvec_cosine_ops' }] }
+      }
+      if (isTableAccessMethodLookup(text)) {
+        return { rows: [{ amname: 'heap' }] }
+      }
+      return { rows: [] }
+    })
+    const transaction = vi.fn(async (fn: (trx: { raw: typeof raw }) => Promise<unknown>) =>
+      fn({ raw })
+    )
+    const localStore = new PgVectorStore({ raw, transaction } as unknown as Knex.Knex)
+
+    await expect(
+      localStore.queryVectors({
+        vectorBucketName: localBucket,
+        indexName: localIndex,
+        queryVector: { float32: [1, 0] },
+        topK: 10,
+      })
+    ).resolves.toMatchObject({
+      vectors: [],
+    })
+
+    expect(transaction).toHaveBeenCalledTimes(1)
+    const efSearchCall = raw.mock.calls.find(([sql]) =>
+      String(sql).includes("set_config('hnsw.ef_search'")
+    )
+    expect(efSearchCall?.[1]).toEqual(['40'])
+    const queryCall = raw.mock.calls.find(([sql]) => String(sql).includes('ORDER BY embedding'))
+    expect(queryCall?.[1]).toEqual(expect.arrayContaining([10]))
+  })
+
   it('omits distance values when queryVectors has returnDistance=false', async () => {
     const localBucket = `bucket-no-distance-${Date.now()}-${Math.random()}`
     const localIndex = `index-no-distance-${Date.now()}-${Math.random()}`
@@ -482,7 +526,10 @@ describe('PgVectorStore (real pgvector)', () => {
       }
       return { rows: [] }
     })
-    const localStore = new PgVectorStore({ raw } as unknown as Knex.Knex)
+    const transaction = vi.fn(async (fn: (trx: { raw: typeof raw }) => Promise<unknown>) =>
+      fn({ raw })
+    )
+    const localStore = new PgVectorStore({ raw, transaction } as unknown as Knex.Knex)
 
     const result = await localStore.queryVectors({
       vectorBucketName: localBucket,
@@ -521,7 +568,10 @@ describe('PgVectorStore (real pgvector)', () => {
       }
       return { rows: [] }
     })
-    const localStore = new PgVectorStore({ raw } as unknown as Knex.Knex)
+    const transaction = vi.fn(async (fn: (trx: { raw: typeof raw }) => Promise<unknown>) =>
+      fn({ raw })
+    )
+    const localStore = new PgVectorStore({ raw, transaction } as unknown as Knex.Knex)
 
     const result = await localStore.queryVectors({
       vectorBucketName: localBucket,
@@ -556,7 +606,10 @@ describe('PgVectorStore (real pgvector)', () => {
       }
       return { rows: [] }
     })
-    const localStore = new PgVectorStore({ raw } as unknown as Knex.Knex)
+    const transaction = vi.fn(async (fn: (trx: { raw: typeof raw }) => Promise<unknown>) =>
+      fn({ raw })
+    )
+    const localStore = new PgVectorStore({ raw, transaction } as unknown as Knex.Knex)
     const command = {
       vectorBucketName: localBucket,
       indexName: localIndex,
@@ -596,6 +649,47 @@ describe('PgVectorStore (real pgvector)', () => {
           throw new Error('temporary probe failure')
         }
         return { rows: [{ amname: 'orioledb' }] }
+      }
+      if (text.includes('ORDER BY embedding')) {
+        throw new Error('query should run through exact scan transaction')
+      }
+      return { rows: [] }
+    })
+    const localStore = new PgVectorStore({ raw, transaction } as unknown as Knex.Knex)
+    const command = {
+      vectorBucketName: localBucket,
+      indexName: localIndex,
+      queryVector: { float32: [1, 0] },
+      topK: 1,
+    }
+
+    await localStore.queryVectors(command)
+    await localStore.queryVectors(command)
+
+    const capabilityLookups = raw.mock.calls.filter(([sql]) => isTableAccessMethodLookup(sql))
+    expect(capabilityLookups).toHaveLength(2)
+    expect(transaction).toHaveBeenCalledTimes(2)
+    const exactScanSettings = trxRaw.mock.calls.filter(([sql]) =>
+      String(sql).includes('enable_indexscan')
+    )
+    expect(exactScanSettings).toHaveLength(2)
+    expect(exactScanSettings.every(([sql]) => String(sql).includes('enable_bitmapscan'))).toBe(true)
+  })
+
+  it('treats an empty table capability probe as unknown and does not cache it', async () => {
+    const localBucket = `bucket-empty-probe-${Date.now()}-${Math.random()}`
+    const localIndex = `index-empty-probe-${Date.now()}-${Math.random()}`
+    const trxRaw = vi.fn().mockResolvedValue({ rows: [] })
+    const transaction = vi.fn(async (fn: (trx: { raw: typeof trxRaw }) => Promise<void>) =>
+      fn({ raw: trxRaw })
+    )
+    const raw = vi.fn(async (sql: string) => {
+      const text = String(sql)
+      if (text.includes('FROM pg_index')) {
+        return { rows: [{ opcname: 'halfvec_cosine_ops' }] }
+      }
+      if (isTableAccessMethodLookup(text)) {
+        return { rows: [] }
       }
       if (text.includes('ORDER BY embedding')) {
         throw new Error('query should run through exact scan transaction')
@@ -1019,14 +1113,15 @@ describe('PgVectorStore (real pgvector)', () => {
     expect(raw.mock.calls.filter(([sql]) => isCapabilityLookup(sql))).toHaveLength(2)
   })
 
-  it('creates an index through an active transaction resolver without opening another transaction', async () => {
+  it('creates an index through an active transaction resolver using a savepoint', async () => {
     const raw = vi.fn().mockResolvedValue({ rows: [] })
-    const transaction = vi.fn()
+    const transaction = vi.fn(async (fn: (trx: { raw: typeof raw }) => Promise<unknown>) =>
+      fn({ raw })
+    )
     const localStore = new PgVectorStore({
       resolve: () =>
         ({
           isTransaction: true,
-          raw,
           transaction,
         }) as unknown as Knex.Knex,
     })
@@ -1041,7 +1136,7 @@ describe('PgVectorStore (real pgvector)', () => {
       })
     ).resolves.toEqual({ $metadata: {} })
 
-    expect(transaction).not.toHaveBeenCalled()
+    expect(transaction).toHaveBeenCalledTimes(1)
     expect(raw).toHaveBeenCalledTimes(2)
     expect(String(raw.mock.calls[0][0])).toContain('CREATE TABLE')
     expect(String(raw.mock.calls[1][0])).toContain('CREATE INDEX')
@@ -1067,8 +1162,9 @@ describe('PgVectorStore (real pgvector)', () => {
     const transactionRaw = vi.fn().mockResolvedValue({ rows: [] })
     const transactionDb = {
       isTransaction: true,
-      raw: transactionRaw,
-      transaction: vi.fn(),
+      transaction: vi.fn(async (fn: (trx: { raw: typeof transactionRaw }) => Promise<unknown>) =>
+        fn({ raw: transactionRaw })
+      ),
     } as unknown as Knex.Knex
     const transactionStore = new PgVectorStore({
       resolve: () => transactionDb,
@@ -1126,6 +1222,11 @@ describe('PgVectorStore (real pgvector)', () => {
           data: { float32: [0, 0, 0, 1] },
           metadata: { category: ['cats', 'birds'], score: 7 },
         },
+        {
+          key: 'e',
+          data: { float32: [0.5, 0.5, 0, 0] },
+          metadata: { category: 'numeric-list', score: [1, 5, 9] },
+        },
       ],
     })
 
@@ -1175,9 +1276,14 @@ describe('PgVectorStore (real pgvector)', () => {
       return sortedVectorKeys(result.vectors)
     }
 
-    await expect(filteredKeys({ category: { $ne: 'cats' } })).resolves.toEqual(['b'])
+    await expect(filteredKeys({ category: { $ne: 'cats' } })).resolves.toEqual(['b', 'e'])
     await expect(filteredKeys({ category: { $in: ['birds'] } })).resolves.toEqual(['d'])
-    await expect(filteredKeys({ category: { $nin: ['cats', 'birds'] } })).resolves.toEqual(['b'])
+    await expect(filteredKeys({ category: { $nin: ['cats', 'birds'] } })).resolves.toEqual([
+      'b',
+      'e',
+    ])
+    await expect(filteredKeys({ score: { $eq: 5 } })).resolves.toEqual(['a', 'e'])
+    await expect(filteredKeys({ score: { $gt: 3 } })).resolves.toEqual(['a', 'c', 'd'])
 
     const fetched = await store.getVectors({
       vectorBucketName: bucket,
@@ -1194,7 +1300,7 @@ describe('PgVectorStore (real pgvector)', () => {
       indexName: index,
       maxResults: 100,
     })
-    expect((list.vectors ?? []).map((v) => v.key).sort()).toEqual(['a', 'b', 'c', 'd'])
+    expect((list.vectors ?? []).map((v) => v.key).sort()).toEqual(['a', 'b', 'c', 'd', 'e'])
 
     const firstPage = await store.listVectors({
       vectorBucketName: bucket,

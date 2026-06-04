@@ -6,10 +6,10 @@ import { monitorStreamSpeed } from './stream-speed'
 /**
  * Monitor readable streams by tracking their speed and bytes read
  * @param dataStream
- * @param byteCounter optional counter for callers that need the final byte count
  */
-export function monitorStream(dataStream: Readable, byteCounter = createByteCounterStream()) {
+export function monitorStream(dataStream: Readable) {
   const speedMonitor = monitorStreamSpeed(dataStream)
+  const byteCounter = createByteCounterStream()
   const span = trace.getActiveSpan()
 
   // Limit measures array to prevent unbounded growth during long uploads

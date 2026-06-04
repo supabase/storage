@@ -260,6 +260,7 @@ export class ShardCatalog implements Sharder {
     await this.factory.withTransaction(async (store) => {
       const resv = await store.fetchReservationById(reservationId)
       if (!resv) return
+      if (resv.status !== 'pending') return
       await store.updateReservationStatus(reservationId, 'cancelled')
     })
   }

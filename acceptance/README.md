@@ -98,6 +98,15 @@ Local CI also enables admin acceptance for multitenant matrix entries. Path-edge
 from the local storage backend, so empty path segment object names are exercised only on backends
 that can store them.
 
+Local CI enables vector acceptance on PostgreSQL and OrioleDB matrix rows using the pgvector-backed
+local provider, covering both S3/file storage backends and single/multitenant modes. OrioleDB rows
+use the locally built OrioleDB+pgvector image. Single-tenant rows create and migrate a dedicated
+`storage_vectors` database from `VECTOR_DATABASE_URL`. Multitenant pgvector rows provision the local
+tenant with the configured tenant database URL and pool URL. Multitenant pgvector index DDL reuses
+the active tenant transaction connection; single-tenant pgvector and S3 Vectors index creation keep
+physical side effects outside retried metadata transactions and clean up committed metadata on
+post-commit failures.
+
 ## GitHub Environments
 
 The workflow dispatch `acceptance_environment` input uses `local` for the managed local run. Any
@@ -125,7 +134,7 @@ secrets as environment secrets.
 | `ACCEPTANCE_ENABLE_CDN`           | Enables CDN purge tests. Managed local runs provide a purge stub by default.                      |
 | `ACCEPTANCE_ENABLE_RENDER`        | Enables image transformation tests.                                                               |
 | `ACCEPTANCE_ENABLE_RLS_SETUP`     | Enables RLS tests; requires service, anon, authenticated keys and bucket/prefix policy resources. |
-| `ACCEPTANCE_ENABLE_VECTOR`        | Enables vector bucket API tests. Requires a configured S3 Vectors-compatible service.             |
+| `ACCEPTANCE_ENABLE_VECTOR`        | Enables vector bucket API tests. Requires local pgvector or a configured S3 Vectors target.       |
 | `ACCEPTANCE_ENABLE_ICEBERG`       | Enables Iceberg catalog API tests.                                                                |
 | `ACCEPTANCE_ENABLE_WIRE`          | Enables wire-level tests outside the `wire` / `full` profiles.                                    |
 | `ACCEPTANCE_RLS_BUCKET`           | Bucket used by opt-in RLS tests. Defaults to local dummy `bucket2`.                               |

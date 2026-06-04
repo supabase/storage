@@ -1,7 +1,4 @@
-import { Attributes, metrics } from '@opentelemetry/api'
-import { getConfig } from '../../config'
-
-const { prometheusMetricsIncludeTenantId } = getConfig()
+import { metrics } from '@opentelemetry/api'
 
 // ============================================================================
 // Metric Registry — tracks all metrics for admin API
@@ -48,35 +45,12 @@ export function isMetricEnabled(name: string): boolean {
 // ============================================================================
 export const meter = metrics.getMeter('storage-api')
 
-function stripTenantAttrs(attrs: Attributes): Attributes {
-  const { tenantId, tenant_id, ...rest } = attrs as Record<string, unknown>
-  return rest as Attributes
-}
-
 /**
- * Registers a metric in the admin registry and wraps .record()/.add()
- * to automatically strip tenant attributes when prometheusMetricsIncludeTenantId is false.
+ * Registers a metric in the admin registry.
  */
 export function registerMetric<T>(name: string, type: MetricType, factory: () => T): T {
   metricsRegistry.set(name, { name, type, enabled: !disabledMetrics.has(name) })
-  const instrument = factory()
-
-  if (prometheusMetricsIncludeTenantId) return instrument
-
-  // biome-ignore lint/suspicious/noExplicitAny: wrapping OTel instrument methods
-  const inst = instrument as any
-  if (typeof inst.record === 'function') {
-    const original = inst.record.bind(inst)
-    inst.record = (value: number, attrs?: Attributes) =>
-      original(value, attrs ? stripTenantAttrs(attrs) : attrs)
-  }
-  if (typeof inst.add === 'function') {
-    const original = inst.add.bind(inst)
-    inst.add = (value: number, attrs?: Attributes) =>
-      original(value, attrs ? stripTenantAttrs(attrs) : attrs)
-  }
-
-  return instrument
+  return factory()
 }
 
 // ============================================================================

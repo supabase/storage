@@ -7,6 +7,7 @@ const {
   requestXForwardedHostRegExp,
   tenantId: defaultTenantId,
   region,
+  serviceName,
   storageS3InternalTracesEnabled,
 } = getConfig()
 
@@ -114,7 +115,7 @@ if (tracingEnabled && traceExporter && spanProcessors.length > 0) {
   // Configure the OpenTelemetry Node SDK
   tracingSdk = new NodeSDK({
     resource: resourceFromAttributes({
-      [ATTR_SERVICE_NAME]: 'storage',
+      [ATTR_SERVICE_NAME]: serviceName,
       [ATTR_SERVICE_VERSION]: version,
     }),
     spanProcessors,

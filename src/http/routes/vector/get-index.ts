@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { compileNoCoercionValidator } from './validation'
 
 const getVectorIndex = {
   type: 'object',
@@ -29,9 +30,12 @@ interface getVectorIndexRequest extends AuthenticatedRequest {
 }
 
 export default async function routes(fastify: FastifyInstance) {
+  const getVectorIndexValidator = compileNoCoercionValidator(getVectorIndex.body)
+
   fastify.post<getVectorIndexRequest>(
     '/GetIndex',
     {
+      validatorCompiler: getVectorIndexValidator,
       config: {
         operation: { type: ROUTE_OPERATIONS.GET_VECTOR_INDEX },
       },

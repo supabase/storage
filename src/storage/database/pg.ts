@@ -1826,7 +1826,6 @@ export class StoragePgDB implements Database {
 
       dbQueryPerformance.record(duration, {
         name: queryName,
-        tenantId: this.tenantId,
         requestAborted: requestAbortedBeforeStart || requestAbortedAtRecord,
         requestAbortedBeforeStart,
         requestAbortedAfterStart: !requestAbortedBeforeStart && requestAbortedAtRecord,

@@ -2,7 +2,6 @@ import EventEmitter from 'node:events'
 import { ERRORS } from '@internal/errors'
 import pg from 'pg'
 import { Db } from 'pg-boss'
-import { getConfig } from '../../config'
 import { PgExecutor } from '../database/pg-connection'
 
 export { quoteIdentifier } from '../database/sql'
@@ -18,9 +17,6 @@ export class QueueDB extends EventEmitter implements Db {
 
   constructor(config: pg.PoolConfig) {
     super()
-
-    config.application_name = config.application_name || getConfig().pgQueueApplicationName
-
     this.config = config
   }
 

@@ -100,6 +100,7 @@ export class PgPoolStrategy {
 
   rebalance(options: PoolRebalanceOptions): void {
     let shouldUpdatePoolMax = false
+    const previousMax = this.pool?.options.max
 
     if (options.clusterSize !== undefined && options.clusterSize !== 0) {
       this.options.clusterSize = options.clusterSize
@@ -116,7 +117,12 @@ export class PgPoolStrategy {
     }
 
     if (this.pool) {
-      this.pool.options.max = this.getSettings().maxConnections
+      const nextMax = this.getSettings().maxConnections
+      this.pool.options.max = nextMax
+
+      if (previousMax !== undefined && nextMax > previousMax) {
+        pulsePgPoolQueue(this.pool)
+      }
     }
   }
 
@@ -252,6 +258,10 @@ function wait(timeoutMs: number): Promise<void> {
     const timeout = setTimeout(resolve, timeoutMs)
     timeout.unref?.()
   })
+}
+
+function pulsePgPoolQueue(pool: Pool): void {
+  ;(pool as Pool & { _pulseQueue?: () => void })._pulseQueue?.()
 }
 
 export class PgPoolManager extends PoolManager<PgPoolStrategy> {

@@ -440,12 +440,24 @@ export async function onTenantConfigChange(cacheKey: string) {
   try {
     const newConfig = await getTenantConfig(cacheKey, { recordMetrics: false })
 
+    // 1. Pool mode flipped recycled → single_use: tear down the long-lived pool.
     if (newConfig.databasePoolMode === 'single_use' && oldConfig.databasePoolMode === 'recycled') {
-      // if the pool mode changed to single use, we need destroy the current pool
-      await destroyTenantPool(cacheKey)
-      return
+      return destroyTenantPool(cacheKey)
     }
 
+    // 2. DB endpoint changed: the cached pool's connection string is stale, and
+    //    so are its open sockets. Hard destroy so the next request rebuilds
+    //    against the new endpoint.
+    if (
+      newConfig.databaseUrl !== oldConfig.databaseUrl ||
+      newConfig.databasePoolUrl !== oldConfig.databasePoolUrl
+    ) {
+      return destroyTenantPool(cacheKey)
+    }
+
+    // 3. Max connections changed: endpoint is fine, only the budget moved.
+    //    Rebalance the cached pg pool in place so new acquire attempts observe
+    //    the new budget while in-flight queries keep their checked-out clients.
     if (
       normalizeMaxConnections(newConfig.maxConnections) !==
       normalizeMaxConnections(oldConfig.maxConnections)

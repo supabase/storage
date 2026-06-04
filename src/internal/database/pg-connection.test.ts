@@ -542,6 +542,88 @@ describe('PgPoolStrategy', () => {
     }
   })
 
+  it('keeps min at 0 across pg pool rebalances', async () => {
+    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
+
+    try {
+      const pool = strategy.getCurrentPoolForTest()
+      expect(pool.options.min).toBe(0)
+
+      strategy.rebalance({ maxConnections: 1 })
+      expect(pool.options.min).toBe(0)
+
+      strategy.rebalance({ maxConnections: 50 })
+      expect(pool.options.min).toBe(0)
+
+      strategy.rebalance({ clusterSize: 100 })
+      expect(pool.options.min).toBe(0)
+    } finally {
+      await strategy.destroy()
+    }
+  })
+
+  it('treats max-connections scale-down as a soft cap for checked-out pg clients', async () => {
+    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
+    const pool = new PgPool({
+      Client: FakePgPoolClient,
+      max: 4,
+    } as unknown as ConstructorParameters<typeof PgPool>[0])
+
+    try {
+      strategy.setCurrentPoolForTest(pool)
+      const checkedOutClients = await Promise.all(Array.from({ length: 4 }, () => pool.connect()))
+      expect(pool.totalCount).toBe(4)
+
+      strategy.rebalance({ maxConnections: 1 })
+      expect(pool.options.max).toBe(1)
+      expect(pool.totalCount).toBe(4)
+
+      const blockedAcquire = pool.connect()
+      await waitForDrainCheck()
+      expect(pool.waitingCount).toBe(1)
+
+      checkedOutClients[0].release()
+      const queuedClient = await blockedAcquire
+      expect(pool.totalCount).toBe(4)
+
+      queuedClient.release()
+      checkedOutClients.slice(1).forEach((client) => client.release())
+    } finally {
+      await pool.end()
+    }
+  })
+
+  it('serves queued pg acquires immediately after scaling max up', async () => {
+    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
+    const pool = new PgPool({
+      Client: FakePgPoolClient,
+      max: 1,
+    } as unknown as ConstructorParameters<typeof PgPool>[0])
+
+    try {
+      strategy.setCurrentPoolForTest(pool)
+      const checkedOutClient = await pool.connect()
+      const queuedConnect = pool.connect()
+
+      await waitForDrainCheck()
+      expect(pool.waitingCount).toBe(1)
+
+      strategy.rebalance({ maxConnections: 2 })
+
+      const queuedClient = await Promise.race([
+        queuedConnect,
+        waitForDrainCheck().then(() => undefined),
+      ])
+      expect(queuedClient).toBeDefined()
+      expect(pool.waitingCount).toBe(0)
+
+      checkedOutClient.release()
+      queuedClient?.release()
+    } finally {
+      await pool.end()
+    }
+  })
+
   it('does not drain the current pg pool after rebalance', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const error = new Error('pool drain failed')

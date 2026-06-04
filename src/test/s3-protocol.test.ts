@@ -37,9 +37,24 @@ import { StoragePgDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
 import { createHash, createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
+import { vi } from 'vitest'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
+import type { ObjectMetadata } from '../storage/backend'
+import { ObjectCreatedCopyEvent, ObjectCreatedPostEvent, ObjectRemoved } from '../storage/events'
+import type { ObjectRemovedEvent } from '../storage/events/lifecycle/object-removed'
 import { EMPTY_SHA256_HASH, SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
+
+interface ObjectCreatedEvent {
+  name: string
+  version: string
+  bucketId: string
+  metadata: ObjectMetadata
+  uploadType: 'standard' | 'resumable' | 's3'
+  tenant: { ref: string; host?: string }
+  reqId: string
+  sbReqId?: string
+}
 
 const {
   anonKeyAsync,
@@ -917,28 +932,51 @@ describe('S3 Protocol', () => {
 
     describe('MultiPart Form Data Upload', () => {
       it('can upload using multipart/form-data', async () => {
-        const bucketName = await createBucket(client)
-        const signedURL = await createPresignedPost(client, {
-          Bucket: bucketName,
-          Key: 'test.jpg',
-          Expires: 5000,
-          Fields: {
-            'Content-Type': 'image/jpg',
-            'X-Amz-Meta-Custom': 'meta-field',
-          },
-        })
+        const webhookSpy = vi
+          .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+          .mockResolvedValue(undefined)
 
-        const formData = new FormData()
-        Object.keys(signedURL.fields).forEach((key) => {
-          formData.set(key, signedURL.fields[key])
-        })
+        try {
+          const bucketName = await createBucket(client)
+          const signedURL = await createPresignedPost(client, {
+            Bucket: bucketName,
+            Key: 'test.jpg',
+            Expires: 5000,
+            Fields: {
+              'Content-Type': 'image/jpg',
+              'X-Amz-Meta-Custom': 'meta-field',
+            },
+          })
 
-        const data = Buffer.alloc(1024)
-        formData.set('file', new Blob([data]), 'test.jpg')
+          const formData = new FormData()
+          Object.keys(signedURL.fields).forEach((key) => {
+            formData.set(key, signedURL.fields[key])
+          })
 
-        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+          const data = Buffer.alloc(1024)
+          formData.set('file', new Blob([data]), 'test.jpg')
 
-        expect(resp.status).toBe(200)
+          const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+          expect(resp.status).toBe(200)
+
+          // Verify webhook was called with correct data
+          expect(webhookSpy).toHaveBeenCalledTimes(1)
+          const webhookCall = webhookSpy.mock.calls[0][0] as ObjectCreatedEvent
+          expect(webhookCall).toMatchObject({
+            tenant: expect.objectContaining({ ref: tenantId }),
+            name: 'test.jpg',
+            version: expect.any(String),
+            bucketId: bucketName,
+            reqId: expect.any(String),
+            metadata: expect.any(Object),
+            uploadType: 's3',
+          })
+          expect(webhookCall.metadata).toBeDefined()
+          expect(webhookCall.metadata).toHaveProperty('size')
+        } finally {
+          webhookSpy.mockRestore()
+        }
       })
 
       it('prevent uploading files larger than the maxFileSize limit', async () => {
@@ -1023,45 +1061,68 @@ describe('S3 Protocol', () => {
       })
 
       it('completes a multipart upload', async () => {
-        const bucketName = await createBucket(client)
-        const createMultiPartUpload = new CreateMultipartUploadCommand({
-          Bucket: bucketName,
-          Key: 'test-1.jpg',
-          ContentType: 'image/jpg',
-          CacheControl: 'max-age=2000',
-        })
-        const resp = await client.send(createMultiPartUpload)
-        expect(resp.UploadId).toBeTruthy()
+        const webhookSpy = vi
+          .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+          .mockResolvedValue(undefined)
 
-        const data = Buffer.alloc(1024 * 5)
-        const uploadPart = new UploadPartCommand({
-          Bucket: bucketName,
-          Key: 'test-1.jpg',
-          ContentLength: data.length,
-          UploadId: resp.UploadId,
-          Body: data,
-          PartNumber: 1,
-        })
+        try {
+          const bucketName = await createBucket(client)
+          const createMultiPartUpload = new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: 'test-1.jpg',
+            ContentType: 'image/jpg',
+            CacheControl: 'max-age=2000',
+          })
+          const resp = await client.send(createMultiPartUpload)
+          expect(resp.UploadId).toBeTruthy()
 
-        const part1 = await client.send(uploadPart)
+          const data = Buffer.alloc(1024 * 5)
+          const uploadPart = new UploadPartCommand({
+            Bucket: bucketName,
+            Key: 'test-1.jpg',
+            ContentLength: data.length,
+            UploadId: resp.UploadId,
+            Body: data,
+            PartNumber: 1,
+          })
 
-        const completeMultiPartUpload = new CompleteMultipartUploadCommand({
-          Bucket: bucketName,
-          Key: 'test-1.jpg',
-          UploadId: resp.UploadId,
-          MultipartUpload: {
-            Parts: [
-              {
-                PartNumber: 1,
-                ETag: part1.ETag,
-              },
-            ],
-          },
-        })
+          const part1 = await client.send(uploadPart)
 
-        const completeResp = await client.send(completeMultiPartUpload)
-        expect(completeResp.$metadata.httpStatusCode).toBe(200)
-        expect(completeResp.Key).toEqual('test-1.jpg')
+          const completeMultiPartUpload = new CompleteMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: 'test-1.jpg',
+            UploadId: resp.UploadId,
+            MultipartUpload: {
+              Parts: [
+                {
+                  PartNumber: 1,
+                  ETag: part1.ETag,
+                },
+              ],
+            },
+          })
+
+          const completeResp = await client.send(completeMultiPartUpload)
+          expect(completeResp.$metadata.httpStatusCode).toBe(200)
+          expect(completeResp.Key).toEqual('test-1.jpg')
+
+          // Verify webhook was called with correct data
+          expect(webhookSpy).toHaveBeenCalledTimes(1)
+          const webhookCall = webhookSpy.mock.calls[0][0] as ObjectCreatedEvent
+          expect(webhookCall).toMatchObject({
+            tenant: expect.objectContaining({ ref: tenantId }),
+            name: 'test-1.jpg',
+            version: expect.any(String),
+            bucketId: bucketName,
+            reqId: expect.any(String),
+            metadata: expect.any(Object),
+            uploadType: 's3',
+          })
+          expect(webhookCall.metadata).toBeDefined()
+          expect(webhookCall.metadata).toHaveProperty('size')
+        } finally {
+          webhookSpy.mockRestore()
+        }
       })
 
       it('does not complete multipart upload on malformed xml body', async () => {
@@ -1341,16 +1402,39 @@ describe('S3 Protocol', () => {
       })
 
       it('upload a file using putObject', async () => {
-        const bucketName = await createBucket(client)
+        const webhookSpy = vi
+          .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+          .mockResolvedValue(undefined)
 
-        const putObject = new PutObjectCommand({
-          Bucket: bucketName,
-          Key: 'test-1-put-object.jpg',
-          Body: Buffer.alloc(1024 * 12),
-        })
+        try {
+          const bucketName = await createBucket(client)
 
-        const resp = await client.send(putObject)
-        expect(resp.$metadata.httpStatusCode).toEqual(200)
+          const putObject = new PutObjectCommand({
+            Bucket: bucketName,
+            Key: 'test-1-put-object.jpg',
+            Body: Buffer.alloc(1024 * 12),
+          })
+
+          const resp = await client.send(putObject)
+          expect(resp.$metadata.httpStatusCode).toEqual(200)
+
+          // Verify webhook was called with correct data
+          expect(webhookSpy).toHaveBeenCalledTimes(1)
+          const webhookCall = webhookSpy.mock.calls[0][0] as ObjectCreatedEvent
+          expect(webhookCall).toMatchObject({
+            tenant: expect.objectContaining({ ref: tenantId }),
+            name: 'test-1-put-object.jpg',
+            version: expect.any(String),
+            bucketId: bucketName,
+            reqId: expect.any(String),
+            metadata: expect.any(Object),
+            uploadType: 's3',
+          })
+          expect(webhookCall.metadata).toBeDefined()
+          expect(webhookCall.metadata).toHaveProperty('size')
+        } finally {
+          webhookSpy.mockRestore()
+        }
       })
 
       it('upload a broken JSON body using putObject ', async () => {
@@ -1600,21 +1684,44 @@ describe('S3 Protocol', () => {
       })
 
       it('upload a file using multipart upload', async () => {
-        const bucketName = await createBucket(client)
+        const webhookSpy = vi
+          .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+          .mockResolvedValue(undefined)
 
-        const uploader = new Upload({
-          client,
-          params: {
-            Bucket: bucketName,
-            Key: 'test-1.jpg',
-            ContentType: 'image/jpg',
-            Body: Buffer.alloc(1024 * 12),
-          },
-        })
+        try {
+          const bucketName = await createBucket(client)
 
-        const resp = await uploader.done()
+          const uploader = new Upload({
+            client,
+            params: {
+              Bucket: bucketName,
+              Key: 'test-1.jpg',
+              ContentType: 'image/jpg',
+              Body: Buffer.alloc(1024 * 12),
+            },
+          })
 
-        expect(resp.$metadata).toBeTruthy()
+          const resp = await uploader.done()
+
+          expect(resp.$metadata).toBeTruthy()
+
+          // Verify webhook was called with correct data
+          expect(webhookSpy).toHaveBeenCalledTimes(1)
+          const webhookCall = webhookSpy.mock.calls[0][0] as ObjectCreatedEvent
+          expect(webhookCall).toMatchObject({
+            tenant: expect.objectContaining({ ref: tenantId }),
+            name: 'test-1.jpg',
+            version: expect.any(String),
+            bucketId: bucketName,
+            reqId: expect.any(String),
+            metadata: expect.any(Object),
+            uploadType: 's3',
+          })
+          expect(webhookCall.metadata).toBeDefined()
+          expect(webhookCall.metadata).toHaveProperty('size')
+        } finally {
+          webhookSpy.mockRestore()
+        }
       })
 
       it('does not mutate in_progress_size when canUpload (RLS) fails', async () => {
@@ -1746,27 +1853,47 @@ describe('S3 Protocol', () => {
 
     describe('DeleteObjectCommand', () => {
       it('can delete an existing object', async () => {
-        const bucketName = await createBucket(client)
-        const key = 'test-1.jpg'
-        await uploadFile(client, bucketName, key, 1)
-
-        const deleteObject = new DeleteObjectCommand({
-          Bucket: bucketName,
-          Key: key,
-        })
-
-        const deleteResp = await client.send(deleteObject)
-        expect(deleteResp.$metadata.httpStatusCode).toEqual(204)
-
-        const getObject = new GetObjectCommand({
-          Bucket: bucketName,
-          Key: key,
-        })
+        const webhookSpy = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
 
         try {
-          await client.send(getObject)
-        } catch (e) {
-          expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+          const bucketName = await createBucket(client)
+          const key = 'test-1.jpg'
+          await uploadFile(client, bucketName, key, 1)
+
+          const deleteObject = new DeleteObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+          })
+
+          const deleteResp = await client.send(deleteObject)
+          expect(deleteResp.$metadata.httpStatusCode).toEqual(204)
+
+          const getObject = new GetObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+          })
+
+          try {
+            await client.send(getObject)
+          } catch (e) {
+            expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
+          }
+
+          // Verify webhook was called with correct data
+          expect(webhookSpy).toHaveBeenCalledTimes(1)
+          const webhookCall = webhookSpy.mock.calls[0][0] as Omit<ObjectRemovedEvent, '$version'>
+          expect(webhookCall).toMatchObject({
+            tenant: expect.objectContaining({ ref: tenantId }),
+            name: key,
+            version: expect.any(String),
+            bucketId: bucketName,
+            reqId: expect.any(String),
+            metadata: expect.any(Object),
+          })
+          expect(webhookCall.metadata).toBeDefined()
+          expect(webhookCall.metadata).toHaveProperty('size')
+        } finally {
+          webhookSpy.mockRestore()
         }
       })
 
@@ -1801,81 +1928,127 @@ describe('S3 Protocol', () => {
 
     describe('DeleteObjectsCommand', () => {
       it('can delete a single object', async () => {
-        const bucketName = await createBucket(client)
-        await Promise.all([uploadFile(client, bucketName, 'test-1.jpg', 1)])
+        const webhookSpy = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
 
-        const deleteObjectsCommand = new DeleteObjectsCommand({
-          Bucket: bucketName,
-          Delete: {
-            Objects: [
-              {
-                Key: 'test-1.jpg',
-              },
-            ],
-          },
-        })
+        try {
+          const bucketName = await createBucket(client)
+          await Promise.all([uploadFile(client, bucketName, 'test-1.jpg', 1)])
 
-        const deleteResp = await client.send(deleteObjectsCommand)
+          const deleteObjectsCommand = new DeleteObjectsCommand({
+            Bucket: bucketName,
+            Delete: {
+              Objects: [
+                {
+                  Key: 'test-1.jpg',
+                },
+              ],
+            },
+          })
 
-        expect(deleteResp.Deleted).toEqual([
-          {
-            Key: 'test-1.jpg',
-          },
-        ])
+          const deleteResp = await client.send(deleteObjectsCommand)
 
-        const listObjectsCommand = new ListObjectsV2Command({
-          Bucket: bucketName,
-        })
+          expect(deleteResp.Deleted).toEqual([
+            {
+              Key: 'test-1.jpg',
+            },
+          ])
 
-        const resp = await client.send(listObjectsCommand)
-        expect(resp.Contents).toBe(undefined)
+          const listObjectsCommand = new ListObjectsV2Command({
+            Bucket: bucketName,
+          })
+
+          const resp = await client.send(listObjectsCommand)
+          expect(resp.Contents).toBe(undefined)
+
+          // Verify webhook was called with correct data
+          expect(webhookSpy).toHaveBeenCalledTimes(1)
+          const webhookCall = webhookSpy.mock.calls[0][0] as Omit<ObjectRemovedEvent, '$version'>
+          expect(webhookCall).toMatchObject({
+            tenant: expect.objectContaining({ ref: tenantId }),
+            name: 'test-1.jpg',
+            version: expect.any(String),
+            bucketId: bucketName,
+            reqId: expect.any(String),
+            metadata: expect.any(Object),
+          })
+          expect(webhookCall.metadata).toBeDefined()
+          expect(webhookCall.metadata).toHaveProperty('size')
+        } finally {
+          webhookSpy.mockRestore()
+        }
       })
 
       it('can delete multiple objects', async () => {
-        const bucketName = await createBucket(client)
-        await Promise.all([
-          uploadFile(client, bucketName, 'test-1.jpg', 1),
-          uploadFile(client, bucketName, 'test-2.jpg', 1),
-          uploadFile(client, bucketName, 'test-3.jpg', 1),
-        ])
+        const webhookSpy = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
 
-        const deleteObjectsCommand = new DeleteObjectsCommand({
-          Bucket: bucketName,
-          Delete: {
-            Objects: [
-              {
-                Key: 'test-1.jpg',
-              },
-              {
-                Key: 'test-2.jpg',
-              },
-              {
-                Key: 'test-3.jpg',
-              },
-            ],
-          },
-        })
+        try {
+          const bucketName = await createBucket(client)
+          await Promise.all([
+            uploadFile(client, bucketName, 'test-1.jpg', 1),
+            uploadFile(client, bucketName, 'test-2.jpg', 1),
+            uploadFile(client, bucketName, 'test-3.jpg', 1),
+          ])
 
-        const deleteResp = await client.send(deleteObjectsCommand)
+          const deleteObjectsCommand = new DeleteObjectsCommand({
+            Bucket: bucketName,
+            Delete: {
+              Objects: [
+                {
+                  Key: 'test-1.jpg',
+                },
+                {
+                  Key: 'test-2.jpg',
+                },
+                {
+                  Key: 'test-3.jpg',
+                },
+              ],
+            },
+          })
 
-        expect(deleteResp.Deleted).toEqual([
-          {
-            Key: 'test-1.jpg',
-          },
-          {
-            Key: 'test-2.jpg',
-          },
-          {
-            Key: 'test-3.jpg',
-          },
-        ])
+          const deleteResp = await client.send(deleteObjectsCommand)
 
-        const listObjectsCommand = new ListObjectsV2Command({
-          Bucket: bucketName,
-        })
+          expect(deleteResp.Deleted).toEqual([
+            {
+              Key: 'test-1.jpg',
+            },
+            {
+              Key: 'test-2.jpg',
+            },
+            {
+              Key: 'test-3.jpg',
+            },
+          ])
 
-        const resp = await client.send(listObjectsCommand)
-        expect(resp.Contents).toBe(undefined)
+          const listObjectsCommand = new ListObjectsV2Command({
+            Bucket: bucketName,
+          })
+
+          const resp = await client.send(listObjectsCommand)
+          expect(resp.Contents).toBe(undefined)
+
+          // Verify webhook was called 3 times (once per object)
+          expect(webhookSpy).toHaveBeenCalledTimes(3)
+          const deletedKeys = webhookSpy.mock.calls.map((call) => call[0].name).sort()
+          expect(deletedKeys).toEqual(['test-1.jpg', 'test-2.jpg', 'test-3.jpg'])
+
+          // Verify all calls have the required fields with metadata
+          webhookSpy.mock.calls.forEach((call) => {
+            const webhookCall = call[0] as Omit<ObjectRemovedEvent, '$version'>
+            expect(webhookCall).toMatchObject({
+              tenant: expect.objectContaining({ ref: tenantId }),
+              name: expect.toBeOneOf(['test-1.jpg', 'test-2.jpg', 'test-3.jpg']),
+              version: expect.any(String),
+              bucketId: bucketName,
+              reqId: expect.any(String),
+              metadata: expect.any(Object),
+            })
+            expect(webhookCall.metadata).toBeDefined()
+            expect(webhookCall.metadata).toHaveProperty('size')
+          })
+        } finally {
+          webhookSpy.mockRestore()
+        }
       })
 
       it('try to delete multiple objects that dont exist', async () => {
@@ -2044,17 +2217,40 @@ describe('S3 Protocol', () => {
 
     describe('CopyObjectCommand', () => {
       it('will copy an object in the same bucket', async () => {
-        const bucketName = await createBucket(client)
-        await uploadFile(client, bucketName, 'test-copy-1.jpg', 1)
+        const webhookSpy = vi
+          .spyOn(ObjectCreatedCopyEvent, 'sendWebhook')
+          .mockResolvedValue(undefined)
 
-        const copyObjectCommand = new CopyObjectCommand({
-          Bucket: bucketName,
-          Key: 'test-copied-2.jpg',
-          CopySource: `${bucketName}/test-copy-1.jpg`,
-        })
+        try {
+          const bucketName = await createBucket(client)
+          await uploadFile(client, bucketName, 'test-copy-1.jpg', 1)
 
-        const resp = await client.send(copyObjectCommand)
-        expect(resp.CopyObjectResult?.ETag).toBeTruthy()
+          const copyObjectCommand = new CopyObjectCommand({
+            Bucket: bucketName,
+            Key: 'test-copied-2.jpg',
+            CopySource: `${bucketName}/test-copy-1.jpg`,
+          })
+
+          const resp = await client.send(copyObjectCommand)
+          expect(resp.CopyObjectResult?.ETag).toBeTruthy()
+
+          // Verify webhook was called with correct data
+          expect(webhookSpy).toHaveBeenCalledTimes(1)
+          const webhookCall = webhookSpy.mock.calls[0][0] as ObjectCreatedEvent
+          expect(webhookCall).toMatchObject({
+            tenant: expect.objectContaining({ ref: tenantId }),
+            name: 'test-copied-2.jpg',
+            version: expect.any(String),
+            bucketId: bucketName,
+            reqId: expect.any(String),
+            metadata: expect.any(Object),
+            uploadType: 's3',
+          })
+          expect(webhookCall.metadata).toBeDefined()
+          expect(webhookCall.metadata).toHaveProperty('size')
+        } finally {
+          webhookSpy.mockRestore()
+        }
       })
 
       it('will copy an object in a different bucket', async () => {

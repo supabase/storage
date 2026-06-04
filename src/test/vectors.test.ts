@@ -7,6 +7,7 @@ import {
   QueryVectorsOutput,
 } from '@aws-sdk/client-s3vectors'
 import { signJWT } from '@internal/auth'
+import { ERRORS } from '@internal/errors'
 import { SingleShard } from '@internal/sharding'
 import { PgVectorMetadataDB, VectorStore, VectorStoreManager } from '@storage/protocols/vector'
 import { FastifyInstance } from 'fastify'
@@ -198,6 +199,30 @@ describe('Vectors API', () => {
       )
     })
 
+    it('should allow route validation for S3Vectors create index requests with 4096 dimensions', async () => {
+      const request = {
+        ...validCreateIndexRequest,
+        dimension: 4096,
+        indexName: 'test-index-4096',
+      }
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/CreateIndex',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: request,
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(mockVectorStore.createVectorIndex).toHaveBeenCalledWith({
+        ...request,
+        vectorBucketName: vectorBucketS3,
+        indexName: `${tenantId}-test-index-4096`,
+      })
+    })
+
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
@@ -302,6 +327,47 @@ describe('Vectors API', () => {
       // Vector service not called when validation fails
     })
 
+    it('should reject numeric string dimension without coercing it', async () => {
+      const invalidRequest = {
+        ...validCreateIndexRequest,
+        dimension: '1536',
+      }
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/CreateIndex',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: invalidRequest,
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.createVectorIndex).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['fractional', 3.5],
+      ['too large', 4097],
+    ])('should reject %s dimension before creating index metadata', async (_label, dimension) => {
+      const invalidRequest = {
+        ...validCreateIndexRequest,
+        dimension,
+      }
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/CreateIndex',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: invalidRequest,
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.createVectorIndex).not.toHaveBeenCalled()
+    })
+
     it('should validate metadataConfiguration structure', async () => {
       const invalidRequest = {
         ...validCreateIndexRequest,
@@ -322,6 +388,34 @@ describe('Vectors API', () => {
 
       expect(response.statusCode).toBe(400)
       // Vector service not called when validation fails
+    })
+
+    it.each([
+      ['empty nonFilterableMetadataKeys', []],
+      ['duplicate nonFilterableMetadataKeys', ['key1', 'key1']],
+      ['too many nonFilterableMetadataKeys', Array.from({ length: 11 }, (_, i) => `key-${i}`)],
+      ['empty nonFilterableMetadataKeys item', ['']],
+      ['too long nonFilterableMetadataKeys item', ['x'.repeat(64)]],
+      ['numeric nonFilterableMetadataKeys item', [123]],
+    ])('should validate metadataConfiguration %s', async (_label, nonFilterableMetadataKeys) => {
+      const invalidRequest = {
+        ...validCreateIndexRequest,
+        metadataConfiguration: {
+          nonFilterableMetadataKeys,
+        },
+      }
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/CreateIndex',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: invalidRequest,
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.createVectorIndex).not.toHaveBeenCalled()
     })
 
     it('should handle vector service not configured', async () => {
@@ -487,7 +581,28 @@ describe('Vectors API', () => {
       expect(response.statusCode).toBe(400)
     })
 
-    it('should handle duplicate bucket creation gracefully', async () => {
+    it('should reject numeric bucket names without coercing them', async () => {
+      const numericBucketName = Date.now()
+
+      try {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/vector/CreateVectorBucket',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: {
+            vectorBucketName: numericBucketName,
+          },
+        })
+
+        expect(response.statusCode).toBe(400)
+      } finally {
+        await s3Vector.deleteBucket(String(numericBucketName)).catch(() => undefined)
+      }
+    })
+
+    it('should return conflict for duplicate bucket creation', async () => {
       // First creation
       const newVectorBucketName = `test-bucket-${Date.now()}-dup`
       const response1 = await appInstance.inject({
@@ -600,6 +715,32 @@ describe('Vectors API', () => {
       expect(response.statusCode).toBe(400)
     })
 
+    it('should reject numeric bucket names without coercing and deleting them', async () => {
+      const numericBucketName = Date.now()
+      await s3Vector.createBucket(String(numericBucketName))
+
+      try {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/vector/DeleteVectorBucket',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: {
+            vectorBucketName: numericBucketName,
+          },
+        })
+
+        expect(response.statusCode).toBe(400)
+
+        const bucketRecord = await findVectorBucket(String(numericBucketName))
+
+        expect(bucketRecord).toBeDefined()
+      } finally {
+        await s3Vector.deleteBucket(String(numericBucketName))
+      }
+    })
+
     it('should handle non-existent bucket', async () => {
       const response = await appInstance.inject({
         method: 'POST',
@@ -666,6 +807,23 @@ describe('Vectors API', () => {
       if (body.vectorBuckets.length === 2) {
         expect(body.nextToken).toBeDefined()
       }
+    })
+
+    it('should reject numeric and stringified controls without coercing them', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectorBuckets',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          maxResults: '1',
+          nextToken: 123,
+          prefix: 456,
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
     })
 
     it('should support pagination with nextToken', async () => {
@@ -931,6 +1089,28 @@ describe('Vectors API', () => {
       expect(response.statusCode).toBe(400)
     })
 
+    it('should reject numeric bucket names without coercing them', async () => {
+      const numericBucketName = Date.now()
+      await s3Vector.createBucket(String(numericBucketName))
+
+      try {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/vector/GetVectorBucket',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: {
+            vectorBucketName: numericBucketName,
+          },
+        })
+
+        expect(response.statusCode).toBe(400)
+      } finally {
+        await s3Vector.deleteBucket(String(numericBucketName))
+      }
+    })
+
     it('should handle non-existent bucket', async () => {
       const response = await appInstance.inject({
         method: 'POST',
@@ -1019,6 +1199,44 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(400)
+    })
+
+    it('should reject numeric index names without coercing and deleting them', async () => {
+      const numericIndexName = Date.now()
+      await s3Vector.createVectorIndex({
+        dataType: 'float32',
+        dimension: 1536,
+        distanceMetric: 'cosine',
+        indexName: String(numericIndexName),
+        vectorBucketName,
+      })
+
+      try {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/vector/DeleteIndex',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: {
+            indexName: numericIndexName,
+            vectorBucketName,
+          },
+        })
+
+        expect(response.statusCode).toBe(400)
+
+        const indexRecord = await findVectorIndex(vectorBucketName, String(numericIndexName))
+
+        expect(indexRecord).toBeDefined()
+      } finally {
+        await s3Vector
+          .deleteIndex({
+            indexName: String(numericIndexName),
+            vectorBucketName,
+          })
+          .catch(() => undefined)
+      }
     })
 
     it('should validate indexName pattern', async () => {
@@ -1131,6 +1349,24 @@ describe('Vectors API', () => {
       expect(response.statusCode).toBe(200)
       const body = JSON.parse(response.body) as ListIndexesResponse
       expect(body.indexes.length).toBeLessThanOrEqual(1)
+    })
+
+    it('should reject numeric and stringified controls without coercing them', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListIndexes',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          maxResults: '1',
+          nextToken: 123,
+          prefix: 456,
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
     })
 
     it('supports pagination with nextToken for indexes', async () => {
@@ -1482,6 +1718,43 @@ describe('Vectors API', () => {
       expect(response.statusCode).toBe(400)
     })
 
+    it('should reject numeric index names without coercing them', async () => {
+      const numericIndexName = Date.now()
+      await s3Vector.createVectorIndex({
+        dataType: 'float32',
+        dimension: 1536,
+        distanceMetric: 'cosine',
+        indexName: String(numericIndexName),
+        vectorBucketName,
+        metadataConfiguration: {
+          nonFilterableMetadataKeys: ['key1'],
+        },
+      })
+
+      try {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/vector/GetIndex',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: {
+            indexName: numericIndexName,
+            vectorBucketName,
+          },
+        })
+
+        expect(response.statusCode).toBe(400)
+      } finally {
+        await s3Vector
+          .deleteIndex({
+            indexName: String(numericIndexName),
+            vectorBucketName,
+          })
+          .catch(() => undefined)
+      }
+    })
+
     it('should validate indexName pattern', async () => {
       const response = await appInstance.inject({
         method: 'POST',
@@ -1557,10 +1830,13 @@ describe('Vectors API', () => {
                 float32: [1.0, 2.0, 3.0],
               },
               metadata: {
+                active: true,
                 category: 'test',
+                score: 0.75,
               },
             },
             {
+              key: 'vec2',
               data: {
                 float32: [4.0, 5.0, 6.0],
               },
@@ -1581,14 +1857,60 @@ describe('Vectors API', () => {
               float32: [1.0, 2.0, 3.0],
             },
             metadata: {
+              active: true,
               category: 'test',
+              score: 0.75,
             },
           },
           {
+            key: 'vec2',
             data: {
               float32: [4.0, 5.0, 6.0],
             },
-            key: undefined,
+          },
+        ],
+        vectorBucketName: vectorBucketS3,
+      })
+    })
+
+    it('should accept list-valued metadata', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/PutVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          vectors: [
+            {
+              key: 'vec-list-metadata',
+              data: {
+                float32: [1.0, 2.0, 3.0],
+              },
+              metadata: {
+                active: true,
+                tags: ['docs', 'search', 2026, false],
+              },
+            },
+          ],
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(mockVectorStore.putVectors).toHaveBeenCalledWith({
+        indexName: `${tenantId}-${indexName}`,
+        vectors: [
+          {
+            key: 'vec-list-metadata',
+            data: {
+              float32: [1.0, 2.0, 3.0],
+            },
+            metadata: {
+              active: true,
+              tags: ['docs', 'search', 2026, false],
+            },
           },
         ],
         vectorBucketName: vectorBucketS3,
@@ -1654,8 +1976,224 @@ describe('Vectors API', () => {
       expect(response.statusCode).toBe(400)
     })
 
+    it('should return InvalidRequest for route validation failures', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/PutVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          vectors: [
+            {
+              key: 'invalid-data',
+              data: {
+                float32: ['1.0', 2.0, 3.0],
+              },
+            },
+          ],
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(parseJsonBody(response.body)).toMatchObject({
+        statusCode: '400',
+        code: 'InvalidRequest',
+      })
+      expect(mockVectorStore.putVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject empty float32 data before calling the vector store', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/PutVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          vectors: [
+            {
+              key: 'empty-data',
+              data: {
+                float32: [],
+              },
+            },
+          ],
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(parseJsonBody(response.body)).toMatchObject({
+        statusCode: '400',
+        code: 'InvalidRequest',
+      })
+      expect(response.body).toContain('float32')
+      expect(mockVectorStore.putVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject missing vector keys before calling the vector store', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/PutVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          vectors: [
+            {
+              data: {
+                float32: [1.0, 2.0, 3.0],
+              },
+            },
+          ],
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(parseJsonBody(response.body)).toMatchObject({
+        statusCode: '400',
+        code: 'InvalidRequest',
+      })
+      expect(response.body).toContain('key')
+      expect(mockVectorStore.putVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject empty vector keys before calling the vector store', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/PutVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          vectors: [
+            {
+              key: '',
+              data: {
+                float32: [1.0, 2.0, 3.0],
+              },
+            },
+          ],
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(parseJsonBody(response.body)).toMatchObject({
+        statusCode: '400',
+        code: 'InvalidRequest',
+      })
+      expect(response.body).toContain('key')
+      expect(mockVectorStore.putVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject vector keys above the S3Vectors length limit before calling the vector store', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/PutVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          vectors: [
+            {
+              key: 'x'.repeat(1025),
+              data: {
+                float32: [1.0, 2.0, 3.0],
+              },
+            },
+          ],
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(parseJsonBody(response.body)).toMatchObject({
+        statusCode: '400',
+        code: 'InvalidRequest',
+      })
+      expect(mockVectorStore.putVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject nested metadata objects before calling the vector store', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/PutVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          vectors: [
+            {
+              key: 'nested-metadata',
+              data: {
+                float32: [1.0, 2.0, 3.0],
+              },
+              metadata: {
+                nested: {
+                  value: 'not supported',
+                },
+              },
+            },
+          ],
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(parseJsonBody(response.body)).toMatchObject({
+        statusCode: '400',
+        code: 'InvalidRequest',
+      })
+      expect(mockVectorStore.putVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject oversized filterable metadata before calling the vector store', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/PutVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          vectors: [
+            {
+              key: 'vec-large-metadata',
+              data: {
+                float32: [1.0, 2.0, 3.0],
+              },
+              metadata: {
+                large: 'x'.repeat(2_050),
+              },
+            },
+          ],
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(parseJsonBody(response.body)).toMatchObject({
+        statusCode: '400',
+        code: 'InvalidParameter',
+        message:
+          "Invalid record for key 'vec-large-metadata': Filterable metadata must have at most 2048 bytes",
+      })
+      expect(mockVectorStore.putVectors).not.toHaveBeenCalled()
+    })
+
     it('should validate maxItems limit', async () => {
       const tooManyVectors = Array.from({ length: 501 }, (_, i) => ({
+        key: `vec-${i}`,
         data: {
           float32: [1.0, 2.0, 3.0],
         },
@@ -1670,11 +2208,13 @@ describe('Vectors API', () => {
         payload: {
           vectorBucketName,
           indexName,
-          vector: tooManyVectors,
+          vectors: tooManyVectors,
         },
       })
 
       expect(response.statusCode).toBe(400)
+      expect(response.body).toContain('must NOT have more than 500 items')
+      expect(mockVectorStore.putVectors).not.toHaveBeenCalled()
     })
 
     it('should handle non-existent index', async () => {
@@ -1689,6 +2229,7 @@ describe('Vectors API', () => {
           indexName: 'non-existent-index',
           vectors: [
             {
+              key: 'vec1',
               data: {
                 float32: [1.0, 2.0, 3.0],
               },
@@ -1698,6 +2239,42 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(404)
+    })
+
+    it('should return validation failures from the vector store as HTTP 400', async () => {
+      const message =
+        "Invalid record for key '5797803-0': Filterable metadata must have at most 2048 bytes"
+      mockVectorStore.putVectors.mockRejectedValueOnce(
+        ERRORS.InvalidParameter(indexName, { message })
+      )
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/PutVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          vectors: [
+            {
+              key: '5797803-0',
+              data: {
+                float32: [1.0, 2.0, 3.0],
+              },
+            },
+          ],
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(parseJsonBody(response.body)).toMatchObject({
+        statusCode: '400',
+        code: 'InvalidParameter',
+        error: 'InvalidParameter',
+        message,
+      })
     })
   })
 
@@ -1853,6 +2430,58 @@ describe('Vectors API', () => {
       expect(mockVectorStore.queryVectors).not.toHaveBeenCalled()
     })
 
+    it('should reject topK above the documented maximum before calling the vector store', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/QueryVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          queryVector: {
+            float32: [1.0, 2.0, 3.0],
+          },
+          topK: 101,
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(parseJsonBody(response.body)).toMatchObject({
+        statusCode: '400',
+        code: 'InvalidRequest',
+      })
+      expect(response.body).toContain('topK')
+      expect(mockVectorStore.queryVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject fractional topK before calling the vector store', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/QueryVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          queryVector: {
+            float32: [1.0, 2.0, 3.0],
+          },
+          topK: 1.5,
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(parseJsonBody(response.body)).toMatchObject({
+        statusCode: '400',
+        code: 'InvalidRequest',
+      })
+      expect(response.body).toContain('topK')
+      expect(mockVectorStore.queryVectors).not.toHaveBeenCalled()
+    })
+
     it('should require authentication with service role', async () => {
       const response = await appInstance.inject({
         method: 'POST',
@@ -1910,6 +2539,32 @@ describe('Vectors API', () => {
       const body = parseJsonBody<{ message: string }>(response.body)
       expect(body.message).toContain('queryVector')
       expect(body.message).toContain('float32')
+    })
+
+    it('should reject empty queryVector.float32 before calling the vector store', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/QueryVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          queryVector: {
+            float32: [],
+          },
+          topK: 10,
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(parseJsonBody(response.body)).toMatchObject({
+        statusCode: '400',
+        code: 'InvalidRequest',
+      })
+      expect(response.body).toContain('float32')
+      expect(mockVectorStore.queryVectors).not.toHaveBeenCalled()
     })
 
     it('should handle non-existent index', async () => {
@@ -2008,6 +2663,60 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(400)
+    })
+
+    it('should reject more than 500 vector keys', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/DeleteVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          keys: Array.from({ length: 501 }, (_, i) => `vec-${i}`),
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.deleteVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject vector keys above the S3Vectors length limit', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/DeleteVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          keys: ['x'.repeat(1025)],
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.deleteVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject numeric vector keys without coercing them', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/DeleteVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          keys: [123],
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.deleteVectors).not.toHaveBeenCalled()
     })
 
     it('should handle non-existent index', async () => {
@@ -2201,7 +2910,7 @@ describe('Vectors API', () => {
       expect(response.statusCode).toBe(400)
     })
 
-    it('should validate maxResults range', async () => {
+    it('should allow the S3Vectors maxResults upper bound', async () => {
       const response = await appInstance.inject({
         method: 'POST',
         url: '/vector/ListVectors',
@@ -2211,11 +2920,55 @@ describe('Vectors API', () => {
         payload: {
           vectorBucketName,
           indexName,
-          maxResults: 501,
+          maxResults: 1000,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(mockVectorStore.listVectors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          maxResults: 1000,
+        })
+      )
+    })
+
+    it('should reject maxResults above the S3Vectors limit', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          maxResults: 1001,
         },
       })
 
       expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.listVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject numeric and boolean strings without coercing them', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          maxResults: '1000',
+          returnData: 'true',
+          segmentCount: '2',
+          segmentIndex: '1',
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.listVectors).not.toHaveBeenCalled()
     })
 
     it('should validate segmentIndex range', async () => {
@@ -2234,6 +2987,58 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(400)
+    })
+
+    it('should require segmentCount and segmentIndex together', async () => {
+      const segmentCountOnly = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          segmentCount: 4,
+        },
+      })
+
+      expect(segmentCountOnly.statusCode).toBe(400)
+
+      const segmentIndexOnly = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          segmentIndex: 0,
+        },
+      })
+
+      expect(segmentIndexOnly.statusCode).toBe(400)
+      expect(mockVectorStore.listVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject segmentIndex greater than or equal to segmentCount', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/ListVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          segmentCount: 4,
+          segmentIndex: 4,
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.listVectors).not.toHaveBeenCalled()
     })
 
     it('should handle non-existent index', async () => {
@@ -2374,6 +3179,61 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(400)
+    })
+
+    it('should reject more than 100 vector keys', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/GetVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          keys: Array.from({ length: 101 }, (_, i) => `vec-${i}`),
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.getVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject vector keys above the S3Vectors length limit', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/GetVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          keys: ['x'.repeat(1025)],
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.getVectors).not.toHaveBeenCalled()
+    })
+
+    it('should reject numeric vector keys and boolean strings without coercing them', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/GetVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          keys: [123],
+          returnData: 'true',
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mockVectorStore.getVectors).not.toHaveBeenCalled()
     })
 
     it('should handle non-existent index', async () => {

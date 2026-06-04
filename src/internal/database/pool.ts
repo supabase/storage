@@ -24,9 +24,6 @@ export const TENANT_POOL_CACHE_LOOKUP_LOG_TYPE = 'cache'
 export const TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE = '[Cache] Tenant pool lookup'
 
 export interface TenantConnectionOptions {
-  user: User
-  superUser: User
-
   tenantId: string
   dbUrl: string
   isExternalPool?: boolean
@@ -36,6 +33,8 @@ export interface TenantConnectionOptions {
   maxConnections: number
   clusterSize?: number
   numWorkers?: number
+  user: User
+  superUser: User
   headers?: Record<string, string | undefined | string[]>
   method?: string
   path?: string

@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { compileNoCoercionValidator } from './validation'
 
 const listBucket = {
   type: 'object',
@@ -22,9 +23,12 @@ interface listBucketRequest extends AuthenticatedRequest {
 }
 
 export default async function routes(fastify: FastifyInstance) {
+  const listBucketsValidator = compileNoCoercionValidator(listBucket.body)
+
   fastify.post<listBucketRequest>(
     '/ListVectorBuckets',
     {
+      validatorCompiler: listBucketsValidator,
       config: {
         operation: { type: ROUTE_OPERATIONS.LIST_VECTOR_BUCKETS },
       },

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { ListVectorBucketsInput } from '@aws-sdk/client-s3vectors'
 import { wait } from '@internal/concurrency'
@@ -18,8 +19,29 @@ import {
   VectorMetadataDB,
 } from './metadata'
 
+const vectorTransactionStorage = new AsyncLocalStorage<{
+  root: PgTransactionalExecutor
+  transaction: PgTransaction
+}>()
+
+export function createVectorTransactionPgResolver(db: PgTransactionalExecutor): {
+  resolve: () => PgTransactionalExecutor | PgTransaction
+  root: () => PgTransactionalExecutor
+} {
+  return {
+    resolve: () => {
+      const transaction = vectorTransactionStorage.getStore()
+      return transaction?.root === db ? transaction.transaction : db
+    },
+    root: () => db,
+  }
+}
+
 export class PgVectorMetadataDB implements VectorMetadataDB {
-  constructor(protected readonly db: PgTransactionalExecutor | PgTransaction) {}
+  constructor(
+    protected readonly db: PgTransactionalExecutor | PgTransaction,
+    private readonly rootDb: PgTransactionalExecutor = db as PgTransactionalExecutor
+  ) {}
 
   async withTransaction<T>(fn: (db: VectorMetadataDB) => Promise<T> | T): Promise<T> {
     const maxRetries = 3
@@ -35,7 +57,11 @@ export class PgVectorMetadataDB implements VectorMetadataDB {
           savepointEstablished = true
         }
 
-        const result = await fn(new PgVectorMetadataDB(trx))
+        const runCallback = () => fn(new PgVectorMetadataDB(trx, this.rootDb))
+        const result = await vectorTransactionStorage.run(
+          { root: this.rootDb, transaction: trx },
+          runCallback
+        )
 
         if (savepoint) {
           await trx.query(`RELEASE SAVEPOINT ${savepoint}`)

@@ -61,10 +61,32 @@ async function main() {
     isMultitenant,
     pgQueueEnable,
     dbMigrationFreezeAt,
+    vectorBucketProvider,
+    vectorDatabaseURL,
+    vectorEnabled,
+    vectorStoreMigrationsEnabled,
     vectorS3Buckets,
     icebergShards,
     numWorkers,
   } = getConfig()
+
+  // VECTOR_DATABASE_URL is only required when pgvector is actually going to
+  // be used: single-tenant mode (it's the maintenance URL used to CREATE
+  // DATABASE storage_vectors) AND either vector routes are enabled or the
+  // migration runner is going to materialise the DB. Multi-tenant pgvector
+  // mode keeps the vector schema in each tenant DB, so no global URL is
+  // needed. Gating on these flags avoids blocking startup in configs that
+  // intentionally keep vectors off.
+  if (
+    vectorBucketProvider === 'pgvector' &&
+    !isMultitenant &&
+    (vectorEnabled || vectorStoreMigrationsEnabled) &&
+    !vectorDatabaseURL
+  ) {
+    throw new Error(
+      'VECTOR_DATABASE_URL is required when VECTOR_BUCKET_PROVIDER=pgvector in single-tenant mode'
+    )
+  }
 
   // Queue
   if (pgQueueEnable) {
@@ -107,6 +129,8 @@ async function main() {
       }))
     )
   } else {
+    // runMigrationsOnTenant internally handles vector_store migrations when
+    // VECTOR_BUCKET_PROVIDER=pgvector + VECTOR_STORE_MIGRATIONS_ENABLED=true.
     await runMigrationsOnTenant({
       databaseUrl: databaseURL,
       upToMigration: dbMigrationFreezeAt,

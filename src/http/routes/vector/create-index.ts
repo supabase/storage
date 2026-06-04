@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { compileNoCoercionValidator } from './validation'
 
 const createVectorIndex = {
   type: 'object',
@@ -10,7 +11,13 @@ const createVectorIndex = {
     type: 'object',
     properties: {
       dataType: { type: 'string', enum: ['float32'] },
-      dimension: { type: 'number', minimum: 1, maximum: 4096 },
+      dimension: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 4096,
+        description:
+          'Vector dimensionality. S3 Vectors supports up to 4096. The local pgvector backend supports up to 4000 and will reject larger values.',
+      },
       distanceMetric: { type: 'string', enum: ['cosine', 'euclidean'] },
       indexName: {
         type: 'string',
@@ -26,7 +33,10 @@ const createVectorIndex = {
         properties: {
           nonFilterableMetadataKeys: {
             type: 'array',
-            items: { type: 'string' },
+            minItems: 1,
+            maxItems: 10,
+            uniqueItems: true,
+            items: { type: 'string', minLength: 1, maxLength: 63 },
           },
         },
       },
@@ -42,9 +52,12 @@ interface createVectorIndexRequest extends AuthenticatedRequest {
 }
 
 export default async function routes(fastify: FastifyInstance) {
+  const createVectorIndexValidator = compileNoCoercionValidator(createVectorIndex.body)
+
   fastify.post<createVectorIndexRequest>(
     '/CreateIndex',
     {
+      validatorCompiler: createVectorIndexValidator,
       config: {
         operation: { type: ROUTE_OPERATIONS.CREATE_VECTOR_INDEX },
       },

@@ -24,11 +24,14 @@ import {
   QueryVectorsInput,
   QueryVectorsOutput,
   S3VectorsClient,
+  ValidationException,
 } from '@aws-sdk/client-s3vectors'
 import { ERRORS } from '@internal/errors'
 import { getConfig } from '../../../../config'
 
 export interface VectorStore {
+  maxDimensions?: number
+  transactionalIndexOperations?: boolean
   createVectorIndex(command: CreateIndexCommandInput): Promise<CreateIndexCommandOutput>
   deleteVectorIndex(param: DeleteIndexCommandInput): Promise<DeleteIndexCommandOutput>
   putVectors(command: PutVectorsInput): Promise<PutVectorsOutput>
@@ -122,6 +125,10 @@ export class S3Vector implements VectorStore {
 
       if (e instanceof NotFoundException) {
         throw ERRORS.S3VectorNotFoundException(resource.type, e.message)
+      }
+
+      if (e instanceof ValidationException) {
+        throw ERRORS.InvalidParameter(resource.name, { error: e, message: e.message })
       }
 
       throw e

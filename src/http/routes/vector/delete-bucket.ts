@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { compileNoCoercionValidator } from './validation'
 
 const deleteVectorBucket = {
   type: 'object',
@@ -21,9 +22,12 @@ interface deleteVectorIndexRequest extends AuthenticatedRequest {
 }
 
 export default async function routes(fastify: FastifyInstance) {
+  const deleteVectorBucketValidator = compileNoCoercionValidator(deleteVectorBucket.body)
+
   fastify.post<deleteVectorIndexRequest>(
     '/DeleteVectorBucket',
     {
+      validatorCompiler: deleteVectorBucketValidator,
       config: {
         operation: { type: ROUTE_OPERATIONS.DELETE_VECTOR_BUCKET },
       },

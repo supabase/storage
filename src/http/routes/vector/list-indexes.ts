@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { compileNoCoercionValidator } from './validation'
 
 const listIndex = {
   type: 'object',
@@ -24,9 +25,12 @@ interface listIndexRequest extends AuthenticatedRequest {
 }
 
 export default async function routes(fastify: FastifyInstance) {
+  const listIndexesValidator = compileNoCoercionValidator(listIndex.body)
+
   fastify.post<listIndexRequest>(
     '/ListIndexes',
     {
+      validatorCompiler: listIndexesValidator,
       config: {
         operation: { type: ROUTE_OPERATIONS.LIST_VECTOR_INDEXES },
       },

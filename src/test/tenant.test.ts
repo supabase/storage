@@ -281,6 +281,77 @@ describe('Tenant configs', () => {
     expect(response.statusCode).toBe(400)
   })
 
+  test('Get tenant config omits sensitive data when ADMIN_RETURN_TENANT_SENSITIVE_DATA is false', async () => {
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    const previousValue = process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA
+    process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA = 'false'
+    let isolatedApp: typeof adminApp | undefined
+
+    try {
+      vi.resetModules()
+      const { default: createApp } = await import('../admin-app')
+      isolatedApp = createApp({})
+
+      const singleResponse = await isolatedApp!.inject({
+        method: 'GET',
+        url: `/tenants/abc`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(singleResponse.statusCode).toBe(200)
+      const singleJSON = JSON.parse(singleResponse.body)
+
+      expect(singleJSON.anonKey).toBeUndefined()
+      expect(singleJSON.databaseUrl).toBeUndefined()
+      expect(singleJSON.databasePoolUrl).toBeUndefined()
+      expect(singleJSON.jwtSecret).toBeUndefined()
+      expect(singleJSON.jwks).toBeUndefined()
+      expect(singleJSON.serviceKey).toBeUndefined()
+
+      // Non-sensitive fields are still returned
+      expect(singleJSON.fileSizeLimit).toBe(payload.fileSizeLimit)
+      expect(singleJSON.maxConnections).toBe(payload.maxConnections)
+      expect(singleJSON.features).toEqual(payload.features)
+      expect(singleJSON.tracingMode).toBe(payload.tracingMode)
+
+      const listResponse = await isolatedApp!.inject({
+        method: 'GET',
+        url: `/tenants`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(listResponse.statusCode).toBe(200)
+      const listJSON = JSON.parse(listResponse.body)
+      expect(listJSON).toHaveLength(1)
+      expect(listJSON[0].id).toBe('abc')
+      expect(listJSON[0].anonKey).toBeUndefined()
+      expect(listJSON[0].databaseUrl).toBeUndefined()
+      expect(listJSON[0].databasePoolUrl).toBeUndefined()
+      expect(listJSON[0].jwtSecret).toBeUndefined()
+      expect(listJSON[0].jwks).toBeUndefined()
+      expect(listJSON[0].serviceKey).toBeUndefined()
+      expect(listJSON[0].fileSizeLimit).toBe(payload.fileSizeLimit)
+    } finally {
+      await isolatedApp?.close()
+
+      if (previousValue === undefined) {
+        delete process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA
+      } else {
+        process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA = previousValue
+      }
+    }
+  })
+
   test('Create tenant config preserves disableEvents and image transformation maxResolution', async () => {
     const createPayload = {
       ...payload,
@@ -930,6 +1001,169 @@ describe('Tenant configs', () => {
       vi.doUnmock('@internal/cache')
       vi.resetModules()
       querySpy.mockRestore()
+    }
+  })
+
+  test('Tenant config databaseUrl change destroys the cached pg pool', async () => {
+    const tenantId = 'pool-dburl-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://old-host'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: null,
+      max_connections: 20,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+      .mockResolvedValueOnce(
+        mockTenantQueryResult({
+          ...encryptedTenant,
+          database_url: encrypt('postgres://new-host'),
+        })
+      )
+    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
+
+    try {
+      await getTenantConfig(tenantId)
+      await onTenantConfigChange(tenantId)
+
+      expect(destroySpy).toHaveBeenCalledWith(tenantId)
+      expect(rebalanceSpy).not.toHaveBeenCalled()
+    } finally {
+      deleteTenantConfig(tenantId)
+      querySpy.mockRestore()
+      destroySpy.mockRestore()
+      rebalanceSpy.mockRestore()
+    }
+  })
+
+  test('Tenant config databasePoolUrl change destroys the cached pg pool', async () => {
+    const tenantId = 'pool-dbpoolurl-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://tenant'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: encrypt('postgres://old-pooler'),
+      max_connections: 20,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+      .mockResolvedValueOnce(
+        mockTenantQueryResult({
+          ...encryptedTenant,
+          database_pool_url: encrypt('postgres://new-pooler'),
+        })
+      )
+    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
+
+    try {
+      await getTenantConfig(tenantId)
+      await onTenantConfigChange(tenantId)
+
+      expect(destroySpy).toHaveBeenCalledWith(tenantId)
+      expect(rebalanceSpy).not.toHaveBeenCalled()
+    } finally {
+      deleteTenantConfig(tenantId)
+      querySpy.mockRestore()
+      destroySpy.mockRestore()
+      rebalanceSpy.mockRestore()
+    }
+  })
+
+  test('Tenant config dbUrl change with maxConnections change destroys instead of rebalancing', async () => {
+    const tenantId = 'pool-dburl-and-max-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://old-host'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: null,
+      max_connections: 20,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+      .mockResolvedValueOnce(
+        mockTenantQueryResult({
+          ...encryptedTenant,
+          database_url: encrypt('postgres://new-host'),
+          max_connections: 40,
+        })
+      )
+    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
+
+    try {
+      await getTenantConfig(tenantId)
+      await onTenantConfigChange(tenantId)
+
+      expect(destroySpy).toHaveBeenCalledWith(tenantId)
+      expect(rebalanceSpy).not.toHaveBeenCalled()
+    } finally {
+      deleteTenantConfig(tenantId)
+      querySpy.mockRestore()
+      destroySpy.mockRestore()
+      rebalanceSpy.mockRestore()
     }
   })
 

@@ -1,9 +1,10 @@
 import { ERRORS } from '@internal/errors'
-import Ajv from 'ajv'
-import { FastifyInstance, FastifySchema, FastifySchemaCompiler } from 'fastify'
+import { MAX_QUERY_TOP_K, MIN_VECTOR_DIMENSIONS } from '@storage/protocols/vector/limits'
+import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+import { compileNoCoercionValidator } from './validation'
 
 const queryVectorPrimitiveSchema = {
   $id: 'queryVectorPrimitive',
@@ -84,14 +85,23 @@ const queryVectorBodyBaseProperties = {
   queryVector: {
     type: 'object',
     properties: {
-      float32: { type: 'array', items: { type: 'number' } },
+      float32: {
+        type: 'array',
+        minItems: MIN_VECTOR_DIMENSIONS,
+        items: { type: 'number' },
+      },
     },
     required: ['float32'],
     additionalProperties: false,
   },
   returnDistance: { type: 'boolean' },
   returnMetadata: { type: 'boolean' },
-  topK: { type: 'number' },
+  topK: {
+    type: 'integer',
+    minimum: 1,
+    maximum: MAX_QUERY_TOP_K,
+    description: `Number of nearest-neighbor results to return, from 1 to ${MAX_QUERY_TOP_K}.`,
+  },
   vectorBucketName: { type: 'string' },
 } as const
 
@@ -171,25 +181,14 @@ export default async function routes(fastify: FastifyInstance) {
   // schemas never appear in components.schemas of the emitted OpenAPI spec.
   fastify.addSchema(queryVectorBodyDocSchema)
 
-  // Strict validation runs through a separate Ajv instance (removeAdditional
-  // disabled so payloads aren't silently stripped before reaching the handler).
-  const ajvNoRemoval = new Ajv({
-    allErrors: true,
-    removeAdditional: false,
-    coerceTypes: false,
-  })
-  ajvNoRemoval.addSchema(queryVectorPrimitiveSchema)
-  ajvNoRemoval.addSchema(queryVectorFieldOperatorsSchema)
-  ajvNoRemoval.addSchema(queryVectorLogicalFilterSchema)
-  ajvNoRemoval.addSchema(queryVectorFilterSchema)
-  ajvNoRemoval.addSchema(queryVectorBodySchema)
-
-  const validateBody = ajvNoRemoval.compile(queryVectorBodySchema)
-
-  const queryVectorsValidator: FastifySchemaCompiler<FastifySchema> = () => (data: unknown) => {
-    if (validateBody(data)) return { value: data }
-    return { error: validateBody.errors ?? [] }
-  }
+  // Strict validation runs through a separate Ajv instance so vector filters
+  // keep their scalar types and payloads aren't silently stripped.
+  const queryVectorsValidator = compileNoCoercionValidator(queryVectorBodySchema, [
+    queryVectorPrimitiveSchema,
+    queryVectorFieldOperatorsSchema,
+    queryVectorLogicalFilterSchema,
+    queryVectorFilterSchema,
+  ])
 
   fastify.post<queryVectorRequest>(
     '/QueryVectors',

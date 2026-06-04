@@ -77,6 +77,7 @@ describe('otel metrics', () => {
     const MeterProvider = vi.fn(function () {
       return {
         shutdown,
+        getMeter: vi.fn(() => ({})),
       }
     })
     const PrometheusExporter = vi.fn(function () {
@@ -182,6 +183,7 @@ describe('otel metrics', () => {
     const MeterProvider = vi.fn(function () {
       return {
         shutdown: vi.fn().mockResolvedValue(undefined),
+        getMeter: vi.fn(() => ({})),
       }
     })
     const PrometheusExporter = vi.fn(function () {

@@ -173,6 +173,112 @@ describe('otel metrics', () => {
     )
   })
 
+  test('registers a view overriding v8js.gc.duration buckets on the runtime-node meter', async () => {
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT
+    delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+
+    const registerInstrumentations = vi.fn(() => vi.fn())
+    const HostMetrics = vi.fn(function () {
+      return {
+        start: vi.fn(),
+      }
+    })
+    const MeterProvider = vi.fn(function () {
+      return {
+        shutdown: vi.fn().mockResolvedValue(undefined),
+        getMeter: vi.fn(() => ({})),
+      }
+    })
+    const PrometheusExporter = vi.fn(function () {
+      return {
+        getMetricsRequestHandler: vi.fn(),
+      }
+    })
+    const RuntimeNodeInstrumentation = vi.fn(function () {
+      return {}
+    })
+    const StorageNodeInstrumentation = vi.fn(function () {
+      return {}
+    })
+
+    vi.doMock('../../config', () => ({
+      getConfig: vi.fn(() => ({
+        version: 'test-version',
+        otelMetricsExportIntervalMs: 1000,
+        otelMetricsEnabled: true,
+        otelMetricsTemporality: 'CUMULATIVE',
+        prometheusMetricsEnabled: false,
+        region: 'local',
+      })),
+    }))
+    vi.doMock('@internal/monitoring/logger', () => ({
+      logger: { info: vi.fn() },
+      logSchema: { error: vi.fn(), info: vi.fn() },
+    }))
+    vi.doMock('@internal/monitoring/system', () => ({
+      StorageNodeInstrumentation,
+    }))
+    vi.doMock('@opentelemetry/api', () => ({
+      metrics: {
+        setGlobalMeterProvider: vi.fn(),
+      },
+    }))
+    vi.doMock('@opentelemetry/exporter-metrics-otlp-grpc', () => ({
+      OTLPMetricExporter: vi.fn(function () {
+        return {}
+      }),
+    }))
+    vi.doMock('@opentelemetry/exporter-prometheus', () => ({
+      PrometheusExporter,
+    }))
+    vi.doMock('@opentelemetry/host-metrics', () => ({
+      HostMetrics,
+    }))
+    vi.doMock('@opentelemetry/instrumentation', () => ({
+      registerInstrumentations,
+    }))
+    vi.doMock('@opentelemetry/instrumentation-runtime-node', () => ({
+      RuntimeNodeInstrumentation,
+    }))
+    vi.doMock('@opentelemetry/resources', () => ({
+      resourceFromAttributes: vi.fn(() => ({})),
+    }))
+    vi.doMock('@opentelemetry/sdk-metrics', () => ({
+      AggregationTemporality: {
+        CUMULATIVE: 'CUMULATIVE',
+        DELTA: 'DELTA',
+      },
+      AggregationType: {
+        DROP: 'DROP',
+        EXPLICIT_BUCKET_HISTOGRAM: 'EXPLICIT_BUCKET_HISTOGRAM',
+      },
+      MeterProvider,
+      PeriodicExportingMetricReader: vi.fn(),
+    }))
+
+    await importOtelMetricsModule()
+
+    expect(MeterProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        views: expect.arrayContaining([
+          {
+            meterName: '@opentelemetry/instrumentation-runtime-node',
+            instrumentName: 'v8js.gc.duration',
+            aggregation: {
+              type: 'EXPLICIT_BUCKET_HISTOGRAM',
+              options: {
+                boundaries: [
+                  0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
+                  1, 2.5, 5, 10, 30,
+                ],
+              },
+            },
+          },
+        ]),
+      })
+    )
+  })
+
   test('does not create a Prometheus reader when Prometheus metrics are disabled', async () => {
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT
     delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT

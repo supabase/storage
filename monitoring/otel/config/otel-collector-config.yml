@@ -15,14 +15,18 @@ processors:
   batch/metrics:
     send_batch_size: 10000
     timeout: 10s
-  # Copy region and instance from Resource attributes to metric data point attributes
-  # This ensures all metrics have the region and instance labels
+  # Copy Resource attributes to metric data point attributes.
+  # This ensures all metrics have stable routing labels and a unique writer label.
   transform/add_resource_attributes:
     metric_statements:
       - context: datapoint
         statements:
           - set(attributes["region"], resource.attributes["region"]) where resource.attributes["region"] != nil
           - set(attributes["instance"], resource.attributes["instance"]) where resource.attributes["instance"] != nil
+          - set(attributes["service.name"], resource.attributes["service.name"]) where resource.attributes["service.name"] != nil
+          - set(attributes["service_instance_id"], resource.attributes["service.instance.id"]) where resource.attributes["service.instance.id"] != nil
+          - set(attributes["worker_id"], resource.attributes["worker.id"]) where resource.attributes["worker.id"] != nil
+          - set(attributes["platformatic_application_id"], resource.attributes["platformatic.application.id"]) where resource.attributes["platformatic.application.id"] != nil
   # Add storage_api_otel_ prefix to all metrics
   # Note: storage_api_ transform must be FIRST to avoid double prefix
   metricstransform/host:

@@ -2,6 +2,7 @@ interface OTelGlobalState {
   __otelMetricsShutdown?: () => Promise<void>
 }
 
+import fs from 'node:fs'
 import { vi } from 'vitest'
 
 const mockedMetricsModules = [
@@ -16,6 +17,8 @@ const mockedMetricsModules = [
   '@opentelemetry/instrumentation-runtime-node',
   '@opentelemetry/resources',
   '@opentelemetry/sdk-metrics',
+  '@platformatic/globals',
+  'os',
 ] as const
 
 async function importOtelMetricsModule() {
@@ -170,6 +173,112 @@ describe('otel metrics', () => {
     )
   })
 
+  test('registers a view overriding v8js.gc.duration buckets on the runtime-node meter', async () => {
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT
+    delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+
+    const registerInstrumentations = vi.fn(() => vi.fn())
+    const HostMetrics = vi.fn(function () {
+      return {
+        start: vi.fn(),
+      }
+    })
+    const MeterProvider = vi.fn(function () {
+      return {
+        shutdown: vi.fn().mockResolvedValue(undefined),
+        getMeter: vi.fn(() => ({})),
+      }
+    })
+    const PrometheusExporter = vi.fn(function () {
+      return {
+        getMetricsRequestHandler: vi.fn(),
+      }
+    })
+    const RuntimeNodeInstrumentation = vi.fn(function () {
+      return {}
+    })
+    const StorageNodeInstrumentation = vi.fn(function () {
+      return {}
+    })
+
+    vi.doMock('../../config', () => ({
+      getConfig: vi.fn(() => ({
+        version: 'test-version',
+        otelMetricsExportIntervalMs: 1000,
+        otelMetricsEnabled: true,
+        otelMetricsTemporality: 'CUMULATIVE',
+        prometheusMetricsEnabled: false,
+        region: 'local',
+      })),
+    }))
+    vi.doMock('@internal/monitoring/logger', () => ({
+      logger: { info: vi.fn() },
+      logSchema: { error: vi.fn(), info: vi.fn() },
+    }))
+    vi.doMock('@internal/monitoring/system', () => ({
+      StorageNodeInstrumentation,
+    }))
+    vi.doMock('@opentelemetry/api', () => ({
+      metrics: {
+        setGlobalMeterProvider: vi.fn(),
+      },
+    }))
+    vi.doMock('@opentelemetry/exporter-metrics-otlp-grpc', () => ({
+      OTLPMetricExporter: vi.fn(function () {
+        return {}
+      }),
+    }))
+    vi.doMock('@opentelemetry/exporter-prometheus', () => ({
+      PrometheusExporter,
+    }))
+    vi.doMock('@opentelemetry/host-metrics', () => ({
+      HostMetrics,
+    }))
+    vi.doMock('@opentelemetry/instrumentation', () => ({
+      registerInstrumentations,
+    }))
+    vi.doMock('@opentelemetry/instrumentation-runtime-node', () => ({
+      RuntimeNodeInstrumentation,
+    }))
+    vi.doMock('@opentelemetry/resources', () => ({
+      resourceFromAttributes: vi.fn(() => ({})),
+    }))
+    vi.doMock('@opentelemetry/sdk-metrics', () => ({
+      AggregationTemporality: {
+        CUMULATIVE: 'CUMULATIVE',
+        DELTA: 'DELTA',
+      },
+      AggregationType: {
+        DROP: 'DROP',
+        EXPLICIT_BUCKET_HISTOGRAM: 'EXPLICIT_BUCKET_HISTOGRAM',
+      },
+      MeterProvider,
+      PeriodicExportingMetricReader: vi.fn(),
+    }))
+
+    await importOtelMetricsModule()
+
+    expect(MeterProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        views: expect.arrayContaining([
+          {
+            meterName: '@opentelemetry/instrumentation-runtime-node',
+            instrumentName: 'v8js.gc.duration',
+            aggregation: {
+              type: 'EXPLICIT_BUCKET_HISTOGRAM',
+              options: {
+                boundaries: [
+                  0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
+                  1, 2.5, 5, 10, 30,
+                ],
+              },
+            },
+          },
+        ]),
+      })
+    )
+  })
+
   test('does not create a Prometheus reader when Prometheus metrics are disabled', async () => {
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT
     delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
@@ -260,6 +369,144 @@ describe('otel metrics', () => {
       expect.objectContaining({
         readers: [],
       })
+    )
+  })
+
+  test('uses Watt worker identity as the OTel service instance id', async () => {
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT
+    delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+
+    const registerInstrumentations = vi.fn(() => vi.fn())
+    const resourceFromAttributes = vi.fn((attributes) => attributes)
+    const HostMetrics = vi.fn(function () {
+      return {
+        start: vi.fn(),
+      }
+    })
+    const MeterProvider = vi.fn(function () {
+      return {
+        shutdown: vi.fn().mockResolvedValue(undefined),
+        getMeter: vi.fn(() => ({})),
+      }
+    })
+    const prometheusExporterOptions: Array<{ withResourceConstantLabels: RegExp }> = []
+    const PrometheusExporter = vi.fn(function (options: { withResourceConstantLabels: RegExp }) {
+      prometheusExporterOptions.push(options)
+      return {
+        getMetricsRequestHandler: vi.fn(),
+      }
+    })
+    const RuntimeNodeInstrumentation = vi.fn(function () {
+      return {}
+    })
+    const StorageNodeInstrumentation = vi.fn(function () {
+      return {}
+    })
+
+    vi.doMock('../../config', () => ({
+      getConfig: vi.fn(() => ({
+        version: 'test-version',
+        otelMetricsExportIntervalMs: 1000,
+        otelMetricsEnabled: true,
+        otelMetricsTemporality: 'CUMULATIVE',
+        prometheusMetricsEnabled: true,
+        region: 'local',
+        serviceName: 'storage-api',
+      })),
+    }))
+    vi.doMock('@platformatic/globals', () => ({
+      getGlobal: vi.fn(() => ({
+        applicationId: 'storage-api:tenant',
+        workerId: '3',
+      })),
+    }))
+    vi.doMock('os', () => ({
+      hostname: vi.fn(() => 'storage-host-a'),
+    }))
+    vi.doMock('@internal/monitoring/logger', () => ({
+      logger: { info: vi.fn() },
+      logSchema: { error: vi.fn(), info: vi.fn() },
+    }))
+    vi.doMock('@internal/monitoring/system', () => ({
+      StorageNodeInstrumentation,
+    }))
+    vi.doMock('@opentelemetry/api', () => ({
+      metrics: {
+        setGlobalMeterProvider: vi.fn(),
+      },
+    }))
+    vi.doMock('@opentelemetry/exporter-metrics-otlp-grpc', () => ({
+      OTLPMetricExporter: vi.fn(function () {
+        return {}
+      }),
+    }))
+    vi.doMock('@opentelemetry/exporter-prometheus', () => ({
+      PrometheusExporter,
+    }))
+    vi.doMock('@opentelemetry/host-metrics', () => ({
+      HostMetrics,
+    }))
+    vi.doMock('@opentelemetry/instrumentation', () => ({
+      registerInstrumentations,
+    }))
+    vi.doMock('@opentelemetry/instrumentation-runtime-node', () => ({
+      RuntimeNodeInstrumentation,
+    }))
+    vi.doMock('@opentelemetry/resources', () => ({
+      resourceFromAttributes,
+    }))
+    vi.doMock('@opentelemetry/sdk-metrics', () => ({
+      AggregationTemporality: {
+        CUMULATIVE: 'CUMULATIVE',
+        DELTA: 'DELTA',
+      },
+      AggregationType: {
+        DROP: 'DROP',
+        EXPLICIT_BUCKET_HISTOGRAM: 'EXPLICIT_BUCKET_HISTOGRAM',
+      },
+      MeterProvider,
+      PeriodicExportingMetricReader: vi.fn(),
+    }))
+
+    await importOtelMetricsModule()
+
+    expect(resourceFromAttributes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instance: 'storage-host-a',
+        'service.instance.id': 'storage-host-a:storage-api:tenant:worker:3',
+        'platformatic.application.id': 'storage-api:tenant',
+        'worker.id': '3',
+        'process.pid': process.pid,
+      })
+    )
+    expect(PrometheusExporter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        withResourceConstantLabels: expect.objectContaining({
+          test: expect.any(Function),
+        }),
+      })
+    )
+
+    const prometheusLabelFilter = prometheusExporterOptions[0].withResourceConstantLabels
+    expect(prometheusLabelFilter.test('service.instance.id')).toBe(true)
+    expect(prometheusLabelFilter.test('worker.id')).toBe(true)
+    expect(prometheusLabelFilter.test('platformatic.application.id')).toBe(true)
+  })
+
+  test('collector promotes service instance identity to metric labels', () => {
+    const collectorConfig = fs.readFileSync(
+      'monitoring/otel/config/otel-collector-config.yml',
+      'utf8'
+    )
+
+    expect(collectorConfig).toContain(
+      'set(attributes["service_instance_id"], resource.attributes["service.instance.id"])'
+    )
+    expect(collectorConfig).toContain(
+      'set(attributes["worker_id"], resource.attributes["worker.id"])'
+    )
+    expect(collectorConfig).toContain(
+      'set(attributes["platformatic_application_id"], resource.attributes["platformatic.application.id"])'
     )
   })
 })

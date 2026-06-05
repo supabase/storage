@@ -18,14 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Set up Node and npm
-        uses: ./.github/actions/setup-node-npm
+      - name: Set up Node dependencies
+        uses: ./.github/actions/setup-node-dependencies
         with:
-          node-version: "24"
-
-      - name: Install dependencies
-        run: |
-          npm ci
+          cache: "false"
 
       - name: Semantic Release
         id: semantic

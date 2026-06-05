@@ -1,9 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
-import { SignedToken, verifyJWT } from '../../../internal/auth'
-import { getJwtSecret } from '../../../internal/database'
-import { ERRORS } from '../../../internal/errors'
+import { SIGNED_URL_SCOPE_DOWNLOAD } from '../../../internal/auth'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
@@ -60,22 +58,9 @@ export default async function routes(fastify: FastifyInstance) {
       const { token } = request.query
       const { download } = request.query
 
-      let payload: SignedToken
-      const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId)
-
-      try {
-        payload = (await verifyJWT(token, jwtSecret, jwks)) as SignedToken
-      } catch (e) {
-        const err = e as Error
-        throw ERRORS.InvalidJWT(err)
-      }
-
-      const { url, exp } = payload
-      const path = `${request.params.bucketName}/${request.params['*']}`
-
-      if (url !== path) {
-        throw ERRORS.InvalidSignature()
-      }
+      const { url, exp } = await request.storage
+        .from(request.params.bucketName)
+        .verifyObjectSignature(token, request.params['*'], SIGNED_URL_SCOPE_DOWNLOAD)
 
       const s3Key = `${request.tenantId}/${url}`
 

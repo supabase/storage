@@ -26,17 +26,62 @@ const JWT_ECC_ALGOS = ['ES256', 'ES384', 'ES512']
 const JWT_ED_ALGOS = ['EdDSA']
 const MAX_ABSOLUTE_JWT_EXPIRATION_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000)
 
+/**
+ * Scope of a signed URL token. Tokens are bound to a single action so a
+ * download token can never be replayed against the upload endpoint (and
+ * vice-versa). Legacy tokens issued before this field existed have no scope.
+ */
+export const SIGNED_URL_SCOPE_DOWNLOAD = 'download'
+export const SIGNED_URL_SCOPE_UPLOAD = 'upload'
+
+export type SignedUrlScope = typeof SIGNED_URL_SCOPE_DOWNLOAD | typeof SIGNED_URL_SCOPE_UPLOAD
+
 export type SignedToken = {
+  scope?: SignedUrlScope
   url: string
   transformations?: string
   exp: number
 }
 
 export type SignedUploadToken = {
+  scope?: SignedUrlScope
   owner: string | undefined
   upsert: boolean
   url: string
   exp: number
+}
+
+/**
+ * Whether a verified signed-URL payload is authorized to **upload**.
+ *
+ * Accepts tokens explicitly scoped for upload, plus — for backward
+ * compatibility — legacy upload tokens issued before scoping existed. Those are
+ * identified by the presence of an `upsert` claim, which only the upload-signing
+ * flow ever emits. Download-shaped tokens (no `upsert`) and any other scope are
+ * rejected, which is what closes the read-token → write-replay hole.
+ *
+ * Keep this and {@link isDownloadScopedToken} as the single source of truth for
+ * signed-URL scope checks — they are duplicated security logic otherwise.
+ */
+export function isUploadScopedToken(payload: { scope?: SignedUrlScope }): boolean {
+  return (
+    payload.scope === SIGNED_URL_SCOPE_UPLOAD ||
+    (payload.scope === undefined && 'upsert' in payload)
+  )
+}
+
+/**
+ * Whether a verified signed-URL payload is authorized to **download** (read).
+ *
+ * Accepts tokens explicitly scoped for download, plus legacy download tokens
+ * (no scope and no `upsert` claim). Upload tokens, legacy upload-shaped tokens
+ * (carrying `upsert`), and any other scope are rejected.
+ */
+export function isDownloadScopedToken(payload: { scope?: SignedUrlScope }): boolean {
+  return (
+    payload.scope === SIGNED_URL_SCOPE_DOWNLOAD ||
+    (payload.scope === undefined && !('upsert' in payload))
+  )
 }
 
 const jwtJwksFingerprintCache = new WeakMap<object, string>()

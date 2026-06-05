@@ -219,6 +219,7 @@ type StorageConfigType = {
   vectorS3Buckets: string[]
   vectorBucketRegion?: string
   vectorDatabaseURL?: string
+  vectorDatabaseCreate: boolean
   vectorStoreMigrationsEnabled: boolean
   vectorMaxBucketsCount: number
   vectorMaxIndexesCount: number
@@ -630,6 +631,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     vectorS3Buckets: getOptionalConfigFromEnv('VECTOR_S3_BUCKETS')?.trim()?.split(',') || [],
     vectorBucketRegion: getOptionalConfigFromEnv('VECTOR_BUCKET_REGION') || undefined,
     vectorDatabaseURL: getOptionalConfigFromEnv('VECTOR_DATABASE_URL') || undefined,
+    vectorDatabaseCreate: getOptionalConfigFromEnv('VECTOR_DATABASE_CREATE') !== 'false',
     vectorStoreMigrationsEnabled:
       getOptionalConfigFromEnv('VECTOR_STORE_MIGRATIONS_ENABLED') === 'true',
     vectorMaxBucketsCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_BUCKETS') || '10', 10),

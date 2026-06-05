@@ -3,14 +3,11 @@
 # docker-compose-infra.yml (multitenant_db, pgbouncer, minio, imgproxy, …) is
 # reused unchanged.
 #
-# To test unreleased multigres changes, build the image locally from a multigres
-# checkout (`docker build -f Dockerfile.cluster -t multigres-cluster:local .`)
-# and point `image` below at `multigres-cluster:local`.
+# `latest` is expected to include the pgvector extension (https://github.com/multigres/multigres/pull/1106)
+# used by local vector acceptance coverage.
 services:
   tenant_db:
-    # Pinned because newer latest images can reject CREATE UNLOGGED TABLE, which
-    # the scanner integration tests still use for cross-connection scratch data.
-    image: ghcr.io/multigres/multigres-cluster@sha256:7fe585a6415554ef1a291221babc09964cf5f6b5f74c297a36ea3b797b8cfafe
+    image: ghcr.io/multigres/multigres-cluster:latest
     # Run an init process (tini) as PID 1 to reap the cluster's child processes.
     init: true
     shm_size: "1gb"

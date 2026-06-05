@@ -42,7 +42,7 @@ jobs:
   acceptance_local:
     name: Local / ${{ matrix.storage_backend }} / ${{ matrix.database }} / ${{ matrix.tenancy }}
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.acceptance_environment == 'local' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -53,6 +53,7 @@ jobs:
         database:
           - pg
           - oriole
+          - multigres
         tenancy:
           - single
           - multitenant
@@ -67,12 +68,15 @@ jobs:
           cp .env.acceptance.sample .env.acceptance
       - name: Typecheck acceptance suite
         run: npm run acceptance:typecheck
+      - name: Pull Multigres cluster image
+        if: ${{ matrix.database == 'multigres' }}
+        uses: ./.github/actions/pull-multigres-cluster
       - name: Run local acceptance profile
         env:
           ACCEPTANCE_ADMIN_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5001' || '' }}
           ACCEPTANCE_ENABLE_ADMIN: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           ACCEPTANCE_ENABLE_VECTOR: "true"
-          ACCEPTANCE_INFRA_RESTART_SCRIPT: ${{ matrix.database == 'oriole' && 'infra:restart:ci:oriole:pgvector' || 'infra:restart:ci' }}
+          ACCEPTANCE_INFRA_RESTART_SCRIPT: ${{ matrix.database == 'oriole' && 'infra:restart:ci:oriole:pgvector' || matrix.database == 'multigres' && 'infra:restart:ci:multigres' || 'infra:restart:ci' }}
           ACCEPTANCE_PROFILE: ${{ inputs.profile || 'full' }}
           ACCEPTANCE_X_FORWARDED_HOST: ${{ matrix.tenancy == 'multitenant' && 'bjhaohmqunupljrqypxz.local.dev' || '' }}
           MULTI_TENANT: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
@@ -81,7 +85,9 @@ jobs:
           STORAGE_PUBLIC_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5000' || '' }}
           STORAGE_BACKEND: ${{ matrix.storage_backend }}
           VECTOR_BUCKET_PROVIDER: pgvector
+          VECTOR_DATABASE_CREATE: ${{ matrix.database != 'multigres' && 'true' || 'false' }}
           VECTOR_DATABASE_URL: ${{ matrix.tenancy == 'single' && 'postgresql://postgres:postgres@127.0.0.1:5432/postgres' || '' }}
+          VECTOR_ENABLED: "true"
           VECTOR_STORE_MIGRATIONS_ENABLED: "true"
         run: |
           mkdir -p data coverage/acceptance

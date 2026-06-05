@@ -98,10 +98,14 @@ Local CI also enables admin acceptance for multitenant matrix entries. Path-edge
 from the local storage backend, so empty path segment object names are exercised only on backends
 that can store them.
 
-Local CI enables vector acceptance on PostgreSQL and OrioleDB matrix rows using the pgvector-backed
-local provider, covering both S3/file storage backends and single/multitenant modes. OrioleDB rows
-use the locally built OrioleDB+pgvector image. Single-tenant rows create and migrate a dedicated
-`storage_vectors` database from `VECTOR_DATABASE_URL`. Multitenant pgvector rows provision the local
+Local CI enables vector acceptance on PostgreSQL, OrioleDB, and Multigres matrix rows using the
+pgvector-backed local provider, covering both S3/file storage backends and single/multitenant modes.
+OrioleDB rows use a locally built pgvector-enabled image, and Multigres rows use the upstream
+`ghcr.io/multigres/multigres-cluster:latest` image, which is expected to include pgvector.
+Single-tenant PostgreSQL and OrioleDB pgvector rows create and migrate a dedicated
+`storage_vectors` database from `VECTOR_DATABASE_URL`; single-tenant Multigres rows set
+`VECTOR_DATABASE_CREATE=false` and run vector migrations in the configured database because the
+Multigres gateway does not support `CREATE DATABASE`. Multitenant pgvector rows provision the local
 tenant with the configured tenant database URL and pool URL. Multitenant pgvector index DDL reuses
 the active tenant transaction connection; single-tenant pgvector and S3 Vectors index creation keep
 physical side effects outside retried metadata transactions and clean up committed metadata on

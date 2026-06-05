@@ -8,7 +8,9 @@
 # and point `image` below at `multigres-cluster:local`.
 services:
   tenant_db:
-    image: ghcr.io/multigres/multigres-cluster:latest
+    # Pinned because newer latest images can reject CREATE UNLOGGED TABLE, which
+    # the scanner integration tests still use for cross-connection scratch data.
+    image: ghcr.io/multigres/multigres-cluster@sha256:7fe585a6415554ef1a291221babc09964cf5f6b5f74c297a36ea3b797b8cfafe
     # Run an init process (tini) as PID 1 to reap the cluster's child processes.
     init: true
     shm_size: "1gb"

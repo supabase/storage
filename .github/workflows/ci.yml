@@ -207,7 +207,7 @@ jobs:
       - name: Pull Multigres cluster image
         run: |
           for i in 1 2 3; do
-            docker pull ghcr.io/multigres/multigres-cluster:latest && exit 0
+            docker pull ghcr.io/multigres/multigres-cluster@sha256:7fe585a6415554ef1a291221babc09964cf5f6b5f74c297a36ea3b797b8cfafe && exit 0
             echo "pull attempt $i failed; retrying in 10s..."
             sleep 10
           done

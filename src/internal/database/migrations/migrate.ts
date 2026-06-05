@@ -35,6 +35,7 @@ const {
   icebergShards,
   multitenantDatabaseQueryTimeout,
   vectorBucketProvider,
+  vectorDatabaseCreate,
   vectorStoreMigrationsEnabled,
   vectorDatabaseURL,
 } = getConfig()
@@ -384,14 +385,16 @@ export async function runMigrationsOnTenant({
   //     isolation via TenantConnection), so we migrate into the same URL.
   //   • Single-tenant: vectors live in a dedicated `storage_vectors` database
   //     on the server pointed at by VECTOR_DATABASE_URL. The migration runner
-  //     CREATE DATABASE's it and then connects via the derived URL.
+  //     CREATE DATABASE's it and then connects via the derived URL. Set
+  //     VECTOR_DATABASE_CREATE=false to run vector migrations in the configured
+  //     database instead, for gateways that do not support CREATE DATABASE.
   if (vectorBucketProvider === 'pgvector' && vectorStoreMigrationsEnabled) {
     if (isMultitenant) {
       await runVectorStoreMigrations({ databaseUrl, waitForLock })
     } else if (vectorDatabaseURL) {
       await runVectorStoreMigrations({
         databaseUrl: vectorDatabaseURL,
-        createDatabase: true,
+        createDatabase: vectorDatabaseCreate,
         waitForLock,
       })
     }

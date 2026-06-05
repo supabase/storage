@@ -32,6 +32,7 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
   const config = getConfig()
   const {
     vectorBucketProvider,
+    vectorDatabaseCreate,
     vectorDatabaseURL,
     vectorS3Buckets,
     isMultitenant,
@@ -46,13 +47,18 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
 
   // pgvector + single-tenant: VECTOR_DATABASE_URL is the maintenance URL the
   // migration runner used to CREATE DATABASE; the runtime pool targets the
-  // derived `storage_vectors` database on the same server.
+  // derived `storage_vectors` database on the same server. When
+  // VECTOR_DATABASE_CREATE=false, the runtime pool targets VECTOR_DATABASE_URL
+  // directly.
   let stPgVectorAdapter: PgVectorStore | undefined
   if (vectorBucketProvider === 'pgvector' && !isMultitenant && vectorDatabaseURL) {
+    const connectionString = vectorDatabaseCreate
+      ? deriveVectorDatabaseUrl(vectorDatabaseURL)
+      : vectorDatabaseURL
     const vectorKnex = Knex({
       client: 'pg',
       connection: {
-        connectionString: deriveVectorDatabaseUrl(vectorDatabaseURL),
+        connectionString,
         application_name: databaseApplicationName,
       },
       pool: { min: 0, max: 10 },

@@ -38,10 +38,6 @@ export const storage = fastifyPlugin(
       request.storage = new Storage(storageBackend, database, location)
       request.cdnCache = new CdnCacheManager(request.storage)
     })
-
-    fastify.addHook('onClose', async () => {
-      storageBackend.close()
-    })
   },
   { name: 'storage-init' }
 )

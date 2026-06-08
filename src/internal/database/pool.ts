@@ -34,9 +34,7 @@ export const TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE = '[Cache] Tenant pool lookup'
 
 /**
  * Pool-level settings: everything required to build the underlying Knex/tarn
- * pool. No request-scoped fields (JWT, headers, route). Internal callers that
- * (re)build a pool outside of a request — e.g. recycle from a tenant-config
- * change — operate on this narrower shape.
+ * pool. No request-scoped fields (JWT, headers, route).
  */
 export interface PoolOptions {
   tenantId: string
@@ -277,6 +275,13 @@ export class PoolManager {
     }
   }
 
+  rebalance(tenantId: string, data: PoolRebalanceOptions) {
+    const pool = tenantPools.get(tenantId)
+    if (pool) {
+      pool.rebalance({ ...data })
+    }
+  }
+
   getPool(settings: TenantConnectionOptions) {
     const isCacheable = (settings.isSingleUse && !settings.isExternalPool) || !settings.isSingleUse
     const { value: existingPool, outcome } = tenantPools.getWithOutcome(settings.tenantId)
@@ -311,41 +316,6 @@ export class PoolManager {
       })
     }
     return Promise.resolve()
-  }
-
-  /**
-   * Replace the cached pool for a tenant with a fresh one built from `settings`.
-   *
-   * The new pool is swapped into the cache synchronously so any subsequent
-   * `getPool()` call observes it immediately. The old pool (if any) is drained
-   * and destroyed in the background via `TenantPool.destroy()` → `drainPool`,
-   * which waits for in-flight acquires/queries to settle before tearing down.
-   *
-   * Use this for tenant-config changes where the underlying DB endpoint is
-   * unchanged but the pool needs to be rebuilt with new settings (e.g.
-   * `maxConnections`). For endpoint changes (dbUrl/credentials), use
-   * `destroy()` instead — the next `getPool()` will rebuild from current
-   * settings rather than reusing the cached connection string.
-   */
-  recycle(tenantId: string, settings: PoolOptions): PoolStrategy {
-    const oldPool = tenantPools.get(tenantId)
-    const newPool = this.newPool({ ...settings, numWorkers: this.numWorkers })
-
-    // Mark the old pool so the cache `dispose` hook (fired by the `set` below
-    // for the replaced entry) doesn't race our explicit destroy.
-    if (oldPool) {
-      manuallyDestroyedPools.add(oldPool)
-    }
-
-    tenantPools.set(tenantId, newPool)
-
-    if (oldPool) {
-      void destroyPoolSafely(oldPool).finally(() => {
-        manuallyDestroyedPools.delete(oldPool)
-      })
-    }
-
-    return newPool
   }
 
   destroyAll() {

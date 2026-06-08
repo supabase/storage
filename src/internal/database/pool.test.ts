@@ -696,6 +696,44 @@ describe('PoolManager cache lifecycle', () => {
     expect(recreated).not.toBe(first)
   })
 
+  test('passes all tenant rebalance options to the cached pool', async () => {
+    const poolModule = await loadPoolModule(10_000)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: Record<string, TestPool> = {}
+
+      protected newPool(settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created[settings.tenantId] = pool
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const pool = poolManager.getPool(createPoolSettings('tenant-rebalance-options'))
+
+    poolManager.rebalance('tenant-rebalance-options', {
+      clusterSize: 3,
+      maxConnections: 14,
+    })
+
+    expect(pool.rebalance).toHaveBeenCalledWith({
+      clusterSize: 3,
+      maxConnections: 14,
+    })
+
+    await poolManager.destroyAll()
+  })
+
+  test('does not expose recycle as a pool manager API', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const poolManager = new poolModule.PoolManager()
+
+    expect('recycle' in poolManager).toBe(false)
+
+    await poolManager.destroyAll()
+  })
+
   test('updates cached tenant pool max connections in place after rebalance', async () => {
     const poolModule = await loadPoolModule(10_000)
     const poolManager = new poolModule.PoolManager()
@@ -1127,183 +1165,6 @@ describe('PoolManager cache lifecycle', () => {
     } finally {
       await poolManager.destroyAll()
     }
-  })
-
-  test('recycle creates a fresh pool when no prior pool is cached', async () => {
-    const poolModule = await loadPoolModule(10_000)
-
-    class TestPoolManager extends poolModule.PoolManager {
-      created: TestPool[] = []
-      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
-        const pool = createTestPool()
-        this.created.push(pool)
-        return pool
-      }
-    }
-
-    const poolManager = new TestPoolManager()
-    const settings = createPoolSettings('recycle-no-prior-pool')
-
-    const pool = poolManager.recycle(settings.tenantId, settings)
-
-    expect(poolManager.created).toHaveLength(1)
-    expect(pool).toBe(poolManager.created[0])
-    expect(poolManager.created[0].destroy).not.toHaveBeenCalled()
-
-    // The newly recycled pool is cached and reused by subsequent getPool calls.
-    expect(poolManager.getPool(settings)).toBe(pool)
-
-    await poolManager.destroyAll()
-  })
-
-  test('recycle swaps the cached pool atomically and returns the new instance', async () => {
-    const poolModule = await loadPoolModule(10_000)
-
-    class TestPoolManager extends poolModule.PoolManager {
-      created: TestPool[] = []
-      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
-        const pool = createTestPool()
-        this.created.push(pool)
-        return pool
-      }
-    }
-
-    const poolManager = new TestPoolManager()
-    const settings = createPoolSettings('recycle-swap')
-
-    const original = poolManager.getPool(settings)
-    expect(poolManager.created).toHaveLength(1)
-
-    const recycled = poolManager.recycle(settings.tenantId, settings)
-
-    expect(poolManager.created).toHaveLength(2)
-    expect(recycled).toBe(poolManager.created[1])
-    expect(recycled).not.toBe(original)
-
-    // The cache swap is synchronous — any getPool right after sees the new pool.
-    expect(poolManager.getPool(settings)).toBe(recycled)
-
-    await poolManager.destroyAll()
-  })
-
-  test('recycle destroys the old pool in the background exactly once', async () => {
-    const poolModule = await loadPoolModule(10_000)
-
-    class TestPoolManager extends poolModule.PoolManager {
-      created: TestPool[] = []
-      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
-        const pool = createTestPool()
-        this.created.push(pool)
-        return pool
-      }
-    }
-
-    const poolManager = new TestPoolManager()
-    const settings = createPoolSettings('recycle-bg-destroy')
-
-    poolManager.getPool(settings)
-    poolManager.recycle(settings.tenantId, settings)
-
-    // destroyPoolSafely is fire-and-forget — wait for it.
-    await vi.waitFor(() => {
-      expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
-    })
-
-    // The new pool is untouched.
-    expect(poolManager.created[1].destroy).not.toHaveBeenCalled()
-
-    await poolManager.destroyAll()
-
-    // After destroyAll the new pool is also destroyed — but only once.
-    expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
-    expect(poolManager.created[1].destroy).toHaveBeenCalledTimes(1)
-  })
-
-  test('recycle does not record a cache eviction for the replaced pool', async () => {
-    const poolModule = await loadPoolModule(10_000)
-    const metricsModule = await import('@internal/monitoring/metrics')
-    const evictionSpy = vi.spyOn(metricsModule.cacheEvictionsTotal, 'add')
-
-    class TestPoolManager extends poolModule.PoolManager {
-      created: TestPool[] = []
-      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
-        const pool = createTestPool()
-        this.created.push(pool)
-        return pool
-      }
-    }
-
-    const poolManager = new TestPoolManager()
-    const settings = createPoolSettings('recycle-no-eviction')
-
-    poolManager.getPool(settings)
-    poolManager.recycle(settings.tenantId, settings)
-
-    // Let the background destroy + dispose hook settle.
-    await vi.waitFor(() => {
-      expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
-    })
-
-    expect(evictionSpy.mock.calls).not.toContainEqual([1, { cache: TENANT_POOL_CACHE_NAME }])
-
-    await poolManager.destroyAll()
-  })
-
-  test('destroy after recycle tears down both pools without double-destroying either', async () => {
-    const poolModule = await loadPoolModule(10_000)
-
-    class TestPoolManager extends poolModule.PoolManager {
-      created: TestPool[] = []
-      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
-        const pool = createTestPool()
-        this.created.push(pool)
-        return pool
-      }
-    }
-
-    const poolManager = new TestPoolManager()
-    const settings = createPoolSettings('recycle-then-destroy')
-
-    poolManager.getPool(settings)
-    poolManager.recycle(settings.tenantId, settings)
-    await poolManager.destroy(settings.tenantId)
-
-    await vi.waitFor(() => {
-      expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
-      expect(poolManager.created[1].destroy).toHaveBeenCalledTimes(1)
-    })
-  })
-
-  test('back-to-back recycles destroy every prior pool and cache the latest', async () => {
-    const poolModule = await loadPoolModule(10_000)
-
-    class TestPoolManager extends poolModule.PoolManager {
-      created: TestPool[] = []
-      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
-        const pool = createTestPool()
-        this.created.push(pool)
-        return pool
-      }
-    }
-
-    const poolManager = new TestPoolManager()
-    const settings = createPoolSettings('recycle-back-to-back')
-
-    poolManager.getPool(settings)
-    poolManager.recycle(settings.tenantId, settings)
-    const latest = poolManager.recycle(settings.tenantId, settings)
-
-    expect(poolManager.created).toHaveLength(3)
-    expect(poolManager.getPool(settings)).toBe(latest)
-
-    // The two earlier pools both drain in the background; the latest stays cached.
-    await vi.waitFor(() => {
-      expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
-      expect(poolManager.created[1].destroy).toHaveBeenCalledTimes(1)
-    })
-    expect(poolManager.created[2].destroy).not.toHaveBeenCalled()
-
-    await poolManager.destroyAll()
   })
 
   test('propagates explicit destroy failures without double-destroying pools', async () => {

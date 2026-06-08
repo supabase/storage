@@ -3,10 +3,8 @@ import {
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_CONFIG_CACHE_NAME,
 } from '@internal/cache'
-import { Cluster } from '@internal/cluster'
 import { TenantConnection } from '@internal/database/connection'
 import { lastLocalMigrationName } from '@internal/database/migrations/files'
-import type { PoolOptions } from '@internal/database/pool'
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import {
@@ -90,7 +88,6 @@ const {
   vectorEnabled,
   multitenantDatabaseQueryTimeout,
   databaseMaxConnections,
-  databasePoolMode: globalDatabasePoolMode,
 } = getConfig()
 
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
@@ -452,13 +449,15 @@ export async function onTenantConfigChange(cacheKey: string) {
     }
 
     // 3. Max connections changed: endpoint is fine, only the budget moved.
-    //    Recycle so new traffic immediately sees the new budget while
-    //    in-flight queries on the old pool drain naturally in the background.
+    //    Rebalance the cached pool in place so new acquire attempts observe
+    //    the new budget while in-flight queries keep their checked-out clients.
     if (
       normalizeMaxConnections(newConfig.maxConnections) !==
       normalizeMaxConnections(oldConfig.maxConnections)
     ) {
-      TenantConnection.poolManager.recycle(cacheKey, buildPoolSettings(cacheKey, newConfig))
+      TenantConnection.poolManager.rebalance(cacheKey, {
+        maxConnections: resolveMaxConnections(newConfig.maxConnections),
+      })
     }
   } catch {
     // if the tenant config is not found, we can ignore it
@@ -476,19 +475,6 @@ function destroyTenantPool(cacheKey: string): Promise<void> {
       project: cacheKey,
     })
   })
-}
-
-function buildPoolSettings(tenantId: string, config: TenantConfig): PoolOptions {
-  return {
-    tenantId,
-    dbUrl: config.databasePoolUrl || config.databaseUrl,
-    isExternalPool: Boolean(config.databasePoolUrl),
-    isSingleUse: config.databasePoolMode
-      ? config.databasePoolMode !== 'recycled'
-      : !globalDatabasePoolMode || globalDatabasePoolMode === 'single_use',
-    maxConnections: resolveMaxConnections(config.maxConnections),
-    clusterSize: Cluster.size,
-  }
 }
 
 function normalizeMaxConnections(maxConnections: number | null | undefined): number | null {

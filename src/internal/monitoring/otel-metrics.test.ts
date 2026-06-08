@@ -509,4 +509,13 @@ describe('otel metrics', () => {
       'set(attributes["platformatic_application_id"], resource.attributes["platformatic.application.id"])'
     )
   })
+
+  test('collector removes service instance resource before Prometheus conversion', () => {
+    const collectorConfig = fs.readFileSync(
+      'monitoring/otel/config/otel-collector-config.yml',
+      'utf8'
+    )
+
+    expect(collectorConfig).toContain('delete_key(attributes, "service.instance.id")')
+  })
 })

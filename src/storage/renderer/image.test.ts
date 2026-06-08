@@ -515,10 +515,14 @@ describe('ImageRenderer fetch client', () => {
   })
 
   it.each([
-    [408, 'image request timed out'],
-    [429, 'too many image requests'],
-    [500, 'imgproxy failed'],
-  ])('preserves exhausted retry response status and body for imgproxy %i', async (statusCode, body) => {
+    [408, 'image request timed out', 'image request timed out'],
+    [429, 'too many image requests', 'too many image requests'],
+    [
+      500,
+      "Can't download source image: https://internal.example/private.png?X-Amz-Signature=secret",
+      'Internal error',
+    ],
+  ])('maps exhausted retry response for imgproxy %i', async (statusCode, body, expectedMessage) => {
     const mockUndici = await useUndiciMockAgent()
 
     try {
@@ -551,13 +555,100 @@ describe('ImageRenderer fetch client', () => {
 
       expect(result).toMatchObject({
         httpStatusCode: statusCode,
-        message: body,
+        message: expectedMessage,
       })
       mockAgent.assertNoPendingInterceptors()
     } finally {
       vi.useRealTimers()
       await mockUndici.close()
     }
+  })
+
+  it.each([
+    [
+      500,
+      "Can't download source image: Image is not compatible with heic/avif",
+      400,
+      'The source image is invalid or unsupported for rendering',
+    ],
+    [
+      500,
+      "Can't download source image: Image is not compatible with future/format",
+      400,
+      'The source image is invalid or unsupported for rendering',
+    ],
+    [
+      422,
+      "Can't download source image: Source image resolution is too big",
+      400,
+      'The source image resolution is too large to process',
+    ],
+    [
+      422,
+      "Can't download source image: Source image frame resolution is too big",
+      400,
+      'The source image frame resolution is too large to process',
+    ],
+    [
+      422,
+      "Can't download source image: Source image file is too big",
+      400,
+      'The source image file is too large to process',
+    ],
+    [
+      422,
+      "Can't download source image: Source image type not supported",
+      400,
+      'The source image is invalid or unsupported for rendering',
+    ],
+    [
+      500,
+      "Can't download source image: invalid TIFF format: image dimensions are not specified",
+      400,
+      'The source image is invalid or unsupported for rendering',
+    ],
+  ])('maps imgproxy source-image validation error %# (%i)', async (upstreamStatusCode, body, expectedStatusCode, expectedMessage) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(body, {
+        status: upstreamStatusCode,
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { ImageRenderer } = await loadRendererModule()
+    const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
+    const result = await renderer.getAsset(createRequest(), createRenderOptions()).catch((e) => e)
+
+    expect(result).toMatchObject({
+      code: 'InvalidRequest',
+      httpStatusCode: expectedStatusCode,
+      message: expectedMessage,
+    })
+  })
+
+  it.each([
+    [
+      404,
+      "Can't download source image: https://internal.example/private.png?X-Amz-Signature=secret: 404",
+    ],
+    [422, "Can't download source image: local:///tmp/private-source.jpg: unsupported source state"],
+  ])('sanitizes unrecognized imgproxy source-image error %# (%i)', async (upstreamStatusCode, body) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(body, {
+        status: upstreamStatusCode,
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { ImageRenderer } = await loadRendererModule()
+    const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
+    const result = await renderer.getAsset(createRequest(), createRenderOptions()).catch((e) => e)
+
+    expect(result).toMatchObject({
+      code: 'InvalidRequest',
+      httpStatusCode: upstreamStatusCode,
+      message: 'Unable to download source image',
+    })
   })
 
   it('clamps imgproxy Retry-After waits before retrying', async () => {

@@ -3,9 +3,8 @@
 # docker-compose-infra.yml (multitenant_db, pgbouncer, minio, imgproxy, …) is
 # reused unchanged.
 #
-# To test unreleased multigres changes, build the image locally from a multigres
-# checkout (`docker build -f Dockerfile.cluster -t multigres-cluster:local .`)
-# and point `image` below at `multigres-cluster:local`.
+# `latest` is expected to include the pgvector extension (https://github.com/multigres/multigres/pull/1106)
+# used by local vector acceptance coverage.
 services:
   tenant_db:
     image: ghcr.io/multigres/multigres-cluster:latest

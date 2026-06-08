@@ -42,7 +42,7 @@ jobs:
   acceptance_local:
     name: Local / ${{ matrix.storage_backend }} / ${{ matrix.database }} / ${{ matrix.tenancy }}
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.acceptance_environment == 'local' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -53,23 +53,14 @@ jobs:
         database:
           - pg
           - oriole
+          - multigres
         tenancy:
           - single
           - multitenant
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-      - name: Set up Node and npm
-        uses: ./.github/actions/setup-node-npm
-        with:
-          node-version: "24"
-      - name: Install dependencies
-        run: npm ci
+      - name: Set up Node dependencies
+        uses: ./.github/actions/setup-node-dependencies
       - name: Prepare env files
         run: |
           cp .env.sample .env
@@ -77,21 +68,27 @@ jobs:
           cp .env.acceptance.sample .env.acceptance
       - name: Typecheck acceptance suite
         run: npm run acceptance:typecheck
+      - name: Pull Multigres cluster image
+        if: ${{ matrix.database == 'multigres' }}
+        uses: ./.github/actions/pull-multigres-cluster
       - name: Run local acceptance profile
         env:
           ACCEPTANCE_ADMIN_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5001' || '' }}
           ACCEPTANCE_ENABLE_ADMIN: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           ACCEPTANCE_ENABLE_VECTOR: "true"
-          ACCEPTANCE_INFRA_RESTART_SCRIPT: ${{ matrix.database == 'oriole' && 'infra:restart:ci:oriole:pgvector' || 'infra:restart:ci' }}
+          ACCEPTANCE_INFRA_RESTART_SCRIPT: ${{ matrix.database == 'oriole' && 'infra:restart:ci:oriole:pgvector' || matrix.database == 'multigres' && 'infra:restart:ci:multigres' || 'infra:restart:ci' }}
           ACCEPTANCE_PROFILE: ${{ inputs.profile || 'full' }}
           ACCEPTANCE_X_FORWARDED_HOST: ${{ matrix.tenancy == 'multitenant' && 'bjhaohmqunupljrqypxz.local.dev' || '' }}
+          DATABASE_ENGINE: ${{ matrix.database == 'multigres' && 'multigres' || 'postgres' }}
           MULTI_TENANT: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           PG_QUEUE_ENABLE: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           REQUEST_X_FORWARDED_HOST_REGEXP: ${{ matrix.tenancy == 'multitenant' && '^([a-z]{20})[.]local[.](?:com|dev)$' || '' }}
           STORAGE_PUBLIC_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5000' || '' }}
           STORAGE_BACKEND: ${{ matrix.storage_backend }}
           VECTOR_BUCKET_PROVIDER: pgvector
+          VECTOR_DATABASE_CREATE: ${{ matrix.database != 'multigres' && 'true' || 'false' }}
           VECTOR_DATABASE_URL: ${{ matrix.tenancy == 'single' && 'postgresql://postgres:postgres@127.0.0.1:5432/postgres' || '' }}
+          VECTOR_ENABLED: "true"
           VECTOR_STORE_MIGRATIONS_ENABLED: "true"
         run: |
           mkdir -p data coverage/acceptance
@@ -113,18 +110,8 @@ jobs:
     environment: ${{ inputs.acceptance_environment }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-      - name: Set up Node and npm
-        uses: ./.github/actions/setup-node-npm
-        with:
-          node-version: "24"
-      - name: Install dependencies
-        run: npm ci
+      - name: Set up Node dependencies
+        uses: ./.github/actions/setup-node-dependencies
       - name: Typecheck acceptance suite
         run: npm run acceptance:typecheck
       - name: Run acceptance profile

@@ -1,3 +1,4 @@
+import { SIGNED_URL_SCOPE_UPLOAD } from '@internal/auth'
 import { PgTenantConnection } from '@internal/database'
 import { ERRORS, isRenderableError } from '@internal/errors'
 import { logSchema, RequestLogContext } from '@internal/monitoring'
@@ -91,7 +92,7 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
 
     const payload = await req.upload.storage
       .from(uploadID.bucket)
-      .verifyObjectSignature(signature, uploadID.objectName)
+      .verifyObjectSignature(signature, uploadID.objectName, SIGNED_URL_SCOPE_UPLOAD)
 
     req.upload.owner = payload.owner
     req.upload.isUpsert = payload.upsert

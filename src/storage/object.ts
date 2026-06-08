@@ -1,5 +1,15 @@
 import { randomUUID } from 'node:crypto'
-import { SignedUploadToken, signJWT, verifyJWT } from '@internal/auth'
+import {
+  isDownloadScopedToken,
+  isUploadScopedToken,
+  SIGNED_URL_SCOPE_DOWNLOAD,
+  SIGNED_URL_SCOPE_UPLOAD,
+  SignedToken,
+  SignedUploadToken,
+  SignedUrlScope,
+  signJWT,
+  verifyJWT,
+} from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
 import { ERRORS } from '@internal/errors'
 import { StorageObjectLocator } from '@storage/locator'
@@ -735,13 +745,23 @@ export class ObjectStorage {
     }, metadata || {})
 
     // security-in-depth: as signObjectUrl could be used as a signing oracle,
-    // make sure it's never able to specify a role JWT claim
+    // make sure it's never able to specify a role JWT claim, nor the claims that
+    // identify an upload token (upsert/owner) — otherwise a download token could
+    // be crafted to satisfy the upload-endpoint's legacy compatibility check.
     delete metadata['role']
+    delete metadata['upsert']
+    delete metadata['owner']
 
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(3).join('/'))
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
-    const token = await signJWT({ url: urlToSign, ...metadata }, urlSigningKey, expiresIn)
+    // `url` and `scope` are spread last so attacker-controlled metadata can never
+    // override the intended object path or the token scope (token-forgery defense).
+    const token = await signJWT(
+      { ...metadata, url: urlToSign, scope: SIGNED_URL_SCOPE_DOWNLOAD },
+      urlSigningKey,
+      expiresIn
+    )
 
     let urlPath = 'object'
 
@@ -785,7 +805,11 @@ export class ObjectStorage {
         let signedURL = null
         if (nameSet.has(path)) {
           const urlToSign = `${this.bucketId}/${path}`
-          const token = await signJWT({ url: urlToSign }, urlSigningKey, expiresIn)
+          const token = await signJWT(
+            { url: urlToSign, scope: SIGNED_URL_SCOPE_DOWNLOAD },
+            urlSigningKey,
+            expiresIn
+          )
           signedURL = `/object/sign/${urlToSign}?token=${token}`
         } else {
           error = 'Either the object does not exist or you do not have access to it'
@@ -830,7 +854,7 @@ export class ObjectStorage {
 
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
     const token = await signJWT(
-      { owner, url, upsert: Boolean(options?.upsert) },
+      { owner, url, upsert: Boolean(options?.upsert), scope: SIGNED_URL_SCOPE_UPLOAD },
       urlSigningKey,
       expiresIn
     )
@@ -839,32 +863,47 @@ export class ObjectStorage {
   }
 
   /**
-   * Verify the signature for a specific object
+   * Verify a signed-URL token for a specific object, enforcing that it was issued
+   * for the requested action. This is the single place that validates a signed
+   * token: signature, scope, object-path binding, and expiry.
    * @param token
    * @param objectName
+   * @param scope the action the token must be authorized for (download or upload)
    */
-  async verifyObjectSignature(token: string, objectName: string) {
+  async verifyObjectSignature<Scope extends SignedUrlScope>(
+    token: string,
+    objectName: string,
+    scope: Scope
+  ): Promise<Scope extends typeof SIGNED_URL_SCOPE_UPLOAD ? SignedUploadToken : SignedToken> {
     const { secret: jwtSecret, jwks } = await getJwtSecret(this.db.tenantId)
 
-    let payload: SignedUploadToken
+    let payload: SignedToken | SignedUploadToken
     try {
-      payload = (await verifyJWT(token, jwtSecret, jwks)) as SignedUploadToken
+      payload = await verifyJWT<SignedToken | SignedUploadToken>(token, jwtSecret, jwks)
     } catch (e) {
       const err = e as Error
       throw ERRORS.InvalidJWT(err)
     }
 
-    const { url, exp } = payload
+    const hasValidScope =
+      scope === SIGNED_URL_SCOPE_UPLOAD
+        ? isUploadScopedToken(payload)
+        : isDownloadScopedToken(payload)
+    if (!hasValidScope) {
+      throw ERRORS.InvalidSignature(`Token is not scoped for ${scope}`)
+    }
 
-    if (url !== `${this.bucketId}/${objectName}`) {
+    if (payload.url !== `${this.bucketId}/${objectName}`) {
       throw ERRORS.InvalidSignature()
     }
 
-    if (exp * 1000 < Date.now()) {
+    if (payload.exp * 1000 < Date.now()) {
       throw ERRORS.ExpiredSignature()
     }
 
-    return payload
+    // the scope check above guarantees the payload matches the requested scope;
+    // TS can't correlate the runtime value with the conditional return type.
+    return payload as Scope extends typeof SIGNED_URL_SCOPE_UPLOAD ? SignedUploadToken : SignedToken
   }
 }
 

@@ -36,6 +36,9 @@ vi.mock('../../../config', () => ({
     icebergShards: [],
     multitenantDatabaseQueryTimeout: 1000,
     vectorBucketProvider: 'pgvector',
+    vectorDatabaseCreate: false,
+    vectorDatabaseURL: 'postgresql://postgres:postgres@127.0.0.1:5432/postgres',
+    vectorStoreMigrationsEnabled: true,
   }),
 }))
 
@@ -114,7 +117,7 @@ vi.mock('./progressive', () => ({
   },
 }))
 
-import { runVectorStoreMigrations } from './migrate'
+import { runMigrationsOnTenant, runVectorStoreMigrations } from './migrate'
 
 interface MockPgClient {
   connect: ReturnType<typeof vi.fn>
@@ -221,5 +224,23 @@ describe('runVectorStoreMigrations', () => {
       'ALTER DATABASE "storage_vectors" SET default_table_access_method = \'orioledb\''
     )
     expect(migrationClient.queries[0]).toBe("SET statement_timeout TO '12h'")
+  })
+
+  it('runs single-tenant vector migrations in the configured database when database creation is disabled', async () => {
+    const tenantMigrationClient = createMockPgClient({})
+    const vectorMigrationClient = createMockPgClient({})
+    mockPgClients.push(tenantMigrationClient, vectorMigrationClient)
+
+    await runMigrationsOnTenant({
+      databaseUrl: 'postgresql://postgres:postgres@127.0.0.1:5432/postgres',
+      waitForLock: false,
+    })
+
+    expect(mockClientConfigs.map((config) => config.connectionString)).toEqual([
+      'postgresql://postgres:postgres@127.0.0.1:5432/postgres',
+      'postgresql://postgres:postgres@127.0.0.1:5432/postgres',
+    ])
+    expect(tenantMigrationClient.queries).not.toContain('CREATE DATABASE "storage_vectors"')
+    expect(vectorMigrationClient.queries[0]).toBe("SET statement_timeout TO '12h'")
   })
 })

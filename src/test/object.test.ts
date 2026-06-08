@@ -5,6 +5,8 @@ vi.hoisted(() => {
 import {
   generateHS512JWK,
   getMaxNumericJWTExpiration,
+  SIGNED_URL_SCOPE_DOWNLOAD,
+  SIGNED_URL_SCOPE_UPLOAD,
   SignedToken,
   signJWT,
   verifyJWT,
@@ -20,7 +22,7 @@ import { getConfig, JwksConfig, JwksConfigKeyOCT, mergeConfig } from '../config'
 import { backends, Obj } from '../storage'
 import { ObjectAdminDelete } from '../storage/events'
 import { useMockObject, useMockQueue } from './common'
-import { withDeleteEnabled } from './utils/storage'
+import { useStorage, withDeleteEnabled } from './utils/storage'
 
 const { jwtSecret, serviceKeyAsync, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
@@ -2155,7 +2157,11 @@ describe('testing uploading with generated signed upload URL', () => {
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
-    const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, 100)
+    const jwtToken = await signJWT(
+      { owner, url: urlToSign, scope: SIGNED_URL_SCOPE_UPLOAD },
+      jwtSecret,
+      100
+    )
     const response = await appInstance.inject({
       method: 'PUT',
       url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
@@ -2210,6 +2216,90 @@ describe('testing uploading with generated signed upload URL', () => {
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
 
+  test('rejects a download-scoped token on the upload endpoint', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      'content-type': 'image/jpeg',
+    })
+
+    const urlToSign = `bucket2/public/sadcat-upload1.png`
+    // A token minted by the download-signing flow must not be replayable to upload
+    const downloadToken = await signJWT(
+      { url: urlToSign, scope: SIGNED_URL_SCOPE_DOWNLOAD },
+      jwtSecret,
+      100
+    )
+
+    const response = await appInstance.inject({
+      method: 'PUT',
+      url: `/object/upload/sign/${urlToSign}?token=${downloadToken}`,
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({ error: ErrorCode.InvalidSignature })
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('rejects a legacy download-shaped token (no upsert) on the upload endpoint', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      'content-type': 'image/jpeg',
+    })
+
+    const urlToSign = `bucket2/public/sadcat-upload1.png`
+    const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
+    // No scope claim and no `upsert` claim — i.e. a download-shaped token — is rejected,
+    // even though it predates scoping. Only legacy *upload* tokens (with upsert) are honored.
+    const unscopedToken = await signJWT({ owner, url: urlToSign }, jwtSecret, 100)
+
+    const response = await appInstance.inject({
+      method: 'PUT',
+      url: `/object/upload/sign/${urlToSign}?token=${unscopedToken}`,
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({ error: ErrorCode.InvalidSignature })
+    expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
+  })
+
+  test('accepts a legacy upload token (no scope, with upsert) for backward compatibility', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+    const headers = Object.assign({}, form.getHeaders(), {
+      'content-type': 'image/jpeg',
+    })
+
+    const BUCKET_ID = 'bucket2'
+    const OBJECT_NAME = 'public/sadcat-legacy-upload.png'
+    const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
+    const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
+    // Token shaped exactly like one minted before scoping existed: owner + url + upsert, no scope
+    const legacyUploadToken = await signJWT(
+      { owner, url: urlToSign, upsert: false },
+      jwtSecret,
+      100
+    )
+
+    const response = await appInstance.inject({
+      method: 'PUT',
+      url: `/object/upload/sign/${urlToSign}?token=${legacyUploadToken}`,
+      headers,
+      payload: form,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+
+    // cleanup so the test can be re-run against the same dataset
+    const db = await getSuperuserPostgrestClient()
+    await withDeleteEnabled(db, async (db) => {
+      await deleteObjectsByName(db, BUCKET_ID, OBJECT_NAME)
+    })
+  })
+
   test('upload object with an expired JWT', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
@@ -2222,7 +2312,11 @@ describe('testing uploading with generated signed upload URL', () => {
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
 
-    const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, '-1s')
+    const jwtToken = await signJWT(
+      { owner, url: urlToSign, scope: SIGNED_URL_SCOPE_UPLOAD },
+      jwtSecret,
+      '-1s'
+    )
     const response = await appInstance.inject({
       method: 'PUT',
       url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
@@ -2244,7 +2338,11 @@ describe('testing uploading with generated signed upload URL', () => {
     const OBJECT_NAME = 'public/sadcat-upload1.png'
     const urlToSign = `${BUCKET_ID}/${OBJECT_NAME}`
     const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
-    const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, 100)
+    const jwtToken = await signJWT(
+      { owner, url: urlToSign, scope: SIGNED_URL_SCOPE_UPLOAD },
+      jwtSecret,
+      100
+    )
     const signatureStart = jwtToken.lastIndexOf('.') + 1
     const signatureChar = jwtToken[signatureStart]
     const tamperedToken = `${jwtToken.slice(0, signatureStart)}${
@@ -2335,7 +2433,11 @@ describe('testing uploading with generated signed upload URL', () => {
 
     expect(resp.statusCode).toBe(200)
 
-    const jwtToken = await signJWT({ owner, url: urlToSign }, jwtSecret, 100)
+    const jwtToken = await signJWT(
+      { owner, url: urlToSign, scope: SIGNED_URL_SCOPE_UPLOAD },
+      jwtSecret,
+      100
+    )
     const response = await appInstance.inject({
       method: 'PUT',
       url: `/object/upload/sign/${urlToSign}?token=${jwtToken}`,
@@ -2453,6 +2555,38 @@ describe('testing generating signed URLs', () => {
 // these tests are written in bucket.test.ts since its easier
 
 /**
+ * signObjectUrl payload hardening (signing-oracle defense)
+ */
+describe('signObjectUrl token claim hardening', () => {
+  const h = useStorage()
+
+  test('attacker-controlled metadata cannot override url/scope or inject upload claims', async () => {
+    const objectName = 'public/sadcat-upload.png'
+    const signedURL = await h.storage
+      .from('bucket2')
+      .signObjectUrl(objectName, `/object/sign/bucket2/${objectName}`, 100, {
+        // a future caller passing these must never be able to forge the token
+        url: 'other-bucket/secret.png',
+        scope: SIGNED_URL_SCOPE_UPLOAD,
+        role: 'service_role',
+        upsert: true,
+        owner: 'attacker',
+      } as never)
+
+    const token = signedURL.split('?token=').pop() as string
+    const payload = (await verifyJWT(token, jwtSecret)) as Record<string, unknown>
+
+    // url stays pinned to the real object path, scope stays 'download'
+    expect(payload.url).toBe(`bucket2/${objectName}`)
+    expect(payload.scope).toBe(SIGNED_URL_SCOPE_DOWNLOAD)
+    // role and the upload-discriminating claims are stripped entirely
+    expect(payload.role).toBeUndefined()
+    expect(payload.upsert).toBeUndefined()
+    expect(payload.owner).toBeUndefined()
+  })
+})
+
+/**
  * GET /sign/
  */
 describe('testing retrieving signed URL', () => {
@@ -2506,6 +2640,51 @@ describe('testing retrieving signed URL', () => {
       ifModifiedSince: 'Thu, 12 Aug 2021 16:00:00 GMT',
       ifNoneMatch: 'abc',
     })
+  })
+
+  test('rejects an upload-scoped token on the download endpoint', async () => {
+    const urlToSign = 'bucket2/public/sadcat-upload.png'
+    const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
+    // A token minted by the upload-signing flow must not be replayable to download
+    const uploadToken = await signJWT(
+      { owner, url: urlToSign, upsert: false, scope: SIGNED_URL_SCOPE_UPLOAD },
+      jwtSecret,
+      100
+    )
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/object/sign/${urlToSign}?token=${uploadToken}`,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json<{ error: string }>().error).toBe('InvalidSignature')
+  })
+
+  test('still serves a legacy unscoped download token', async () => {
+    const urlToSign = 'bucket2/public/sadcat-upload.png'
+    // Tokens issued before scoping existed (no scope claim, no upsert) remain valid for download
+    const legacyToken = await signJWT({ url: urlToSign }, jwtSecret, 100)
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/object/sign/${urlToSign}?token=${legacyToken}`,
+    })
+    expect(response.statusCode).toBe(200)
+  })
+
+  test('rejects a legacy upload-shaped token (with upsert) on the download endpoint', async () => {
+    const urlToSign = 'bucket2/public/sadcat-upload.png'
+    const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
+    // A legacy upload token (no scope, but carrying upsert) must not be replayable to read
+    const legacyUploadToken = await signJWT(
+      { owner, url: urlToSign, upsert: false },
+      jwtSecret,
+      100
+    )
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/object/sign/${urlToSign}?token=${legacyUploadToken}`,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json<{ error: string }>().error).toBe('InvalidSignature')
   })
 
   test('get object with incorrect url in jwt', async () => {

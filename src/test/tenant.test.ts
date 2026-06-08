@@ -571,60 +571,6 @@ describe('Tenant configs', () => {
     expect(getResponseJSON).toEqual({ ...payload, fileSizeLimit: 2 })
   })
 
-  test('Tenant config maxConnections change rebalances cached pg pool without destroying it', async () => {
-    const tenantId = 'pool-max-connections-change'
-    const encryptedTenant = {
-      anon_key: encrypt('anon'),
-      database_url: encrypt('postgres://tenant'),
-      database_pool_mode: 'recycled',
-      file_size_limit: 1,
-      jwt_secret: encrypt('jwt-secret'),
-      jwks: null,
-      service_key: encrypt('service-key'),
-      feature_purge_cache: false,
-      feature_image_transformation: false,
-      feature_s3_protocol: false,
-      feature_iceberg_catalog: false,
-      feature_iceberg_catalog_max_catalogs: 0,
-      feature_iceberg_catalog_max_namespaces: 0,
-      feature_iceberg_catalog_max_tables: 0,
-      feature_vector_buckets: false,
-      feature_vector_buckets_max_buckets: 0,
-      feature_vector_buckets_max_indexes: 0,
-      image_transformation_max_resolution: null,
-      database_pool_url: null,
-      max_connections: 20,
-      migrations_version: migrationVersion,
-      migrations_status: 'COMPLETED',
-      tracing_mode: null,
-      disable_events: null,
-    }
-    const querySpy = vi
-      .spyOn(multitenantPgExecutor, 'query')
-      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
-      .mockResolvedValueOnce(
-        mockTenantQueryResult({
-          ...encryptedTenant,
-          max_connections: 40,
-        })
-      )
-    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
-
-    try {
-      await getTenantConfig(tenantId)
-      await onTenantConfigChange(tenantId)
-
-      expect(rebalanceSpy).toHaveBeenCalledWith(tenantId, { maxConnections: 40 })
-      expect(destroySpy).not.toHaveBeenCalled()
-    } finally {
-      deleteTenantConfig(tenantId)
-      querySpy.mockRestore()
-      destroySpy.mockRestore()
-      rebalanceSpy.mockRestore()
-    }
-  })
-
   test('Tenant config maxConnections nullish transitions do not destroy cached pg pool', async () => {
     const tenantId = 'pool-max-connections-nullish-change'
     const encryptedTenant = {
@@ -1001,6 +947,60 @@ describe('Tenant configs', () => {
       vi.doUnmock('@internal/cache')
       vi.resetModules()
       querySpy.mockRestore()
+    }
+  })
+
+  test('Tenant config maxConnections change rebalances cached pg pool without destroying it', async () => {
+    const tenantId = 'pool-max-connections-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://tenant'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: null,
+      max_connections: 20,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+      .mockResolvedValueOnce(
+        mockTenantQueryResult({
+          ...encryptedTenant,
+          max_connections: 40,
+        })
+      )
+    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
+
+    try {
+      await getTenantConfig(tenantId)
+      await onTenantConfigChange(tenantId)
+
+      expect(rebalanceSpy).toHaveBeenCalledWith(tenantId, { maxConnections: 40 })
+      expect(destroySpy).not.toHaveBeenCalled()
+    } finally {
+      deleteTenantConfig(tenantId)
+      querySpy.mockRestore()
+      destroySpy.mockRestore()
+      rebalanceSpy.mockRestore()
     }
   })
 

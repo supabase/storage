@@ -279,6 +279,7 @@ function resolveInfraRestartScript() {
   const script = acceptanceEnv('ACCEPTANCE_INFRA_RESTART_SCRIPT') ?? 'infra:restart:ci'
   const allowed = new Set([
     'infra:restart:ci',
+    'infra:restart:ci:multigres',
     'infra:restart:ci:oriole',
     'infra:restart:ci:oriole:pgvector',
   ])

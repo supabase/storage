@@ -16,8 +16,8 @@ import {
 import { Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ErrorCode, isStorageError, StorageBackendError } from '@internal/errors'
-import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { HttpRequest } from '@smithy/protocol-http'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
 import Fastify from 'fastify'
 import { Readable } from 'stream'
@@ -179,13 +179,8 @@ describe('S3Backend', () => {
       }
     })
 
-    test('maps the configured timeout to Smithy socketTimeout and fails stalled requests', async () => {
-      const server = http.createServer((_req, res) => {
-        setTimeout(() => {
-          res.writeHead(200, { 'content-type': 'text/plain' })
-          res.end('ok')
-        }, 200)
-      })
+    test('maps the configured timeout to Undici and fails stalled requests', async () => {
+      const server = http.createServer()
       await new Promise<void>((resolve) => {
         server.listen(0, '127.0.0.1', resolve)
       })
@@ -199,8 +194,9 @@ describe('S3Backend', () => {
 
       try {
         const handler = (S3Client as unknown as Mock).mock.calls[0][0]
-          .requestHandler as NodeHttpHandler
-        expect(handler).toBeInstanceOf(NodeHttpHandler)
+          .requestHandler as UndiciHttpHandler
+        expect(handler).toBeInstanceOf(UndiciHttpHandler)
+        expect(handler.httpHandlerConfigs().dispatcher).toBe(backend.agent.dispatcher)
 
         await expect(
           handler.handle(
@@ -211,19 +207,15 @@ describe('S3Backend', () => {
               method: 'GET',
               path: '/',
               headers: { host: `127.0.0.1:${port}` },
-            })
+            }),
+            { abortSignal: AbortSignal.timeout(2500) }
           )
-        ).rejects.toMatchObject({ name: 'TimeoutError' })
-
-        expect(handler.httpHandlerConfigs()).toMatchObject({
-          connectionTimeout: 5000,
-          socketTimeout: 40,
+        ).rejects.toMatchObject({
+          name: 'TimeoutError',
+          code: 'UND_ERR_HEADERS_TIMEOUT',
         })
-        expect(handler.httpHandlerConfigs().requestTimeout).toBeUndefined()
       } finally {
-        backend.close()
-        backend.agent.httpAgent.destroy()
-        backend.agent.httpsAgent.destroy()
+        await backend.close()
         await new Promise<void>((resolve, reject) => {
           server.close((error) => {
             if (error) {

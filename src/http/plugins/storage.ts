@@ -42,11 +42,6 @@ export const storage = fastifyPlugin(
       request.storage = new Storage(storageBackend, database, location)
       done()
     })
-
-    fastify.addHook('onClose', (_instance, done) => {
-      storageBackend.close()
-      done()
-    })
   },
   { name: 'storage-init' }
 )

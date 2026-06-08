@@ -1,10 +1,9 @@
-import * as https from 'node:https'
 import { S3Client } from '@aws-sdk/client-s3'
 import { PubSub } from '@internal/database'
 import { ERRORS } from '@internal/errors'
-import { createAgent } from '@internal/http'
+import { createAgent, InstrumentedAgent } from '@internal/http'
 import { logSchema } from '@internal/monitoring'
-import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { getFileSizeLimit } from '@storage/limits'
 import {
   AlsMemoryKV,
@@ -23,7 +22,6 @@ import type {
   HookHandlerDoneFunction,
 } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
-import * as http from 'http'
 import type { ServerRequest as Request } from 'srvx'
 import { getConfig } from '../../../config'
 import { db, dbSuperUser, registerJwtAuth, storage } from '../../plugins'
@@ -62,7 +60,7 @@ const {
   storageFilePath,
 } = getConfig()
 
-function createTusStore(agent: { httpsAgent: https.Agent; httpAgent: http.Agent }) {
+function createTusStore(agent: InstrumentedAgent) {
   if (storageBackendType === 's3') {
     return new S3Store({
       partSize: tusPartSize * 1024 * 1024, // Each uploaded part will have ${tusPartSize}MB,
@@ -71,11 +69,7 @@ function createTusStore(agent: { httpsAgent: https.Agent; httpAgent: http.Agent 
       maxConcurrentPartUploads: tusMaxConcurrentUploads,
       useTags: tusAllowS3Tags,
       s3ClientConfig: {
-        requestHandler: new NodeHttpHandler({
-          ...agent,
-          connectionTimeout: 5000,
-          socketTimeout: tusS3ClientTimeout,
-        }),
+        requestHandler: new UndiciHttpHandler({ dispatcher: agent.dispatcher }),
         bucket: storageS3Bucket,
         region: storageS3Region,
         endpoint: storageS3Endpoint,
@@ -89,13 +83,9 @@ function createTusStore(agent: { httpsAgent: https.Agent; httpAgent: http.Agent 
   })
 }
 
-export function createTusLockS3Client(agent: { httpsAgent: https.Agent; httpAgent: http.Agent }) {
+export function createTusLockS3Client(agent: InstrumentedAgent) {
   const client = new S3Client({
-    requestHandler: new NodeHttpHandler({
-      ...agent,
-      connectionTimeout: 5000,
-      socketTimeout: tusS3ClientTimeout,
-    }),
+    requestHandler: new UndiciHttpHandler({ dispatcher: agent.dispatcher }),
     region: storageS3Region,
     endpoint: storageS3Endpoint,
     forcePathStyle: storageS3ForcePathStyle,
@@ -104,10 +94,7 @@ export function createTusLockS3Client(agent: { httpsAgent: https.Agent; httpAgen
   return client
 }
 
-function createTusServer(
-  lockNotifier: LockNotifier,
-  agent: { httpsAgent: https.Agent; httpAgent: http.Agent }
-) {
+function createTusServer(lockNotifier: LockNotifier, agent: InstrumentedAgent) {
   const datastore = createTusStore(agent)
   const sharedS3Client = tusLockType === 's3' ? createTusLockS3Client(agent) : undefined
   const serverOptions: ServerOptions & {
@@ -199,11 +186,12 @@ export default async function routes(fastify: FastifyInstance) {
 
   const agent = createAgent('s3_tus', {
     maxSockets: storageS3MaxSockets,
+    requestTimeoutMs: tusS3ClientTimeout,
   })
   agent.monitor()
 
   fastify.addHook('onClose', async () => {
-    agent.close()
+    await agent.close()
 
     await lockNotifier.stop().catch((e) => {
       logSchema.error(fastify.log, 'Failed to stop TUS lock notifier', {

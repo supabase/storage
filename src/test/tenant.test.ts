@@ -836,7 +836,7 @@ describe('Tenant configs', () => {
     }
   })
 
-  test('Tenant config maxConnections change recycles cached pool without destroying it', async () => {
+  test('Tenant config maxConnections change rebalances cached pool without destroying it', async () => {
     const tenantId = 'pool-max-connections-change'
     const encryptedTenant = {
       anon_key: encrypt('anon'),
@@ -877,9 +877,9 @@ describe('Tenant configs', () => {
     }
     const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
     const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const recycleSpy = vi
-      .spyOn(TenantConnection.poolManager, 'recycle')
-      .mockReturnValue({} as never)
+    const rebalanceSpy = vi
+      .spyOn(TenantConnection.poolManager, 'rebalance')
+      .mockReturnValue(undefined)
 
     try {
       knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
@@ -887,21 +887,13 @@ describe('Tenant configs', () => {
       await getTenantConfig(tenantId)
       await onTenantConfigChange(tenantId)
 
-      expect(recycleSpy).toHaveBeenCalledWith(
-        tenantId,
-        expect.objectContaining({
-          tenantId,
-          dbUrl: 'postgres://tenant',
-          maxConnections: 40,
-          isExternalPool: false,
-        })
-      )
+      expect(rebalanceSpy).toHaveBeenCalledWith(tenantId, { maxConnections: 40 })
       expect(destroySpy).not.toHaveBeenCalled()
     } finally {
       deleteTenantConfig(tenantId)
       knexTableSpy.mockRestore()
       destroySpy.mockRestore()
-      recycleSpy.mockRestore()
+      rebalanceSpy.mockRestore()
     }
   })
 
@@ -946,9 +938,6 @@ describe('Tenant configs', () => {
     }
     const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
     const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const recycleSpy = vi
-      .spyOn(TenantConnection.poolManager, 'recycle')
-      .mockReturnValue({} as never)
 
     try {
       knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
@@ -957,12 +946,10 @@ describe('Tenant configs', () => {
       await onTenantConfigChange(tenantId)
 
       expect(destroySpy).toHaveBeenCalledWith(tenantId)
-      expect(recycleSpy).not.toHaveBeenCalled()
     } finally {
       deleteTenantConfig(tenantId)
       knexTableSpy.mockRestore()
       destroySpy.mockRestore()
-      recycleSpy.mockRestore()
     }
   })
 
@@ -1007,9 +994,6 @@ describe('Tenant configs', () => {
     }
     const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
     const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const recycleSpy = vi
-      .spyOn(TenantConnection.poolManager, 'recycle')
-      .mockReturnValue({} as never)
 
     try {
       knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
@@ -1018,16 +1002,14 @@ describe('Tenant configs', () => {
       await onTenantConfigChange(tenantId)
 
       expect(destroySpy).toHaveBeenCalledWith(tenantId)
-      expect(recycleSpy).not.toHaveBeenCalled()
     } finally {
       deleteTenantConfig(tenantId)
       knexTableSpy.mockRestore()
       destroySpy.mockRestore()
-      recycleSpy.mockRestore()
     }
   })
 
-  test('Tenant config dbUrl change with maxConnections change destroys (does not recycle)', async () => {
+  test('Tenant config dbUrl change with maxConnections change destroys instead of rebalancing', async () => {
     const tenantId = 'pool-dburl-and-max-change'
     const encryptedTenant = {
       anon_key: encrypt('anon'),
@@ -1069,9 +1051,9 @@ describe('Tenant configs', () => {
     }
     const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
     const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const recycleSpy = vi
-      .spyOn(TenantConnection.poolManager, 'recycle')
-      .mockReturnValue({} as never)
+    const rebalanceSpy = vi
+      .spyOn(TenantConnection.poolManager, 'rebalance')
+      .mockReturnValue(undefined)
 
     try {
       knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
@@ -1079,14 +1061,14 @@ describe('Tenant configs', () => {
       await getTenantConfig(tenantId)
       await onTenantConfigChange(tenantId)
 
-      // dbUrl is checked first — destroy wins, recycle skipped.
+      // dbUrl is checked first — destroy wins, rebalance skipped.
       expect(destroySpy).toHaveBeenCalledWith(tenantId)
-      expect(recycleSpy).not.toHaveBeenCalled()
+      expect(rebalanceSpy).not.toHaveBeenCalled()
     } finally {
       deleteTenantConfig(tenantId)
       knexTableSpy.mockRestore()
       destroySpy.mockRestore()
-      recycleSpy.mockRestore()
+      rebalanceSpy.mockRestore()
     }
   })
 

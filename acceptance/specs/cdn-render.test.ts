@@ -29,6 +29,9 @@ const onePixelPng = new Uint8Array(
     'base64'
   )
 )
+// Minimal ftypmif1 HEIF-family header without heic/avif compatible brands. imgproxy
+// v3.26 identifies it as HEIF-like, then rejects it as incompatible with heic/avif.
+const incompatibleMif1Heif = new Uint8Array(Buffer.from('00000010667479706d69663100000000', 'hex'))
 
 describeAcceptance(
   'CDN cache contract',
@@ -150,6 +153,37 @@ describeAcceptance(
             )}`
           )
         )
+      } finally {
+        await cleanupRestResources(bucketName, [objectKey], client)
+      }
+    })
+
+    it('returns bad request for no-transform imgproxy source-image validation failures', async () => {
+      const config = getAcceptanceConfig()
+      const client = createRestClient()
+      const bucketName = uniqueBucketName('render-invalid-heif')
+      const objectKey = uniqueObjectKey('render-invalid-heif', 'heic')
+
+      try {
+        await createRestBucket(bucketName, { isPublic: true })
+        await uploadRestObject(bucketName, objectKey, incompatibleMif1Heif, {
+          contentType: 'image/heic',
+        })
+
+        const rendered = await fetchRenderedImage(
+          joinUrl(
+            config.baseUrl,
+            `/render/image/public/${bucketName}/${encodePathSegments(objectKey)}`
+          )
+        )
+
+        expect(rendered.status, rendered.bodyText).toBe(400)
+        expect(rendered.contentType).not.toMatch(/^image\//)
+        expect(JSON.parse(rendered.bodyText)).toMatchObject({
+          error: 'InvalidRequest',
+          message: 'The source image is invalid or unsupported for rendering',
+          statusCode: '400',
+        })
       } finally {
         await cleanupRestResources(bucketName, [objectKey], client)
       }

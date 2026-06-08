@@ -51,6 +51,37 @@ const IMGPROXY_RETRY_DELAY_BUDGET_MS = IMGPROXY_MAX_RETRIES * IMGPROXY_RETRY_MAX
 const IMGPROXY_TOTAL_TIMEOUT_MS =
   IMGPROXY_REQUEST_TIMEOUT_MS * (IMGPROXY_MAX_RETRIES + 1) + IMGPROXY_RETRY_DELAY_BUDGET_MS
 const IMAGE_RENDERER_RESPONSE_HEADERS = ['content-length', 'content-type', 'last-modified'] as const
+const IMGPROXY_INTERNAL_ERROR_MESSAGE = 'Internal error'
+const IMGPROXY_SOURCE_IMAGE_ERROR_PATTERN = /Can't download source image\b/i
+const IMGPROXY_SOURCE_IMAGE_ERROR_MESSAGE = 'Unable to download source image'
+const IMGPROXY_SOURCE_IMAGE_INVALID_OR_UNSUPPORTED_MESSAGE =
+  'The source image is invalid or unsupported for rendering'
+const IMGPROXY_SOURCE_IMAGE_BAD_REQUESTS = [
+  {
+    message: IMGPROXY_SOURCE_IMAGE_INVALID_OR_UNSUPPORTED_MESSAGE,
+    pattern: /Image is not compatible with\b/i,
+  },
+  {
+    message: IMGPROXY_SOURCE_IMAGE_INVALID_OR_UNSUPPORTED_MESSAGE,
+    pattern: /Source image type not supported/i,
+  },
+  {
+    message: IMGPROXY_SOURCE_IMAGE_INVALID_OR_UNSUPPORTED_MESSAGE,
+    pattern: /invalid TIFF format:/i,
+  },
+  {
+    message: 'The source image resolution is too large to process',
+    pattern: /Source image resolution is too big/i,
+  },
+  {
+    message: 'The source image frame resolution is too large to process',
+    pattern: /Source image frame resolution is too big/i,
+  },
+  {
+    message: 'The source image file is too large to process',
+    pattern: /Source image file is too big/i,
+  },
+]
 
 const dispatcher: Dispatcher = new Agent({
   bodyTimeout: IMGPROXY_REQUEST_TIMEOUT_MS,
@@ -422,9 +453,49 @@ export class ImageRenderer extends Renderer {
       return ERRORS.InternalError(e instanceof Error ? e : undefined, formatRequestErrorMessage(e))
     }
 
-    const statusCode = error.response?.status || 500
-    return ERRORS.ImageProcessingError(statusCode, errorResponse || error.message)
+    const processingError = getImageProcessingError(
+      error.response?.status || 500,
+      errorResponse || error.message
+    )
+    return ERRORS.ImageProcessingError(processingError.statusCode, processingError.message)
   }
+}
+
+function getImageProcessingError(statusCode: number, message: string) {
+  const sourceImageError = getImgProxySourceImageValidationError(message)
+  if (sourceImageError) {
+    return {
+      message: sourceImageError.message,
+      statusCode: 400,
+    }
+  }
+
+  if (isImgProxySourceImageError(message) && statusCode < 500) {
+    return {
+      message: IMGPROXY_SOURCE_IMAGE_ERROR_MESSAGE,
+      statusCode,
+    }
+  }
+
+  if (statusCode >= 500) {
+    return {
+      message: IMGPROXY_INTERNAL_ERROR_MESSAGE,
+      statusCode,
+    }
+  }
+
+  return {
+    message,
+    statusCode,
+  }
+}
+
+function getImgProxySourceImageValidationError(message: string) {
+  return IMGPROXY_SOURCE_IMAGE_BAD_REQUESTS.find((badRequest) => badRequest.pattern.test(message))
+}
+
+function isImgProxySourceImageError(message: string) {
+  return IMGPROXY_SOURCE_IMAGE_ERROR_PATTERN.test(message)
 }
 
 function createHeaders(headers?: ImageRendererRequestOptions['headers']) {

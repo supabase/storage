@@ -2,12 +2,10 @@ import { logger, logSchema } from '@internal/monitoring'
 import { Pool, PoolConfig } from 'pg'
 import { getConfig } from '../../config'
 import { PgPoolExecutor, PgTransactionalExecutor } from './pg-connection'
-import { getSslSettings } from './ssl'
 
 function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): PoolConfig {
   const {
     databaseApplicationName,
-    databaseSSLRootCert,
     multitenantDatabasePoolUrl,
     multitenantDatabaseUrl,
     multitenantMaxConnections,
@@ -17,12 +15,6 @@ function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): Poo
   const poolSize = multitenantDatabasePoolUrl
     ? multitenantMaxConnections * 10
     : multitenantMaxConnections
-  const sslSettings = connectionString
-    ? getSslSettings({
-        connectionString,
-        databaseSSLRootCert,
-      })
-    : undefined
 
   return {
     connectionString,
@@ -31,7 +23,6 @@ function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): Poo
     min: 0,
     max: poolSize,
     idleTimeoutMillis: 5000,
-    ssl: sslSettings ? { ...sslSettings } : undefined,
   }
 }
 
@@ -151,7 +142,6 @@ function getPoolConfigSignature(config: PoolConfig): string {
     idleTimeoutMillis: config.idleTimeoutMillis,
     max: config.max,
     min: config.min,
-    ssl: config.ssl,
   })
 }
 

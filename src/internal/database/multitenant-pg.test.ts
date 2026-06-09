@@ -4,7 +4,6 @@ type MultitenantPgModule = typeof import('./multitenant-pg')
 type MockPgPoolOptions = {
   connectionString?: string
   max?: number
-  ssl?: unknown
 }
 type MockPgClient = {
   query: () => Promise<{ rows: unknown[] }>
@@ -48,7 +47,7 @@ describe('multitenant pg pool', () => {
     vi.resetModules()
   })
 
-  it('plumbs DATABASE_SSL_ROOT_CERT into the shared multitenant pool config', async () => {
+  it('does not pass DATABASE_SSL_ROOT_CERT into the shared multitenant pool config', async () => {
     loadedModule = await loadMultitenantPgModule({
       databaseSSLRootCert: 'root-cert',
     })
@@ -59,14 +58,12 @@ describe('multitenant pg pool', () => {
       expect.objectContaining({
         connectionString: 'postgres://user:password@db.example.test:5432/postgres',
         max: 3,
-        ssl: {
-          ca: 'root-cert',
-        },
       })
     )
+    expect(getLatestPool().options).not.toHaveProperty('ssl')
   })
 
-  it('uses the pool URL for SSL settings and pool sizing when configured', async () => {
+  it('uses the pool URL for sizing without injecting SSL settings', async () => {
     loadedModule = await loadMultitenantPgModule({
       databaseSSLRootCert: 'root-cert',
       multitenantDatabasePoolUrl: 'postgres://user:password@1.2.3.4:6432/postgres',
@@ -78,12 +75,9 @@ describe('multitenant pg pool', () => {
       expect.objectContaining({
         connectionString: 'postgres://user:password@1.2.3.4:6432/postgres',
         max: 30,
-        ssl: {
-          ca: 'root-cert',
-          rejectUnauthorized: false,
-        },
       })
     )
+    expect(getLatestPool().options).not.toHaveProperty('ssl')
   })
 
   it('reads the current config after runtime config changes', async () => {

@@ -48,6 +48,12 @@ export interface PgTransactionalExecutor extends PgExecutor {
   beginTransaction(options?: TransactionOptions): Promise<PgTransaction>
 }
 
+interface PgPoolErrorContext {
+  message: string
+  tenantId?: string
+  project?: string
+}
+
 type PgClientWithCancel = PoolClient & {
   processID?: number
   secretKey?: number
@@ -175,16 +181,25 @@ export class PgPoolStrategy {
       databaseSSLRootCert,
     })
 
-    return new Pool({
-      min: 0,
-      max: settings.maxConnections,
-      connectionString: settings.dbUrl,
-      connectionTimeoutMillis: databaseConnectionTimeout,
-      idleTimeoutMillis: settings.idleTimeoutMillis,
-      ssl: sslSettings ? { ...sslSettings } : undefined,
-      application_name: databaseApplicationName,
-      options: settings.searchPath ? `-c search_path=${settings.searchPath.join(',')}` : undefined,
-    })
+    return attachPgPoolErrorHandler(
+      new Pool({
+        min: 0,
+        max: settings.maxConnections,
+        connectionString: settings.dbUrl,
+        connectionTimeoutMillis: databaseConnectionTimeout,
+        idleTimeoutMillis: settings.idleTimeoutMillis,
+        ssl: sslSettings ? { ...sslSettings } : undefined,
+        application_name: databaseApplicationName,
+        options: settings.searchPath
+          ? `-c search_path=${settings.searchPath.join(',')}`
+          : undefined,
+      }),
+      {
+        message: '[PgPoolStrategy] Idle pg client error',
+        tenantId: settings.tenantId,
+        project: settings.tenantId,
+      }
+    )
   }
 
   private async drainPool(pool: Pool, reason: 'destroy' | 'rebalance'): Promise<void> {
@@ -229,6 +244,19 @@ export class PgPoolStrategy {
       metadata: JSON.stringify(metadata),
     })
   }
+}
+
+export function attachPgPoolErrorHandler(pool: Pool, context: PgPoolErrorContext): Pool {
+  pool.on('error', (error) => {
+    logSchema.warning(logger, context.message, {
+      type: 'db',
+      tenantId: context.tenantId,
+      project: context.project,
+      error,
+    })
+  })
+
+  return pool
 }
 
 function getPoolWorkStats(pool: Pool): {

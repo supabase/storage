@@ -108,6 +108,25 @@ describe('normalizeRawError', () => {
 
     expect(result.raw).toBe('Failed to stringify error')
   })
+
+  it('omits pg client internals attached to Error objects', () => {
+    const error = new Error('Connection terminated unexpectedly') as Error & {
+      client?: unknown
+      code?: string
+    }
+    const client: { ssl: { ca: string }; self?: unknown } = {
+      ssl: { ca: 'secret root cert' },
+    }
+    client.self = client
+    error.client = client
+    error.code = '08006'
+
+    const result = normalizeRawError(error, 'info')
+
+    expect(result.raw).not.toContain('client')
+    expect(result.raw).not.toContain('secret root cert')
+    expect(JSON.parse(result.raw)).toEqual({ code: '08006' })
+  })
 })
 
 describe('getErrorCode', () => {

@@ -455,6 +455,33 @@ describe('PgTenantConnection', () => {
 })
 
 describe('PgPoolStrategy', () => {
+  it('logs idle pg pool errors without rethrowing them', async () => {
+    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
+    const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
+
+    try {
+      const pool = strategy.getCurrentPoolForTest()
+      const error = Object.assign(new Error('Connection terminated unexpectedly'), {
+        client: { ssl: { ca: 'secret root cert' } },
+      })
+
+      expect(() => pool.emit('error', error, {})).not.toThrow()
+      expect(logSpy).toHaveBeenCalledWith(
+        logger,
+        '[PgPoolStrategy] Idle pg client error',
+        expect.objectContaining({
+          type: 'db',
+          tenantId: 'pg-pool-strategy-test',
+          project: 'pg-pool-strategy-test',
+          error,
+        })
+      )
+    } finally {
+      logSpy.mockRestore()
+      await strategy.destroy()
+    }
+  })
+
   it('documents that pg-pool end does not service already queued acquires', async () => {
     const pool = new PgPool({
       Client: FakePgPoolClient,

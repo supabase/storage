@@ -35,9 +35,6 @@ export const ROUTE_OPERATIONS = {
   PURGE_OBJECT_CACHE: 'storage.cdn.purge_object_cache',
   PURGE_BUCKET_CACHE: 'storage.cdn.purge_bucket_cache',
   PURGE_TENANT_CACHE: 'storage.cdn.purge_tenant_cache',
-  PURGE_OBJECT_TRANSFORMS_CACHE: 'storage.cdn.purge_object_transforms_cache',
-  PURGE_BUCKET_TRANSFORMS_CACHE: 'storage.cdn.purge_bucket_transforms_cache',
-  PURGE_TENANT_TRANSFORMS_CACHE: 'storage.cdn.purge_tenant_transforms_cache',
 
   // Image Transformation
   RENDER_AUTH_IMAGE: 'storage.render.image_authenticated',

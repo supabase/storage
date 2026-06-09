@@ -84,14 +84,15 @@ export class CdnCacheManager {
   constructor(protected readonly storage: Storage) {}
 
   async purge(opts: PurgeCacheInput) {
-    console.log('PURGE CACHE!!!!!!!!')
     if (!cdnPurgeUrl) {
       throw ERRORS.MissingParameter('CDN_PURGE_ENDPOINT_URL is not set')
     }
 
-    // Check if object exists (only for object-level purges)
+    // Check if resource exists
     if (opts.type === 'object' || opts.type === 'object-transforms') {
       await this.storage.from(opts.bucket).asSuperUser().findObject(opts.objectName)
+    } else if (opts.type === 'bucket' || opts.type === 'bucket-transforms') {
+      await this.storage.asSuperUser().findBucket(opts.bucket)
     }
 
     // Build request body based on purge type
@@ -110,7 +111,6 @@ export class CdnCacheManager {
       requestBody.objectName = opts.objectName
     }
 
-    console.log('PURGE CACHE!!!!!!!!... 2')
     // Purge cache
     try {
       const requestInit: RequestInit & { dispatcher: Agent } = {
@@ -121,10 +121,7 @@ export class CdnCacheManager {
         signal: AbortSignal.timeout(CDN_PURGE_TIMEOUT_MS),
       }
 
-      console.log('SENDING!! url=', cdnPurgeUrl)
       const response = await fetch(cdnPurgeUrl, requestInit)
-
-      console.log('GOT RESPONSE', response.status, response.statusText)
 
       try {
         await assertOkResponse(response)
@@ -132,7 +129,6 @@ export class CdnCacheManager {
         await response.body?.cancel().catch(() => {})
       }
     } catch (e) {
-      console.log('ERRROR', e)
       throw ERRORS.InternalError(
         e instanceof Error ? e : new Error(String(e)),
         'Error purging cache'

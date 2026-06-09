@@ -54,6 +54,12 @@ const IMAGE_RENDERER_RESPONSE_HEADERS = ['content-length', 'content-type', 'last
 const IMGPROXY_INTERNAL_ERROR_MESSAGE = 'Internal error'
 const IMGPROXY_SOURCE_IMAGE_ERROR_PATTERN = /Can't download source image\b/i
 const IMGPROXY_SOURCE_IMAGE_ERROR_MESSAGE = 'Unable to download source image'
+const IMGPROXY_INVALID_TRANSFORMATION_MESSAGE = 'Invalid image request'
+const IMGPROXY_INVALID_SOURCE_MESSAGE = 'Invalid image source'
+const IMGPROXY_REJECTED_REQUEST_MESSAGE = 'Image transformation request was rejected'
+const IMGPROXY_NOT_FOUND_MESSAGE = 'Not found'
+const IMGPROXY_TOO_MANY_REQUESTS_MESSAGE = 'Too many requests'
+const IMGPROXY_REQUEST_TIMED_OUT_MESSAGE = 'Image request timed out'
 const IMGPROXY_SOURCE_IMAGE_INVALID_OR_UNSUPPORTED_MESSAGE =
   'The source image is invalid or unsupported for rendering'
 const IMGPROXY_SOURCE_IMAGE_BAD_REQUESTS = [
@@ -70,6 +76,14 @@ const IMGPROXY_SOURCE_IMAGE_BAD_REQUESTS = [
     pattern: /invalid TIFF format:/i,
   },
   {
+    message: IMGPROXY_SOURCE_IMAGE_INVALID_OR_UNSUPPORTED_MESSAGE,
+    pattern: /^Invalid source image$/i,
+  },
+  {
+    message: IMGPROXY_SOURCE_IMAGE_INVALID_OR_UNSUPPORTED_MESSAGE,
+    pattern: /^Broken or unsupported image$/i,
+  },
+  {
     message: 'The source image resolution is too large to process',
     pattern: /Source image resolution is too big/i,
   },
@@ -82,6 +96,36 @@ const IMGPROXY_SOURCE_IMAGE_BAD_REQUESTS = [
     pattern: /Source image file is too big/i,
   },
 ]
+const IMGPROXY_PUBLIC_ERRORS = [
+  {
+    message: IMGPROXY_SOURCE_IMAGE_ERROR_MESSAGE,
+    pattern: /^Source image is unreachable$/i,
+  },
+  {
+    message: IMGPROXY_INVALID_TRANSFORMATION_MESSAGE,
+    pattern: /^Invalid URL$/i,
+  },
+  {
+    message: IMGPROXY_INVALID_SOURCE_MESSAGE,
+    pattern: /^Invalid source$/i,
+  },
+  {
+    message: IMGPROXY_REJECTED_REQUEST_MESSAGE,
+    pattern: /^Forbidden$/i,
+  },
+  {
+    message: IMGPROXY_NOT_FOUND_MESSAGE,
+    pattern: /^Not found$/i,
+  },
+  {
+    message: IMGPROXY_TOO_MANY_REQUESTS_MESSAGE,
+    pattern: /^Too many requests$/i,
+  },
+  {
+    message: IMGPROXY_REQUEST_TIMED_OUT_MESSAGE,
+    pattern: /^Timeout$/i,
+  },
+] as const
 
 const dispatcher: Dispatcher = new Agent({
   bodyTimeout: IMGPROXY_REQUEST_TIMEOUT_MS,
@@ -455,7 +499,7 @@ export class ImageRenderer extends Renderer {
 
     const processingError = getImageProcessingError(
       error.response?.status || 500,
-      errorResponse || error.message
+      errorResponse.trim() || error.message
     )
     return ERRORS.ImageProcessingError(processingError.statusCode, processingError.message)
   }
@@ -470,9 +514,24 @@ function getImageProcessingError(statusCode: number, message: string) {
     }
   }
 
-  if (isImgProxySourceImageError(message) && statusCode < 500) {
+  if (statusCode === 408) {
     return {
-      message: IMGPROXY_SOURCE_IMAGE_ERROR_MESSAGE,
+      message: IMGPROXY_REQUEST_TIMED_OUT_MESSAGE,
+      statusCode,
+    }
+  }
+
+  if (statusCode === 429) {
+    return {
+      message: IMGPROXY_TOO_MANY_REQUESTS_MESSAGE,
+      statusCode,
+    }
+  }
+
+  const publicError = getImgProxyPublicError(message)
+  if (publicError) {
+    return {
+      message: publicError.message,
       statusCode,
     }
   }
@@ -484,14 +543,25 @@ function getImageProcessingError(statusCode: number, message: string) {
     }
   }
 
+  if (isImgProxySourceImageError(message)) {
+    return {
+      message: IMGPROXY_SOURCE_IMAGE_ERROR_MESSAGE,
+      statusCode,
+    }
+  }
+
   return {
-    message,
+    message: IMGPROXY_INVALID_TRANSFORMATION_MESSAGE,
     statusCode,
   }
 }
 
 function getImgProxySourceImageValidationError(message: string) {
   return IMGPROXY_SOURCE_IMAGE_BAD_REQUESTS.find((badRequest) => badRequest.pattern.test(message))
+}
+
+function getImgProxyPublicError(message: string) {
+  return IMGPROXY_PUBLIC_ERRORS.find((publicError) => publicError.pattern.test(message))
 }
 
 function isImgProxySourceImageError(message: string) {

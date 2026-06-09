@@ -12,6 +12,7 @@ type MockPgClient = {
 type MockPgPool = {
   options: MockPgPoolOptions
   ended: boolean
+  on: ReturnType<typeof vi.fn>
   connect: () => Promise<MockPgClient>
   end: () => Promise<void>
 }
@@ -78,6 +79,14 @@ describe('multitenant pg pool', () => {
       })
     )
     expect(getLatestPool().options).not.toHaveProperty('ssl')
+  })
+
+  it('installs an idle pg client error handler on the shared multitenant pool', async () => {
+    loadedModule = await loadMultitenantPgModule()
+
+    await runQuery(loadedModule)
+
+    expect(getLatestPool().on).toHaveBeenCalledWith('error', expect.any(Function))
   })
 
   it('reads the current config after runtime config changes', async () => {
@@ -214,6 +223,7 @@ function mockPgModule(): void {
     class MockPool implements MockPgPool {
       readonly options: MockPgPoolOptions
       ended = false
+      on = vi.fn()
       connect = vi.fn(async () => createMockPgClient())
       end = vi.fn(async () => {
         this.ended = true

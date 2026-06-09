@@ -1,5 +1,6 @@
 import { IcebergError } from '@storage/protocols/iceberg/catalog/errors'
 import { DatabaseError } from 'pg'
+import { configure } from 'safe-stable-stringify'
 import { StorageBackendError } from './storage-error'
 
 export enum ErrorCode {
@@ -576,6 +577,7 @@ const ERROR_CODE_MAP: Record<string, ErrorCode> = {
   FST_ERR_CTP_INVALID_MEDIA_TYPE: ErrorCode.InvalidMimeType,
   FST_ERR_CTP_BODY_TOO_LARGE: ErrorCode.EntityTooLarge,
 }
+const ERROR_RAW_OMITTED_KEYS = new Set(['client'])
 
 export function isStorageError(errorType: ErrorCode, error: unknown): error is StorageBackendError {
   return error instanceof StorageBackendError && error.code === errorType
@@ -626,7 +628,7 @@ export function normalizeRawError(error: unknown, logLevel: string) {
       logLevel === 'debug' || statusCode >= 500 || errorCode === ErrorCode.UnknownError
 
     return {
-      raw: JSON.stringify(error),
+      raw: stringifyErrorRaw(error),
       name: error.name,
       message: error.message,
       stack: includeStack ? error.stack || '' : '',
@@ -643,5 +645,23 @@ export function normalizeRawError(error: unknown, logLevel: string) {
     return {
       raw: 'Failed to stringify error',
     }
+  }
+}
+
+const stableStringify = configure({
+  maximumDepth: 8,
+  maximumBreadth: 64,
+  deterministic: false,
+})
+
+function errorRawReplacer(key: string, value: unknown) {
+  return ERROR_RAW_OMITTED_KEYS.has(key) ? undefined : value
+}
+
+function stringifyErrorRaw(error: Error): string {
+  try {
+    return stableStringify(error, errorRawReplacer) ?? 'Failed to stringify error'
+  } catch {
+    return 'Failed to stringify error'
   }
 }

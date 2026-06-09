@@ -1,9 +1,9 @@
 import { getTenantConfig } from '@internal/database'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
 import { logger, logSchema } from '@internal/monitoring'
-import { Knex } from 'knex'
+import type { Storage } from '@storage/storage'
 import { getConfig } from '../../../config'
-import { UpgradeBaseEvent, UpgradeBaseEventPayload } from './base-event'
+import { UpgradeBaseEvent, UpgradeBaseEventPayload, UpgradeTransaction } from './base-event'
 
 type SyncCatalogIdsPayload = UpgradeBaseEventPayload
 
@@ -12,14 +12,8 @@ const { icebergShards } = getConfig()
 export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
   static queueName = 'sync-iceberg-catalog-ids'
 
-  static async handleUpgrade(tnx: Knex.Transaction) {
-    const tenantCatalogs = await tnx
-      .table('iceberg_catalogs')
-      .select<{ tenant_id: string; catalog_names: string[] }[]>(
-        'tenant_id',
-        tnx.raw('ARRAY_AGG(name) AS catalog_names')
-      )
-      .groupBy('tenant_id')
+  static async handleUpgrade(tnx: UpgradeTransaction) {
+    const tenantCatalogs = await listTenantCatalogs(tnx)
 
     let updatedCount = 0
     let hardFail: unknown | undefined = undefined
@@ -34,6 +28,8 @@ export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
 
     await Promise.all(
       tenantCatalogs.map(async (catalog) => {
+        let storage: Storage | undefined
+
         try {
           const config = await getTenantConfig(catalog.tenant_id)
 
@@ -43,7 +39,7 @@ export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
             waitForLock: true,
           })
 
-          const storage = await this.createStorage({
+          storage = await this.createStorage({
             tenant: {
               ref: catalog.tenant_id,
               host: '',
@@ -68,16 +64,12 @@ export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
 
           try {
             for (const bucket of tenantBuckets) {
-              const updated = await tnx
-                .table('iceberg_catalogs')
-                .where('tenant_id', catalog.tenant_id)
-                .where('name', bucket.name)
-                .whereNull('deleted_at')
-                .update({
-                  id: bucket.id,
-                  updated_at: new Date(),
-                })
-                .returning('id')
+              const updated = await updateCatalogId(tnx, {
+                catalogId: bucket.id,
+                name: bucket.name,
+                tenantId: catalog.tenant_id,
+                updatedAt: new Date(),
+              })
 
               logSchema.info(
                 logger,
@@ -89,12 +81,11 @@ export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
 
               if (updated.length === 0) {
                 // insert catalog if it does not exist
-                await tnx.table('iceberg_catalogs').insert({
-                  id: bucket.id,
+                await insertCatalog(tnx, {
+                  catalogId: bucket.id,
                   name: bucket.name,
-                  tenant_id: catalog.tenant_id,
-                  created_at: new Date(),
-                  updated_at: new Date(),
+                  tenantId: catalog.tenant_id,
+                  timestamp: new Date(),
                 })
               }
 
@@ -125,6 +116,15 @@ export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
               type: 'upgradeEvent',
             }
           )
+        } finally {
+          if (storage) {
+            await storage.db.destroyConnection().catch((e) => {
+              logger.error(
+                { error: e },
+                `[Upgrade][SyncCatalogIds] ${catalog.tenant_id} - FAILED DISPOSING CONNECTION`
+              )
+            })
+          }
         }
       })
     )
@@ -142,37 +142,101 @@ export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
     })
   }
 
-  protected static async refillShards(tnx: Knex.Transaction) {
+  protected static async refillShards(tnx: UpgradeTransaction) {
     if (icebergShards.length === 0) {
       return
     }
 
-    await tnx.raw(`DELETE FROM shard_reservation where resource_id LIKE 'iceberg-table::%'`)
-    await tnx.raw(`DELETE FROM shard_slots where resource_id LIKE 'iceberg-table::%'`)
+    await tnx.query(`DELETE FROM shard_reservation where resource_id LIKE 'iceberg-table::%'`)
+    await tnx.query(`DELETE FROM shard_slots where resource_id LIKE 'iceberg-table::%'`)
 
-    const query = `
+    await tnx.query(refillShardsQuery())
+  }
+}
+
+type TenantCatalogRow = { tenant_id: string; catalog_names: string[] }
+type UpdatedCatalogRow = { id: string }
+
+async function listTenantCatalogs(tnx: UpgradeTransaction): Promise<TenantCatalogRow[]> {
+  const result = await tnx.query<TenantCatalogRow>(`
+    SELECT tenant_id, ARRAY_AGG(name) AS catalog_names
+    FROM iceberg_catalogs
+    GROUP BY tenant_id
+  `)
+
+  return result.rows
+}
+
+async function updateCatalogId(
+  tnx: UpgradeTransaction,
+  params: {
+    catalogId: string
+    name: string
+    tenantId: string
+    updatedAt: Date
+  }
+): Promise<UpdatedCatalogRow[]> {
+  const result = await tnx.query<UpdatedCatalogRow>({
+    text: `
+      UPDATE iceberg_catalogs
+      SET id = $1, updated_at = $2
+      WHERE tenant_id = $3
+        AND name = $4
+        AND deleted_at IS NULL
+      RETURNING id
+    `,
+    values: [params.catalogId, params.updatedAt, params.tenantId, params.name],
+  })
+
+  return result.rows
+}
+
+async function insertCatalog(
+  tnx: UpgradeTransaction,
+  params: {
+    catalogId: string
+    name: string
+    tenantId: string
+    timestamp: Date
+  }
+): Promise<void> {
+  await tnx.query({
+    text: `
+      INSERT INTO iceberg_catalogs (id, name, tenant_id, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5)
+    `,
+    values: [params.catalogId, params.name, params.tenantId, params.timestamp, params.timestamp],
+  })
+}
+
+export function refillShardsQuery(): string {
+  return `
         WITH all_iceberg_tables as (
-            SELECT t.id, t.tenant_id, t.name, t.shard_key, t.shard_id, t.namespace_id, t.catalog_id, row_number() OVER () as seq_num
+            SELECT t.id, t.tenant_id, t.name, s.shard_key, s.id AS shard_id, t.namespace_id, t.catalog_id, row_number() OVER (PARTITION BY s.id ORDER BY t.id) - 1 as slot_no
             FROM iceberg_tables t
+            JOIN shard s ON s.kind = 'iceberg-table' AND s.shard_key = t.shard_key
         ),
         set_shard_reservation AS (
              INSERT INTO shard_reservation (tenant_id, shard_id, kind, resource_id, lease_expires_at, slot_no, status)
-                 SELECT it.tenant_id, s.id, 'iceberg-table', ('iceberg-table::' || it.catalog_id || '::' || it.namespace_id || '/' || it.name), now() + interval '5 minutes', it.seq_num - 1, 'confirmed'
+                 SELECT it.tenant_id, it.shard_id, 'iceberg-table', ('iceberg-table::' || it.catalog_id || '::' || it.namespace_id || '/' || it.name), now() + interval '5 minutes', it.slot_no, 'confirmed'
                  FROM all_iceberg_tables it
-                          JOIN shard s ON s.kind = 'iceberg-table' AND s.shard_key = it.shard_key
          ),
          shard_slot AS (
              INSERT INTO shard_slots (tenant_id, shard_id, resource_id, slot_no)
-                 SELECT it.tenant_id, it.shard_id, ('iceberg-table::' || it.catalog_id || '::' || it.namespace_id || '/' || it.name), it.seq_num - 1
+                 SELECT it.tenant_id, it.shard_id, ('iceberg-table::' || it.catalog_id || '::' || it.namespace_id || '/' || it.name), it.slot_no
                  FROM all_iceberg_tables it
-                 RETURNING slot_no
+                 RETURNING shard_id, slot_no
+         ),
+         shard_next_slot AS (
+             SELECT s.id AS shard_id, COALESCE(MAX(shard_slot.slot_no) + 1, 0) AS next_slot
+             FROM shard s
+             LEFT JOIN shard_slot ON shard_slot.shard_id = s.id
+             WHERE s.kind = 'iceberg-table'
+             GROUP BY s.id
          )
         UPDATE shard
-        SET next_slot = (SELECT COALESCE((SELECT MAX(slot_no) + 1 FROM shard_slot), next_slot))
-        WHERE shard.kind = 'iceberg-table'
-          AND shard.shard_key = ?;
+        SET next_slot = shard_next_slot.next_slot
+        FROM shard_next_slot
+        WHERE shard.id = shard_next_slot.shard_id;
     `
-
-    await tnx.raw(query, icebergShards[0])
-  }
 }

@@ -6,9 +6,9 @@ import { Cluster } from '@internal/cluster/cluster'
 import { AsyncAbortController } from '@internal/concurrency'
 import {
   listenForTenantUpdate,
-  multitenantKnex,
+  multitenantPgExecutor,
+  PgTenantConnection,
   PubSub,
-  TenantConnection,
 } from '@internal/database'
 import {
   runMigrationsOnTenant,
@@ -17,7 +17,7 @@ import {
 } from '@internal/database/migrations'
 import { logger, logSchema } from '@internal/monitoring'
 import { Queue, SYSTEM_TENANT } from '@internal/queue'
-import { KnexShardStoreFactory, ShardCatalog } from '@internal/sharding'
+import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { getGlobal } from '@platformatic/globals'
 import { registerWorkers } from '@storage/events'
 import { SyncCatalogIds } from '@storage/events/upgrades/sync-catalog-ids'
@@ -101,7 +101,7 @@ async function main() {
   }
 
   // Sharding for special buckets (vectors, analytics)
-  const sharding = new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
+  const sharding = new ShardCatalog(new PgShardStoreFactory(multitenantPgExecutor))
 
   // Migrations
   if (isMultitenant) {
@@ -148,8 +148,8 @@ async function main() {
   }
 
   // PoolManager
-  TenantConnection.poolManager.setNumWorkers(numWorkers)
-  TenantConnection.poolManager.monitor()
+  PgTenantConnection.poolManager.setNumWorkers(numWorkers)
+  PgTenantConnection.poolManager.monitor()
 
   // Cluster information
   await Cluster.init(shutdownSignal.nextGroup.signal)
@@ -162,7 +162,7 @@ async function main() {
       },
       `[Cluster] Cluster size changed to ${data.size}`
     )
-    TenantConnection.poolManager.rebalanceAll({
+    PgTenantConnection.poolManager.rebalanceAll({
       clusterSize: data.size,
     })
   })

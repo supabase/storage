@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ListPartsCommand, S3Client } from '@aws-sdk/client-s3'
-import { KnexMetastore } from '@storage/protocols/iceberg/knex'
+import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { FastifyInstance } from 'fastify'
 import { getConfig } from '../config'
 import { useStorage } from './utils/storage'
@@ -34,13 +34,13 @@ describe('S3 protocol error code', () => {
 
   let testApp: FastifyInstance
   let client: S3Client
-  let icebergMetastore: KnexMetastore
+  let icebergMetastore: PgMetastore
   let fileBackendPath: string
 
   beforeAll(async () => {
     fileBackendPath = await mkdtemp(join(tmpdir(), 'storage-file-backend-'))
     testApp = await createFileBackedApp(fileBackendPath)
-    icebergMetastore = new KnexMetastore(t.database.connection.pool.acquire(), {
+    icebergMetastore = new PgMetastore(t.database.connection.pool.acquire(), {
       multiTenant: false,
       schema: 'storage',
     })

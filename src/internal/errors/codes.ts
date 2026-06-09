@@ -22,6 +22,7 @@ export enum ErrorCode {
   BucketAlreadyExists = 'BucketAlreadyExists',
   DatabaseTimeout = 'DatabaseTimeout',
   DatabaseReadOnly = 'DatabaseReadOnly',
+  DatabaseTransactionAborted = 'DatabaseTransactionAborted',
   DatabaseInvalidObjectDefinition = 'DatabaseInvalidObjectDefinition',
   DatabaseSchemaMismatch = 'DatabaseSchemaMismatch',
   InvalidSignature = 'InvalidSignature',
@@ -391,6 +392,15 @@ export const ERRORS = {
       code: ErrorCode.DatabaseReadOnly,
       httpStatusCode: 503,
       message: 'The database is currently in read-only mode. Please try again later.',
+      originalError: e,
+    }),
+
+  DatabaseTransactionAborted: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.DatabaseTransactionAborted,
+      httpStatusCode: 500,
+      message:
+        'The database transaction has been aborted. Roll back the transaction before retrying.',
       originalError: e,
     }),
 

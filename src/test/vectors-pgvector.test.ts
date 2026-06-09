@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto'
+import { PgPoolExecutor } from '@internal/database'
 import { BucketScopedSingleShard } from '@internal/sharding'
 import {
-  createVectorTransactionKnexResolver,
-  KnexVectorMetadataDB,
+  createVectorTransactionPgResolver,
+  PgVectorMetadataDB,
   PgVectorStore,
   VectorStoreManager,
 } from '@storage/protocols/vector'
-import Knex from 'knex'
+import { Pool as PgPool } from 'pg'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 /**
@@ -41,20 +42,22 @@ let pgvectorAvailable = false
 const tenantId = 'pgvector-it-tenant'
 
 describe('Vectors via VectorStoreManager + real pgvector', () => {
-  let knex: Knex.Knex
-  let metadataDb: KnexVectorMetadataDB
+  let pool: PgPool
+  let executor: PgPoolExecutor
+  let metadataDb: PgVectorMetadataDB
   let manager: VectorStoreManager
   const bucketName = `pgvector-it-bucket-${Date.now()}`
 
   beforeAll(async () => {
-    const probe = Knex({
-      client: 'pg',
-      connection: { connectionString: TEST_DATABASE_URL, connectionTimeoutMillis: 2_000 },
-      pool: { min: 0, max: 1 },
+    const probe = new PgPool({
+      connectionString: TEST_DATABASE_URL,
+      connectionTimeoutMillis: 2_000,
+      min: 0,
+      max: 1,
     })
     try {
-      await probe.raw('CREATE EXTENSION IF NOT EXISTS vector')
-      await probe.raw('CREATE SCHEMA IF NOT EXISTS storage_vectors')
+      await probe.query('CREATE EXTENSION IF NOT EXISTS vector')
+      await probe.query('CREATE SCHEMA IF NOT EXISTS storage_vectors')
       pgvectorAvailable = true
     } catch (e) {
       console.warn(
@@ -62,18 +65,20 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
         (e as Error).message
       )
     } finally {
-      await probe.destroy()
+      await probe.end()
     }
 
     if (!pgvectorAvailable) return
 
-    knex = Knex({
-      client: 'pg',
-      connection: { connectionString: TEST_DATABASE_URL, connectionTimeoutMillis: 5_000 },
-      pool: { min: 0, max: 4 },
+    pool = new PgPool({
+      connectionString: TEST_DATABASE_URL,
+      connectionTimeoutMillis: 5_000,
+      min: 0,
+      max: 4,
     })
-    metadataDb = new KnexVectorMetadataDB(knex)
-    const adapter = new PgVectorStore(knex)
+    executor = new PgPoolExecutor(pool)
+    metadataDb = new PgVectorMetadataDB(executor)
+    const adapter = new PgVectorStore(executor)
     const shard = new BucketScopedSingleShard({
       keyPrefix: 'pgvector__',
       capacity: Number.MAX_SAFE_INTEGER,
@@ -92,7 +97,7 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
         await tx.deleteVectorBucket(bucketName)
       })
       .catch(() => undefined)
-    await knex.destroy()
+    await pool.end()
   })
 
   beforeEach(async (ctx) => {
@@ -111,7 +116,7 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
       capacity: Number.MAX_SAFE_INTEGER,
     })
     const transactionalManager = new VectorStoreManager(
-      new PgVectorStore(createVectorTransactionKnexResolver(knex)),
+      new PgVectorStore(createVectorTransactionPgResolver(executor)),
       metadataDb,
       shard,
       {
@@ -122,8 +127,13 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
     )
 
     try {
-      await knex('storage.buckets_vectors').insert({ id: bucket }).onConflict('id').ignore()
-      await knex.raw(`CREATE TABLE ${qualifiedTable}
+      await pool.query(
+        `INSERT INTO storage.buckets_vectors (id)
+         VALUES ($1)
+         ON CONFLICT (id) DO NOTHING`,
+        [bucket]
+      )
+      await pool.query(`CREATE TABLE ${qualifiedTable}
         (
           key text PRIMARY KEY,
           embedding halfvec(4) NOT NULL,
@@ -138,15 +148,22 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
         distanceMetric: 'cosine',
       })
 
-      const metadataRows = await knex('storage.vector_indexes')
-        .where({ bucket_id: bucket, name: indexName })
-        .select('name', 'bucket_id')
+      const metadataRows = await pool.query(
+        `SELECT name, bucket_id
+         FROM storage.vector_indexes
+         WHERE bucket_id = $1
+           AND name = $2`,
+        [bucket, indexName]
+      )
 
-      expect(metadataRows).toEqual([{ name: indexName, bucket_id: bucket }])
+      expect(metadataRows.rows).toEqual([{ name: indexName, bucket_id: bucket }])
     } finally {
-      await knex.raw(`DROP TABLE IF EXISTS ${qualifiedTable}`)
-      await knex('storage.vector_indexes').where({ bucket_id: bucket, name: indexName }).del()
-      await knex('storage.buckets_vectors').where({ id: bucket }).del()
+      await pool.query(`DROP TABLE IF EXISTS ${qualifiedTable}`)
+      await pool.query(`DELETE FROM storage.vector_indexes WHERE bucket_id = $1 AND name = $2`, [
+        bucket,
+        indexName,
+      ])
+      await pool.query(`DELETE FROM storage.buckets_vectors WHERE id = $1`, [bucket])
     }
   })
 
@@ -400,7 +417,7 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
     // must not see each other's data.
     const indexName = `it-isolation-${Date.now()}`
     const otherTenantManager = new VectorStoreManager(
-      new PgVectorStore(knex),
+      new PgVectorStore(executor),
       metadataDb,
       new BucketScopedSingleShard({
         keyPrefix: 'pgvector__',

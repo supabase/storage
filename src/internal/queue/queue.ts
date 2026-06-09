@@ -19,6 +19,7 @@ type RegisteredEvent = {
 }
 
 export const PG_BOSS_SCHEMA = 'pgboss_v10'
+const queueStopTimeoutMs = 25_000
 
 export abstract class Queue {
   protected static events: RegisteredEvent[] = []
@@ -162,11 +163,6 @@ export abstract class Queue {
                 type: 'queue',
               })
             })
-            .finally(async () => {
-              await Queue.callClose().catch(() => {
-                // no-op
-              })
-            })
         },
         { once: true }
       )
@@ -201,17 +197,31 @@ export abstract class Queue {
     }
 
     const boss = this.pgBoss
+    const db = this.pgBossDb
     const { isProduction } = getConfig()
 
-    await boss.stop({
-      timeout: 20 * 1000,
-      graceful: isProduction,
-      wait: true,
-    })
+    try {
+      await withQueueStopTimeout(
+        boss.stop({
+          timeout: 20 * 1000,
+          graceful: isProduction,
+          wait: true,
+        }),
+        'Queue stop'
+      )
+    } finally {
+      try {
+        await withQueueStopTimeout(this.callClose(), 'Queue close')
+      } finally {
+        if (Queue.pgBoss === boss) {
+          Queue.pgBoss = undefined
+        }
 
-    await this.callClose()
-
-    Queue.pgBoss = undefined
+        if (Queue.pgBossDb === db) {
+          Queue.pgBossDb = undefined
+        }
+      }
+    }
   }
 
   protected static async startWorkers(opts: {
@@ -424,5 +434,24 @@ export abstract class Queue {
     queueOpts.signal?.addEventListener('abort', () => {
       clearInterval(interval)
     })
+  }
+}
+
+async function withQueueStopTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${queueStopTimeoutMs}ms`))
+    }, queueStopTimeoutMs)
+    timeout.unref?.()
+  })
+
+  try {
+    return await Promise.race([promise, timeoutPromise])
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout)
+    }
   }
 }

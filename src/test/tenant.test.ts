@@ -1,6 +1,11 @@
 import { encrypt, signJWT } from '@internal/auth'
 import { TENANT_CONFIG_CACHE_NAME } from '@internal/cache'
-import { jwksManager, TenantConnection } from '@internal/database'
+import {
+  closeMultitenantPg,
+  jwksManager,
+  multitenantPgExecutor,
+  PgTenantConnection,
+} from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import {
   deleteTenantConfig,
@@ -13,7 +18,6 @@ import {
 import { cacheRequestsTotal } from '@internal/monitoring/metrics'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
-import { multitenantKnex } from '../internal/database/multitenant-db'
 import { adminApp } from './common'
 import { assertLogicalLookupMetrics } from './utils/cache-metrics'
 import { mockCreateLruCache } from './utils/cache-mock'
@@ -112,19 +116,25 @@ const payload2 = {
 }
 
 type TenantModule = typeof import('../internal/database/tenant')
-type MultitenantDbModule = typeof import('../internal/database/multitenant-db')
-type TenantQueryBuilder = ReturnType<(typeof multitenantKnex)['table']>
+type MultitenantPgModule = typeof import('../internal/database/multitenant-pg')
 
 async function loadTenantModule(
   maxItems: number
-): Promise<{ tenantModule: TenantModule; multitenantDbModule: MultitenantDbModule }> {
+): Promise<{ tenantModule: TenantModule; multitenantPgModule: MultitenantPgModule }> {
   vi.resetModules()
   mockCreateLruCache({ max: maxItems })
 
   return {
     tenantModule: await import('../internal/database/tenant'),
-    multitenantDbModule: await import('../internal/database/multitenant-db'),
+    multitenantPgModule: await import('../internal/database/multitenant-pg'),
   }
+}
+
+function mockTenantQueryResult(row: object) {
+  return {
+    rows: [row],
+    rowCount: 1,
+  } as never
 }
 
 beforeAll(async () => {
@@ -155,7 +165,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await adminApp.close()
-  await multitenantKnex.destroy()
+  await closeMultitenantPg()
 })
 
 describe('Tenant configs', () => {
@@ -223,6 +233,54 @@ describe('Tenant configs', () => {
     await expect(getFeatures('abc')).resolves.toEqual(payload.features)
   })
 
+  test('Normalizes legacy database pool mode alias on tenant writes', async () => {
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload: {
+        ...payload,
+        databasePoolMode: 'recycle',
+      },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(response.statusCode).toBe(201)
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(JSON.parse(getResponse.body)).toEqual({
+      ...payload,
+      databasePoolMode: 'recycled',
+    })
+
+    await expect(getTenantConfig('abc')).resolves.toMatchObject({
+      databasePoolMode: 'recycled',
+    })
+  })
+
+  test('Rejects invalid database pool mode values', async () => {
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload: {
+        ...payload,
+        databasePoolMode: 'invalid',
+      },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
   test('Get tenant config omits sensitive data when ADMIN_RETURN_TENANT_SENSITIVE_DATA is false', async () => {
     await adminApp.inject({
       method: 'POST',
@@ -235,11 +293,12 @@ describe('Tenant configs', () => {
 
     const previousValue = process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA
     process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA = 'false'
+    let isolatedApp: typeof adminApp | undefined
 
     try {
       vi.resetModules()
       const { default: createApp } = await import('../admin-app')
-      const isolatedApp = createApp({})
+      isolatedApp = createApp({})
 
       const singleResponse = await isolatedApp!.inject({
         method: 'GET',
@@ -282,9 +341,9 @@ describe('Tenant configs', () => {
       expect(listJSON[0].jwks).toBeUndefined()
       expect(listJSON[0].serviceKey).toBeUndefined()
       expect(listJSON[0].fileSizeLimit).toBe(payload.fileSizeLimit)
-
-      await isolatedApp!.close()
     } finally {
+      await isolatedApp?.close()
+
       if (previousValue === undefined) {
         delete process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA
       } else {
@@ -381,10 +440,17 @@ describe('Tenant configs', () => {
       expect(generateUrlSigningJwkSpy).toHaveBeenCalledWith('abc', expect.anything())
       expect(runMigrationsOnTenantMock).not.toHaveBeenCalled()
 
-      await expect(multitenantKnex('tenants').where({ id: 'abc' }).first()).resolves.toBeUndefined()
-      await expect(
-        multitenantKnex('tenants_jwks').where({ tenant_id: 'abc' }).select('id')
-      ).resolves.toEqual([])
+      const tenant = await multitenantPgExecutor.query({
+        text: 'SELECT id FROM tenants WHERE id = $1 LIMIT 1',
+        values: ['abc'],
+      })
+      const jwks = await multitenantPgExecutor.query({
+        text: 'SELECT id FROM tenants_jwks WHERE tenant_id = $1',
+        values: ['abc'],
+      })
+
+      expect(tenant.rows[0]).toBeUndefined()
+      expect(jwks.rows).toEqual([])
     } finally {
       generateUrlSigningJwkSpy.mockRestore()
     }
@@ -503,6 +569,60 @@ describe('Tenant configs', () => {
     })
     const getResponseJSON = JSON.parse(getResponse.body)
     expect(getResponseJSON).toEqual({ ...payload, fileSizeLimit: 2 })
+  })
+
+  test('Tenant config maxConnections nullish transitions do not destroy cached pg pool', async () => {
+    const tenantId = 'pool-max-connections-nullish-change'
+    const encryptedTenant = {
+      anon_key: encrypt('anon'),
+      database_url: encrypt('postgres://tenant'),
+      database_pool_mode: 'recycled',
+      file_size_limit: 1,
+      jwt_secret: encrypt('jwt-secret'),
+      jwks: null,
+      service_key: encrypt('service-key'),
+      feature_purge_cache: false,
+      feature_image_transformation: false,
+      feature_s3_protocol: false,
+      feature_iceberg_catalog: false,
+      feature_iceberg_catalog_max_catalogs: 0,
+      feature_iceberg_catalog_max_namespaces: 0,
+      feature_iceberg_catalog_max_tables: 0,
+      feature_vector_buckets: false,
+      feature_vector_buckets_max_buckets: 0,
+      feature_vector_buckets_max_indexes: 0,
+      image_transformation_max_resolution: null,
+      database_pool_url: null,
+      max_connections: null,
+      migrations_version: migrationVersion,
+      migrations_status: 'COMPLETED',
+      tracing_mode: null,
+      disable_events: null,
+    }
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+      .mockResolvedValueOnce(
+        mockTenantQueryResult({
+          ...encryptedTenant,
+          max_connections: undefined,
+        })
+      )
+    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
+
+    try {
+      const cachedConfig = await getTenantConfig(tenantId)
+      ;(cachedConfig as { maxConnections?: number | null }).maxConnections = null
+
+      await onTenantConfigChange(tenantId)
+
+      expect(destroySpy).not.toHaveBeenCalled()
+      expect(querySpy).toHaveBeenCalledTimes(2)
+    } finally {
+      deleteTenantConfig(tenantId)
+      querySpy.mockRestore()
+      destroySpy.mockRestore()
+    }
   })
 
   test('Update tenant databasePoolUrl to null', async () => {
@@ -751,18 +871,17 @@ describe('Tenant configs', () => {
       },
     })
 
-    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const querySpy = vi.spyOn(multitenantPgExecutor, 'query')
     try {
       await getTenantConfig(tenantId)
-      expect(knexTableSpy).toHaveBeenCalledTimes(1)
-      expect(knexTableSpy).toHaveBeenCalledWith('tenants')
+      expect(querySpy).toHaveBeenCalledTimes(1)
 
       const results = await Promise.all([
         getTenantConfig(tenantId),
         getTenantConfig(tenantId),
         getTenantConfig(tenantId),
       ])
-      expect(knexTableSpy).toHaveBeenCalledTimes(1)
+      expect(querySpy).toHaveBeenCalledTimes(1)
       results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
 
       await adminApp.inject({
@@ -773,7 +892,7 @@ describe('Tenant configs', () => {
         },
       })
     } finally {
-      knexTableSpy.mockRestore()
+      querySpy.mockRestore()
     }
   })
 
@@ -806,37 +925,32 @@ describe('Tenant configs', () => {
       disable_events: null,
     }
 
-    const { tenantModule, multitenantDbModule } = await loadTenantModule(2)
-    const knexTableSpy = vi.spyOn(multitenantDbModule.multitenantKnex, 'table')
-    const queryBuilder = {
-      first: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      abortOnSignal: vi.fn().mockResolvedValue(encryptedTenant),
-    }
+    const { tenantModule, multitenantPgModule } = await loadTenantModule(2)
+    const querySpy = vi
+      .spyOn(multitenantPgModule.multitenantPgExecutor, 'query')
+      .mockResolvedValue(mockTenantQueryResult(encryptedTenant))
 
     try {
-      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
-
       for (const tenantId of tenantIds) {
         await tenantModule.getTenantConfig(tenantId)
       }
 
-      expect(knexTableSpy).toHaveBeenCalledTimes(tenantIds.length)
+      expect(querySpy).toHaveBeenCalledTimes(tenantIds.length)
 
       await tenantModule.getTenantConfig(tenantIds[0])
 
-      expect(knexTableSpy).toHaveBeenCalledTimes(tenantIds.length + 1)
+      expect(querySpy).toHaveBeenCalledTimes(tenantIds.length + 1)
     } finally {
       tenantIds.forEach((tenantId) => {
         tenantModule.deleteTenantConfig(tenantId)
       })
       vi.doUnmock('@internal/cache')
       vi.resetModules()
-      knexTableSpy.mockRestore()
+      querySpy.mockRestore()
     }
   })
 
-  test('Tenant config maxConnections change rebalances cached pool without destroying it', async () => {
+  test('Tenant config maxConnections change rebalances cached pg pool without destroying it', async () => {
     const tenantId = 'pool-max-connections-change'
     const encryptedTenant = {
       anon_key: encrypt('anon'),
@@ -864,26 +978,19 @@ describe('Tenant configs', () => {
       tracing_mode: null,
       disable_events: null,
     }
-    const queryBuilder = {
-      first: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      abortOnSignal: vi
-        .fn()
-        .mockResolvedValueOnce(encryptedTenant)
-        .mockResolvedValueOnce({
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+      .mockResolvedValueOnce(
+        mockTenantQueryResult({
           ...encryptedTenant,
           max_connections: 40,
-        }),
-    }
-    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
-    const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const rebalanceSpy = vi
-      .spyOn(TenantConnection.poolManager, 'rebalance')
-      .mockReturnValue(undefined)
+        })
+      )
+    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
 
     try {
-      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
-
       await getTenantConfig(tenantId)
       await onTenantConfigChange(tenantId)
 
@@ -891,13 +998,13 @@ describe('Tenant configs', () => {
       expect(destroySpy).not.toHaveBeenCalled()
     } finally {
       deleteTenantConfig(tenantId)
-      knexTableSpy.mockRestore()
+      querySpy.mockRestore()
       destroySpy.mockRestore()
       rebalanceSpy.mockRestore()
     }
   })
 
-  test('Tenant config databaseUrl change destroys the cached pool', async () => {
+  test('Tenant config databaseUrl change destroys the cached pg pool', async () => {
     const tenantId = 'pool-dburl-change'
     const encryptedTenant = {
       anon_key: encrypt('anon'),
@@ -925,35 +1032,33 @@ describe('Tenant configs', () => {
       tracing_mode: null,
       disable_events: null,
     }
-    const queryBuilder = {
-      first: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      abortOnSignal: vi
-        .fn()
-        .mockResolvedValueOnce(encryptedTenant)
-        .mockResolvedValueOnce({
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+      .mockResolvedValueOnce(
+        mockTenantQueryResult({
           ...encryptedTenant,
           database_url: encrypt('postgres://new-host'),
-        }),
-    }
-    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
-    const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
+        })
+      )
+    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
 
     try {
-      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
-
       await getTenantConfig(tenantId)
       await onTenantConfigChange(tenantId)
 
       expect(destroySpy).toHaveBeenCalledWith(tenantId)
+      expect(rebalanceSpy).not.toHaveBeenCalled()
     } finally {
       deleteTenantConfig(tenantId)
-      knexTableSpy.mockRestore()
+      querySpy.mockRestore()
       destroySpy.mockRestore()
+      rebalanceSpy.mockRestore()
     }
   })
 
-  test('Tenant config databasePoolUrl change destroys the cached pool', async () => {
+  test('Tenant config databasePoolUrl change destroys the cached pg pool', async () => {
     const tenantId = 'pool-dbpoolurl-change'
     const encryptedTenant = {
       anon_key: encrypt('anon'),
@@ -981,31 +1086,29 @@ describe('Tenant configs', () => {
       tracing_mode: null,
       disable_events: null,
     }
-    const queryBuilder = {
-      first: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      abortOnSignal: vi
-        .fn()
-        .mockResolvedValueOnce(encryptedTenant)
-        .mockResolvedValueOnce({
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+      .mockResolvedValueOnce(
+        mockTenantQueryResult({
           ...encryptedTenant,
           database_pool_url: encrypt('postgres://new-pooler'),
-        }),
-    }
-    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
-    const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
+        })
+      )
+    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
 
     try {
-      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
-
       await getTenantConfig(tenantId)
       await onTenantConfigChange(tenantId)
 
       expect(destroySpy).toHaveBeenCalledWith(tenantId)
+      expect(rebalanceSpy).not.toHaveBeenCalled()
     } finally {
       deleteTenantConfig(tenantId)
-      knexTableSpy.mockRestore()
+      querySpy.mockRestore()
       destroySpy.mockRestore()
+      rebalanceSpy.mockRestore()
     }
   })
 
@@ -1037,43 +1140,35 @@ describe('Tenant configs', () => {
       tracing_mode: null,
       disable_events: null,
     }
-    const queryBuilder = {
-      first: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      abortOnSignal: vi
-        .fn()
-        .mockResolvedValueOnce(encryptedTenant)
-        .mockResolvedValueOnce({
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+      .mockResolvedValueOnce(
+        mockTenantQueryResult({
           ...encryptedTenant,
           database_url: encrypt('postgres://new-host'),
           max_connections: 40,
-        }),
-    }
-    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
-    const destroySpy = vi.spyOn(TenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const rebalanceSpy = vi
-      .spyOn(TenantConnection.poolManager, 'rebalance')
-      .mockReturnValue(undefined)
+        })
+      )
+    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
+    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
 
     try {
-      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
-
       await getTenantConfig(tenantId)
       await onTenantConfigChange(tenantId)
 
-      // dbUrl is checked first — destroy wins, rebalance skipped.
       expect(destroySpy).toHaveBeenCalledWith(tenantId)
       expect(rebalanceSpy).not.toHaveBeenCalled()
     } finally {
       deleteTenantConfig(tenantId)
-      knexTableSpy.mockRestore()
+      querySpy.mockRestore()
       destroySpy.mockRestore()
       rebalanceSpy.mockRestore()
     }
   })
 
   test('Get tenant config records one cache request per logical lookup', async () => {
-    const knexTableSpy = vi.spyOn(multitenantKnex, 'table')
+    const querySpy = vi.spyOn(multitenantPgExecutor, 'query')
     const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
     const tenantId = 'cache-metrics-lookup'
     const encryptedTenant = {
@@ -1103,25 +1198,20 @@ describe('Tenant configs', () => {
       disable_events: null,
     }
 
-    const tenantQuery = Promise.withResolvers<typeof encryptedTenant>()
-    const queryBuilder = {
-      first: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      abortOnSignal: vi.fn().mockImplementation(() => tenantQuery.promise),
-    }
+    const tenantQuery = Promise.withResolvers<never>()
 
     try {
-      knexTableSpy.mockReturnValue(queryBuilder as unknown as TenantQueryBuilder)
+      querySpy.mockImplementation(() => tenantQuery.promise)
       await assertLogicalLookupMetrics({
         addSpy,
-        backendCallSpy: queryBuilder.abortOnSignal,
+        backendCallSpy: querySpy,
         cacheName: TENANT_CONFIG_CACHE_NAME,
         startLookups: () => [
           getTenantConfig(tenantId),
           getTenantConfig(tenantId),
           getTenantConfig(tenantId),
         ],
-        resolveBackend: () => tenantQuery.resolve(encryptedTenant),
+        resolveBackend: () => tenantQuery.resolve(mockTenantQueryResult(encryptedTenant)),
         assertCachedHit: async () => {
           await expect(getTenantConfig(tenantId)).resolves.toMatchObject({
             databaseUrl: 'postgres://tenant',
@@ -1130,7 +1220,7 @@ describe('Tenant configs', () => {
       })
     } finally {
       deleteTenantConfig(tenantId)
-      knexTableSpy.mockRestore()
+      querySpy.mockRestore()
       addSpy.mockRestore()
     }
   })

@@ -1,4 +1,4 @@
-export * from './knex'
+export * from './pg'
 export * from './sharder'
 export * from './store'
 export * from './strategy/bucket-scoped-single-shard'

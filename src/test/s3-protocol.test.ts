@@ -30,10 +30,10 @@ import { Upload } from '@aws-sdk/lib-storage'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { wait } from '@internal/concurrency'
-import { getPostgresConnection, getServiceKeyUser, TenantConnection } from '@internal/database'
+import { getPostgresConnection, getServiceKeyUser, PgTenantConnection } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
-import { StorageKnexDB } from '@storage/database'
+import { StoragePgDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
 import { createHash, createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
@@ -2145,7 +2145,7 @@ describe('S3 Protocol', () => {
             uploadFile(client, bucketName, deniedKey, 1),
           ])
 
-          await db.raw(`
+          await db.query(`
             CREATE POLICY "${policyName}_select"
             ON storage.objects
             AS PERMISSIVE
@@ -2153,7 +2153,7 @@ describe('S3 Protocol', () => {
             TO "anon"
             USING (bucket_id = '${bucketName}' AND name = '${allowedKey}')
           `)
-          await db.raw(`
+          await db.query(`
             CREATE POLICY "${policyName}_delete"
             ON storage.objects
             AS PERMISSIVE
@@ -2197,8 +2197,8 @@ describe('S3 Protocol', () => {
           expect(deniedListResp.Contents?.map((object) => object.Key)).toEqual([deniedKey])
         } finally {
           anonClient.destroy()
-          await db.raw(`DROP POLICY IF EXISTS "${policyName}_select" ON storage.objects`)
-          await db.raw(`DROP POLICY IF EXISTS "${policyName}_delete" ON storage.objects`)
+          await db.query(`DROP POLICY IF EXISTS "${policyName}_select" ON storage.objects`)
+          await db.query(`DROP POLICY IF EXISTS "${policyName}_delete" ON storage.objects`)
           await connection.dispose()
           await client
             .send(
@@ -3108,7 +3108,7 @@ describe('S3 Protocol', () => {
 describe('Migration compatibility', () => {
   describe('integration', () => {
     const { tenantId } = getConfig()
-    let connection: TenantConnection
+    let connection: PgTenantConnection
     let bucketId: string
 
     beforeAll(async () => {
@@ -3121,18 +3121,18 @@ describe('Migration compatibility', () => {
       })
 
       bucketId = randomUUID()
-      const db = new StorageKnexDB(connection, { tenantId, host: 'localhost' })
+      const db = new StoragePgDB(connection, { tenantId, host: 'localhost' })
       await db.createBucket({ id: bucketId, name: `migration-test-${bucketId}`, public: false })
     })
 
     afterAll(async () => {
-      const db = new StorageKnexDB(connection, { tenantId, host: 'localhost' })
+      const db = new StoragePgDB(connection, { tenantId, host: 'localhost' })
       await db.deleteBucket(bucketId)
       await connection.dispose()
     })
 
     const makeDB = (latestMigration?: keyof typeof DBMigration) =>
-      new StorageKnexDB(connection, { tenantId, host: 'localhost', latestMigration })
+      new StoragePgDB(connection, { tenantId, host: 'localhost', latestMigration })
 
     describe('createMultipartUpload', () => {
       it('does not store metadata when latestMigration is before s3-multipart-uploads-metadata', async () => {

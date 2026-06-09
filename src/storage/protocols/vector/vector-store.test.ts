@@ -11,15 +11,10 @@ import { ERRORS } from '@internal/errors'
 import { logSchema } from '@internal/monitoring'
 import { Sharder } from '@internal/sharding'
 import { VectorBucket } from '@storage/schemas'
-import type { Knex } from 'knex'
 import { type Mocked, vi } from 'vitest'
 import { type VectorStore } from './adapter/s3-vector'
-import {
-  createVectorTransactionKnexResolver,
-  KnexVectorMetadataDB,
-  type VectorLockResourceType,
-  type VectorMetadataDB,
-} from './knex'
+import { type VectorLockResourceType, type VectorMetadataDB } from './metadata'
+import { createVectorTransactionPgResolver, PgVectorMetadataDB } from './pg'
 import { VECTOR_BUCKET_COUNT_LOCK, VectorStoreManager } from './vector-store'
 
 function createMockVectorStore(): Mocked<VectorStore> {
@@ -154,7 +149,7 @@ function createDeterministicVectorDb(options: {
   }
 
   return {
-    async withTransaction<T>(fn: (db: KnexVectorMetadataDB) => T): Promise<T> {
+    async withTransaction<T>(fn: (db: VectorMetadataDB) => Promise<T> | T): Promise<T> {
       let holdsCountLock = false
 
       const tx: Partial<VectorMetadataDB> = {
@@ -195,7 +190,7 @@ function createDeterministicVectorDb(options: {
       }
 
       try {
-        return await fn(tx as KnexVectorMetadataDB)
+        return await fn(tx as VectorMetadataDB)
       } finally {
         if (holdsCountLock) {
           releaseCountLock()
@@ -226,13 +221,18 @@ function createDeterministicVectorDb(options: {
 }
 
 describe('VectorStoreManager bucket lifecycle', () => {
-  it('exposes the active metadata transaction through a scoped knex resolver', async () => {
-    const trx = { isTransaction: true } as unknown as Knex
-    const rootKnex = {
-      transaction: async (fn: (transaction: typeof trx) => Promise<void>) => fn(trx),
-    } as unknown as Knex
-    const db = new KnexVectorMetadataDB(rootKnex)
-    const resolver = createVectorTransactionKnexResolver(rootKnex)
+  it('exposes the active metadata transaction through a scoped pg resolver', async () => {
+    const trx = {
+      query: vi.fn(),
+      commit: vi.fn(),
+      rollback: vi.fn(),
+    }
+    const rootPg = {
+      query: vi.fn(),
+      beginTransaction: vi.fn().mockResolvedValue(trx),
+    }
+    const db = new PgVectorMetadataDB(rootPg as never)
+    const resolver = createVectorTransactionPgResolver(rootPg as never)
     const resolved: unknown[] = []
 
     await db.withTransaction(async () => {
@@ -240,7 +240,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
     })
     resolved.push(resolver.resolve())
 
-    expect(resolved).toEqual([trx, rootKnex])
+    expect(resolved).toEqual([trx, rootPg])
+    expect(trx.commit).toHaveBeenCalledTimes(1)
   })
 
   it('serializes concurrent creates for the final bucket slot', async () => {
@@ -466,8 +467,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
     db.findVectorBucket
       .mockResolvedValueOnce(createVectorBucketRecord('bucket-a'))
       .mockRejectedValueOnce(ERRORS.S3VectorNotFoundException('vector bucket', 'bucket-a'))
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
 
     const manager = new VectorStoreManager(vectorStore, db, sharder, {
@@ -539,11 +540,11 @@ describe('VectorStoreManager bucket lifecycle', () => {
     db.createVectorIndex.mockResolvedValue(
       {} as Awaited<ReturnType<VectorMetadataDB['createVectorIndex']>>
     )
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) => {
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) => {
       callOrder.push('metadata:start')
       inMetadataTransaction = true
       try {
-        return await fn(db as unknown as KnexVectorMetadataDB)
+        return await fn(db as unknown as VectorMetadataDB)
       } finally {
         inMetadataTransaction = false
         callOrder.push('metadata:end')
@@ -598,8 +599,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
     db.createVectorIndex.mockRejectedValue(
       ERRORS.S3VectorConflictException('vector index', 'index-a')
     )
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
 
     const manager = new VectorStoreManager(vectorStore, db, sharder, {
@@ -632,8 +633,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
     db.findVectorBucket.mockResolvedValue(createVectorBucketRecord('bucket-a'))
     db.countIndexes.mockResolvedValue(1)
     db.findVectorIndexForBucket.mockResolvedValue(createVectorIndexRecord())
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
 
     const manager = new VectorStoreManager(vectorStore, db, sharder, {
@@ -702,7 +703,7 @@ describe('VectorStoreManager bucket lifecycle', () => {
       await releaseFirstMetadata.promise
       return {} as Awaited<ReturnType<VectorMetadataDB['createVectorIndex']>>
     })
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) => {
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) => {
       let holdsBucketLock = false
       const tx: Partial<VectorMetadataDB> = {
         ...db,
@@ -715,7 +716,7 @@ describe('VectorStoreManager bucket lifecycle', () => {
       }
 
       try {
-        return await fn(tx as KnexVectorMetadataDB)
+        return await fn(tx as VectorMetadataDB)
       } finally {
         if (holdsBucketLock) {
           releaseBucketLock()
@@ -787,8 +788,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
       {} as Awaited<ReturnType<VectorMetadataDB['createVectorIndex']>>
     )
     db.deleteVectorIndex.mockResolvedValue()
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
     sharder.reserve.mockResolvedValue({
       leaseExpiresAt: '',
@@ -843,8 +844,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
       {} as Awaited<ReturnType<VectorMetadataDB['createVectorIndex']>>
     )
     db.deleteVectorIndex.mockResolvedValue()
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
     sharder.reserve.mockResolvedValue({
       leaseExpiresAt: '',
@@ -905,8 +906,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
     db.createVectorIndex.mockResolvedValue(
       {} as Awaited<ReturnType<VectorMetadataDB['createVectorIndex']>>
     )
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
     sharder.reserve.mockResolvedValue({
       leaseExpiresAt: '',
@@ -948,9 +949,9 @@ describe('VectorStoreManager bucket lifecycle', () => {
     db.findVectorBucket.mockResolvedValue(createVectorBucketRecord('bucket-a'))
     db.countIndexes.mockResolvedValue(0)
     db.createVectorIndex.mockResolvedValue(createVectorIndexRecord())
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) => {
-      await fn(db as unknown as KnexVectorMetadataDB)
-      await fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) => {
+      await fn(db as unknown as VectorMetadataDB)
+      await fn(db as unknown as VectorMetadataDB)
     })
     sharder.reserve.mockResolvedValue({
       leaseExpiresAt: '',
@@ -995,8 +996,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
       {} as Awaited<ReturnType<VectorMetadataDB['createVectorIndex']>>
     )
     db.deleteVectorIndex.mockResolvedValue()
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
     sharder.reserve.mockResolvedValue({
       leaseExpiresAt: '',
@@ -1058,8 +1059,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
     db.findVectorBucket.mockResolvedValue(createVectorBucketRecord('bucket-a'))
     db.countIndexes.mockResolvedValue(0)
     db.createVectorIndex.mockResolvedValue(createVectorIndexRecord())
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
     sharder.reserve.mockResolvedValue({
       leaseExpiresAt: '',
@@ -1115,8 +1116,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
     db.createVectorIndex.mockResolvedValue(index)
     db.findVectorIndexForBucket.mockResolvedValue(index)
     db.deleteVectorIndex.mockResolvedValue()
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
     sharder.reserve.mockResolvedValue({
       leaseExpiresAt: '',
@@ -1271,8 +1272,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
     db.createVectorIndex.mockResolvedValue(
       {} as Awaited<ReturnType<VectorMetadataDB['createVectorIndex']>>
     )
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
     sharder.reserve.mockResolvedValue({
       leaseExpiresAt: '',
@@ -1329,12 +1330,12 @@ describe('VectorStoreManager bucket lifecycle', () => {
       ERRORS.S3VectorNotFoundException('vector-index', 'index-a')
     )
     db.withTransaction
-      .mockImplementationOnce(async (fn: (db: KnexVectorMetadataDB) => unknown) => {
-        await fn(db as unknown as KnexVectorMetadataDB)
+      .mockImplementationOnce(async (fn: (db: VectorMetadataDB) => unknown) => {
+        await fn(db as unknown as VectorMetadataDB)
         throw commitError
       })
-      .mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-        fn(db as unknown as KnexVectorMetadataDB)
+      .mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+        fn(db as unknown as VectorMetadataDB)
       )
     sharder.reserve.mockResolvedValue({
       leaseExpiresAt: '',
@@ -1402,12 +1403,12 @@ describe('VectorStoreManager bucket lifecycle', () => {
     )
     db.findVectorIndexForBucket.mockResolvedValue(createVectorIndexRecord())
     db.withTransaction
-      .mockImplementationOnce(async (fn: (db: KnexVectorMetadataDB) => unknown) => {
-        await fn(db as unknown as KnexVectorMetadataDB)
+      .mockImplementationOnce(async (fn: (db: VectorMetadataDB) => unknown) => {
+        await fn(db as unknown as VectorMetadataDB)
         throw commitError
       })
-      .mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-        fn(db as unknown as KnexVectorMetadataDB)
+      .mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+        fn(db as unknown as VectorMetadataDB)
       )
     sharder.reserve.mockResolvedValue({
       leaseExpiresAt: '',
@@ -1456,12 +1457,12 @@ describe('VectorStoreManager bucket lifecycle', () => {
       ERRORS.S3VectorNotFoundException('vector-index', 'index-a')
     )
     db.withTransaction
-      .mockImplementationOnce(async (fn: (db: KnexVectorMetadataDB) => unknown) => {
-        await fn(db as unknown as KnexVectorMetadataDB)
+      .mockImplementationOnce(async (fn: (db: VectorMetadataDB) => unknown) => {
+        await fn(db as unknown as VectorMetadataDB)
         throw commitError
       })
-      .mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-        fn(db as unknown as KnexVectorMetadataDB)
+      .mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+        fn(db as unknown as VectorMetadataDB)
       )
     sharder.reserve.mockResolvedValue({
       leaseExpiresAt: '',
@@ -1519,11 +1520,11 @@ describe('VectorStoreManager bucket lifecycle', () => {
       {} as Awaited<ReturnType<VectorMetadataDB['findVectorIndexForBucket']>>
     )
     db.deleteVectorIndex.mockResolvedValue()
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) => {
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) => {
       callOrder.push('metadata:start')
       inMetadataTransaction = true
       try {
-        const result = await fn(db as unknown as KnexVectorMetadataDB)
+        const result = await fn(db as unknown as VectorMetadataDB)
         callOrder.push('metadata:commit')
         return result
       } finally {
@@ -1592,11 +1593,11 @@ describe('VectorStoreManager bucket lifecycle', () => {
       {} as Awaited<ReturnType<VectorMetadataDB['findVectorIndexForBucket']>>
     )
     db.deleteVectorIndex.mockResolvedValue()
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) => {
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) => {
       callOrder.push('metadata:start')
       inMetadataTransaction = true
       try {
-        const result = await fn(db as unknown as KnexVectorMetadataDB)
+        const result = await fn(db as unknown as VectorMetadataDB)
         callOrder.push('metadata:commit')
         return result
       } finally {
@@ -1663,8 +1664,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
       )
       .mockRejectedValueOnce(ERRORS.S3VectorNotFoundException('vector-index', 'index-a'))
     db.deleteVectorIndex.mockResolvedValue()
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
     sharder.findShardByResourceId.mockResolvedValue({
       capacity: 1,
@@ -1709,8 +1710,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
     const vectorStore = createMockVectorStore()
 
     db.findVectorIndexForBucket.mockRejectedValue(missingIndex)
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
 
     const manager = new VectorStoreManager(vectorStore, db, sharder, {
@@ -1741,8 +1742,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
       {} as Awaited<ReturnType<VectorMetadataDB['findVectorIndexForBucket']>>
     )
     db.deleteVectorIndex.mockResolvedValue()
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) => {
-      await fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) => {
+      await fn(db as unknown as VectorMetadataDB)
       throw commitError
     })
     sharder.findShardByResourceId.mockResolvedValue({
@@ -2279,8 +2280,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
     db.findVectorIndexForBucket.mockResolvedValue(
       {} as Awaited<ReturnType<VectorMetadataDB['findVectorIndexForBucket']>>
     )
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
     sharder.findShardByResourceId.mockResolvedValue({
       capacity: 1,
@@ -2328,8 +2329,8 @@ describe('VectorStoreManager bucket lifecycle', () => {
     db.findVectorIndexForBucket.mockResolvedValue(
       {} as Awaited<ReturnType<VectorMetadataDB['findVectorIndexForBucket']>>
     )
-    db.withTransaction.mockImplementation(async (fn: (db: KnexVectorMetadataDB) => unknown) =>
-      fn(db as unknown as KnexVectorMetadataDB)
+    db.withTransaction.mockImplementation(async (fn: (db: VectorMetadataDB) => unknown) =>
+      fn(db as unknown as VectorMetadataDB)
     )
     sharder.findShardByResourceId.mockResolvedValue({
       capacity: 1,

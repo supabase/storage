@@ -201,9 +201,9 @@ function translateFieldOperator(ctx: Ctx, fieldName: string, op: string, raw: un
           message: `$exists requires a boolean for "${fieldName}"`,
         })
       }
-      // Use the function form `jsonb_exists` instead of the `?` operator: the
-      // bare `?` in SQL collides with knex's positional placeholder parser
-      // when this fragment is later embedded in a knex.raw call.
+      // Use the function form `jsonb_exists` instead of the `?` operator so
+      // this fragment can be converted to positional `?` placeholders without
+      // ambiguity.
       const keyParam = placeholder(ctx, fieldName)
       return raw
         ? `jsonb_exists(${ctx.column}, ${keyParam})`
@@ -307,7 +307,7 @@ export function translateFilter(filter: S3VectorFilter, column = 'metadata'): Tr
   return { sql, params: ctx.params }
 }
 
-export function translateFilterForKnex(
+export function translateFilterToPositionalPlaceholders(
   filter: S3VectorFilter,
   column = 'metadata'
 ): TranslatedFilter {

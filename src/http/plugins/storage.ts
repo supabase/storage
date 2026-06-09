@@ -1,6 +1,7 @@
 import { createStorageBackend, StorageBackendAdapter } from '@storage/backend'
 import { CdnCacheManager } from '@storage/cdn/cdn-cache-manager'
-import { StorageKnexDB } from '@storage/database'
+import type { Database } from '@storage/database'
+import { StoragePgDB } from '@storage/database'
 import { PassThroughLocation, TenantLocation } from '@storage/locator'
 import { Storage } from '@storage/storage'
 import fastifyPlugin from 'fastify-plugin'
@@ -22,13 +23,15 @@ export const storage = fastifyPlugin(
   async function storagePlugin(fastify) {
     fastify.decorateRequest('storage')
     fastify.addHook('preHandler', async (request) => {
-      const database = new StorageKnexDB(request.db, {
+      const databaseOptions = {
         tenantId: request.tenantId,
         host: request.headers['x-forwarded-host'] as string,
         reqId: request.id,
         sbReqId: request.sbReqId,
         latestMigration: request.latestMigration,
-      })
+      }
+
+      const database: Database = new StoragePgDB(request.db, databaseOptions)
 
       const location = request.isIcebergBucket
         ? new PassThroughLocation(request.internalIcebergBucketName!)

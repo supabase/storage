@@ -1,5 +1,5 @@
 export interface Persistence {
-  insertBatch<T>(table: string, records: T[]): Promise<void>
+  insertBatch<T extends object>(table: string, records: T[]): Promise<void>
   beginTransaction(): Promise<void>
   commitTransaction(): Promise<void>
   rollbackTransaction(): Promise<void>

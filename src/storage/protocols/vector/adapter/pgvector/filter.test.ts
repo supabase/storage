@@ -1,4 +1,4 @@
-import { translateFilter, translateFilterForKnex } from './filter'
+import { translateFilter, translateFilterToPositionalPlaceholders } from './filter'
 
 function eqSql(column: string, field: number, scalar: number, array: number, value: number) {
   return (
@@ -154,7 +154,7 @@ describe('translateFilter (pgvector / JSONB)', () => {
         params: ['tag', 'tag', ['a', 'b'], 'tag', ['a', 'b']],
       })
     })
-    it('$exists true uses jsonb_exists (function form avoids knex `?` collision)', () => {
+    it('$exists true uses jsonb_exists (function form avoids positional `?` ambiguity)', () => {
       expect(translateFilter({ tag: { $exists: true } })).toEqual({
         sql: 'jsonb_exists(metadata, $1)',
         params: ['tag'],
@@ -228,9 +228,9 @@ describe('translateFilter (pgvector / JSONB)', () => {
     })
   })
 
-  describe('knex raw conversion', () => {
+  describe('positional placeholder conversion', () => {
     it('expands reused numbered placeholders into positional bindings', () => {
-      expect(translateFilterForKnex({ category: 'cats' })).toEqual({
+      expect(translateFilterToPositionalPlaceholders({ category: 'cats' })).toEqual({
         sql:
           '(metadata->>? = ? OR ' +
           "EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(metadata->?) = 'array' THEN metadata->? ELSE '[]'::jsonb END) AS elem(value) WHERE elem.value#>>'{}' = ?))",

@@ -1,8 +1,10 @@
 import EventEmitter from 'node:events'
 import { ERRORS } from '@internal/errors'
-import { Knex } from 'knex'
 import pg from 'pg'
 import { Db } from 'pg-boss'
+import { PgExecutor } from '../database/pg-connection'
+
+export { quoteIdentifier } from '../database/sql'
 
 export class QueueDB extends EventEmitter implements Db {
   opened = false
@@ -84,24 +86,21 @@ export class QueueDB extends EventEmitter implements Db {
   }
 }
 
-export class KnexQueueDB extends EventEmitter implements Db {
+export class PgQueueDB extends EventEmitter implements Db {
   events = {
     error: 'error',
   }
 
-  constructor(protected readonly knex: Knex) {
+  constructor(protected readonly db: PgExecutor) {
     super()
   }
 
   async executeSql(text: string, values: unknown[]): Promise<{ rows: unknown[] }> {
-    const knexQuery = text.replaceAll('$', ':')
-    const params: Record<string, unknown> = {}
-
-    values.forEach((value, index) => {
-      const key = (index + 1).toString()
-      params[key] = value === undefined ? null : value
+    const result = await this.db.query({
+      text,
+      values: values.map((value) => (value === undefined ? null : value)),
     })
-    const result = await this.knex.raw(knexQuery, params)
+
     return { rows: result.rows }
   }
 }

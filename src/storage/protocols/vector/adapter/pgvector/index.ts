@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   CreateIndexCommandInput,
   CreateIndexCommandOutput,
@@ -16,10 +16,15 @@ import {
   QueryVectorsInput,
   QueryVectorsOutput,
 } from '@aws-sdk/client-s3vectors'
+import {
+  PgExecutor,
+  PgTransaction,
+  PgTransactionalExecutor,
+  quoteIdentifier,
+} from '@internal/database'
 import { ERRORS } from '@internal/errors'
 import BaseTtlCache from '@isaacs/ttlcache'
 import type { DocumentType } from '@smithy/types'
-import type { Knex } from 'knex'
 import {
   MAX_DELETE_VECTOR_KEYS,
   MAX_GET_VECTOR_KEYS,
@@ -32,7 +37,7 @@ import {
 import { paginateNPlusOne } from '../../pagination'
 import { VectorStore } from '../s3-vector'
 import { handlePgVectorError } from './errors'
-import { S3VectorFilter, translateFilterForKnex } from './filter'
+import { S3VectorFilter, translateFilter } from './filter'
 
 // Cache the resolved distance metric for ~5 min per (bucket, index). Avoids
 // hammering pg_index on every queryVectors call; stale entries (e.g., an
@@ -71,7 +76,7 @@ const UNKNOWN_TABLE_CAPABILITY: PgVectorTableCapability = {
   requiresManualUpsert: false,
   requiresExactQueryScan: true,
 }
-const tableCapabilityCaches = new WeakMap<Knex, Map<string, Promise<PgVectorTableCapability>>>()
+const tableCapabilityCaches = new WeakMap<object, Map<string, Promise<PgVectorTableCapability>>>()
 
 function metricCacheKey(bucket: string, index: string): string {
   return `${bucket}\x00${index}`
@@ -137,7 +142,7 @@ function validateListSegment(input: ListVectorsInput):
   return { segmentCount, segmentIndex }
 }
 
-function tableCapabilityCache(db: Knex): Map<string, Promise<PgVectorTableCapability>> {
+function tableCapabilityCache(db: object): Map<string, Promise<PgVectorTableCapability>> {
   let cache = tableCapabilityCaches.get(db)
   if (!cache) {
     cache = new Map()
@@ -154,11 +159,14 @@ function capabilityForAccessMethod(accessMethod: unknown): PgVectorTableCapabili
   return accessMethod === 'orioledb' ? BRIDGED_HNSW_TABLE_CAPABILITY : STANDARD_TABLE_CAPABILITY
 }
 
-function forgetTableCapability(db: Knex, table: string): void {
+function forgetTableCapability(db: object, table: string): void {
   tableCapabilityCaches.get(db)?.delete(table)
 }
 
-async function resolveTableCapability(db: Knex, table: string): Promise<PgVectorTableCapability> {
+async function resolveTableCapability(
+  db: PgExecutor,
+  table: string
+): Promise<PgVectorTableCapability> {
   const cache = tableCapabilityCache(db)
   let capability = cache.get(table)
   if (capability) {
@@ -166,15 +174,18 @@ async function resolveTableCapability(db: Knex, table: string): Promise<PgVector
   }
 
   const capabilityProbe: Promise<PgVectorTableCapability> = db
-    .raw(
-      `SELECT am.amname
-       FROM pg_class c
-       JOIN pg_namespace n ON n.oid = c.relnamespace
-       JOIN pg_am am ON am.oid = c.relam
-       WHERE n.nspname = ? AND c.relname = ?
-       LIMIT 1`,
-      [SCHEMA, table]
-    )
+    .query<{ amname: string | null }>({
+      text: `
+        SELECT am.amname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_am am ON am.oid = c.relam
+        WHERE n.nspname = $1
+          AND c.relname = $2
+        LIMIT 1
+      `,
+      values: [SCHEMA, table],
+    })
     .then((result: { rows?: Array<Record<string, unknown>> }) => {
       if (result.rows?.[0]?.amname === undefined && cache.get(table) === capabilityProbe) {
         cache.delete(table)
@@ -194,32 +205,60 @@ async function resolveTableCapability(db: Knex, table: string): Promise<PgVector
   return capabilityProbe
 }
 
-/**
- * Knex handle abstraction: ST mode passes a singleton Knex; MT mode passes
- * a function that resolves to the tenant's pool on each call. We can't use a
- * bare `() => Knex` because `Knex` itself is callable, so the function form is
- * wrapped in a tagged object.
- */
-export type KnexResolver = Knex | { resolve: () => Knex; root?: () => Knex }
+export type PgExecutorResolver =
+  | PgTransactionalExecutor
+  | PgTransaction
+  | {
+      resolve: () => PgTransactionalExecutor | PgTransaction
+      root?: () => PgTransactionalExecutor | PgTransaction
+    }
 
-function resolveKnex(r: KnexResolver): Knex {
-  return 'resolve' in r && typeof r.resolve === 'function' ? r.resolve() : (r as Knex)
+function isPgExecutorProvider(r: PgExecutorResolver): r is {
+  resolve: () => PgTransactionalExecutor | PgTransaction
+  root?: () => PgTransactionalExecutor | PgTransaction
+} {
+  return typeof (r as { resolve?: unknown }).resolve === 'function'
 }
 
-function resolveRootKnex(r: KnexResolver): Knex {
-  return 'resolve' in r && typeof r.resolve === 'function'
-    ? (r.root?.() ?? r.resolve())
-    : (r as Knex)
+function resolvePgExecutor(r: PgExecutorResolver): PgTransactionalExecutor | PgTransaction {
+  return isPgExecutorProvider(r) ? r.resolve() : r
 }
 
-function hasRootKnexResolver(r: KnexResolver): boolean {
-  return 'resolve' in r && typeof r.resolve === 'function' && typeof r.root === 'function'
+function resolveRootPgExecutor(r: PgExecutorResolver): PgTransactionalExecutor | PgTransaction {
+  return isPgExecutorProvider(r) ? (r.root?.() ?? r.resolve()) : r
 }
 
-async function withPgTransaction<T>(db: Knex, fn: (trx: Knex) => Promise<T>): Promise<T> {
-  // Knex transaction handles create a savepoint when transaction() is called on
-  // them. Keep statement failures from poisoning the caller's outer transaction.
-  return db.transaction(async (trx) => fn(trx as unknown as Knex))
+function hasRootPgResolver(r: PgExecutorResolver): boolean {
+  return isPgExecutorProvider(r) && typeof r.root === 'function'
+}
+
+async function withPgTransaction<T>(
+  db: PgTransactionalExecutor | PgTransaction,
+  fn: (trx: PgTransaction) => Promise<T>
+): Promise<T> {
+  if (db instanceof PgTransaction) {
+    const savepoint = nextSavepointName()
+    await db.query(`SAVEPOINT ${savepoint}`)
+    try {
+      const result = await fn(db)
+      await db.query(`RELEASE SAVEPOINT ${savepoint}`)
+      return result
+    } catch (error) {
+      await db.query(`ROLLBACK TO SAVEPOINT ${savepoint}`).catch(() => undefined)
+      await db.query(`RELEASE SAVEPOINT ${savepoint}`).catch(() => undefined)
+      throw error
+    }
+  }
+
+  const trx = await db.beginTransaction()
+  try {
+    const result = await fn(trx)
+    await trx.commit()
+    return result
+  } catch (error) {
+    await trx.rollback().catch(() => undefined)
+    throw error
+  }
 }
 
 function tableName(vectorBucketName: string, indexName: string): string {
@@ -238,7 +277,19 @@ function qualifiedTable(vectorBucketName: string, indexName: string): string {
 }
 
 function qualifiedTableName(table: string): string {
-  return `${SCHEMA}.${table}`
+  return `${quoteIdentifier(SCHEMA)}.${quoteIdentifier(table)}`
+}
+
+function nextSavepointName(): string {
+  return quoteIdentifier(`pgvector_store_${randomUUID().replace(/-/g, '_')}`)
+}
+
+function offsetPlaceholders(sql: string, offset: number): string {
+  if (offset === 0) {
+    return sql
+  }
+
+  return sql.replace(/\$(\d+)/g, (_, index) => `$${Number(index) + offset}`)
 }
 
 interface OpClassChoice {
@@ -312,16 +363,16 @@ export class PgVectorStore implements VectorStore {
   readonly maxDimensions = MAX_DIMENSIONS
   readonly transactionalIndexOperations: boolean
 
-  constructor(private readonly knex: KnexResolver) {
-    this.transactionalIndexOperations = hasRootKnexResolver(knex)
+  constructor(private readonly executor: PgExecutorResolver) {
+    this.transactionalIndexOperations = hasRootPgResolver(executor)
   }
 
-  private db(): Knex {
-    return resolveKnex(this.knex)
+  private db(): PgTransactionalExecutor | PgTransaction {
+    return resolvePgExecutor(this.executor)
   }
 
-  private rootDb(): Knex {
-    return resolveRootKnex(this.knex)
+  private rootDb(): PgTransactionalExecutor | PgTransaction {
+    return resolveRootPgExecutor(this.executor)
   }
 
   async createVectorIndex(command: CreateIndexCommandInput): Promise<CreateIndexCommandOutput> {
@@ -362,19 +413,19 @@ export class PgVectorStore implements VectorStore {
           // inlining is safe. halfvec stores each dimension as a 2-byte
           // float16; recall loss vs float32 is typically <0.5% on normalized
           // embeddings and index size/memory drop ~50%.
-          await trx.raw(
-            `CREATE TABLE ${SCHEMA}.??
-             (
-               key text PRIMARY KEY,
-               embedding halfvec(${dimension}) NOT NULL,
-               metadata jsonb NOT NULL DEFAULT '{}'::jsonb
-             )`,
-            [table]
-          )
-          await trx.raw(
-            `CREATE INDEX ?? ON ${SCHEMA}.?? USING hnsw (embedding ${choice.opClass})`,
-            [`${table}_hnsw`, table]
-          )
+          await trx.query(`
+            CREATE TABLE ${qualifiedTableName(table)}
+            (
+              key text PRIMARY KEY,
+              embedding halfvec(${dimension}) NOT NULL,
+              metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+            )
+          `)
+          await trx.query(`
+            CREATE INDEX ${quoteIdentifier(`${table}_hnsw`)}
+            ON ${qualifiedTableName(table)}
+            USING hnsw (embedding ${choice.opClass})
+          `)
         })
         forgetTableCapability(db, table)
         forgetTableCapability(this.rootDb(), table)
@@ -398,7 +449,7 @@ export class PgVectorStore implements VectorStore {
     return handlePgVectorError(
       async () => {
         const db = this.db()
-        await db.raw(`DROP TABLE IF EXISTS ${SCHEMA}.??`, [table])
+        await db.query(`DROP TABLE IF EXISTS ${qualifiedTableName(table)}`)
         forgetTableCapability(db, table)
         forgetTableCapability(this.rootDb(), table)
         metricCache.delete(metricCacheKey(bucket, index))
@@ -441,16 +492,18 @@ export class PgVectorStore implements VectorStore {
         }
 
         try {
-          await db.raw(
-            `INSERT INTO ?? (key, embedding, metadata)
-             SELECT key, embedding::halfvec, metadata
-             FROM jsonb_to_recordset(?::jsonb)
-               AS x(key text, embedding text, metadata jsonb)
-             ON CONFLICT (key) DO UPDATE
-               SET embedding = EXCLUDED.embedding,
-                   metadata  = EXCLUDED.metadata`,
-            [qualified, serializedRows]
-          )
+          await db.query({
+            text: `
+              INSERT INTO ${qualified} (key, embedding, metadata)
+              SELECT key, embedding::halfvec, metadata
+              FROM jsonb_to_recordset($1::jsonb)
+                AS x(key text, embedding text, metadata jsonb)
+              ON CONFLICT (key) DO UPDATE
+                SET embedding = EXCLUDED.embedding,
+                    metadata  = EXCLUDED.metadata
+            `,
+            values: [serializedRows],
+          })
         } catch (e) {
           if (!isBridgedHnswUpsertError(e)) {
             throw e
@@ -471,7 +524,11 @@ export class PgVectorStore implements VectorStore {
     )
   }
 
-  private async putVectorsManually(db: Knex, table: string, serializedRows: string): Promise<void> {
+  private async putVectorsManually(
+    db: PgTransactionalExecutor | PgTransaction,
+    table: string,
+    serializedRows: string
+  ): Promise<void> {
     // OrioleDB supports pgvector HNSW indexes through index bridging, but its
     // bridged HNSW path can reject ON CONFLICT DO UPDATE with "unexpected
     // self-updated tuple". Plain UPDATE, INSERT, and DO NOTHING work, so this
@@ -479,46 +536,52 @@ export class PgVectorStore implements VectorStore {
     for (let attempt = 1; attempt <= MANUAL_UPSERT_MAX_ATTEMPTS; attempt += 1) {
       try {
         await withPgTransaction(db, async (trx) => {
-          await trx.raw(
-            `WITH input AS (
-               SELECT key, embedding::halfvec AS embedding, metadata
-               FROM jsonb_to_recordset(?::jsonb)
-                 AS x(key text, embedding text, metadata jsonb)
-             )
-             UPDATE ${table} AS target
-                SET embedding = input.embedding,
-                    metadata = input.metadata
-               FROM input
-              WHERE target.key = input.key`,
-            [serializedRows]
-          )
+          await trx.query({
+            text: `
+              WITH input AS (
+                SELECT key, embedding::halfvec AS embedding, metadata
+                FROM jsonb_to_recordset($1::jsonb)
+                  AS x(key text, embedding text, metadata jsonb)
+              )
+              UPDATE ${table} AS target
+                 SET embedding = input.embedding,
+                     metadata = input.metadata
+                FROM input
+               WHERE target.key = input.key
+            `,
+            values: [serializedRows],
+          })
 
-          await trx.raw(
-            `INSERT INTO ${table} (key, embedding, metadata)
-             SELECT key, embedding::halfvec, metadata
-               FROM jsonb_to_recordset(?::jsonb)
-                 AS x(key text, embedding text, metadata jsonb)
-             ON CONFLICT (key) DO NOTHING`,
-            [serializedRows]
-          )
+          await trx.query({
+            text: `
+              INSERT INTO ${table} (key, embedding, metadata)
+              SELECT key, embedding::halfvec, metadata
+                FROM jsonb_to_recordset($1::jsonb)
+                  AS x(key text, embedding text, metadata jsonb)
+              ON CONFLICT (key) DO NOTHING
+            `,
+            values: [serializedRows],
+          })
 
           // Close the READ COMMITTED race where two writers both miss the first
           // UPDATE for a new key, one INSERT wins, and the other INSERT does
           // nothing. The final UPDATE applies the later writer's payload without
           // using ON CONFLICT DO UPDATE, which OrioleDB bridged HNSW can reject.
-          await trx.raw(
-            `WITH input AS (
-               SELECT key, embedding::halfvec AS embedding, metadata
-               FROM jsonb_to_recordset(?::jsonb)
-                 AS x(key text, embedding text, metadata jsonb)
-             )
-             UPDATE ${table} AS target
-                SET embedding = input.embedding,
-                    metadata = input.metadata
-               FROM input
-              WHERE target.key = input.key`,
-            [serializedRows]
-          )
+          await trx.query({
+            text: `
+              WITH input AS (
+                SELECT key, embedding::halfvec AS embedding, metadata
+                FROM jsonb_to_recordset($1::jsonb)
+                  AS x(key text, embedding text, metadata jsonb)
+              )
+              UPDATE ${table} AS target
+                 SET embedding = input.embedding,
+                     metadata = input.metadata
+                FROM input
+               WHERE target.key = input.key
+            `,
+            values: [serializedRows],
+          })
         })
         return
       } catch (error) {
@@ -530,7 +593,7 @@ export class PgVectorStore implements VectorStore {
   }
 
   private async queryVectorsRaw(
-    db: Knex,
+    db: PgTransactionalExecutor | PgTransaction,
     table: string,
     sql: string,
     params: unknown[],
@@ -539,10 +602,11 @@ export class PgVectorStore implements VectorStore {
     const capability = await resolveTableCapability(db, table)
     if (!capability.requiresExactQueryScan) {
       return withPgTransaction(db, async (trx): Promise<{ rows: unknown[] }> => {
-        await trx.raw(`SELECT set_config('hnsw.ef_search', ?, true)`, [
-          String(Math.max(topK, DEFAULT_HNSW_EF_SEARCH)),
-        ])
-        return trx.raw(sql, params)
+        await trx.query({
+          text: `SELECT set_config('hnsw.ef_search', $1, true)`,
+          values: [String(Math.max(topK, DEFAULT_HNSW_EF_SEARCH))],
+        })
+        return trx.query({ text: sql, values: params })
       })
     }
 
@@ -550,11 +614,11 @@ export class PgVectorStore implements VectorStore {
     // can also miss rows inserted after the index was created. Use exact scan
     // semantics for pools where we have observed that path.
     return withPgTransaction(db, async (trx): Promise<{ rows: unknown[] }> => {
-      await trx.raw(
-        `SELECT set_config('enable_indexscan', 'off', true),
-                set_config('enable_bitmapscan', 'off', true)`
-      )
-      return trx.raw(sql, params)
+      await trx.query(`
+        SELECT set_config('enable_indexscan', 'off', true),
+               set_config('enable_bitmapscan', 'off', true)
+      `)
+      return trx.query({ text: sql, values: params })
     })
   }
 
@@ -571,8 +635,8 @@ export class PgVectorStore implements VectorStore {
         const cols = ['key']
         if (wantData) cols.push('embedding::text AS embedding')
         if (wantMeta) cols.push('metadata')
-        const sql = `SELECT ${cols.join(', ')} FROM ?? WHERE key = ANY(?)`
-        const result = await this.db().raw(sql, [qualifiedTable(bucket, index), keys])
+        const sql = `SELECT ${cols.join(', ')} FROM ${qualifiedTable(bucket, index)} WHERE key = ANY($1::text[])`
+        const result = await this.db().query({ text: sql, values: [keys] })
         const rows = result.rows as Array<{
           key: string
           embedding?: string
@@ -598,10 +662,10 @@ export class PgVectorStore implements VectorStore {
 
     return handlePgVectorError(
       async () => {
-        await this.db().raw(`DELETE FROM ?? WHERE key = ANY(?)`, [
-          qualifiedTable(bucket, index),
-          keys,
-        ])
+        await this.db().query({
+          text: `DELETE FROM ${qualifiedTable(bucket, index)} WHERE key = ANY($1::text[])`,
+          values: [keys],
+        })
         return {} as DeleteVectorsOutput
       },
       { type: 'vectors', name: index }
@@ -630,7 +694,7 @@ export class PgVectorStore implements VectorStore {
         const distanceOp: '<=>' | '<->' = metric === 'euclidean' ? '<->' : '<=>'
 
         const cols: string[] = ['key']
-        if (wantDistance) cols.push(`embedding ${distanceOp} ?::halfvec AS distance`)
+        if (wantDistance) cols.push(`embedding ${distanceOp} $1::halfvec AS distance`)
         if (wantMeta) cols.push('metadata')
 
         const params: unknown[] = []
@@ -638,23 +702,21 @@ export class PgVectorStore implements VectorStore {
 
         let whereClause = ''
         if (input.filter) {
-          const translated = translateFilterForKnex(input.filter as unknown as S3VectorFilter)
-          // Knex.raw uses `?` positionally, so repeated translated $N
-          // placeholders must be expanded into repeated bindings.
-          whereClause = ' WHERE ' + translated.sql
+          const translated = translateFilter(input.filter as unknown as S3VectorFilter)
+          whereClause = ' WHERE ' + offsetPlaceholders(translated.sql, params.length)
           params.push(...translated.params)
         }
 
         params.push(toVectorLiteral(queryVector.float32 as number[]))
         params.push(topK)
 
-        // Inline the table name — it's a fixed prefix + hex hash (safe).
-        // Avoids mixing `??` with `?::halfvec` casts, which trips up knex's
-        // placeholder counter.
         const table = tableName(bucket, index)
-        const sql = `SELECT ${cols.join(', ')} FROM ${qualifiedTableName(table)}${whereClause}
-                     ORDER BY embedding ${distanceOp} ?::halfvec ASC
-                     LIMIT ?`
+        const orderVectorParam = params.length - 1
+        const limitParam = params.length
+        const sql = `SELECT ${cols.join(', ')}
+                     FROM ${qualifiedTableName(table)}${whereClause}
+                     ORDER BY embedding ${distanceOp} $${orderVectorParam}::halfvec ASC
+                     LIMIT $${limitParam}`
         const result = await this.queryVectorsRaw(this.db(), table, sql, params, topK)
         const rows = result.rows as Array<{
           key: string
@@ -699,22 +761,26 @@ export class PgVectorStore implements VectorStore {
         if (wantData) cols.push('embedding::text AS embedding')
         if (wantMeta) cols.push('metadata')
 
-        const params: unknown[] = [qualifiedTable(bucket, index)]
+        const params: unknown[] = []
         const whereClauses: string[] = []
         if (cursor) {
-          whereClauses.push('key > ?')
+          whereClauses.push(`key > $${params.length + 1}`)
           params.push(cursor)
         }
         if (segment) {
-          whereClauses.push('mod(abs(hashtext(key)::bigint), ?::bigint) = ?::bigint')
+          whereClauses.push(
+            `mod(abs(hashtext(key)::bigint), $${params.length + 1}::bigint) = $${params.length + 2}::bigint`
+          )
           params.push(segment.segmentCount, segment.segmentIndex)
         }
         params.push(maxResults + 1)
 
         const whereClause = whereClauses.length > 0 ? ` WHERE ${whereClauses.join(' AND ')}` : ''
-        const sql = `SELECT ${cols.join(', ')} FROM ??${whereClause}
-                     ORDER BY key ASC LIMIT ?`
-        const result = await this.db().raw(sql, params)
+        const sql = `SELECT ${cols.join(', ')}
+                     FROM ${qualifiedTable(bucket, index)}${whereClause}
+                     ORDER BY key ASC
+                     LIMIT $${params.length}`
+        const result = await this.db().query({ text: sql, values: params })
         const rows = result.rows as Array<{
           key: string
           embedding?: string
@@ -738,18 +804,22 @@ export class PgVectorStore implements VectorStore {
   private async lookupMetric(bucket: string, index: string): Promise<DistanceMetric> {
     const table = tableName(bucket, index)
     try {
-      const result = await this.db().raw(
-        `SELECT am.amname, opc.opcname
-         FROM pg_index i
-         JOIN pg_class ic   ON ic.oid = i.indexrelid
-         JOIN pg_class tc   ON tc.oid = i.indrelid
-         JOIN pg_namespace n ON n.oid = tc.relnamespace
-         JOIN pg_am am      ON am.oid = ic.relam
-         JOIN pg_opclass opc ON opc.oid = ANY(i.indclass)
-         WHERE n.nspname = ? AND tc.relname = ? AND am.amname = 'hnsw'
-         LIMIT 1`,
-        [SCHEMA, table]
-      )
+      const result = await this.db().query({
+        text: `
+          SELECT am.amname, opc.opcname
+          FROM pg_index i
+          JOIN pg_class ic ON ic.oid = i.indexrelid
+          JOIN pg_class tc ON tc.oid = i.indrelid
+          JOIN pg_namespace n ON n.oid = tc.relnamespace
+          JOIN pg_am am ON am.oid = ic.relam
+          JOIN pg_opclass opc ON opc.oid = ANY(i.indclass)
+          WHERE n.nspname = $1
+            AND tc.relname = $2
+            AND am.amname = 'hnsw'
+          LIMIT 1
+        `,
+        values: [SCHEMA, table],
+      })
       const op = result.rows?.[0]?.opcname as string | undefined
       if (op === 'halfvec_l2_ops') return 'euclidean'
       return 'cosine'

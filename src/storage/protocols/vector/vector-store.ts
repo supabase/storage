@@ -19,13 +19,13 @@ import { logger, logSchema } from '@internal/monitoring'
 import { Sharder } from '@internal/sharding/sharder'
 import { VectorStore } from './adapter/s3-vector'
 import { isVectorResourceConflictError, isVectorResourceNotFoundError } from './errors'
-import { VectorMetadataDB } from './knex'
 import {
   MAX_DELETE_VECTOR_KEYS,
   MAX_GET_VECTOR_KEYS,
   validatePutVectors,
   validateVectorKeys,
 } from './limits'
+import { VectorMetadataDB } from './metadata'
 
 interface VectorStoreConfig {
   tenantId: string

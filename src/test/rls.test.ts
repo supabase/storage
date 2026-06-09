@@ -10,15 +10,15 @@ import { signJWT } from '@internal/auth'
 import { wait } from '@internal/concurrency'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { createStorageBackend } from '@storage/backend'
-import { StorageKnexDB } from '@storage/database'
+import { StoragePgDB } from '@storage/database'
 import { TenantLocation } from '@storage/locator'
 import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import FormData from 'form-data'
 import fs from 'fs'
 import yaml from 'js-yaml'
-import { Knex, knex } from 'knex'
 import path from 'path'
+import { Pool } from 'pg'
 import * as tus from 'tus-js-client'
 import { DetailedError } from 'tus-js-client'
 import app from '../app'
@@ -119,7 +119,7 @@ let currentUserId: string
 let currentStorage: Storage
 
 describe('RLS policies', () => {
-  let db: Knex
+  let db: Pool
 
   beforeAll(async () => {
     // parse yaml file
@@ -134,10 +134,7 @@ describe('RLS policies', () => {
       }
     }
 
-    db = knex({
-      connection: databaseURL,
-      client: 'pg',
-    })
+    db = new Pool({ connectionString: databaseURL })
   })
 
   let jwt: string
@@ -146,12 +143,18 @@ describe('RLS policies', () => {
     currentUserId = randomUUID()
     jwt = (await signJWT({ sub: currentUserId, role: 'authenticated' }, jwtSecret, '1h')) as string
 
-    await db.table('auth.users').insert({
-      instance_id: '00000000-0000-0000-0000-000000000000',
-      id: currentUserId,
-      aud: 'authenticated',
-      role: 'authenticated',
-      email: currentUserId + '@supabase.io',
+    await db.query({
+      text: `
+        INSERT INTO auth.users (instance_id, id, aud, role, email)
+        VALUES ($1, $2, $3, $4, $5)
+      `,
+      values: [
+        '00000000-0000-0000-0000-000000000000',
+        currentUserId,
+        'authenticated',
+        'authenticated',
+        currentUserId + '@supabase.io',
+      ],
     })
 
     const adminUser = await getServiceKeyUser(tenantId)
@@ -163,12 +166,12 @@ describe('RLS policies', () => {
       host: 'localhost',
     })
 
-    const knexDB = new StorageKnexDB(pg, {
+    const storageDb = new StoragePgDB(pg, {
       host: 'localhost',
       tenantId,
     })
 
-    currentStorage = new Storage(backend, knexDB, new TenantLocation(storageS3Bucket))
+    currentStorage = new Storage(backend, storageDb, new TenantLocation(storageS3Bucket))
   })
 
   afterEach(async () => {
@@ -177,8 +180,8 @@ describe('RLS policies', () => {
   })
 
   afterAll(async () => {
-    await db.destroy()
-    await (currentStorage.db as StorageKnexDB).connection.dispose()
+    await db.end()
+    await (currentStorage.db as StoragePgDB).connection.dispose()
   })
 
   testSpec.tests.forEach((_test, index) => {
@@ -308,7 +311,7 @@ describe('RLS policies', () => {
                     console.log(
                       `RUNNING QUERY DROP POLICY IF EXISTS "${policy.name}" ON ${policy.table};`
                     )
-                    await db.raw(`DROP POLICY "${policy.name}" ON ${policy.table};`)
+                    await db.query(`DROP POLICY "${policy.name}" ON ${policy.table};`)
                   })
                 )
               }),
@@ -329,7 +332,7 @@ describe('RLS policies', () => {
         )
 
         for (const policy of policiesToDelete) {
-          await db.raw(`DROP POLICY IF EXISTS "${policy.name}" ON ${policy.table};`)
+          await db.query(`DROP POLICY IF EXISTS "${policy.name}" ON ${policy.table};`)
         }
       }
     })
@@ -503,7 +506,7 @@ async function runOperation(
   }
 }
 
-async function createPolicy(db: Knex, policy: Policy) {
+async function createPolicy(db: Pool, policy: Policy) {
   const { name, content } = policy
   let { tables, roles, permissions } = policy
 
@@ -530,7 +533,7 @@ async function createPolicy(db: Knex, policy: Policy) {
         )
         created.push(
           db
-            .raw(
+            .query(
               `CREATE POLICY "${name}_${permission}" ON ${table} AS PERMISSIVE FOR ${permission} TO "${role}" ${content}`
             )
             .then(() => ({

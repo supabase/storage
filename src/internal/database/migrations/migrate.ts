@@ -1,6 +1,5 @@
 import { ERRORS } from '@internal/errors'
 import { ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events'
-import { Knex } from 'knex'
 import { Client, ClientConfig } from 'pg'
 import { MigrationError } from 'postgres-migrations'
 import { runMigration } from 'postgres-migrations/dist/run-migration'
@@ -9,10 +8,12 @@ import { validateMigrationHashes } from 'postgres-migrations/dist/validation'
 import SQL from 'sql-template-strings'
 import { getConfig, MultitenantMigrationStrategy } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
-import { multitenantKnex } from '../multitenant-db'
+import { multitenantPgExecutor } from '../multitenant-pg'
+import { PgExecutor, PgTransaction } from '../pg-connection'
 import { searchPath } from '../pool'
 import { getSslSettings } from '../ssl'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
+import { TenantConfigStorePg } from '../tenant-store-pg'
 import { deriveVectorDatabaseUrl, VECTOR_DATABASE_NAME } from '../vector-store-url'
 import { lastLocalMigrationName, loadMigrationFilesCached, localMigrationFiles } from './files'
 import { ProgressiveMigrations } from './progressive'
@@ -33,12 +34,13 @@ const {
   dbRefreshMigrationHashesOnMismatch,
   dbMigrationFreezeAt,
   icebergShards,
-  multitenantDatabaseQueryTimeout,
   vectorBucketProvider,
   vectorDatabaseCreate,
   vectorStoreMigrationsEnabled,
   vectorDatabaseURL,
 } = getConfig()
+
+const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
 
 /**
  * Migrations that were added after the initial release
@@ -107,24 +109,12 @@ export async function* listTenantsToMigrate(signal: AbortSignal) {
   while (!signal.aborted) {
     const migrationVersion = await lastLocalMigrationName()
 
-    const data = await multitenantKnex
-      .table<{ id: string; cursor_id: number }>('tenants')
-      .select('id', 'cursor_id')
-      .where('cursor_id', '>', lastCursor)
-      .where((builder) => {
-        builder
-          .where((whereBuilder) => {
-            whereBuilder
-              .where('migrations_version', '!=', migrationVersion)
-              .whereNotIn('migrations_status', [
-                TenantMigrationStatus.FAILED,
-                TenantMigrationStatus.FAILED_STALE,
-              ])
-          })
-          .orWhere('migrations_status', null)
-      })
-      .orderBy('cursor_id', 'asc')
-      .limit(200)
+    const data = await tenantConfigStorePg.listTenantsToMigrateBatch(
+      migrationVersion,
+      lastCursor,
+      [TenantMigrationStatus.FAILED, TenantMigrationStatus.FAILED_STALE],
+      200
+    )
 
     if (data.length === 0) {
       break
@@ -146,13 +136,11 @@ export async function* listTenantsToResetMigrations(
       return DBMigration[migrationName as keyof typeof DBMigration] > DBMigration[migration]
     })
 
-    const data = await multitenantKnex
-      .table<{ id: string; cursor_id: number }>('tenants')
-      .select('id', 'cursor_id')
-      .where('cursor_id', '>', lastCursor)
-      .whereIn('migrations_version', afterMigrations)
-      .orderBy('cursor_id', 'asc')
-      .limit(200)
+    const data = await tenantConfigStorePg.listTenantsToResetMigrationsBatch(
+      afterMigrations,
+      lastCursor,
+      200
+    )
 
     if (data.length === 0) {
       break
@@ -173,26 +161,21 @@ export async function updateTenantMigrationsState(
   options?: {
     migration?: keyof typeof DBMigration
     state: TenantMigrationStatus
-    tnx?: Knex.Transaction
+    tnx?: PgExecutor
   }
 ) {
   const migrationVersion = options?.migration || (await lastLocalMigrationName())
   const state = options?.state || TenantMigrationStatus.COMPLETED
-  const db = options?.tnx ? options.tnx : multitenantKnex
+  const migrationState = {
+    migrations_version: [TenantMigrationStatus.FAILED, TenantMigrationStatus.FAILED_STALE].includes(
+      state
+    )
+      ? undefined
+      : migrationVersion,
+    migrations_status: state,
+  }
 
-  return db
-    .table('tenants')
-    .where('id', tenantId)
-    .update({
-      migrations_version: [
-        TenantMigrationStatus.FAILED,
-        TenantMigrationStatus.FAILED_STALE,
-      ].includes(state)
-        ? undefined
-        : migrationVersion,
-      migrations_status: state,
-    })
-    .abortOnSignal(AbortSignal.timeout(multitenantDatabaseQueryTimeout))
+  return tenantConfigStorePg.update(tenantId, migrationState, options?.tnx ?? multitenantPgExecutor)
 }
 
 /**
@@ -211,19 +194,30 @@ export async function areMigrationsUpToDate(tenantId: string) {
 }
 
 export async function obtainLockOnMultitenantDB<T>(
-  fn: (tnx: Knex.Transaction) => Promise<T>,
+  fn: (tnx: PgTransaction) => Promise<T>,
   options?: { sbReqId?: string }
 ) {
-  const trx = await multitenantKnex.transaction()
+  const trx = await multitenantPgExecutor.beginTransaction()
   try {
-    const result = await trx.raw(
-      `SELECT pg_try_advisory_xact_lock(?) AS locked;`,
-      [-8575985245963000605]
-    )
+    const result = await trx.query<{ locked: boolean }>({
+      text: `SELECT pg_try_advisory_xact_lock($1) AS locked;`,
+      values: [-8575985245963000605],
+    })
     const lockAcquired = result.rows.shift()?.locked || false
 
     if (!lockAcquired) {
-      await trx.rollback()
+      try {
+        await trx.rollback()
+      } catch (rollbackError) {
+        logSchema.warning(logger, '[Migrations] Failed to rollback transaction', {
+          type: 'migrations',
+          sbReqId: options?.sbReqId,
+          error: rollbackError,
+          metadata: JSON.stringify({
+            reason: 'lock not acquired',
+          }),
+        })
+      }
       return
     }
 
@@ -236,7 +230,16 @@ export async function obtainLockOnMultitenantDB<T>(
     await trx.commit()
     return fnResult
   } catch (e) {
-    await trx.rollback()
+    try {
+      await trx.rollback()
+    } catch (rollbackError) {
+      logSchema.warning(logger, '[Migrations] Failed to rollback transaction', {
+        type: 'migrations',
+        sbReqId: options?.sbReqId,
+        error: rollbackError,
+        metadata: JSON.stringify({ originalError: String(e) }),
+      })
+    }
     throw e
   }
 }
@@ -547,31 +550,31 @@ export async function resetMigration(options: {
 
   try {
     const queryWithAdvisory = withAdvisoryLock(false, async (pgClient) => {
+      await pgClient.query(`SET search_path TO ${searchPath.join(',')}`)
+
+      const migrationsRowsResult = await pgClient.query(`SELECT * from migrations`)
+      const currentTenantMigrations = migrationsRowsResult.rows as { id: number; name: string }[]
+
+      if (!currentTenantMigrations.length) {
+        return false
+      }
+
+      const currentLastMigration = currentTenantMigrations[currentTenantMigrations.length - 1]
+      const localMigration = DBMigration[options.untilMigration]
+
+      // This tenant migration is already at the desired migration
+      if (currentLastMigration.id === localMigration) {
+        return false
+      }
+
+      // This tenant migration is behind of the desired migration
+      if (currentLastMigration.id < localMigration) {
+        return false
+      }
+
       await pgClient.query(`BEGIN`)
 
       try {
-        await client.query(`SET search_path TO ${searchPath.join(',')}`)
-
-        const migrationsRowsResult = await pgClient.query(`SELECT * from migrations`)
-        const currentTenantMigrations = migrationsRowsResult.rows as { id: number; name: string }[]
-
-        if (!currentTenantMigrations.length) {
-          return false
-        }
-
-        const currentLastMigration = currentTenantMigrations[currentTenantMigrations.length - 1]
-        const localMigration = DBMigration[options.untilMigration]
-
-        // This tenant migration is already at the desired migration
-        if (currentLastMigration.id === localMigration) {
-          return false
-        }
-
-        // This tenant migration is behind of the desired migration
-        if (currentLastMigration.id < localMigration) {
-          return false
-        }
-
         // This tenant migration is ahead the desired migration
         await pgClient.query(SQL`DELETE FROM migrations WHERE id > ${localMigration}`)
 

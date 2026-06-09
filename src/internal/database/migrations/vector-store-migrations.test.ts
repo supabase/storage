@@ -83,8 +83,11 @@ vi.mock('../../monitoring', () => ({
   },
 }))
 
-vi.mock('../multitenant-db', () => ({
-  multitenantKnex: {},
+vi.mock('../multitenant-pg', () => ({
+  multitenantPgExecutor: {
+    query: vi.fn(),
+    beginTransaction: vi.fn(),
+  },
 }))
 
 vi.mock('../tenant', () => ({

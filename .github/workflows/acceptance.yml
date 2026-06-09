@@ -79,6 +79,7 @@ jobs:
           ACCEPTANCE_INFRA_RESTART_SCRIPT: ${{ matrix.database == 'oriole' && 'infra:restart:ci:oriole:pgvector' || matrix.database == 'multigres' && 'infra:restart:ci:multigres' || 'infra:restart:ci' }}
           ACCEPTANCE_PROFILE: ${{ inputs.profile || 'full' }}
           ACCEPTANCE_X_FORWARDED_HOST: ${{ matrix.tenancy == 'multitenant' && 'bjhaohmqunupljrqypxz.local.dev' || '' }}
+          DATABASE_ENGINE: ${{ matrix.database == 'multigres' && 'multigres' || 'postgres' }}
           MULTI_TENANT: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           PG_QUEUE_ENABLE: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           REQUEST_X_FORWARDED_HOST_REGEXP: ${{ matrix.tenancy == 'multitenant' && '^([a-z]{20})[.]local[.](?:com|dev)$' || '' }}

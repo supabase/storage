@@ -1,4 +1,4 @@
-import { multitenantKnex } from '@internal/database'
+import { multitenantPgExecutor, PgTransaction } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload, PG_BOSS_SCHEMA, Queue, SYSTEM_TENANT_REF } from '@internal/queue'
 import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
@@ -34,11 +34,17 @@ export class UpgradePgBossV10 extends BaseEvent<UpgradePgBossV10Payload> {
   }
 
   static async handle(job: Job<UpgradePgBossV10Payload>) {
+    return this.handlePg(job)
+  }
+
+  private static async handlePg(job: Job<UpgradePgBossV10Payload>) {
     const { sbReqId } = job.data
 
-    await multitenantKnex.transaction(async (tnx) => {
-      const resultLock = await tnx.raw('SELECT pg_try_advisory_xact_lock(-5525285245963000606)')
-      const lockAcquired = resultLock.rows.shift()?.pg_try_advisory_xact_lock || false
+    await withPgTransaction(async (tnx) => {
+      const resultLock = await tnx.query<{ locked: boolean }>(
+        `SELECT pg_try_advisory_xact_lock(-5525285245963000606) AS locked`
+      )
+      const lockAcquired = resultLock.rows.shift()?.locked || false
 
       if (!lockAcquired) {
         return
@@ -51,49 +57,50 @@ export class UpgradePgBossV10 extends BaseEvent<UpgradePgBossV10Payload> {
 
       for (const queue of queues) {
         try {
-          const sql = `
-            INSERT INTO ${targetSchema}.job (
-                id,
-                name,
-                priority,
-                data,
-                retry_limit,
-                retry_count,
-                retry_delay,
-                retry_backoff,
-                start_after,
-                singleton_key,
-                singleton_on,
-                expire_in,
-                created_on,
-                keep_until,
-                output,
-                policy
-            )
-            SELECT
-                id,
-                name,
-                priority,
-                data,
-                retryLimit,
-                retryCount,
-                retryDelay,
-                retryBackoff,
-                startAfter,
-                singletonKey,
-                singletonOn,
-                expireIn,
-                createdOn,
-                keepUntil,
-                output jsonb,
-                ? as policy
-            FROM ${sourceSchema}.job
-            WHERE name = ?
-                AND state = 'created'
-            ON CONFLICT DO NOTHING
-        `
-
-          await tnx.raw(sql, [queue.policy, queue.name])
+          await tnx.query({
+            text: `
+              INSERT INTO ${targetSchema}.job (
+                  id,
+                  name,
+                  priority,
+                  data,
+                  retry_limit,
+                  retry_count,
+                  retry_delay,
+                  retry_backoff,
+                  start_after,
+                  singleton_key,
+                  singleton_on,
+                  expire_in,
+                  created_on,
+                  keep_until,
+                  output,
+                  policy
+              )
+              SELECT
+                  id,
+                  name,
+                  priority,
+                  data,
+                  retryLimit,
+                  retryCount,
+                  retryDelay,
+                  retryBackoff,
+                  startAfter,
+                  singletonKey,
+                  singletonOn,
+                  expireIn,
+                  createdOn,
+                  keepUntil,
+                  output jsonb,
+                  $1 as policy
+              FROM ${sourceSchema}.job
+              WHERE name = $2
+                  AND state = 'created'
+              ON CONFLICT DO NOTHING
+            `,
+            values: [queue.policy, queue.name],
+          })
         } catch (error) {
           logSchema.error(logger, '[PgBoss] Error while copying jobs', {
             type: 'pgboss',
@@ -104,5 +111,26 @@ export class UpgradePgBossV10 extends BaseEvent<UpgradePgBossV10Payload> {
         }
       }
     })
+  }
+}
+
+async function withPgTransaction<T>(fn: (tnx: PgTransaction) => Promise<T>): Promise<T> {
+  const tnx = await multitenantPgExecutor.beginTransaction()
+
+  try {
+    const result = await fn(tnx)
+    await tnx.commit()
+    return result
+  } catch (e) {
+    try {
+      await tnx.rollback()
+    } catch (rollbackError) {
+      logSchema.warning(logger, '[UpgradePgBossV10] Failed to rollback transaction', {
+        type: 'pgboss',
+        error: rollbackError,
+        metadata: JSON.stringify({ originalError: String(e) }),
+      })
+    }
+    throw e
   }
 }

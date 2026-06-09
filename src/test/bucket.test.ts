@@ -1,5 +1,5 @@
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
-import { StorageKnexDB } from '@storage/database'
+import { StoragePgDB } from '@storage/database'
 import { randomUUID } from 'crypto'
 import dotenv from 'dotenv'
 import { FastifyInstance } from 'fastify'
@@ -14,7 +14,7 @@ const serviceKey = process.env.SERVICE_KEY || ''
 const { tenantId } = getConfig()
 
 let appInstance: FastifyInstance
-let adminDb: StorageKnexDB
+let adminDb: StoragePgDB
 
 beforeAll(async () => {
   vi.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {
@@ -45,7 +45,7 @@ beforeAll(async () => {
     host: 'localhost',
   })
 
-  adminDb = new StorageKnexDB(pg, {
+  adminDb = new StoragePgDB(pg, {
     host: 'localhost',
     tenantId,
   })
@@ -544,7 +544,7 @@ describe('testing count objects in bucket', () => {
   const { tenantId } = getConfig()
   const testObjectCount = 27
   const testOwnerId = randomUUID()
-  let db: StorageKnexDB
+  let db: StoragePgDB
   let testBucketId: string
   let testObjectNames: string[]
 
@@ -557,7 +557,7 @@ describe('testing count objects in bucket', () => {
       host: 'localhost',
     })
 
-    db = new StorageKnexDB(pg, {
+    db = new StoragePgDB(pg, {
       host: 'localhost',
       tenantId,
     })

@@ -1,13 +1,16 @@
-import { multitenantKnex } from '@internal/database'
-import { KnexShardStoreFactory, ShardCatalog, ShardRow } from '@internal/sharding'
+import { multitenantPgExecutor, PgTransaction } from '@internal/database'
+import { logger, logSchema } from '@internal/monitoring'
+import { PgShardStoreFactory, ShardCatalog, ShardRow } from '@internal/sharding'
 import {
   ListTableResponse,
   RestCatalogClient,
 } from '@storage/protocols/iceberg/catalog/rest-catalog-client'
-import { TableIndex } from '@storage/protocols/iceberg/knex'
+import { TableIndex } from '@storage/protocols/iceberg/metastore'
 import { IcebergCatalog } from '@storage/schemas'
 
 type NamespaceWithShardInfo = TableIndex & { shard_id?: string; shard_key?: string }
+type CatalogRow = Pick<IcebergCatalog, 'id' | 'name'>
+type ReconcilerTransaction = PgTransaction
 
 /**
  * Highly experimental reconciler for iceberg catalogs
@@ -21,22 +24,14 @@ export class IcebergCatalogReconciler {
   constructor(private readonly restCatalog: RestCatalogClient) {}
 
   async reconcile() {
-    const namespaces = await multitenantKnex
-      .table('iceberg_namespaces')
-      .select(
-        'iceberg_namespaces.*',
-        'iceberg_tables.shard_id as shard_id',
-        'iceberg_tables.shard_key as shard_key'
-      )
-      .join('iceberg_tables', 'iceberg_namespaces.id', 'iceberg_tables.namespace_id')
-      .distinct<NamespaceWithShardInfo[]>('iceberg_namespaces.name')
+    const namespaces = await this.listNamespacesWithShardInfo()
 
     await this.syncOrphanTables()
     await this.deleteUpstreamEmptyNamespaces(namespaces)
   }
 
   private async syncOrphanTables() {
-    const sharding = new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
+    const sharding = this.createShardCatalog()
     const shards = await sharding.listShardByKind('iceberg-table')
 
     await Promise.allSettled(
@@ -57,21 +52,11 @@ export class IcebergCatalogReconciler {
                 continue
               }
 
-              // List tables in the database for this namespace and shard
-              const dbTables = await multitenantKnex
-                .table('iceberg_tables')
-                .whereIn(
-                  'name',
-                  tableBatch.map((t) => t.name)
-                )
-                .where('shard_key', shard.shard_key)
-                .join('iceberg_namespaces', 'iceberg_tables.namespace_id', 'iceberg_namespaces.id')
-                .where('iceberg_namespaces.id', dbNamespaceId)
-                .select<TableIndex[]>(
-                  'iceberg_tables.name',
-                  'iceberg_namespaces.name',
-                  'iceberg_tables.tenant_id'
-                )
+              const dbTables = await this.listDbTablesForBatch(
+                dbNamespaceId,
+                shard.shard_key,
+                tableBatch.map((t) => t.name)
+              )
 
               await Promise.allSettled([
                 this.deleteLocalOrphanTables(shard, dbTables, tableBatch),
@@ -93,14 +78,18 @@ export class IcebergCatalogReconciler {
       (dbt) => !tableBatch.find((t) => t.name === dbt.name)
     )
 
-    await multitenantKnex
-      .table('iceberg_tables')
-      .whereIn(
-        'name',
-        tablesToDeleteInDb.map((t) => t.name)
-      )
-      .where('shard_key', shard.shard_key)
-      .del()
+    if (tablesToDeleteInDb.length === 0) {
+      return
+    }
+
+    await multitenantPgExecutor.query({
+      text: `
+        DELETE FROM iceberg_tables
+        WHERE name = ANY($1::text[])
+          AND shard_key = $2
+      `,
+      values: [tablesToDeleteInDb.map((t) => t.name), shard.shard_key],
+    })
   }
 
   private async syncUpstreamOrphanTables(
@@ -110,7 +99,7 @@ export class IcebergCatalogReconciler {
     dbTables: TableIndex[],
     tableBatch: ListTableResponse['identifiers']
   ) {
-    const shardCatalog = new ShardCatalog(new KnexShardStoreFactory(multitenantKnex))
+    const shardCatalog = this.createShardCatalog()
     // Find tables that are in the catalog but not in the database
     const tablesMissing = tableBatch.filter((t) => !dbTables.find((dbt) => dbt.name === t.name))
 
@@ -118,7 +107,7 @@ export class IcebergCatalogReconciler {
       return
     }
 
-    await multitenantKnex.transaction(async (tnx) => {
+    await this.withTransaction(async (tnx) => {
       await Promise.all(
         tablesMissing.map(async (table) => {
           const namespaceResp = await this.restCatalog.loadNamespaceMetadata({
@@ -132,16 +121,15 @@ export class IcebergCatalogReconciler {
             table: table.name,
           })
 
-          let catalogId = namespaceResp.properties?.['bucket-name'] as string | undefined
+          let catalogName = namespaceResp.properties?.['bucket-name'] as string | undefined
+          let catalog = catalogName
+            ? await this.findCatalogByName(tnx, tenantId, catalogName)
+            : undefined
 
-          if (!catalogId) {
-            const firstCatalog = await multitenantKnex
-              .table<IcebergCatalog>('iceberg_catalogs')
-              .select('name')
-              .where('tenant_id', tenantId)
-              .first()
+          if (!catalog) {
+            catalog = await this.findFirstCatalog(tnx, tenantId)
 
-            if (!firstCatalog) {
+            if (!catalog) {
               // There is no catalog in the user database, meaning that the only thing we can do
               // is delete the table from the upstream catalog
               await this.restCatalog.dropTable({
@@ -151,34 +139,18 @@ export class IcebergCatalogReconciler {
               })
 
               // Also special case here, since the tenant has no catalog, we can free up the shard slots
-              await tnx.raw(
-                `
-                WITH shard_slots AS (
-                  UPDATE shard_slots
-                    SET resource_id = null, tenant_id = null
-                    WHERE shard_id = ? AND tenant_id = ?
-                    RETURNING shard_id, slot_no
-                ),
-                deleted_reservations AS (
-                   DELETE FROM shard_reservation
-                     WHERE shard_id = ?
-                       AND tenant_id = ?
-                )
-                SELECT 1;
-              `,
-                [shard.id, tenantId, shard.id, tenantId]
-              )
+              await this.clearTenantShardSlots(tnx, shard.id, tenantId)
               return
             }
 
-            catalogId = firstCatalog.name
+            catalogName = catalog.name
           }
 
           const sharder = shardCatalog.withTnx(tnx)
           const existingShard = await sharder.findShardByResourceId({
             kind: 'iceberg-table',
             tenantId,
-            bucketName: catalogId,
+            bucketName: catalog.name,
             logicalName: `${namespaceId}/${table.name}`,
           })
 
@@ -187,7 +159,7 @@ export class IcebergCatalogReconciler {
             const { reservationId } = await sharder.reserve({
               kind: 'iceberg-table',
               tenantId,
-              bucketName: catalogId,
+              bucketName: catalog.name,
               logicalName: `${namespaceId}/${table.name}`,
               shardId: shard.id,
             })
@@ -195,16 +167,17 @@ export class IcebergCatalogReconciler {
             await sharder.confirm(reservationId, {
               kind: 'iceberg-table',
               tenantId,
-              bucketName: catalogId,
+              bucketName: catalog.name,
               logicalName: `${namespaceId}/${table.name}`,
             })
           }
 
-          await tnx.table('iceberg_tables').insert({
+          await this.insertIcebergTable(tnx, {
             name: table.name,
             namespace_id: namespaceId,
-            location: tableResp.metadata.location,
-            bucket_id: catalogId,
+            location: tableResp.metadata.location as string,
+            catalog_id: catalog.id,
+            bucket_name: catalog.name,
             tenant_id: tenantId,
             shard_id: shard.id,
             shard_key: shard.shard_key,
@@ -238,6 +211,153 @@ export class IcebergCatalogReconciler {
         }
       })
     )
+  }
+
+  private createShardCatalog() {
+    return new ShardCatalog(new PgShardStoreFactory(multitenantPgExecutor))
+  }
+
+  private async listNamespacesWithShardInfo(): Promise<NamespaceWithShardInfo[]> {
+    const result = await multitenantPgExecutor.query<NamespaceWithShardInfo>(`
+      SELECT DISTINCT
+        iceberg_namespaces.*,
+        iceberg_tables.shard_id AS shard_id,
+        iceberg_tables.shard_key AS shard_key
+      FROM iceberg_namespaces
+      JOIN iceberg_tables ON iceberg_namespaces.id = iceberg_tables.namespace_id
+    `)
+
+    return result.rows
+  }
+
+  private async listDbTablesForBatch(
+    namespaceId: string,
+    shardKey: string,
+    tableNames: string[]
+  ): Promise<TableIndex[]> {
+    if (tableNames.length === 0) {
+      return []
+    }
+
+    const result = await multitenantPgExecutor.query<TableIndex>({
+      text: `
+        SELECT iceberg_tables.name, iceberg_tables.tenant_id
+        FROM iceberg_tables
+        JOIN iceberg_namespaces ON iceberg_tables.namespace_id = iceberg_namespaces.id
+        WHERE iceberg_tables.name = ANY($1::text[])
+          AND iceberg_tables.shard_key = $2
+          AND iceberg_namespaces.id = $3
+      `,
+      values: [tableNames, shardKey, namespaceId],
+    })
+
+    return result.rows
+  }
+
+  private async withTransaction<T>(
+    callback: (tnx: ReconcilerTransaction) => Promise<T>
+  ): Promise<T> {
+    const tnx = await multitenantPgExecutor.beginTransaction()
+    try {
+      const result = await callback(tnx)
+      await tnx.commit()
+      return result
+    } catch (e) {
+      try {
+        await tnx.rollback()
+      } catch (rollbackError) {
+        logSchema.warning(logger, '[IcebergCatalogReconciler] Failed to rollback transaction', {
+          type: 'db',
+          error: rollbackError,
+          metadata: JSON.stringify({ originalError: String(e) }),
+        })
+      }
+      throw e
+    }
+  }
+
+  private async findCatalogByName(
+    tnx: ReconcilerTransaction,
+    tenantId: string,
+    catalogName: string
+  ): Promise<CatalogRow | undefined> {
+    const result = await tnx.query<CatalogRow>({
+      text: `
+        SELECT id, name
+        FROM iceberg_catalogs
+        WHERE tenant_id = $1
+          AND name = $2
+        LIMIT 1
+      `,
+      values: [tenantId, catalogName],
+    })
+
+    return result.rows[0]
+  }
+
+  private async findFirstCatalog(
+    tnx: ReconcilerTransaction,
+    tenantId: string
+  ): Promise<CatalogRow | undefined> {
+    const result = await tnx.query<CatalogRow>({
+      text: `
+        SELECT id, name
+        FROM iceberg_catalogs
+        WHERE tenant_id = $1
+        LIMIT 1
+      `,
+      values: [tenantId],
+    })
+
+    return result.rows[0]
+  }
+
+  private async clearTenantShardSlots(
+    tnx: ReconcilerTransaction,
+    shardId: number,
+    tenantId: string
+  ): Promise<void> {
+    const statement = `
+      WITH updated_slots AS (
+        UPDATE shard_slots
+          SET resource_id = null, tenant_id = null
+          WHERE shard_id = $1
+            AND tenant_id = $2
+          RETURNING shard_id, slot_no
+      ),
+      deleted_reservations AS (
+         DELETE FROM shard_reservation
+           WHERE shard_id = $1
+             AND tenant_id = $2
+      )
+      SELECT 1;
+    `
+
+    await tnx.query({ text: statement, values: [shardId, tenantId] })
+  }
+
+  private async insertIcebergTable(
+    tnx: ReconcilerTransaction,
+    table: {
+      name: string
+      namespace_id: string
+      location: string
+      catalog_id: string
+      bucket_name: string
+      tenant_id: string
+      shard_id: number
+      shard_key: string
+      remote_table_id?: string
+    }
+  ): Promise<void> {
+    const entries = Object.entries(table)
+    await tnx.query({
+      text: `
+        INSERT INTO iceberg_tables (${entries.map(([column]) => column).join(', ')})
+        VALUES (${entries.map((_, index) => `$${index + 1}`).join(', ')})
+      `,
+      values: entries.map(([, value]) => value),
+    })
   }
 
   private async *listNamespaces(shardKey: string) {

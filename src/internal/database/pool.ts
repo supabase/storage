@@ -1,6 +1,4 @@
 import { type CacheLookupOutcome, createTtlCache, TENANT_POOL_CACHE_NAME } from '@internal/cache'
-import { wait } from '@internal/concurrency'
-import { getSslSettings } from '@internal/database/ssl'
 import { logger, logSchema } from '@internal/monitoring'
 import {
   cacheEvictionsTotal,
@@ -12,18 +10,11 @@ import {
   meter,
 } from '@internal/monitoring/metrics'
 import { JWTPayload } from 'jose'
-import { Knex, knex } from 'knex'
 import { getConfig } from '../../config'
 
 const {
   isMultitenant,
-  databaseSSLRootCert,
-  databaseMaxConnections,
-  databaseFreePoolAfterInactivity,
-  databaseConnectionTimeout,
   dbSearchPath,
-  dbPostgresVersion,
-  databaseApplicationName,
   tenantPoolCacheTtlMs,
   tenantPoolCacheHitLogSampleRate,
   tenantPoolCacheMissLogSampleRate,
@@ -32,11 +23,7 @@ const {
 export const TENANT_POOL_CACHE_LOOKUP_LOG_TYPE = 'cache'
 export const TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE = '[Cache] Tenant pool lookup'
 
-/**
- * Pool-level settings: everything required to build the underlying Knex/tarn
- * pool. No request-scoped fields (JWT, headers, route).
- */
-export interface PoolOptions {
+export interface TenantConnectionOptions {
   tenantId: string
   dbUrl: string
   isExternalPool?: boolean
@@ -46,13 +33,6 @@ export interface PoolOptions {
   maxConnections: number
   clusterSize?: number
   numWorkers?: number
-}
-
-/**
- * Full settings for a tenant connection: pool options plus the request-scoped
- * JWT/route context that `TenantConnection` consumes when running queries.
- */
-export interface TenantConnectionOptions extends PoolOptions {
   user: User
   superUser: User
   headers?: Record<string, string | undefined | string[]>
@@ -77,7 +57,6 @@ export interface PoolRebalanceOptions {
 }
 
 export interface PoolStrategy {
-  acquire(): Knex
   rebalance(options: PoolRebalanceOptions): void
   destroy(): Promise<void>
   getPoolStats(): PoolStats | null
@@ -94,11 +73,6 @@ const multiTenantTtlConfig = {
 }
 
 const manuallyDestroyedPools = new WeakSet<PoolStrategy>()
-
-type RebalanceableTarnPool = {
-  max: number
-  _tryAcquireOrCreate?: () => void
-}
 
 function logPoolDestroyError(error: unknown): void {
   logSchema.error(logger, 'pool was not able to be destroyed', {
@@ -128,11 +102,20 @@ function recordTenantPoolCacheEviction(reason: string): void {
   }
 }
 
-function recordTenantPoolCacheRequest(outcome: string): void {
+function recordTenantPoolCacheRequest(outcome: CacheLookupOutcome): void {
   cacheRequestsTotal.add(1, {
     cache: TENANT_POOL_CACHE_NAME,
     outcome,
   })
+}
+
+function recordTenantPoolCacheLookup(
+  settings: TenantConnectionOptions,
+  isCacheable: boolean,
+  outcome: CacheLookupOutcome
+): void {
+  recordTenantPoolCacheRequest(outcome)
+  logTenantPoolCacheLookup(settings, isCacheable, outcome)
 }
 
 function shouldLogTenantPoolCacheLookup(sampleRate: number): boolean {
@@ -233,10 +216,10 @@ async function collectPoolStats() {
 }
 
 /**
- * PoolManager is a class that manages a pool of Knex connections.
- * It creates a new pool for each tenant and reuses existing pools.
+ * PoolManager manages tenant-specific database pools and the shared cache metrics.
+ * Concrete connection implementations provide the actual pool strategy.
  */
-export class PoolManager {
+export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
   protected numWorkers: number = 1
 
   setNumWorkers(numWorkers: number) {
@@ -282,23 +265,18 @@ export class PoolManager {
     }
   }
 
-  getPool(settings: TenantConnectionOptions) {
+  getPool(settings: TenantConnectionOptions): TPool {
     const isCacheable = (settings.isSingleUse && !settings.isExternalPool) || !settings.isSingleUse
     const { value: existingPool, outcome } = tenantPools.getWithOutcome(settings.tenantId)
+    recordTenantPoolCacheLookup(settings, isCacheable, outcome)
 
     if (existingPool) {
-      recordTenantPoolCacheRequest(outcome)
-      logTenantPoolCacheLookup(settings, isCacheable, outcome)
-
-      return existingPool
+      return existingPool as TPool
     }
 
     if (!isCacheable) {
       return this.newPool({ ...settings, numWorkers: this.numWorkers })
     }
-
-    recordTenantPoolCacheRequest(outcome)
-    logTenantPoolCacheLookup(settings, isCacheable, outcome)
 
     const newPool = this.newPool({ ...settings, numWorkers: this.numWorkers })
 
@@ -333,142 +311,5 @@ export class PoolManager {
     return Promise.allSettled(promises)
   }
 
-  protected newPool(settings: PoolOptions): PoolStrategy {
-    return new TenantPool(settings)
-  }
-}
-
-/**
- * TenantPool create a new Knex pool for each tenant, with rebalance
- * functionality to adjust the number of connections based on the cluster size.
- */
-class TenantPool implements PoolStrategy {
-  protected pool?: Knex
-
-  constructor(protected readonly options: PoolOptions) {}
-
-  acquire() {
-    if (this.pool) {
-      return this.pool
-    }
-
-    this.pool = this.createKnexPool()
-    return this.pool
-  }
-
-  destroy(): Promise<void> {
-    const originalPool = this.pool
-
-    if (!originalPool) {
-      return Promise.resolve()
-    }
-
-    this.pool = undefined
-    return this.drainPool(originalPool)
-  }
-
-  getPoolStats(): PoolStats | null {
-    const tarnPool = this.pool?.client?.pool
-    if (!tarnPool) return null
-    return {
-      used: tarnPool.numUsed(),
-      total: tarnPool.numUsed() + tarnPool.numFree(),
-    }
-  }
-
-  getSettings() {
-    const isSingleUseExternalPool = this.options.isSingleUse && this.options.isExternalPool
-
-    const numWorkers = Math.max(this.options.numWorkers ?? 1, 1)
-    const clusterSize = this.options.clusterSize || 0
-    let maxConnection = this.options.maxConnections || databaseMaxConnections
-
-    const divisor = Math.max(clusterSize, 1) * numWorkers
-    if (divisor > 1) {
-      maxConnection = Math.ceil(maxConnection / divisor) || 1
-    }
-
-    if (isSingleUseExternalPool) {
-      maxConnection = 1
-    }
-
-    return {
-      ...this.options,
-      searchPath: this.options.isExternalPool ? undefined : searchPath,
-      idleTimeoutMillis: isSingleUseExternalPool ? 100 : databaseFreePoolAfterInactivity,
-      reapIntervalMillis: isSingleUseExternalPool ? 50 : undefined,
-      maxConnections: maxConnection,
-    }
-  }
-
-  rebalance(options: PoolRebalanceOptions) {
-    let shouldUpdatePoolMax = false
-
-    if (options.clusterSize !== undefined && options.clusterSize !== 0) {
-      this.options.clusterSize = options.clusterSize
-      shouldUpdatePoolMax = true
-    }
-
-    if (options.maxConnections !== undefined) {
-      this.options.maxConnections = options.maxConnections
-      shouldUpdatePoolMax = true
-    }
-
-    if (!shouldUpdatePoolMax) {
-      return
-    }
-
-    const tarnPool = this.pool?.client?.pool as RebalanceableTarnPool | undefined
-    if (tarnPool) {
-      tarnPool.max = this.getSettings().maxConnections
-      tarnPool._tryAcquireOrCreate?.()
-    }
-  }
-
-  protected async drainPool(pool: Knex) {
-    for (; pool?.client?.pool; ) {
-      let waiting = 0
-      waiting += pool.client.pool.numPendingAcquires()
-      waiting += pool.client.pool.numPendingValidations()
-      waiting += pool.client.pool.numPendingCreates()
-
-      if (waiting === 0) {
-        break
-      }
-
-      await wait(200)
-    }
-
-    return pool.destroy()
-  }
-
-  protected createKnexPool() {
-    const settings = this.getSettings()
-    const sslSettings = getSslSettings({
-      connectionString: settings.dbUrl,
-      databaseSSLRootCert,
-    })
-
-    const maxConnections = settings.maxConnections
-
-    return knex({
-      client: 'pg',
-      version: dbPostgresVersion,
-      searchPath: settings.searchPath,
-      pool: {
-        min: 0,
-        max: maxConnections,
-        acquireTimeoutMillis: databaseConnectionTimeout,
-        idleTimeoutMillis: settings.idleTimeoutMillis,
-        reapIntervalMillis: 1000,
-      },
-      connection: {
-        connectionString: settings.dbUrl,
-        connectionTimeoutMillis: databaseConnectionTimeout,
-        ssl: sslSettings ? { ...sslSettings } : undefined,
-        application_name: databaseApplicationName,
-      },
-      acquireConnectionTimeout: databaseConnectionTimeout,
-    })
-  }
+  protected abstract newPool(settings: TenantConnectionOptions): TPool
 }

@@ -1,2 +1,3 @@
 export * from './adapter'
-export * from './knex'
+export * from './errors'
+export * from './pg'

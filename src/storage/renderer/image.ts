@@ -162,7 +162,7 @@ const dispatcher: Dispatcher = new Agent({
 )
 
 interface TransformLimits {
-  maxResolution?: number
+  maxResolution?: number | null
 }
 
 interface ImageRendererRequestOptions {

@@ -9,7 +9,7 @@ import {
 import { signJWT } from '@internal/auth'
 import { ERRORS } from '@internal/errors'
 import { SingleShard } from '@internal/sharding'
-import { KnexVectorMetadataDB, VectorStore, VectorStoreManager } from '@storage/protocols/vector'
+import { PgVectorMetadataDB, VectorStore, VectorStoreManager } from '@storage/protocols/vector'
 import { FastifyInstance } from 'fastify'
 import type { Mocked } from 'vitest'
 import app from '../app'
@@ -23,6 +23,7 @@ const vectorBucketS3 = vectorS3Buckets[0]
 
 let appInstance: FastifyInstance
 let serviceToken: string
+const storageTest = useStorage()
 
 type ListVectorBucketsResponse = Awaited<ReturnType<VectorStoreManager['listBuckets']>>
 type GetVectorBucketResponse = Awaited<ReturnType<VectorStoreManager['getBucket']>>
@@ -33,6 +34,43 @@ type ErrorResponse = {
 
 function parseJsonBody<Body>(body: string): Body {
   return JSON.parse(body) as Body
+}
+
+async function findVectorIndex(bucketId: string, name: string) {
+  const result = await storageTest.database.connection.pool.acquire().query<{
+    data_type: string
+    dimension: number
+    distance_metric: string
+    metadata_configuration: unknown
+  }>({
+    text: `
+      SELECT data_type, dimension, distance_metric, metadata_configuration
+      FROM storage.vector_indexes
+      WHERE bucket_id = $1
+        AND name = $2
+      LIMIT 1
+    `,
+    values: [bucketId, name],
+  })
+
+  return result.rows[0]
+}
+
+async function findVectorBucket(bucketId: string) {
+  const result = await storageTest.database.connection.pool.acquire().query<{
+    id: string
+    created_at: Date
+  }>({
+    text: `
+      SELECT id, created_at
+      FROM storage.buckets_vectors
+      WHERE id = $1
+      LIMIT 1
+    `,
+    values: [bucketId],
+  })
+
+  return result.rows[0]
 }
 
 // Use the common mock helpers
@@ -65,8 +103,6 @@ let vectorBucketName: string
 let s3Vector: VectorStoreManager
 
 describe('Vectors API', () => {
-  const storageTest = useStorage()
-
   beforeAll(async () => {
     appInstance = app()
 
@@ -78,7 +114,7 @@ describe('Vectors API', () => {
       shardKey: 'test-bucket',
       capacity: 1000,
     })
-    const mockVectorDB = new KnexVectorMetadataDB(storageTest.database.connection.pool.acquire())
+    const mockVectorDB = new PgVectorMetadataDB(storageTest.database.connection.pool.acquire())
     s3Vector = new VectorStoreManager(mockVectorStore, mockVectorDB, shard, {
       tenantId: 'test-tenant',
       maxBucketCount: Infinity,
@@ -149,14 +185,10 @@ describe('Vectors API', () => {
         indexName: `${tenantId}-test-index`,
       })
 
-      const indexMetadata = await storageTest.database.connection.pool
-        .acquire()
-        .table('storage.vector_indexes')
-        .where({
-          name: validCreateIndexRequest.indexName,
-          bucket_id: validCreateIndexRequest.vectorBucketName,
-        })
-        .first()
+      const indexMetadata = await findVectorIndex(
+        validCreateIndexRequest.vectorBucketName,
+        validCreateIndexRequest.indexName
+      )
 
       expect(indexMetadata).toBeDefined()
       expect(indexMetadata?.data_type).toBe(validCreateIndexRequest.dataType)
@@ -500,11 +532,7 @@ describe('Vectors API', () => {
       expect(response.statusCode).toBe(200)
 
       // Verify bucket was created in database
-      const bucketRecord = await storageTest.database.connection.pool
-        .acquire()
-        .table('storage.buckets_vectors')
-        .where({ id: newBucketName })
-        .first()
+      const bucketRecord = await findVectorBucket(newBucketName)
 
       expect(bucketRecord).toBeDefined()
       expect(bucketRecord?.id).toBe(newBucketName)
@@ -623,11 +651,7 @@ describe('Vectors API', () => {
       expect(response.statusCode).toBe(200)
 
       // Verify bucket was deleted from database
-      const bucketRecord = await storageTest.database.connection.pool
-        .acquire()
-        .table('storage.buckets_vectors')
-        .where({ id: vectorBucketName })
-        .first()
+      const bucketRecord = await findVectorBucket(vectorBucketName)
 
       expect(bucketRecord).toBeUndefined()
     })
@@ -709,11 +733,7 @@ describe('Vectors API', () => {
 
         expect(response.statusCode).toBe(400)
 
-        const bucketRecord = await storageTest.database.connection.pool
-          .acquire()
-          .table('storage.buckets_vectors')
-          .where({ id: String(numericBucketName) })
-          .first()
+        const bucketRecord = await findVectorBucket(String(numericBucketName))
 
         expect(bucketRecord).toBeDefined()
       } finally {
@@ -1142,14 +1162,7 @@ describe('Vectors API', () => {
       expect(response.statusCode).toBe(200)
 
       // Verify the index was deleted from database
-      const indexRecord = await storageTest.database.connection.pool
-        .acquire()
-        .table('storage.vector_indexes')
-        .where({
-          name: indexName,
-          bucket_id: vectorBucketName,
-        })
-        .first()
+      const indexRecord = await findVectorIndex(vectorBucketName, indexName)
 
       expect(indexRecord).toBeUndefined()
 
@@ -1213,14 +1226,7 @@ describe('Vectors API', () => {
 
         expect(response.statusCode).toBe(400)
 
-        const indexRecord = await storageTest.database.connection.pool
-          .acquire()
-          .table('storage.vector_indexes')
-          .where({
-            name: String(numericIndexName),
-            bucket_id: vectorBucketName,
-          })
-          .first()
+        const indexRecord = await findVectorIndex(vectorBucketName, String(numericIndexName))
 
         expect(indexRecord).toBeDefined()
       } finally {

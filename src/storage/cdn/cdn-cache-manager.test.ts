@@ -17,11 +17,14 @@ async function importCdnCacheManager(config: CdnConfig = {}) {
 }
 
 function createStorageMock(findObject = vi.fn().mockResolvedValue({ id: 'object-id' })) {
+  const storageAsSuperUser = vi.fn(() => ({
+    findBucket: vi.fn().mockResolvedValue({ id: 'object-id' }),
+  }))
   const asSuperUser = vi.fn(() => ({ findObject }))
   const from = vi.fn(() => ({ asSuperUser }))
 
   return {
-    storage: { from } as unknown as Storage,
+    storage: { from, asSuperUser: storageAsSuperUser } as unknown as Storage,
     from,
     asSuperUser,
     findObject,

@@ -515,14 +515,17 @@ describe('ImageRenderer fetch client', () => {
   })
 
   it.each([
-    [408, 'image request timed out', 'image request timed out'],
-    [429, 'too many image requests', 'too many image requests'],
+    [408, 'image request timed out', 408, 400, 'Image request timed out'],
+    [429, 'too many image requests', 429, 400, 'Too many requests'],
     [
       500,
       "Can't download source image: https://internal.example/private.png?X-Amz-Signature=secret",
+      500,
+      500,
       'Internal error',
     ],
-  ])('maps exhausted retry response for imgproxy %i', async (statusCode, body, expectedMessage) => {
+    [503, 'temporary imgproxy failure', 503, 400, 'Internal error'],
+  ])('maps exhausted retry response for imgproxy %i', async (statusCode, body, expectedStatusCode, expectedUserStatusCode, expectedMessage) => {
     const mockUndici = await useUndiciMockAgent()
 
     try {
@@ -554,7 +557,8 @@ describe('ImageRenderer fetch client', () => {
       const result = await resultPromise
 
       expect(result).toMatchObject({
-        httpStatusCode: statusCode,
+        httpStatusCode: expectedStatusCode,
+        userStatusCode: expectedUserStatusCode,
         message: expectedMessage,
       })
       mockAgent.assertNoPendingInterceptors()
@@ -607,6 +611,25 @@ describe('ImageRenderer fetch client', () => {
       400,
       'The source image is invalid or unsupported for rendering',
     ],
+    [422, 'Invalid source image', 400, 'The source image is invalid or unsupported for rendering'],
+    [
+      422,
+      'Invalid source image \n',
+      400,
+      'The source image is invalid or unsupported for rendering',
+    ],
+    [
+      422,
+      'Broken or unsupported image',
+      400,
+      'The source image is invalid or unsupported for rendering',
+    ],
+    [
+      422,
+      'Broken or unsupported image \t',
+      400,
+      'The source image is invalid or unsupported for rendering',
+    ],
   ])('maps imgproxy source-image validation error %# (%i)', async (upstreamStatusCode, body, expectedStatusCode, expectedMessage) => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(body, {
@@ -622,6 +645,7 @@ describe('ImageRenderer fetch client', () => {
     expect(result).toMatchObject({
       code: 'InvalidRequest',
       httpStatusCode: expectedStatusCode,
+      userStatusCode: expectedStatusCode,
       message: expectedMessage,
     })
   })
@@ -647,7 +671,40 @@ describe('ImageRenderer fetch client', () => {
     expect(result).toMatchObject({
       code: 'InvalidRequest',
       httpStatusCode: upstreamStatusCode,
+      userStatusCode: 400,
       message: 'Unable to download source image',
+    })
+  })
+
+  it.each([
+    [404, 'Invalid URL', 404, 400, 'Invalid image request'],
+    [404, 'Invalid source', 404, 400, 'Invalid image source'],
+    [404, 'Invalid source \n', 404, 400, 'Invalid image source'],
+    [403, 'Forbidden', 403, 400, 'Image transformation request was rejected'],
+    [404, 'Not found', 404, 400, 'Not found'],
+    [404, 'Source image is unreachable', 404, 400, 'Unable to download source image'],
+    [404, 'Source image is unreachable \n', 404, 400, 'Unable to download source image'],
+    [429, 'Too many requests', 429, 400, 'Too many requests'],
+    [429, 'Too many requests \t', 429, 400, 'Too many requests'],
+    [503, 'Timeout', 503, 400, 'Image request timed out'],
+    [422, '<html>upstream debug</html>', 422, 400, 'Invalid image request'],
+    [502, '<html>upstream failure</html>', 502, 400, 'Internal error'],
+  ])('maps imgproxy production public error %# (%i)', async (upstreamStatusCode, body, expectedStatusCode, expectedUserStatusCode, expectedMessage) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(body, {
+        status: upstreamStatusCode,
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { ImageRenderer } = await loadRendererModule()
+    const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
+    const result = await renderer.getAsset(createRequest(), createRenderOptions()).catch((e) => e)
+
+    expect(result).toMatchObject({
+      httpStatusCode: expectedStatusCode,
+      userStatusCode: expectedUserStatusCode,
+      message: expectedMessage,
     })
   })
 
@@ -1139,7 +1196,7 @@ describe('ImageRenderer fetch client', () => {
     await expect(readStream(result.body)).resolves.toBe('rendered-body')
   })
 
-  it('does not retry non-retryable imgproxy failures and preserves the response body', async () => {
+  it('does not retry non-retryable imgproxy failures and returns a controlled message', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('invalid image request', {
         status: 400,
@@ -1154,7 +1211,7 @@ describe('ImageRenderer fetch client', () => {
 
     await expect(renderer.getAsset(createRequest(), createRenderOptions())).rejects.toMatchObject({
       httpStatusCode: 400,
-      message: 'invalid image request',
+      message: 'Invalid image request',
       metadata: {
         transformations: ['height:50', 'resizing_type:fill'],
       },
@@ -1162,7 +1219,7 @@ describe('ImageRenderer fetch client', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('falls back to the request error message when imgproxy returns an empty error body', async () => {
+  it('returns a controlled message when imgproxy returns an empty error body', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 400 }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -1171,7 +1228,7 @@ describe('ImageRenderer fetch client', () => {
 
     await expect(renderer.getAsset(createRequest(), createRenderOptions())).rejects.toMatchObject({
       httpStatusCode: 400,
-      message: 'Request failed with status code 400',
+      message: 'Invalid image request',
     })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
@@ -1213,7 +1270,7 @@ describe('ImageRenderer fetch client', () => {
     const errorBody = new Readable({
       objectMode: true,
       read() {
-        this.push(new TextEncoder().encode('invalid image request'))
+        this.push(new TextEncoder().encode('Invalid source image'))
         this.push(null)
       },
     })
@@ -1228,7 +1285,7 @@ describe('ImageRenderer fetch client', () => {
       } as never)
     ).resolves.toMatchObject({
       httpStatusCode: 400,
-      message: 'invalid image request',
+      message: 'The source image is invalid or unsupported for rendering',
     })
   })
 

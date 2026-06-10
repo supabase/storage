@@ -79,7 +79,7 @@ export default async function routes(fastify: FastifyInstance) {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
-    const data = await migrationAdminStorePg.completeActiveJobs(migrationQueueName, 2000)
+    const data = await migrationAdminStorePg.completeActiveJobs(migrationQueueName)
 
     return reply.send(data)
   })

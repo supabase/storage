@@ -298,6 +298,53 @@ export class PgPoolManager extends PoolManager<PgPoolStrategy> {
   }
 }
 
+class PgClientErrorTracker {
+  private clientError?: Error
+
+  constructor(private readonly client: PoolClient) {
+    this.client.on('error', this.onError)
+  }
+
+  get error(): Error | undefined {
+    return this.clientError
+  }
+
+  throwIfErrored(): void {
+    if (this.clientError) {
+      throw this.clientError
+    }
+  }
+
+  releaseErrorForQuery(error: unknown): Error | undefined {
+    if (this.clientError) {
+      return this.clientError
+    }
+
+    if (shouldDisposeClient(error)) {
+      return ensureError(error)
+    }
+
+    return undefined
+  }
+
+  releaseErrorForFinalizer(error: unknown): Error {
+    return this.clientError ?? ensureError(error)
+  }
+
+  detach(): void {
+    this.client.off('error', this.onError)
+  }
+
+  private readonly onError = (error: unknown): void => {
+    const normalizedError = ensureError(error)
+    markClientDisposable(normalizedError)
+
+    if (!this.clientError) {
+      this.clientError = normalizedError
+    }
+  }
+}
+
 export class PgPoolExecutor implements PgTransactionalExecutor {
   constructor(private readonly pool: Pool) {}
 
@@ -305,30 +352,68 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
     statement: string | PgStatement,
     options?: PgQueryArgument
   ): Promise<QueryResult<T>> {
-    const client = await this.pool.connect()
+    assertValidSignal(getQuerySignal(options))
+
+    let client: PoolClient | undefined
+    let clientErrorTracker: PgClientErrorTracker | undefined
     let releaseError: Error | undefined
 
     try {
-      return await runPgQuery<T>(client, statement, options)
+      client = await this.pool.connect()
+      clientErrorTracker = new PgClientErrorTracker(client)
+      const result = await runPgQuery<T>(client, statement, options)
+      clientErrorTracker.throwIfErrored()
+      return result
     } catch (e) {
-      if (shouldDisposeClient(e)) {
-        releaseError = e instanceof Error ? e : new Error(String(e))
+      if (!client) {
+        if (isConnectionTimeoutError(e)) {
+          throw ERRORS.DatabaseTimeout(e)
+        }
+
+        throw e
       }
-      throw e
+
+      releaseError = clientErrorTracker?.releaseErrorForQuery(e)
+      throw releaseError ?? e
     } finally {
-      client.release(releaseError)
+      if (client && clientErrorTracker) {
+        const trackedError = clientErrorTracker.error
+        try {
+          client.release(releaseError ?? trackedError)
+        } finally {
+          clientErrorTracker.detach()
+        }
+      }
     }
   }
 
   async beginTransaction(options?: TransactionOptions): Promise<PgTransaction> {
-    const client = await this.pool.connect()
-    const transaction = new PgTransaction(client)
+    let client: PoolClient
+    try {
+      client = await this.pool.connect()
+    } catch (e) {
+      if (isConnectionTimeoutError(e)) {
+        throw ERRORS.DatabaseTimeout(e)
+      }
+
+      throw e
+    }
+
+    const clientErrorTracker = new PgClientErrorTracker(client)
+    const transaction = new PgTransaction(client, clientErrorTracker)
 
     try {
       await transaction.query(buildBeginStatement(options))
       return transaction
     } catch (e) {
-      client.release(e instanceof Error ? e : new Error(String(e)))
+      if (!transaction.isCompleted()) {
+        const releaseError = clientErrorTracker.releaseErrorForFinalizer(e)
+        try {
+          client.release(releaseError)
+        } finally {
+          clientErrorTracker.detach()
+        }
+      }
       throw e
     }
   }
@@ -337,7 +422,10 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
 export class PgTransaction implements PgExecutor {
   private completed = false
 
-  constructor(private readonly client: PoolClient) {}
+  constructor(
+    private readonly client: PoolClient,
+    private readonly clientErrorTracker?: PgClientErrorTracker
+  ) {}
 
   isCompleted(): boolean {
     return this.completed
@@ -351,7 +439,21 @@ export class PgTransaction implements PgExecutor {
       throw new Error('Cannot query a completed transaction')
     }
 
-    return runPgQuery<T>(this.client, statement, options)
+    try {
+      const result = await runPgQuery<T>(this.client, statement, options)
+      this.clientErrorTracker?.throwIfErrored()
+      return result
+    } catch (e) {
+      const releaseError =
+        this.clientErrorTracker?.releaseErrorForQuery(e) ??
+        (shouldDisposeClient(e) ? ensureError(e) : undefined)
+      if (releaseError) {
+        this.completed = true
+        this.release(releaseError)
+        throw releaseError
+      }
+      throw e
+    }
   }
 
   async commit(): Promise<void> {
@@ -362,14 +464,15 @@ export class PgTransaction implements PgExecutor {
     let releaseError: Error | undefined
     try {
       await runPgQuery(this.client, 'COMMIT')
+      this.clientErrorTracker?.throwIfErrored()
     } catch (e) {
       // A failed transaction finalizer leaves cleanup state uncertain, so release
       // with the error even for recoverable SQLSTATEs such as 40001 at COMMIT.
-      releaseError = e instanceof Error ? e : new Error(String(e))
+      releaseError = this.clientErrorTracker?.releaseErrorForFinalizer(e) ?? ensureError(e)
       throw e
     } finally {
       this.completed = true
-      this.client.release(releaseError)
+      this.release(releaseError)
     }
   }
 
@@ -381,14 +484,24 @@ export class PgTransaction implements PgExecutor {
     let releaseError: Error | undefined
     try {
       await runPgQuery(this.client, 'ROLLBACK')
+      this.clientErrorTracker?.throwIfErrored()
     } catch (e) {
       // A failed transaction finalizer leaves cleanup state uncertain, so release
       // with the error even for recoverable SQLSTATEs.
-      releaseError = e instanceof Error ? e : new Error(String(e))
+      releaseError = this.clientErrorTracker?.releaseErrorForFinalizer(e) ?? ensureError(e)
       throw e
     } finally {
       this.completed = true
-      this.client.release(releaseError)
+      this.release(releaseError)
+    }
+  }
+
+  private release(releaseError?: Error): void {
+    const trackedError = this.clientErrorTracker?.error
+    try {
+      this.client.release(releaseError ?? trackedError)
+    } finally {
+      this.clientErrorTracker?.detach()
     }
   }
 }
@@ -589,6 +702,10 @@ function createDisposedTenantConnectionError(): Error {
   return new Error('Cannot use a disposed PgTenantConnection')
 }
 
+function ensureError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
+}
+
 export function createAbortError(): Error & { code: string } {
   const error = new Error('Query was aborted') as Error & { code: string }
   error.name = 'AbortError'
@@ -607,16 +724,29 @@ async function runPgQuery<T extends QueryResultRow = QueryResultRow>(
   const query = normalizeStatement(statement, Array.isArray(options) ? options : undefined)
   let aborted = false
   let cancelPromise: Promise<void> | undefined
+  let rejectAbort: ((error: Error) => void) | undefined
+  const abortPromise = signal
+    ? new Promise<never>((_, reject) => {
+        rejectAbort = reject
+      })
+    : undefined
+
+  const rejectWithAbortError = () => {
+    rejectAbort?.(createAbortError())
+    rejectAbort = undefined
+  }
 
   const onAbort = () => {
     aborted = true
     cancelPromise = cancelPgQuery(client).catch(() => undefined)
+    rejectWithAbortError()
   }
 
   signal?.addEventListener('abort', onAbort, { once: true })
 
   try {
-    const result = await client.query<T>(query.text, query.values)
+    const queryPromise = client.query<T>(query.text, query.values)
+    const result = await (abortPromise ? Promise.race([queryPromise, abortPromise]) : queryPromise)
 
     if (aborted) {
       throw createAbortError()
@@ -625,7 +755,7 @@ async function runPgQuery<T extends QueryResultRow = QueryResultRow>(
     return result
   } catch (e) {
     if (aborted) {
-      await cancelPromise
+      void cancelPromise
       throw createAbortError()
     }
 
@@ -658,6 +788,10 @@ function assertValidSignal(signal?: AbortSignal): void {
   if (signal.aborted) {
     throw createAbortError()
   }
+}
+
+function getQuerySignal(options?: PgQueryArgument): AbortSignal | undefined {
+  return Array.isArray(options) ? undefined : options?.signal
 }
 
 function buildBeginStatement(options?: TransactionOptions): string {
@@ -707,7 +841,8 @@ function isConnectionTimeoutError(error: unknown): error is Error {
   return (
     error instanceof Error &&
     (error.message === 'timeout expired' ||
-      error.message === 'timeout exceeded when trying to connect')
+      error.message === 'timeout exceeded when trying to connect' ||
+      error.message === 'Connection terminated due to connection timeout')
   )
 }
 

@@ -1,4 +1,9 @@
-import { getTenantConfig, multitenantPgExecutor, PgPoolExecutor } from '@internal/database'
+import {
+  attachPgPoolErrorHandler,
+  getTenantConfig,
+  multitenantPgExecutor,
+  PgPoolExecutor,
+} from '@internal/database'
 import { deriveVectorDatabaseUrl } from '@internal/database/vector-store-url'
 import { ERRORS } from '@internal/errors'
 import {
@@ -55,12 +60,17 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
     const connectionString = vectorDatabaseCreate
       ? deriveVectorDatabaseUrl(vectorDatabaseURL)
       : vectorDatabaseURL
-    stPgVectorPool = new PgPool({
-      connectionString,
-      application_name: databaseApplicationName,
-      min: 0,
-      max: 10,
-    })
+    stPgVectorPool = attachPgPoolErrorHandler(
+      new PgPool({
+        connectionString,
+        application_name: databaseApplicationName,
+        min: 0,
+        max: 10,
+      }),
+      {
+        message: '[Vector] Idle pgvector client error',
+      }
+    )
     stPgVectorAdapter = new PgVectorStore(new PgPoolExecutor(stPgVectorPool))
     fastify.addHook('onClose', async () => {
       await stPgVectorPool?.end()

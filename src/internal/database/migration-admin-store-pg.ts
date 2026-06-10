@@ -1,10 +1,7 @@
 import { QueryResultRow } from 'pg'
-import { getConfig } from '../../config'
 import { PgExecutor } from './pg-connection'
 import { quoteIdentifier } from './sql'
 import { TenantCursorRow } from './tenant-store-pg'
-
-const { multitenantDatabaseQueryTimeout } = getConfig()
 
 export class MigrationAdminStorePg {
   private readonly jobTable: string
@@ -32,23 +29,15 @@ export class MigrationAdminStorePg {
     return result.rows
   }
 
-  async completeActiveJobs(queueName: string, limit: number): Promise<number> {
+  async completeActiveJobs(queueName: string): Promise<number> {
     const result = await this.query({
       text: `
-        WITH jobs_to_update AS (
-          SELECT id
-          FROM ${this.jobTable}
-          WHERE state = 'active'
-            AND name = $1
-          ORDER BY created_on DESC
-          LIMIT $2
-        )
         UPDATE ${this.jobTable} AS job
         SET state = 'completed'
-        FROM jobs_to_update
-        WHERE job.id = jobs_to_update.id
+        WHERE state = 'active'
+          AND name = $1
       `,
-      values: [queueName, limit],
+      values: [queueName],
     })
 
     return result.rowCount || 0
@@ -74,22 +63,14 @@ export class MigrationAdminStorePg {
     return result.rows
   }
 
-  async deleteTenantJobs(tenantId: string, queueName: string, limit: number): Promise<number> {
+  async deleteTenantJobs(tenantId: string, queueName: string): Promise<number> {
     const result = await this.query({
       text: `
-        WITH jobs_to_delete AS (
-          SELECT id
-          FROM ${this.jobTable}
-          WHERE data->'tenant'->>'ref' = $1
-            AND name = $2
-          ORDER BY created_on DESC
-          LIMIT $3
-        )
-        DELETE FROM ${this.jobTable} AS job
-        USING jobs_to_delete
-        WHERE job.id = jobs_to_delete.id
+        DELETE FROM ${this.jobTable}
+        WHERE data->'tenant'->>'ref' = $1
+          AND name = $2
       `,
-      values: [tenantId, queueName, limit],
+      values: [tenantId, queueName],
     })
 
     return result.rowCount || 0
@@ -114,8 +95,6 @@ export class MigrationAdminStorePg {
   private query<T extends QueryResultRow = QueryResultRow>(
     statement: Parameters<PgExecutor['query']>[0]
   ) {
-    return this.db.query<T>(statement, {
-      signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout),
-    })
+    return this.db.query<T>(statement)
   }
 }

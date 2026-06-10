@@ -113,7 +113,8 @@ export async function* listTenantsToMigrate(signal: AbortSignal) {
       migrationVersion,
       lastCursor,
       [TenantMigrationStatus.FAILED, TenantMigrationStatus.FAILED_STALE],
-      200
+      200,
+      signal
     )
 
     if (data.length === 0) {
@@ -139,7 +140,8 @@ export async function* listTenantsToResetMigrations(
     const data = await tenantConfigStorePg.listTenantsToResetMigrationsBatch(
       afterMigrations,
       lastCursor,
-      200
+      200,
+      signal
     )
 
     if (data.length === 0) {

@@ -70,4 +70,21 @@ describe('TenantConfigStorePg', () => {
     expect(statement.text).toContain('WHERE id = $3')
     expect(statement.values).toEqual(['postgres://tenant', 10, 'tenant-id'])
   })
+
+  it('uses the caller signal without adding an internal timeout for migration listing', async () => {
+    const { query, store } = createTenantStore()
+    const signal = new AbortController().signal
+
+    await store.listTenantsToMigrateBatch('storage-schema', 0, ['FAILED'], 200, signal)
+
+    expect(query).toHaveBeenCalledWith(expect.anything(), { signal })
+  })
+
+  it('does not add an internal timeout for reset migration listing', async () => {
+    const { query, store } = createTenantStore()
+
+    await store.listTenantsToResetMigrationsBatch(['storage-schema'], 0, 200)
+
+    expect(query).toHaveBeenCalledWith(expect.anything())
+  })
 })

@@ -287,6 +287,7 @@ export class IcebergCatalogReconciler {
         FROM iceberg_catalogs
         WHERE tenant_id = $1
           AND name = $2
+          AND deleted_at IS NULL
         LIMIT 1
       `,
       values: [tenantId, catalogName],
@@ -304,6 +305,7 @@ export class IcebergCatalogReconciler {
         SELECT id, name
         FROM iceberg_catalogs
         WHERE tenant_id = $1
+          AND deleted_at IS NULL
         LIMIT 1
       `,
       values: [tenantId],

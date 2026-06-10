@@ -18,7 +18,7 @@ import {
   JwksConfig,
   JwksConfigKey,
   JwksConfigKeyOCT,
-  normalizeDatabasePoolMode,
+  normalizeDatabasePoolModeForRead,
 } from '../../config'
 import { decrypt } from '../auth'
 import { JWKSManager, JWKSManagerStorePg } from '../auth/jwks'
@@ -93,6 +93,7 @@ const {
   icebergEnabled,
   vectorEnabled,
   databaseMaxConnections,
+  databasePoolMode,
 } = getConfig()
 
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
@@ -249,7 +250,7 @@ export async function getTenantConfig(
       anonKey: decrypt(anon_key),
       databaseUrl: decrypt(database_url),
       databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
-      databasePoolMode: normalizeDatabasePoolMode(database_pool_mode),
+      databasePoolMode: normalizeDatabasePoolModeForRead(database_pool_mode, databasePoolMode),
       fileSizeLimit: Number(file_size_limit),
       jwtSecret,
       jwks: jwks ? { keys: jwks.keys ?? [] } : jwks,

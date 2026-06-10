@@ -218,25 +218,29 @@ export class TenantConfigStorePg {
     migrationVersion: string,
     lastCursor: number,
     failedStatuses: string[],
-    batchSize: number
+    batchSize: number,
+    signal?: AbortSignal
   ): Promise<TenantCursorRow[]> {
-    const result = await this.query<TenantCursorRow>({
-      text: `
-        SELECT id, cursor_id
-        FROM tenants
-        WHERE cursor_id > $1
-          AND (
-            (
-              migrations_version != $2
-              AND migrations_status != ALL($3::text[])
+    const result = await this.queryWithoutInternalTimeout<TenantCursorRow>(
+      {
+        text: `
+          SELECT id, cursor_id
+          FROM tenants
+          WHERE cursor_id > $1
+            AND (
+              (
+                migrations_version != $2
+                AND migrations_status != ALL($3::text[])
+              )
+              OR migrations_status IS NULL
             )
-            OR migrations_status IS NULL
-          )
-        ORDER BY cursor_id ASC
-        LIMIT $4
-      `,
-      values: [lastCursor, migrationVersion, failedStatuses, batchSize],
-    })
+          ORDER BY cursor_id ASC
+          LIMIT $4
+        `,
+        values: [lastCursor, migrationVersion, failedStatuses, batchSize],
+      },
+      signal
+    )
 
     return result.rows
   }
@@ -244,23 +248,27 @@ export class TenantConfigStorePg {
   async listTenantsToResetMigrationsBatch(
     migrationVersions: string[],
     lastCursor: number,
-    batchSize: number
+    batchSize: number,
+    signal?: AbortSignal
   ): Promise<TenantCursorRow[]> {
     if (migrationVersions.length === 0) {
       return []
     }
 
-    const result = await this.query<TenantCursorRow>({
-      text: `
-        SELECT id, cursor_id
-        FROM tenants
-        WHERE cursor_id > $1
-          AND migrations_version = ANY($2::text[])
-        ORDER BY cursor_id ASC
-        LIMIT $3
-      `,
-      values: [lastCursor, migrationVersions, batchSize],
-    })
+    const result = await this.queryWithoutInternalTimeout<TenantCursorRow>(
+      {
+        text: `
+          SELECT id, cursor_id
+          FROM tenants
+          WHERE cursor_id > $1
+            AND migrations_version = ANY($2::text[])
+          ORDER BY cursor_id ASC
+          LIMIT $3
+        `,
+        values: [lastCursor, migrationVersions, batchSize],
+      },
+      signal
+    )
 
     return result.rows
   }
@@ -272,6 +280,13 @@ export class TenantConfigStorePg {
     return db.query<T>(statement, {
       signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout),
     })
+  }
+
+  private queryWithoutInternalTimeout<T extends QueryResultRow = QueryResultRow>(
+    statement: Parameters<PgExecutor['query']>[0],
+    signal?: AbortSignal
+  ) {
+    return signal ? this.db.query<T>(statement, { signal }) : this.db.query<T>(statement)
   }
 }
 

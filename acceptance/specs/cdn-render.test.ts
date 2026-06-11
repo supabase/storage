@@ -118,14 +118,10 @@ describeAcceptance(
           message: 'success',
         })
 
-        const missingPurge = await client.request(
-          'DELETE',
-          `/cdn/${bucketName}/${encodePathSegments(missingBucketName)}`,
-          {
-            expectedStatus: [400, 404],
-            token: requireServiceKey(),
-          }
-        )
+        const missingPurge = await client.request('DELETE', `/cdn/${missingBucketName}`, {
+          expectedStatus: [400, 404],
+          token: requireServiceKey(),
+        })
         expect(missingPurge.json).toBeTruthy()
       } finally {
         await cleanupRestResources(bucketName, [], client)

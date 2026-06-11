@@ -164,6 +164,29 @@ describe('CDN Cache Manager', () => {
     })
   })
 
+  it('will purge entire bucket when using bucket endpoint', async () => {
+    const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
+
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: `/cdn/${bucketName}/`,
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const body = await response.json()
+    expect(body).toEqual({ message: 'success' })
+    expect(purgeSpy).toHaveBeenCalledWith({
+      type: 'object',
+      tenant: tenantId,
+      bucket: bucketName,
+      objectName: '',
+    })
+  })
+
   it('will purge bucket transformations when transformations query param is true', async () => {
     const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
 

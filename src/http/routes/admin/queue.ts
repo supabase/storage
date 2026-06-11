@@ -1,5 +1,5 @@
 import { SYSTEM_TENANT } from '@internal/queue/constants'
-import { MoveJobs, UpgradePgBossV10 } from '@storage/events'
+import { MoveJobs } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
@@ -32,19 +32,6 @@ interface MoveJobsRequestInterface extends RequestGenericInterface {
 
 export default async function routes(fastify: FastifyInstance) {
   registerApiKeyAuth(fastify)
-
-  fastify.post('/migrate/pgboss-v10', { schema: { tags: ['queue'] } }, async (req, reply) => {
-    if (!pgQueueEnable) {
-      return reply.status(400).send({ message: 'Queue is not enabled' })
-    }
-
-    await UpgradePgBossV10.send({
-      sbReqId: req.sbReqId,
-      tenant: SYSTEM_TENANT,
-    })
-
-    return reply.send({ message: 'Migration scheduled' })
-  })
 
   fastify.post<MoveJobsRequestInterface>(
     '/move',

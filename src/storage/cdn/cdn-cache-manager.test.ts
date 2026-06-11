@@ -1,5 +1,6 @@
 import type { Storage } from '@storage/storage'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { spyOnAbortSignalTimeout } from '../../test/utils/abort-signal'
 
 type CdnConfig = {
   cdnPurgeEndpointURL?: string
@@ -38,8 +39,7 @@ describe('CdnCacheManager', () => {
   it('sends a purge request for an existing object', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetchMock)
-    const timeoutSignal = new AbortController().signal
-    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal)
+    const { timeoutSignal, timeoutSpy } = spyOnAbortSignalTimeout()
 
     const { CdnCacheManager } = await importCdnCacheManager({
       cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',

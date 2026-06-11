@@ -385,14 +385,6 @@ export class PgVectorStore implements VectorStore {
     return resolveRootPgExecutor(this.executor)
   }
 
-  private tableCapabilityCacheKey(db: PgTransactionalExecutor | PgTransaction): object {
-    if (db instanceof PgTransaction) {
-      return db
-    }
-
-    return tableCapabilityCacheKey(this.rootDb())
-  }
-
   async createVectorIndex(command: CreateIndexCommandInput): Promise<CreateIndexCommandOutput> {
     if (!command.indexName || !command.vectorBucketName) {
       throw ERRORS.MissingParameter('indexName/vectorBucketName')
@@ -502,7 +494,7 @@ export class PgVectorStore implements VectorStore {
         const serializedRows = JSON.stringify([...rows].sort((a, b) => a.key.localeCompare(b.key)))
         const table = tableName(bucket, index)
         const qualified = qualifiedTableName(table)
-        const capabilityCacheKey = this.tableCapabilityCacheKey(db)
+        const capabilityCacheKey = tableCapabilityCacheKey(db)
         const capability = await resolveTableCapability(db, table, capabilityCacheKey)
 
         if (capability.requiresManualUpsert) {
@@ -618,7 +610,7 @@ export class PgVectorStore implements VectorStore {
     params: unknown[],
     topK: number
   ): Promise<{ rows: unknown[] }> {
-    const capability = await resolveTableCapability(db, table, this.tableCapabilityCacheKey(db))
+    const capability = await resolveTableCapability(db, table, tableCapabilityCacheKey(db))
     if (!capability.requiresExactQueryScan) {
       return withPgTransaction(db, async (trx): Promise<{ rows: unknown[] }> => {
         await trx.query({

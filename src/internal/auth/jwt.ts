@@ -104,9 +104,13 @@ async function findJWKFromHeader(
       return encoder.encode(secret)
     }
 
-    // find the first key without a kid or with the matching kid and the "oct" type
+    // find the first key without a kid or with the matching kid, the "oct" type, and a compatible alg
     const jwk = jwks.keys.find(
-      (key) => (!key.kid || key.kid === header.kid) && key.kty === 'oct' && key.k
+      (key) =>
+        (!key.kid || key.kid === header.kid) &&
+        key.kty === 'oct' &&
+        key.k &&
+        (!key.alg || key.alg === header.alg)
     )
 
     if (!jwk) {
@@ -126,16 +130,20 @@ async function findJWKFromHeader(
     kty = 'OKP'
   }
 
-  // find the first key with a matching kid (or no kid if none is specified in the JWT header) and the correct key type
+  // find the first key with a matching kid (or no kid if none is specified in the JWT header), the correct key type, and a compatible alg
   const jwk = jwks.keys.find((key) => {
-    return ((!key.kid && !header.kid) || key.kid === header.kid) && key.kty === kty
+    return (
+      ((!key.kid && !header.kid) || key.kid === header.kid) &&
+      key.kty === kty &&
+      (!key.alg || key.alg === header.alg)
+    )
   })
 
   if (!jwk) {
     // couldn't find a matching JWK, try to use the secret
     return encoder.encode(secret)
   }
-  return await importJWK(jwk)
+  return await importJWK(jwk, jwk.alg || header.alg)
 }
 
 function getJWTVerificationKey(secret: string, jwks: JwksConfig | null): JWTVerifyGetKey {

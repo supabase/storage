@@ -1,4 +1,8 @@
-import { MigrationAdminStorePg, multitenantPgExecutor } from '@internal/database'
+import {
+  MIGRATION_ADMIN_JOB_LIMIT,
+  MigrationAdminStorePg,
+  multitenantPgExecutor,
+} from '@internal/database'
 import {
   isDBMigrationName,
   resetMigrationsOnTenants,
@@ -70,7 +74,10 @@ export default async function routes(fastify: FastifyInstance) {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
-    const data = await migrationAdminStorePg.listActiveJobs(migrationQueueName, 2000)
+    const data = await migrationAdminStorePg.listActiveJobs(
+      migrationQueueName,
+      MIGRATION_ADMIN_JOB_LIMIT
+    )
 
     return reply.send(data)
   })
@@ -79,7 +86,10 @@ export default async function routes(fastify: FastifyInstance) {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
-    const data = await migrationAdminStorePg.completeActiveJobs(migrationQueueName)
+    const data = await migrationAdminStorePg.completeActiveJobs(
+      migrationQueueName,
+      MIGRATION_ADMIN_JOB_LIMIT
+    )
 
     return reply.send(data)
   })

@@ -30,23 +30,28 @@ describe('MigrationAdminStorePg', () => {
     expect(query).toHaveBeenCalledWith(expect.anything())
   })
 
-  it('completes all active jobs instead of a limited page', async () => {
+  it('completes only a limited page of active jobs', async () => {
     const { query, store } = createMigrationAdminStore()
 
-    await store.completeActiveJobs('migrations')
+    await store.completeActiveJobs('migrations', 2000)
 
     const statement = getLastStatement(query)
-    expect(statement.text).not.toMatch(/\bLIMIT\b/i)
-    expect(statement.values).toEqual(['migrations'])
+    expect(statement.text).toMatch(/\bWITH jobs_to_update AS\b/i)
+    expect(statement.text).toMatch(/\bLIMIT \$2\b/i)
+    expect(statement.text).toMatch(
+      /WHERE job\.id = jobs_to_update\.id\s+AND job\.state = 'active'/i
+    )
+    expect(statement.values).toEqual(['migrations', 2000])
   })
 
-  it('deletes all tenant jobs instead of a limited page', async () => {
+  it('deletes only a limited page of tenant jobs', async () => {
     const { query, store } = createMigrationAdminStore()
 
-    await store.deleteTenantJobs('tenant-id', 'migrations')
+    await store.deleteTenantJobs('tenant-id', 'migrations', 100)
 
     const statement = getLastStatement(query)
-    expect(statement.text).not.toMatch(/\bLIMIT\b/i)
-    expect(statement.values).toEqual(['tenant-id', 'migrations'])
+    expect(statement.text).toMatch(/\bWITH jobs_to_delete AS\b/i)
+    expect(statement.text).toMatch(/\bLIMIT \$3\b/i)
+    expect(statement.values).toEqual(['tenant-id', 'migrations', 100])
   })
 })

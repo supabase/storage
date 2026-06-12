@@ -4,6 +4,7 @@ import {
   getTenantCapabilities,
   getTenantConfig,
   jwksManager,
+  MIGRATION_ADMIN_JOB_LIMIT,
   MigrationAdminStorePg,
   multitenantPgExecutor,
   onTenantConfigChange,
@@ -251,11 +252,19 @@ function getTenantDatabaseUrl(tenantId: string) {
 }
 
 function listTenantMigrationJobs(tenantId: string) {
-  return migrationAdminStorePg.listTenantJobs(tenantId, migrationQueueName, 100)
+  return migrationAdminStorePg.listTenantJobs(
+    tenantId,
+    migrationQueueName,
+    MIGRATION_ADMIN_JOB_LIMIT
+  )
 }
 
 function deleteTenantMigrationJobs(tenantId: string) {
-  return migrationAdminStorePg.deleteTenantJobs(tenantId, migrationQueueName)
+  return migrationAdminStorePg.deleteTenantJobs(
+    tenantId,
+    migrationQueueName,
+    MIGRATION_ADMIN_JOB_LIMIT
+  )
 }
 
 export default async function routes(fastify: FastifyInstance) {

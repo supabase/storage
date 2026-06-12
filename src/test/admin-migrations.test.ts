@@ -16,7 +16,11 @@ import { DBMigration } from '@internal/database/migrations'
 import { randomUUID } from 'crypto'
 import type { FastifyInstance } from 'fastify'
 import { mergeConfig } from '../config'
-import { closeMultitenantPg, multitenantPgExecutor } from '../internal/database'
+import {
+  closeMultitenantPg,
+  MIGRATION_ADMIN_JOB_LIMIT,
+  multitenantPgExecutor,
+} from '../internal/database'
 import { PG_BOSS_SCHEMA, Queue } from '../internal/queue/queue'
 import { RunMigrationsOnTenants } from '../storage/events/migrations/run-migrations'
 import { createAdminApp } from './common'
@@ -54,15 +58,30 @@ type JobRow = {
 async function insertJobs(jobs: JobRow | JobRow[]) {
   const rows = Array.isArray(jobs) ? jobs : [jobs]
 
-  for (const job of rows) {
-    await multitenantPgExecutor.query({
-      text: `
-        INSERT INTO ${pgBossJobTable} (id, name, state, created_on, data)
-        VALUES ($1, $2, $3, COALESCE($4, now()), $5)
-      `,
-      values: [job.id, job.name, job.state, job.created_on, job.data],
-    })
+  if (rows.length === 0) {
+    return
   }
+
+  await multitenantPgExecutor.query({
+    text: `
+      INSERT INTO ${pgBossJobTable} (id, name, state, created_on, data)
+      SELECT id, name, state, COALESCE(created_on, now()), data
+      FROM unnest(
+        $1::uuid[],
+        $2::text[],
+        $3::text[],
+        $4::timestamptz[],
+        $5::jsonb[]
+      ) AS input(id, name, state, created_on, data)
+    `,
+    values: [
+      rows.map((job) => job.id),
+      rows.map((job) => job.name),
+      rows.map((job) => job.state),
+      rows.map((job) => job.created_on || null),
+      rows.map((job) => JSON.stringify(job.data)),
+    ],
+  })
 }
 
 async function deleteJobs(jobIds: string[]) {
@@ -425,6 +444,7 @@ describe('Admin migrations routes', () => {
     const otherTenantId = `admin-migrations-other-${randomUUID().slice(0, 8)}`
     const olderJobId = trackJobId(randomUUID())
     const newerJobId = trackJobId(randomUUID())
+    const extraTenantJobIds = Array.from({ length: 99 }, () => trackJobId(randomUUID()))
     const otherTenantJobId = trackJobId(randomUUID())
     const wrongQueueJobId = trackJobId(randomUUID())
 
@@ -456,6 +476,18 @@ describe('Admin migrations routes', () => {
           tenantId: jobTenantId,
         },
       },
+      ...extraTenantJobIds.map((id) => ({
+        id,
+        name: RunMigrationsOnTenants.getQueueName(),
+        state: 'active',
+        created_on: new Date('2026-03-25T09:00:00.000Z'),
+        data: {
+          tenant: {
+            ref: jobTenantId,
+          },
+          tenantId: jobTenantId,
+        },
+      })),
       {
         id: otherTenantJobId,
         name: RunMigrationsOnTenants.getQueueName(),
@@ -488,8 +520,8 @@ describe('Admin migrations routes', () => {
 
     expect(response.statusCode).toBe(200)
     const body = JSON.parse(response.body)
-    expect(body).toHaveLength(2)
-    expect(body).toEqual([
+    expect(body).toHaveLength(2 + extraTenantJobIds.length)
+    expect(body.slice(0, 2)).toEqual([
       expect.objectContaining({
         id: newerJobId,
         name: RunMigrationsOnTenants.getQueueName(),
@@ -635,7 +667,9 @@ describe('Admin migrations routes', () => {
   test('deletes only tenant migration jobs from the current queue', async () => {
     const tenantWithJobsId = `admin-migrations-delete-${randomUUID().slice(0, 8)}`
     const otherTenantId = `admin-migrations-delete-other-${randomUUID().slice(0, 8)}`
-    const matchingJobId = trackJobId(randomUUID())
+    const matchingJobIds = Array.from({ length: MIGRATION_ADMIN_JOB_LIMIT + 1 }, () =>
+      trackJobId(randomUUID())
+    )
     const otherTenantJobId = trackJobId(randomUUID())
     const wrongQueueJobId = trackJobId(randomUUID())
 
@@ -643,8 +677,8 @@ describe('Admin migrations routes', () => {
     await createTenant(otherTenantId)
 
     await insertJobs([
-      {
-        id: matchingJobId,
+      ...matchingJobIds.map((id) => ({
+        id,
         name: RunMigrationsOnTenants.getQueueName(),
         state: 'active',
         data: {
@@ -653,7 +687,7 @@ describe('Admin migrations routes', () => {
           },
           tenantId: tenantWithJobsId,
         },
-      },
+      })),
       {
         id: otherTenantJobId,
         name: RunMigrationsOnTenants.getQueueName(),
@@ -685,10 +719,19 @@ describe('Admin migrations routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(JSON.parse(response.body)).toBe(1)
+    expect(JSON.parse(response.body)).toBe(MIGRATION_ADMIN_JOB_LIMIT)
+
+    const secondResponse = await adminApp.inject({
+      method: 'DELETE',
+      url: `/tenants/${tenantWithJobsId}/migrations/jobs`,
+      headers,
+    })
+
+    expect(secondResponse.statusCode).toBe(200)
+    expect(JSON.parse(secondResponse.body)).toBe(1)
 
     const rows = await getJobs<{ id: string; name: string }>('id, name', [
-      matchingJobId,
+      ...matchingJobIds,
       otherTenantJobId,
       wrongQueueJobId,
     ])

@@ -9,7 +9,8 @@ import type { Database } from '../database'
 import { StoragePgDB } from '../database'
 import { Storage } from '../storage'
 
-const { storageS3Bucket, storageS3MaxSockets, storageBackendType, region } = getConfig()
+const { storageS3Bucket, storageS3MaxSockets, storageS3ClientTimeout, storageBackendType, region } =
+  getConfig()
 
 let storageBackend: StorageBackendAdapter | undefined = undefined
 let Webhook: Awaited<typeof import('./lifecycle/webhook')>['Webhook'] | undefined = undefined
@@ -100,6 +101,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
 
     const httpAgent = createAgent('s3_worker', {
       maxSockets: storageS3MaxSockets,
+      requestTimeoutMs: storageS3ClientTimeout,
     })
 
     storageBackend = createStorageBackend(storageBackendType, {

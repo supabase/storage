@@ -4,16 +4,15 @@ import {
   httpPoolFreeSockets,
   httpPoolPendingRequests,
 } from '@internal/monitoring/metrics'
-import Agent, { HttpsAgent } from 'agentkeepalive'
+import { Agent } from 'undici'
 import { getConfig } from '../../config'
 
 const { region } = getConfig()
 
 export interface InstrumentedAgent {
-  httpAgent: Agent
-  httpsAgent: HttpsAgent
+  dispatcher: Agent
   monitor: () => NodeJS.Timeout | undefined
-  close: () => void
+  close: () => Promise<void>
 }
 
 export interface AgentStats {
@@ -21,98 +20,96 @@ export interface AgentStats {
   freeSocketCount: number
   pendingRequestCount: number
   errorSocketCount: number
-  timeoutSocketCount: number
-  createSocketErrorCount: number
+}
+
+export interface AgentOptions {
+  maxSockets: number
+  connectTimeoutMs?: number
+  requestTimeoutMs?: number
 }
 
 /**
- * Creates an instrumented agent
- * Adding metrics to the agent
+ * Creates an instrumented undici Agent.
+ * Tracks connect errors via the Agent's `connectionError` event so the
+ * `http_pool_errors` metric stays populated.
  */
-export function createAgent(name: string, options: { maxSockets: number }): InstrumentedAgent {
-  const agentOptions = {
-    maxSockets: options.maxSockets,
-    keepAlive: true,
-    keepAliveMsecs: 1000,
-    freeSocketTimeout: 1000 * 15,
-  }
+export function createAgent(name: string, options: AgentOptions): InstrumentedAgent {
+  const dispatcher = new Agent({
+    connections: options.maxSockets,
+    keepAliveTimeout: 15_000,
+    pipelining: 1,
+    headersTimeout: options.requestTimeoutMs ?? 0,
+    bodyTimeout: options.requestTimeoutMs ?? 0,
+    connect: {
+      timeout: options.connectTimeoutMs ?? 5_000,
+      keepAlive: true,
+      keepAliveInitialDelay: 1_000,
+    },
+  })
 
-  const httpAgent = new Agent(agentOptions)
-  const httpsAgent = new HttpsAgent(agentOptions)
-  let watcher: NodeJS.Timeout | undefined = undefined
+  let errorCount = 0
+  dispatcher.on('connectionError', () => {
+    errorCount++
+  })
+
+  let watcher: NodeJS.Timeout | undefined
+  let closing: Promise<void> | undefined
 
   return {
-    httpAgent,
-    httpsAgent,
+    dispatcher,
     monitor: () => {
-      const agent = watchAgent(name, 'https', httpsAgent)
-      watcher = agent
-      return agent
+      watcher = watchAgent(name, dispatcher, () => errorCount)
+      return watcher
     },
     close: () => {
+      if (closing) return closing
       if (watcher) {
         clearInterval(watcher)
+        watcher = undefined
       }
+      closing = dispatcher.close()
+      return closing
     },
   }
 }
 
-/**
- * Updates HTTP agent metrics
- */
-function updateHttpAgentMetrics(name: string, protocol: string, stats: AgentStats) {
-  const baseAttrs = { name, protocol }
+function updateHttpAgentMetrics(name: string, stats: AgentStats) {
+  const baseAttrs = { name, protocol: 'https' }
 
   httpPoolBusySockets.record(stats.busySocketCount, baseAttrs)
   httpPoolFreeSockets.record(stats.freeSocketCount, baseAttrs)
   httpPoolPendingRequests.record(stats.pendingRequestCount, { name, region })
-  httpPoolErrors.record(stats.errorSocketCount, { ...baseAttrs, type: 'socket_error' })
-  httpPoolErrors.record(stats.timeoutSocketCount, { ...baseAttrs, type: 'timeout_socket_error' })
-  httpPoolErrors.record(stats.createSocketErrorCount, { ...baseAttrs, type: 'create_socket_error' })
+  httpPoolErrors.record(stats.errorSocketCount, { ...baseAttrs, type: 'connect_error' })
 }
 
-export function watchAgent(name: string, protocol: 'http' | 'https', agent: Agent | HttpsAgent) {
+export function watchAgent(name: string, dispatcher: Agent, getErrorCount: () => number) {
   return setInterval(() => {
-    const httpStatus = agent.getCurrentStatus()
-
-    const httpStats = gatherHttpAgentStats(httpStatus)
-
-    updateHttpAgentMetrics(name, protocol, httpStats)
+    const stats = gatherDispatcherStats(dispatcher, getErrorCount())
+    updateHttpAgentMetrics(name, stats)
   }, 5000)
 }
 
-// Function to update metrics based on the current status of the agent
-export function gatherHttpAgentStats(status: Agent.AgentStatus) {
-  // Calculate the number of busy sockets by iterating over the `sockets` object
+export function gatherDispatcherStats(dispatcher: Agent, errorCount: number): AgentStats {
   let busySocketCount = 0
-  for (const host in status.sockets) {
-    if (status.sockets.hasOwnProperty(host)) {
-      busySocketCount += status.sockets[host]
-    }
-  }
-
-  // Calculate the number of free sockets by iterating over the `freeSockets` object
   let freeSocketCount = 0
-  for (const host in status.freeSockets) {
-    if (status.freeSockets.hasOwnProperty(host)) {
-      freeSocketCount += status.freeSockets[host]
-    }
-  }
-
-  // Calculate the number of pending requests by iterating over the `requests` object
   let pendingRequestCount = 0
-  for (const host in status.requests) {
-    if (status.requests.hasOwnProperty(host)) {
-      pendingRequestCount += status.requests[host]
+
+  for (const origin of Object.keys(dispatcher.stats)) {
+    const s = dispatcher.stats[origin] as {
+      running: number
+      free?: number
+      pending: number
+      queued?: number
     }
+    busySocketCount += s.running
+    freeSocketCount += s.free ?? 0
+    pendingRequestCount += s.pending + (s.queued ?? 0)
   }
 
   return {
     busySocketCount,
     freeSocketCount,
     pendingRequestCount,
-    errorSocketCount: status.errorSocketCount,
-    timeoutSocketCount: status.timeoutSocketCount,
-    createSocketErrorCount: status.createSocketErrorCount,
+    errorSocketCount: errorCount,
   }
 }

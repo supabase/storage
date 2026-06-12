@@ -22,7 +22,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { createAgent, InstrumentedAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
-import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
 import { getConfig } from '../../../config'
 import {
@@ -71,9 +71,10 @@ export class S3Backend implements StorageBackendAdapter {
       options.httpAgent ??
       createAgent('s3_default', {
         maxSockets: storageS3MaxSockets,
+        requestTimeoutMs: options.requestTimeout,
       })
 
-    if (this.agent.httpsAgent && tracingEnabled) {
+    if (tracingEnabled) {
       this.agent.monitor()
     }
 
@@ -683,7 +684,7 @@ export class S3Backend implements StorageBackendAdapter {
   }
 
   close() {
-    this.agent.close()
+    return this.agent.close()
   }
 
   protected createS3Client(options: S3ClientOptions & { name: string }) {
@@ -691,11 +692,8 @@ export class S3Backend implements StorageBackendAdapter {
       region: options.region,
       runtime: 'node',
       requestStreamBufferSize: 32 * 1024,
-      requestHandler: new NodeHttpHandler({
-        httpAgent: options.httpAgent?.httpAgent,
-        httpsAgent: options.httpAgent?.httpsAgent,
-        connectionTimeout: 5000,
-        requestTimeout: options.requestTimeout,
+      requestHandler: new UndiciHttpHandler({
+        dispatcher: options.httpAgent?.dispatcher,
       }),
     }
     if (options.endpoint) {

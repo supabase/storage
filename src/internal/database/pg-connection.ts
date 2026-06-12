@@ -152,7 +152,6 @@ export class PgPoolStrategy {
   }
 
   protected getSettings() {
-    const isSingleUseExternalPool = this.options.isSingleUse && this.options.isExternalPool
     const numWorkers = Math.max(this.options.numWorkers ?? 1, 1)
     const clusterSize = this.options.clusterSize || 0
     let maxConnection = this.options.maxConnections || databaseMaxConnections
@@ -162,13 +161,9 @@ export class PgPoolStrategy {
       maxConnection = Math.ceil(maxConnection / divisor) || 1
     }
 
-    if (isSingleUseExternalPool) {
-      maxConnection = 1
-    }
-
     return {
       ...this.options,
-      idleTimeoutMillis: isSingleUseExternalPool ? 100 : databaseFreePoolAfterInactivity,
+      idleTimeoutMillis: databaseFreePoolAfterInactivity,
       maxConnections: maxConnection,
       searchPath: this.options.isExternalPool ? undefined : searchPath,
     }
@@ -530,11 +525,6 @@ export class PgTenantConnection {
 
   dispose() {
     this.disposed = true
-
-    if (this.options.isSingleUse && this.options.isExternalPool) {
-      return this.pool.destroy()
-    }
-
     return Promise.resolve()
   }
 

@@ -591,7 +591,7 @@ describe('PgTransaction', () => {
 })
 
 describe('PgTenantConnection', () => {
-  it('rejects pool acquisition after disposal', async () => {
+  it('rejects connection use after disposal without destroying the retained pool', async () => {
     const pool = {
       acquire: vi.fn(),
       destroy: vi.fn().mockResolvedValue(undefined),
@@ -600,7 +600,6 @@ describe('PgTenantConnection', () => {
       pool,
       createPoolStrategySettings({
         isExternalPool: true,
-        isSingleUse: true,
       })
     )
 
@@ -613,29 +612,6 @@ describe('PgTenantConnection', () => {
       'Cannot use a disposed PgTenantConnection'
     )
     await expect(connection.transaction()).rejects.toThrow(
-      'Cannot use a disposed PgTenantConnection'
-    )
-    expect(() => connection.asSuperUser()).toThrow('Cannot use a disposed PgTenantConnection')
-    expect(pool.acquire).not.toHaveBeenCalled()
-    expect(pool.destroy).toHaveBeenCalledTimes(1)
-  })
-
-  it('rejects cacheable connection use after disposal without destroying the retained pool', async () => {
-    const pool = {
-      acquire: vi.fn(),
-      destroy: vi.fn().mockResolvedValue(undefined),
-    } as unknown as PgPoolStrategy
-    const connection = new PgTenantConnection(
-      pool,
-      createPoolStrategySettings({
-        isExternalPool: false,
-        isSingleUse: false,
-      })
-    )
-
-    await connection.dispose()
-
-    await expect(connection.query('SELECT 1')).rejects.toThrow(
       'Cannot use a disposed PgTenantConnection'
     )
     expect(() => connection.asSuperUser()).toThrow('Cannot use a disposed PgTenantConnection')
@@ -658,7 +634,6 @@ describe('PgTenantConnection', () => {
       pool,
       createPoolStrategySettings({
         isExternalPool: true,
-        isSingleUse: true,
       })
     )
 
@@ -677,7 +652,7 @@ describe('PgTenantConnection', () => {
       })
       expect(pool.acquire).toHaveBeenCalledTimes(1)
       expect(beginTransaction).toHaveBeenCalledTimes(1)
-      expect(pool.destroy).toHaveBeenCalledTimes(1)
+      expect(pool.destroy).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }

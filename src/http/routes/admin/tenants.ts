@@ -25,12 +25,7 @@ import { PG_BOSS_SCHEMA } from '@internal/queue'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import {
-  getConfig,
-  JwksConfigKey,
-  normalizeDatabasePoolMode,
-  normalizeDatabasePoolModeForRead,
-} from '../../../config'
+import { getConfig, JwksConfigKey } from '../../../config'
 import { dbSuperUser, storage } from '../../plugins'
 import { registerApiKeyAuth } from '../../plugins/apikey'
 import { registerJsonParserAllowingEmptyBody } from '../../plugins/empty-json-body'
@@ -42,11 +37,6 @@ const patchSchema = {
       anonKey: { type: 'string' },
       databaseUrl: { type: 'string' },
       databasePoolUrl: { type: 'string', nullable: true },
-      databasePoolMode: {
-        type: 'string',
-        enum: ['single_use', 'recycled', 'recycle', null],
-        nullable: true,
-      },
       maxConnections: { type: 'number' },
       jwks: { type: 'object', nullable: true },
       fileSizeLimit: { type: 'number' },
@@ -126,7 +116,6 @@ interface tenantDBInterface {
   anon_key: string
   database_url: string
   database_pool_url?: string | null
-  database_pool_mode?: string | null
   max_connections?: number
   jwt_secret: string
   jwks: { keys?: JwksConfigKey[] } | null
@@ -146,13 +135,8 @@ interface tenantDBInterface {
   disable_events?: string[] | null
 }
 
-const {
-  dbMigrationFreezeAt,
-  icebergEnabled,
-  vectorEnabled,
-  adminReturnTenantSensitiveData,
-  databasePoolMode,
-} = getConfig()
+const { dbMigrationFreezeAt, icebergEnabled, vectorEnabled, adminReturnTenantSensitiveData } =
+  getConfig()
 const migrationQueueName = RunMigrationsOnTenants.getQueueName()
 const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
 const migrationAdminStorePg = new MigrationAdminStorePg(multitenantPgExecutor, PG_BOSS_SCHEMA)
@@ -278,7 +262,6 @@ export default async function routes(fastify: FastifyInstance) {
         anon_key,
         database_url,
         database_pool_url,
-        database_pool_mode,
         max_connections,
         file_size_limit,
         jwt_secret,
@@ -311,7 +294,6 @@ export default async function routes(fastify: FastifyInstance) {
               serviceKey: decrypt(service_key),
             }
           : {}),
-        databasePoolMode: normalizeDatabasePoolModeForRead(database_pool_mode, databasePoolMode),
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
         migrationVersion: migrations_version,
@@ -357,7 +339,6 @@ export default async function routes(fastify: FastifyInstance) {
         anon_key,
         database_url,
         database_pool_url,
-        database_pool_mode,
         max_connections,
         file_size_limit,
         jwt_secret,
@@ -398,7 +379,6 @@ export default async function routes(fastify: FastifyInstance) {
               serviceKey: decrypt(service_key),
             }
           : {}),
-        databasePoolMode: normalizeDatabasePoolModeForRead(database_pool_mode, databasePoolMode),
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
         capabilities,
@@ -441,7 +421,6 @@ export default async function routes(fastify: FastifyInstance) {
       const {
         anonKey,
         databaseUrl,
-        databasePoolMode,
         fileSizeLimit,
         jwtSecret,
         jwks,
@@ -458,7 +437,6 @@ export default async function routes(fastify: FastifyInstance) {
         anon_key: encrypt(anonKey),
         database_url: encrypt(databaseUrl),
         database_pool_url: databasePoolUrl ? encrypt(databasePoolUrl) : undefined,
-        database_pool_mode: normalizeDatabasePoolMode(databasePoolMode),
         max_connections: maxConnections ? Number(maxConnections) : undefined,
         file_size_limit: fileSizeLimit,
         jwt_secret: encrypt(jwtSecret),
@@ -513,7 +491,6 @@ export default async function routes(fastify: FastifyInstance) {
         serviceKey,
         features,
         databasePoolUrl,
-        databasePoolMode,
         maxConnections,
         tracingMode,
         disableEvents,
@@ -528,7 +505,6 @@ export default async function routes(fastify: FastifyInstance) {
           : databasePoolUrl === null
             ? null
             : undefined,
-        database_pool_mode: normalizeDatabasePoolMode(databasePoolMode),
         max_connections: maxConnections ? Number(maxConnections) : undefined,
         file_size_limit: fileSizeLimit,
         jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,
@@ -586,7 +562,6 @@ export default async function routes(fastify: FastifyInstance) {
         serviceKey,
         features,
         databasePoolUrl,
-        databasePoolMode,
         maxConnections,
         tracingMode,
         disableEvents,
@@ -631,10 +606,6 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (maxConnections) {
         tenantInfo.max_connections = Number(maxConnections)
-      }
-
-      if (databasePoolMode !== undefined) {
-        tenantInfo.database_pool_mode = normalizeDatabasePoolMode(databasePoolMode)
       }
 
       if (tracingMode) {

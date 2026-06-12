@@ -16,7 +16,6 @@ export interface TenantConfigRow {
   anon_key: string
   database_url: string
   database_pool_url?: string | null
-  database_pool_mode?: string | null
   max_connections?: number | null
   jwt_secret: string
   jwks?: { keys?: JwksConfigKey[] } | null
@@ -47,7 +46,6 @@ const tenantWritableColumns = [
   'anon_key',
   'database_url',
   'database_pool_url',
-  'database_pool_mode',
   'max_connections',
   'jwt_secret',
   'jwks',

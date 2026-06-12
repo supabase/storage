@@ -210,7 +210,6 @@ describe('Pg database foundation', () => {
     const settings = createConnectionSettings(superUser, {
       tenantId: 'pg-foundation-cacheable',
       isExternalPool: false,
-      isSingleUse: false,
     })
 
     const first = await PgTenantConnection.create(settings)
@@ -227,26 +226,31 @@ describe('Pg database foundation', () => {
     )
   })
 
-  it('does not cache single-use external pg tenant pools and dispose closes them', async () => {
+  it('caches external pg tenant pools and dispose keeps them open for reuse', async () => {
     const superUser = await getServiceKeyUser(tenantId)
     const settings = createConnectionSettings(superUser, {
-      tenantId: 'pg-foundation-single-use',
+      tenantId: 'pg-foundation-external-pool',
       isExternalPool: true,
-      isSingleUse: true,
     })
 
     const first = await PgTenantConnection.create(settings)
     const second = await PgTenantConnection.create(settings)
 
-    expect(second.pool).not.toBe(first.pool)
+    expect(second.pool).toBe(first.pool)
 
     await first.pool.acquire().query('SELECT 1')
     expect(first.pool.getPoolStats()).not.toBeNull()
 
     await first.dispose()
-    expect(first.pool.getPoolStats()).toBeNull()
+    expect(first.pool.getPoolStats()).not.toBeNull()
+    await expect(first.query('SELECT 1')).rejects.toThrow(
+      'Cannot use a disposed PgTenantConnection'
+    )
 
+    // The shared pool stays usable for connections that were not disposed.
+    await second.pool.acquire().query('SELECT 1')
     await second.dispose()
+    await PgTenantConnection.poolManager.destroy('pg-foundation-external-pool')
   })
 
   it('creates pg tenant connections through the shared database settings factory', async () => {

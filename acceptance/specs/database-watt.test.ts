@@ -1,14 +1,16 @@
 import { randomUUID } from 'node:crypto'
-import { describeAcceptance, encodePathSegments, getAcceptanceConfig } from '../support/config'
-import { createRestClient } from '../support/http'
-import {
-  cleanupRestResources,
-  createRestBucket,
-  requireServiceKey,
-  uniqueBucketName,
-  uniqueObjectKey,
-  uploadRestObject,
-} from '../support/resources'
+import { setupLoopbackMessaging } from '@platformatic/runtime'
+import dotenv from 'dotenv'
+import { describeAcceptance, getAcceptanceConfig } from '../support/config'
+import { uniqueBucketName } from '../support/resources'
+
+dotenv.config({ path: '.env.test', override: false })
+dotenv.config({ path: '.env', override: false })
+
+type ApplicationContext = {
+  close: () => Promise<void>
+  isBackgroundApplication: boolean
+}
 
 type DatabaseWattStats = {
   acquire: number
@@ -40,6 +42,10 @@ type QueryRowsResponse = {
   rows: Array<{ value: number }>
 }
 
+type BucketRowsResponse = {
+  rows: BucketResponse[]
+}
+
 type LockResponse = {
   lockId: string
 }
@@ -48,16 +54,29 @@ type ErrorResponse = {
   code: string
   destination?: string
   message: string
+  sqlState?: string
 }
 
 const describeDatabaseWattAcceptance = process.env.ACCEPTANCE_DATABASE_WATT === 'true' ? describeAcceptance : describe.skip
+let app: ApplicationContext | undefined
+let messaging: ReturnType<typeof setupLoopbackMessaging> | undefined
+
+async function createDatabaseWattApp(): Promise<ApplicationContext> {
+  const moduleUrl = new URL('../../src/database/index.ts', import.meta.url).href
+  const databaseApp = await import(moduleUrl)
+  return databaseApp.create()
+}
 
 function testDestination(): string {
   return process.env.ACCEPTANCE_TENANT_ID || process.env.TENANT_ID || 'default'
 }
 
 function sendDatabaseMessage<T = unknown>(message: string, payload: unknown): Promise<T> {
-  return sendWattMessage<T>('database', message, payload)
+  if (!messaging) {
+    throw new Error('Database Watt loopback messaging is not initialized')
+  }
+
+  return messaging.send('database', message, payload) as Promise<T>
 }
 
 function isDatabaseError(result: unknown): result is ErrorResponse {
@@ -87,6 +106,75 @@ async function queryDatabaseWatt(destination = testDestination()): Promise<Query
     requestId: randomUUID(),
     sql: 'SELECT 1 as value',
   })
+}
+
+async function cleanupBucket(bucketName: string, destination = testDestination()): Promise<void> {
+  const tx = await beginTransaction(destination)
+
+  try {
+    await checkedResult(
+      sendDatabaseMessage('database.lockedQuery', {
+        lockId: tx.lockId,
+        requestId: randomUUID(),
+        sql: `SELECT set_config('storage.allow_delete_query', 'true', true)`,
+      })
+    )
+    await checkedResult(
+      sendDatabaseMessage('database.lockedQuery', {
+        lockId: tx.lockId,
+        requestId: randomUUID(),
+        sql: 'DELETE FROM storage.buckets WHERE id = $1',
+        values: [bucketName],
+      })
+    )
+    await checkedResult(sendDatabaseMessage('database.commitTransaction', { lockId: tx.lockId }))
+  } catch (error) {
+    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(() => undefined)
+    throw error
+  }
+}
+
+async function getBucket(bucketName: string, destination = testDestination()): Promise<BucketResponse | undefined> {
+  const result = await checkedResult<BucketRowsResponse>(
+    sendDatabaseMessage('database.query', {
+      destination,
+      requestId: randomUUID(),
+      sql: 'SELECT id, name, public FROM storage.buckets WHERE id = $1',
+      values: [bucketName],
+    })
+  )
+
+  return result.rows[0]
+}
+
+async function insertBucket(bucketName: string, destination = testDestination()): Promise<unknown> {
+  return sendDatabaseMessage('database.query', {
+    destination,
+    requestId: randomUUID(),
+    sql: `INSERT INTO storage.buckets (id, name, owner, public) VALUES ($1, $1, $2, false)`,
+    values: [bucketName, randomUUID()],
+  })
+}
+
+async function commitBucketDatabaseWatt(): Promise<{ bucketName: string }> {
+  const bucketName = uniqueBucketName('dbwatt-commit')
+  const tx = await beginTransaction()
+
+  try {
+    await checkedResult(
+      sendDatabaseMessage('database.lockedQuery', {
+        lockId: tx.lockId,
+        requestId: randomUUID(),
+        sql: `INSERT INTO storage.buckets (id, name, owner, public) VALUES ($1, $1, $2, false)`,
+        values: [bucketName, randomUUID()],
+      })
+    )
+    await checkedResult(sendDatabaseMessage('database.commitTransaction', { lockId: tx.lockId }))
+    return { bucketName }
+  } catch (error) {
+    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(() => undefined)
+    throw error
+  }
 }
 
 async function masterTransaction(): Promise<{ value: number | undefined }> {
@@ -224,15 +312,28 @@ async function resetDatabaseWattStats(): Promise<void> {
 }
 
 describeDatabaseWattAcceptance(
-  'Database Watt E2E',
+  'Database Watt PostgreSQL integration',
   {
     destructive: true,
     profiles: ['core'],
   },
   () => {
-    it('executes stateless queries in the Database Watt worker', async () => {
-      await resetDatabaseWattStats()
+    beforeAll(async () => {
+      messaging = setupLoopbackMessaging('database-watt-acceptance')
+      app = await createDatabaseWattApp()
+    })
 
+    beforeEach(async () => {
+      await resetDatabaseWattStats()
+    })
+
+    afterAll(async () => {
+      await app?.close()
+      app = undefined
+      messaging = undefined
+    })
+
+    it('executes stateless queries in the Database Watt worker', async () => {
       const response = await queryDatabaseWatt()
       const stats = await getDatabaseWattStats()
 
@@ -248,7 +349,6 @@ describeDatabaseWattAcceptance(
         return
       }
 
-      await resetDatabaseWattStats()
       const response = await queryDatabaseWatt('master')
       const stats = await getDatabaseWattStats()
 
@@ -264,7 +364,6 @@ describeDatabaseWattAcceptance(
         return
       }
 
-      await resetDatabaseWattStats()
       const response = await masterTransaction()
       const stats = await getDatabaseWattStats()
 
@@ -274,56 +373,38 @@ describeDatabaseWattAcceptance(
       expect(stats.commitTransaction).toBeGreaterThanOrEqual(1)
     })
 
-    it('commits REST object changes through Database Watt transactions', async () => {
-      const client = createRestClient()
-      const token = requireServiceKey()
-      const bucketName = uniqueBucketName('dbwatt-commit')
-      const objectKey = uniqueObjectKey('dbwatt-commit')
-      await resetDatabaseWattStats()
-
+    it('commits bucket changes through Database Watt transactions', async () => {
+      let bucketName: string | undefined
       try {
-        await createRestBucket(bucketName, { isPublic: false })
-        await uploadRestObject(bucketName, objectKey, 'database-watt-commit')
-
-        const read = await client.request('GET', `/object/${bucketName}/${encodePathSegments(objectKey)}`, {
-          expectedStatus: 200,
-          token,
-        })
+        const committed = await commitBucketDatabaseWatt()
+        bucketName = committed.bucketName
+        const bucket = await getBucket(bucketName)
         const stats = await getDatabaseWattStats()
 
-        expect(read.body).toBe('database-watt-commit')
+        expect(bucket).toMatchObject({ id: bucketName, name: bucketName, public: false })
         expect(stats.beginTransaction).toBeGreaterThanOrEqual(1)
         expect(stats.lockedQuery).toBeGreaterThanOrEqual(1)
         expect(stats.commitTransaction).toBeGreaterThanOrEqual(1)
       } finally {
-        await cleanupRestResources(bucketName, [objectKey], client)
+        if (bucketName) {
+          await cleanupBucket(bucketName)
+        }
       }
     })
 
     it('rolls back failed transaction work and leaves no partial bucket state', async () => {
-      const client = createRestClient()
-      const token = requireServiceKey()
-      await resetDatabaseWattStats()
-
       const rollback = await rollbackDatabaseWatt()
       const bucketName = rollback.bucketName
       expect(bucketName).toBeTruthy()
 
-      const lookup = await client.request('GET', `/bucket/${bucketName}`, {
-        expectedStatus: 400,
-        token,
-      })
+      const bucket = await getBucket(bucketName)
       const stats = await getDatabaseWattStats()
 
-      expect(lookup.status).toBe(400)
+      expect(bucket).toBeUndefined()
       expect(stats.rollbackTransaction).toBeGreaterThanOrEqual(1)
     })
 
     it('preserves nested savepoint semantics in Database Watt transactions', async () => {
-      const client = createRestClient()
-      const token = requireServiceKey()
-      await resetDatabaseWattStats()
-
       const savepoint = await savepointDatabaseWatt()
       const outerBucket = savepoint.outerBucket
       const innerBucket = savepoint.innerBucket
@@ -332,56 +413,37 @@ describeDatabaseWattAcceptance(
         expect(outerBucket).toBeTruthy()
         expect(innerBucket).toBeTruthy()
 
-        const outer = await client.request<BucketResponse>('GET', `/bucket/${outerBucket}`, {
-          expectedStatus: 200,
-          token,
-        })
-        const inner = await client.request('GET', `/bucket/${innerBucket}`, {
-          expectedStatus: 400,
-          token,
-        })
+        const outer = await getBucket(outerBucket)
+        const inner = await getBucket(innerBucket)
         const stats = await getDatabaseWattStats()
 
-        expect(outer.json?.id).toBe(outerBucket)
-        expect(inner.status).toBe(400)
+        expect(outer?.id).toBe(outerBucket)
+        expect(inner).toBeUndefined()
         expect(stats.lockedQuery).toBeGreaterThanOrEqual(3)
         expect(stats.commitTransaction).toBeGreaterThanOrEqual(1)
       } finally {
         if (outerBucket) {
-          await cleanupRestResources(outerBucket, [], client)
+          await cleanupBucket(outerBucket)
         }
       }
     })
 
-    it('preserves storage error mapping when Database Watt returns PostgreSQL errors', async () => {
-      const client = createRestClient()
-      const token = requireServiceKey()
+    it('preserves PostgreSQL error mapping when Database Watt returns PostgreSQL errors', async () => {
       const bucketName = uniqueBucketName('dbwatt-error')
-      await resetDatabaseWattStats()
 
       try {
-        await createRestBucket(bucketName, { isPublic: false })
-        const duplicate = await client.request('POST', '/bucket', {
-          body: {
-            id: bucketName,
-            name: bucketName,
-            public: false,
-          },
-          expectedStatus: 400,
-          token,
-        })
+        await checkedResult(insertBucket(bucketName))
+        const duplicate = await insertBucket(bucketName) as ErrorResponse
         const stats = await getDatabaseWattStats()
 
-        expect(duplicate.status).toBe(400)
-        expect(stats.lockedQuery).toBeGreaterThanOrEqual(1)
+        expect(duplicate).toMatchObject({ code: 'POSTGRES_ERROR', sqlState: '23505' })
+        expect(stats.query).toBeGreaterThanOrEqual(2)
       } finally {
-        await cleanupRestResources(bucketName, [], client)
+        await cleanupBucket(bucketName)
       }
     })
 
     it('translates request aborts into Database Watt cancellation', async () => {
-      await resetDatabaseWattStats()
-
       const response = await sleepDatabaseWatt()
       const stats = await getDatabaseWattStats()
 
@@ -397,7 +459,6 @@ describeDatabaseWattAcceptance(
         return
       }
 
-      await resetDatabaseWattStats()
       const response = await missingDestinationDatabaseWatt()
 
       expect(response).toMatchObject({ code: 'DESTINATION_UNKNOWN' })
@@ -405,8 +466,6 @@ describeDatabaseWattAcceptance(
     })
 
     it('handles concurrent Database Watt query load', async () => {
-      await resetDatabaseWattStats()
-
       const response = await concurrentQueriesDatabaseWatt()
       const stats = await getDatabaseWattStats()
 
@@ -416,8 +475,6 @@ describeDatabaseWattAcceptance(
 
     it('exercises multitenant destination resolution when the target is multitenant', async () => {
       const config = getAcceptanceConfig()
-      const client = createRestClient()
-      const token = requireServiceKey(config)
       const bucketName = uniqueBucketName('dbwatt-tenant')
 
       if (!config.tenantId) {
@@ -425,19 +482,15 @@ describeDatabaseWattAcceptance(
         return
       }
 
-      await resetDatabaseWattStats()
       try {
-        await createRestBucket(bucketName, { isPublic: false })
-        const bucket = await client.request<BucketResponse>('GET', `/bucket/${bucketName}`, {
-          expectedStatus: 200,
-          token,
-        })
+        await checkedResult(insertBucket(bucketName, config.tenantId))
+        const bucket = await getBucket(bucketName, config.tenantId)
         const stats = await getDatabaseWattStats()
 
-        expect(bucket.json?.id).toBe(bucketName)
-        expect(stats.beginTransaction).toBeGreaterThanOrEqual(1)
+        expect(bucket?.id).toBe(bucketName)
+        expect(stats.query).toBeGreaterThanOrEqual(2)
       } finally {
-        await cleanupRestResources(bucketName, [], client)
+        await cleanupBucket(bucketName, config.tenantId)
       }
     })
   }

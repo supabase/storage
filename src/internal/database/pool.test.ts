@@ -316,9 +316,7 @@ describe('PoolManager cache lifecycle', () => {
       outcome: 'miss',
       sampleRate: 1,
       sampleWeight: 1,
-      isCacheable: true,
       isExternalPool: false,
-      isSingleUse: false,
     })
     const expectedHitLog = expect.objectContaining({
       type: poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_TYPE,
@@ -328,9 +326,7 @@ describe('PoolManager cache lifecycle', () => {
       outcome: 'hit',
       sampleRate: 1,
       sampleWeight: 1,
-      isCacheable: true,
       isExternalPool: false,
-      isSingleUse: false,
     })
 
     expect(second).toBe(first)
@@ -414,7 +410,7 @@ describe('PoolManager cache lifecycle', () => {
     await poolManager.destroyAll()
   })
 
-  test('logs sampled single-use external pool cache misses without a cached pool', async () => {
+  test('logs sampled external pool cache misses', async () => {
     const poolModule = await loadPoolModule(10_000, undefined, {
       tenantPoolCacheMissLogSampleRate: 1,
     })
@@ -435,18 +431,15 @@ describe('PoolManager cache lifecycle', () => {
     const expectedMissLog = expect.objectContaining({
       type: poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_TYPE,
       cache: TENANT_POOL_CACHE_NAME,
-      tenantId: 'tenant-single-use-external-log',
-      project: 'tenant-single-use-external-log',
+      tenantId: 'tenant-external-pool-log',
+      project: 'tenant-external-pool-log',
       outcome: 'miss',
       sampleRate: 1,
       sampleWeight: 1,
-      isCacheable: false,
       isExternalPool: true,
-      isSingleUse: true,
     })
-    const pool = poolManager.getPool({
-      ...createPoolSettings('tenant-single-use-external-log'),
-      isSingleUse: true,
+    poolManager.getPool({
+      ...createPoolSettings('tenant-external-pool-log'),
       isExternalPool: true,
     })
 
@@ -456,7 +449,6 @@ describe('PoolManager cache lifecycle', () => {
       )
     ).toEqual([[expectedMissLog, poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE]])
 
-    await pool.destroy()
     await poolManager.destroyAll()
   })
 
@@ -547,7 +539,7 @@ describe('PoolManager cache lifecycle', () => {
     expect(poolManager.created[1].destroy).toHaveBeenCalledTimes(1)
   })
 
-  test('records pool cache misses for single-use external pools without cached pools', async () => {
+  test('caches external pools across lookups and records miss then hit', async () => {
     const poolModule = await loadPoolModule(10_000)
     const metricsModule = await import('@internal/monitoring/metrics')
     const addSpy = vi.spyOn(metricsModule.cacheRequestsTotal, 'add')
@@ -564,58 +556,23 @@ describe('PoolManager cache lifecycle', () => {
 
     const poolManager = new TestPoolManager()
     const settings = {
-      ...createPoolSettings('tenant-single-use-external'),
-      isSingleUse: true,
+      ...createPoolSettings('tenant-external-pool-cache'),
       isExternalPool: true,
     }
 
     const first = poolManager.getPool(settings)
     const second = poolManager.getPool(settings)
 
-    expect(second).not.toBe(first)
-    expect(poolManager.created).toHaveLength(2)
+    expect(second).toBe(first)
+    expect(poolManager.created).toHaveLength(1)
     expect(
       addSpy.mock.calls.filter(([, attrs]) => {
         return attrs && typeof attrs === 'object' && attrs.cache === TENANT_POOL_CACHE_NAME
       })
     ).toEqual([
       [1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'miss' }],
-      [1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'miss' }],
+      [1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'hit' }],
     ])
-
-    await Promise.all([first.destroy(), second.destroy()])
-    await poolManager.destroyAll()
-  })
-
-  test('reuses cached pools for single-use external requests and records a hit', async () => {
-    const poolModule = await loadPoolModule(10_000)
-    const metricsModule = await import('@internal/monitoring/metrics')
-    const addSpy = vi.spyOn(metricsModule.cacheRequestsTotal, 'add')
-
-    class TestPoolManager extends poolModule.PoolManager {
-      created: TestPool[] = []
-
-      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
-        const pool = createTestPool()
-        this.created.push(pool)
-        return pool
-      }
-    }
-
-    const poolManager = new TestPoolManager()
-    const tenantId = 'tenant-single-use-external-reuses-cache'
-    const cachedPool = poolManager.getPool(createPoolSettings(tenantId))
-    addSpy.mockClear()
-
-    const reusedPool = poolManager.getPool({
-      ...createPoolSettings(tenantId),
-      isSingleUse: true,
-      isExternalPool: true,
-    })
-
-    expect(reusedPool).toBe(cachedPool)
-    expect(poolManager.created).toHaveLength(1)
-    expect(addSpy.mock.calls).toEqual([[1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'hit' }]])
 
     await poolManager.destroyAll()
   })

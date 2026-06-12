@@ -12,14 +12,7 @@ import {
 } from '@storage/protocols/s3/credentials'
 import { JWTPayload } from 'jose'
 import objectSizeOf from 'object-sizeof'
-import {
-  type DatabasePoolMode,
-  getConfig,
-  JwksConfig,
-  JwksConfigKey,
-  JwksConfigKeyOCT,
-  normalizeDatabasePoolModeForRead,
-} from '../../config'
+import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import { decrypt } from '../auth'
 import { JWKSManager, JWKSManagerStorePg } from '../auth/jwks'
 import { createMutexByKey } from '../concurrency'
@@ -33,7 +26,6 @@ interface TenantConfig {
   anonKey?: string
   databaseUrl: string
   databasePoolUrl?: string
-  databasePoolMode?: DatabasePoolMode | null
   maxConnections?: number
   fileSizeLimit: number
   features: Features
@@ -93,7 +85,6 @@ const {
   icebergEnabled,
   vectorEnabled,
   databaseMaxConnections,
-  databasePoolMode,
 } = getConfig()
 
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
@@ -219,7 +210,6 @@ export async function getTenantConfig(
     const {
       anon_key,
       database_url,
-      database_pool_mode,
       file_size_limit,
       jwt_secret,
       jwks,
@@ -250,7 +240,6 @@ export async function getTenantConfig(
       anonKey: decrypt(anon_key),
       databaseUrl: decrypt(database_url),
       databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
-      databasePoolMode: normalizeDatabasePoolModeForRead(database_pool_mode, databasePoolMode),
       fileSizeLimit: Number(file_size_limit),
       jwtSecret,
       jwks: jwks ? { keys: jwks.keys ?? [] } : jwks,
@@ -441,12 +430,7 @@ export async function onTenantConfigChange(cacheKey: string) {
   try {
     const newConfig = await getTenantConfig(cacheKey, { recordMetrics: false })
 
-    // 1. Pool mode flipped recycled → single_use: tear down the long-lived pool.
-    if (newConfig.databasePoolMode === 'single_use' && oldConfig.databasePoolMode === 'recycled') {
-      return destroyTenantPool(cacheKey)
-    }
-
-    // 2. DB endpoint changed: the cached pool's connection string is stale, and
+    // 1. DB endpoint changed: the cached pool's connection string is stale, and
     //    so are its open sockets. Hard destroy so the next request rebuilds
     //    against the new endpoint.
     if (
@@ -456,7 +440,7 @@ export async function onTenantConfigChange(cacheKey: string) {
       return destroyTenantPool(cacheKey)
     }
 
-    // 3. Max connections changed: endpoint is fine, only the budget moved.
+    // 2. Max connections changed: endpoint is fine, only the budget moved.
     //    Rebalance the cached pg pool in place so new acquire attempts observe
     //    the new budget while in-flight queries keep their checked-out clients.
     if (

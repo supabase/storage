@@ -5,7 +5,6 @@ import { SignJWT } from 'jose'
 export type StorageBackendType = 'file' | 's3'
 export type VectorBucketProvider = 's3' | 'pgvector'
 export type IcebergCatalogAuthType = 'sigv4' | 'token'
-export type DatabasePoolMode = 'single_use' | 'recycled'
 export type DatabaseEngine = 'postgres' | 'multigres'
 const DEFAULT_S3_UPLOAD_PART_SIZE = 16 * 1024 * 1024
 const MIN_S3_UPLOAD_PART_SIZE = 5 * 1024 * 1024
@@ -105,7 +104,6 @@ type StorageConfigType = {
   databaseSSLRootCert?: string
   databaseEngine: DatabaseEngine
   databasePoolURL?: string
-  databasePoolMode?: DatabasePoolMode
   databaseMaxConnections: number
   databaseFreePoolAfterInactivity: number
   databasePoolDrainTimeout: number
@@ -250,59 +248,6 @@ function getConfigFromEnv(key: string, fallbackEnv?: string): string {
   return value
 }
 
-export function normalizeDatabasePoolMode(
-  mode: string | null | undefined
-): DatabasePoolMode | null | undefined {
-  if (mode === null || mode === undefined) {
-    return mode
-  }
-
-  if (mode === '') {
-    return undefined
-  }
-
-  if (mode === 'single_use') {
-    return 'single_use'
-  }
-
-  if (mode === 'recycled' || mode === 'recycle') {
-    return 'recycled'
-  }
-
-  throw new Error(`Invalid database pool mode "${mode}". Expected "single_use" or "recycled".`)
-}
-
-export function normalizeDatabasePoolModeForRead(
-  mode: string | null | undefined,
-  fallback?: DatabasePoolMode
-): DatabasePoolMode | null | undefined {
-  if (mode === null) {
-    return null
-  }
-
-  if (mode === undefined || mode === '') {
-    return undefined
-  }
-
-  if (mode === 'single_use' || mode === 'recycled') {
-    return mode
-  }
-
-  if (mode === 'recycle') {
-    return 'single_use'
-  }
-
-  return fallback
-}
-
-function normalizeDatabasePoolModeFromEnv(mode: string | undefined): DatabasePoolMode | undefined {
-  try {
-    return normalizeDatabasePoolMode(mode) ?? undefined
-  } catch {
-    return 'recycled'
-  }
-}
-
 export function normalizeDatabaseEngine(engine: string | null | undefined): DatabaseEngine {
   if (engine === null || engine === undefined || engine === '') {
     return 'postgres'
@@ -329,16 +274,7 @@ export function setEnvPaths(paths: string[]) {
 }
 
 export function mergeConfig(newConfig: Partial<StorageConfigType>) {
-  const normalizedConfig = { ...newConfig } as Partial<StorageConfigType> & {
-    databasePoolMode?: string | null
-  }
-
-  if ('databasePoolMode' in normalizedConfig) {
-    normalizedConfig.databasePoolMode =
-      normalizeDatabasePoolMode(normalizedConfig.databasePoolMode) ?? undefined
-  }
-
-  config = { ...config, ...(normalizedConfig as Required<StorageConfigType>) }
+  config = { ...config, ...(newConfig as Required<StorageConfigType>) }
 }
 
 export function getConfig(options?: { reload?: boolean }): StorageConfigType {
@@ -524,9 +460,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     databaseEngine: normalizeDatabaseEngine(getOptionalConfigFromEnv('DATABASE_ENGINE')),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
     databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
-    databasePoolMode: normalizeDatabasePoolModeFromEnv(
-      getOptionalConfigFromEnv('DATABASE_POOL_MODE')
-    ),
     databaseMaxConnections: parseInt(
       getOptionalConfigFromEnv('DATABASE_MAX_CONNECTIONS') || '20',
       10

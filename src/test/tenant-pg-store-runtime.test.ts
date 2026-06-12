@@ -177,7 +177,6 @@ describe('pg store runtime selection', () => {
       url: `/tenants/${tenantId}`,
       payload: {
         databasePoolUrl: 'postgres://tenant-pool-db',
-        databasePoolMode: 'single_use',
         maxConnections: 3,
         fileSizeLimit: 1234,
         features: {
@@ -196,7 +195,6 @@ describe('pg store runtime selection', () => {
     await expect(getTenantConfig(tenantId)).resolves.toMatchObject({
       databaseUrl: createPayload.databaseUrl,
       databasePoolUrl: 'postgres://tenant-pool-db',
-      databasePoolMode: 'single_use',
       fileSizeLimit: 1234,
       maxConnections: 3,
       disableEvents: ['ObjectCreated:*'],

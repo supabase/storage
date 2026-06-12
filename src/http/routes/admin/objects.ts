@@ -75,7 +75,6 @@ export default async function routes(fastify: FastifyInstance) {
   registerApiKeyAuth(fastify)
   fastify.register(dbSuperUser, {
     disableHostCheck: true,
-    maxConnections: 5,
   })
   fastify.register(storage)
 

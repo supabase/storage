@@ -27,7 +27,6 @@ export interface TenantConnectionOptions {
   tenantId: string
   dbUrl: string
   isExternalPool?: boolean
-  isSingleUse?: boolean
   idleTimeoutMillis?: number
   reapIntervalMillis?: number
   maxConnections: number
@@ -111,11 +110,10 @@ function recordTenantPoolCacheRequest(outcome: CacheLookupOutcome): void {
 
 function recordTenantPoolCacheLookup(
   settings: TenantConnectionOptions,
-  isCacheable: boolean,
   outcome: CacheLookupOutcome
 ): void {
   recordTenantPoolCacheRequest(outcome)
-  logTenantPoolCacheLookup(settings, isCacheable, outcome)
+  logTenantPoolCacheLookup(settings, outcome)
 }
 
 function shouldLogTenantPoolCacheLookup(sampleRate: number): boolean {
@@ -124,7 +122,6 @@ function shouldLogTenantPoolCacheLookup(sampleRate: number): boolean {
 
 function logTenantPoolCacheLookup(
   settings: TenantConnectionOptions,
-  isCacheable: boolean,
   outcome: CacheLookupOutcome
 ): void {
   const sampleRate =
@@ -142,9 +139,7 @@ function logTenantPoolCacheLookup(
     outcome,
     sampleRate,
     sampleWeight: 1 / sampleRate,
-    isCacheable,
     isExternalPool: Boolean(settings.isExternalPool),
-    isSingleUse: Boolean(settings.isSingleUse),
   }
 
   logSchema.info(logger, TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE, log)
@@ -266,16 +261,11 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
   }
 
   getPool(settings: TenantConnectionOptions): TPool {
-    const isCacheable = (settings.isSingleUse && !settings.isExternalPool) || !settings.isSingleUse
     const { value: existingPool, outcome } = tenantPools.getWithOutcome(settings.tenantId)
-    recordTenantPoolCacheLookup(settings, isCacheable, outcome)
+    recordTenantPoolCacheLookup(settings, outcome)
 
     if (existingPool) {
       return existingPool as TPool
-    }
-
-    if (!isCacheable) {
-      return this.newPool({ ...settings, numWorkers: this.numWorkers })
     }
 
     const newPool = this.newPool({ ...settings, numWorkers: this.numWorkers })

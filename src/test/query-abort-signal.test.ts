@@ -24,7 +24,6 @@ describe('Query Abort Signal', () => {
 
     const pool: TestPool = poolManager.getPool({
       tenantId,
-      isSingleUse: true,
       isExternalPool: true,
       maxConnections: 1,
       dbUrl: databasePoolURL || databaseURL,

@@ -31,7 +31,6 @@ const migrationVersion = Object.entries(DBMigration).sort(([_, a], [__, b]) => b
 
 const payload = {
   anonKey: 'a',
-  databasePoolMode: null,
   databaseUrl: 'b',
   databasePoolUrl: 'v',
   maxConnections: 12,
@@ -74,7 +73,6 @@ const payload = {
 
 const payload2 = {
   anonKey: 'e',
-  databasePoolMode: null,
   databaseUrl: 'f',
   databasePoolUrl: 'm',
   maxConnections: 14,
@@ -233,13 +231,13 @@ describe('Tenant configs', () => {
     await expect(getFeatures('abc')).resolves.toEqual(payload.features)
   })
 
-  test('Normalizes legacy database pool mode alias on tenant writes', async () => {
+  test('Ignores legacy database pool mode fields on tenant writes', async () => {
     const response = await adminApp.inject({
       method: 'POST',
       url: `/tenants/abc`,
       payload: {
         ...payload,
-        databasePoolMode: 'recycle',
+        databasePoolMode: 'single_use',
       },
       headers: {
         apikey: process.env.ADMIN_API_KEYS,
@@ -255,114 +253,14 @@ describe('Tenant configs', () => {
       },
     })
     expect(getResponse.statusCode).toBe(200)
-    expect(JSON.parse(getResponse.body)).toEqual({
-      ...payload,
-      databasePoolMode: 'recycled',
-    })
-
-    await expect(getTenantConfig('abc')).resolves.toMatchObject({
-      databasePoolMode: 'recycled',
-    })
-  })
-
-  test('Rejects invalid database pool mode values', async () => {
-    const response = await adminApp.inject({
-      method: 'POST',
-      url: `/tenants/abc`,
-      payload: {
-        ...payload,
-        databasePoolMode: 'invalid',
-      },
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-
-    expect(response.statusCode).toBe(400)
-  })
-
-  test('Tolerates invalid legacy database pool mode rows on tenant reads', async () => {
-    const createResponse = await adminApp.inject({
-      method: 'POST',
-      url: `/tenants/abc`,
-      payload,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(createResponse.statusCode).toBe(201)
-
-    await multitenantPgExecutor.query({
-      text: 'UPDATE tenants SET database_pool_mode = $1 WHERE id = $2',
-      values: ['garbage', 'abc'],
-    })
-    deleteTenantConfig('abc')
-
-    const getResponse = await adminApp.inject({
-      method: 'GET',
-      url: `/tenants/abc`,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(getResponse.statusCode).toBe(200)
-
-    const listResponse = await adminApp.inject({
-      method: 'GET',
-      url: `/tenants`,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(listResponse.statusCode).toBe(200)
-    await expect(getTenantConfig('abc')).resolves.toMatchObject({
-      databasePoolMode: undefined,
-    })
-  })
-
-  test('Preserves legacy stored recycle pool mode as single-use on tenant reads', async () => {
-    const createResponse = await adminApp.inject({
-      method: 'POST',
-      url: `/tenants/abc`,
-      payload,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(createResponse.statusCode).toBe(201)
-
-    await multitenantPgExecutor.query({
-      text: 'UPDATE tenants SET database_pool_mode = $1 WHERE id = $2',
-      values: ['recycle', 'abc'],
-    })
-    deleteTenantConfig('abc')
-
-    const getResponse = await adminApp.inject({
-      method: 'GET',
-      url: `/tenants/abc`,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(getResponse.statusCode).toBe(200)
-    expect(JSON.parse(getResponse.body)).toEqual({
-      ...payload,
-      databasePoolMode: 'single_use',
-    })
-
-    await expect(getTenantConfig('abc')).resolves.toMatchObject({
-      databasePoolMode: 'single_use',
-    })
+    expect(JSON.parse(getResponse.body)).toEqual(payload)
   })
 
   test('PATCH refreshes local tenant config changes before the notify cache path', async () => {
     const createResponse = await adminApp.inject({
       method: 'POST',
       url: `/tenants/abc`,
-      payload: {
-        ...payload,
-        databasePoolMode: 'recycled',
-      },
+      payload,
       headers: {
         apikey: process.env.ADMIN_API_KEYS,
       },
@@ -690,7 +588,6 @@ describe('Tenant configs', () => {
     const encryptedTenant = {
       anon_key: encrypt('anon'),
       database_url: encrypt('postgres://tenant'),
-      database_pool_mode: 'recycled',
       file_size_limit: 1,
       jwt_secret: encrypt('jwt-secret'),
       jwks: null,
@@ -1015,7 +912,6 @@ describe('Tenant configs', () => {
     const encryptedTenant = {
       anon_key: encrypt('anon'),
       database_url: encrypt('postgres://tenant'),
-      database_pool_mode: null,
       file_size_limit: 1,
       jwt_secret: encrypt('jwt-secret'),
       jwks: null,
@@ -1069,7 +965,6 @@ describe('Tenant configs', () => {
     const encryptedTenant = {
       anon_key: encrypt('anon'),
       database_url: encrypt('postgres://tenant'),
-      database_pool_mode: 'recycled',
       file_size_limit: 1,
       jwt_secret: encrypt('jwt-secret'),
       jwks: null,
@@ -1123,7 +1018,6 @@ describe('Tenant configs', () => {
     const encryptedTenant = {
       anon_key: encrypt('anon'),
       database_url: encrypt('postgres://old-host'),
-      database_pool_mode: 'recycled',
       file_size_limit: 1,
       jwt_secret: encrypt('jwt-secret'),
       jwks: null,
@@ -1177,7 +1071,6 @@ describe('Tenant configs', () => {
     const encryptedTenant = {
       anon_key: encrypt('anon'),
       database_url: encrypt('postgres://tenant'),
-      database_pool_mode: 'recycled',
       file_size_limit: 1,
       jwt_secret: encrypt('jwt-secret'),
       jwks: null,
@@ -1231,7 +1124,6 @@ describe('Tenant configs', () => {
     const encryptedTenant = {
       anon_key: encrypt('anon'),
       database_url: encrypt('postgres://old-host'),
-      database_pool_mode: 'recycled',
       file_size_limit: 1,
       jwt_secret: encrypt('jwt-secret'),
       jwks: null,
@@ -1288,7 +1180,6 @@ describe('Tenant configs', () => {
     const encryptedTenant = {
       anon_key: encrypt('anon'),
       database_url: encrypt('postgres://tenant'),
-      database_pool_mode: null,
       file_size_limit: 1,
       jwt_secret: encrypt('jwt-secret'),
       jwks: null,

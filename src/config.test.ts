@@ -6,6 +6,7 @@ const CONFIG_ENV_KEYS = [
   'TENANT_POOL_CACHE_TTL_MS',
   'TENANT_POOL_CACHE_HIT_LOG_SAMPLE_RATE',
   'TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE',
+  'DATABASE_POOL_MODE',
   'DATABASE_POOL_DRAIN_TIMEOUT',
 ] as const
 
@@ -56,6 +57,29 @@ describe('tenant pool cache config parsing', () => {
     expect(config.tenantPoolCacheHitLogSampleRate).toBe(0)
     expect(config.tenantPoolCacheMissLogSampleRate).toBe(0)
     expect(config.databasePoolDrainTimeout).toBe(30_000)
+  })
+
+  test('falls back to recycled pool mode for invalid DATABASE_POOL_MODE env values', async () => {
+    setConfigEnv({
+      DATABASE_POOL_MODE: 'garbage',
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.databasePoolMode).toBe('recycled')
+  })
+
+  test('preserves legacy tenant-row recycle semantics on read', async () => {
+    const { normalizeDatabasePoolModeForRead } = await import('./config')
+
+    expect(normalizeDatabasePoolModeForRead('recycle')).toBe('single_use')
+  })
+
+  test('falls back for invalid tenant-row pool mode values on read', async () => {
+    const { normalizeDatabasePoolModeForRead } = await import('./config')
+
+    expect(normalizeDatabasePoolModeForRead('garbage', 'recycled')).toBe('recycled')
   })
 
   test('parses database pool drain timeout in milliseconds', async () => {

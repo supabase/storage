@@ -2,6 +2,7 @@ import { ErrorCode, type StorageBackendError } from '@internal/errors'
 import type { SignRequestOptions } from 'aws-sigv4-sign'
 import JSONBigint from 'json-bigint'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { spyOnAbortSignalTimeout } from '../../../../test/utils/abort-signal'
 
 const mockSignRequest = vi.fn()
 vi.mock('aws-sigv4-sign', () => ({
@@ -22,12 +23,6 @@ type TestableRestCatalogClient = {
     data?: unknown
     headers?: Record<string, string>
   }): Promise<T>
-}
-
-function spyOnAbortSignalTimeout() {
-  const timeoutSignal = new AbortController().signal
-  const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal)
-  return { timeoutSignal, timeoutSpy }
 }
 
 describe('RestCatalogClient request pipeline', () => {

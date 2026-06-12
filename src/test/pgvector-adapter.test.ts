@@ -1,4 +1,4 @@
-import { PgPoolExecutor, PgTransaction } from '@internal/database'
+import { PgPoolExecutor, PgTenantConnection, PgTransaction } from '@internal/database'
 import { PgVectorStore } from '@storage/protocols/vector'
 import { Pool as PgPool, type PoolClient, type QueryResult } from 'pg'
 import { afterAll, beforeAll, describe, expect, it, type Mock, vi } from 'vitest'
@@ -74,6 +74,24 @@ function createMockExecutor(raw: RawQueryMock, transaction?: Mock) {
       return createMockPgTransaction(transactionRaw)
     },
   } as never
+}
+
+function createMockTenantConnection(raw: RawQueryMock, sharedPool: object): PgTenantConnection {
+  return new PgTenantConnection(
+    Object.assign(sharedPool, {
+      acquire: () => createMockExecutor(raw),
+      destroy: vi.fn(),
+      getPoolStats: vi.fn(),
+      rebalance: vi.fn(),
+    }) as never,
+    {
+      tenantId: 'tenant-a',
+      dbUrl: 'postgres://tenant-a',
+      maxConnections: 2,
+      user: { jwt: 'jwt', payload: { role: 'authenticated' } },
+      superUser: { jwt: 'service', payload: { role: 'service_role' } },
+    } as never
+  )
 }
 
 function createManualUpsertDb(
@@ -822,6 +840,33 @@ describe('PgVectorStore (real pgvector)', () => {
     ).rejects.toThrow('different vector dimensions')
 
     expect(transaction).not.toHaveBeenCalled()
+    expect(raw.mock.calls.filter(([sql]) => isTableAccessMethodLookup(sql))).toHaveLength(1)
+  })
+
+  it('reuses table capability cache across tenant request connections sharing a pool', async () => {
+    const raw = vi.fn(async (sql: string) => {
+      const text = String(sql)
+      if (isTableAccessMethodLookup(text)) {
+        return { rows: [{ amname: 'heap' }] }
+      }
+      return { rows: [] }
+    })
+    const sharedPool = {}
+
+    const firstStore = new PgVectorStore(createMockTenantConnection(raw, sharedPool))
+    const secondStore = new PgVectorStore(createMockTenantConnection(raw, sharedPool))
+
+    await firstStore.putVectors({
+      vectorBucketName: bucket,
+      indexName: index,
+      vectors: [{ key: 'a', data: { float32: [1, 0] } }],
+    })
+    await secondStore.putVectors({
+      vectorBucketName: bucket,
+      indexName: index,
+      vectors: [{ key: 'b', data: { float32: [0, 1] } }],
+    })
+
     expect(raw.mock.calls.filter(([sql]) => isTableAccessMethodLookup(sql))).toHaveLength(1)
   })
 

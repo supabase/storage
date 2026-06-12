@@ -1,6 +1,9 @@
 import { logger, logSchema } from '@internal/monitoring'
 import { EventEmitter } from 'events'
 import { DatabaseError, Pool as PgPool, type Pool, type PoolClient } from 'pg'
+// Production cancel requests use this pg internals class; the test spies on
+// the same class to keep cancellation pending without opening real sockets.
+import PgConnection from 'pg/lib/connection'
 import { vi } from 'vitest'
 import {
   getPgCancelConnectionTarget,
@@ -53,10 +56,10 @@ function createDatabaseError(code: string | undefined, message = 'database error
 
 async function expectQueryErrorRelease(error: Error): Promise<ReturnType<typeof vi.fn>> {
   const release = vi.fn()
-  const client = {
+  const client = Object.assign(new EventEmitter(), {
     query: vi.fn().mockRejectedValue(error),
     release,
-  } as unknown as PoolClient
+  }) as unknown as PoolClient
   const pool = {
     connect: vi.fn().mockResolvedValue(client),
   } as unknown as Pool
@@ -245,6 +248,140 @@ describe('getPgCancelConnectionTarget', () => {
 })
 
 describe('PgPoolExecutor', () => {
+  it('tracks checked-out client errors during direct queries', async () => {
+    const socketError = new Error('socket reset')
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn(async () => {
+        expect(client.listenerCount('error')).toBe(1)
+        client.emit('error', socketError)
+        return { rows: [] }
+      }),
+      release: vi.fn(),
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    await expect(executor.query('SELECT 1')).rejects.toBe(socketError)
+
+    expect(client.release).toHaveBeenCalledWith(socketError)
+    expect(client.listenerCount('error')).toBe(0)
+  })
+
+  it('throws tracked checked-out client errors over concurrent direct query errors', async () => {
+    const socketError = new Error('socket reset')
+    const queryError = new Error('benign query error')
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn(async () => {
+        expect(client.listenerCount('error')).toBe(1)
+        client.emit('error', socketError)
+        throw queryError
+      }),
+      release: vi.fn(),
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    await expect(executor.query('SELECT 1')).rejects.toBe(socketError)
+
+    expect(client.release).toHaveBeenCalledWith(socketError)
+    expect(client.listenerCount('error')).toBe(0)
+  })
+
+  it('keeps checked-out client error listeners attached through direct query release', async () => {
+    const releaseError = new Error('socket reset during release')
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(() => {
+        expect(client.listenerCount('error')).toBe(1)
+        client.emit('error', releaseError)
+      }),
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    await expect(executor.query('SELECT 1')).resolves.toEqual({ rows: [] })
+
+    expect(client.release).toHaveBeenCalledWith(undefined)
+    expect(client.listenerCount('error')).toBe(0)
+  })
+
+  it('disposes tracked checked-out client errors before throwing from transaction queries', async () => {
+    const socketError = new Error('socket reset')
+    const client = Object.assign(new EventEmitter(), {
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockImplementationOnce(async () => {
+          expect(client.listenerCount('error')).toBe(1)
+          client.emit('error', socketError)
+          return { rows: [] }
+        })
+        .mockResolvedValueOnce({ rows: [] }),
+      release: vi.fn(),
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    const transaction = await executor.beginTransaction()
+    await expect(transaction.query('SELECT 1')).rejects.toBe(socketError)
+
+    expect(client.release).toHaveBeenCalledWith(socketError)
+    await expect(transaction.rollback()).resolves.toBeUndefined()
+    expect(client.query).toHaveBeenCalledTimes(2)
+    expect(client.listenerCount('error')).toBe(0)
+  })
+
+  it('does not release twice when BEGIN disposes the transaction client', async () => {
+    const socketError = new Error('socket reset during begin')
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn(async () => {
+        expect(client.listenerCount('error')).toBe(1)
+        client.emit('error', socketError)
+        return { rows: [] }
+      }),
+      release: vi.fn(),
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    await expect(executor.beginTransaction()).rejects.toBe(socketError)
+
+    expect(client.release).toHaveBeenCalledTimes(1)
+    expect(client.release).toHaveBeenCalledWith(socketError)
+    expect(client.listenerCount('error')).toBe(0)
+  })
+
+  it('keeps checked-out client error listeners attached through transaction release', async () => {
+    const releaseError = new Error('socket reset during transaction release')
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(() => {
+        expect(client.listenerCount('error')).toBe(1)
+        client.emit('error', releaseError)
+      }),
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    const transaction = await executor.beginTransaction()
+
+    await expect(transaction.commit()).resolves.toBeUndefined()
+    expect(client.release).toHaveBeenCalledWith(undefined)
+    expect(client.listenerCount('error')).toBe(0)
+  })
+
   it('returns clients to the pool after regular SQL errors', async () => {
     for (const code of ['42P01', '23505', '23503', '42501', '22P02', '42703']) {
       const error = createDatabaseError(code)
@@ -274,6 +411,124 @@ describe('PgPoolExecutor', () => {
     const protocolErrorRelease = await expectQueryErrorRelease(protocolError)
 
     expect(protocolErrorRelease).toHaveBeenCalledWith(protocolError)
+  })
+
+  it('maps pg-pool connection timeouts during query checkout to DatabaseTimeout', async () => {
+    const timeoutError = new Error('Connection terminated due to connection timeout')
+    const pool = {
+      connect: vi.fn().mockRejectedValue(timeoutError),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    await expect(executor.query('SELECT 1')).rejects.toMatchObject({
+      code: 'DatabaseTimeout',
+      originalError: timeoutError,
+    })
+  })
+
+  it('rejects pre-aborted queries before checking out a client', async () => {
+    const signal = AbortSignal.abort()
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn(),
+      release: vi.fn(),
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    await expect(executor.query('SELECT 1', { signal })).rejects.toMatchObject({
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+      message: 'Query was aborted',
+    })
+    expect(pool.connect).not.toHaveBeenCalled()
+  })
+
+  it('rejects aborted queries without waiting for the pg query to settle', async () => {
+    const controller = new AbortController()
+    const release = vi.fn()
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn(() => {
+        controller.abort()
+        return new Promise(() => undefined)
+      }),
+      release,
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    const result = await Promise.race([
+      executor.query('SELECT pg_sleep(999)', { signal: controller.signal }).then(
+        () => ({ status: 'resolved' as const }),
+        (error) => ({ status: 'rejected' as const, error })
+      ),
+      waitForDrainCheck().then(() => ({ status: 'pending' as const })),
+    ])
+
+    expect(result).toMatchObject({
+      status: 'rejected',
+      error: {
+        name: 'AbortError',
+        code: 'ABORT_ERR',
+        message: 'Query was aborted',
+      },
+    })
+    expect(release).toHaveBeenCalledWith(expect.objectContaining({ name: 'AbortError' }))
+  })
+
+  it('rejects aborted queries immediately while cancel is still pending', async () => {
+    vi.useFakeTimers()
+    const connectSpy = vi.spyOn(PgConnection.prototype, 'connect').mockImplementation(() => true)
+    const endSpy = vi.spyOn(PgConnection.prototype, 'end').mockImplementation(() => undefined)
+    const controller = new AbortController()
+    const release = vi.fn()
+    const client = Object.assign(new EventEmitter(), {
+      processID: 123,
+      secretKey: 456,
+      host: 'db.example.test',
+      port: 5432,
+      query: vi.fn(() => {
+        controller.abort()
+        return new Promise(() => undefined)
+      }),
+      release,
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+    const settled = vi.fn()
+    const queryPromise = executor.query('SELECT pg_sleep(999)', { signal: controller.signal }).then(
+      () => settled('resolved'),
+      (error) => settled('rejected', error)
+    )
+
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(settled).toHaveBeenCalledWith(
+        'rejected',
+        expect.objectContaining({
+          name: 'AbortError',
+          code: 'ABORT_ERR',
+          message: 'Query was aborted',
+        })
+      )
+      expect(release).toHaveBeenCalledWith(expect.objectContaining({ name: 'AbortError' }))
+      expect(connectSpy).toHaveBeenCalled()
+      expect(endSpy).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(endSpy).toHaveBeenCalled()
+      await queryPromise
+    } finally {
+      connectSpy.mockRestore()
+      endSpy.mockRestore()
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -308,6 +563,30 @@ describe('PgTransaction', () => {
     )
     expect(client.query).toHaveBeenCalledTimes(1)
     expect(client.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('disposes the transaction client after an aborted query without queueing rollback', async () => {
+    const controller = new AbortController()
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn(() => {
+        controller.abort()
+        return new Promise(() => undefined)
+      }),
+      release: vi.fn(),
+    }) as unknown as PoolClient & EventEmitter
+    const transaction = new PgTransaction(client)
+
+    await expect(
+      transaction.query('SELECT pg_sleep(999)', { signal: controller.signal })
+    ).rejects.toMatchObject({
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+      message: 'Query was aborted',
+    })
+
+    expect(client.release).toHaveBeenCalledWith(expect.objectContaining({ name: 'AbortError' }))
+    await transaction.rollback()
+    expect(client.query).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -406,6 +685,21 @@ describe('PgTenantConnection', () => {
 
   it('maps pg-pool acquisition timeouts to DatabaseTimeout', async () => {
     const timeoutError = new Error('timeout exceeded when trying to connect')
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction: vi.fn().mockRejectedValue(timeoutError),
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(pool, createPoolStrategySettings())
+
+    await expect(connection.transaction()).rejects.toMatchObject({
+      code: 'DatabaseTimeout',
+      originalError: timeoutError,
+    })
+  })
+
+  it('maps pg-pool connection-terminated acquisition timeouts to DatabaseTimeout', async () => {
+    const timeoutError = new Error('Connection terminated due to connection timeout')
     const pool = {
       acquire: vi.fn().mockReturnValue({
         beginTransaction: vi.fn().mockRejectedValue(timeoutError),

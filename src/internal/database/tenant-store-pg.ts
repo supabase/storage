@@ -5,6 +5,11 @@ import { quoteIdentifier } from './sql'
 
 const { multitenantDatabaseQueryTimeout } = getConfig()
 const QUOTED_ID_COLUMN = quoteIdentifier('id')
+const MIN_MIGRATION_LIST_QUERY_TIMEOUT_MS = 60_000
+const MIGRATION_LIST_QUERY_TIMEOUT_MS = Math.max(
+  MIN_MIGRATION_LIST_QUERY_TIMEOUT_MS,
+  multitenantDatabaseQueryTimeout
+)
 
 export interface TenantConfigRow {
   id: string
@@ -69,6 +74,16 @@ type TenantWritableColumn = (typeof tenantWritableColumns)[number]
 export type TenantConfigRowInput = Partial<Pick<TenantConfigRow, TenantWritableColumn>>
 export type TenantCursorRow = Pick<TenantConfigRow, 'id' | 'cursor_id'> & { cursor_id: number }
 
+interface TenantQueryOptions {
+  db?: PgExecutor
+  signal?: AbortSignal
+  /**
+   * Positive values add an internal timeout. Zero or negative values disable
+   * the internal timeout and use only the caller signal, if provided.
+   */
+  timeoutMs?: number
+}
+
 export class TenantConfigStorePg {
   constructor(private db: PgExecutor) {}
 
@@ -108,7 +123,7 @@ export class TenantConfigStorePg {
         `,
         values,
       },
-      db
+      { db }
     )
   }
 
@@ -134,7 +149,7 @@ export class TenantConfigStorePg {
         `,
         values,
       },
-      db
+      { db }
     )
   }
 
@@ -162,7 +177,7 @@ export class TenantConfigStorePg {
         `,
         values: [...values, tenantId],
       },
-      db
+      { db }
     )
 
     return result.rowCount || 0
@@ -218,25 +233,29 @@ export class TenantConfigStorePg {
     migrationVersion: string,
     lastCursor: number,
     failedStatuses: string[],
-    batchSize: number
+    batchSize: number,
+    signal?: AbortSignal
   ): Promise<TenantCursorRow[]> {
-    const result = await this.query<TenantCursorRow>({
-      text: `
-        SELECT id, cursor_id
-        FROM tenants
-        WHERE cursor_id > $1
-          AND (
-            (
-              migrations_version != $2
-              AND migrations_status != ALL($3::text[])
+    const result = await this.query<TenantCursorRow>(
+      {
+        text: `
+          SELECT id, cursor_id
+          FROM tenants
+          WHERE cursor_id > $1
+            AND (
+              (
+                migrations_version != $2
+                AND migrations_status != ALL($3::text[])
+              )
+              OR migrations_status IS NULL
             )
-            OR migrations_status IS NULL
-          )
-        ORDER BY cursor_id ASC
-        LIMIT $4
-      `,
-      values: [lastCursor, migrationVersion, failedStatuses, batchSize],
-    })
+          ORDER BY cursor_id ASC
+          LIMIT $4
+        `,
+        values: [lastCursor, migrationVersion, failedStatuses, batchSize],
+      },
+      { signal, timeoutMs: MIGRATION_LIST_QUERY_TIMEOUT_MS }
+    )
 
     return result.rows
   }
@@ -244,34 +263,44 @@ export class TenantConfigStorePg {
   async listTenantsToResetMigrationsBatch(
     migrationVersions: string[],
     lastCursor: number,
-    batchSize: number
+    batchSize: number,
+    signal?: AbortSignal
   ): Promise<TenantCursorRow[]> {
     if (migrationVersions.length === 0) {
       return []
     }
 
-    const result = await this.query<TenantCursorRow>({
-      text: `
-        SELECT id, cursor_id
-        FROM tenants
-        WHERE cursor_id > $1
-          AND migrations_version = ANY($2::text[])
-        ORDER BY cursor_id ASC
-        LIMIT $3
-      `,
-      values: [lastCursor, migrationVersions, batchSize],
-    })
+    const result = await this.query<TenantCursorRow>(
+      {
+        text: `
+          SELECT id, cursor_id
+          FROM tenants
+          WHERE cursor_id > $1
+            AND migrations_version = ANY($2::text[])
+          ORDER BY cursor_id ASC
+          LIMIT $3
+        `,
+        values: [lastCursor, migrationVersions, batchSize],
+      },
+      { signal, timeoutMs: MIGRATION_LIST_QUERY_TIMEOUT_MS }
+    )
 
     return result.rows
   }
 
   private query<T extends QueryResultRow = QueryResultRow>(
     statement: Parameters<PgExecutor['query']>[0],
-    db: PgExecutor = this.db
+    options: TenantQueryOptions = {}
   ) {
-    return db.query<T>(statement, {
-      signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout),
-    })
+    const db = options.db ?? this.db
+    const timeoutMs = options.timeoutMs ?? multitenantDatabaseQueryTimeout
+    const timeoutSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined
+    const signal =
+      options.signal && timeoutSignal
+        ? AbortSignal.any([options.signal, timeoutSignal])
+        : (options.signal ?? timeoutSignal)
+
+    return signal ? db.query<T>(statement, { signal }) : db.query<T>(statement)
   }
 }
 

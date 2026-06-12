@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { FastifyRequest } from 'fastify'
 import { Readable } from 'stream'
+import { spyOnAbortSignalTimeout } from '../../test/utils/abort-signal'
 import type { StorageBackendAdapter } from '../backend'
 
 const EXHAUSTED_RETRY_BACKOFF_MS = 50 + 100 + 200 + 400 + 800
@@ -779,8 +780,7 @@ describe('ImageRenderer fetch client', () => {
       )
       const mockAgent = mockUndici.getMockAgent()
       const pool = mockAgent.get('https://imgproxy.example.test')
-      const timeoutSignal = new AbortController().signal
-      const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal)
+      const { timeoutSpy } = spyOnAbortSignalTimeout()
 
       for (let retry = 0; retry < 5; retry += 1) {
         pool

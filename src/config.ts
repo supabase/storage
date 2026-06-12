@@ -272,6 +272,37 @@ export function normalizeDatabasePoolMode(
   throw new Error(`Invalid database pool mode "${mode}". Expected "single_use" or "recycled".`)
 }
 
+export function normalizeDatabasePoolModeForRead(
+  mode: string | null | undefined,
+  fallback?: DatabasePoolMode
+): DatabasePoolMode | null | undefined {
+  if (mode === null) {
+    return null
+  }
+
+  if (mode === undefined || mode === '') {
+    return undefined
+  }
+
+  if (mode === 'single_use' || mode === 'recycled') {
+    return mode
+  }
+
+  if (mode === 'recycle') {
+    return 'single_use'
+  }
+
+  return fallback
+}
+
+function normalizeDatabasePoolModeFromEnv(mode: string | undefined): DatabasePoolMode | undefined {
+  try {
+    return normalizeDatabasePoolMode(mode) ?? undefined
+  } catch {
+    return 'recycled'
+  }
+}
+
 export function normalizeDatabaseEngine(engine: string | null | undefined): DatabaseEngine {
   if (engine === null || engine === undefined || engine === '') {
     return 'postgres'
@@ -493,7 +524,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     databaseEngine: normalizeDatabaseEngine(getOptionalConfigFromEnv('DATABASE_ENGINE')),
     databaseURL: getOptionalIfMultitenantConfigFromEnv('DATABASE_URL') || '',
     databasePoolURL: getOptionalConfigFromEnv('DATABASE_POOL_URL') || '',
-    databasePoolMode: normalizeDatabasePoolMode(getOptionalConfigFromEnv('DATABASE_POOL_MODE')),
+    databasePoolMode: normalizeDatabasePoolModeFromEnv(
+      getOptionalConfigFromEnv('DATABASE_POOL_MODE')
+    ),
     databaseMaxConnections: parseInt(
       getOptionalConfigFromEnv('DATABASE_MAX_CONNECTIONS') || '20',
       10

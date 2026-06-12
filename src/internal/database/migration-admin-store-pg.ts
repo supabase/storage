@@ -1,10 +1,9 @@
 import { QueryResultRow } from 'pg'
-import { getConfig } from '../../config'
 import { PgExecutor } from './pg-connection'
 import { quoteIdentifier } from './sql'
 import { TenantCursorRow } from './tenant-store-pg'
 
-const { multitenantDatabaseQueryTimeout } = getConfig()
+export const MIGRATION_ADMIN_JOB_LIMIT = 2000
 
 export class MigrationAdminStorePg {
   private readonly jobTable: string
@@ -47,6 +46,7 @@ export class MigrationAdminStorePg {
         SET state = 'completed'
         FROM jobs_to_update
         WHERE job.id = jobs_to_update.id
+          AND job.state = 'active'
       `,
       values: [queueName, limit],
     })
@@ -114,8 +114,6 @@ export class MigrationAdminStorePg {
   private query<T extends QueryResultRow = QueryResultRow>(
     statement: Parameters<PgExecutor['query']>[0]
   ) {
-    return this.db.query<T>(statement, {
-      signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout),
-    })
+    return this.db.query<T>(statement)
   }
 }

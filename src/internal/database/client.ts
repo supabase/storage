@@ -1,6 +1,6 @@
 import { Cluster } from '@internal/cluster'
 import { ERRORS } from '@internal/errors'
-import { getConfig, normalizeDatabasePoolMode } from '../../config'
+import { getConfig } from '../../config'
 import { PgTenantConnection } from './pg-connection'
 import { User } from './pool'
 import { getTenantConfig } from './tenant'
@@ -75,8 +75,7 @@ async function getDbSettings(
     dbUrl = tenant.databasePoolUrl || tenant.databaseUrl
     isExternalPool = Boolean(tenant.databasePoolUrl)
     maxConnections = tenant.maxConnections ?? maxConnections
-    const tenantDatabasePoolMode = normalizeDatabasePoolMode(tenant.databasePoolMode)
-    isSingleUse = tenantDatabasePoolMode ? tenantDatabasePoolMode === 'single_use' : isSingleUse
+    isSingleUse = tenant.databasePoolMode ? tenant.databasePoolMode === 'single_use' : isSingleUse
   }
 
   return {

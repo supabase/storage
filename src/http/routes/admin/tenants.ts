@@ -4,8 +4,10 @@ import {
   getTenantCapabilities,
   getTenantConfig,
   jwksManager,
+  MIGRATION_ADMIN_JOB_LIMIT,
   MigrationAdminStorePg,
   multitenantPgExecutor,
+  onTenantConfigChange,
   TenantConfigStorePg,
   TenantMigrationStatus,
 } from '@internal/database'
@@ -23,7 +25,12 @@ import { PG_BOSS_SCHEMA } from '@internal/queue'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { getConfig, JwksConfigKey, normalizeDatabasePoolMode } from '../../../config'
+import {
+  getConfig,
+  JwksConfigKey,
+  normalizeDatabasePoolMode,
+  normalizeDatabasePoolModeForRead,
+} from '../../../config'
 import { dbSuperUser, storage } from '../../plugins'
 import { registerApiKeyAuth } from '../../plugins/apikey'
 import { registerJsonParserAllowingEmptyBody } from '../../plugins/empty-json-body'
@@ -139,8 +146,13 @@ interface tenantDBInterface {
   disable_events?: string[] | null
 }
 
-const { dbMigrationFreezeAt, icebergEnabled, vectorEnabled, adminReturnTenantSensitiveData } =
-  getConfig()
+const {
+  dbMigrationFreezeAt,
+  icebergEnabled,
+  vectorEnabled,
+  adminReturnTenantSensitiveData,
+  databasePoolMode,
+} = getConfig()
 const migrationQueueName = RunMigrationsOnTenants.getQueueName()
 const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
 const migrationAdminStorePg = new MigrationAdminStorePg(multitenantPgExecutor, PG_BOSS_SCHEMA)
@@ -240,11 +252,19 @@ function getTenantDatabaseUrl(tenantId: string) {
 }
 
 function listTenantMigrationJobs(tenantId: string) {
-  return migrationAdminStorePg.listTenantJobs(tenantId, migrationQueueName, 100)
+  return migrationAdminStorePg.listTenantJobs(
+    tenantId,
+    migrationQueueName,
+    MIGRATION_ADMIN_JOB_LIMIT
+  )
 }
 
 function deleteTenantMigrationJobs(tenantId: string) {
-  return migrationAdminStorePg.deleteTenantJobs(tenantId, migrationQueueName, 100)
+  return migrationAdminStorePg.deleteTenantJobs(
+    tenantId,
+    migrationQueueName,
+    MIGRATION_ADMIN_JOB_LIMIT
+  )
 }
 
 export default async function routes(fastify: FastifyInstance) {
@@ -291,7 +311,7 @@ export default async function routes(fastify: FastifyInstance) {
               serviceKey: decrypt(service_key),
             }
           : {}),
-        databasePoolMode: normalizeDatabasePoolMode(database_pool_mode),
+        databasePoolMode: normalizeDatabasePoolModeForRead(database_pool_mode, databasePoolMode),
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
         migrationVersion: migrations_version,
@@ -378,7 +398,7 @@ export default async function routes(fastify: FastifyInstance) {
               serviceKey: decrypt(service_key),
             }
           : {}),
-        databasePoolMode: normalizeDatabasePoolMode(database_pool_mode),
+        databasePoolMode: normalizeDatabasePoolModeForRead(database_pool_mode, databasePoolMode),
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
         capabilities,
@@ -475,7 +495,7 @@ export default async function routes(fastify: FastifyInstance) {
         progressiveMigrations.addTenant(tenantId)
       }
 
-      deleteTenantConfig(tenantId)
+      void onTenantConfigChange(tenantId)
       reply.code(201).send()
     }
   )
@@ -548,7 +568,7 @@ export default async function routes(fastify: FastifyInstance) {
         }
       }
 
-      deleteTenantConfig(tenantId)
+      void onTenantConfigChange(tenantId)
       reply.code(204).send()
     }
   )
@@ -648,7 +668,7 @@ export default async function routes(fastify: FastifyInstance) {
         progressiveMigrations.addTenant(tenantId)
       }
 
-      deleteTenantConfig(tenantId)
+      void onTenantConfigChange(tenantId)
       reply.code(204).send()
     }
   )

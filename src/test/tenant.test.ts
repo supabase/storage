@@ -281,6 +281,120 @@ describe('Tenant configs', () => {
     expect(response.statusCode).toBe(400)
   })
 
+  test('Tolerates invalid legacy database pool mode rows on tenant reads', async () => {
+    const createResponse = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(createResponse.statusCode).toBe(201)
+
+    await multitenantPgExecutor.query({
+      text: 'UPDATE tenants SET database_pool_mode = $1 WHERE id = $2',
+      values: ['garbage', 'abc'],
+    })
+    deleteTenantConfig('abc')
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+
+    const listResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(listResponse.statusCode).toBe(200)
+    await expect(getTenantConfig('abc')).resolves.toMatchObject({
+      databasePoolMode: undefined,
+    })
+  })
+
+  test('Preserves legacy stored recycle pool mode as single-use on tenant reads', async () => {
+    const createResponse = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(createResponse.statusCode).toBe(201)
+
+    await multitenantPgExecutor.query({
+      text: 'UPDATE tenants SET database_pool_mode = $1 WHERE id = $2',
+      values: ['recycle', 'abc'],
+    })
+    deleteTenantConfig('abc')
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(JSON.parse(getResponse.body)).toEqual({
+      ...payload,
+      databasePoolMode: 'single_use',
+    })
+
+    await expect(getTenantConfig('abc')).resolves.toMatchObject({
+      databasePoolMode: 'single_use',
+    })
+  })
+
+  test('PATCH refreshes local tenant config changes before the notify cache path', async () => {
+    const createResponse = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload: {
+        ...payload,
+        databasePoolMode: 'recycled',
+      },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(createResponse.statusCode).toBe(201)
+
+    await getTenantConfig('abc')
+    const destroySpy = vi
+      .spyOn(PgTenantConnection.poolManager, 'destroy')
+      .mockResolvedValue(undefined)
+
+    try {
+      const response = await adminApp.inject({
+        method: 'PATCH',
+        url: `/tenants/abc`,
+        payload: {
+          databasePoolUrl: 'postgres://pool.example.test/postgres',
+        },
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(response.statusCode).toBe(204)
+
+      await vi.waitFor(() => {
+        expect(destroySpy).toHaveBeenCalledWith('abc')
+      })
+    } finally {
+      destroySpy.mockRestore()
+    }
+  })
+
   test('Get tenant config omits sensitive data when ADMIN_RETURN_TENANT_SENSITIVE_DATA is false', async () => {
     await adminApp.inject({
       method: 'POST',

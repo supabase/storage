@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events'
 import { vi } from 'vitest'
 
 type MultitenantPgModule = typeof import('./multitenant-pg')
@@ -249,8 +250,8 @@ function mockPgModule(): void {
 }
 
 function createMockPgClient(): MockPgClient {
-  return {
+  return Object.assign(new EventEmitter(), {
     query: vi.fn(async () => ({ rows: [] })),
     release: vi.fn(),
-  }
+  }) as unknown as MockPgClient
 }

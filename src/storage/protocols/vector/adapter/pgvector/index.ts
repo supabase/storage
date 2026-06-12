@@ -18,6 +18,7 @@ import {
 } from '@aws-sdk/client-s3vectors'
 import {
   PgExecutor,
+  PgTenantConnection,
   PgTransaction,
   PgTransactionalExecutor,
   quoteIdentifier,
@@ -151,6 +152,14 @@ function tableCapabilityCache(db: object): Map<string, Promise<PgVectorTableCapa
   return cache
 }
 
+function tableCapabilityCacheKey(db: PgTransactionalExecutor | PgTransaction): object {
+  if (db instanceof PgTenantConnection) {
+    return db.pool
+  }
+
+  return db
+}
+
 function capabilityForAccessMethod(accessMethod: unknown): PgVectorTableCapability {
   if (typeof accessMethod !== 'string') {
     return UNKNOWN_TABLE_CAPABILITY
@@ -165,9 +174,10 @@ function forgetTableCapability(db: object, table: string): void {
 
 async function resolveTableCapability(
   db: PgExecutor,
-  table: string
+  table: string,
+  cacheKey: object = tableCapabilityCacheKey(db as PgTransactionalExecutor | PgTransaction)
 ): Promise<PgVectorTableCapability> {
-  const cache = tableCapabilityCache(db)
+  const cache = tableCapabilityCache(cacheKey)
   let capability = cache.get(table)
   if (capability) {
     return capability
@@ -427,8 +437,8 @@ export class PgVectorStore implements VectorStore {
             USING hnsw (embedding ${choice.opClass})
           `)
         })
-        forgetTableCapability(db, table)
-        forgetTableCapability(this.rootDb(), table)
+        forgetTableCapability(tableCapabilityCacheKey(db), table)
+        forgetTableCapability(tableCapabilityCacheKey(this.rootDb()), table)
         // Prime the metric cache so subsequent queryVectors don't need a
         // round-trip lookup to pick the right distance operator. The two
         // names are validated non-empty at the top of this method.
@@ -450,8 +460,8 @@ export class PgVectorStore implements VectorStore {
       async () => {
         const db = this.db()
         await db.query(`DROP TABLE IF EXISTS ${qualifiedTableName(table)}`)
-        forgetTableCapability(db, table)
-        forgetTableCapability(this.rootDb(), table)
+        forgetTableCapability(tableCapabilityCacheKey(db), table)
+        forgetTableCapability(tableCapabilityCacheKey(this.rootDb()), table)
         metricCache.delete(metricCacheKey(bucket, index))
         return { $metadata: {} } as DeleteIndexCommandOutput
       },
@@ -484,7 +494,8 @@ export class PgVectorStore implements VectorStore {
         const serializedRows = JSON.stringify([...rows].sort((a, b) => a.key.localeCompare(b.key)))
         const table = tableName(bucket, index)
         const qualified = qualifiedTableName(table)
-        const capability = await resolveTableCapability(db, table)
+        const capabilityCacheKey = tableCapabilityCacheKey(db)
+        const capability = await resolveTableCapability(db, table, capabilityCacheKey)
 
         if (capability.requiresManualUpsert) {
           await this.putVectorsManually(db, qualified, serializedRows)
@@ -509,8 +520,8 @@ export class PgVectorStore implements VectorStore {
             throw e
           }
 
-          forgetTableCapability(db, table)
-          const refreshedCapability = await resolveTableCapability(db, table)
+          forgetTableCapability(capabilityCacheKey, table)
+          const refreshedCapability = await resolveTableCapability(db, table, capabilityCacheKey)
           if (!refreshedCapability.requiresManualUpsert) {
             throw e
           }
@@ -599,7 +610,7 @@ export class PgVectorStore implements VectorStore {
     params: unknown[],
     topK: number
   ): Promise<{ rows: unknown[] }> {
-    const capability = await resolveTableCapability(db, table)
+    const capability = await resolveTableCapability(db, table, tableCapabilityCacheKey(db))
     if (!capability.requiresExactQueryScan) {
       return withPgTransaction(db, async (trx): Promise<{ rows: unknown[] }> => {
         await trx.query({

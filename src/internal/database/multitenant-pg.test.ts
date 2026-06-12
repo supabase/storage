@@ -1,4 +1,4 @@
-import { vi } from 'vitest'
+import { afterEach, describe, it, vi } from 'vitest'
 
 type MultitenantPgModule = typeof import('./multitenant-pg')
 type MockPgPoolOptions = {
@@ -16,14 +16,30 @@ type MockPgPool = {
   connect: () => Promise<MockPgClient>
   end: () => Promise<void>
 }
+type MockWattQuery = {
+  destination: string
+  statement: unknown
+}
 
 let createdPools: MockPgPool[] = []
+let wattQueries: MockWattQuery[] = []
+const originalEnv = { ...process.env }
 
 async function loadMultitenantPgModule(
-  configOverrides: Record<string, unknown> = {}
+  configOverrides: Record<string, unknown> = {},
+  options: { hasWattMessaging?: boolean } = {}
 ): Promise<MultitenantPgModule> {
   vi.resetModules()
+  process.env = { ...originalEnv, MULTI_TENANT: 'true' }
   mockPgModule()
+  mockWattConnectionModule()
+  const globals = await import('@platformatic/globals')
+
+  if (options.hasWattMessaging) {
+    globals.updateGlobals({ messaging: {} as unknown as never })
+  } else {
+    globals.removeGlobals(['messaging'])
+  }
 
   const configModule = await import('../../config')
   configModule.getConfig({ reload: true })
@@ -45,7 +61,9 @@ describe('multitenant pg pool', () => {
     await loadedModule?.closeMultitenantPg()
     loadedModule = undefined
     vi.doUnmock('pg')
+    vi.doUnmock('./watt-connection')
     vi.resetModules()
+    process.env = { ...originalEnv }
   })
 
   it('does not pass DATABASE_SSL_ROOT_CERT into the shared multitenant pool config', async () => {
@@ -194,6 +212,36 @@ describe('multitenant pg pool', () => {
     expect('getMultitenantPgPool' in loadedModule).toBe(false)
     expect('getMultitenantPgPoolConfig' in loadedModule).toBe(false)
   })
+
+  it('uses Database Watt for master queries when messaging is available', async () => {
+    loadedModule = await loadMultitenantPgModule({}, { hasWattMessaging: true })
+
+    await runQuery(loadedModule)
+
+    expect(createdPools).toHaveLength(0)
+    expect(wattQueries).toEqual([
+      {
+        destination: 'master',
+        statement: 'select 1',
+      },
+    ])
+  })
+
+  it('uses Database Watt for master transactions when messaging is available', async () => {
+    loadedModule = await loadMultitenantPgModule({}, { hasWattMessaging: true })
+
+    const tx = await loadedModule.multitenantPgExecutor.beginTransaction()
+    await tx.query('select 1')
+    await tx.commit()
+
+    expect(createdPools).toHaveLength(0)
+    expect(wattQueries).toEqual([
+      {
+        destination: 'master',
+        statement: 'select 1',
+      },
+    ])
+  })
 })
 
 async function runQuery(module: MultitenantPgModule): Promise<void> {
@@ -244,6 +292,37 @@ function mockPgModule(): void {
         Pool: MockPool,
         types,
       },
+    }
+  })
+}
+
+function mockWattConnectionModule(): void {
+  wattQueries = []
+
+  vi.doMock('./watt-connection', () => {
+    class MockDatabaseWattPgExecutor {
+      constructor(private readonly destination: string) {}
+
+      async query(statement: unknown) {
+        wattQueries.push({ destination: this.destination, statement })
+        return { rowCount: 0, rows: [] }
+      }
+
+      async beginTransaction() {
+        return {
+          commit: vi.fn(async () => undefined),
+          isCompleted: vi.fn(() => false),
+          query: vi.fn(async (statement: unknown) => {
+            wattQueries.push({ destination: this.destination, statement })
+            return { rowCount: 0, rows: [] }
+          }),
+          rollback: vi.fn(async () => undefined),
+        }
+      }
+    }
+
+    return {
+      DatabaseWattPgExecutor: MockDatabaseWattPgExecutor,
     }
   })
 }

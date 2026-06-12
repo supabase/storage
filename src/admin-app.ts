@@ -1,7 +1,7 @@
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
 import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'
-import { getGlobal } from '@platformatic/globals'
+import { hasField } from '@platformatic/globals'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, setErrorHandler } from './http'
@@ -14,7 +14,7 @@ const { version, prometheusMetricsEnabled } = getConfig()
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
   const app = fastify(opts)
-  const isRunningUnderWatt = typeof getGlobal()?.applicationId === 'string'
+  const isRunningUnderWatt = hasField('applicationId')
 
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {

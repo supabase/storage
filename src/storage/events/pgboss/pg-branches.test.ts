@@ -1,10 +1,9 @@
 import { vi } from 'vitest'
 
-const { mockBeginTransaction, mockError, mockGetQueue, mockGetQueues } = vi.hoisted(() => ({
+const { mockBeginTransaction, mockError, mockGetQueue } = vi.hoisted(() => ({
   mockBeginTransaction: vi.fn(),
   mockError: vi.fn(),
   mockGetQueue: vi.fn(),
-  mockGetQueues: vi.fn(),
 }))
 
 vi.mock('../../../config', () => ({
@@ -33,7 +32,6 @@ vi.mock('@internal/queue', () => ({
   Queue: {
     getInstance: () => ({
       getQueue: mockGetQueue,
-      getQueues: mockGetQueues,
     }),
   },
 }))
@@ -43,7 +41,6 @@ vi.mock('../base-event', () => ({
 }))
 
 import { MoveJobs } from './move-jobs'
-import { UpgradePgBossV10 } from './upgrade-v10'
 
 function makeTransaction() {
   return {
@@ -59,17 +56,6 @@ function makeMoveJob() {
       fromQueue: 'source-queue',
       toQueue: 'target-queue',
       deleteJobsFromOriginalQueue: false,
-      sbReqId: 'sb-req-123',
-      tenant: {
-        ref: 'tenant-a',
-      },
-    },
-  }
-}
-
-function makeUpgradeJob() {
-  return {
-    data: {
       sbReqId: 'sb-req-123',
       tenant: {
         ref: 'tenant-a',
@@ -99,30 +85,6 @@ describe('pg-boss maintenance pg branches', () => {
       expect.objectContaining({
         text: expect.stringContaining('INSERT INTO pgboss_v10.job'),
         values: ['target-queue', 'exactly_once', 'source-queue'],
-      })
-    )
-    expect(tx.commit).toHaveBeenCalledTimes(1)
-    expect(tx.rollback).not.toHaveBeenCalled()
-  })
-
-  it('copies pg-boss v10 jobs through the pg transaction branch', async () => {
-    const tx = makeTransaction()
-    tx.query.mockResolvedValueOnce({ rows: [{ locked: true }] }).mockResolvedValueOnce({ rows: [] })
-    mockBeginTransaction.mockResolvedValue(tx)
-    mockGetQueues.mockResolvedValue([
-      {
-        name: 'queue-a',
-        policy: 'exactly_once',
-      },
-    ])
-
-    await UpgradePgBossV10.handle(makeUpgradeJob() as never)
-
-    expect(tx.query).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        text: expect.stringContaining('INSERT INTO pgboss_v10.job'),
-        values: ['exactly_once', 'queue-a'],
       })
     )
     expect(tx.commit).toHaveBeenCalledTimes(1)

@@ -470,18 +470,6 @@ describeAcceptance(
 
         await expectMetricsConfigMutation(client, headers)
 
-        const queueMigration = await client.request<MessageResponse>(
-          'POST',
-          '/queue/migrate/pgboss-v10',
-          {
-            expectedStatus: [200, 400],
-            headers,
-          }
-        )
-        expect(queueMigration.json?.message).toBe(
-          queueMigration.status === 200 ? 'Migration scheduled' : 'Queue is not enabled'
-        )
-
         await client.request('DELETE', `/tenants/${createdTenantId}`, {
           expectedStatus: 204,
           headers,

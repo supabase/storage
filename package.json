@@ -21,6 +21,7 @@
     "test:integration:watch": "vitest --config vitest.integration.config.ts",
     "test:integration:coverage": "vitest run --coverage --config vitest.integration.config.ts",
     "acceptance": "tsx acceptance/scripts/run-managed-local.ts",
+    "acceptance:watt": "tsx acceptance/scripts/run-managed-watt-local.ts",
     "acceptance:run": "tsx acceptance/scripts/run.ts",
     "acceptance:typecheck": "tsc -p acceptance/tsconfig.json --noEmit",
     "test": "npm run test:unit && npm run infra:restart && npm run test:dummy-data && npm run test:integration",
@@ -115,6 +116,7 @@
   "devDependencies": {
     "@aws-sdk/s3-presigned-post": "^3.1023.0",
     "@biomejs/biome": "2.5.1",
+    "@platformatic/runtime": "^3.59.0",
     "@types/js-yaml": "^4.0.5",
     "@types/json-bigint": "^1.0.4",
     "@types/node": "^24.12.0",

@@ -2,29 +2,39 @@ import { type ChildProcess, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import { createServer, type Server as HttpServer } from 'node:http'
 import path from 'node:path'
-import process from 'node:process'
+import { RuntimeApiClient } from '@platformatic/control'
 import dotenv from 'dotenv'
 
-// Snapshot before loading .env.acceptance so server config only comes from .env.test/.env.
 const inheritedEnv = { ...process.env }
 loadAcceptanceEnvFile()
 
 const args = process.argv.slice(2)
-const profile = readArg('profile') ?? acceptanceEnv('ACCEPTANCE_PROFILE') ?? 'smoke'
+const profile = readArg('profile') ?? acceptanceEnv('ACCEPTANCE_PROFILE') ?? 'core'
 const serverEnv = loadServerEnvFiles(inheritedEnv)
 configureManagedLocalQueueEnv(serverEnv)
+serverEnv.LOG_LEVEL = serverEnv.LOG_LEVEL || 'info'
+serverEnv.NODE_ENV = 'test'
+serverEnv.UPLOAD_FILE_SIZE_LIMIT = serverEnv.UPLOAD_FILE_SIZE_LIMIT || '524288000'
+serverEnv.WORKERS_NUM = serverEnv.WORKERS_NUM || '2'
+serverEnv.PLT_MANAGEMENT_API = serverEnv.PLT_MANAGEMENT_API || 'true'
+serverEnv.WATT_HEALTH_ENABLED = serverEnv.WATT_HEALTH_ENABLED || 'false'
+
 const serverPort = serverEnv.SERVER_PORT || serverEnv.PORT || '5000'
 const baseUrl = acceptanceEnv('ACCEPTANCE_BASE_URL') ?? `http://127.0.0.1:${serverPort}`
 const serverIsMultitenant = isMultitenantServer(serverEnv)
 const acceptanceRunEnv: NodeJS.ProcessEnv = {
   ...process.env,
   ACCEPTANCE_BASE_URL: baseUrl,
-  ACCEPTANCE_DATABASE_WATT: 'false',
+  ACCEPTANCE_DATABASE_WATT: 'true',
   ACCEPTANCE_PROFILE: profile,
+  ACCEPTANCE_SERVICE_KEY: acceptanceEnv('ACCEPTANCE_SERVICE_KEY') ?? serverEnv.SERVICE_KEY,
+  ACCEPTANCE_S3_ACCESS_KEY_ID:
+    acceptanceEnv('ACCEPTANCE_S3_ACCESS_KEY_ID') ?? serverEnv.S3_PROTOCOL_ACCESS_KEY_ID,
   ACCEPTANCE_S3_ENDPOINT: acceptanceEnv('ACCEPTANCE_S3_ENDPOINT') ?? `${baseUrl}/s3`,
+  ACCEPTANCE_S3_SECRET_ACCESS_KEY:
+    acceptanceEnv('ACCEPTANCE_S3_SECRET_ACCESS_KEY') ?? serverEnv.S3_PROTOCOL_ACCESS_KEY_SECRET,
+  ACCEPTANCE_TUS_ENDPOINT: `${baseUrl}/upload/resumable`,
   STORAGE_BACKEND: acceptanceEnv('STORAGE_BACKEND') ?? serverEnv.STORAGE_BACKEND,
-  ACCEPTANCE_TUS_ENDPOINT:
-    acceptanceEnv('ACCEPTANCE_TUS_ENDPOINT') ?? `${baseUrl}/upload/resumable`,
 }
 
 let server: ChildProcess | undefined
@@ -35,6 +45,37 @@ main().catch((error) => {
   console.error(error)
   process.exit(1)
 })
+
+async function waitForWattApplication(applicationId: string, timeoutMs: number) {
+  const client = new RuntimeApiClient()
+  const started = Date.now()
+  let lastError: unknown
+
+  try {
+    while (Date.now() - started < timeoutMs) {
+      try {
+        const runtime = await client.getMatchingRuntime()
+        const application = await client.getRuntimeApplications(runtime.pid).then(({ applications }) => {
+          return applications.find((application) => application.id === applicationId)
+        })
+
+        if (application?.status === 'started') {
+          return
+        }
+
+        lastError = new Error(`Application ${applicationId} status is ${application?.status ?? 'unknown'}`)
+      } catch (error) {
+        lastError = error
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+  } finally {
+    await client.close()
+  }
+
+  throw new Error(`Timed out waiting for Watt application ${applicationId}: ${String(lastError)}`)
+}
 
 async function main() {
   try {
@@ -49,15 +90,19 @@ async function main() {
       serverEnv.CDN_PURGE_ENDPOINT_URL = purge.url
     }
 
-    server = spawn(localBin('tsx'), ['src/start/server.ts'], {
+    await run('npm', ['run', 'build'], serverEnv)
+
+    server = spawn(localBin('wattpm'), ['start'], {
       detached: process.platform !== 'win32',
       env: serverEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    prefixOutput(server.stdout, '[storage] ')
-    prefixOutput(server.stderr, '[storage] ')
+    prefixOutput(server.stdout, '[watt] ')
+    prefixOutput(server.stderr, '[watt] ')
 
     await waitForStatus(`${baseUrl}/status`, 60_000)
+    await waitForWattApplication('storage', 60_000)
+    await waitForWattApplication('database', 60_000)
 
     if (serverIsMultitenant) {
       provisionedS3Credential = await provisionLocalMultitenantTenant(serverEnv)
@@ -71,7 +116,7 @@ async function main() {
       acceptanceRunEnv.ACCEPTANCE_ADMIN_URL = ''
       acceptanceRunEnv.ACCEPTANCE_ADMIN_API_KEY = ''
       process.stderr.write(
-        '[acceptance] disabled admin acceptance for managed single-tenant server\n'
+        '[acceptance] disabled admin acceptance for managed single-tenant Watt server\n'
       )
     }
 
@@ -276,22 +321,6 @@ function closeHttpServer(server: HttpServer): Promise<void> {
   })
 }
 
-function resolveInfraRestartScript() {
-  const script = acceptanceEnv('ACCEPTANCE_INFRA_RESTART_SCRIPT') ?? 'infra:restart:ci'
-  const allowed = new Set([
-    'infra:restart:ci',
-    'infra:restart:ci:multigres',
-    'infra:restart:ci:oriole',
-    'infra:restart:ci:oriole:pgvector',
-  ])
-
-  if (!allowed.has(script)) {
-    throw new Error(`Unsupported ACCEPTANCE_INFRA_RESTART_SCRIPT: ${script}`)
-  }
-
-  return script
-}
-
 function requiredEnv(env: NodeJS.ProcessEnv, name: string, fallbackName?: string): string {
   const value = env[name] || (fallbackName ? env[fallbackName] : undefined)
 
@@ -350,6 +379,17 @@ function parseJson<T>(text: string): T | undefined {
   return JSON.parse(text) as T
 }
 
+function resolveInfraRestartScript() {
+  const script = acceptanceEnv('ACCEPTANCE_INFRA_RESTART_SCRIPT') ?? 'infra:restart:ci'
+  const allowed = new Set(['infra:restart:ci', 'infra:restart:ci:oriole'])
+
+  if (!allowed.has(script)) {
+    throw new Error(`Unsupported ACCEPTANCE_INFRA_RESTART_SCRIPT: ${script}`)
+  }
+
+  return script
+}
+
 function run(cmd: string, runArgs: string[], runEnv: NodeJS.ProcessEnv): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(command(cmd), runArgs, {
@@ -395,84 +435,22 @@ async function waitForStatus(url: string, timeoutMs: number) {
 }
 
 async function stopServer(child: ChildProcess) {
-  if (hasExited(child)) {
+  if (child.exitCode !== null || child.signalCode !== null) {
     return
   }
 
-  if (process.platform === 'win32') {
-    const exitedAfterKill = waitForExit(child, 5_000)
-    child.kill()
-
-    if (!(await exitedAfterKill)) {
-      process.stderr.write('[storage] server did not exit after kill\n')
-    }
-    return
-  }
-
-  const exitedAfterTerminate = waitForExit(child, 5_000)
-  killProcessTree(child, 'SIGTERM')
-
-  if (await exitedAfterTerminate) {
-    return
-  }
-
-  process.stderr.write('[storage] server did not exit after SIGTERM; sending SIGKILL\n')
-
-  const exitedAfterKill = waitForExit(child, 2_000)
-  killProcessTree(child, 'SIGKILL')
-
-  if (!(await exitedAfterKill)) {
-    process.stderr.write('[storage] server did not exit after SIGKILL\n')
-  }
-}
-
-function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (hasExited(child)) {
-    return Promise.resolve(true)
-  }
-
-  return new Promise((resolve) => {
-    let timer: NodeJS.Timeout
-
-    function cleanup() {
-      clearTimeout(timer)
-      child.off('exit', onExit)
-    }
-
-    function onExit() {
-      cleanup()
-      resolve(true)
-    }
-
-    child.once('exit', onExit)
-    timer = setTimeout(() => {
-      cleanup()
-      resolve(hasExited(child))
-    }, timeoutMs)
-  })
-}
-
-function hasExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null
-}
-
-function killProcessTree(child: ChildProcess, signal: NodeJS.Signals) {
   if (process.platform === 'win32' || !child.pid) {
-    child.kill(signal)
+    child.kill()
     return
   }
 
   try {
-    process.kill(-child.pid, signal)
+    process.kill(-child.pid, 'SIGTERM')
   } catch (error) {
-    if (!isNoSuchProcessError(error)) {
+    if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH')) {
       throw error
     }
   }
-}
-
-function isNoSuchProcessError(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH'
 }
 
 function readArg(name: string) {
@@ -517,16 +495,13 @@ function acceptanceEnv(name: string): string | undefined {
 
 function loadAcceptanceEnvFile() {
   const acceptanceEnvPath = process.env.ACCEPTANCE_ENV_FILE ?? '.env.acceptance'
-
   dotenv.config({ path: path.resolve(acceptanceEnvPath), override: false })
 }
 
 function loadServerEnvFiles(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...baseEnv }
-
   loadEnvFileInto(env, '.env.test')
   loadEnvFileInto(env, '.env')
-
   return env
 }
 

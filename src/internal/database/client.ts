@@ -1,10 +1,12 @@
 import { Cluster } from '@internal/cluster'
 import { ERRORS } from '@internal/errors'
 import { getXForwardedHostRegExp } from '@internal/http/x-forwarded-host'
+import { hasField } from '@platformatic/globals'
 import { getConfig } from '../../config'
 import { PgTenantConnection } from './pg-connection'
 import { User } from './pool'
 import { getTenantConfig } from './tenant'
+import { getWattPostgresConnection } from './watt-connection'
 
 const xForwardedHostRegExp = getXForwardedHostRegExp()
 
@@ -18,6 +20,7 @@ interface ConnectionOptions {
   superUser: User
   disableHostCheck?: boolean
   operation?: () => string | undefined
+  maxConnections?: number
 }
 
 export async function getPgPostgresConnection(
@@ -34,7 +37,52 @@ export async function getPgPostgresConnection(
   })
 }
 
-export const getPostgresConnection = getPgPostgresConnection
+function validateConnectionOptions(options: ConnectionOptions): void {
+  const { isMultitenant, requestXForwardedHostRegExp } = getConfig()
+
+  if (!isMultitenant) {
+    return
+  }
+
+  if (!options.tenantId) {
+    throw ERRORS.InvalidTenantId()
+  }
+
+  if (!requestXForwardedHostRegExp || options.disableHostCheck) {
+    return
+  }
+
+  const xForwardedHost = options.host
+
+  if (typeof xForwardedHost !== 'string') {
+    throw ERRORS.InvalidXForwardedHeader('X-Forwarded-Host header is not a string')
+  }
+
+  if (!new RegExp(requestXForwardedHostRegExp).test(xForwardedHost)) {
+    throw ERRORS.InvalidXForwardedHeader(
+      'X-Forwarded-Host header does not match regular expression'
+    )
+  }
+}
+
+export async function getPostgresConnection(
+  options: ConnectionOptions
+): Promise<PgTenantConnection> {
+  if (!hasField('messaging')) {
+    return getPgPostgresConnection(options)
+  }
+
+  validateConnectionOptions(options)
+  const { databaseMaxConnections } = getConfig()
+
+  return getWattPostgresConnection({
+    ...options,
+    dbUrl: '',
+    isExternalPool: false,
+    isSingleUse: false,
+    maxConnections: options.maxConnections ?? databaseMaxConnections,
+  })
+}
 
 async function getDbSettings(
   tenantId: string,

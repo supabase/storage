@@ -97,6 +97,23 @@ interface PgPoolErrorContext {
   project?: string
 }
 
+export interface PgTransactionLike extends PgExecutor {
+  isCompleted(): boolean
+  commit(): Promise<void>
+  rollback(): Promise<void>
+}
+
+export interface PgTenantConnectionLike extends PgExecutor {
+  readonly role: string
+  dispose(): Promise<void>
+  setAbortSignal(signal: AbortSignal): void
+  getAbortSignal(): AbortSignal | undefined
+  beginTransaction(options?: TransactionOptions): Promise<PgTransactionLike>
+  asSuperUser(): PgTenantConnectionLike
+  transaction(opts?: TransactionOptions): Promise<PgTransactionLike>
+  setScope(tnx: PgExecutor): Promise<void>
+}
+
 type PgClientWithCancel = PoolClient & {
   processID?: number
   secretKey?: number
@@ -471,7 +488,7 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
   }
 }
 
-export class PgTransaction implements PgExecutor {
+export class PgTransaction implements PgTransactionLike {
   private completed = false
   private statementTimeoutMs?: number
 
@@ -610,7 +627,7 @@ export class PgTransaction implements PgExecutor {
   }
 }
 
-export class PgTenantConnection {
+export class PgTenantConnection implements PgTenantConnectionLike {
   static poolManager = new PgPoolManager()
   public readonly role: string
   private abortSignal?: AbortSignal

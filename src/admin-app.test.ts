@@ -1,13 +1,60 @@
 import { vi } from 'vitest'
 
-const getGlobal = vi.hoisted(() => vi.fn())
 const lastLocalMigrationName = vi.hoisted(() => vi.fn())
 const adminApiKey = 'test-admin-api-key'
 const originalServerAdminApiKeys = process.env.SERVER_ADMIN_API_KEYS
 
-vi.mock('@platformatic/globals', () => ({
-  getGlobal,
-}))
+function mockAdminAppDependencies() {
+  vi.doMock('./config', () => ({
+    getConfig: () => ({
+      adminApiKeys: adminApiKey,
+      prometheusMetricsEnabled: false,
+      version: 'test',
+    }),
+  }))
+  vi.doMock('@internal/monitoring/otel-metrics', () => ({
+    handleMetricsRequest: vi.fn(),
+  }))
+  vi.doMock('./http', () => ({
+    plugins: {
+      adminTenantId: async () => {},
+      logRequest: () => async () => {},
+      registerApiKeyAuth: (fastify: {
+        addHook: (name: string, hook: Function) => void
+      }) => {
+        fastify.addHook(
+          'onRequest',
+          async (
+            request: { headers: Record<string, unknown> },
+            reply: { status: Function }
+          ) => {
+            if (request.headers.apikey !== adminApiKey) {
+              return reply.status(401).send()
+            }
+          }
+        )
+      },
+      requestContext: async () => {},
+      signals: async () => {},
+    },
+    routes: {
+      jwks: async () => {},
+      icebergAdmin: async () => {},
+      metricsConfig: async () => {},
+      migrations: async () => {},
+      objects: async () => {},
+      pprof: async (fastify: { get: Function }) => {
+        fastify.get('/profile', async (_request: unknown, reply: { status: Function }) => {
+          return reply.status(401).send()
+        })
+      },
+      queue: async () => {},
+      s3Credentials: async () => {},
+      tenants: async () => {},
+    },
+    setErrorHandler: vi.fn(),
+  }))
+}
 
 vi.mock('@internal/database/migrations', async () => {
   const actual = await vi.importActual<typeof import('@internal/database/migrations')>(
@@ -20,17 +67,42 @@ vi.mock('@internal/database/migrations', async () => {
 })
 
 async function buildAdminApp() {
-  vi.resetModules()
+  mockAdminAppDependencies()
   const { default: buildAdmin } = await import('./admin-app')
   const app = buildAdmin({})
   await app.ready()
   return app
 }
 
+async function clearWattGlobals() {
+  const { removeGlobals } = await import('@platformatic/globals')
+  removeGlobals(['applicationId', 'workerId', 'messaging'])
+}
+
+async function setWattGlobals() {
+  const { updateGlobals } = await import('@platformatic/globals')
+  updateGlobals({
+    applicationId: 'storage',
+    workerId: 0,
+  })
+}
+
 describe('admin app', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.useRealTimers()
+    vi.resetModules()
+    await clearWattGlobals()
     process.env.SERVER_ADMIN_API_KEYS = adminApiKey
     lastLocalMigrationName.mockResolvedValue('storage-schema')
+  })
+
+  afterEach(async () => {
+    vi.useRealTimers()
+    await clearWattGlobals()
+    vi.doUnmock('./config')
+    vi.doUnmock('@internal/monitoring/otel-metrics')
+    vi.doUnmock('./http')
+    vi.resetModules()
   })
 
   afterAll(() => {
@@ -42,8 +114,6 @@ describe('admin app', () => {
   })
 
   it('does not register pprof endpoints outside Watt', async () => {
-    getGlobal.mockReturnValue(undefined)
-
     const app = await buildAdminApp()
 
     try {
@@ -59,10 +129,7 @@ describe('admin app', () => {
   })
 
   it('registers pprof endpoints under Watt', async () => {
-    getGlobal.mockReturnValue({
-      applicationId: 'storage',
-      workerId: 0,
-    })
+    await setWattGlobals()
 
     const app = await buildAdminApp()
 
@@ -79,7 +146,6 @@ describe('admin app', () => {
   })
 
   it('returns the stack migration version', async () => {
-    getGlobal.mockReturnValue(undefined)
     lastLocalMigrationName.mockResolvedValue('create-migrations-table')
 
     const app = await buildAdminApp()
@@ -103,8 +169,6 @@ describe('admin app', () => {
   })
 
   it('requires the admin API key for the stack migration version', async () => {
-    getGlobal.mockReturnValue(undefined)
-
     const app = await buildAdminApp()
 
     try {

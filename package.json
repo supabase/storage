@@ -96,7 +96,7 @@
     "fs-xattr": "0.3.1",
     "ioredis": "^5.2.4",
     "ip-address": "^10.2.0",
-    "jose": "^6.2.2",
+    "jose": "^6.2.3",
     "json-bigint": "^1.0.0",
     "lru-cache": "^11.2.0",
     "object-sizeof": "^2.6.4",

@@ -33,6 +33,8 @@ export const ROUTE_OPERATIONS = {
 
   // CDN
   PURGE_OBJECT_CACHE: 'storage.cdn.purge_object_cache',
+  PURGE_BUCKET_CACHE: 'storage.cdn.purge_bucket_cache',
+  PURGE_TENANT_CACHE: 'storage.cdn.purge_tenant_cache',
 
   // Image Transformation
   RENDER_AUTH_IMAGE: 'storage.render.image_authenticated',

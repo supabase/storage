@@ -99,9 +99,155 @@ describe('CDN Cache Manager', () => {
     const body = await response.json()
     expect(body).toEqual({ message: 'success' })
     expect(purgeSpy).toHaveBeenCalledWith({
+      type: 'object',
       tenant: tenantId,
       bucket: bucketName,
       objectName,
+    })
+  })
+
+  it('will purge object transformations when transformations query param is true', async () => {
+    const objectName = `purge-file-transforms-${Date.now()}.txt`
+    await storageHook.storage.from(bucketName).uploadNewObject({
+      isUpsert: true,
+      objectName,
+      userMetadata: {},
+      file: {
+        body: Readable.from(Buffer.from('test')),
+        cacheControl: 'public, max-age=31536000',
+        mimeType: 'text/plain',
+        isTruncated: () => false,
+      },
+    })
+
+    const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
+
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: `/cdn/${bucketName}/${objectName}?transformations=true`,
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const body = await response.json()
+    expect(body).toEqual({ message: 'success' })
+    expect(purgeSpy).toHaveBeenCalledWith({
+      type: 'object-transforms',
+      tenant: tenantId,
+      bucket: bucketName,
+      objectName,
+    })
+  })
+
+  it('will purge entire bucket when using bucket endpoint', async () => {
+    const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
+
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: `/cdn/${bucketName}`,
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const body = await response.json()
+    expect(body).toEqual({ message: 'success' })
+    expect(purgeSpy).toHaveBeenCalledWith({
+      type: 'bucket',
+      tenant: tenantId,
+      bucket: bucketName,
+    })
+  })
+
+  it('will purge entire bucket when using bucket endpoint', async () => {
+    const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
+
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: `/cdn/${bucketName}/`,
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const body = await response.json()
+    expect(body).toEqual({ message: 'success' })
+    expect(purgeSpy).toHaveBeenCalledWith({
+      type: 'object',
+      tenant: tenantId,
+      bucket: bucketName,
+      objectName: '',
+    })
+  })
+
+  it('will purge bucket transformations when transformations query param is true', async () => {
+    const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
+
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: `/cdn/${bucketName}?transformations=true`,
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const body = await response.json()
+    expect(body).toEqual({ message: 'success' })
+    expect(purgeSpy).toHaveBeenCalledWith({
+      type: 'bucket-transforms',
+      tenant: tenantId,
+      bucket: bucketName,
+    })
+  })
+
+  it('will purge entire tenant when using tenant endpoint', async () => {
+    const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
+
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: '/cdn/',
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const body = await response.json()
+    expect(body).toEqual({ message: 'success' })
+    expect(purgeSpy).toHaveBeenCalledWith({
+      type: 'tenant',
+      tenant: tenantId,
+    })
+  })
+
+  it('will purge tenant transformations when transformations query param is true', async () => {
+    const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
+
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: '/cdn/?transformations=true',
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const body = await response.json()
+    expect(body).toEqual({ message: 'success' })
+    expect(purgeSpy).toHaveBeenCalledWith({
+      type: 'tenant-transforms',
+      tenant: tenantId,
     })
   })
 })

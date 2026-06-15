@@ -27,8 +27,8 @@ runs:
         [ -n "$OVERRIDE_FILE" ] && override_arg="-f $OVERRIDE_FILE"
         docker compose --project-directory . \
           -f ./.docker/docker-compose-infra.yml $override_arg \
-          exec -T tenant_db \
-          pg_dump -U postgres -d postgres \
+          exec -T -e PGPASSWORD=postgres tenant_db \
+          pg_dump -h 127.0.0.1 -p 5432 -U postgres -d postgres \
           --exclude-table-data=storage.migrations \
           --restrict-key=test \
           > before-${{ inputs.label }}.sql
@@ -48,8 +48,8 @@ runs:
         [ -n "$OVERRIDE_FILE" ] && override_arg="-f $OVERRIDE_FILE"
         docker compose --project-directory . \
           -f ./.docker/docker-compose-infra.yml $override_arg \
-          exec -T tenant_db \
-          pg_dump -U postgres -d postgres \
+          exec -T -e PGPASSWORD=postgres tenant_db \
+          pg_dump -h 127.0.0.1 -p 5432 -U postgres -d postgres \
           --exclude-table-data=storage.migrations \
           --restrict-key=test \
           > after-${{ inputs.label }}.sql

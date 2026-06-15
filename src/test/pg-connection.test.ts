@@ -18,6 +18,7 @@ describe('Pg database foundation', () => {
       tenantId,
       isExternalPool: true,
       maxConnections: 2,
+      databaseEngine: getConfig().databaseEngine,
       dbUrl: databasePoolURL || databaseURL,
       user: superUser,
       superUser,

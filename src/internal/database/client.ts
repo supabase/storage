@@ -41,7 +41,8 @@ async function getDbSettings(
   host: string | undefined,
   options?: { disableHostCheck?: boolean }
 ) {
-  const { isMultitenant, databasePoolURL, databaseURL, databaseMaxConnections } = getConfig()
+  const { isMultitenant, databasePoolURL, databaseURL, databaseEngine, databaseMaxConnections } =
+    getConfig()
 
   let dbUrl = databasePoolURL || databaseURL
   let maxConnections = databaseMaxConnections
@@ -75,6 +76,7 @@ async function getDbSettings(
 
   return {
     dbUrl,
+    databaseEngine,
     isExternalPool,
     maxConnections,
   }

@@ -36,6 +36,7 @@ describe('StoragePgDB bucket metadata', () => {
     connectionSettings = {
       tenantId,
       dbUrl: databaseURL!,
+      databaseEngine: getConfig().databaseEngine,
       isExternalPool: false,
       maxConnections: 2,
       user: superUser,
@@ -431,7 +432,7 @@ describe('StoragePgDB bucket metadata', () => {
               async (pg) => {
                 await expect(readCurrentRoleFromExecutor(pg)).resolves.toBe(superUser.payload.role)
                 await expect(readCurrentStatementTimeoutFromExecutor(pg)).resolves.toBe('4321ms')
-                await pg.query("SELECT set_config('statement_timeout', '30s', true)")
+                await pg.query("SET LOCAL statement_timeout = '30s'")
                 await expect(readCurrentStatementTimeoutFromExecutor(pg)).resolves.toBe('30s')
                 throw new Error('failed nested super-user timeout query')
               }

@@ -8,7 +8,7 @@ import {
   quoteQualifiedIdentifier,
 } from '@internal/database'
 import { DBMigration, tenantHasMigrations } from '@internal/database/migrations'
-import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
+import { ERRORS, ErrorCode, isStorageError, StorageBackendError } from '@internal/errors'
 import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
@@ -26,7 +26,7 @@ import {
   SearchObjectOption,
   TransactionOptions,
 } from './adapter'
-import { DBError, mapPgTransactionAbortedError } from './errors'
+import { DBError, mapPgTransactionAbortedError, PgErrorContext } from './errors'
 
 const { databaseEngine, isMultitenant } = getConfig()
 // Scanner cache tables are unlogged scratch tables, not session temp tables.
@@ -1808,7 +1808,7 @@ export class StoragePgDB implements Database {
           })
         }
       }
-      throw mapPgError(e)
+      throw mapPgErrorWithQueryName(e, queryName)
     } finally {
       try {
         if (!savepoint && differentScopes) {
@@ -1861,7 +1861,7 @@ export class StoragePgDB implements Database {
     try {
       return await fn(this.connection.pool.acquire(), abortSignal)
     } catch (e) {
-      throw mapPgError(e)
+      throw mapPgErrorWithQueryName(e, queryName)
     } finally {
       recordDuration()
     }
@@ -1999,9 +1999,28 @@ function objectLockClause(filters?: FindObjectFilters): string {
   return filters?.noWait ? `${lock} NOWAIT` : lock
 }
 
-function mapPgError(error: unknown, query?: string): unknown {
+function mapPgError(error: unknown, context?: string | PgErrorContext): unknown {
   if (error instanceof DatabaseError) {
-    return DBError.fromDBError(error, query)
+    return DBError.fromDBError(error, context)
+  }
+
+  return error
+}
+
+function mapPgErrorWithQueryName(error: unknown, queryName: string): unknown {
+  return ensurePgErrorQueryName(mapPgError(error), queryName)
+}
+
+function ensurePgErrorQueryName(error: unknown, queryName: string): unknown {
+  if (!(error instanceof StorageBackendError) || !(error.originalError instanceof DatabaseError)) {
+    return error
+  }
+
+  const metadata = error.metadata
+  if (!metadata) {
+    error.metadata = { queryName }
+  } else if (metadata.queryName === undefined) {
+    metadata.queryName = queryName
   }
 
   return error

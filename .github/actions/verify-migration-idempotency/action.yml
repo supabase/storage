@@ -1,0 +1,61 @@
+name: Verify migration idempotency
+description: >
+  Dump the schema, reset and rerun migrations, dump again, and diff the two
+  dumps to catch non-idempotent migrations.
+
+inputs:
+  override-file:
+    description: docker compose override file selecting the tenant_db engine; omit for vanilla Postgres
+    required: false
+    default: ""
+  label:
+    description: Engine name used in dump filenames and the mismatch message
+    required: true
+  database-url:
+    description: Connection string the idempotency script migrates against
+    default: postgresql://postgres:postgres@127.0.0.1/postgres
+
+runs:
+  using: composite
+  steps:
+    - name: Dump schema before
+      shell: bash
+      env:
+        OVERRIDE_FILE: ${{ inputs.override-file }}
+      run: |
+        override_arg=""
+        [ -n "$OVERRIDE_FILE" ] && override_arg="-f $OVERRIDE_FILE"
+        docker compose --project-directory . \
+          -f ./.docker/docker-compose-infra.yml $override_arg \
+          exec -T tenant_db \
+          pg_dump -U postgres -d postgres \
+          --exclude-table-data=storage.migrations \
+          --restrict-key=test \
+          > before-${{ inputs.label }}.sql
+
+    - name: Reset and rerun migrations
+      shell: bash
+      env:
+        DATABASE_URL: ${{ inputs.database-url }}
+      run: npm run migration:test-idempotency
+
+    - name: Dump schema after
+      shell: bash
+      env:
+        OVERRIDE_FILE: ${{ inputs.override-file }}
+      run: |
+        override_arg=""
+        [ -n "$OVERRIDE_FILE" ] && override_arg="-f $OVERRIDE_FILE"
+        docker compose --project-directory . \
+          -f ./.docker/docker-compose-infra.yml $override_arg \
+          exec -T tenant_db \
+          pg_dump -U postgres -d postgres \
+          --exclude-table-data=storage.migrations \
+          --restrict-key=test \
+          > after-${{ inputs.label }}.sql
+
+    - name: Diff schemas
+      shell: bash
+      run: |
+        diff before-${{ inputs.label }}.sql after-${{ inputs.label }}.sql \
+          || (echo '${{ inputs.label }} schema mismatch!'; exit 1)

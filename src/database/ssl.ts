@@ -1,7 +1,7 @@
 export function getSslSettings(
   connectionString: string,
   rootCert?: string
-): { ca?: string; rejectUnauthorized?: boolean } | false | undefined {
+): { ca?: string; rejectUnauthorized?: boolean } | boolean | undefined {
   const sslMode = getSslMode(connectionString)
 
   if (sslMode === 'disable') {
@@ -14,7 +14,11 @@ export function getSslSettings(
     }
   }
 
-  if (sslMode === 'require' || sslMode === 'prefer') {
+  if (sslMode === 'require') {
+    return true
+  }
+
+  if (sslMode === 'prefer') {
     return {
       rejectUnauthorized: false,
     }

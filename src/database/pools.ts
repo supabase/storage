@@ -21,13 +21,17 @@ export class PoolRegistry {
   private readonly config: DatabaseConfig
   private readonly pools = new Map<string, PoolEntry>()
   private pendingGlobalAcquisitions = 0
+  private cachedStats?: PoolRegistryStats
   private readonly evictionInterval: NodeJS.Timeout
 
   constructor(config: DatabaseConfig) {
     this.config = config
-    this.evictionInterval = setInterval(() => {
-      void this.evictIdlePools()
-    }, Math.max(config.idlePoolTimeoutMs, 1_000))
+    this.evictionInterval = setInterval(
+      () => {
+        void this.evictIdlePools()
+      },
+      Math.max(config.idlePoolTimeoutMs, 1_000)
+    )
     this.evictionInterval.unref()
   }
 
@@ -75,6 +79,10 @@ export class PoolRegistry {
   }
 
   getStats(): PoolRegistryStats {
+    if (this.cachedStats) {
+      return this.cachedStats
+    }
+
     let inUseConnections = 0
     let totalConnections = 0
     let waitingRequests = 0
@@ -85,18 +93,25 @@ export class PoolRegistry {
       waitingRequests += entry.pool.waitingCount
     }
 
-    return {
+    const stats = {
       inUseConnections,
       pools: this.pools.size,
       totalConnections,
       waitingRequests,
     }
+    this.cachedStats = stats
+    queueMicrotask(() => {
+      this.cachedStats = undefined
+    })
+
+    return stats
   }
 
   async close(): Promise<void> {
     clearInterval(this.evictionInterval)
     const pools = [...this.pools.values()].map((entry) => entry.pool)
     this.pools.clear()
+    this.cachedStats = undefined
     await Promise.allSettled(pools.map((pool) => pool.end()))
   }
 
@@ -132,6 +147,7 @@ export class PoolRegistry {
     }
 
     this.pools.set(destination.id, entry)
+    this.cachedStats = undefined
     return entry
   }
 
@@ -166,6 +182,7 @@ export class PoolRegistry {
       }
 
       this.pools.delete(destination)
+      this.cachedStats = undefined
       toEvict.push(entry.pool)
     }
 

@@ -22,6 +22,7 @@ export type DatabaseConfig = {
   maxResultRows: number
   maxSerializedRequestBytes: number
   maxSqlBytes: number
+  poolIsExternal: boolean
   poolConnectionString?: string
   poolMode?: string
   rootCert?: string
@@ -73,6 +74,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): DatabaseConfig
       10 * 1024 * 1024
     ),
     maxSqlBytes: readPositiveInteger(env.DATABASE_WATT_MAX_SQL_BYTES, 1024 * 1024),
+    poolIsExternal: Boolean(env.DATABASE_POOL_URL),
     poolConnectionString: env.DATABASE_POOL_URL || env.DATABASE_URL,
     poolMode: env.DATABASE_POOL_MODE,
     rootCert: readRootCert(env.DATABASE_SSL_ROOT_CERT),

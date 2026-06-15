@@ -3,8 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DatabaseErrorResponse } from '../errors.js'
 import type { ApplicationContext } from '../index.js'
 
-type Handler = (data: unknown) => Promise<unknown>
-
 type MockClient = {
   queries: Array<{ sql: string; values?: unknown[] }>
   query: ReturnType<typeof vi.fn>
@@ -12,10 +10,14 @@ type MockClient = {
 }
 
 type MockedEnvironment = {
-  app: ApplicationContext,
+  app: ApplicationContext
   messaging: ReturnType<typeof setupLoopbackMessaging>
   clients: MockClient[]
-  pools: Array<{ config: Record<string, unknown>; ended: boolean; queries: Array<{ sql: string; values?: unknown[] }> }>
+  pools: Array<{
+    config: Record<string, unknown>
+    ended: boolean
+    queries: Array<{ sql: string; values?: unknown[] }>
+  }>
 }
 
 function createMockClient(rows: unknown[]): MockClient {
@@ -31,14 +33,11 @@ function createMockClient(rows: unknown[]): MockClient {
   return client
 }
 
-async function loadApp(options: {
-  env?: Record<string, string>
-  queryRows?: unknown[]
-  tenantRows?: unknown[]
-} = {}): Promise<MockedEnvironment> {
+async function loadApp(
+  options: { env?: Record<string, string>; queryRows?: unknown[]; tenantRows?: unknown[] } = {}
+): Promise<MockedEnvironment> {
   vi.resetModules()
 
-  const handlers = new Map<string, Handler>()
   const clients: MockClient[] = []
   const pools: MockedEnvironment['pools'] = []
   const queryRows = options.queryRows || [{ ok: true }]
@@ -100,7 +99,7 @@ async function loadApp(options: {
   }))
 
   // We need dynamic import due to the mocking of PostgreSQL modules above
-  const {create} = await import('../index.js')
+  const { create } = await import('../index.js')
 
   const messaging = setupLoopbackMessaging('db')
   const app = create()
@@ -120,7 +119,7 @@ describe('database Watt application messaging handlers', () => {
   it('registers prefixed handlers and exposes no server', async () => {
     const { app } = await loadApp()
 
-    expect(app.isBackgroundApplication).toBe(true)    
+    expect(app.isBackgroundApplication).toBe(true)
   })
 
   it('executes stateless queries against the single-tenant destination', async () => {
@@ -136,6 +135,19 @@ describe('database Watt application messaging handlers', () => {
     expect(response).toEqual({ rowCount: 1, rows: [{ ok: true }] })
     expect(clients[0].query).toHaveBeenCalledWith('SELECT 1', [1])
     expect(clients[0].release).toHaveBeenCalledWith(undefined)
+  })
+
+  it('marks single-tenant DATABASE_POOL_URL destinations as external pools', async () => {
+    const { messaging, pools } = await loadApp({
+      env: { DATABASE_POOL_URL: 'postgres://pooler' },
+    })
+
+    await messaging.send('database', 'database.query', {
+      destination: 'default',
+      sql: 'SELECT 1',
+    })
+
+    expect(pools[0].config).toMatchObject({ connectionString: 'postgres://pooler' })
   })
 
   it('returns validation errors from malformed requests', async () => {
@@ -200,7 +212,9 @@ describe('database Watt application messaging handlers', () => {
       lockId: begin.lockId,
       sql: 'SELECT 1',
     })
-    const commit = await messaging.send('database', 'database.commitTransaction', { lockId: begin.lockId })
+    const commit = await messaging.send('database', 'database.commitTransaction', {
+      lockId: begin.lockId,
+    })
 
     expect(commit).toEqual({ committed: true })
     expect(clients[0].queries.map((query) => query.sql)).toEqual([
@@ -300,5 +314,3 @@ describe('database Watt application messaging handlers', () => {
     })
   })
 })
-
-

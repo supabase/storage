@@ -42,6 +42,7 @@ async function getDbSettings(
     isMultitenant,
     databasePoolURL,
     databaseURL,
+    databaseEngine,
     databaseMaxConnections,
     requestXForwardedHostRegExp,
   } = getConfig()
@@ -76,6 +77,7 @@ async function getDbSettings(
 
   return {
     dbUrl,
+    databaseEngine,
     isExternalPool,
     maxConnections,
   }

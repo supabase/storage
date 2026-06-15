@@ -21,6 +21,7 @@ const {
   databaseMaxConnections,
   databasePoolDrainTimeout,
   databaseSSLRootCert,
+  databaseEngine,
   databaseStatementTimeout,
 } = getConfig()
 
@@ -447,6 +448,7 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
 export class PgTransaction implements PgExecutor {
   private completed = false
   private pendingStatementTimeoutMs?: number
+  private appliedStatementTimeoutMs?: number
 
   constructor(
     private readonly client: PoolClient,
@@ -465,6 +467,14 @@ export class PgTransaction implements PgExecutor {
     const timeoutMs = this.pendingStatementTimeoutMs
     this.pendingStatementTimeoutMs = undefined
     return timeoutMs
+  }
+
+  setAppliedStatementTimeout(timeoutMs: number | undefined): void {
+    this.appliedStatementTimeoutMs = timeoutMs && timeoutMs > 0 ? timeoutMs : undefined
+  }
+
+  getAppliedStatementTimeout(): number | undefined {
+    return this.appliedStatementTimeoutMs
   }
 
   async query<T extends QueryResultRow = QueryResultRow>(
@@ -675,7 +685,11 @@ export class PgTenantConnection {
       }
 
       const statementTimeout = opts?.timeout ?? databaseStatementTimeout
-      transaction.setPendingStatementTimeout(statementTimeout)
+      if (this.isMultigresDatabase()) {
+        await this.applyStatementTimeoutImmediately(transaction, statementTimeout)
+      } else {
+        transaction.setPendingStatementTimeout(statementTimeout)
+      }
 
       return transaction
     } catch (e) {
@@ -683,6 +697,27 @@ export class PgTenantConnection {
         throw ERRORS.DatabaseTimeout(e)
       }
 
+      throw e
+    }
+  }
+
+  private isMultigresDatabase(): boolean {
+    return (this.options.databaseEngine ?? databaseEngine) === 'multigres'
+  }
+
+  private async applyStatementTimeoutImmediately(
+    transaction: PgTransaction,
+    statementTimeout: number | undefined
+  ): Promise<void> {
+    if (!statementTimeout || statementTimeout <= 0) {
+      return
+    }
+
+    try {
+      await transaction.query(buildSetLocalStatementTimeoutStatement(statementTimeout))
+      transaction.setAppliedStatementTimeout(statementTimeout)
+    } catch (e) {
+      await this.rollbackTransactionSafely(transaction, e, 'statement_timeout setup')
       throw e
     }
   }
@@ -715,7 +750,10 @@ export class PgTenantConnection {
   }
 
   async setScope(tnx: PgExecutor) {
-    const statementTimeout = tnx instanceof PgTransaction ? tnx.takePendingStatementTimeout() : 0
+    const transaction = tnx instanceof PgTransaction ? tnx : undefined
+    const pendingStatementTimeout = transaction ? transaction.takePendingStatementTimeout() : 0
+    const isMultigres = this.isMultigresDatabase()
+    const statementTimeout = isMultigres ? 0 : pendingStatementTimeout
     const scopeValues = [
       this.role,
       this.role,
@@ -732,7 +770,25 @@ export class PgTenantConnection {
       text: statementTimeout ? scopeConfigStatementWithTimeout : scopeConfigStatement,
       values: statementTimeout ? [`${statementTimeout}ms`, ...scopeValues] : scopeValues,
     })
+
+    if (isMultigres && transaction) {
+      // Multigres requires SET LOCAL for statement_timeout, and role scope setup resets it.
+      const timeoutToReapply = transaction.getAppliedStatementTimeout()
+
+      if (timeoutToReapply && timeoutToReapply > 0) {
+        await transaction.query(buildSetLocalStatementTimeoutStatement(timeoutToReapply))
+        transaction.setAppliedStatementTimeout(timeoutToReapply)
+      }
+    }
   }
+}
+
+function buildSetLocalStatementTimeoutStatement(statementTimeout: number): string {
+  if (!Number.isFinite(statementTimeout) || statementTimeout <= 0) {
+    throw new Error(`Invalid statement timeout: ${statementTimeout}`)
+  }
+
+  return `SET LOCAL statement_timeout = '${statementTimeout}ms'`
 }
 
 function createDisposedTenantConnectionError(): Error {

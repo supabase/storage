@@ -855,6 +855,55 @@ describe('PgTenantConnection', () => {
     ])
   })
 
+  it('uses a standalone statement_timeout setup for Multigres transactions', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] })
+    const client = {
+      query,
+      release: vi.fn(),
+    } as unknown as PoolClient
+    const transaction = new PgTransaction(client)
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction: vi.fn().mockResolvedValue(transaction),
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: true,
+        databaseEngine: 'multigres',
+      })
+    )
+
+    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction)
+
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      "SELECT set_config('search_path', $1, true)",
+      expect.any(Array)
+    )
+    expect(query).toHaveBeenNthCalledWith(2, "SET LOCAL statement_timeout = '4321ms'", undefined)
+
+    await connection.setScope(transaction)
+
+    expect(query).toHaveBeenCalledTimes(4)
+    const [scopeStatement, scopeValues] = query.mock.calls[2]
+    expect(scopeStatement).not.toContain("set_config('statement_timeout'")
+    expect(scopeValues).toEqual([
+      'authenticated',
+      'authenticated',
+      'jwt',
+      '',
+      JSON.stringify({ role: 'authenticated' }),
+      '{}',
+      '',
+      '',
+      '',
+    ])
+    expect(query).toHaveBeenNthCalledWith(4, "SET LOCAL statement_timeout = '4321ms'", undefined)
+  })
+
   it('does not re-apply statement_timeout after setScope consumes it', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] })
     const client = {

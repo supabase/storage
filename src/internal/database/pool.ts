@@ -10,7 +10,7 @@ import {
   recordCacheRequest,
 } from '@internal/monitoring/metrics'
 import { JWTPayload } from 'jose'
-import { getConfig } from '../../config'
+import { type DatabaseEngine, getConfig } from '../../config'
 
 const {
   isMultitenant,
@@ -30,6 +30,7 @@ export interface TenantConnectionOptions {
   idleTimeoutMillis?: number
   reapIntervalMillis?: number
   maxConnections: number
+  databaseEngine?: DatabaseEngine
   clusterSize?: number
   numWorkers?: number
   user: User

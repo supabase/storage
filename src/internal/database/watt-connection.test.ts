@@ -1,10 +1,7 @@
 import { removeGlobals, updateGlobals } from '@platformatic/globals'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TenantConnectionOptions } from './pool'
-import {
-  DatabaseWattPgExecutor,
-  getWattPostgresConnection,
-} from './watt-connection'
+import { DatabaseWattPgExecutor, getWattPostgresConnection } from './watt-connection'
 
 type SentWattMessage = {
   application: string
@@ -12,19 +9,21 @@ type SentWattMessage = {
   message: string
 }
 
-function installWattMessagingMock(
-  responses: Record<string, unknown> = {}
-): { sent: SentWattMessage[] } {
+function installWattMessagingMock(responses: Record<string, unknown> = {}): {
+  sent: SentWattMessage[]
+} {
   const sent: SentWattMessage[] = []
 
   updateGlobals({
     messaging: {
+      handle: vi.fn(),
+      notify: vi.fn(),
       send: vi.fn(async (application: string, message: string, data: Record<string, unknown>) => {
         sent.push({ application, data, message })
         const response = responses[message]
         return response instanceof Promise ? response : response
       }),
-    } as unknown as any
+    },
   })
 
   return { sent }
@@ -41,7 +40,10 @@ describe('Watt PostgreSQL connection adapter', () => {
     })
     const connection = await getWattPostgresConnection(createConnectionOptions())
 
-    const result = await connection.query<{ id: number }>({ text: 'SELECT $1::int as id', values: [1] })
+    const result = await connection.query<{ id: number }>({
+      text: 'SELECT $1::int as id',
+      values: [1],
+    })
 
     expect(result.rows).toEqual([{ id: 1 }])
     expect(result.rowCount).toBe(1)
@@ -118,13 +120,42 @@ describe('Watt PostgreSQL connection adapter', () => {
     })
   })
 
+  it('preserves timeout response codes on pg DatabaseError', async () => {
+    installWattMessagingMock({
+      'database.query': {
+        code: 'ACQUIRE_TIMEOUT',
+        message: 'Timed out acquiring database connection',
+      },
+    })
+    const connection = await getWattPostgresConnection(createConnectionOptions())
+
+    await expect(connection.query('SELECT 1')).rejects.toMatchObject({
+      code: 'ACQUIRE_TIMEOUT',
+      message: 'Timed out acquiring database connection',
+    })
+  })
+
+  it('maps server timeouts to PostgreSQL query-canceled SQLSTATE', async () => {
+    installWattMessagingMock({
+      'database.query': {
+        code: 'SERVER_TIMEOUT',
+        message: 'canceling statement due to statement timeout',
+      },
+    })
+    const connection = await getWattPostgresConnection(createConnectionOptions())
+
+    await expect(connection.query('SELECT pg_sleep(10)')).rejects.toMatchObject({
+      code: '57014',
+      message: 'canceling statement due to statement timeout',
+    })
+  })
+
   it('sends explicit cancellation when an AbortSignal fires', async () => {
     let resolveQuery!: (value: unknown) => void
     const { sent } = installWattMessagingMock({
-      'database.query':
-        new Promise((resolve) => {
-          resolveQuery = resolve
-        }),
+      'database.query': new Promise((resolve) => {
+        resolveQuery = resolve
+      }),
       'database.cancel': { cancelled: true },
     })
     const connection = await getWattPostgresConnection(createConnectionOptions())

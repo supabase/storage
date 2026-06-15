@@ -36,7 +36,7 @@ export class DestinationResolver {
     return {
       connectionString,
       id: destination,
-      isExternalPool: Boolean(process.env.DATABASE_POOL_URL),
+      isExternalPool: this.config.poolIsExternal,
       maxConnections: this.config.destinationMaxConnections,
       poolMode: this.config.poolMode,
     }

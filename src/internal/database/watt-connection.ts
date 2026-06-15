@@ -1,6 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import { getMessaging } from '@platformatic/globals'
 import { TransactionOptions } from '@storage/database'
-import { randomUUID } from 'node:crypto'
 import { DatabaseError, QueryResult, QueryResultRow } from 'pg'
 import {
   PgExecutor,
@@ -170,10 +170,7 @@ class WattPgTransaction implements PgTransactionLike {
   private readonly lockId: string
   private readonly operation?: () => string | undefined
 
-  constructor(
-    lockId: string,
-    operation?: () => string | undefined
-  ) {
+  constructor(lockId: string, operation?: () => string | undefined) {
     this.lockId = lockId
     this.operation = operation
   }
@@ -280,7 +277,9 @@ async function sendDatabaseMessage<T>(
         return
       }
 
-      void getMessaging().send(databaseApplicationId, 'database.cancel', { requestId, lockId }).catch(() => undefined)
+      void getMessaging()
+        .send(databaseApplicationId, 'database.cancel', { requestId, lockId })
+        .catch(() => undefined)
       reject(createAbortError())
     }
 
@@ -352,7 +351,7 @@ function toDatabaseError(response: DatabaseErrorResponse): Error {
     response.code === 'MESSAGING_TIMEOUT'
   ) {
     const error = new DatabaseError(response.message, 0, 'error')
-    error.code = response.code === 'SERVER_TIMEOUT' ? '57014' : undefined
+    error.code = response.code === 'SERVER_TIMEOUT' ? '57014' : response.code
     error.stack = response.stack
     return error
   }

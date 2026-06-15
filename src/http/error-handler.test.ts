@@ -1,5 +1,7 @@
 import { ErrorCode } from '@internal/errors'
+import { DBError } from '@storage/database/errors'
 import Fastify from 'fastify'
+import { DatabaseError } from 'pg'
 import { setErrorHandler } from './error-handler'
 
 describe('setErrorHandler', () => {
@@ -67,4 +69,62 @@ describe('setErrorHandler', () => {
       await app.close()
     }
   })
+
+  it('maps wrapped database slowdown errors to 429', async () => {
+    const app = Fastify()
+    setErrorHandler(app)
+
+    app.get('/wrapped-slowdown', async () => {
+      throw DBError.fromDBError(
+        createPgError('08P01', 'no more connections allowed (max_client_conn)')
+      )
+    })
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/wrapped-slowdown',
+      })
+
+      expect(response.statusCode).toBe(429)
+      expect(response.json()).toMatchObject({
+        statusCode: '429',
+        code: ErrorCode.SlowDown,
+        error: 'too_many_connections',
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('keeps wrapped non-slowdown connection errors as database errors', async () => {
+    const app = Fastify()
+    setErrorHandler(app)
+
+    app.get('/wrapped-protocol-error', async () => {
+      throw DBError.fromDBError(createPgError('08P01', 'received invalid response: 58'))
+    })
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/wrapped-protocol-error',
+      })
+
+      expect(response.statusCode).toBe(500)
+      expect(response.json()).toMatchObject({
+        statusCode: '500',
+        code: ErrorCode.DatabaseError,
+        error: ErrorCode.DatabaseError,
+      })
+    } finally {
+      await app.close()
+    }
+  })
 })
+
+function createPgError(code: string, message: string): DatabaseError {
+  const error = new DatabaseError(message, message.length, 'error')
+  error.code = code
+  return error
+}

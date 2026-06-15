@@ -45,6 +45,24 @@ export interface PgQueryOptions {
 
 type PgQueryArgument = PgQueryOptions | unknown[]
 
+const scopeConfigNames = [
+  'role',
+  'request.jwt.claim.role',
+  'request.jwt',
+  'request.jwt.claim.sub',
+  'request.jwt.claims',
+  'request.headers',
+  'request.method',
+  'request.path',
+  'storage.operation',
+] as const
+
+const scopeConfigStatement = buildScopeConfigStatement(scopeConfigNames)
+const scopeConfigStatementWithTimeout = buildScopeConfigStatement([
+  'statement_timeout',
+  ...scopeConfigNames,
+])
+
 export interface PgExecutor {
   query<T extends QueryResultRow = QueryResultRow>(
     statement: string | PgStatement,
@@ -303,6 +321,18 @@ function pulsePgPoolQueue(pool: Pool): void {
   ;(pool as Pool & { _pulseQueue?: () => void })._pulseQueue?.()
 }
 
+function buildScopeConfigStatement(configNames: readonly string[]): string {
+  const configStatements = configNames.map((name, index) => {
+    return `set_config('${name}', $${index + 1}, true)`
+  })
+  configStatements.push(`set_config('storage.allow_delete_query', 'true', true)`)
+
+  return `
+        SELECT
+          ${configStatements.join(',\n          ')};
+      `
+}
+
 export class PgPoolManager extends PoolManager<PgPoolStrategy> {
   protected newPool(settings: PoolStrategySettings): PgPoolStrategy {
     return new PgPoolStrategy(settings)
@@ -432,6 +462,7 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
 
 export class PgTransaction implements PgExecutor {
   private completed = false
+  private pendingStatementTimeoutMs?: number
 
   constructor(
     private readonly client: PoolClient,
@@ -442,6 +473,16 @@ export class PgTransaction implements PgExecutor {
     return this.completed
   }
 
+  setPendingStatementTimeout(timeoutMs: number | undefined): void {
+    this.pendingStatementTimeoutMs = timeoutMs && timeoutMs > 0 ? timeoutMs : undefined
+  }
+
+  takePendingStatementTimeout(): number | undefined {
+    const timeoutMs = this.pendingStatementTimeoutMs
+    this.pendingStatementTimeoutMs = undefined
+    return timeoutMs
+  }
+
   async query<T extends QueryResultRow = QueryResultRow>(
     statement: string | PgStatement,
     options?: PgQueryArgument
@@ -450,7 +491,16 @@ export class PgTransaction implements PgExecutor {
       throw new Error('Cannot query a completed transaction')
     }
 
+    const signal = getQuerySignal(options)
+
     try {
+      assertValidSignal(signal)
+
+      const pendingStatementTimeout = this.takePendingStatementTimeoutStatement()
+      if (pendingStatementTimeout) {
+        await runPgQuery(this.client, pendingStatementTimeout, { signal })
+      }
+
       const result = await runPgQuery<T>(this.client, statement, options)
       this.clientErrorTracker?.throwIfErrored()
       return result
@@ -515,6 +565,19 @@ export class PgTransaction implements PgExecutor {
       this.clientErrorTracker?.detach()
     }
   }
+
+  private takePendingStatementTimeoutStatement(): PgStatement | undefined {
+    const timeoutMs = this.takePendingStatementTimeout()
+
+    if (!timeoutMs) {
+      return undefined
+    }
+
+    return {
+      text: `SELECT set_config('statement_timeout', $1, true)`,
+      values: [`${timeoutMs}ms`],
+    }
+  }
 }
 
 export class PgTenantConnection {
@@ -522,12 +585,16 @@ export class PgTenantConnection {
   public readonly role: string
   private abortSignal?: AbortSignal
   private disposed = false
+  private readonly headersPayload: string
+  private readonly userPayload: string
 
   constructor(
     public readonly pool: PgPoolStrategy,
     protected readonly options: TenantConnectionOptions
   ) {
     this.role = options.user.payload.role || 'anon'
+    this.headersPayload = JSON.stringify(options.headers || {})
+    this.userPayload = JSON.stringify(options.user.payload)
   }
 
   static stop() {
@@ -624,17 +691,7 @@ export class PgTenantConnection {
       }
 
       const statementTimeout = opts?.timeout ?? databaseStatementTimeout
-      if (statementTimeout > 0) {
-        try {
-          await transaction.query({
-            text: `SELECT set_config('statement_timeout', $1, true)`,
-            values: [`${statementTimeout}ms`],
-          })
-        } catch (e) {
-          await this.rollbackTransactionSafely(transaction, e, 'statement_timeout setup')
-          throw e
-        }
-      }
+      transaction.setPendingStatementTimeout(statementTimeout)
 
       return transaction
     } catch (e) {
@@ -674,32 +731,22 @@ export class PgTenantConnection {
   }
 
   async setScope(tnx: PgExecutor) {
-    const headers = JSON.stringify(this.options.headers || {})
+    const statementTimeout = tnx instanceof PgTransaction ? tnx.takePendingStatementTimeout() : 0
+    const scopeValues = [
+      this.role,
+      this.role,
+      this.options.user.jwt || '',
+      this.options.user.payload.sub || '',
+      this.userPayload,
+      this.headersPayload,
+      this.options.method || '',
+      this.options.path || '',
+      this.options.operation?.() || '',
+    ]
+
     await tnx.query({
-      text: `
-        SELECT
-          set_config('role', $1, true),
-          set_config('request.jwt.claim.role', $2, true),
-          set_config('request.jwt', $3, true),
-          set_config('request.jwt.claim.sub', $4, true),
-          set_config('request.jwt.claims', $5, true),
-          set_config('request.headers', $6, true),
-          set_config('request.method', $7, true),
-          set_config('request.path', $8, true),
-          set_config('storage.operation', $9, true),
-          set_config('storage.allow_delete_query', 'true', true);
-      `,
-      values: [
-        this.role,
-        this.role,
-        this.options.user.jwt || '',
-        this.options.user.payload.sub || '',
-        JSON.stringify(this.options.user.payload),
-        headers,
-        this.options.method || '',
-        this.options.path || '',
-        this.options.operation?.() || '',
-      ],
+      text: statementTimeout ? scopeConfigStatementWithTimeout : scopeConfigStatement,
+      values: statementTimeout ? [`${statementTimeout}ms`, ...scopeValues] : scopeValues,
     })
   }
 }

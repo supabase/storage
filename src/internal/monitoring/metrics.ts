@@ -1,4 +1,4 @@
-import { CACHE_LOOKUP_OUTCOMES, type CacheLookupOutcome } from '@internal/cache/adapter'
+import type { CacheLookupOutcome } from '@internal/cache/adapter'
 import type { CacheName } from '@internal/cache/names'
 import { type Attributes, metrics } from '@opentelemetry/api'
 
@@ -57,7 +57,50 @@ export function registerMetric<T>(name: string, type: MetricType, factory: () =>
 
 // ============================================================================
 // HTTP Request Metrics
+//
+// HTTP byte counters intentionally do not check `isMetricEnabled()`. They use
+// cumulative observable counters, so skipping observations on runtime disable
+// would leave stale exported points and later jumps on re-enable. Active arrays
+// keep collection on emitted series only.
 // ============================================================================
+type HttpMetricAttributes = {
+  method: string
+  operation: string
+  status_code: string
+}
+
+type HttpSizeMetricsState = {
+  requestBytes: number
+  responseBytes: number
+  attributes: Attributes
+}
+
+const httpSizeMetricsState = new Map<string, HttpSizeMetricsState>()
+const httpRequestSizeMetricStates: HttpSizeMetricsState[] = []
+const httpResponseSizeMetricStates: HttpSizeMetricsState[] = []
+
+function getHttpSizeMetricsState(attributes: HttpMetricAttributes): HttpSizeMetricsState {
+  const key = `${attributes.method}\x00${attributes.operation}\x00${attributes.status_code}`
+  let state = httpSizeMetricsState.get(key)
+  if (!state) {
+    state = {
+      requestBytes: 0,
+      responseBytes: 0,
+      attributes: {
+        method: attributes.method,
+        operation: attributes.operation,
+        status_code: attributes.status_code,
+      },
+    }
+    httpSizeMetricsState.set(key, state)
+  }
+  return state
+}
+
+function isRecordableMetricValue(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
 export const httpRequestDuration = registerMetric(
   'http_request_duration_seconds',
   'histogram',
@@ -68,34 +111,133 @@ export const httpRequestDuration = registerMetric(
     })
 )
 
-export const httpRequestSizeBytes = registerMetric('http_request_size_bytes', 'counter', () =>
-  meter.createCounter('http_request_size_bytes', {
+const httpRequestSizeBytes = registerMetric('http_request_size_bytes', 'counter', () =>
+  meter.createObservableCounter('http_request_size_bytes', {
     description: 'Total bytes received in HTTP requests (from content-length header)',
     unit: 'bytes',
   })
 )
+httpRequestSizeBytes.addCallback((observer) => {
+  for (let index = 0; index < httpRequestSizeMetricStates.length; index++) {
+    const state = httpRequestSizeMetricStates[index]
+    observer.observe(state.requestBytes, state.attributes)
+  }
+})
 
-export const httpResponseSizeBytes = registerMetric('http_response_size_bytes', 'counter', () =>
-  meter.createCounter('http_response_size_bytes', {
+const httpResponseSizeBytes = registerMetric('http_response_size_bytes', 'counter', () =>
+  meter.createObservableCounter('http_response_size_bytes', {
     description: 'Total bytes sent in HTTP responses (from content-length header)',
     unit: 'bytes',
   })
 )
+httpResponseSizeBytes.addCallback((observer) => {
+  for (let index = 0; index < httpResponseSizeMetricStates.length; index++) {
+    const state = httpResponseSizeMetricStates[index]
+    observer.observe(state.responseBytes, state.attributes)
+  }
+})
+
+/** Records request/response bytes by bumping in-process tallies with one state lookup. */
+export function recordHttpSizes(
+  requestSizeBytes: number | undefined,
+  responseSizeBytes: number | undefined,
+  attributes: HttpMetricAttributes
+): void {
+  const shouldRecordRequestSize = isRecordableMetricValue(requestSizeBytes)
+  const shouldRecordResponseSize = isRecordableMetricValue(responseSizeBytes)
+
+  if (!shouldRecordRequestSize && !shouldRecordResponseSize) {
+    return
+  }
+
+  const state = getHttpSizeMetricsState(attributes)
+
+  if (shouldRecordRequestSize) {
+    if (state.requestBytes === 0) {
+      httpRequestSizeMetricStates.push(state)
+    }
+    state.requestBytes += requestSizeBytes
+  }
+
+  if (shouldRecordResponseSize) {
+    if (state.responseBytes === 0) {
+      httpResponseSizeMetricStates.push(state)
+    }
+    state.responseBytes += responseSizeBytes
+  }
+}
 
 // ============================================================================
 // Upload Metrics
+//
+// Upload counters follow the same cumulative observable-counter semantics as
+// HTTP/cache: runtime disables must not suppress observations, and active arrays
+// avoid export-time scans over inactive series.
 // ============================================================================
-export const fileUploadStarted = registerMetric('upload_started', 'counter', () =>
-  meter.createCounter('upload_started', {
+type UploadMetricsState = {
+  started: number
+  success: number
+  attributes: Attributes
+}
+
+const uploadMetricsState = new Map<string, UploadMetricsState>()
+const uploadStartedMetricStates: UploadMetricsState[] = []
+const uploadSuccessMetricStates: UploadMetricsState[] = []
+
+function getUploadMetricsState(uploadType: string): UploadMetricsState {
+  let state = uploadMetricsState.get(uploadType)
+  if (!state) {
+    state = {
+      started: 0,
+      success: 0,
+      attributes: { uploadType },
+    }
+    uploadMetricsState.set(uploadType, state)
+  }
+  return state
+}
+
+const fileUploadStarted = registerMetric('upload_started', 'counter', () =>
+  meter.createObservableCounter('upload_started', {
     description: 'Total uploads started',
   })
 )
+fileUploadStarted.addCallback((observer) => {
+  for (let index = 0; index < uploadStartedMetricStates.length; index++) {
+    const state = uploadStartedMetricStates[index]
+    observer.observe(state.started, state.attributes)
+  }
+})
 
-export const fileUploadedSuccess = registerMetric('upload_success', 'counter', () =>
-  meter.createCounter('upload_success', {
+const fileUploadedSuccess = registerMetric('upload_success', 'counter', () =>
+  meter.createObservableCounter('upload_success', {
     description: 'Total successful uploads',
   })
 )
+fileUploadedSuccess.addCallback((observer) => {
+  for (let index = 0; index < uploadSuccessMetricStates.length; index++) {
+    const state = uploadSuccessMetricStates[index]
+    observer.observe(state.success, state.attributes)
+  }
+})
+
+/** Records an upload start by bumping an in-process tally. */
+export function recordUploadStarted(uploadType: string): void {
+  const state = getUploadMetricsState(uploadType)
+  if (state.started === 0) {
+    uploadStartedMetricStates.push(state)
+  }
+  state.started++
+}
+
+/** Records an upload success by bumping an in-process tally. */
+export function recordUploadSuccess(uploadType: string): void {
+  const state = getUploadMetricsState(uploadType)
+  if (state.success === 0) {
+    uploadSuccessMetricStates.push(state)
+  }
+  state.success++
+}
 
 // ============================================================================
 // Cache Metrics
@@ -104,26 +246,32 @@ export const fileUploadedSuccess = registerMetric('upload_success', 'counter', (
 // With cumulative async OTel instruments, skipping `observe()` after a runtime
 // disable can keep the previous point exported, then jump on re-enable because
 // the in-process tally kept advancing. Drop these metrics at exporter/view
-// configuration if they need to be suppressed entirely.
+// configuration if they need to be suppressed entirely. Like HTTP/upload, cache
+// counters keep active arrays so callbacks do not scan inactive series.
 // ============================================================================
+type CacheRequestMetricsState = {
+  count: number
+  attributes: Attributes
+}
+
 type CacheMetricsState = {
-  requests: Record<CacheLookupOutcome, number>
-  requestAttributes: Record<CacheLookupOutcome, Attributes>
+  requests: Record<CacheLookupOutcome, CacheRequestMetricsState>
   evictions: number
   evictionAttributes: Attributes
 }
 
 const cacheMetricsState = new Map<CacheName, CacheMetricsState>()
+const cacheRequestMetricStates: CacheRequestMetricsState[] = []
+const cacheEvictionMetricStates: CacheMetricsState[] = []
 
 function getCacheMetricsState(cache: CacheName): CacheMetricsState {
   let state = cacheMetricsState.get(cache)
   if (!state) {
     state = {
-      requests: { hit: 0, miss: 0, stale: 0 },
-      requestAttributes: {
-        hit: { cache, outcome: 'hit' },
-        miss: { cache, outcome: 'miss' },
-        stale: { cache, outcome: 'stale' },
+      requests: {
+        hit: { count: 0, attributes: { cache, outcome: 'hit' } },
+        miss: { count: 0, attributes: { cache, outcome: 'miss' } },
+        stale: { count: 0, attributes: { cache, outcome: 'stale' } },
       },
       evictions: 0,
       evictionAttributes: { cache },
@@ -135,40 +283,43 @@ function getCacheMetricsState(cache: CacheName): CacheMetricsState {
 
 /** Records a single cache lookup outcome by bumping an in-process tally. */
 export function recordCacheRequest(cache: CacheName, outcome: CacheLookupOutcome): void {
-  getCacheMetricsState(cache).requests[outcome]++
+  const state = getCacheMetricsState(cache).requests[outcome]
+  if (state.count === 0) {
+    cacheRequestMetricStates.push(state)
+  }
+  state.count++
 }
 
 /** Records a single capacity/ttl cache eviction by bumping an in-process tally. */
 export function recordCacheEviction(cache: CacheName): void {
-  getCacheMetricsState(cache).evictions++
+  const state = getCacheMetricsState(cache)
+  if (state.evictions === 0) {
+    cacheEvictionMetricStates.push(state)
+  }
+  state.evictions++
 }
 
-export const cacheRequestsTotal = registerMetric('cache_requests_total', 'counter', () =>
+const cacheRequestsTotal = registerMetric('cache_requests_total', 'counter', () =>
   meter.createObservableCounter('cache_requests_total', {
     description: 'Total cache lookups by cache and outcome',
   })
 )
 cacheRequestsTotal.addCallback((observer) => {
-  for (const state of cacheMetricsState.values()) {
-    for (const outcome of CACHE_LOOKUP_OUTCOMES) {
-      const count = state.requests[outcome]
-      if (count > 0) {
-        observer.observe(count, state.requestAttributes[outcome])
-      }
-    }
+  for (let index = 0; index < cacheRequestMetricStates.length; index++) {
+    const state = cacheRequestMetricStates[index]
+    observer.observe(state.count, state.attributes)
   }
 })
 
-export const cacheEvictionsTotal = registerMetric('cache_evictions_total', 'counter', () =>
+const cacheEvictionsTotal = registerMetric('cache_evictions_total', 'counter', () =>
   meter.createObservableCounter('cache_evictions_total', {
     description: 'Total cache evictions',
   })
 )
 cacheEvictionsTotal.addCallback((observer) => {
-  for (const state of cacheMetricsState.values()) {
-    if (state.evictions > 0) {
-      observer.observe(state.evictions, state.evictionAttributes)
-    }
+  for (let index = 0; index < cacheEvictionMetricStates.length; index++) {
+    const state = cacheEvictionMetricStates[index]
+    observer.observe(state.evictions, state.evictionAttributes)
   }
 })
 

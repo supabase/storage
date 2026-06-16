@@ -2,7 +2,7 @@ import { once } from 'events'
 import { FastifyRequest } from 'fastify'
 import { PassThrough, Readable } from 'stream'
 import { ErrorCode, isStorageError, StorageBackendError } from '../internal/errors'
-import { fileUploadedSuccess, fileUploadStarted } from '../internal/monitoring/metrics'
+import * as monitoringMetrics from '../internal/monitoring/metrics'
 import { ObjectAdminDelete, ObjectCreatedPostEvent } from '../storage/events'
 import { TenantLocation } from '../storage/locator'
 import { fileUploadFromRequest, Uploader } from '../storage/uploader'
@@ -399,7 +399,7 @@ describe('fileUploadFromRequest', () => {
 
 describe('Uploader metrics', () => {
   test('prepareUpload records upload start attributes without tenant id labels', async () => {
-    const addSpy = vi.spyOn(fileUploadStarted, 'add')
+    const recordSpy = vi.spyOn(monitoringMetrics, 'recordUploadStarted')
     const uploader = createUploader(
       {
         uploadObject: vi.fn(),
@@ -418,14 +418,14 @@ describe('Uploader metrics', () => {
         uploadType: 'standard',
       })
 
-      expect(addSpy).toHaveBeenCalledWith(1, { uploadType: 'standard' })
+      expect(recordSpy).toHaveBeenCalledWith('standard')
     } finally {
-      addSpy.mockRestore()
+      recordSpy.mockRestore()
     }
   })
 
   test('completeUpload records upload success attributes without tenant id labels', async () => {
-    const addSpy = vi.spyOn(fileUploadedSuccess, 'add')
+    const recordSpy = vi.spyOn(monitoringMetrics, 'recordUploadSuccess')
     const sendWebhookSpy = vi
       .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
       .mockResolvedValue(undefined)
@@ -469,9 +469,9 @@ describe('Uploader metrics', () => {
         userMetadata: undefined,
       })
 
-      expect(addSpy).toHaveBeenCalledWith(1, { uploadType: 'standard' })
+      expect(recordSpy).toHaveBeenCalledWith('standard')
     } finally {
-      addSpy.mockRestore()
+      recordSpy.mockRestore()
       sendWebhookSpy.mockRestore()
     }
   })

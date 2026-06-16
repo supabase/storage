@@ -115,4 +115,122 @@ describe('metrics registry', () => {
       },
     ])
   })
+
+  test('observes cumulative http byte counters with stable attributes even when disabled', async () => {
+    const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
+
+    const attributes = {
+      method: 'POST',
+      operation: 'object.upload',
+      status_code: '200',
+    }
+
+    metricsModule.setMetricsEnabled([
+      { name: 'http_request_size_bytes', enabled: false },
+      { name: 'http_response_size_bytes', enabled: false },
+    ])
+    metricsModule.recordHttpSizes(7, undefined, attributes)
+    metricsModule.recordHttpSizes(3, undefined, { ...attributes })
+    metricsModule.recordHttpSizes(undefined, 2, attributes)
+
+    expect(mockMeter.invoke('http_request_size_bytes')).toEqual([
+      {
+        value: 10,
+        attributes,
+      },
+    ])
+
+    expect(mockMeter.invoke('http_response_size_bytes')).toEqual([
+      {
+        value: 2,
+        attributes,
+      },
+    ])
+  })
+
+  test('observes request and response bytes recorded together', async () => {
+    const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
+
+    const attributes = {
+      method: 'POST',
+      operation: 'object.upload',
+      status_code: '200',
+    }
+
+    metricsModule.recordHttpSizes(7, 2, attributes)
+    metricsModule.recordHttpSizes(3, undefined, { ...attributes })
+    metricsModule.recordHttpSizes(undefined, 5, attributes)
+
+    expect(mockMeter.invoke('http_request_size_bytes')).toEqual([
+      {
+        value: 10,
+        attributes,
+      },
+    ])
+
+    expect(mockMeter.invoke('http_response_size_bytes')).toEqual([
+      {
+        value: 7,
+        attributes,
+      },
+    ])
+  })
+
+  test('ignores invalid http byte sizes without poisoning later observations', async () => {
+    const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
+
+    const attributes = {
+      method: 'POST',
+      operation: 'object.upload',
+      status_code: '200',
+    }
+
+    metricsModule.recordHttpSizes(Number.NaN, Number.POSITIVE_INFINITY, attributes)
+    metricsModule.recordHttpSizes(7, 2, attributes)
+
+    expect(mockMeter.invoke('http_request_size_bytes')).toEqual([
+      {
+        value: 7,
+        attributes,
+      },
+    ])
+
+    expect(mockMeter.invoke('http_response_size_bytes')).toEqual([
+      {
+        value: 2,
+        attributes,
+      },
+    ])
+  })
+
+  test('observes cumulative upload counters with stable attributes even when disabled', async () => {
+    const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
+
+    metricsModule.setMetricsEnabled([
+      { name: 'upload_started', enabled: false },
+      { name: 'upload_success', enabled: false },
+    ])
+    metricsModule.recordUploadStarted('standard')
+    metricsModule.recordUploadStarted('standard')
+    metricsModule.recordUploadStarted('multipart')
+    metricsModule.recordUploadSuccess('standard')
+
+    expect(mockMeter.invoke('upload_started')).toEqual([
+      {
+        value: 2,
+        attributes: { uploadType: 'standard' },
+      },
+      {
+        value: 1,
+        attributes: { uploadType: 'multipart' },
+      },
+    ])
+
+    expect(mockMeter.invoke('upload_success')).toEqual([
+      {
+        value: 1,
+        attributes: { uploadType: 'standard' },
+      },
+    ])
+  })
 })

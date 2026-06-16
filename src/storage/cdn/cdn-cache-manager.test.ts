@@ -57,10 +57,6 @@ describe('CdnCacheManager', () => {
       objectName: 'folder/image.png',
     })
 
-    expect(storage.from).toHaveBeenCalledWith('bucket-id')
-    expect(storage.asSuperUser).toHaveBeenCalledTimes(1)
-    expect(storage.findObject).toHaveBeenCalledWith('folder/image.png')
-
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
     const [input, init] = fetchMock.mock.calls[0]
@@ -198,29 +194,6 @@ describe('CdnCacheManager', () => {
     })
   })
 
-  it('does not call the purge endpoint when the object lookup fails', async () => {
-    const fetchMock = vi.fn<typeof fetch>()
-    vi.stubGlobal('fetch', fetchMock)
-
-    const { CdnCacheManager } = await importCdnCacheManager({
-      cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
-      cdnPurgeEndpointKey: 'test-key',
-    })
-    const lookupError = new Error('object not found')
-    const storage = createStorageMock(vi.fn().mockRejectedValue(lookupError))
-
-    await expect(
-      new CdnCacheManager(storage.storage).purge({
-        type: 'object',
-        tenant: 'tenant-ref',
-        bucket: 'bucket-id',
-        objectName: 'missing.png',
-      })
-    ).rejects.toBe(lookupError)
-
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
   it('requires a CDN purge endpoint URL before checking object existence', async () => {
     const fetchMock = vi.fn<typeof fetch>()
     vi.stubGlobal('fetch', fetchMock)
@@ -334,10 +307,6 @@ describe('CdnCacheManager', () => {
       bucket: 'bucket-id',
       objectName: 'folder/image.png',
     })
-
-    expect(storage.from).toHaveBeenCalledWith('bucket-id')
-    expect(storage.asSuperUser).toHaveBeenCalledTimes(1)
-    expect(storage.findObject).toHaveBeenCalledWith('folder/image.png')
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
 

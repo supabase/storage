@@ -45,7 +45,6 @@ describeAcceptance(
       const client = createRestClient()
       const bucketName = uniqueBucketName('cdn')
       const objectKey = uniqueObjectKey('cdn')
-      const missingObjectKey = uniqueObjectKey('cdn-missing')
 
       try {
         await createRestBucket(bucketName, { isPublic: true })
@@ -62,16 +61,6 @@ describeAcceptance(
         expect(purge.json).toMatchObject({
           message: 'success',
         })
-
-        const missingPurge = await client.request(
-          'DELETE',
-          `/cdn/${bucketName}/${encodePathSegments(missingObjectKey)}`,
-          {
-            expectedStatus: [400, 404],
-            token: requireServiceKey(),
-          }
-        )
-        expect(missingPurge.json).toBeTruthy()
       } finally {
         await cleanupRestResources(bucketName, [objectKey], client)
       }
@@ -105,7 +94,6 @@ describeAcceptance(
     it('purges an entire bucket cache', async () => {
       const client = createRestClient()
       const bucketName = uniqueBucketName('cdn')
-      const missingBucketName = uniqueBucketName('cdn-missing')
 
       try {
         await createRestBucket(bucketName, { isPublic: true })
@@ -117,12 +105,6 @@ describeAcceptance(
         expect(purge.json).toMatchObject({
           message: 'success',
         })
-
-        const missingPurge = await client.request('DELETE', `/cdn/${missingBucketName}`, {
-          expectedStatus: [400, 404],
-          token: requireServiceKey(),
-        })
-        expect(missingPurge.json).toBeTruthy()
       } finally {
         await cleanupRestResources(bucketName, [], client)
       }

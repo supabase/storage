@@ -88,13 +88,6 @@ export class CdnCacheManager {
       throw ERRORS.MissingParameter('CDN_PURGE_ENDPOINT_URL is not set')
     }
 
-    // Check if resource exists
-    if (opts.type === 'object' || opts.type === 'object-transforms') {
-      await this.storage.from(opts.bucket).asSuperUser().findObject(opts.objectName)
-    } else if (opts.type === 'bucket' || opts.type === 'bucket-transforms') {
-      await this.storage.asSuperUser().findBucket(opts.bucket)
-    }
-
     // Build request body based on purge type
     const requestBody: Record<string, unknown> = {
       type: opts.type,

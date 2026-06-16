@@ -1,5 +1,6 @@
 import { CACHE_LOOKUP_OUTCOMES, type CacheLookupOutcome } from '@internal/cache/adapter'
-import { Attributes, metrics } from '@opentelemetry/api'
+import type { CacheName } from '@internal/cache/names'
+import { type Attributes, metrics } from '@opentelemetry/api'
 
 // ============================================================================
 // Metric Registry — tracks all metrics for admin API
@@ -112,9 +113,9 @@ type CacheMetricsState = {
   evictionAttributes: Attributes
 }
 
-const cacheMetricsState = new Map<string, CacheMetricsState>()
+const cacheMetricsState = new Map<CacheName, CacheMetricsState>()
 
-function getCacheMetricsState(cache: string): CacheMetricsState {
+function getCacheMetricsState(cache: CacheName): CacheMetricsState {
   let state = cacheMetricsState.get(cache)
   if (!state) {
     state = {
@@ -133,12 +134,12 @@ function getCacheMetricsState(cache: string): CacheMetricsState {
 }
 
 /** Records a single cache lookup outcome by bumping an in-process tally. */
-export function recordCacheRequest(cache: string, outcome: CacheLookupOutcome): void {
+export function recordCacheRequest(cache: CacheName, outcome: CacheLookupOutcome): void {
   getCacheMetricsState(cache).requests[outcome]++
 }
 
 /** Records a single capacity/ttl cache eviction by bumping an in-process tally. */
-export function recordCacheEviction(cache: string): void {
+export function recordCacheEviction(cache: CacheName): void {
   getCacheMetricsState(cache).evictions++
 }
 

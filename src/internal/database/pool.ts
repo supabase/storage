@@ -1,13 +1,13 @@
 import { type CacheLookupOutcome, createTtlCache, TENANT_POOL_CACHE_NAME } from '@internal/cache'
 import { logger, logSchema } from '@internal/monitoring'
 import {
-  cacheEvictionsTotal,
-  cacheRequestsTotal,
   dbActiveConnection,
   dbActivePool,
   dbInUseConnection,
   isMetricEnabled,
   meter,
+  recordCacheEviction,
+  recordCacheRequest,
 } from '@internal/monitoring/metrics'
 import { JWTPayload } from 'jose'
 import { getConfig } from '../../config'
@@ -95,17 +95,12 @@ async function destroyPoolSafely(pool: PoolStrategy): Promise<void> {
 function recordTenantPoolCacheEviction(reason: string): void {
   // Explicit destroy paths are filtered before this helper is called.
   if (reason === 'stale' || reason === 'evict' || reason === 'delete') {
-    cacheEvictionsTotal.add(1, {
-      cache: TENANT_POOL_CACHE_NAME,
-    })
+    recordCacheEviction(TENANT_POOL_CACHE_NAME)
   }
 }
 
 function recordTenantPoolCacheRequest(outcome: CacheLookupOutcome): void {
-  cacheRequestsTotal.add(1, {
-    cache: TENANT_POOL_CACHE_NAME,
-    outcome,
-  })
+  recordCacheRequest(TENANT_POOL_CACHE_NAME, outcome)
 }
 
 function recordTenantPoolCacheLookup(

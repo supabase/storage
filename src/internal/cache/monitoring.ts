@@ -1,10 +1,10 @@
 import {
   cacheEntries,
-  cacheEvictionsTotal,
-  cacheRequestsTotal,
   cacheSizeBytes,
   isMetricEnabled,
   meter,
+  recordCacheEviction,
+  recordCacheRequest,
 } from '@internal/monitoring/metrics'
 import { Attributes, BatchObservableCallback, Observable } from '@opentelemetry/api'
 import { CacheLookupOptions, Disposable, DisposableCache, OutcomeAwareCache } from './adapter'
@@ -27,13 +27,6 @@ function isDisposable(value: unknown): value is Disposable {
   )
 }
 
-function cacheAttrs(
-  cache: CacheName,
-  attrs?: Record<string, string | number | boolean>
-): Attributes {
-  return attrs ? { cache, ...attrs } : { cache }
-}
-
 export function withCacheEvictionMetrics<K, V, R extends string>(
   cacheName: CacheName,
   dispose?: CacheDisposeHandler<K, V, R>
@@ -42,7 +35,7 @@ export function withCacheEvictionMetrics<K, V, R extends string>(
     // Track capacity-pressure evictions only.
     // TTL expiry/removal reasons are excluded on purpose.
     if (reason === 'evict') {
-      cacheEvictionsTotal.add(1, cacheAttrs(cacheName))
+      recordCacheEviction(cacheName)
     }
 
     dispose?.(value, key, reason)
@@ -51,6 +44,7 @@ export function withCacheEvictionMetrics<K, V, R extends string>(
 
 class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K, V, SetOptions> {
   private disposed = false
+  private readonly cacheAttributes: Attributes
   private readonly observeOccupancy: BatchObservableCallback = (observer) => {
     const cacheEntriesEnabled = isMetricEnabled('cache_entries')
     const cacheSizeBytesEnabled = isMetricEnabled('cache_size_bytes')
@@ -61,14 +55,13 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
 
     this.options?.purgeStale?.()
     const stats = this.cache.getStats()
-    const attrs = cacheAttrs(this.name)
 
     if (cacheEntriesEnabled) {
-      observer.observe(cacheEntries, stats.entries, attrs)
+      observer.observe(cacheEntries, stats.entries, this.cacheAttributes)
     }
 
     if (cacheSizeBytesEnabled) {
-      observer.observe(cacheSizeBytes, stats.sizeBytes, attrs)
+      observer.observe(cacheSizeBytes, stats.sizeBytes, this.cacheAttributes)
     }
   }
 
@@ -77,6 +70,7 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
     private readonly cache: OutcomeAwareCache<K, V, SetOptions>,
     private readonly options?: MonitorCacheOptions
   ) {
+    this.cacheAttributes = { cache: name }
     meter.addBatchObservableCallback(this.observeOccupancy, CACHE_OCCUPANCY_OBSERVABLES)
   }
 
@@ -86,7 +80,7 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
     }
 
     const { value, outcome } = this.cache.getWithOutcome(key)
-    cacheRequestsTotal.add(1, cacheAttrs(this.name, { outcome }))
+    recordCacheRequest(this.name, outcome)
 
     return value
   }

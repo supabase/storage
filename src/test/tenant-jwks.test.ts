@@ -24,7 +24,7 @@ import {
   jwksManager,
   listenForTenantUpdate,
 } from '@internal/database'
-import { cacheRequestsTotal } from '@internal/monitoring/metrics'
+import * as metrics from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
@@ -431,7 +431,7 @@ describe('Tenant jwks configs', () => {
 
   test('Config records one cache request per logical lookup', async () => {
     const listActiveSpy = vi.spyOn(jwksManager['storage'], 'listActive')
-    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const lookupTenantId = 'jwks-cache-metrics-lookup'
     const encryptedJwk = {
       id: 'cache-metrics',
@@ -445,7 +445,7 @@ describe('Tenant jwks configs', () => {
       listActiveSpy.mockImplementation(() => listActiveRequest.promise)
 
       await assertLogicalLookupMetrics({
-        addSpy,
+        recordSpy,
         backendCallSpy: listActiveSpy,
         cacheName: TENANT_JWKS_CACHE_NAME,
         startLookups: () => [
@@ -462,7 +462,7 @@ describe('Tenant jwks configs', () => {
       })
     } finally {
       listActiveSpy.mockRestore()
-      addSpy.mockRestore()
+      recordSpy.mockRestore()
     }
   })
 

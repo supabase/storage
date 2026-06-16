@@ -12,7 +12,6 @@ const { prometheusMetricsEnabled } = getConfig()
 interface MetricsOptions {
   enabledEndpoint?: boolean
   excludeRoutes?: string[]
-  groupStatusCodes?: boolean
 }
 
 export const metrics = (options: MetricsOptions = {}) =>
@@ -41,8 +40,6 @@ export const metricsEndpoint = ({ enabledEndpoint }: MetricsOptions) => {
 interface HttpMetricsOptions {
   /** Routes to exclude from metrics collection */
   excludeRoutes?: string[]
-  /** Whether to group status codes (2xx, 3xx, etc.) */
-  groupStatusCodes?: boolean
 }
 
 /**
@@ -59,7 +56,6 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
         '/health',
         '/healthcheck',
       ]
-      const groupStatusCodes = options.groupStatusCodes ?? true
 
       // Hook into request lifecycle to measure duration
       fastify.addHook('onRequest', async (request) => {
@@ -83,16 +79,11 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
         const durationNs = endTime - startTime
         const durationSeconds = Number(durationNs) / 1e9
 
-        const method = request.method
-        const statusCode = groupStatusCodes
-          ? `${Math.floor(reply.statusCode / 100)}xx`
-          : String(reply.statusCode)
-
         const attributes = {
-          method,
+          method: request.method,
           operation:
             request.operation?.type || request.routeOptions?.config?.operation?.type || 'unknown',
-          status_code: statusCode,
+          status_code: `${reply.statusCode}`,
         }
 
         // Record duration (histogram count replaces httpRequestsTotal)

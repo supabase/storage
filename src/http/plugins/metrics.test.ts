@@ -36,7 +36,7 @@ describe('httpMetrics plugin', () => {
       const expectedAttributes = {
         method: 'POST',
         operation: 'unknown',
-        status_code: '2xx',
+        status_code: '200',
       }
 
       expect(durationSpy).toHaveBeenCalledWith(expect.any(Number), expectedAttributes)

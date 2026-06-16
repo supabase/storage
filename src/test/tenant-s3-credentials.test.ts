@@ -20,7 +20,7 @@ import {
   multitenantPgExecutor,
   s3CredentialsManager,
 } from '@internal/database'
-import { cacheRequestsTotal } from '@internal/monitoring/metrics'
+import * as metrics from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
 import objectSizeOf from 'object-sizeof'
@@ -542,7 +542,7 @@ describe('Tenant S3 credentials', () => {
 
   test('Config records one cache request per logical lookup', async () => {
     const getByKeySpy = vi.spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
-    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const lookupTenantId = 's3-cache-metrics-lookup'
     const lookupAccessKey = 's3-cache-metrics-access-key'
     const credentials = {
@@ -560,7 +560,7 @@ describe('Tenant S3 credentials', () => {
       getByKeySpy.mockImplementation(() => credentialsLookup.promise)
 
       await assertLogicalLookupMetrics({
-        addSpy,
+        recordSpy,
         backendCallSpy: getByKeySpy,
         cacheName: TENANT_S3_CREDENTIALS_CACHE_NAME,
         startLookups: () => [
@@ -580,7 +580,7 @@ describe('Tenant S3 credentials', () => {
       })
     } finally {
       getByKeySpy.mockRestore()
-      addSpy.mockRestore()
+      recordSpy.mockRestore()
     }
   })
 })

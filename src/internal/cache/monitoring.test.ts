@@ -4,14 +4,7 @@ import {
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_CONFIG_CACHE_NAME,
 } from '@internal/cache'
-import {
-  cacheEntries,
-  cacheEvictionsTotal,
-  cacheRequestsTotal,
-  cacheSizeBytes,
-  meter,
-  setMetricsEnabled,
-} from '@internal/monitoring/metrics'
+import * as metrics from '@internal/monitoring/metrics'
 import { vi } from 'vitest'
 import { monitorCache } from './monitoring'
 
@@ -33,7 +26,7 @@ describe('cache telemetry helpers', () => {
   })
 
   test('records cache hits and misses', () => {
-    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
     })
@@ -43,18 +36,12 @@ describe('cache telemetry helpers', () => {
     expect(cache.get('hit')).toEqual({ ok: true })
     expect(cache.get('miss')).toBeUndefined()
 
-    expect(addSpy).toHaveBeenNthCalledWith(1, 1, {
-      cache: TENANT_CONFIG_CACHE_NAME,
-      outcome: 'hit',
-    })
-    expect(addSpy).toHaveBeenNthCalledWith(2, 1, {
-      cache: TENANT_CONFIG_CACHE_NAME,
-      outcome: 'miss',
-    })
+    expect(recordSpy).toHaveBeenNthCalledWith(1, TENANT_CONFIG_CACHE_NAME, 'hit')
+    expect(recordSpy).toHaveBeenNthCalledWith(2, TENANT_CONFIG_CACHE_NAME, 'miss')
   })
 
   test('can read without recording cache request metrics', () => {
-    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
     })
@@ -64,11 +51,11 @@ describe('cache telemetry helpers', () => {
     expect(cache.get('hit', { recordMetrics: false })).toEqual({ ok: true })
     expect(cache.get('miss', { recordMetrics: false })).toBeUndefined()
 
-    expect(addSpy).not.toHaveBeenCalled()
+    expect(recordSpy).not.toHaveBeenCalled()
   })
 
   test('records stale cache reads when allowStale is enabled', () => {
-    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
       ttl: 10,
@@ -82,14 +69,11 @@ describe('cache telemetry helpers', () => {
     vi.advanceTimersByTime(11)
 
     expect(cache.get('stale')).toEqual({ ok: true })
-    expect(addSpy).toHaveBeenCalledWith(1, {
-      cache: TENANT_CONFIG_CACHE_NAME,
-      outcome: 'stale',
-    })
+    expect(recordSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME, 'stale')
   })
 
   test('records evictions', () => {
-    const evictionSpy = vi.spyOn(cacheEvictionsTotal, 'add')
+    const evictionSpy = vi.spyOn(metrics, 'recordCacheEviction')
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 1,
     })
@@ -97,16 +81,11 @@ describe('cache telemetry helpers', () => {
     cache.set('first', { ok: true })
     cache.set('second', { ok: false })
 
-    expect(evictionSpy.mock.calls).toContainEqual([
-      1,
-      {
-        cache: TENANT_CONFIG_CACHE_NAME,
-      },
-    ])
+    expect(evictionSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME)
   })
 
   test('records ttl cache hits and misses', () => {
-    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const cache = createTtlCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
       ttl: 1000,
@@ -117,18 +96,12 @@ describe('cache telemetry helpers', () => {
     expect(cache.get('hit')).toEqual({ ok: true })
     expect(cache.get('miss')).toBeUndefined()
 
-    expect(addSpy).toHaveBeenNthCalledWith(1, 1, {
-      cache: TENANT_CONFIG_CACHE_NAME,
-      outcome: 'hit',
-    })
-    expect(addSpy).toHaveBeenNthCalledWith(2, 1, {
-      cache: TENANT_CONFIG_CACHE_NAME,
-      outcome: 'miss',
-    })
+    expect(recordSpy).toHaveBeenNthCalledWith(1, TENANT_CONFIG_CACHE_NAME, 'hit')
+    expect(recordSpy).toHaveBeenNthCalledWith(2, TENANT_CONFIG_CACHE_NAME, 'miss')
   })
 
   test('records ttl cache evictions', () => {
-    const evictionSpy = vi.spyOn(cacheEvictionsTotal, 'add')
+    const evictionSpy = vi.spyOn(metrics, 'recordCacheEviction')
     const cache = createTtlCache(TENANT_CONFIG_CACHE_NAME, {
       max: 1,
       ttl: 1000,
@@ -137,13 +110,11 @@ describe('cache telemetry helpers', () => {
     cache.set('first', { ok: true })
     cache.set('second', { ok: false })
 
-    expect(evictionSpy).toHaveBeenCalledWith(1, {
-      cache: TENANT_CONFIG_CACHE_NAME,
-    })
+    expect(evictionSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME)
   })
 
   test('chains caller disposeAfter after recording evictions', () => {
-    const evictionSpy = vi.spyOn(cacheEvictionsTotal, 'add')
+    const evictionSpy = vi.spyOn(metrics, 'recordCacheEviction')
     const disposeAfter = vi.fn()
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 1,
@@ -153,9 +124,7 @@ describe('cache telemetry helpers', () => {
     cache.set('first', { ok: true })
     cache.set('second', { ok: false })
 
-    expect(evictionSpy).toHaveBeenCalledWith(1, {
-      cache: TENANT_CONFIG_CACHE_NAME,
-    })
+    expect(evictionSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME)
     expect(disposeAfter).toHaveBeenCalledWith({ ok: true }, 'first', 'evict')
     expect(evictionSpy.mock.invocationCallOrder[0]).toBeLessThan(
       disposeAfter.mock.invocationCallOrder[0]
@@ -195,7 +164,7 @@ describe('cache telemetry helpers', () => {
   })
 
   test('purges stale entries before reporting occupancy metrics', () => {
-    const addBatchObservableCallbackSpy = vi.spyOn(meter, 'addBatchObservableCallback')
+    const addBatchObservableCallbackSpy = vi.spyOn(metrics.meter, 'addBatchObservableCallback')
     let batchObserver: ((observer: { observe: (...args: unknown[]) => void }) => void) | undefined
 
     addBatchObservableCallbackSpy.mockImplementation((callback) => {
@@ -223,16 +192,16 @@ describe('cache telemetry helpers', () => {
     batchObserver?.({ observe: observeSpy })
 
     expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
-    expect(observeSpy).toHaveBeenCalledWith(cacheEntries, 0, {
+    expect(observeSpy).toHaveBeenCalledWith(metrics.cacheEntries, 0, {
       cache: TENANT_CONFIG_CACHE_NAME,
     })
-    expect(observeSpy).toHaveBeenCalledWith(cacheSizeBytes, 0, {
+    expect(observeSpy).toHaveBeenCalledWith(metrics.cacheSizeBytes, 0, {
       cache: TENANT_CONFIG_CACHE_NAME,
     })
   })
 
   test('skips stale purges when occupancy gauges are disabled', () => {
-    const addBatchObservableCallbackSpy = vi.spyOn(meter, 'addBatchObservableCallback')
+    const addBatchObservableCallbackSpy = vi.spyOn(metrics.meter, 'addBatchObservableCallback')
     let batchObserver: ((observer: { observe: (...args: unknown[]) => void }) => void) | undefined
 
     addBatchObservableCallbackSpy.mockImplementation((callback) => {
@@ -252,7 +221,7 @@ describe('cache telemetry helpers', () => {
     monitorCache(TENANT_CONFIG_CACHE_NAME, cache, { purgeStale })
 
     try {
-      setMetricsEnabled([
+      metrics.setMetricsEnabled([
         { name: 'cache_entries', enabled: false },
         { name: 'cache_size_bytes', enabled: false },
       ])
@@ -264,7 +233,7 @@ describe('cache telemetry helpers', () => {
       expect(cache.getStats).not.toHaveBeenCalled()
       expect(observeSpy).not.toHaveBeenCalled()
     } finally {
-      setMetricsEnabled([
+      metrics.setMetricsEnabled([
         { name: 'cache_entries', enabled: true },
         { name: 'cache_size_bytes', enabled: true },
       ])
@@ -274,7 +243,7 @@ describe('cache telemetry helpers', () => {
   test('records stale ttl cache reads before timer cleanup', () => {
     vi.useRealTimers()
 
-    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const cache = createTtlCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
       ttl: 10,
@@ -284,16 +253,13 @@ describe('cache telemetry helpers', () => {
     busyWaitMs(20)
 
     expect(cache.get('stale')).toEqual({ ok: true })
-    expect(addSpy).toHaveBeenCalledWith(1, {
-      cache: TENANT_CONFIG_CACHE_NAME,
-      outcome: 'stale',
-    })
+    expect(recordSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME, 'stale')
   })
 
   test('purges stale ttl entries before reporting occupancy metrics', () => {
     vi.useRealTimers()
 
-    const addBatchObservableCallbackSpy = vi.spyOn(meter, 'addBatchObservableCallback')
+    const addBatchObservableCallbackSpy = vi.spyOn(metrics.meter, 'addBatchObservableCallback')
     let batchObserver: ((observer: { observe: (...args: unknown[]) => void }) => void) | undefined
 
     addBatchObservableCallbackSpy.mockImplementation((callback) => {
@@ -314,17 +280,20 @@ describe('cache telemetry helpers', () => {
     batchObserver?.({ observe: observeSpy })
 
     expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
-    expect(observeSpy).toHaveBeenCalledWith(cacheEntries, 0, {
+    expect(observeSpy).toHaveBeenCalledWith(metrics.cacheEntries, 0, {
       cache: TENANT_CONFIG_CACHE_NAME,
     })
-    expect(observeSpy).toHaveBeenCalledWith(cacheSizeBytes, 0, {
+    expect(observeSpy).toHaveBeenCalledWith(metrics.cacheSizeBytes, 0, {
       cache: TENANT_CONFIG_CACHE_NAME,
     })
   })
 
   test('dispose unregisters occupancy callbacks and tears down wrapped caches', () => {
-    const addBatchObservableCallbackSpy = vi.spyOn(meter, 'addBatchObservableCallback')
-    const removeBatchObservableCallbackSpy = vi.spyOn(meter, 'removeBatchObservableCallback')
+    const addBatchObservableCallbackSpy = vi.spyOn(metrics.meter, 'addBatchObservableCallback')
+    const removeBatchObservableCallbackSpy = vi.spyOn(
+      metrics.meter,
+      'removeBatchObservableCallback'
+    )
     const cache = {
       delete: vi.fn().mockReturnValue(false),
       dispose: vi.fn(),
@@ -336,8 +305,8 @@ describe('cache telemetry helpers', () => {
 
     const monitoredCache = monitorCache(TENANT_CONFIG_CACHE_NAME, cache)
     const [callback, observables] = addBatchObservableCallbackSpy.mock.calls.at(-1) as [
-      Parameters<typeof meter.addBatchObservableCallback>[0],
-      Parameters<typeof meter.addBatchObservableCallback>[1],
+      Parameters<typeof metrics.meter.addBatchObservableCallback>[0],
+      Parameters<typeof metrics.meter.addBatchObservableCallback>[1],
     ]
 
     monitoredCache.dispose()

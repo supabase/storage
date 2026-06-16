@@ -1,14 +1,9 @@
 import type { Mock, MockInstance } from 'vitest'
 
-type CacheMetricAttributes = {
-  cache?: string
-  outcome?: string
-}
-
-type CacheRequestMetricCall = [number, { cache: string; outcome: string }]
+type CacheRequestRecordCall = [string, string]
 
 type AssertLogicalLookupMetricsOptions<T> = {
-  addSpy: MockInstance
+  recordSpy: MockInstance
   backendCallSpy: Mock | MockInstance
   cacheName: string
   startLookups: () => [Promise<T>, Promise<T>, Promise<T>]
@@ -22,24 +17,18 @@ async function waitForImmediate(): Promise<void> {
 }
 
 export function getCacheRequestCalls(
-  addSpy: MockInstance,
+  recordSpy: MockInstance,
   cacheName: string
-): CacheRequestMetricCall[] {
-  return addSpy.mock.calls.filter((call) => {
-    const [, attrs] = call as [number, CacheMetricAttributes | undefined]
-    const metricAttrs = attrs as CacheMetricAttributes | undefined
+): CacheRequestRecordCall[] {
+  return recordSpy.mock.calls.filter((call) => {
+    const [cache, outcome] = call as [unknown, unknown]
 
-    return Boolean(
-      metricAttrs &&
-        typeof metricAttrs === 'object' &&
-        metricAttrs.outcome &&
-        metricAttrs.cache === cacheName
-    )
-  }) as CacheRequestMetricCall[]
+    return cache === cacheName && typeof outcome === 'string'
+  }) as CacheRequestRecordCall[]
 }
 
 export async function assertLogicalLookupMetrics<T>({
-  addSpy,
+  recordSpy,
   backendCallSpy,
   cacheName,
   startLookups,
@@ -48,7 +37,7 @@ export async function assertLogicalLookupMetrics<T>({
   assertCachedHit,
 }: AssertLogicalLookupMetricsOptions<T>): Promise<void> {
   await waitForImmediate()
-  addSpy.mockClear()
+  recordSpy.mockClear()
 
   const lookups = startLookups()
 
@@ -58,12 +47,12 @@ export async function assertLogicalLookupMetrics<T>({
   // Waiters re-check the cache inside
   // the mutex with recordMetrics: false
   // so only these three outer misses are emitted.
-  const misses = [
-    [1, { cache: cacheName, outcome: 'miss' }],
-    [1, { cache: cacheName, outcome: 'miss' }],
-    [1, { cache: cacheName, outcome: 'miss' }],
+  const misses: CacheRequestRecordCall[] = [
+    [cacheName, 'miss'],
+    [cacheName, 'miss'],
+    [cacheName, 'miss'],
   ]
-  expect(getCacheRequestCalls(addSpy, cacheName)).toEqual(misses)
+  expect(getCacheRequestCalls(recordSpy, cacheName)).toEqual(misses)
   expect(backendCallSpy).toHaveBeenCalledTimes(1)
 
   resolveBackend()
@@ -71,12 +60,9 @@ export async function assertLogicalLookupMetrics<T>({
   const results = (await Promise.all(lookups)) as [T, T, T]
   await assertConcurrentResults?.(results)
 
-  expect(getCacheRequestCalls(addSpy, cacheName)).toEqual(misses)
+  expect(getCacheRequestCalls(recordSpy, cacheName)).toEqual(misses)
 
   await assertCachedHit()
 
-  expect(getCacheRequestCalls(addSpy, cacheName)).toEqual([
-    ...misses,
-    [1, { cache: cacheName, outcome: 'hit' }],
-  ])
+  expect(getCacheRequestCalls(recordSpy, cacheName)).toEqual([...misses, [cacheName, 'hit']])
 }

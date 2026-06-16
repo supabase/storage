@@ -1,4 +1,5 @@
-import { metrics } from '@opentelemetry/api'
+import { CACHE_LOOKUP_OUTCOMES, type CacheLookupOutcome } from '@internal/cache/adapter'
+import { Attributes, metrics } from '@opentelemetry/api'
 
 // ============================================================================
 // Metric Registry — tracks all metrics for admin API
@@ -97,18 +98,78 @@ export const fileUploadedSuccess = registerMetric('upload_success', 'counter', (
 
 // ============================================================================
 // Cache Metrics
+//
+// These observable counters intentionally do not check `isMetricEnabled()`.
+// With cumulative async OTel instruments, skipping `observe()` after a runtime
+// disable can keep the previous point exported, then jump on re-enable because
+// the in-process tally kept advancing. Drop these metrics at exporter/view
+// configuration if they need to be suppressed entirely.
 // ============================================================================
+type CacheMetricsState = {
+  requests: Record<CacheLookupOutcome, number>
+  requestAttributes: Record<CacheLookupOutcome, Attributes>
+  evictions: number
+  evictionAttributes: Attributes
+}
+
+const cacheMetricsState = new Map<string, CacheMetricsState>()
+
+function getCacheMetricsState(cache: string): CacheMetricsState {
+  let state = cacheMetricsState.get(cache)
+  if (!state) {
+    state = {
+      requests: { hit: 0, miss: 0, stale: 0 },
+      requestAttributes: {
+        hit: { cache, outcome: 'hit' },
+        miss: { cache, outcome: 'miss' },
+        stale: { cache, outcome: 'stale' },
+      },
+      evictions: 0,
+      evictionAttributes: { cache },
+    }
+    cacheMetricsState.set(cache, state)
+  }
+  return state
+}
+
+/** Records a single cache lookup outcome by bumping an in-process tally. */
+export function recordCacheRequest(cache: string, outcome: CacheLookupOutcome): void {
+  getCacheMetricsState(cache).requests[outcome]++
+}
+
+/** Records a single capacity/ttl cache eviction by bumping an in-process tally. */
+export function recordCacheEviction(cache: string): void {
+  getCacheMetricsState(cache).evictions++
+}
+
 export const cacheRequestsTotal = registerMetric('cache_requests_total', 'counter', () =>
-  meter.createCounter('cache_requests_total', {
+  meter.createObservableCounter('cache_requests_total', {
     description: 'Total cache lookups by cache and outcome',
   })
 )
+cacheRequestsTotal.addCallback((observer) => {
+  for (const state of cacheMetricsState.values()) {
+    for (const outcome of CACHE_LOOKUP_OUTCOMES) {
+      const count = state.requests[outcome]
+      if (count > 0) {
+        observer.observe(count, state.requestAttributes[outcome])
+      }
+    }
+  }
+})
 
 export const cacheEvictionsTotal = registerMetric('cache_evictions_total', 'counter', () =>
-  meter.createCounter('cache_evictions_total', {
+  meter.createObservableCounter('cache_evictions_total', {
     description: 'Total cache evictions',
   })
 )
+cacheEvictionsTotal.addCallback((observer) => {
+  for (const state of cacheMetricsState.values()) {
+    if (state.evictions > 0) {
+      observer.observe(state.evictions, state.evictionAttributes)
+    }
+  }
+})
 
 export const cacheEntries = registerMetric('cache_entries', 'gauge', () =>
   meter.createObservableGauge('cache_entries', {

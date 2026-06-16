@@ -15,7 +15,7 @@ import {
   getTenantConfig,
   onTenantConfigChange,
 } from '@internal/database/tenant'
-import { cacheRequestsTotal } from '@internal/monitoring/metrics'
+import * as metrics from '@internal/monitoring/metrics'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
@@ -1175,7 +1175,7 @@ describe('Tenant configs', () => {
 
   test('Get tenant config records one cache request per logical lookup', async () => {
     const querySpy = vi.spyOn(multitenantPgExecutor, 'query')
-    const addSpy = vi.spyOn(cacheRequestsTotal, 'add')
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const tenantId = 'cache-metrics-lookup'
     const encryptedTenant = {
       anon_key: encrypt('anon'),
@@ -1208,7 +1208,7 @@ describe('Tenant configs', () => {
     try {
       querySpy.mockImplementation(() => tenantQuery.promise)
       await assertLogicalLookupMetrics({
-        addSpy,
+        recordSpy,
         backendCallSpy: querySpy,
         cacheName: TENANT_CONFIG_CACHE_NAME,
         startLookups: () => [
@@ -1226,7 +1226,7 @@ describe('Tenant configs', () => {
     } finally {
       deleteTenantConfig(tenantId)
       querySpy.mockRestore()
-      addSpy.mockRestore()
+      recordSpy.mockRestore()
     }
   })
 })

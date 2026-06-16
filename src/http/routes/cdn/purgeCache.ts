@@ -8,7 +8,7 @@ const purgeObjectParamsSchema = {
   type: 'object',
   properties: {
     bucketName: { type: 'string', examples: ['avatars'] },
-    '*': { type: 'string', examples: ['folder/cat.png'] },
+    '*': { type: 'string', examples: ['folder/cat.png'], minLength: 1 },
   },
   required: ['bucketName', '*'],
 } as const

@@ -2,6 +2,7 @@ import type { CacheLookupOutcome } from '@internal/cache/adapter'
 import type { CacheName } from '@internal/cache/names'
 import { type Attributes, metrics } from '@opentelemetry/api'
 import { createBatchObservableCounterGroup } from './counter'
+import { HTTP_SIZE_METRICS_MAX_STATES } from './metric-limits'
 
 // ============================================================================
 // Metric Registry — tracks all metrics for admin API
@@ -94,7 +95,7 @@ type HttpSizeMetricsState = {
 const httpSizeMetrics = createBatchObservableCounterGroup({
   meter,
   registerMetric,
-  maxStates: 4096,
+  maxStates: HTTP_SIZE_METRICS_MAX_STATES,
   counters: {
     requestBytes: {
       name: 'http_request_size_bytes',

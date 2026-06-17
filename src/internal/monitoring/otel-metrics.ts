@@ -20,6 +20,7 @@ import { getGlobal } from '@platformatic/globals'
 import { FastifyReply, FastifyRequest } from 'fastify'
 import * as os from 'os'
 import { getConfig } from '../../config'
+import { HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT } from './metric-limits'
 
 const {
   version,
@@ -156,6 +157,16 @@ const views = [
     meterName: 'storage-api',
     instrumentName: 'http_request_duration_seconds',
     aggregation: histogramAggregation,
+  },
+  {
+    meterName: 'storage-api',
+    instrumentName: 'http_request_size_bytes',
+    aggregationCardinalityLimit: HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT,
+  },
+  {
+    meterName: 'storage-api',
+    instrumentName: 'http_response_size_bytes',
+    aggregationCardinalityLimit: HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT,
   },
   {
     meterName: 'storage-api',

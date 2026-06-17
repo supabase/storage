@@ -119,14 +119,6 @@ const httpSizeMetrics = createBatchObservableCounterGroup({
       status_code: attributes.status_code,
     },
   }),
-  observe: (observer, counters, state) => {
-    if (state.requestBytes > 0) {
-      observer.observe(counters.requestBytes, state.requestBytes, state.attributes)
-    }
-    if (state.responseBytes > 0) {
-      observer.observe(counters.responseBytes, state.responseBytes, state.attributes)
-    }
-  },
 })
 
 function isRecordableMetricValue(value: number | undefined): value is number {
@@ -199,14 +191,6 @@ const uploadMetrics = createBatchObservableCounterGroup({
     success: 0,
     attributes: { uploadType },
   }),
-  observe: (observer, counters, state) => {
-    if (state.started > 0) {
-      observer.observe(counters.started, state.started, state.attributes)
-    }
-    if (state.success > 0) {
-      observer.observe(counters.success, state.success, state.attributes)
-    }
-  },
 })
 
 /** Records an upload start by bumping an in-process tally. */

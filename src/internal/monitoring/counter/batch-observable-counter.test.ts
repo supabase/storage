@@ -80,14 +80,6 @@ function createUploadGroup(meter: Meter, maxStates = 10) {
     },
     getKey: (uploadType: string) => uploadType,
     createState,
-    observe: (observer, counters, state: UploadState) => {
-      if (state.started > 0) {
-        observer.observe(counters.started, state.started, state.attributes)
-      }
-      if (state.success > 0) {
-        observer.observe(counters.success, state.success, state.attributes)
-      }
-    },
   })
 
   return { group, createState }
@@ -171,7 +163,7 @@ describe('createBatchObservableCounterGroup', () => {
     ])
   })
 
-  test('collect() observes each state once and routes every series to its counter', () => {
+  test('default observer collects each state once and routes every series to its counter', () => {
     const meter = createFakeMeter()
     const { group } = createUploadGroup(meter.meter)
 
@@ -191,7 +183,7 @@ describe('createBatchObservableCounterGroup', () => {
     )
   })
 
-  test('collect() omits series the observe callback guards out', () => {
+  test('default observer omits zero-value series', () => {
     const meter = createFakeMeter()
     const { group } = createUploadGroup(meter.meter)
 
@@ -199,6 +191,65 @@ describe('createBatchObservableCounterGroup', () => {
 
     expect(meter.collect()).toEqual([
       { name: 'upload_started', value: 1, attributes: { uploadType: 'standard' } },
+    ])
+  })
+
+  test('allows a custom observer for non-flat state shapes', () => {
+    const meter = createFakeMeter()
+    const group = createBatchObservableCounterGroup({
+      meter: meter.meter,
+      registerMetric,
+      maxStates: 10,
+      counters: {
+        requests: { name: 'cache_requests_total', description: 'cache requests' },
+        evictions: { name: 'cache_evictions_total', description: 'cache evictions' },
+      },
+      getKey: (cache: string) => cache,
+      createState: (cache: string) => ({
+        requests: {
+          hit: { count: 0, attributes: { cache, outcome: 'hit' } as Attributes },
+          miss: { count: 0, attributes: { cache, outcome: 'miss' } as Attributes },
+        },
+        evictions: 0,
+        evictionAttributes: { cache } as Attributes,
+      }),
+      observe: (observer, counters, state) => {
+        if (state.requests.hit.count > 0) {
+          observer.observe(
+            counters.requests,
+            state.requests.hit.count,
+            state.requests.hit.attributes
+          )
+        }
+        if (state.requests.miss.count > 0) {
+          observer.observe(
+            counters.requests,
+            state.requests.miss.count,
+            state.requests.miss.attributes
+          )
+        }
+        if (state.evictions > 0) {
+          observer.observe(counters.evictions, state.evictions, state.evictionAttributes)
+        }
+      },
+    })
+
+    group.state('metadata').requests.hit.count += 1
+    group.state('metadata').requests.miss.count += 2
+    group.state('metadata').evictions += 1
+
+    expect(meter.collect()).toEqual([
+      {
+        name: 'cache_requests_total',
+        value: 1,
+        attributes: { cache: 'metadata', outcome: 'hit' },
+      },
+      {
+        name: 'cache_requests_total',
+        value: 2,
+        attributes: { cache: 'metadata', outcome: 'miss' },
+      },
+      { name: 'cache_evictions_total', value: 1, attributes: { cache: 'metadata' } },
     ])
   })
 

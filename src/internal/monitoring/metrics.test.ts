@@ -184,6 +184,35 @@ describe('metrics registry', () => {
     ])
   })
 
+  test('keeps http byte counters below the safe threshold', async () => {
+    const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
+    const safeCounterThreshold = Number.MAX_SAFE_INTEGER - 1_000_000_000
+
+    const attributes = {
+      method: 'POST',
+      operation: 'object.upload',
+      status_code: '200',
+    }
+
+    metricsModule.recordHttpSizes(safeCounterThreshold - 1, undefined, attributes)
+    metricsModule.recordHttpSizes(2, undefined, attributes)
+    metricsModule.recordHttpSizes(undefined, Number.MAX_SAFE_INTEGER, attributes)
+
+    expect(mockMeter.invoke('http_request_size_bytes')).toEqual([
+      {
+        value: 2,
+        attributes,
+      },
+    ])
+
+    expect(mockMeter.invoke('http_response_size_bytes')).toEqual([
+      {
+        value: safeCounterThreshold,
+        attributes,
+      },
+    ])
+  })
+
   test('ignores invalid http byte sizes without poisoning later observations', async () => {
     const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
 

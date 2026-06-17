@@ -63,6 +63,22 @@ export function registerMetric<T>(name: string, type: MetricType, factory: () =>
 // cumulative observable counters, so skipping observations on runtime disable
 // would leave stale exported points and later jumps on re-enable.
 // ============================================================================
+const SAFE_COUNTER_THRESHOLD = Number.MAX_SAFE_INTEGER - 1_000_000_000
+
+function safeAdd(current: number, amount: number): number {
+  const next = current + amount
+
+  if (
+    current >= SAFE_COUNTER_THRESHOLD ||
+    next >= SAFE_COUNTER_THRESHOLD ||
+    !Number.isSafeInteger(next)
+  ) {
+    return Math.min(amount, SAFE_COUNTER_THRESHOLD)
+  }
+
+  return next
+}
+
 type HttpMetricAttributes = {
   method: string
   operation: string
@@ -142,11 +158,11 @@ export function recordHttpSizes(
   const state = httpSizeMetrics.state(attributes)
 
   if (shouldRecordRequestSize) {
-    state.requestBytes += requestSizeBytes
+    state.requestBytes = safeAdd(state.requestBytes, requestSizeBytes)
   }
 
   if (shouldRecordResponseSize) {
-    state.responseBytes += responseSizeBytes
+    state.responseBytes = safeAdd(state.responseBytes, responseSizeBytes)
   }
 }
 
@@ -194,12 +210,14 @@ const uploadMetrics = createBatchObservableCounterGroup({
 
 /** Records an upload start by bumping an in-process tally. */
 export function recordUploadStarted(uploadType: string): void {
-  uploadMetrics.state(uploadType).started++
+  const state = uploadMetrics.state(uploadType)
+  state.started = safeAdd(state.started, 1)
 }
 
 /** Records an upload success by bumping an in-process tally. */
 export function recordUploadSuccess(uploadType: string): void {
-  uploadMetrics.state(uploadType).success++
+  const state = uploadMetrics.state(uploadType)
+  state.success = safeAdd(state.success, 1)
 }
 
 // ============================================================================
@@ -266,12 +284,14 @@ const cacheMetrics = createBatchObservableCounterGroup({
 
 /** Records a single cache lookup outcome by bumping an in-process tally. */
 export function recordCacheRequest(cache: CacheName, outcome: CacheLookupOutcome): void {
-  cacheMetrics.state(cache).requests[outcome].count++
+  const state = cacheMetrics.state(cache).requests[outcome]
+  state.count = safeAdd(state.count, 1)
 }
 
 /** Records a single capacity/ttl cache eviction by bumping an in-process tally. */
 export function recordCacheEviction(cache: CacheName): void {
-  cacheMetrics.state(cache).evictions++
+  const state = cacheMetrics.state(cache)
+  state.evictions = safeAdd(state.evictions, 1)
 }
 
 export const cacheEntries = registerMetric('cache_entries', 'gauge', () =>

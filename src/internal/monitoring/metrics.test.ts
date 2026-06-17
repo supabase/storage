@@ -152,7 +152,7 @@ describe('metrics registry', () => {
     ])
   })
 
-  test('observes cumulative http byte counters with stable attributes even when disabled', async () => {
+  test('accumulates request and response bytes independently, even when disabled', async () => {
     const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
 
     const attributes = {
@@ -165,34 +165,6 @@ describe('metrics registry', () => {
       { name: 'http_request_size_bytes', enabled: false },
       { name: 'http_response_size_bytes', enabled: false },
     ])
-    metricsModule.recordHttpSizes(7, undefined, attributes)
-    metricsModule.recordHttpSizes(3, undefined, { ...attributes })
-    metricsModule.recordHttpSizes(undefined, 2, attributes)
-
-    expect(mockMeter.invoke('http_request_size_bytes')).toEqual([
-      {
-        value: 10,
-        attributes,
-      },
-    ])
-
-    expect(mockMeter.invoke('http_response_size_bytes')).toEqual([
-      {
-        value: 2,
-        attributes,
-      },
-    ])
-  })
-
-  test('observes request and response bytes recorded together', async () => {
-    const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
-
-    const attributes = {
-      method: 'POST',
-      operation: 'object.upload',
-      status_code: '200',
-    }
-
     metricsModule.recordHttpSizes(7, 2, attributes)
     metricsModule.recordHttpSizes(3, undefined, { ...attributes })
     metricsModule.recordHttpSizes(undefined, 5, attributes)

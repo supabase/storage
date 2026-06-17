@@ -114,13 +114,6 @@ const httpRequestSizeBytes = registerMetric('http_request_size_bytes', 'counter'
     unit: 'bytes',
   })
 )
-httpRequestSizeBytes.addCallback((observer) => {
-  httpSizeMetricsState.forEach((state) => {
-    if (state.requestBytes > 0) {
-      observer.observe(state.requestBytes, state.attributes)
-    }
-  })
-})
 
 const httpResponseSizeBytes = registerMetric('http_response_size_bytes', 'counter', () =>
   meter.createObservableCounter('http_response_size_bytes', {
@@ -128,13 +121,20 @@ const httpResponseSizeBytes = registerMetric('http_response_size_bytes', 'counte
     unit: 'bytes',
   })
 )
-httpResponseSizeBytes.addCallback((observer) => {
-  httpSizeMetricsState.forEach((state) => {
-    if (state.responseBytes > 0) {
-      observer.observe(state.responseBytes, state.attributes)
-    }
-  })
-})
+
+meter.addBatchObservableCallback(
+  (observer) => {
+    httpSizeMetricsState.forEach((state) => {
+      if (state.requestBytes > 0) {
+        observer.observe(httpRequestSizeBytes, state.requestBytes, state.attributes)
+      }
+      if (state.responseBytes > 0) {
+        observer.observe(httpResponseSizeBytes, state.responseBytes, state.attributes)
+      }
+    })
+  },
+  [httpRequestSizeBytes, httpResponseSizeBytes]
+)
 
 /** Records request/response bytes by bumping in-process tallies with one state lookup. */
 export function recordHttpSizes(
@@ -192,26 +192,26 @@ const fileUploadStarted = registerMetric('upload_started', 'counter', () =>
     description: 'Total uploads started',
   })
 )
-fileUploadStarted.addCallback((observer) => {
-  uploadMetricsState.forEach((state) => {
-    if (state.started > 0) {
-      observer.observe(state.started, state.attributes)
-    }
-  })
-})
 
 const fileUploadedSuccess = registerMetric('upload_success', 'counter', () =>
   meter.createObservableCounter('upload_success', {
     description: 'Total successful uploads',
   })
 )
-fileUploadedSuccess.addCallback((observer) => {
-  uploadMetricsState.forEach((state) => {
-    if (state.success > 0) {
-      observer.observe(state.success, state.attributes)
-    }
-  })
-})
+
+meter.addBatchObservableCallback(
+  (observer) => {
+    uploadMetricsState.forEach((state) => {
+      if (state.started > 0) {
+        observer.observe(fileUploadStarted, state.started, state.attributes)
+      }
+      if (state.success > 0) {
+        observer.observe(fileUploadedSuccess, state.success, state.attributes)
+      }
+    })
+  },
+  [fileUploadStarted, fileUploadedSuccess]
+)
 
 /** Records an upload start by bumping an in-process tally. */
 export function recordUploadStarted(uploadType: string): void {
@@ -277,34 +277,34 @@ const cacheRequestsTotal = registerMetric('cache_requests_total', 'counter', () 
     description: 'Total cache lookups by cache and outcome',
   })
 )
-cacheRequestsTotal.addCallback((observer) => {
-  cacheMetricsState.forEach((state) => {
-    const requests = state.requests
-
-    if (requests.hit.count > 0) {
-      observer.observe(requests.hit.count, requests.hit.attributes)
-    }
-    if (requests.miss.count > 0) {
-      observer.observe(requests.miss.count, requests.miss.attributes)
-    }
-    if (requests.stale.count > 0) {
-      observer.observe(requests.stale.count, requests.stale.attributes)
-    }
-  })
-})
 
 const cacheEvictionsTotal = registerMetric('cache_evictions_total', 'counter', () =>
   meter.createObservableCounter('cache_evictions_total', {
     description: 'Total cache evictions',
   })
 )
-cacheEvictionsTotal.addCallback((observer) => {
-  cacheMetricsState.forEach((state) => {
-    if (state.evictions > 0) {
-      observer.observe(state.evictions, state.evictionAttributes)
-    }
-  })
-})
+
+meter.addBatchObservableCallback(
+  (observer) => {
+    cacheMetricsState.forEach((state) => {
+      const requests = state.requests
+
+      if (requests.hit.count > 0) {
+        observer.observe(cacheRequestsTotal, requests.hit.count, requests.hit.attributes)
+      }
+      if (requests.miss.count > 0) {
+        observer.observe(cacheRequestsTotal, requests.miss.count, requests.miss.attributes)
+      }
+      if (requests.stale.count > 0) {
+        observer.observe(cacheRequestsTotal, requests.stale.count, requests.stale.attributes)
+      }
+      if (state.evictions > 0) {
+        observer.observe(cacheEvictionsTotal, state.evictions, state.evictionAttributes)
+      }
+    })
+  },
+  [cacheRequestsTotal, cacheEvictionsTotal]
+)
 
 export const cacheEntries = registerMetric('cache_entries', 'gauge', () =>
   meter.createObservableGauge('cache_entries', {

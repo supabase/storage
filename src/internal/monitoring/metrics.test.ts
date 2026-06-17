@@ -1,4 +1,4 @@
-import type { Meter } from '@opentelemetry/api'
+import type { BatchObservableCallback, Meter, Observable } from '@opentelemetry/api'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 interface CapturedObservable {
@@ -13,21 +13,35 @@ interface CapturedObservation {
   attributes?: Record<string, unknown>
 }
 
+interface CapturedBatchObservable {
+  callback: BatchObservableCallback
+  observables: Observable[]
+}
+
 function createMockMeter(): {
   meter: Meter
   invoke: (name: string) => CapturedObservation[]
 } {
   const observables: CapturedObservable[] = []
+  const batchObservables: CapturedBatchObservable[] = []
+  const observableNames = new Map<Observable, string>()
   const noopMetric = {
     add: vi.fn(),
     record: vi.fn(),
   }
 
-  const createObservable = () => (name: string) => ({
-    addCallback(callback: CapturedObservable['callback']) {
-      observables.push({ name, callback })
-    },
-  })
+  const createObservable = () => (name: string) => {
+    const observable = {
+      addCallback(callback: CapturedObservable['callback']) {
+        observables.push({ name, callback })
+      },
+      removeCallback: vi.fn(),
+    } as unknown as Observable
+
+    observableNames.set(observable, name)
+
+    return observable
+  }
 
   const meter = {
     createCounter: vi.fn(() => noopMetric),
@@ -36,7 +50,11 @@ function createMockMeter(): {
     createObservableCounter: vi.fn(createObservable()),
     createObservableGauge: vi.fn(createObservable()),
     createUpDownCounter: vi.fn(() => noopMetric),
-    addBatchObservableCallback: vi.fn(),
+    addBatchObservableCallback: vi.fn(
+      (callback: BatchObservableCallback, observables: Observable[]) => {
+        batchObservables.push({ callback, observables })
+      }
+    ),
     removeBatchObservableCallback: vi.fn(),
   } as unknown as Meter
 
@@ -52,6 +70,24 @@ function createMockMeter(): {
       if (observable.name === name) {
         observable.callback(observer)
       }
+    }
+
+    for (const batchObservable of batchObservables) {
+      const hasObservable = batchObservable.observables.some(
+        (observable) => observableNames.get(observable) === name
+      )
+
+      if (!hasObservable) {
+        continue
+      }
+
+      void batchObservable.callback({
+        observe: (observable, value, attributes) => {
+          if (observableNames.get(observable) === name) {
+            observations.push({ value, attributes })
+          }
+        },
+      })
     }
 
     return observations

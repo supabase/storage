@@ -20,6 +20,14 @@ type BatchObservableCounterGroup<TInput, TState> = {
   state(input: TInput): TState
 }
 
+type DefaultBatchObservableCounterGroup<
+  TCounter extends string,
+  TInput,
+  TState,
+> = BatchObservableCounterGroup<TInput, TState> & {
+  add(input: TInput, counterKey: TCounter, amount?: number): void
+}
+
 type BatchObservableCounterGroupOptions<
   TCounter extends string,
   TInput,
@@ -47,6 +55,22 @@ type CustomObservableCounterGroupOptions<
   ): void
 }
 
+export const SAFE_COUNTER_THRESHOLD = Number.MAX_SAFE_INTEGER - 1_000_000_000
+
+export function safeAddCounter(current: number, amount: number): number {
+  const next = current + amount
+
+  if (
+    current >= SAFE_COUNTER_THRESHOLD ||
+    next >= SAFE_COUNTER_THRESHOLD ||
+    !Number.isSafeInteger(next)
+  ) {
+    return Math.min(amount, SAFE_COUNTER_THRESHOLD)
+  }
+
+  return next
+}
+
 function observeDefaultCounters<TCounter extends string>(
   observer: BatchObservableObserver,
   counters: Record<TCounter, Observable>,
@@ -69,7 +93,7 @@ export function createBatchObservableCounterGroup<
   TState extends DefaultObservableCounterState<TCounter>,
 >(
   options: BatchObservableCounterGroupOptions<TCounter, TInput, TKey, TState>
-): BatchObservableCounterGroup<TInput, TState>
+): DefaultBatchObservableCounterGroup<TCounter, TInput, TState>
 
 export function createBatchObservableCounterGroup<
   TCounter extends string,
@@ -89,7 +113,9 @@ export function createBatchObservableCounterGroup<
   options: BatchObservableCounterGroupOptions<TCounter, TInput, TKey, TState> & {
     observe?: CustomObservableCounterGroupOptions<TCounter, TInput, TKey, TState>['observe']
   }
-): BatchObservableCounterGroup<TInput, TState> {
+): BatchObservableCounterGroup<TInput, TState> & {
+  add(input: TInput, counterKey: TCounter, amount?: number): void
+} {
   if (!Number.isInteger(options.maxStates) || options.maxStates < 1) {
     throw new Error('maxStates must be a positive integer')
   }
@@ -127,17 +153,28 @@ export function createBatchObservableCounterGroup<
     counterKeys.map((counterKey) => counters[counterKey])
   )
 
-  return {
-    state(input) {
-      const key = options.getKey(input)
-      let state = states.get(key)
+  const getState = (input: TInput): TState => {
+    const key = options.getKey(input)
+    let state = states.get(key)
 
-      if (!state) {
-        state = options.createState(input)
-        states.set(key, state)
+    if (!state) {
+      state = options.createState(input)
+      states.set(key, state)
+    }
+
+    return state
+  }
+
+  return {
+    state: getState,
+    add(input, counterKey, amount = 1) {
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return
       }
 
-      return state
+      const state = getState(input) as unknown as DefaultObservableCounterState<TCounter>
+      const counterState = state as Record<TCounter, number>
+      counterState[counterKey] = safeAddCounter(counterState[counterKey], amount)
     },
   }
 }

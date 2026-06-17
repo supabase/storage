@@ -1,7 +1,10 @@
 import type { Attributes, BatchObservableCallback, Meter, Observable } from '@opentelemetry/api'
 import { describe, expect, test, vi } from 'vitest'
 
-import { createBatchObservableCounterGroup } from './batch-observable-counter'
+import {
+  createBatchObservableCounterGroup,
+  SAFE_COUNTER_THRESHOLD,
+} from './batch-observable-counter'
 
 interface Observation {
   name: string
@@ -191,6 +194,36 @@ describe('createBatchObservableCounterGroup', () => {
 
     expect(meter.collect()).toEqual([
       { name: 'upload_started', value: 1, attributes: { uploadType: 'standard' } },
+    ])
+  })
+
+  test('add() increments flat counter state without an update object', () => {
+    const meter = createFakeMeter()
+    const { group, createState } = createUploadGroup(meter.meter)
+
+    group.add('standard', 'started')
+    group.add('standard', 'success', 2)
+    group.add('standard', 'started', 0)
+    group.add('standard', 'success', Number.NaN)
+
+    expect(createState).toHaveBeenCalledTimes(1)
+    expect(meter.collect()).toEqual(
+      expect.arrayContaining([
+        { name: 'upload_started', value: 1, attributes: { uploadType: 'standard' } },
+        { name: 'upload_success', value: 2, attributes: { uploadType: 'standard' } },
+      ])
+    )
+  })
+
+  test('add() keeps flat counters below the safe threshold', () => {
+    const meter = createFakeMeter()
+    const { group } = createUploadGroup(meter.meter)
+
+    group.add('standard', 'started', SAFE_COUNTER_THRESHOLD - 1)
+    group.add('standard', 'started', 2)
+
+    expect(meter.collect()).toEqual([
+      { name: 'upload_started', value: 2, attributes: { uploadType: 'standard' } },
     ])
   })
 

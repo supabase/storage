@@ -61,7 +61,7 @@ interface UploadState {
 }
 
 /** A representative two-counter group keyed by a plain string, mirroring the upload metrics. */
-function createUploadGroup(meter: Meter) {
+function createUploadGroup(meter: Meter, maxStates = 10) {
   const createState = vi.fn(
     (uploadType: string): UploadState => ({
       started: 0,
@@ -73,6 +73,7 @@ function createUploadGroup(meter: Meter) {
   const group = createBatchObservableCounterGroup({
     meter,
     registerMetric,
+    maxStates,
     counters: {
       started: { name: 'upload_started', description: 'Total uploads started' },
       success: { name: 'upload_success', description: 'Total successful uploads' },
@@ -111,6 +112,7 @@ describe('createBatchObservableCounterGroup', () => {
     createBatchObservableCounterGroup({
       meter: meter.meter,
       registerMetric,
+      maxStates: 10,
       counters: {
         bytes: { name: 'request_bytes', description: 'bytes in', unit: 'bytes' },
         count: { name: 'request_total', description: 'requests' },
@@ -149,6 +151,7 @@ describe('createBatchObservableCounterGroup', () => {
     const group = createBatchObservableCounterGroup({
       meter: meter.meter,
       registerMetric,
+      maxStates: 10,
       counters: { total: { name: 'http_total', description: 'requests' } },
       getKey: (input: { method: string; status: string }) => `${input.method}\x00${input.status}`,
       createState,
@@ -176,11 +179,16 @@ describe('createBatchObservableCounterGroup', () => {
     group.state('standard').success += 1
     group.state('multipart').started += 1
 
-    expect(meter.collect()).toEqual([
-      { name: 'upload_started', value: 2, attributes: { uploadType: 'standard' } },
-      { name: 'upload_success', value: 1, attributes: { uploadType: 'standard' } },
-      { name: 'upload_started', value: 1, attributes: { uploadType: 'multipart' } },
-    ])
+    const observations = meter.collect()
+
+    expect(observations).toHaveLength(3)
+    expect(observations).toEqual(
+      expect.arrayContaining([
+        { name: 'upload_started', value: 2, attributes: { uploadType: 'standard' } },
+        { name: 'upload_success', value: 1, attributes: { uploadType: 'standard' } },
+        { name: 'upload_started', value: 1, attributes: { uploadType: 'multipart' } },
+      ])
+    )
   })
 
   test('collect() omits series the observe callback guards out', () => {
@@ -192,5 +200,52 @@ describe('createBatchObservableCounterGroup', () => {
     expect(meter.collect()).toEqual([
       { name: 'upload_started', value: 1, attributes: { uploadType: 'standard' } },
     ])
+  })
+
+  test('evicts least recently used states once maxStates is reached', () => {
+    const meter = createFakeMeter()
+    const { group, createState } = createUploadGroup(meter.meter, 2)
+
+    group.state('standard').started += 1
+    group.state('multipart').started += 1
+    group.state('standard').success += 1
+    group.state('resumable').started += 1
+
+    const observations = meter.collect()
+
+    expect(createState).toHaveBeenCalledTimes(3)
+    expect(observations).toHaveLength(3)
+    expect(observations).toEqual(
+      expect.arrayContaining([
+        { name: 'upload_started', value: 1, attributes: { uploadType: 'standard' } },
+        { name: 'upload_success', value: 1, attributes: { uploadType: 'standard' } },
+        { name: 'upload_started', value: 1, attributes: { uploadType: 'resumable' } },
+      ])
+    )
+    expect(
+      observations.some((observation) => observation.attributes?.uploadType === 'multipart')
+    ).toBe(false)
+
+    const recreated = group.state('multipart')
+
+    expect(recreated.started).toBe(0)
+    expect(recreated.success).toBe(0)
+    expect(createState).toHaveBeenCalledTimes(4)
+  })
+
+  test('requires a positive maxStates cap', () => {
+    const meter = createFakeMeter()
+
+    expect(() =>
+      createBatchObservableCounterGroup({
+        meter: meter.meter,
+        registerMetric,
+        maxStates: 0,
+        counters: { total: { name: 'http_total', description: 'requests' } },
+        getKey: (key: string) => key,
+        createState: () => ({ count: 0 }),
+        observe: () => undefined,
+      })
+    ).toThrow('maxStates must be a positive integer')
   })
 })

@@ -78,6 +78,7 @@ type HttpSizeMetricsState = {
 const httpSizeMetrics = createBatchObservableCounterGroup({
   meter,
   registerMetric,
+  maxStates: 4096,
   counters: {
     requestBytes: {
       name: 'http_request_size_bytes',
@@ -164,6 +165,7 @@ type UploadMetricsState = {
 const uploadMetrics = createBatchObservableCounterGroup({
   meter,
   registerMetric,
+  maxStates: 32,
   counters: {
     started: {
       name: 'upload_started',
@@ -223,6 +225,7 @@ type CacheMetricsState = {
 const cacheMetrics = createBatchObservableCounterGroup({
   meter,
   registerMetric,
+  maxStates: 64,
   counters: {
     requests: {
       name: 'cache_requests_total',

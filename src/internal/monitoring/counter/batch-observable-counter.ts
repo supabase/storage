@@ -1,4 +1,5 @@
 import type { BatchObservableCallback, Meter, Observable } from '@opentelemetry/api'
+import { LRUCache } from 'lru-cache'
 
 type BatchObservableObserver = Parameters<BatchObservableCallback>[0]
 
@@ -18,12 +19,13 @@ type BatchObservableCounterGroup<TInput, TState> = {
 export function createBatchObservableCounterGroup<
   TCounter extends string,
   TInput,
-  TKey,
-  TState,
+  TKey extends {},
+  TState extends {},
 >(options: {
   meter: Meter
   registerMetric: RegisterCounterMetric
   counters: Record<TCounter, ObservableCounterConfig>
+  maxStates: number
   getKey(input: TInput): TKey
   createState(input: TInput): TState
   observe(
@@ -32,7 +34,11 @@ export function createBatchObservableCounterGroup<
     state: TState
   ): void
 }): BatchObservableCounterGroup<TInput, TState> {
-  const states = new Map<TKey, TState>()
+  if (!Number.isInteger(options.maxStates) || options.maxStates < 1) {
+    throw new Error('maxStates must be a positive integer')
+  }
+
+  const states = new LRUCache<TKey, TState>({ max: options.maxStates })
   const counterKeys = Object.keys(options.counters) as TCounter[]
   const counters = {} as Record<TCounter, Observable>
 

@@ -1830,7 +1830,7 @@ describe('testing delete object', () => {
  * DELETE /objects
  * */
 describe('testing deleting multiple objects', () => {
-  test('check if RLS policies are respected: authenticated user is able to delete authenticated resource', async () => {
+  test('authenticated user can bulk delete objects up to the request cap', async () => {
     const runId = randomUUID()
     const bucketName = 'bucket2'
     const objectNames = [...Array(MAX_OBJECTS_PER_REQUEST).keys()].map(

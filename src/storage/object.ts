@@ -766,13 +766,19 @@ export class ObjectStorage {
    * @param expiresIn
    */
   async signObjectUrls(paths: string[], expiresIn: number) {
-    const results: { name: string }[] = []
+    let results: { name: string }[]
 
-    for (let i = 0; i < paths.length; i += MAX_OBJECTS_PER_LOOKUP_BATCH) {
-      const pathsSubset = paths.slice(i, i + MAX_OBJECTS_PER_LOOKUP_BATCH)
+    if (paths.length <= MAX_OBJECTS_PER_LOOKUP_BATCH) {
+      results = await this.findObjects(paths, 'name')
+    } else {
+      results = []
 
-      const objects = await this.findObjects(pathsSubset, 'name')
-      results.push(...objects)
+      for (let i = 0; i < paths.length; i += MAX_OBJECTS_PER_LOOKUP_BATCH) {
+        const pathsSubset = paths.slice(i, i + MAX_OBJECTS_PER_LOOKUP_BATCH)
+
+        const objects = await this.findObjects(pathsSubset, 'name')
+        results.push(...objects)
+      }
     }
 
     const nameSet = new Set(results.map(({ name }) => name))

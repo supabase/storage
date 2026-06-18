@@ -430,6 +430,8 @@ export class S3Backend implements StorageBackendAdapter {
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
     try {
+      const deleteRequests: Promise<unknown>[] = []
+
       for (let i = 0; i < prefixes.length; i += MAX_KEYS_PER_S3_DELETE) {
         const s3Prefixes = prefixes.slice(i, i + MAX_KEYS_PER_S3_DELETE).map((ele) => {
           return { Key: ele }
@@ -441,7 +443,16 @@ export class S3Backend implements StorageBackendAdapter {
             Objects: s3Prefixes,
           },
         })
-        await this.client.send(command)
+        deleteRequests.push(this.client.send(command))
+      }
+
+      const results = await Promise.allSettled(deleteRequests)
+      const rejected = results.find((result): result is PromiseRejectedResult => {
+        return result.status === 'rejected'
+      })
+
+      if (rejected) {
+        throw rejected.reason
       }
     } catch (e) {
       throw StorageBackendError.fromError(e)

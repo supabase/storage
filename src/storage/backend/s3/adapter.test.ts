@@ -192,6 +192,33 @@ describe('S3Backend', () => {
         },
       })
     })
+
+    test('sends DeleteObjectsCommand chunks concurrently', async () => {
+      const firstDelete = Promise.withResolvers<{ $metadata: { httpStatusCode: number } }>()
+      const secondDelete = Promise.withResolvers<{ $metadata: { httpStatusCode: number } }>()
+      mockSend.mockImplementationOnce(() => firstDelete.promise)
+      mockSend.mockImplementationOnce(() => secondDelete.promise)
+
+      const backend = createBackend()
+      const keys = [...Array(MAX_KEYS_PER_S3_DELETE + 1).keys()].map((i) => `object-${i}`)
+
+      const deletePromise = backend.deleteObjects('test-bucket', keys)
+
+      expect(mockSend).toHaveBeenCalledTimes(2)
+
+      firstDelete.resolve({
+        $metadata: {
+          httpStatusCode: 200,
+        },
+      })
+      secondDelete.resolve({
+        $metadata: {
+          httpStatusCode: 200,
+        },
+      })
+
+      await expect(deletePromise).resolves.toBeUndefined()
+    })
   })
 
   describe('privateAssetUrl', () => {

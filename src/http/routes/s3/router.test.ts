@@ -273,7 +273,7 @@ describe('DeleteObject route mapping', () => {
       },
     }
 
-    expect(data.Body.Delete.Object).toHaveLength(1000)
+    expect(data.Body.Delete.Object).toHaveLength(MAX_OBJECTS_PER_REQUEST)
     expect(validate(data)).toBe(true)
     expect(validate.errors).toBeNull()
   })

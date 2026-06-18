@@ -243,13 +243,13 @@ describe('CompleteMultipartUpload route mapping', () => {
 })
 
 describe('DeleteObject route mapping', () => {
-  const getDeleteObjectsRoute = async () => {
+  it('accepts DeleteObjects payloads at the object request cap in router validation', async () => {
     const { default: DeleteObject } = await import('./commands/delete-object')
     const router = new Router()
 
     DeleteObject(router as unknown as S3Router)
 
-    return router
+    const route = router
       .routes()
       .get('/:Bucket')
       ?.find(
@@ -257,27 +257,21 @@ describe('DeleteObject route mapping', () => {
           candidate.method === 'post' &&
           candidate.querystringMatches.some((match) => match.key === 'delete')
       )
-  }
-
-  const createDeleteObjectsData = (objectCount: number) => ({
-    Params: { Bucket: 'bucket' },
-    Querystring: { delete: '' },
-    Body: {
-      Delete: {
-        Object: [...Array(objectCount).keys()].map((i) => ({
-          Key: `object-${i}`,
-        })),
-      },
-    },
-  })
-
-  it('accepts DeleteObjects payloads at the object request cap in router validation', async () => {
-    const route = await getDeleteObjectsRoute()
 
     expect(route).toBeDefined()
 
     const validate = route!.compiledSchema()
-    const data = createDeleteObjectsData(MAX_OBJECTS_PER_REQUEST)
+    const data = {
+      Params: { Bucket: 'bucket' },
+      Querystring: { delete: '' },
+      Body: {
+        Delete: {
+          Object: [...Array(MAX_OBJECTS_PER_REQUEST).keys()].map((i) => ({
+            Key: `object-${i}`,
+          })),
+        },
+      },
+    }
 
     expect(data.Body.Delete.Object).toHaveLength(1000)
     expect(validate(data)).toBe(true)
@@ -285,12 +279,34 @@ describe('DeleteObject route mapping', () => {
   })
 
   it('rejects DeleteObjects payloads over the object request cap in router validation', async () => {
-    const route = await getDeleteObjectsRoute()
+    const { default: DeleteObject } = await import('./commands/delete-object')
+    const router = new Router()
+
+    DeleteObject(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket')
+      ?.find(
+        (candidate) =>
+          candidate.method === 'post' &&
+          candidate.querystringMatches.some((match) => match.key === 'delete')
+      )
 
     expect(route).toBeDefined()
 
     const validate = route!.compiledSchema()
-    const data = createDeleteObjectsData(MAX_OBJECTS_PER_REQUEST + 1)
+    const data = {
+      Params: { Bucket: 'bucket' },
+      Querystring: { delete: '' },
+      Body: {
+        Delete: {
+          Object: [...Array(MAX_OBJECTS_PER_REQUEST + 1).keys()].map((i) => ({
+            Key: `object-${i}`,
+          })),
+        },
+      },
+    }
 
     expect(validate(data)).toBe(false)
     expect(validate.errors).toEqual([

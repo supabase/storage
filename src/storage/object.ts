@@ -180,7 +180,7 @@ export class ObjectStorage {
    * @param prefixes
    */
   async deleteObjects(prefixes: string[]) {
-    let results: { name: string }[] = []
+    const results: { name: string }[] = []
 
     for (let i = 0; i < prefixes.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
       const prefixesSubset = prefixes.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
@@ -194,24 +194,17 @@ export class ObjectStorage {
           // if successfully deleted, delete from s3 too
           // todo: consider moving this to a queue
           const prefixesToDelete = data.reduce((all, { name, version }) => {
-            all.push(
-              this.location.getKeyLocation({
-                tenantId: db.tenantId,
-                bucketId: this.bucketId,
-                objectName: name,
-                version,
-              })
-            )
+            const location = this.location.getKeyLocation({
+              tenantId: db.tenantId,
+              bucketId: this.bucketId,
+              objectName: name,
+              version,
+            })
+
+            all.push(location)
 
             if (version) {
-              all.push(
-                this.location.getKeyLocation({
-                  tenantId: db.tenantId,
-                  bucketId: this.bucketId,
-                  objectName: name,
-                  version,
-                }) + '.info'
-              )
+              all.push(`${location}.info`)
             }
             return all
           }, [] as string[])
@@ -773,7 +766,7 @@ export class ObjectStorage {
    * @param expiresIn
    */
   async signObjectUrls(paths: string[], expiresIn: number) {
-    let results: { name: string }[] = []
+    const results: { name: string }[] = []
 
     for (let i = 0; i < paths.length; i += MAX_OBJECTS_PER_LOOKUP_BATCH) {
       const pathsSubset = paths.slice(i, i + MAX_OBJECTS_PER_LOOKUP_BATCH)

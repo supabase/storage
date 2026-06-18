@@ -11,21 +11,40 @@ type ObservableCounterConfig = {
   unit?: string
 }
 
-type DefaultObservableCounterState<TCounter extends string> = Record<TCounter, number> & {
+type AddCounterMethodName<TCounter extends string> = `add${Capitalize<TCounter>}`
+
+export type ObservableCounterSeries = {
+  count: number
   attributes: Attributes
 }
+
+type CounterDimension<TValue> = TValue extends object
+  ? {
+      [TKey in keyof TValue & string]: TValue[TKey] extends ObservableCounterSeries ? TKey : never
+    }[keyof TValue & string]
+  : never
+
+type AddCounterMethod<TInput, TValue> = TValue extends ObservableCounterSeries
+  ? (input: TInput, amount?: number) => void
+  : CounterDimension<TValue> extends never
+    ? never
+    : (input: TInput, dimension: CounterDimension<TValue>, amount?: number) => void
+
+type AutoAddCounterMethods<
+  TCounter extends string,
+  TInput,
+  TState extends Record<TCounter, unknown>,
+> = {
+  [TKey in TCounter as AddCounterMethod<TInput, TState[TKey]> extends never
+    ? never
+    : AddCounterMethodName<TKey>]: AddCounterMethod<TInput, TState[TKey]>
+}
+
+type ObservableCounterGroupState<TCounter extends string> = Record<TCounter, unknown>
 
 type BatchObservableCounterGroup<TInput, TState> = {
   /** Returns the mutable tally for `input`, creating it on first use. */
   state(input: TInput): TState
-}
-
-type DefaultBatchObservableCounterGroup<
-  TCounter extends string,
-  TInput,
-  TState,
-> = BatchObservableCounterGroup<TInput, TState> & {
-  add(input: TInput, counterKey: TCounter, amount?: number): void
 }
 
 type BatchObservableCounterGroupOptions<
@@ -71,18 +90,55 @@ export function safeAddCounter(current: number, amount: number): number {
   return next
 }
 
-function observeDefaultCounters<TCounter extends string>(
+function isAddableCounterAmount(amount: number): boolean {
+  return Number.isFinite(amount) && amount > 0
+}
+
+function addMethodName(counterKey: string): `add${string}` {
+  return `add${counterKey.charAt(0).toUpperCase()}${counterKey.slice(1)}`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object')
+}
+
+function isObservableCounterState(value: unknown): value is ObservableCounterSeries {
+  return isRecord(value) && typeof value.count === 'number' && isRecord(value.attributes)
+}
+
+function observeDefaultCounters<
+  TCounter extends string,
+  TState extends ObservableCounterGroupState<TCounter>,
+>(
   observer: BatchObservableObserver,
   counters: Record<TCounter, Observable>,
   counterKeys: TCounter[],
-  state: DefaultObservableCounterState<TCounter>
+  state: TState
 ): void {
   for (const counterKey of counterKeys) {
     const value = state[counterKey]
 
-    if (value > 0) {
-      observer.observe(counters[counterKey], value, state.attributes)
+    if (isObservableCounterState(value) && value.count > 0) {
+      observer.observe(counters[counterKey], value.count, value.attributes)
+      continue
     }
+
+    if (!isRecord(value)) {
+      continue
+    }
+
+    for (const key in value) {
+      const series = value[key]
+      if (isObservableCounterState(series) && series.count > 0) {
+        observer.observe(counters[counterKey], series.count, series.attributes)
+      }
+    }
+  }
+}
+
+function addCounterState(counterState: ObservableCounterSeries, amount = 1): void {
+  if (isAddableCounterAmount(amount)) {
+    counterState.count = safeAddCounter(counterState.count, amount)
   }
 }
 
@@ -90,10 +146,14 @@ export function createBatchObservableCounterGroup<
   TCounter extends string,
   TInput,
   TKey extends {},
-  TState extends DefaultObservableCounterState<TCounter>,
+  TState extends ObservableCounterGroupState<TCounter>,
 >(
-  options: BatchObservableCounterGroupOptions<TCounter, TInput, TKey, TState>
-): DefaultBatchObservableCounterGroup<TCounter, TInput, TState>
+  options: BatchObservableCounterGroupOptions<TCounter, TInput, TKey, TState> & {
+    observe?: CustomObservableCounterGroupOptions<TCounter, TInput, TKey, TState>['observe']
+  }
+): BatchObservableCounterGroup<TInput, TState> & {
+  add(input: TInput, counterKey: TCounter, amount?: number): void
+} & AutoAddCounterMethods<TCounter, TInput, TState>
 
 export function createBatchObservableCounterGroup<
   TCounter extends string,
@@ -113,9 +173,7 @@ export function createBatchObservableCounterGroup<
   options: BatchObservableCounterGroupOptions<TCounter, TInput, TKey, TState> & {
     observe?: CustomObservableCounterGroupOptions<TCounter, TInput, TKey, TState>['observe']
   }
-): BatchObservableCounterGroup<TInput, TState> & {
-  add(input: TInput, counterKey: TCounter, amount?: number): void
-} {
+): Record<string, unknown> {
   if (!Number.isInteger(options.maxStates) || options.maxStates < 1) {
     throw new Error('maxStates must be a positive integer')
   }
@@ -143,7 +201,7 @@ export function createBatchObservableCounterGroup<
         observer,
         counters,
         counterKeys,
-        state as unknown as DefaultObservableCounterState<TCounter>
+        state as unknown as ObservableCounterGroupState<TCounter>
       ))
 
   options.meter.addBatchObservableCallback(
@@ -165,16 +223,44 @@ export function createBatchObservableCounterGroup<
     return state
   }
 
-  return {
-    state: getState,
-    add(input, counterKey, amount = 1) {
-      if (!Number.isFinite(amount) || amount <= 0) {
-        return
-      }
+  const addCounter = (
+    input: TInput,
+    counterKey: TCounter,
+    arg1?: unknown,
+    arg2?: unknown
+  ): void => {
+    const state = getState(input) as Record<string, unknown>
+    const value = state[counterKey]
 
-      const state = getState(input) as unknown as DefaultObservableCounterState<TCounter>
-      const counterState = state as Record<TCounter, number>
-      counterState[counterKey] = safeAddCounter(counterState[counterKey], amount)
-    },
+    if (isObservableCounterState(value)) {
+      const amount = typeof arg1 === 'number' ? arg1 : 1
+      addCounterState(value, amount)
+      return
+    }
+
+    if (!isRecord(value) || typeof arg1 !== 'string') {
+      return
+    }
+
+    const countState = value[arg1]
+    const amount = typeof arg2 === 'number' ? arg2 : 1
+
+    if (isObservableCounterState(countState)) {
+      addCounterState(countState, amount)
+    }
   }
+
+  const group = {
+    state: getState,
+    add: (input: TInput, counterKey: TCounter, amount = 1) => addCounter(input, counterKey, amount),
+  } as BatchObservableCounterGroup<TInput, TState> & {
+    add(input: TInput, counterKey: TCounter, amount?: number): void
+  } & Record<string, unknown>
+
+  for (const counterKey of counterKeys) {
+    group[addMethodName(counterKey)] = (input: TInput, arg1?: unknown, arg2?: unknown) =>
+      addCounter(input, counterKey, arg1, arg2)
+  }
+
+  return group
 }

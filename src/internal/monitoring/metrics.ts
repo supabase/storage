@@ -1,7 +1,11 @@
 import type { CacheLookupOutcome } from '@internal/cache/adapter'
 import type { CacheName } from '@internal/cache/names'
 import { type Attributes, metrics } from '@opentelemetry/api'
-import { createBatchObservableCounterGroup, safeAddCounter } from './counter'
+import {
+  createBatchObservableCounterGroup,
+  type ObservableCounterSeries,
+  safeAddCounter,
+} from './counter'
 import { HTTP_SIZE_METRICS_MAX_STATES } from './metric-limits'
 
 // ============================================================================
@@ -232,9 +236,8 @@ export function recordHttpRequestMetrics(
 // HTTP/cache: runtime disables must not suppress observations.
 // ============================================================================
 type UploadMetricsState = {
-  started: number
-  success: number
-  attributes: Attributes
+  started: ObservableCounterSeries
+  success: ObservableCounterSeries
 }
 
 const uploadMetrics = createBatchObservableCounterGroup({
@@ -253,20 +256,19 @@ const uploadMetrics = createBatchObservableCounterGroup({
   },
   getKey: (uploadType: string) => uploadType,
   createState: (uploadType: string): UploadMetricsState => ({
-    started: 0,
-    success: 0,
-    attributes: { uploadType },
+    started: { count: 0, attributes: { uploadType } },
+    success: { count: 0, attributes: { uploadType } },
   }),
 })
 
 /** Records an upload start by bumping an in-process tally. */
 export function recordUploadStarted(uploadType: string): void {
-  uploadMetrics.add(uploadType, 'started')
+  uploadMetrics.addStarted(uploadType)
 }
 
 /** Records an upload success by bumping an in-process tally. */
 export function recordUploadSuccess(uploadType: string): void {
-  uploadMetrics.add(uploadType, 'success')
+  uploadMetrics.addSuccess(uploadType)
 }
 
 // ============================================================================
@@ -278,15 +280,9 @@ export function recordUploadSuccess(uploadType: string): void {
 // the in-process tally kept advancing. Drop these metrics at exporter/view
 // configuration if they need to be suppressed entirely.
 // ============================================================================
-type CacheRequestMetricsState = {
-  count: number
-  attributes: Attributes
-}
-
 type CacheMetricsState = {
-  requests: Record<CacheLookupOutcome, CacheRequestMetricsState>
-  evictions: number
-  evictionAttributes: Attributes
+  requests: Record<CacheLookupOutcome, ObservableCounterSeries>
+  evictions: ObservableCounterSeries
 }
 
 const cacheMetrics = createBatchObservableCounterGroup({
@@ -310,37 +306,18 @@ const cacheMetrics = createBatchObservableCounterGroup({
       miss: { count: 0, attributes: { cache, outcome: 'miss' } },
       stale: { count: 0, attributes: { cache, outcome: 'stale' } },
     },
-    evictions: 0,
-    evictionAttributes: { cache },
+    evictions: { count: 0, attributes: { cache } },
   }),
-  observe: (observer, counters, state) => {
-    const requests = state.requests
-
-    if (requests.hit.count > 0) {
-      observer.observe(counters.requests, requests.hit.count, requests.hit.attributes)
-    }
-    if (requests.miss.count > 0) {
-      observer.observe(counters.requests, requests.miss.count, requests.miss.attributes)
-    }
-    if (requests.stale.count > 0) {
-      observer.observe(counters.requests, requests.stale.count, requests.stale.attributes)
-    }
-    if (state.evictions > 0) {
-      observer.observe(counters.evictions, state.evictions, state.evictionAttributes)
-    }
-  },
 })
 
 /** Records a single cache lookup outcome by bumping an in-process tally. */
 export function recordCacheRequest(cache: CacheName, outcome: CacheLookupOutcome): void {
-  const state = cacheMetrics.state(cache).requests[outcome]
-  state.count = safeAddCounter(state.count, 1)
+  cacheMetrics.addRequests(cache, outcome)
 }
 
 /** Records a single capacity/ttl cache eviction by bumping an in-process tally. */
 export function recordCacheEviction(cache: CacheName): void {
-  const state = cacheMetrics.state(cache)
-  state.evictions = safeAddCounter(state.evictions, 1)
+  cacheMetrics.addEvictions(cache)
 }
 
 export const cacheEntries = registerMetric('cache_entries', 'gauge', () =>

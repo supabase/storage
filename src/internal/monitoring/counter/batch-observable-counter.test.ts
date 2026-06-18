@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from 'vitest'
 
 import {
   createBatchObservableCounterGroup,
+  type ObservableCounterSeries,
   SAFE_COUNTER_THRESHOLD,
 } from './batch-observable-counter'
 
@@ -14,12 +15,6 @@ interface Observation {
 
 type CounterOptions = { description?: string; unit?: string }
 
-/**
- * Minimal in-memory `Meter` stand-in. The factory only touches
- * `createObservableCounter` and `addBatchObservableCallback`, so the fake can be
- * tiny — and because the factory takes its dependencies by injection, no module
- * mocking is required.
- */
 function createFakeMeter() {
   const counterNames = new Map<Observable, string>()
   const createdCounters: { name: string; options?: CounterOptions }[] = []
@@ -58,18 +53,16 @@ function createFakeMeter() {
 const registerMetric = <T>(_name: string, _type: 'counter', factory: () => T): T => factory()
 
 interface UploadState {
-  started: number
-  success: number
-  attributes: Attributes
+  started: ObservableCounterSeries
+  success: ObservableCounterSeries
 }
 
 /** A representative two-counter group keyed by a plain string, mirroring the upload metrics. */
 function createUploadGroup(meter: Meter, maxStates = 10) {
   const createState = vi.fn(
     (uploadType: string): UploadState => ({
-      started: 0,
-      success: 0,
-      attributes: { uploadType },
+      started: { count: 0, attributes: { uploadType } },
+      success: { count: 0, attributes: { uploadType } },
     })
   )
 
@@ -170,9 +163,9 @@ describe('createBatchObservableCounterGroup', () => {
     const meter = createFakeMeter()
     const { group } = createUploadGroup(meter.meter)
 
-    group.state('standard').started += 2
-    group.state('standard').success += 1
-    group.state('multipart').started += 1
+    group.state('standard').started.count += 2
+    group.state('standard').success.count += 1
+    group.state('multipart').started.count += 1
 
     const observations = meter.collect()
 
@@ -190,21 +183,21 @@ describe('createBatchObservableCounterGroup', () => {
     const meter = createFakeMeter()
     const { group } = createUploadGroup(meter.meter)
 
-    group.state('standard').started += 1
+    group.state('standard').started.count += 1
 
     expect(meter.collect()).toEqual([
       { name: 'upload_started', value: 1, attributes: { uploadType: 'standard' } },
     ])
   })
 
-  test('add() increments flat counter state without an update object', () => {
+  test('generated counter methods increment counter series without an update object', () => {
     const meter = createFakeMeter()
     const { group, createState } = createUploadGroup(meter.meter)
 
-    group.add('standard', 'started')
-    group.add('standard', 'success', 2)
-    group.add('standard', 'started', 0)
-    group.add('standard', 'success', Number.NaN)
+    group.addStarted('standard')
+    group.addSuccess('standard', 2)
+    group.addStarted('standard', 0)
+    group.addSuccess('standard', Number.NaN)
 
     expect(createState).toHaveBeenCalledTimes(1)
     expect(meter.collect()).toEqual(
@@ -219,7 +212,7 @@ describe('createBatchObservableCounterGroup', () => {
     const meter = createFakeMeter()
     const { group } = createUploadGroup(meter.meter)
 
-    group.add('standard', 'started', SAFE_COUNTER_THRESHOLD - 1)
+    group.addStarted('standard', SAFE_COUNTER_THRESHOLD - 1)
     group.add('standard', 'started', 2)
 
     expect(meter.collect()).toEqual([
@@ -231,7 +224,7 @@ describe('createBatchObservableCounterGroup', () => {
     ])
   })
 
-  test('allows a custom observer for non-flat state shapes', () => {
+  test('generated counter methods increment nested counter maps', () => {
     const meter = createFakeMeter()
     const group = createBatchObservableCounterGroup({
       meter: meter.meter,
@@ -247,33 +240,13 @@ describe('createBatchObservableCounterGroup', () => {
           hit: { count: 0, attributes: { cache, outcome: 'hit' } as Attributes },
           miss: { count: 0, attributes: { cache, outcome: 'miss' } as Attributes },
         },
-        evictions: 0,
-        evictionAttributes: { cache } as Attributes,
+        evictions: { count: 0, attributes: { cache } as Attributes },
       }),
-      observe: (observer, counters, state) => {
-        if (state.requests.hit.count > 0) {
-          observer.observe(
-            counters.requests,
-            state.requests.hit.count,
-            state.requests.hit.attributes
-          )
-        }
-        if (state.requests.miss.count > 0) {
-          observer.observe(
-            counters.requests,
-            state.requests.miss.count,
-            state.requests.miss.attributes
-          )
-        }
-        if (state.evictions > 0) {
-          observer.observe(counters.evictions, state.evictions, state.evictionAttributes)
-        }
-      },
     })
 
-    group.state('metadata').requests.hit.count += 1
-    group.state('metadata').requests.miss.count += 2
-    group.state('metadata').evictions += 1
+    group.addRequests('metadata', 'hit')
+    group.addRequests('metadata', 'miss', 2)
+    group.addEvictions('metadata')
 
     expect(meter.collect()).toEqual([
       {
@@ -294,10 +267,10 @@ describe('createBatchObservableCounterGroup', () => {
     const meter = createFakeMeter()
     const { group, createState } = createUploadGroup(meter.meter, 2)
 
-    group.state('standard').started += 1
-    group.state('multipart').started += 1
-    group.state('standard').success += 1
-    group.state('resumable').started += 1
+    group.state('standard').started.count += 1
+    group.state('multipart').started.count += 1
+    group.state('standard').success.count += 1
+    group.state('resumable').started.count += 1
 
     const observations = meter.collect()
 
@@ -316,8 +289,8 @@ describe('createBatchObservableCounterGroup', () => {
 
     const recreated = group.state('multipart')
 
-    expect(recreated.started).toBe(0)
-    expect(recreated.success).toBe(0)
+    expect(recreated.started.count).toBe(0)
+    expect(recreated.success.count).toBe(0)
     expect(createState).toHaveBeenCalledTimes(4)
   })
 

@@ -1,31 +1,59 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-describe('objectRequestLimitSchema', () => {
+const ENV = { ...process.env }
+
+describe('enforceDeleteObjectsLimit', () => {
   afterEach(() => {
-    delete process.env.REQUEST_HARD_LIMITS_ENABLED
+    process.env = { ...ENV }
+    vi.doUnmock('../internal/database/tenant')
     vi.resetModules()
   })
 
-  it('omits maxItems when hard limits are disabled', async () => {
-    delete process.env.REQUEST_HARD_LIMITS_ENABLED
+  it('does not enforce the object request cap until hard limits are enabled', async () => {
+    process.env.MULTI_TENANT = 'false'
+    process.env.REQUEST_HARD_LIMITS_ENABLED = 'false'
     vi.resetModules()
 
-    const { objectRequestLimitSchema, MAX_OBJECTS_PER_REQUEST } = await import('./limits')
+    const { enforceDeleteObjectsLimit, MAX_OBJECTS_PER_REQUEST } = await import('./limits')
 
-    expect(objectRequestLimitSchema()).toEqual({
-      description: `At most ${MAX_OBJECTS_PER_REQUEST} objects can be deleted per request.`,
-    })
+    await expect(
+      enforceDeleteObjectsLimit('tenant-id', MAX_OBJECTS_PER_REQUEST + 1)
+    ).resolves.toBeUndefined()
   })
 
-  it('caps maxItems at the object request limit when hard limits are enabled', async () => {
+  it('enforces the default object request cap when hard limits are enabled', async () => {
+    process.env.MULTI_TENANT = 'false'
     process.env.REQUEST_HARD_LIMITS_ENABLED = 'true'
     vi.resetModules()
 
-    const { objectRequestLimitSchema, MAX_OBJECTS_PER_REQUEST } = await import('./limits')
+    const { enforceDeleteObjectsLimit, MAX_OBJECTS_PER_REQUEST } = await import('./limits')
 
-    expect(objectRequestLimitSchema()).toEqual({
-      maxItems: MAX_OBJECTS_PER_REQUEST,
-      description: `At most ${MAX_OBJECTS_PER_REQUEST} objects can be deleted per request.`,
+    await expect(
+      enforceDeleteObjectsLimit('tenant-id', MAX_OBJECTS_PER_REQUEST + 1)
+    ).rejects.toMatchObject({
+      code: 'InvalidRequest',
+      message: `Bulk object requests are limited to ${MAX_OBJECTS_PER_REQUEST} objects per request.`,
     })
+  })
+
+  it('uses the tenant delete objects limit in multitenant mode', async () => {
+    process.env.MULTI_TENANT = 'true'
+    process.env.REQUEST_HARD_LIMITS_ENABLED = 'true'
+    const getDeleteObjectsLimit = vi.fn().mockResolvedValue(2000)
+    vi.doMock('../internal/database/tenant', () => ({
+      getDeleteObjectsLimit,
+      getFeatures: vi.fn(),
+      getFileSizeLimit: vi.fn(),
+    }))
+    vi.resetModules()
+
+    const { enforceDeleteObjectsLimit } = await import('./limits')
+
+    await expect(enforceDeleteObjectsLimit('tenant-id', 1500)).resolves.toBeUndefined()
+    await expect(enforceDeleteObjectsLimit('tenant-id', 2001)).rejects.toMatchObject({
+      code: 'InvalidRequest',
+      message: 'Bulk object requests are limited to 2000 objects per request.',
+    })
+    expect(getDeleteObjectsLimit).toHaveBeenCalledWith('tenant-id')
   })
 })

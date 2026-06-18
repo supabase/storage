@@ -312,7 +312,7 @@ describe('DeleteObject route mapping', () => {
     expect(validate.errors).toBeNull()
   })
 
-  it('rejects DeleteObjects payloads over the object request cap when hard limits are enabled', async () => {
+  it('keeps DeleteObjects router validation tenant-agnostic when hard limits are enabled', async () => {
     const previousHardLimitsEnabled = process.env.REQUEST_HARD_LIMITS_ENABLED
     process.env.REQUEST_HARD_LIMITS_ENABLED = 'true'
     vi.resetModules()
@@ -350,18 +350,77 @@ describe('DeleteObject route mapping', () => {
         },
       }
 
-      expect(validate(data)).toBe(false)
-      expect(validate.errors).toEqual([
-        expect.objectContaining({
-          instancePath: '/Body/Delete/Object',
-          keyword: 'maxItems',
-        }),
-      ])
+      expect(validate(data)).toBe(true)
+      expect(validate.errors).toBeNull()
     } finally {
       if (previousHardLimitsEnabled === undefined) {
         delete process.env.REQUEST_HARD_LIMITS_ENABLED
       } else {
         process.env.REQUEST_HARD_LIMITS_ENABLED = previousHardLimitsEnabled
+      }
+      vi.resetModules()
+    }
+  })
+
+  it('rejects DeleteObjects payloads over the default cap in the handler when hard limits are enabled', async () => {
+    const previousHardLimitsEnabled = process.env.REQUEST_HARD_LIMITS_ENABLED
+    const previousMultiTenant = process.env.MULTI_TENANT
+    process.env.REQUEST_HARD_LIMITS_ENABLED = 'true'
+    process.env.MULTI_TENANT = 'false'
+    vi.resetModules()
+
+    try {
+      const [{ Router: FreshRouter }, { default: DeleteObject }] = await Promise.all([
+        import('./router'),
+        import('./commands/delete-object'),
+      ])
+      const router = new FreshRouter()
+
+      DeleteObject(router as unknown as S3Router)
+
+      const route = router
+        .routes()
+        .get('/:Bucket')
+        ?.find(
+          (candidate) =>
+            candidate.method === 'post' &&
+            candidate.querystringMatches.some((match) => match.key === 'delete')
+        )
+
+      expect(route).toBeDefined()
+
+      await expect(
+        route!.handler!(
+          {
+            Params: { Bucket: 'bucket' },
+            Querystring: { delete: '' },
+            Headers: {},
+            Body: {
+              Delete: {
+                Object: [...Array(MAX_OBJECTS_PER_REQUEST + 1).keys()].map((i) => ({
+                  Key: `object-${i}`,
+                })),
+              },
+            },
+          },
+          {
+            tenantId: 'tenant-id',
+          } as never
+        )
+      ).rejects.toMatchObject({
+        code: 'InvalidRequest',
+        message: `Bulk object requests are limited to ${MAX_OBJECTS_PER_REQUEST} objects per request.`,
+      })
+    } finally {
+      if (previousHardLimitsEnabled === undefined) {
+        delete process.env.REQUEST_HARD_LIMITS_ENABLED
+      } else {
+        process.env.REQUEST_HARD_LIMITS_ENABLED = previousHardLimitsEnabled
+      }
+      if (previousMultiTenant === undefined) {
+        delete process.env.MULTI_TENANT
+      } else {
+        process.env.MULTI_TENANT = previousMultiTenant
       }
       vi.resetModules()
     }

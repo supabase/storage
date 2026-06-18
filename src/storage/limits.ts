@@ -1,6 +1,7 @@
 import { ERRORS } from '@internal/errors'
 import { getConfig } from '../config'
 import {
+  getDeleteObjectsLimit as getDeleteObjectsLimitForTenant,
   getFeatures,
   getFileSizeLimit as getFileSizeLimitForTenant,
 } from '../internal/database/tenant'
@@ -22,16 +23,30 @@ export const MAX_OBJECTS_PER_LOOKUP_BATCH = MAX_OBJECTS_PER_REQUEST
 export const ICEBERG_BUCKET_RESERVED_SUFFIX = icebergBucketDetectionSuffix
 export const RESERVED_BUCKET_SUFFIXES = [icebergBucketDetectionSuffix]
 
-export function objectRequestLimitSchema(): { maxItems?: number; description: string } {
-  const description = `At most ${MAX_OBJECTS_PER_REQUEST} objects can be deleted per request.`
-  return requestHardLimitsEnabled
-    ? {
-        maxItems: MAX_OBJECTS_PER_REQUEST,
-        description,
-      }
-    : {
-        description,
-      }
+export const DELETE_OBJECTS_LIMIT_DESCRIPTION = `At most ${MAX_OBJECTS_PER_REQUEST} objects can be deleted per request.`
+
+export async function getDeleteObjectsLimit(tenantId: string): Promise<number> {
+  if (isMultitenant) {
+    return (await getDeleteObjectsLimitForTenant(tenantId)) ?? MAX_OBJECTS_PER_REQUEST
+  }
+
+  return MAX_OBJECTS_PER_REQUEST
+}
+
+export async function enforceDeleteObjectsLimit(
+  tenantId: string,
+  objectCount: number
+): Promise<void> {
+  if (!requestHardLimitsEnabled) {
+    return
+  }
+
+  const deleteObjectsLimit = await getDeleteObjectsLimit(tenantId)
+  if (objectCount > deleteObjectsLimit) {
+    throw ERRORS.InvalidRequest(
+      `Bulk object requests are limited to ${deleteObjectsLimit} objects per request.`
+    )
+  }
 }
 
 /**

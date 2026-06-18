@@ -2512,6 +2512,23 @@ describe('testing uploading with generated signed upload URL', () => {
  */
 describe('testing generating signed URLs', () => {
   test('check if RLS policies are respected: authenticated user is able to sign URLs for an authenticated resource', async () => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+        paths: [...Array(MAX_OBJECTS_PER_REQUEST).keys()].map((i) => `authenticated/${i}`),
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const result = JSON.parse(response.body)
+    expect(result).toHaveLength(MAX_OBJECTS_PER_REQUEST)
+  })
+
+  test('authenticated user can sign URLs up to the request cap', async () => {
     const runId = randomUUID()
     const bucketName = 'bucket2'
     const objectNames = [...Array(MAX_OBJECTS_PER_REQUEST).keys()].map(

@@ -262,6 +262,11 @@ describe('otel metrics', () => {
     expect(MeterProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         views: expect.arrayContaining([
+          expect.objectContaining({
+            meterName: 'storage-api',
+            instrumentName: 'http_request_duration_seconds',
+            aggregationCardinalityLimit: HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT,
+          }),
           {
             meterName: 'storage-api',
             instrumentName: 'http_request_size_bytes',

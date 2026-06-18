@@ -1,5 +1,6 @@
 import type { BatchObservableCallback, Meter, Observable } from '@opentelemetry/api'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { HTTP_SIZE_METRICS_MAX_STATES } from './metric-limits'
 
 interface CapturedObservable {
   name: string
@@ -155,19 +156,18 @@ describe('metrics registry', () => {
   test('accumulates request and response bytes independently, even when disabled', async () => {
     const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
 
-    const attributes = {
-      method: 'POST',
-      operation: 'object.upload',
-      status_code: '200',
-    }
+    const method = 'POST'
+    const operation = 'object.upload'
+    const statusCode = 200
+    const attributes = { method, operation, status_code: String(statusCode) }
 
     metricsModule.setMetricsEnabled([
       { name: 'http_request_size_bytes', enabled: false },
       { name: 'http_response_size_bytes', enabled: false },
     ])
-    metricsModule.recordHttpSizes(7, 2, attributes)
-    metricsModule.recordHttpSizes(3, undefined, { ...attributes })
-    metricsModule.recordHttpSizes(undefined, 5, attributes)
+    metricsModule.recordHttpRequestMetrics(0.001, 7, 2, method, operation, statusCode)
+    metricsModule.recordHttpRequestMetrics(0.001, 3, undefined, method, operation, statusCode)
+    metricsModule.recordHttpRequestMetrics(0.001, undefined, 5, method, operation, statusCode)
 
     expect(mockMeter.invoke('http_request_size_bytes')).toEqual([
       {
@@ -188,19 +188,32 @@ describe('metrics registry', () => {
     const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
     const safeCounterThreshold = Number.MAX_SAFE_INTEGER - 1_000_000_000
 
-    const attributes = {
-      method: 'POST',
-      operation: 'object.upload',
-      status_code: '200',
-    }
+    const method = 'POST'
+    const operation = 'object.upload'
+    const statusCode = 200
+    const attributes = { method, operation, status_code: String(statusCode) }
 
-    metricsModule.recordHttpSizes(safeCounterThreshold - 1, undefined, attributes)
-    metricsModule.recordHttpSizes(2, undefined, attributes)
-    metricsModule.recordHttpSizes(undefined, Number.MAX_SAFE_INTEGER, attributes)
+    metricsModule.recordHttpRequestMetrics(
+      0.001,
+      safeCounterThreshold - 1,
+      undefined,
+      method,
+      operation,
+      statusCode
+    )
+    metricsModule.recordHttpRequestMetrics(0.001, 2, undefined, method, operation, statusCode)
+    metricsModule.recordHttpRequestMetrics(
+      0.001,
+      undefined,
+      Number.MAX_SAFE_INTEGER,
+      method,
+      operation,
+      statusCode
+    )
 
     expect(mockMeter.invoke('http_request_size_bytes')).toEqual([
       {
-        value: 2,
+        value: safeCounterThreshold,
         attributes,
       },
     ])
@@ -216,14 +229,20 @@ describe('metrics registry', () => {
   test('ignores invalid http byte sizes without poisoning later observations', async () => {
     const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
 
-    const attributes = {
-      method: 'POST',
-      operation: 'object.upload',
-      status_code: '200',
-    }
+    const method = 'POST'
+    const operation = 'object.upload'
+    const statusCode = 200
+    const attributes = { method, operation, status_code: String(statusCode) }
 
-    metricsModule.recordHttpSizes(Number.NaN, Number.POSITIVE_INFINITY, attributes)
-    metricsModule.recordHttpSizes(7, 2, attributes)
+    metricsModule.recordHttpRequestMetrics(
+      0.001,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      method,
+      operation,
+      statusCode
+    )
+    metricsModule.recordHttpRequestMetrics(0.001, 7, 2, method, operation, statusCode)
 
     expect(mockMeter.invoke('http_request_size_bytes')).toEqual([
       {
@@ -238,6 +257,27 @@ describe('metrics registry', () => {
         attributes,
       },
     ])
+  })
+
+  test('routes new http metric states to overflow after the cap', async () => {
+    const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
+
+    for (let i = 0; i <= HTTP_SIZE_METRICS_MAX_STATES; i++) {
+      metricsModule.recordHttpRequestMetrics(0.001, 1, undefined, 'GET', `operation-${i}`, 200)
+    }
+
+    expect(mockMeter.invoke('http_request_size_bytes')).toEqual(
+      expect.arrayContaining([
+        {
+          value: 1,
+          attributes: {
+            method: 'overflow',
+            operation: 'overflow',
+            status_code: 'overflow',
+          },
+        },
+      ])
+    )
   })
 
   test('observes cumulative upload counters with stable attributes even when disabled', async () => {

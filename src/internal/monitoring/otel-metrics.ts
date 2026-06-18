@@ -157,6 +157,7 @@ const views = [
     meterName: 'storage-api',
     instrumentName: 'http_request_duration_seconds',
     aggregation: histogramAggregation,
+    aggregationCardinalityLimit: HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT,
   },
   {
     meterName: 'storage-api',

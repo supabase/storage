@@ -64,49 +64,99 @@ export function registerMetric<T>(name: string, type: MetricType, factory: () =>
 // cumulative observable counters, so skipping observations on runtime disable
 // would leave stale exported points and later jumps on re-enable.
 // ============================================================================
-type HttpMetricAttributes = {
-  method: string
-  operation: string
-  status_code: string
-}
-
 type HttpSizeMetricsState = {
   requestBytes: number
   responseBytes: number
   attributes: Attributes
 }
 
-const httpSizeMetrics = createBatchObservableCounterGroup({
-  meter,
-  registerMetric,
-  maxStates: HTTP_SIZE_METRICS_MAX_STATES,
-  counters: {
-    requestBytes: {
-      name: 'http_request_size_bytes',
-      description: 'Total bytes received in HTTP requests (from content-length header)',
-      unit: 'bytes',
-    },
-    responseBytes: {
-      name: 'http_response_size_bytes',
-      description: 'Total bytes sent in HTTP responses (from content-length header)',
-      unit: 'bytes',
-    },
-  },
-  getKey: (attributes: HttpMetricAttributes) =>
-    `${attributes.method}\x00${attributes.operation}\x00${attributes.status_code}`,
-  createState: (attributes: HttpMetricAttributes): HttpSizeMetricsState => ({
-    requestBytes: 0,
-    responseBytes: 0,
-    attributes: {
-      method: attributes.method,
-      operation: attributes.operation,
-      status_code: attributes.status_code,
-    },
-  }),
-})
+const HTTP_METRICS_OVERFLOW_LABEL = 'overflow'
+
+const httpStatusCodeLabels = new Map<number, string>()
+const httpSizeMetricStates = new Set<HttpSizeMetricsState>()
+// Nested maps avoid allocating a composite key on the HTTP request hot path.
+const httpSizeMetricsByMethod = new Map<string, Map<string, Map<number, HttpSizeMetricsState>>>()
+let httpSizeMetricStateCount = 0
+
+const httpSizeOverflowState = createHttpSizeMetricsState(
+  HTTP_METRICS_OVERFLOW_LABEL,
+  HTTP_METRICS_OVERFLOW_LABEL,
+  HTTP_METRICS_OVERFLOW_LABEL
+)
+httpSizeMetricStates.add(httpSizeOverflowState)
 
 function isRecordableMetricValue(value: number | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+function createHttpSizeMetricsState(
+  method: string,
+  operation: string,
+  statusCodeLabel: string
+): HttpSizeMetricsState {
+  return {
+    requestBytes: 0,
+    responseBytes: 0,
+    attributes: {
+      method,
+      operation,
+      status_code: statusCodeLabel,
+    },
+  }
+}
+
+function getStatusCodeLabel(statusCode: number): string {
+  let label = httpStatusCodeLabels.get(statusCode)
+
+  if (!label) {
+    label = String(statusCode)
+    httpStatusCodeLabels.set(statusCode, label)
+  }
+
+  return label
+}
+
+function getHttpSizeMetricsState(
+  method: string,
+  operation: string,
+  statusCode: number
+): HttpSizeMetricsState {
+  let byOperation = httpSizeMetricsByMethod.get(method)
+
+  if (!byOperation) {
+    if (httpSizeMetricStateCount >= HTTP_SIZE_METRICS_MAX_STATES) {
+      return httpSizeOverflowState
+    }
+
+    byOperation = new Map()
+    httpSizeMetricsByMethod.set(method, byOperation)
+  }
+
+  let byStatusCode = byOperation.get(operation)
+
+  if (!byStatusCode) {
+    if (httpSizeMetricStateCount >= HTTP_SIZE_METRICS_MAX_STATES) {
+      return httpSizeOverflowState
+    }
+
+    byStatusCode = new Map()
+    byOperation.set(operation, byStatusCode)
+  }
+
+  let state = byStatusCode.get(statusCode)
+
+  if (!state) {
+    if (httpSizeMetricStateCount >= HTTP_SIZE_METRICS_MAX_STATES) {
+      return httpSizeOverflowState
+    }
+
+    state = createHttpSizeMetricsState(method, operation, getStatusCodeLabel(statusCode))
+    byStatusCode.set(statusCode, state)
+    httpSizeMetricStates.add(state)
+    httpSizeMetricStateCount++
+  }
+
+  return state
 }
 
 export const httpRequestDuration = registerMetric(
@@ -119,28 +169,60 @@ export const httpRequestDuration = registerMetric(
     })
 )
 
-/** Records request/response bytes by bumping in-process tallies with one state lookup. */
-export function recordHttpSizes(
+const httpRequestSizeBytes = registerMetric('http_request_size_bytes', 'counter', () =>
+  meter.createObservableCounter('http_request_size_bytes', {
+    description: 'Total bytes received in HTTP requests (from content-length header)',
+    unit: 'bytes',
+  })
+)
+
+const httpResponseSizeBytes = registerMetric('http_response_size_bytes', 'counter', () =>
+  meter.createObservableCounter('http_response_size_bytes', {
+    description: 'Total bytes sent in HTTP responses (from content-length header)',
+    unit: 'bytes',
+  })
+)
+
+meter.addBatchObservableCallback(
+  (observer) => {
+    for (const state of httpSizeMetricStates) {
+      if (state.requestBytes > 0) {
+        observer.observe(httpRequestSizeBytes, state.requestBytes, state.attributes)
+      }
+      if (state.responseBytes > 0) {
+        observer.observe(httpResponseSizeBytes, state.responseBytes, state.attributes)
+      }
+    }
+  },
+  [httpRequestSizeBytes, httpResponseSizeBytes]
+)
+
+function recordHttpByteSizesForState(
+  state: HttpSizeMetricsState,
   requestSizeBytes: number | undefined,
-  responseSizeBytes: number | undefined,
-  attributes: HttpMetricAttributes
+  responseSizeBytes: number | undefined
 ): void {
-  const shouldRecordRequestSize = isRecordableMetricValue(requestSizeBytes)
-  const shouldRecordResponseSize = isRecordableMetricValue(responseSizeBytes)
-
-  if (!shouldRecordRequestSize && !shouldRecordResponseSize) {
-    return
-  }
-
-  const state = httpSizeMetrics.state(attributes)
-
-  if (shouldRecordRequestSize) {
+  if (isRecordableMetricValue(requestSizeBytes)) {
     state.requestBytes = safeAddCounter(state.requestBytes, requestSizeBytes)
   }
 
-  if (shouldRecordResponseSize) {
+  if (isRecordableMetricValue(responseSizeBytes)) {
     state.responseBytes = safeAddCounter(state.responseBytes, responseSizeBytes)
   }
+}
+
+export function recordHttpRequestMetrics(
+  durationSeconds: number,
+  requestSizeBytes: number | undefined,
+  responseSizeBytes: number | undefined,
+  method: string,
+  operation: string,
+  statusCode: number
+): void {
+  const state = getHttpSizeMetricsState(method, operation, statusCode)
+
+  httpRequestDuration.record(durationSeconds, state.attributes)
+  recordHttpByteSizesForState(state, requestSizeBytes, responseSizeBytes)
 }
 
 // ============================================================================

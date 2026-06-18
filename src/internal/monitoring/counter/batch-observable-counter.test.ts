@@ -223,7 +223,11 @@ describe('createBatchObservableCounterGroup', () => {
     group.add('standard', 'started', 2)
 
     expect(meter.collect()).toEqual([
-      { name: 'upload_started', value: 2, attributes: { uploadType: 'standard' } },
+      {
+        name: 'upload_started',
+        value: SAFE_COUNTER_THRESHOLD,
+        attributes: { uploadType: 'standard' },
+      },
     ])
   })
 

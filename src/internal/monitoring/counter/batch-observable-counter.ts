@@ -65,7 +65,7 @@ export function safeAddCounter(current: number, amount: number): number {
     next >= SAFE_COUNTER_THRESHOLD ||
     !Number.isSafeInteger(next)
   ) {
-    return Math.min(amount, SAFE_COUNTER_THRESHOLD)
+    return SAFE_COUNTER_THRESHOLD
   }
 
   return next

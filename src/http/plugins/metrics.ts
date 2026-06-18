@@ -1,4 +1,4 @@
-import { httpRequestDuration, recordHttpSizes } from '@internal/monitoring/metrics'
+import { recordHttpRequestMetrics } from '@internal/monitoring/metrics'
 import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'
 import fastifyPlugin from 'fastify-plugin'
 import { getConfig } from '../../config'
@@ -87,15 +87,8 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
         const durationNs = endTime - startTime
         const durationSeconds = Number(durationNs) / 1e9
 
-        const attributes = {
-          method: request.method,
-          operation:
-            request.operation?.type || request.routeOptions?.config?.operation?.type || 'unknown',
-          status_code: `${reply.statusCode}`,
-        }
-
-        // Record duration (histogram count replaces httpRequestsTotal)
-        httpRequestDuration.record(durationSeconds, attributes)
+        const operation =
+          request.operation?.type || request.routeOptions?.config?.operation?.type || 'unknown'
 
         // Record request size from content-length header
         const requestContentLength = request.headers['content-length']
@@ -105,9 +98,14 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
         const responseContentLength = reply.getHeader('content-length')
         const responseSize = parseMetricSizeHeader(responseContentLength)
 
-        if (requestSize !== undefined || responseSize !== undefined) {
-          recordHttpSizes(requestSize, responseSize, attributes)
-        }
+        recordHttpRequestMetrics(
+          durationSeconds,
+          requestSize,
+          responseSize,
+          request.method,
+          operation,
+          reply.statusCode
+        )
       })
     },
     { name: 'http-metrics' }

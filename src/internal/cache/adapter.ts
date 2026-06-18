@@ -2,7 +2,8 @@ export type CacheLookupOptions = {
   recordMetrics?: boolean
 }
 
-export type CacheLookupOutcome = 'hit' | 'miss' | 'stale'
+export const CACHE_LOOKUP_OUTCOMES = ['hit', 'miss', 'stale'] as const
+export type CacheLookupOutcome = (typeof CACHE_LOOKUP_OUTCOMES)[number]
 
 export type CacheLookupResult<V> = {
   value: V | undefined

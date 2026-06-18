@@ -226,7 +226,7 @@ describe('PoolManager cache lifecycle', () => {
   test('records logical pool cache misses and hits', async () => {
     const poolModule = await loadPoolModule(10_000)
     const metricsModule = await import('@internal/monitoring/metrics')
-    const addSpy = vi.spyOn(metricsModule.cacheRequestsTotal, 'add')
+    const recordSpy = vi.spyOn(metricsModule, 'recordCacheRequest')
 
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
@@ -246,10 +246,10 @@ describe('PoolManager cache lifecycle', () => {
 
     expect(second).toBe(first)
     expect(poolManager.created).toHaveLength(1)
-    expect(addSpy.mock.calls).toEqual(
+    expect(recordSpy.mock.calls).toEqual(
       expect.arrayContaining([
-        [1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'miss' }],
-        [1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'hit' }],
+        [TENANT_POOL_CACHE_NAME, 'miss'],
+        [TENANT_POOL_CACHE_NAME, 'hit'],
       ])
     )
 
@@ -455,7 +455,7 @@ describe('PoolManager cache lifecycle', () => {
   test('records pool cache evictions when inactivity ttl removes cached pools', async () => {
     const poolModule = await loadPoolModule(20)
     const metricsModule = await import('@internal/monitoring/metrics')
-    const evictionSpy = vi.spyOn(metricsModule.cacheEvictionsTotal, 'add')
+    const evictionSpy = vi.spyOn(metricsModule, 'recordCacheEviction')
 
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
@@ -472,9 +472,7 @@ describe('PoolManager cache lifecycle', () => {
 
     await vi.advanceTimersByTimeAsync(40)
 
-    expect(evictionSpy).toHaveBeenCalledWith(1, {
-      cache: TENANT_POOL_CACHE_NAME,
-    })
+    expect(evictionSpy).toHaveBeenCalledWith(TENANT_POOL_CACHE_NAME)
     expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
 
     await poolManager.destroyAll()
@@ -483,7 +481,7 @@ describe('PoolManager cache lifecycle', () => {
   test('records pool cache evictions when capacity removes cached pools', async () => {
     const poolModule = await loadPoolModule(10_000, 1)
     const metricsModule = await import('@internal/monitoring/metrics')
-    const evictionSpy = vi.spyOn(metricsModule.cacheEvictionsTotal, 'add')
+    const evictionSpy = vi.spyOn(metricsModule, 'recordCacheEviction')
 
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
@@ -499,9 +497,7 @@ describe('PoolManager cache lifecycle', () => {
     poolManager.getPool(createPoolSettings('tenant-cache-capacity-eviction-a'))
     poolManager.getPool(createPoolSettings('tenant-cache-capacity-eviction-b'))
 
-    expect(evictionSpy).toHaveBeenCalledWith(1, {
-      cache: TENANT_POOL_CACHE_NAME,
-    })
+    expect(evictionSpy).toHaveBeenCalledWith(TENANT_POOL_CACHE_NAME)
     expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
 
     await poolManager.destroyAll()
@@ -510,7 +506,7 @@ describe('PoolManager cache lifecycle', () => {
   test('does not record pool cache evictions for explicit destroys', async () => {
     const poolModule = await loadPoolModule(10_000)
     const metricsModule = await import('@internal/monitoring/metrics')
-    const evictionSpy = vi.spyOn(metricsModule.cacheEvictionsTotal, 'add')
+    const evictionSpy = vi.spyOn(metricsModule, 'recordCacheEviction')
 
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
@@ -529,12 +525,7 @@ describe('PoolManager cache lifecycle', () => {
     await poolManager.destroy('tenant-cache-explicit-destroy-a')
     await poolManager.destroyAll()
 
-    expect(evictionSpy.mock.calls).not.toContainEqual([
-      1,
-      {
-        cache: TENANT_POOL_CACHE_NAME,
-      },
-    ])
+    expect(evictionSpy).not.toHaveBeenCalledWith(TENANT_POOL_CACHE_NAME)
     expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
     expect(poolManager.created[1].destroy).toHaveBeenCalledTimes(1)
   })
@@ -542,7 +533,7 @@ describe('PoolManager cache lifecycle', () => {
   test('caches external pools across lookups and records miss then hit', async () => {
     const poolModule = await loadPoolModule(10_000)
     const metricsModule = await import('@internal/monitoring/metrics')
-    const addSpy = vi.spyOn(metricsModule.cacheRequestsTotal, 'add')
+    const recordSpy = vi.spyOn(metricsModule, 'recordCacheRequest')
 
     class TestPoolManager extends poolModule.PoolManager {
       created: TestPool[] = []
@@ -565,13 +556,9 @@ describe('PoolManager cache lifecycle', () => {
 
     expect(second).toBe(first)
     expect(poolManager.created).toHaveLength(1)
-    expect(
-      addSpy.mock.calls.filter(([, attrs]) => {
-        return attrs && typeof attrs === 'object' && attrs.cache === TENANT_POOL_CACHE_NAME
-      })
-    ).toEqual([
-      [1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'miss' }],
-      [1, { cache: TENANT_POOL_CACHE_NAME, outcome: 'hit' }],
+    expect(recordSpy.mock.calls.filter(([cache]) => cache === TENANT_POOL_CACHE_NAME)).toEqual([
+      [TENANT_POOL_CACHE_NAME, 'miss'],
+      [TENANT_POOL_CACHE_NAME, 'hit'],
     ])
 
     await poolManager.destroyAll()

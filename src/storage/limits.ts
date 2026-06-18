@@ -5,7 +5,12 @@ import {
   getFileSizeLimit as getFileSizeLimitForTenant,
 } from '../internal/database/tenant'
 
-const { isMultitenant, imageTransformationEnabled, icebergBucketDetectionSuffix } = getConfig()
+const {
+  isMultitenant,
+  imageTransformationEnabled,
+  icebergBucketDetectionSuffix,
+  requestHardLimitsEnabled,
+} = getConfig()
 
 export type BucketType = 'STANDARD' | 'ANALYTICS'
 
@@ -16,6 +21,18 @@ export const MAX_OBJECTS_PER_DELETE_BATCH = Math.floor(MAX_KEYS_PER_S3_DELETE / 
 export const MAX_OBJECTS_PER_LOOKUP_BATCH = MAX_OBJECTS_PER_REQUEST
 export const ICEBERG_BUCKET_RESERVED_SUFFIX = icebergBucketDetectionSuffix
 export const RESERVED_BUCKET_SUFFIXES = [icebergBucketDetectionSuffix]
+
+export function objectRequestLimitSchema(): { maxItems?: number; description: string } {
+  const description = `At most ${MAX_OBJECTS_PER_REQUEST} objects can be deleted per request.`
+  return requestHardLimitsEnabled
+    ? {
+        maxItems: MAX_OBJECTS_PER_REQUEST,
+        description,
+      }
+    : {
+        description,
+      }
+}
 
 /**
  * Get the maximum file size for a specific project

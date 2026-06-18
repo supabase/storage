@@ -278,7 +278,7 @@ describe('DeleteObject route mapping', () => {
     expect(validate.errors).toBeNull()
   })
 
-  it('rejects DeleteObjects payloads over the object request cap in router validation', async () => {
+  it('accepts DeleteObjects payloads over the object request cap by default', async () => {
     const { default: DeleteObject } = await import('./commands/delete-object')
     const router = new Router()
 
@@ -308,13 +308,63 @@ describe('DeleteObject route mapping', () => {
       },
     }
 
-    expect(validate(data)).toBe(false)
-    expect(validate.errors).toEqual([
-      expect.objectContaining({
-        instancePath: '/Body/Delete/Object',
-        keyword: 'maxItems',
-      }),
-    ])
+    expect(validate(data)).toBe(true)
+    expect(validate.errors).toBeNull()
+  })
+
+  it('rejects DeleteObjects payloads over the object request cap when hard limits are enabled', async () => {
+    const previousHardLimitsEnabled = process.env.REQUEST_HARD_LIMITS_ENABLED
+    process.env.REQUEST_HARD_LIMITS_ENABLED = 'true'
+    vi.resetModules()
+
+    try {
+      const [{ Router: FreshRouter }, { default: DeleteObject }] = await Promise.all([
+        import('./router'),
+        import('./commands/delete-object'),
+      ])
+      const router = new FreshRouter()
+
+      DeleteObject(router as unknown as S3Router)
+
+      const route = router
+        .routes()
+        .get('/:Bucket')
+        ?.find(
+          (candidate) =>
+            candidate.method === 'post' &&
+            candidate.querystringMatches.some((match) => match.key === 'delete')
+        )
+
+      expect(route).toBeDefined()
+
+      const validate = route!.compiledSchema()
+      const data = {
+        Params: { Bucket: 'bucket' },
+        Querystring: { delete: '' },
+        Body: {
+          Delete: {
+            Object: [...Array(MAX_OBJECTS_PER_REQUEST + 1).keys()].map((i) => ({
+              Key: `object-${i}`,
+            })),
+          },
+        },
+      }
+
+      expect(validate(data)).toBe(false)
+      expect(validate.errors).toEqual([
+        expect.objectContaining({
+          instancePath: '/Body/Delete/Object',
+          keyword: 'maxItems',
+        }),
+      ])
+    } finally {
+      if (previousHardLimitsEnabled === undefined) {
+        delete process.env.REQUEST_HARD_LIMITS_ENABLED
+      } else {
+        process.env.REQUEST_HARD_LIMITS_ENABLED = previousHardLimitsEnabled
+      }
+      vi.resetModules()
+    }
   })
 
   it('returns 204 from iceberg single-object deletes', async () => {

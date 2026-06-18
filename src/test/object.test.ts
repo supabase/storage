@@ -32,6 +32,7 @@ let appInstance: FastifyInstance
 
 type SignedUrlResult = {
   error: string | null
+  path: string
   signedURL: string | null
 }
 
@@ -1857,9 +1858,9 @@ describe('testing deleting multiple objects', () => {
 
       const result = JSON.parse(response.body)
       expect(result).toHaveLength(MAX_OBJECTS_PER_REQUEST)
-      // Only the first two names are stable across the likely DELETE RETURNING plans.
-      expect(result[0].name).toBe(objectNames[0])
-      expect(result[1].name).toBe(objectNames[1])
+      expect(result.map((row: { name: string }) => row.name)).toEqual(
+        expect.arrayContaining(objectNames)
+      )
     } finally {
       const cleanupTx = await getSuperuserPostgrestClient()
       await withDeleteEnabled(cleanupTx, async (db) => {

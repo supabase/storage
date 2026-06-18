@@ -24,6 +24,7 @@ import { createAgent, InstrumentedAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
+import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
 import { getConfig } from '../../../config'
 import {
   BrowserCacheHeaders,
@@ -429,17 +430,30 @@ export class S3Backend implements StorageBackendAdapter {
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
     try {
-      const s3Prefixes = prefixes.map((ele) => {
-        return { Key: ele }
+      const deleteRequests: Promise<unknown>[] = []
+
+      for (let i = 0; i < prefixes.length; i += MAX_KEYS_PER_S3_DELETE) {
+        const s3Prefixes = prefixes.slice(i, i + MAX_KEYS_PER_S3_DELETE).map((ele) => {
+          return { Key: ele }
+        })
+
+        const command = new DeleteObjectsCommand({
+          Bucket: bucket,
+          Delete: {
+            Objects: s3Prefixes,
+          },
+        })
+        deleteRequests.push(this.client.send(command))
+      }
+
+      const results = await Promise.allSettled(deleteRequests)
+      const rejected = results.find((result): result is PromiseRejectedResult => {
+        return result.status === 'rejected'
       })
 
-      const command = new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: {
-          Objects: s3Prefixes,
-        },
-      })
-      await this.client.send(command)
+      if (rejected) {
+        throw rejected.reason
+      }
     } catch (e) {
       throw StorageBackendError.fromError(e)
     }

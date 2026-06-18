@@ -1,4 +1,5 @@
 import { assertValidNumericJWTExpiration } from '@internal/auth'
+import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
@@ -24,6 +25,7 @@ const getSignedURLsBodySchema = {
       type: 'array',
       items: { type: 'string' },
       minItems: 1,
+      maxItems: MAX_OBJECTS_PER_REQUEST,
       examples: [['folder/cat.png', 'folder/morecats.png']],
     },
   },

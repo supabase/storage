@@ -120,7 +120,6 @@ type StorageConfigType = {
   emptyBucketMax: number
   storageBackendType: StorageBackendType
   tenantId: string
-  requestUrlLengthLimit: number
   requestXForwardedHostRegExp?: string
   requestAllowXForwardedPrefix?: boolean
   storagePublicUrl?: string
@@ -316,8 +315,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     requestAllowXForwardedPrefix:
       getOptionalConfigFromEnv('REQUEST_ALLOW_X_FORWARDED_PATH') === 'true',
     storagePublicUrl: getOptionalConfigFromEnv('STORAGE_PUBLIC_URL'),
-    requestUrlLengthLimit:
-      Number(getOptionalConfigFromEnv('REQUEST_URL_LENGTH_LIMIT', 'URL_LENGTH_LIMIT')) || 7_500,
     requestTraceHeader: getOptionalConfigFromEnv('REQUEST_TRACE_HEADER', 'REQUEST_ID_HEADER'),
     requestEtagHeaders: getOptionalConfigFromEnv('REQUEST_ETAG_HEADERS')?.trim().split(',') || [
       'if-none-match',

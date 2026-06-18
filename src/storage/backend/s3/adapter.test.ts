@@ -1,7 +1,14 @@
-import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import {
+  DeleteObjectsCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ErrorCode, isStorageError } from '@internal/errors'
+import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
 import { Readable } from 'stream'
 import { type Mock, vi } from 'vitest'
 import { getConfig } from '../../../config'
@@ -153,6 +160,37 @@ describe('S3Backend', () => {
       const result = await backend.getObject('test-bucket', 'test-key', undefined)
 
       expect(result.metadata.mimetype).toBe('image/png')
+    })
+  })
+
+  describe('deleteObjects', () => {
+    test('chunks DeleteObjectsCommand payloads to the S3 key limit', async () => {
+      mockSend.mockResolvedValue({
+        $metadata: {
+          httpStatusCode: 200,
+        },
+      })
+
+      const backend = createBackend()
+      const keys = [...Array(MAX_KEYS_PER_S3_DELETE + 1).keys()].map((i) => `object-${i}`)
+
+      await backend.deleteObjects('test-bucket', keys)
+
+      expect(mockSend).toHaveBeenCalledTimes(2)
+      expect(mockSend.mock.calls[0][0]).toBeInstanceOf(DeleteObjectsCommand)
+      expect(mockSend.mock.calls[0][0].input).toMatchObject({
+        Bucket: 'test-bucket',
+        Delete: {
+          Objects: keys.slice(0, MAX_KEYS_PER_S3_DELETE).map((Key) => ({ Key })),
+        },
+      })
+      expect(mockSend.mock.calls[1][0]).toBeInstanceOf(DeleteObjectsCommand)
+      expect(mockSend.mock.calls[1][0].input).toMatchObject({
+        Bucket: 'test-bucket',
+        Delete: {
+          Objects: [{ Key: `object-${MAX_KEYS_PER_S3_DELETE}` }],
+        },
+      })
     })
   })
 

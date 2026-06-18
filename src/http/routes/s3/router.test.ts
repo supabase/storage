@@ -1,3 +1,4 @@
+import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import { vi } from 'vitest'
 import { S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
 import { Uploader } from '../../../storage/uploader'
@@ -242,6 +243,45 @@ describe('CompleteMultipartUpload route mapping', () => {
 })
 
 describe('DeleteObject route mapping', () => {
+  it('rejects DeleteObjects payloads over the object request cap in router validation', async () => {
+    const { default: DeleteObject } = await import('./commands/delete-object')
+    const router = new Router()
+
+    DeleteObject(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket')
+      ?.find(
+        (candidate) =>
+          candidate.method === 'post' &&
+          candidate.querystringMatches.some((match) => match.key === 'delete')
+      )
+
+    expect(route).toBeDefined()
+
+    const validate = route!.compiledSchema()
+    const data = {
+      Params: { Bucket: 'bucket' },
+      Querystring: { delete: '' },
+      Body: {
+        Delete: {
+          Object: [...Array(MAX_OBJECTS_PER_REQUEST + 1).keys()].map((i) => ({
+            Key: `object-${i}`,
+          })),
+        },
+      },
+    }
+
+    expect(validate(data)).toBe(false)
+    expect(validate.errors).toEqual([
+      expect.objectContaining({
+        instancePath: '/Body/Delete/Object',
+        keyword: 'maxItems',
+      }),
+    ])
+  })
+
   it('returns 204 from iceberg single-object deletes', async () => {
     const previousIcebergDeleteEnabled = process.env.ICEBERG_S3_DELETE_ENABLED
     process.env.ICEBERG_S3_DELETE_ENABLED = 'true'

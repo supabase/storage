@@ -1,3 +1,4 @@
+import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { getConfig } from '../../../../config'
 import { ROUTE_OPERATIONS } from '../../operations'
@@ -33,6 +34,7 @@ const DeleteObjectsInput = {
         properties: {
           Object: {
             type: 'array',
+            maxItems: MAX_OBJECTS_PER_REQUEST,
             items: {
               type: 'object',
               properties: {

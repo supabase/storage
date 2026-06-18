@@ -1,3 +1,4 @@
+import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import { objectSchema } from '@storage/schemas/object'
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -19,6 +20,7 @@ const deleteObjectsBodySchema = {
       type: 'array',
       items: { type: 'string' },
       minItems: 1,
+      maxItems: MAX_OBJECTS_PER_REQUEST,
       examples: [['folder/cat.png', 'folder/morecats.png']],
     },
   },

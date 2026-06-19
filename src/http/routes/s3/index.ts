@@ -99,11 +99,15 @@ export default async function routes(fastify: FastifyInstance) {
                 const headers = output.headers
 
                 if (headers) {
-                  Object.keys(headers).forEach((header) => {
+                  for (const header in headers) {
+                    if (!Object.prototype.hasOwnProperty.call(headers, header)) {
+                      continue
+                    }
+
                     if (headers[header]) {
                       reply.header(header, headers[header])
                     }
-                  })
+                  }
                 }
                 return reply.status(output.statusCode || 200).send(output.responseBody)
               } catch (e) {

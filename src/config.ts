@@ -112,6 +112,7 @@ type StorageConfigType = {
   databaseStatementTimeout: number
   databaseApplicationName: string
   region: string
+  requestHardLimitsEnabled: boolean
   requestTraceHeader?: string
   requestEtagHeaders: string[]
   responseSMaxAge: number
@@ -314,6 +315,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     requestAllowXForwardedPrefix:
       getOptionalConfigFromEnv('REQUEST_ALLOW_X_FORWARDED_PATH') === 'true',
+    requestHardLimitsEnabled: getOptionalConfigFromEnv('REQUEST_HARD_LIMITS_ENABLED') === 'true',
     storagePublicUrl: getOptionalConfigFromEnv('STORAGE_PUBLIC_URL'),
     requestTraceHeader: getOptionalConfigFromEnv('REQUEST_TRACE_HEADER', 'REQUEST_ID_HEADER'),
     requestEtagHeaders: getOptionalConfigFromEnv('REQUEST_ETAG_HEADERS')?.trim().split(',') || [

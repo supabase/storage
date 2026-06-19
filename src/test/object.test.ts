@@ -1871,7 +1871,7 @@ describe('testing deleting multiple objects', () => {
     }
   })
 
-  test('rejects delete requests over the object request cap', async () => {
+  test('allows delete requests over the object request cap when hard limits are disabled', async () => {
     const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/bucket2',
@@ -1885,7 +1885,8 @@ describe('testing deleting multiple objects', () => {
       },
     })
 
-    expect(response.statusCode).toBe(400)
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.body)).toEqual([])
     expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
   })
 

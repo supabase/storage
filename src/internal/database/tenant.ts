@@ -35,6 +35,7 @@ interface TenantConfig {
   serviceKeyPayload: {
     role: string
   }
+  deleteObjectsLimit?: number
   migrationVersion?: keyof typeof DBMigration
   migrationStatus?: TenantMigrationStatus
   syncMigrationsDone?: boolean
@@ -227,6 +228,7 @@ export async function getTenantConfig(
       image_transformation_max_resolution,
       database_pool_url,
       max_connections,
+      delete_objects_limit,
       migrations_version,
       migrations_status,
       tracing_mode,
@@ -246,6 +248,10 @@ export async function getTenantConfig(
       serviceKey,
       serviceKeyPayload: { role: dbServiceRole },
       maxConnections: max_connections ? Number(max_connections) : undefined,
+      deleteObjectsLimit:
+        delete_objects_limit === null || delete_objects_limit === undefined
+          ? undefined
+          : Number(delete_objects_limit),
       features: {
         imageTransformation: {
           enabled: Boolean(feature_image_transformation),
@@ -387,6 +393,16 @@ export async function getJwtSecret(tenantId: string): Promise<{
 export async function getFileSizeLimit(tenantId: string): Promise<number> {
   const { fileSizeLimit } = await getTenantConfig(tenantId)
   return fileSizeLimit
+}
+
+/**
+ * Get the maximum objects allowed per bulk object request for a tenant.
+ * Undefined means the tenant uses the service default.
+ * @param tenantId
+ */
+export async function getDeleteObjectsLimit(tenantId: string): Promise<number | undefined> {
+  const { deleteObjectsLimit } = await getTenantConfig(tenantId)
+  return deleteObjectsLimit
 }
 
 /**

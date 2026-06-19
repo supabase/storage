@@ -40,6 +40,7 @@ const patchSchema = {
       maxConnections: { type: 'number' },
       jwks: { type: 'object', nullable: true },
       fileSizeLimit: { type: 'number' },
+      deleteObjectsLimit: { type: 'integer', minimum: 1, nullable: true },
       jwtSecret: { type: 'string' },
       serviceKey: { type: 'string' },
       tracingMode: { type: 'string' },
@@ -121,6 +122,7 @@ interface tenantDBInterface {
   jwks: { keys?: JwksConfigKey[] } | null
   service_key: string
   file_size_limit?: number
+  delete_objects_limit?: number | null
   feature_s3_protocol?: boolean
   feature_purge_cache?: boolean
   feature_image_transformation?: boolean
@@ -264,6 +266,7 @@ export default async function routes(fastify: FastifyInstance) {
         database_pool_url,
         max_connections,
         file_size_limit,
+        delete_objects_limit,
         jwt_secret,
         jwks,
         service_key,
@@ -296,6 +299,10 @@ export default async function routes(fastify: FastifyInstance) {
           : {}),
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
+        deleteObjectsLimit:
+          delete_objects_limit === null || delete_objects_limit === undefined
+            ? undefined
+            : Number(delete_objects_limit),
         migrationVersion: migrations_version,
         migrationStatus: migrations_status,
         tracingMode: tracing_mode,
@@ -341,6 +348,7 @@ export default async function routes(fastify: FastifyInstance) {
         database_pool_url,
         max_connections,
         file_size_limit,
+        delete_objects_limit,
         jwt_secret,
         jwks,
         service_key,
@@ -381,6 +389,10 @@ export default async function routes(fastify: FastifyInstance) {
           : {}),
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
+        deleteObjectsLimit:
+          delete_objects_limit === null || delete_objects_limit === undefined
+            ? undefined
+            : Number(delete_objects_limit),
         capabilities,
         features: {
           imageTransformation: {
@@ -422,6 +434,7 @@ export default async function routes(fastify: FastifyInstance) {
         anonKey,
         databaseUrl,
         fileSizeLimit,
+        deleteObjectsLimit,
         jwtSecret,
         jwks,
         serviceKey,
@@ -439,6 +452,7 @@ export default async function routes(fastify: FastifyInstance) {
         database_pool_url: databasePoolUrl ? encrypt(databasePoolUrl) : undefined,
         max_connections: maxConnections ? Number(maxConnections) : undefined,
         file_size_limit: fileSizeLimit,
+        delete_objects_limit: deleteObjectsLimit,
         jwt_secret: encrypt(jwtSecret),
         jwks: jwks || null,
         service_key: encrypt(serviceKey),
@@ -486,6 +500,7 @@ export default async function routes(fastify: FastifyInstance) {
         anonKey,
         databaseUrl,
         fileSizeLimit,
+        deleteObjectsLimit,
         jwtSecret,
         jwks,
         serviceKey,
@@ -507,6 +522,7 @@ export default async function routes(fastify: FastifyInstance) {
             : undefined,
         max_connections: maxConnections ? Number(maxConnections) : undefined,
         file_size_limit: fileSizeLimit,
+        delete_objects_limit: deleteObjectsLimit,
         jwt_secret: jwtSecret !== undefined ? encrypt(jwtSecret) : undefined,
         jwks,
         service_key: serviceKey !== undefined ? encrypt(serviceKey) : undefined,
@@ -557,6 +573,7 @@ export default async function routes(fastify: FastifyInstance) {
         anonKey,
         databaseUrl,
         fileSizeLimit,
+        deleteObjectsLimit,
         jwtSecret,
         jwks,
         serviceKey,
@@ -581,6 +598,10 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (fileSizeLimit) {
         tenantInfo.file_size_limit = fileSizeLimit
+      }
+
+      if (typeof deleteObjectsLimit !== 'undefined') {
+        tenantInfo.delete_objects_limit = deleteObjectsLimit
       }
 
       if (typeof features?.imageTransformation?.enabled !== 'undefined') {

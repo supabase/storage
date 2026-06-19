@@ -186,6 +186,9 @@ async function httpServer(signal: AbortSignal) {
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
     loggerInstance: logger,
     disableRequestLogging: true,
+    childLoggerFactory(logger) {
+      return logger
+    },
     exposeDocs,
     requestIdHeader: requestTraceHeader,
     routerOptions: { maxParamLength: 2500 },
@@ -235,6 +238,9 @@ async function httpAdminServer(
   const adminApp = buildAdmin({
     loggerInstance: logger,
     disableRequestLogging: true,
+    childLoggerFactory(logger) {
+      return logger
+    },
     exposeDocs,
     requestIdHeader: adminRequestIdHeader,
   })

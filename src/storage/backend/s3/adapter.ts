@@ -393,26 +393,27 @@ export class S3Backend implements StorageBackendAdapter {
         StartAfter: options?.startAfter,
       })
       const data = await this.client.send(command)
-      const keys =
-        data.Contents?.filter((ele) => {
-          if (options?.beforeDate) {
-            if (ele.LastModified && ele.LastModified < options.beforeDate) {
-              return ele.Key as string
-            }
-            return false
-          }
-          return ele.Key
-        }).map((ele) => {
-          if (options?.prefix) {
-            return {
-              // remove prefix and leading slash if present
-              name: (ele.Key as string).replace(options.prefix, '').replace(/^\//, ''),
-              size: ele.Size as number,
-            }
-          }
+      const keys: { name: string; size: number }[] = []
 
-          return { name: ele.Key as string, size: ele.Size as number }
-        }) || []
+      for (const ele of data.Contents || []) {
+        if (!ele.Key) {
+          continue
+        }
+
+        if (options?.beforeDate && (!ele.LastModified || ele.LastModified >= options.beforeDate)) {
+          continue
+        }
+
+        if (options?.prefix) {
+          keys.push({
+            // remove prefix and leading slash if present
+            name: ele.Key.replace(options.prefix, '').replace(/^\//, ''),
+            size: ele.Size as number,
+          })
+        } else {
+          keys.push({ name: ele.Key, size: ele.Size as number })
+        }
+      }
 
       return {
         keys,

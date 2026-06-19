@@ -240,26 +240,25 @@ export default function PutObject(s3Router: S3Router) {
 }
 
 function fieldsToObject(fields: MultipartFields) {
-  return Object.keys(fields).reduce(
-    (acc, key) => {
-      const field = fields[key]
-      if (Array.isArray(field)) {
-        return acc
-      }
+  const acc: Record<string, string> = {}
 
-      if (!field) {
-        return acc
-      }
+  for (const key in fields) {
+    if (!Object.prototype.hasOwnProperty.call(fields, key)) {
+      continue
+    }
 
-      if (
-        field.type === 'field' &&
-        (typeof field.value === 'string' || field.value === 'number' || field.value === 'boolean')
-      ) {
-        acc[field.fieldname.toLowerCase()] = field.value
-      }
+    const field = fields[key]
+    if (Array.isArray(field) || !field) {
+      continue
+    }
 
-      return acc
-    },
-    {} as Record<string, string>
-  )
+    if (
+      field.type === 'field' &&
+      (typeof field.value === 'string' || field.value === 'number' || field.value === 'boolean')
+    ) {
+      acc[field.fieldname.toLowerCase()] = field.value
+    }
+  }
+
+  return acc
 }

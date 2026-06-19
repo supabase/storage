@@ -660,28 +660,26 @@ export class ObjectStorage {
       searchResult = delimitedResults
     }
 
-    let isTruncated = false
-
-    if (searchResult.length > limit) {
-      searchResult = searchResult.slice(0, limit)
-      isTruncated = true
-    }
+    const isTruncated = searchResult.length > limit
+    const resultCount = isTruncated ? limit : searchResult.length
 
     const folders: Obj[] = []
     const objects: Obj[] = []
-    searchResult.forEach((obj) => {
+    for (let index = 0; index < resultCount; index++) {
+      const obj = searchResult[index]
       const target = obj.id === null ? folders : objects
       const name = obj.id === null && !obj.name.endsWith('/') ? obj.name + '/' : obj.name
       target.push({
         ...obj,
         name: options?.encodingType === 'url' ? encodeURIComponent(name) : name,
       })
-    })
+    }
 
     let nextContinuationToken: string | undefined
     let nextCursorKey: string | undefined
 
     if (isTruncated) {
+      const lastObject = searchResult[resultCount - 1]
       const sortColumn = (cursor?.sortColumn || options?.sortBy?.column) as
         | 'name'
         | 'created_at'
@@ -689,15 +687,15 @@ export class ObjectStorage {
         | undefined
 
       nextContinuationToken = encodeContinuationToken({
-        startAfter: searchResult[searchResult.length - 1].name,
+        startAfter: lastObject.name,
         sortOrder: cursor?.sortOrder || options?.sortBy?.order,
         sortColumn,
         sortColumnAfter:
-          sortColumn && sortColumn !== 'name' && searchResult[searchResult.length - 1][sortColumn]
-            ? new Date(searchResult[searchResult.length - 1][sortColumn] || '').toISOString()
+          sortColumn && sortColumn !== 'name' && lastObject[sortColumn]
+            ? new Date(lastObject[sortColumn] || '').toISOString()
             : undefined,
       })
-      nextCursorKey = searchResult[searchResult.length - 1].name
+      nextCursorKey = lastObject.name
     }
 
     return {
@@ -724,12 +722,16 @@ export class ObjectStorage {
   ) {
     await this.findObject(objectName)
 
-    metadata = Object.keys(metadata || {}).reduce((all, key) => {
-      if (!all[key]) {
-        delete all[key]
+    metadata = metadata || {}
+    for (const key in metadata) {
+      if (!Object.prototype.hasOwnProperty.call(metadata, key)) {
+        continue
       }
-      return all
-    }, metadata || {})
+
+      if (!metadata[key]) {
+        delete metadata[key]
+      }
+    }
 
     // security-in-depth: as signObjectUrl could be used as a signing oracle,
     // make sure it's never able to specify a role JWT claim, nor the claims that
@@ -781,7 +783,10 @@ export class ObjectStorage {
       }
     }
 
-    const nameSet = new Set(results.map(({ name }) => name))
+    const nameSet = new Set<string>()
+    for (const { name } of results) {
+      nameSet.add(name)
+    }
 
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
 

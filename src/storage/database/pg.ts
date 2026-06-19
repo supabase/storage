@@ -349,19 +349,16 @@ export class StoragePgDB implements Database {
 
     try {
       const result = await this.runQuery('CreateBucket', async (db, signal) => {
-        const entries = Object.entries(bucketData).filter(([, value]) => value !== undefined)
-        const columns = entries.map(([column]) => quoteIdentifier(column))
-        const values = entries.map(([, value]) => value)
-        const placeholders = entries.map((_, index) => `$${index + 1}`)
+        const insert = buildInsert(bucketData as Record<string, unknown>)
 
         return this.query(
           db,
           {
             text: `
-              INSERT INTO storage.buckets (${columns.join(', ')})
-              VALUES (${placeholders.join(', ')})
+              INSERT INTO storage.buckets (${insert.columns})
+              VALUES (${insert.placeholders})
             `,
-            values,
+            values: insert.values,
           },
           signal
         )
@@ -840,10 +837,22 @@ export class StoragePgDB implements Database {
 
     const result = await this.runQuery('UpsertObject', async (db, signal) => {
       const insert = buildInsert(objectData)
-      const updateEntries = Object.entries(updateData).filter(([, value]) => value !== undefined)
-      const updateClause = updateEntries
-        .map(([column]) => `${quoteIdentifier(column)} = EXCLUDED.${quoteIdentifier(column)}`)
-        .join(', ')
+      const updateRecord = updateData as Record<string, unknown>
+      const updateClauses: string[] = []
+
+      for (const column in updateRecord) {
+        if (!Object.prototype.hasOwnProperty.call(updateRecord, column)) {
+          continue
+        }
+
+        if (updateRecord[column] === undefined) {
+          continue
+        }
+
+        updateClauses.push(`${quoteIdentifier(column)} = EXCLUDED.${quoteIdentifier(column)}`)
+      }
+
+      const updateClause = updateClauses.join(', ')
 
       return this.query<Obj>(
         db,
@@ -1632,17 +1641,21 @@ export class StoragePgDB implements Database {
     }
 
     await this.runUnscopedQuery('InsertS3KeysIntoTempTable', async (db, signal) => {
-      const values = keys.flatMap((key) => [key.key, key.size])
-      const placeholders = keys
-        .map((_, index) => `($${index * 2 + 1}, $${index * 2 + 2})`)
-        .join(', ')
+      const values: (string | number)[] = []
+      const placeholders: string[] = []
+
+      for (let index = 0; index < keys.length; index++) {
+        const key = keys[index]
+        placeholders.push(`($${index * 2 + 1}, $${index * 2 + 2})`)
+        values.push(key.key, key.size)
+      }
 
       await this.query(
         db,
         {
           text: `
             INSERT INTO ${quoteQualifiedIdentifier(tableName)} (key, size)
-            VALUES ${placeholders}
+            VALUES ${placeholders.join(', ')}
             ON CONFLICT DO NOTHING
           `,
           values,
@@ -1680,19 +1693,34 @@ export class StoragePgDB implements Database {
       }
 
       if (typeof columns === 'string') {
-        return columns
-          .split(',')
-          .map((column) => column.trim())
-          .filter((column) => !rule.newColumns.includes(column))
-          .join(',') as T
+        const normalizedColumns: string[] = []
+        for (const column of columns.split(',')) {
+          const trimmed = column.trim()
+          if (rule.newColumns.includes(trimmed)) {
+            continue
+          }
+
+          normalizedColumns.push(trimmed)
+        }
+
+        return normalizedColumns.join(',') as T
       }
 
-      const normalizedColumns: Record<string, unknown> = {
-        ...(columns as Record<string, unknown>),
+      const normalizedColumns: Record<string, unknown> = {}
+      const sourceColumns = columns as Record<string, unknown>
+
+      for (const column in sourceColumns) {
+        if (!Object.prototype.hasOwnProperty.call(sourceColumns, column)) {
+          continue
+        }
+
+        if (rule.newColumns.includes(column)) {
+          continue
+        }
+
+        normalizedColumns[column] = sourceColumns[column]
       }
-      for (const column of rule.newColumns) {
-        delete normalizedColumns[column]
-      }
+
       return normalizedColumns as T
     }
 
@@ -1700,13 +1728,16 @@ export class StoragePgDB implements Database {
   }
 
   protected normalizeMultipartUploadColumns(columns: string): string[] {
-    let normalizedColumns = this.normalizeColumns(columns)
-      .split(',')
-      .map((column) => column.trim())
-      .filter((column) => column.length > 0)
+    const normalizedColumns: string[] = []
+    const hasMetadataColumn = this.hasMultipartMetadataColumn()
 
-    if (!this.hasMultipartMetadataColumn()) {
-      normalizedColumns = normalizedColumns.filter((column) => column !== 'metadata')
+    for (const column of this.normalizeColumns(columns).split(',')) {
+      const trimmed = column.trim()
+      if (!trimmed || (!hasMetadataColumn && trimmed === 'metadata')) {
+        continue
+      }
+
+      normalizedColumns.push(trimmed)
     }
 
     return normalizedColumns
@@ -1904,19 +1935,34 @@ export class StoragePgDB implements Database {
 }
 
 function selectColumns(columns: string | string[]): string {
-  const columnNames = Array.isArray(columns)
-    ? columns
-    : columns.split(',').map((column) => column.trim())
+  const selected: string[] = []
 
-  const selected = columnNames
-    .filter((column) => column.length > 0)
-    .map((column) => {
-      if (column === '*') {
-        return '*'
+  if (Array.isArray(columns)) {
+    for (const column of columns) {
+      if (column.length === 0) {
+        continue
       }
 
-      return quoteIdentifier(column)
-    })
+      if (column === '*') {
+        selected.push('*')
+      } else {
+        selected.push(quoteIdentifier(column))
+      }
+    }
+  } else {
+    for (const column of columns.split(',')) {
+      const trimmed = column.trim()
+      if (trimmed.length === 0) {
+        continue
+      }
+
+      if (trimmed === '*') {
+        selected.push('*')
+      } else {
+        selected.push(quoteIdentifier(trimmed))
+      }
+    }
+  }
 
   return selected.length ? selected.join(', ') : quoteIdentifier('id')
 }
@@ -1930,16 +1976,33 @@ function buildInsert(data: Record<string, unknown>): {
   placeholders: string
   values: unknown[]
 } {
-  const entries = Object.entries(data).filter(([, value]) => value !== undefined)
+  const columns: string[] = []
+  const placeholders: string[] = []
+  const values: unknown[] = []
 
-  if (entries.length === 0) {
+  for (const column in data) {
+    if (!Object.prototype.hasOwnProperty.call(data, column)) {
+      continue
+    }
+
+    const value = data[column]
+    if (value === undefined) {
+      continue
+    }
+
+    values.push(value)
+    columns.push(quoteIdentifier(column))
+    placeholders.push(`$${values.length}`)
+  }
+
+  if (values.length === 0) {
     throw ERRORS.NoContentProvided()
   }
 
   return {
-    columns: entries.map(([column]) => quoteIdentifier(column)).join(', '),
-    placeholders: entries.map((_, index) => `$${index + 1}`).join(', '),
-    values: entries.map(([, value]) => value),
+    columns: columns.join(', '),
+    placeholders: placeholders.join(', '),
+    values,
   }
 }
 
@@ -1947,17 +2010,30 @@ function buildUpdate(data: Record<string, unknown>): {
   setClause: string
   values: unknown[]
 } {
-  const entries = Object.entries(data).filter(([, value]) => value !== undefined)
+  const setClauses: string[] = []
+  const values: unknown[] = []
 
-  if (entries.length === 0) {
+  for (const column in data) {
+    if (!Object.prototype.hasOwnProperty.call(data, column)) {
+      continue
+    }
+
+    const value = data[column]
+    if (value === undefined) {
+      continue
+    }
+
+    values.push(value)
+    setClauses.push(`${quoteIdentifier(column)} = $${values.length}`)
+  }
+
+  if (values.length === 0) {
     throw ERRORS.NoContentProvided()
   }
 
   return {
-    setClause: entries
-      .map(([column], index) => `${quoteIdentifier(column)} = $${index + 1}`)
-      .join(', '),
-    values: entries.map(([, value]) => value),
+    setClause: setClauses.join(', '),
+    values,
   }
 }
 
@@ -1965,9 +2041,18 @@ function buildTupleValues(values: { name: string; version: string }[]): {
   placeholders: string
   values: string[]
 } {
+  const placeholders: string[] = []
+  const queryValues: string[] = []
+
+  for (let index = 0; index < values.length; index++) {
+    const { name, version } = values[index]
+    placeholders.push(`($${index * 2 + 2}, $${index * 2 + 3})`)
+    queryValues.push(name, version)
+  }
+
   return {
-    placeholders: values.map((_, index) => `($${index * 2 + 2}, $${index * 2 + 3})`).join(', '),
-    values: values.flatMap(({ name, version }) => [name, version]),
+    placeholders: placeholders.join(', '),
+    values: queryValues,
   }
 }
 

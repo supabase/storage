@@ -2,6 +2,7 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
@@ -160,6 +161,53 @@ describe('S3Backend', () => {
       const result = await backend.getObject('test-bucket', 'test-key', undefined)
 
       expect(result.metadata.mimetype).toBe('image/png')
+    })
+  })
+
+  describe('list', () => {
+    test('filters listed keys by cutoff date and strips the requested prefix', async () => {
+      mockSend.mockResolvedValue({
+        Contents: [
+          {
+            Key: 'tenant/bucket/old.txt',
+            LastModified: new Date('2024-01-01T00:00:00.000Z'),
+            Size: 12,
+          },
+          {
+            Key: 'tenant/bucket/new.txt',
+            LastModified: new Date('2024-01-03T00:00:00.000Z'),
+            Size: 34,
+          },
+          {
+            Key: 'tenant/bucket/no-date.txt',
+            Size: 56,
+          },
+          {
+            LastModified: new Date('2024-01-01T00:00:00.000Z'),
+            Size: 78,
+          },
+        ],
+        NextContinuationToken: 'next-page',
+      })
+
+      const backend = createBackend()
+
+      await expect(
+        backend.list('test-bucket', {
+          prefix: 'tenant/bucket',
+          beforeDate: new Date('2024-01-02T00:00:00.000Z'),
+        })
+      ).resolves.toEqual({
+        keys: [{ name: 'old.txt', size: 12 }],
+        nextToken: 'next-page',
+      })
+
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      expect(mockSend.mock.calls[0][0]).toBeInstanceOf(ListObjectsV2Command)
+      expect(mockSend.mock.calls[0][0].input).toMatchObject({
+        Bucket: 'test-bucket',
+        Prefix: 'tenant/bucket',
+      })
     })
   })
 

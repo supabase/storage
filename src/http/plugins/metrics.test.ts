@@ -1,17 +1,11 @@
-import {
-  httpRequestDuration,
-  httpRequestSizeBytes,
-  httpResponseSizeBytes,
-} from '@internal/monitoring/metrics'
+import * as monitoringMetrics from '@internal/monitoring/metrics'
 import Fastify from 'fastify'
 import { httpMetrics } from './metrics'
 
 describe('httpMetrics plugin', () => {
   it('records HTTP metric attributes without tenant id labels', async () => {
     const app = Fastify()
-    const durationSpy = vi.spyOn(httpRequestDuration, 'record')
-    const requestSizeSpy = vi.spyOn(httpRequestSizeBytes, 'add')
-    const responseSizeSpy = vi.spyOn(httpResponseSizeBytes, 'add')
+    const httpMetricsSpy = vi.spyOn(monitoringMetrics, 'recordHttpRequestMetrics')
 
     app.decorateRequest('tenantId', 'tenant-a')
     await app.register(httpMetrics())
@@ -33,19 +27,45 @@ describe('httpMetrics plugin', () => {
 
       expect(response.statusCode).toBe(200)
 
-      const expectedAttributes = {
-        method: 'POST',
-        operation: 'unknown',
-        status_code: '200',
-      }
-
-      expect(durationSpy).toHaveBeenCalledWith(expect.any(Number), expectedAttributes)
-      expect(requestSizeSpy).toHaveBeenCalledWith(7, expectedAttributes)
-      expect(responseSizeSpy).toHaveBeenCalledWith(2, expectedAttributes)
+      expect(httpMetricsSpy).toHaveBeenCalledWith(expect.any(Number), 7, 2, 'POST', 'unknown', 200)
     } finally {
-      durationSpy.mockRestore()
-      requestSizeSpy.mockRestore()
-      responseSizeSpy.mockRestore()
+      httpMetricsSpy.mockRestore()
+      await app.close()
+    }
+  })
+
+  it('ignores malformed request content-length headers', async () => {
+    const app = Fastify()
+    const httpMetricsSpy = vi.spyOn(monitoringMetrics, 'recordHttpRequestMetrics')
+
+    await app.register(httpMetrics())
+    app.post('/objects/:bucket', async (_request, reply) => {
+      reply.header('content-length', 'nope')
+      return 'ok'
+    })
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/objects/bucket-a',
+        headers: {
+          'content-length': 'not-a-size',
+          'content-type': 'text/plain',
+        },
+        payload: 'payload',
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(httpMetricsSpy).toHaveBeenCalledWith(
+        expect.any(Number),
+        undefined,
+        2,
+        'POST',
+        'unknown',
+        200
+      )
+    } finally {
+      httpMetricsSpy.mockRestore()
       await app.close()
     }
   })

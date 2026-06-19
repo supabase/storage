@@ -4,6 +4,7 @@ interface OTelGlobalState {
 
 import fs from 'node:fs'
 import { vi } from 'vitest'
+import { HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT } from './metric-limits'
 
 const mockedMetricsModules = [
   '../../config',
@@ -173,7 +174,7 @@ describe('otel metrics', () => {
     )
   })
 
-  test('registers a view overriding v8js.gc.duration buckets on the runtime-node meter', async () => {
+  test('registers metric views for HTTP size cardinality and runtime GC buckets', async () => {
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT
     delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
 
@@ -261,6 +262,21 @@ describe('otel metrics', () => {
     expect(MeterProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         views: expect.arrayContaining([
+          expect.objectContaining({
+            meterName: 'storage-api',
+            instrumentName: 'http_request_duration_seconds',
+            aggregationCardinalityLimit: HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT,
+          }),
+          {
+            meterName: 'storage-api',
+            instrumentName: 'http_request_size_bytes',
+            aggregationCardinalityLimit: HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT,
+          },
+          {
+            meterName: 'storage-api',
+            instrumentName: 'http_response_size_bytes',
+            aggregationCardinalityLimit: HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT,
+          },
           {
             meterName: '@opentelemetry/instrumentation-runtime-node',
             instrumentName: 'v8js.gc.duration',

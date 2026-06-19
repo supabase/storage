@@ -2,6 +2,7 @@ import { encrypt, signJWT } from '@internal/auth'
 import { TENANT_CONFIG_CACHE_NAME } from '@internal/cache'
 import {
   closeMultitenantPg,
+  getDeleteObjectsLimit,
   jwksManager,
   multitenantPgExecutor,
   PgTenantConnection,
@@ -35,6 +36,7 @@ const payload = {
   databasePoolUrl: 'v',
   maxConnections: 12,
   fileSizeLimit: 1,
+  deleteObjectsLimit: 1500,
   jwtSecret: 'c',
   serviceKey: 'd',
   jwks: { keys: [] },
@@ -77,6 +79,7 @@ const payload2 = {
   databasePoolUrl: 'm',
   maxConnections: 14,
   fileSizeLimit: 2,
+  deleteObjectsLimit: 2000,
   jwtSecret: 'g',
   serviceKey: 'h',
   jwks: null,
@@ -228,6 +231,7 @@ describe('Tenant configs', () => {
 
     await expect(getServiceKey('abc')).resolves.toBe(payload.serviceKey)
     await expect(getFileSizeLimit('abc')).resolves.toBe(payload.fileSizeLimit)
+    await expect(getDeleteObjectsLimit('abc')).resolves.toBe(payload.deleteObjectsLimit)
     await expect(getFeatures('abc')).resolves.toEqual(payload.features)
   })
 

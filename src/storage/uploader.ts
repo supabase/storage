@@ -1,6 +1,6 @@
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { fileUploadedSuccess, fileUploadStarted } from '@internal/monitoring/metrics'
+import { recordUploadStarted, recordUploadSuccess } from '@internal/monitoring/metrics'
 import { StorageObjectLocator } from '@storage/locator'
 import { randomUUID } from 'crypto'
 import { FastifyRequest } from 'fastify'
@@ -104,9 +104,7 @@ export class Uploader {
    */
   async prepareUpload(options: CanUploadOptions & { uploadType: UploadType }) {
     await this.canUpload(options)
-    fileUploadStarted.add(1, {
-      uploadType: options.uploadType,
-    })
+    recordUploadStarted(options.uploadType)
 
     return randomUUID()
   }
@@ -281,9 +279,7 @@ export class Uploader {
 
         await Promise.all(events)
 
-        fileUploadedSuccess.add(1, {
-          uploadType,
-        })
+        recordUploadSuccess(uploadType)
 
         return { obj: newObject, isNew, metadata: objectMetadata }
       })

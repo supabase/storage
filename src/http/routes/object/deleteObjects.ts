@@ -1,4 +1,4 @@
-import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
+import { DELETE_OBJECTS_LIMIT_DESCRIPTION, enforceDeleteObjectsLimit } from '@storage/limits'
 import { objectSchema } from '@storage/schemas/object'
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -20,7 +20,7 @@ const deleteObjectsBodySchema = {
       type: 'array',
       items: { type: 'string' },
       minItems: 1,
-      maxItems: MAX_OBJECTS_PER_REQUEST,
+      description: DELETE_OBJECTS_LIMIT_DESCRIPTION,
       examples: [['folder/cat.png', 'folder/morecats.png']],
     },
   },
@@ -60,6 +60,8 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketName } = request.params
       const prefixes = request.body['prefixes']
+
+      await enforceDeleteObjectsLimit(request.tenantId, prefixes.length)
 
       const results = await request.storage.from(bucketName).deleteObjects(prefixes)
 

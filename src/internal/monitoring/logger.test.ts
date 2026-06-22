@@ -46,6 +46,24 @@ function setupLoggerMocks(configOverrides: Record<string, unknown> = {}) {
 }
 
 describe('logger serializers', () => {
+  async function createRequestUrlRedactor() {
+    setupLoggerMocks()
+    const { serializeRequestLog } = await import('./logger')
+
+    return (url: string, query?: unknown) =>
+      serializeRequestLog({
+        id: 'trace-1',
+        method: 'GET',
+        url,
+        ...(query === undefined ? {} : { query }),
+        headers: {},
+        hostname: 'storage.test',
+        ip: '127.0.0.1',
+        protocol: 'https',
+        socket: { remotePort: 1234 },
+      } as never).url
+  }
+
   afterEach(() => {
     for (const moduleId of mockedLoggerModules) {
       vi.doUnmock(moduleId)
@@ -83,6 +101,54 @@ describe('logger serializers', () => {
       remoteAddress: '127.0.0.1',
       remotePort: 1234,
     })
+  })
+
+  test('redactLogUrl redacts sensitive keys from the parsed query', async () => {
+    const redact = await createRequestUrlRedactor()
+
+    expect(redact('/o?token=secret&keep=1', { token: 'secret', keep: '1' })).toBe(
+      '/o?token=redacted&keep=1'
+    )
+  })
+
+  test('redactLogUrl redacts encoded sensitive keys from the parsed query', async () => {
+    const redact = await createRequestUrlRedactor()
+
+    expect(redact('/o?to%6Ben=leaked-jwt', { token: 'leaked-jwt' })).toBe('/o?token=redacted')
+  })
+
+  test('redactLogUrl leaves URLs untouched when the parsed query has no sensitive keys', async () => {
+    const redact = await createRequestUrlRedactor()
+
+    expect(redact('/o?tokenizer=foo', { tokenizer: 'foo' })).toBe('/o?tokenizer=foo')
+    expect(redact('/o?keep=visible', { keep: 'visible' })).toBe('/o?keep=visible')
+  })
+
+  test('redactLogUrl redacts exact sensitive keys when no parsed query is available', async () => {
+    const redact = await createRequestUrlRedactor()
+
+    expect(redact('/o?a=1&X-Amz-Signature=sig&b=2')).toBe('/o?a=1&X-Amz-Signature=redacted&b=2')
+  })
+
+  test('redactLogUrl redacts encoded sensitive keys when no parsed query is available', async () => {
+    const redact = await createRequestUrlRedactor()
+
+    expect(redact('/o?X-Amz-%53ignature=leaked-sig')).toBe('/o?X-Amz-Signature=redacted')
+  })
+
+  test('redactLogUrl does not redact sensitive key prefixes or suffixes', async () => {
+    const redact = await createRequestUrlRedactor()
+
+    expect(redact('/o?tokenizer=foo')).toBe('/o?tokenizer=foo')
+    expect(redact('/o?notX-Amz-Signature=foo')).toBe('/o?notX-Amz-Signature=foo')
+  })
+
+  test('redactLogUrl does not treat path ampersands as query separators', async () => {
+    const redact = await createRequestUrlRedactor()
+
+    expect(redact('/object/sign/bucket/a&b.txt?token=leaked-jwt')).toBe(
+      '/object/sign/bucket/a&b.txt?token=redacted'
+    )
   })
 
   test('serializeReplyLog whitelists reply headers and tolerates undefined replies', async () => {

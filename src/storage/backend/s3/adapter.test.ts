@@ -120,6 +120,50 @@ describe('S3Backend', () => {
     })
   }
 
+  describe('client config', () => {
+    test('passes split checksum settings independently to the AWS client', async () => {
+      const originalRequestChecksum = process.env.STORAGE_S3_REQUEST_CHECKSUM_CALCULATION
+      const originalResponseChecksum = process.env.STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION
+
+      try {
+        delete process.env.STORAGE_S3_REQUEST_CHECKSUM_CALCULATION
+        process.env.STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION = 'WHEN_REQUIRED'
+
+        vi.resetModules()
+        const { S3Backend: ReloadedS3Backend } = await import('./adapter')
+        const s3ClientMock = S3Client as unknown as Mock
+
+        s3ClientMock.mockClear()
+
+        new ReloadedS3Backend({
+          region: 'us-east-1',
+          endpoint: 'http://localhost:9000',
+        })
+
+        expect(s3ClientMock.mock.calls[0][0]).toMatchObject({
+          region: 'us-east-1',
+          endpoint: 'http://localhost:9000',
+          responseChecksumValidation: 'WHEN_REQUIRED',
+        })
+        expect(s3ClientMock.mock.calls[0][0].requestChecksumCalculation).toBeUndefined()
+      } finally {
+        if (originalRequestChecksum === undefined) {
+          delete process.env.STORAGE_S3_REQUEST_CHECKSUM_CALCULATION
+        } else {
+          process.env.STORAGE_S3_REQUEST_CHECKSUM_CALCULATION = originalRequestChecksum
+        }
+
+        if (originalResponseChecksum === undefined) {
+          delete process.env.STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION
+        } else {
+          process.env.STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION = originalResponseChecksum
+        }
+
+        vi.resetModules()
+      }
+    })
+  })
+
   describe('getObject', () => {
     test('should return correct default MIME type when S3 returns no ContentType', async () => {
       mockSend.mockResolvedValue({

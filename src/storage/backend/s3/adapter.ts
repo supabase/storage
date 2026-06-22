@@ -41,7 +41,8 @@ const {
   tracingFeatures,
   storageS3MaxSockets,
   tracingEnabled,
-  storageS3DisableChecksum,
+  storageS3RequestChecksumCalculation,
+  storageS3ResponseChecksumValidation,
 } = getConfig()
 
 export const MAX_PUT_OBJECT_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
@@ -720,9 +721,11 @@ export class S3Backend implements StorageBackendAdapter {
       params.forcePathStyle = true
     }
 
-    if (storageS3DisableChecksum) {
-      params.requestChecksumCalculation = 'WHEN_REQUIRED'
-      params.responseChecksumValidation = 'WHEN_REQUIRED'
+    if (storageS3RequestChecksumCalculation) {
+      params.requestChecksumCalculation = storageS3RequestChecksumCalculation
+    }
+    if (storageS3ResponseChecksumValidation) {
+      params.responseChecksumValidation = storageS3ResponseChecksumValidation
     }
     return new S3Client(params)
   }

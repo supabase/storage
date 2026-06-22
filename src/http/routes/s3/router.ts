@@ -105,7 +105,18 @@ export type QuerystringMatch = {
   value: string | undefined
 }
 
+export type HeaderMatch = {
+  name: string
+  value?: string
+}
+
 export type RouteQuery = Record<string, string | undefined>
+
+export type RouteMatch = {
+  query: RouteQuery
+  headers: Record<string, string>
+  type?: string
+}
 
 type Route<S extends Schema, Context> = {
   method: HTTPMethod
@@ -120,6 +131,9 @@ type Route<S extends Schema, Context> = {
   acceptMultiformData?: boolean
   operation: string
   compiledSchema: () => ValidateFunction<JTDDataType<S>>
+  // Precompiled matcher: the query/header criteria are parsed once at registration
+  // time so request-time matching is a single closure call with no string parsing.
+  matches: (match: RouteMatch) => boolean
 }
 
 interface RouteOptions<S extends Schema> {
@@ -221,6 +235,7 @@ export class Router<Context = unknown> {
       acceptMultiformData,
       operation,
       type: options.type,
+      matches: compileMatcher(query, headers, options.type),
     }
 
     if (!existingPath) {
@@ -274,81 +289,100 @@ export class Router<Context = unknown> {
     return this._routes
   }
 
-  matchRoute(
-    route: Route<Schema, Context>,
-    match: { query: RouteQuery; headers: Record<string, string>; type?: string }
-  ) {
-    const isOfType = match.type ? match.type === route.type : route.type === undefined
+  matchRoute(route: Route<Schema, Context>, match: RouteMatch) {
+    return route.matches(match)
+  }
+}
 
-    if ((route.headersMatches?.length || 0) > 0) {
-      return (
-        this.matchHeaders(route.headersMatches, match.headers) &&
-        this.matchQueryString(route.querystringMatches, match.query) &&
-        isOfType
-      )
+/**
+ * Precompiles a route's query/header/type criteria into a single matcher closure.
+ *
+ * The query wildcard flag and the header name/value pairs are derived once here
+ * instead of on every request, so request-time matching is a closure call with no
+ * per-request string splitting or array scanning to recompute static information.
+ */
+function compileMatcher(
+  query: QuerystringMatch[],
+  headers: string[],
+  type?: string
+): (match: RouteMatch) => boolean {
+  const hasWildcardQuery = query.some((match) => match.key === '*')
+  const valuedQueryMatches = query.filter((match) => match.key !== '*')
+  const headerMatches = headers.map(parseHeaderMatch)
+  const hasHeaderMatches = headerMatches.length > 0
+
+  return (match: RouteMatch) => {
+    const isOfType = match.type ? match.type === type : type === undefined
+    if (!isOfType) {
+      return false
     }
 
-    return this.matchQueryString(route.querystringMatches, match.query) && isOfType
+    if (hasHeaderMatches && !matchHeaders(headerMatches, match.headers)) {
+      return false
+    }
+
+    return matchQueryString(valuedQueryMatches, hasWildcardQuery, match.query)
+  }
+}
+
+function parseHeaderMatch(header: string): HeaderMatch {
+  const separatorIndex = header.indexOf('=')
+  if (separatorIndex === -1) {
+    return { name: header }
+  }
+  return { name: header.slice(0, separatorIndex), value: header.slice(separatorIndex + 1) }
+}
+
+function matchHeaders(matches: HeaderMatch[], received?: Record<string, string>) {
+  if (!received) {
+    return matches.length === 0
   }
 
-  protected matchHeaders(headers: string[], received?: Record<string, string>) {
-    if (!received) {
-      return headers.length === 0
+  for (const match of matches) {
+    const value = received[match.name]
+    if (value === undefined) {
+      return false
     }
-
-    return headers.every((header) => {
-      const headerParts = header.split('=')
-      const headerName = headerParts[0]
-      const headerValue = headerParts[1]
-
-      const matchHeaderName = received[headerName] !== undefined
-      const matchHeaderValue = headerValue ? received[headerName]?.startsWith(headerValue) : true
-
-      return matchHeaderName && matchHeaderValue
-    })
+    if (match.value && !value.startsWith(match.value)) {
+      return false
+    }
   }
 
-  protected matchQueryString(matches: QuerystringMatch[], received?: RouteQuery) {
-    let hasWildcard = false
-    for (const match of matches) {
-      if (match.key === '*') {
-        hasWildcard = true
-        break
-      }
-    }
+  return true
+}
 
-    if (!received) {
+function matchQueryString(
+  valuedMatches: QuerystringMatch[],
+  hasWildcard: boolean,
+  received?: RouteQuery
+) {
+  if (!received) {
+    return hasWildcard
+  }
+
+  let hasReceivedQuery = false
+  for (const key in received) {
+    if (Object.prototype.hasOwnProperty.call(received, key)) {
+      hasReceivedQuery = true
+      break
+    }
+  }
+
+  if (!hasReceivedQuery) {
+    return hasWildcard
+  }
+
+  for (const match of valuedMatches) {
+    if (!Object.prototype.hasOwnProperty.call(received, match.key)) {
       return hasWildcard
     }
 
-    let hasReceivedQuery = false
-    for (const key in received) {
-      if (Object.prototype.hasOwnProperty.call(received, key)) {
-        hasReceivedQuery = true
-        break
-      }
-    }
-
-    if (!hasReceivedQuery) {
+    if (match.value !== undefined && match.value !== received[match.key]) {
       return hasWildcard
     }
-
-    for (const match of matches) {
-      if (match.key === '*') {
-        continue
-      }
-
-      if (!Object.prototype.hasOwnProperty.call(received, match.key)) {
-        return hasWildcard
-      }
-
-      if (match.value !== undefined && match.value !== received[match.key]) {
-        return hasWildcard
-      }
-    }
-
-    return true
   }
+
+  return true
 }
 
 /**

@@ -1034,6 +1034,72 @@ describe('S3 Protocol', () => {
         expect(resp.UploadId).toBeTruthy()
       })
 
+      it('creates a multi part upload for an empty json request with a percent-encoded uploads query name', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-encoded-uploads-query.json'
+        let uploadId: string | undefined
+
+        try {
+          const signedRequest = await createSignedS3Request({
+            baseUrl,
+            method: 'POST',
+            path: `/s3/${bucketName}/${key}`,
+            query: {
+              uploads: '',
+            },
+            headers: {
+              'content-type': 'application/json',
+            },
+            body: '',
+            includeContentLength: true,
+          })
+          signedRequest.requestUrl.search = '?up%6Co%61ds'
+
+          const response = await fetch(signedRequest.requestUrl, {
+            method: 'POST',
+            headers: signedRequest.headers,
+            body: '',
+          })
+          const data = await response.text()
+
+          expect(response.status).toBe(200)
+          expect(data).toContain('<InitiateMultipartUploadResult')
+          uploadId = data.match(/<UploadId>([^<]+)<\/UploadId>/)?.[1]
+          expect(uploadId).toBeTruthy()
+        } finally {
+          if (uploadId) {
+            await client.send(
+              new AbortMultipartUploadCommand({
+                Bucket: bucketName,
+                Key: key,
+                UploadId: uploadId,
+              })
+            )
+          }
+        }
+      })
+
+      it('rejects an empty json multipart post without uploads query', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-empty-json-without-uploads-query.json'
+
+        const emptyJsonPostResp = await sendSignedS3Request({
+          baseUrl,
+          method: 'POST',
+          path: `/s3/${bucketName}/${key}`,
+          headers: {
+            'content-type': 'application/json',
+          },
+        })
+
+        expect(emptyJsonPostResp.status).toBe(400)
+        expect(emptyJsonPostResp.data).toContain('<Error>')
+        expect(emptyJsonPostResp.data).toContain('<Code>InvalidRequest</Code>')
+        expect(emptyJsonPostResp.data).toContain(
+          "<Message>Body cannot be empty when content-type is set to 'application/json'</Message>"
+        )
+      })
+
       it('upload a part', async () => {
         const bucketName = await createBucket(client)
         const createMultiPartUpload = new CreateMultipartUploadCommand({

@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
-import { URL } from 'node:url'
 import { normalizeRawError } from '@internal/errors'
+import fastQuerystring from 'fast-querystring'
 import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from 'fastify'
 import pino, { Logger } from 'pino'
 import { getConfig } from '../../config'
@@ -246,7 +246,7 @@ export function serializeRequestLog(req: FastifyRequest): SerializedRequestLog {
     region,
     traceId: req.id,
     method: req.method,
-    url: redactLogUrl(req.url),
+    url: redactLogUrl(req.url, req.query),
     headers: whitelistHeaders(req.headers),
     hostname: req.hostname,
     remoteAddress: req.ip,
@@ -333,23 +333,30 @@ function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-function redactLogUrl(url: string) {
+function redactLogUrl(url: string, query?: unknown): string {
   const qIdx = url.indexOf('?')
 
   // Fast path: no query string, nothing to redact
   if (qIdx === -1) return url
 
-  const query = url.slice(qIdx + 1)
-  // Fast path: no sensitive params present
-  if (!redactedQueryParams.some((p) => query.includes(p))) return url
+  // Reuse the query Fastify already parsed (and percent-decoded) during routing;
+  // only parse here when it is unavailable, e.g. raw non-Fastify log values. A key
+  // sent as `to%6Ben` is decoded to `token`, so encoded secrets are still matched.
+  const parsed = isRecord(query) ? query : fastQuerystring.parse(url.slice(qIdx + 1))
 
-  const lUrl = new URL(url, 'http://storage.local')
-  redactedQueryParams.forEach((param) => {
-    if (lUrl.searchParams.has(param)) {
-      lUrl.searchParams.set(param, 'redacted')
+  // Redact only when a sensitive key is present, cloning lazily so the request's
+  // own query object is never mutated. When nothing is sensitive, return the URL
+  // untouched and do no extra work.
+  let redacted: Record<string, unknown> | undefined
+  for (const param of redactedQueryParams) {
+    if (param in parsed) {
+      redacted ??= { ...parsed }
+      redacted[param] = 'redacted'
     }
-  })
-  return `${lUrl.pathname}${lUrl.search}`
+  }
+  if (redacted === undefined) return url
+
+  return `${url.slice(0, qIdx)}?${fastQuerystring.stringify(redacted)}`
 }
 
 function statusOfType(statusCode: number, ofType: number) {

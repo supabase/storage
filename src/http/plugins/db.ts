@@ -57,7 +57,7 @@ export const db = fastifyPlugin(
       })
 
       // Connect abort signal to DB connection for query cancellation
-      if (request.signals?.disconnect?.signal && databaseEnableQueryCancellation) {
+      if (databaseEnableQueryCancellation && request.signals) {
         request.db.setAbortSignal(request.signals.disconnect.signal)
       }
     })
@@ -103,7 +103,7 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
       })
 
       // Connect abort signal to DB connection for query cancellation
-      if (request.signals?.disconnect?.signal && databaseEnableQueryCancellation) {
+      if (databaseEnableQueryCancellation && request.signals) {
         request.db.setAbortSignal(request.signals.disconnect.signal)
       }
     })

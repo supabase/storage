@@ -8,6 +8,8 @@ const CONFIG_ENV_KEYS = [
   'TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE',
   'DATABASE_POOL_DRAIN_TIMEOUT',
   'REQUEST_HARD_LIMITS_ENABLED',
+  'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
+  'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
 ] as const
 
 type ConfigEnvKey = (typeof CONFIG_ENV_KEYS)[number]
@@ -78,6 +80,29 @@ describe('tenant pool cache config parsing', () => {
     const config = getConfig({ reload: true })
 
     expect(config.requestHardLimitsEnabled).toBe(true)
+  })
+
+  test('does not force S3 checksum config by default', async () => {
+    setConfigEnv({})
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.storageS3RequestChecksumCalculation).toBeUndefined()
+    expect(config.storageS3ResponseChecksumValidation).toBeUndefined()
+  })
+
+  test('parses split S3 checksum config independently', async () => {
+    setConfigEnv({
+      STORAGE_S3_REQUEST_CHECKSUM_CALCULATION: 'WHEN_SUPPORTED',
+      STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION: 'WHEN_REQUIRED',
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.storageS3RequestChecksumCalculation).toBe('WHEN_SUPPORTED')
+    expect(config.storageS3ResponseChecksumValidation).toBe('WHEN_REQUIRED')
   })
 
   test('parses database pool drain timeout in milliseconds', async () => {

@@ -1,4 +1,5 @@
 import { logger } from '@internal/monitoring'
+import fastDecodeURIComponent from 'fast-decode-uri-component'
 import * as ipAddr from 'ip-address'
 import { ConnectionOptions } from 'tls'
 
@@ -28,7 +29,8 @@ export function getSslSettings({
 }
 
 export function isIpAddress(ip: string) {
-  // IP might be URL-encoded
-  const decodedIp = decodeURIComponent(ip)
+  // IP might be URL-encoded. fast-decode returns the input unchanged when there
+  // is nothing to decode, and null (rather than throwing) on malformed input.
+  const decodedIp = fastDecodeURIComponent(ip) ?? ip
   return ipAddr.Address6.isValid(decodedIp) || ipAddr.Address4.isValid(decodedIp)
 }

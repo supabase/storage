@@ -1,3 +1,4 @@
+import fastDecodeURIComponent from 'fast-decode-uri-component'
 import fs from 'fs'
 import { mkdir } from 'fs/promises'
 import path from 'path'
@@ -93,9 +94,12 @@ function parseMultipartFilename(headers: MultipartHeaders) {
 
   const extendedMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i)
   if (extendedMatch?.[1]) {
-    try {
-      return decodeURIComponent(extendedMatch[1])
-    } catch {}
+    // fast-decode returns null (rather than throwing) on malformed input, in
+    // which case we fall through to the quoted form below.
+    const decoded = fastDecodeURIComponent(extendedMatch[1])
+    if (decoded !== null) {
+      return decoded
+    }
   }
 
   const quotedMatch = disposition.match(/filename="([^"]+)"/i)

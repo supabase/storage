@@ -1,3 +1,4 @@
+import { Writable } from 'node:stream'
 import { vi } from 'vitest'
 
 const mockedLoggerModules = ['pino', '../../config'] as const
@@ -328,6 +329,110 @@ describe('logger serializers', () => {
       statusCode: 200,
       headers: { etag: 'fresh-etag' },
     })
+  })
+
+  test('base logger registers compiled req/res stringifiers on child loggers', async () => {
+    const lines: string[] = []
+    const stream = new Writable({
+      write(chunk, _encoding, callback) {
+        lines.push(chunk.toString())
+        callback()
+      },
+    })
+
+    vi.doMock('pino', async () => {
+      type PinoFactory = typeof import('pino')
+      const actual = await vi.importActual<{ default: PinoFactory } & Record<string, unknown>>(
+        'pino'
+      )
+      const actualPino = actual.default
+      const pinoMock = Object.assign(
+        vi.fn((options: unknown) =>
+          actualPino(
+            {
+              ...((options ?? {}) as Record<string, unknown>),
+              base: null,
+              timestamp: false,
+              transport: undefined,
+            } as never,
+            stream as never
+          )
+        ),
+        actualPino,
+        {
+          stdTimeFunctions: actualPino.stdTimeFunctions,
+          symbols: actualPino.symbols,
+        }
+      )
+
+      return {
+        ...actual,
+        default: pinoMock,
+      }
+    })
+    vi.doMock('../../config', () => ({
+      getConfig: vi.fn(() => ({
+        logLevel: 'info',
+        logflareApiKey: undefined,
+        logflareBatchSize: 1,
+        logflareEnabled: false,
+        logflareSourceToken: undefined,
+        region: 'local',
+        version: 'test-version',
+      })),
+    }))
+
+    const { logger, serializeReplyLog, serializeRequestLog } = await import('./logger')
+    const req = serializeRequestLog({
+      id: 'trace-1',
+      method: 'GET',
+      url: '/object?token=hidden-query&keep=visible',
+      query: { token: 'hidden-query', keep: 'visible' },
+      headers: {
+        authorization: 'Bearer hidden-auth',
+        'x-client-info': 'storage-js',
+      },
+      hostname: 'storage.test',
+      ip: '127.0.0.1',
+      protocol: 'https',
+      socket: { remotePort: 1234 },
+    } as never)
+    const res = serializeReplyLog({
+      statusCode: 200,
+      getHeaders: vi.fn(() => ({
+        etag: 'fresh-etag',
+        'set-cookie': 'hidden-cookie',
+      })),
+    } as never)!
+
+    ;(req as unknown as Record<string, unknown>).unknownRequestField = 'dropped-request-field'
+    ;(res as unknown as Record<string, unknown>).unknownReplyField = 'dropped-reply-field'
+
+    logger.info({ req, res }, 'compiled serializer smoke')
+
+    expect(lines).toHaveLength(1)
+    const log = JSON.parse(lines[0])
+    expect(log.req).toEqual({
+      region: 'local',
+      traceId: 'trace-1',
+      method: 'GET',
+      url: '/object?token=redacted&keep=visible',
+      headers: { x_client_info: 'storage-js' },
+      hostname: 'storage.test',
+      remoteAddress: '127.0.0.1',
+      remotePort: 1234,
+    })
+    expect(log.res).toEqual({
+      statusCode: 200,
+      headers: { etag: 'fresh-etag' },
+    })
+
+    const serializedLog = JSON.stringify(log)
+    expect(serializedLog).not.toContain('hidden-query')
+    expect(serializedLog).not.toContain('hidden-auth')
+    expect(serializedLog).not.toContain('hidden-cookie')
+    expect(serializedLog).not.toContain('dropped-request-field')
+    expect(serializedLog).not.toContain('dropped-reply-field')
   })
 
   test('buildTransport wires logflare hooks when logflare is enabled', async () => {

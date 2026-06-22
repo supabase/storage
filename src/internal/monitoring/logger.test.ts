@@ -286,6 +286,50 @@ describe('logger serializers', () => {
     expect(serializedRawValues).not.toContain('hidden-cookie')
   })
 
+  test('serializeRequestLogToJson emits schema JSON, dropping unknown keys and absent optionals', async () => {
+    setupLoggerMocks()
+    const { serializeRequestLog, serializeRequestLogToJson } = await import('./logger')
+
+    const request = {
+      id: 'trace-1',
+      method: 'GET',
+      url: '/object?keep=visible',
+      headers: { 'x-client-info': 'storage-js' },
+      hostname: 'storage.test',
+      ip: '127.0.0.1',
+      protocol: 'https',
+      socket: { remotePort: undefined },
+    } as never
+
+    const json = serializeRequestLogToJson(serializeRequestLog(request))
+
+    expect(JSON.parse(json)).toEqual({
+      region: 'local',
+      traceId: 'trace-1',
+      method: 'GET',
+      url: '/object?keep=visible',
+      headers: { x_client_info: 'storage-js' },
+      hostname: 'storage.test',
+      remoteAddress: '127.0.0.1',
+    })
+    expect(json).not.toContain('remotePort')
+  })
+
+  test('serializeReplyLogToJson emits schema JSON for the reply payload', async () => {
+    setupLoggerMocks()
+    const { serializeReplyLog, serializeReplyLogToJson } = await import('./logger')
+
+    const reply = serializeReplyLog({
+      statusCode: 200,
+      getHeaders: vi.fn(() => ({ etag: 'fresh-etag' })),
+    } as never)!
+
+    expect(JSON.parse(serializeReplyLogToJson(reply))).toEqual({
+      statusCode: 200,
+      headers: { etag: 'fresh-etag' },
+    })
+  })
+
   test('buildTransport wires logflare hooks when logflare is enabled', async () => {
     setupLoggerMocks({
       logLevel: 'debug',

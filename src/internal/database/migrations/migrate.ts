@@ -1,5 +1,6 @@
 import { ERRORS } from '@internal/errors'
 import { ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events'
+// Database migrations intentionally keep direct pg access outside Database Watt for now.
 import { Client, ClientConfig } from 'pg'
 import { MigrationError } from 'postgres-migrations'
 import { runMigration } from 'postgres-migrations/dist/run-migration'

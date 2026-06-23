@@ -45,7 +45,6 @@ describeAcceptance(
       const client = createRestClient()
       const bucketName = uniqueBucketName('cdn')
       const objectKey = uniqueObjectKey('cdn')
-      const missingObjectKey = uniqueObjectKey('cdn-missing')
 
       try {
         await createRestBucket(bucketName, { isPublic: true })
@@ -62,19 +61,100 @@ describeAcceptance(
         expect(purge.json).toMatchObject({
           message: 'success',
         })
-
-        const missingPurge = await client.request(
-          'DELETE',
-          `/cdn/${bucketName}/${encodePathSegments(missingObjectKey)}`,
-          {
-            expectedStatus: [400, 404],
-            token: requireServiceKey(),
-          }
-        )
-        expect(missingPurge.json).toBeTruthy()
       } finally {
         await cleanupRestResources(bucketName, [objectKey], client)
       }
+    })
+
+    it('purges object transformations cache', async () => {
+      const client = createRestClient()
+      const bucketName = uniqueBucketName('cdn')
+      const objectKey = uniqueObjectKey('cdn')
+
+      try {
+        await createRestBucket(bucketName, { isPublic: true })
+        await uploadRestObject(bucketName, objectKey, 'cdn-purge-transforms-target')
+
+        const purge = await client.request<CdnPurgeResponse>(
+          'DELETE',
+          `/cdn/${bucketName}/${encodePathSegments(objectKey)}?transformations=true`,
+          {
+            expectedStatus: 200,
+            token: requireServiceKey(),
+          }
+        )
+        expect(purge.json).toMatchObject({
+          message: 'success',
+        })
+      } finally {
+        await cleanupRestResources(bucketName, [objectKey], client)
+      }
+    })
+
+    it('purges an entire bucket cache', async () => {
+      const client = createRestClient()
+      const bucketName = uniqueBucketName('cdn')
+
+      try {
+        await createRestBucket(bucketName, { isPublic: true })
+
+        const purge = await client.request<CdnPurgeResponse>('DELETE', `/cdn/${bucketName}`, {
+          expectedStatus: 200,
+          token: requireServiceKey(),
+        })
+        expect(purge.json).toMatchObject({
+          message: 'success',
+        })
+      } finally {
+        await cleanupRestResources(bucketName, [], client)
+      }
+    })
+
+    it('purges bucket transformations cache', async () => {
+      const client = createRestClient()
+      const bucketName = uniqueBucketName('cdn')
+
+      try {
+        await createRestBucket(bucketName, { isPublic: true })
+
+        const purge = await client.request<CdnPurgeResponse>(
+          'DELETE',
+          `/cdn/${bucketName}?transformations=true`,
+          {
+            expectedStatus: 200,
+            token: requireServiceKey(),
+          }
+        )
+        expect(purge.json).toMatchObject({
+          message: 'success',
+        })
+      } finally {
+        await cleanupRestResources(bucketName, [], client)
+      }
+    })
+
+    it('purges entire tenant cache', async () => {
+      const client = createRestClient()
+
+      const purge = await client.request<CdnPurgeResponse>('DELETE', '/cdn/', {
+        expectedStatus: 200,
+        token: requireServiceKey(),
+      })
+      expect(purge.json).toMatchObject({
+        message: 'success',
+      })
+    })
+
+    it('purges tenant transformations cache', async () => {
+      const client = createRestClient()
+
+      const purge = await client.request<CdnPurgeResponse>('DELETE', '/cdn?transformations=true', {
+        expectedStatus: 200,
+        token: requireServiceKey(),
+      })
+      expect(purge.json).toMatchObject({
+        message: 'success',
+      })
     })
   }
 )

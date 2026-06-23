@@ -64,6 +64,9 @@ export async function main() {
   const server = adminApp({
     loggerInstance: logger,
     disableRequestLogging: true,
+    childLoggerFactory(logger) {
+      return logger
+    },
     requestIdHeader: requestTraceHeader,
   })
 

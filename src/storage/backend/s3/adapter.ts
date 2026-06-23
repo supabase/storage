@@ -24,6 +24,7 @@ import { createAgent, InstrumentedAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
+import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
 import { getConfig } from '../../../config'
 import {
   BrowserCacheHeaders,
@@ -40,7 +41,8 @@ const {
   tracingFeatures,
   storageS3MaxSockets,
   tracingEnabled,
-  storageS3DisableChecksum,
+  storageS3RequestChecksumCalculation,
+  storageS3ResponseChecksumValidation,
 } = getConfig()
 
 export const MAX_PUT_OBJECT_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
@@ -392,26 +394,27 @@ export class S3Backend implements StorageBackendAdapter {
         StartAfter: options?.startAfter,
       })
       const data = await this.client.send(command)
-      const keys =
-        data.Contents?.filter((ele) => {
-          if (options?.beforeDate) {
-            if (ele.LastModified && ele.LastModified < options.beforeDate) {
-              return ele.Key as string
-            }
-            return false
-          }
-          return ele.Key
-        }).map((ele) => {
-          if (options?.prefix) {
-            return {
-              // remove prefix and leading slash if present
-              name: (ele.Key as string).replace(options.prefix, '').replace(/^\//, ''),
-              size: ele.Size as number,
-            }
-          }
+      const keys: { name: string; size: number }[] = []
 
-          return { name: ele.Key as string, size: ele.Size as number }
-        }) || []
+      for (const ele of data.Contents || []) {
+        if (!ele.Key) {
+          continue
+        }
+
+        if (options?.beforeDate && (!ele.LastModified || ele.LastModified >= options.beforeDate)) {
+          continue
+        }
+
+        if (options?.prefix) {
+          keys.push({
+            // remove prefix and leading slash if present
+            name: ele.Key.replace(options.prefix, '').replace(/^\//, ''),
+            size: ele.Size as number,
+          })
+        } else {
+          keys.push({ name: ele.Key, size: ele.Size as number })
+        }
+      }
 
       return {
         keys,
@@ -429,17 +432,30 @@ export class S3Backend implements StorageBackendAdapter {
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
     try {
-      const s3Prefixes = prefixes.map((ele) => {
-        return { Key: ele }
+      const deleteRequests: Promise<unknown>[] = []
+
+      for (let i = 0; i < prefixes.length; i += MAX_KEYS_PER_S3_DELETE) {
+        const s3Prefixes = prefixes.slice(i, i + MAX_KEYS_PER_S3_DELETE).map((ele) => {
+          return { Key: ele }
+        })
+
+        const command = new DeleteObjectsCommand({
+          Bucket: bucket,
+          Delete: {
+            Objects: s3Prefixes,
+          },
+        })
+        deleteRequests.push(this.client.send(command))
+      }
+
+      const results = await Promise.allSettled(deleteRequests)
+      const rejected = results.find((result): result is PromiseRejectedResult => {
+        return result.status === 'rejected'
       })
 
-      const command = new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: {
-          Objects: s3Prefixes,
-        },
-      })
-      await this.client.send(command)
+      if (rejected) {
+        throw rejected.reason
+      }
     } catch (e) {
       throw StorageBackendError.fromError(e)
     }
@@ -705,9 +721,11 @@ export class S3Backend implements StorageBackendAdapter {
       params.forcePathStyle = true
     }
 
-    if (storageS3DisableChecksum) {
-      params.requestChecksumCalculation = 'WHEN_REQUIRED'
-      params.responseChecksumValidation = 'WHEN_REQUIRED'
+    if (storageS3RequestChecksumCalculation) {
+      params.requestChecksumCalculation = storageS3RequestChecksumCalculation
+    }
+    if (storageS3ResponseChecksumValidation) {
+      params.responseChecksumValidation = storageS3ResponseChecksumValidation
     }
     return new S3Client(params)
   }

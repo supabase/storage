@@ -21,6 +21,7 @@ export interface TenantConfigRow {
   jwks?: { keys?: JwksConfigKey[] } | null
   service_key: string
   file_size_limit?: number
+  delete_objects_limit?: number | null
   feature_s3_protocol?: boolean
   feature_purge_cache?: boolean
   feature_image_transformation?: boolean
@@ -51,6 +52,7 @@ const tenantWritableColumns = [
   'jwks',
   'service_key',
   'file_size_limit',
+  'delete_objects_limit',
   'feature_s3_protocol',
   'feature_purge_cache',
   'feature_image_transformation',

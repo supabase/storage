@@ -292,7 +292,8 @@ describeAcceptance(
             vectorBucketName,
             vectors: defaultPageVectorKeys.map((key, i) => ({
               data: {
-                float32: [i, 0],
+                // Offset by 1 so no vector has zero norm, which a cosine index rejects.
+                float32: [i + 1, 0],
               },
               key,
             })),
@@ -558,9 +559,16 @@ describeAcceptance(
         expect(euclideanQuery.json?.vectors?.map((vector) => vector.key)).toEqual(
           euclideanVectorKeys
         )
+        // Backends differ on the euclidean convention: pgvector's `<->` returns the true L2
+        // distance, while the S3 Vectors engine returns the squared L2 distance. Both preserve
+        // ordering (squaring is monotonic for non-negative values). Detect the convention from
+        // the first neighbor, then require the rest to be consistent with it.
+        const nearDistance = euclideanQuery.json?.vectors?.[1]?.distance ?? Number.NaN
+        const farDistance = euclideanQuery.json?.vectors?.[2]?.distance ?? Number.NaN
+        const squaredDistance = Math.abs(nearDistance - 25) < Math.abs(nearDistance - 5)
         expect(euclideanQuery.json?.vectors?.[0]?.distance).toBeCloseTo(0, 5)
-        expect(euclideanQuery.json?.vectors?.[1]?.distance).toBeCloseTo(5, 3)
-        expect(euclideanQuery.json?.vectors?.[2]?.distance).toBeCloseTo(17, 3)
+        expect(nearDistance).toBeCloseTo(squaredDistance ? 25 : 5, 3)
+        expect(farDistance).toBeCloseTo(squaredDistance ? 289 : 17, 3)
 
         await client.request('POST', '/vector/DeleteVectors', {
           body: {

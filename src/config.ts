@@ -6,6 +6,7 @@ export type StorageBackendType = 'file' | 's3'
 export type VectorBucketProvider = 's3' | 'pgvector'
 export type IcebergCatalogAuthType = 'sigv4' | 'token'
 export type DatabaseEngine = 'postgres' | 'multigres'
+export type StorageS3ChecksumConfig = 'WHEN_SUPPORTED' | 'WHEN_REQUIRED'
 const DEFAULT_S3_UPLOAD_PART_SIZE = 16 * 1024 * 1024
 const MIN_S3_UPLOAD_PART_SIZE = 5 * 1024 * 1024
 export enum MultitenantMigrationStrategy {
@@ -72,7 +73,8 @@ type StorageConfigType = {
   storageFileEtagAlgorithm: 'mtime' | 'md5'
   storageS3InternalTracesEnabled?: boolean
   storageS3MaxSockets: number
-  storageS3DisableChecksum: boolean
+  storageS3RequestChecksumCalculation?: StorageS3ChecksumConfig
+  storageS3ResponseChecksumValidation?: StorageS3ChecksumConfig
   storageS3UploadPartSize: number
   storageS3UploadQueueSize: number
   storageS3Bucket: string
@@ -112,6 +114,7 @@ type StorageConfigType = {
   databaseStatementTimeout: number
   databaseApplicationName: string
   region: string
+  requestHardLimitsEnabled: boolean
   requestTraceHeader?: string
   requestEtagHeaders: string[]
   responseSMaxAge: number
@@ -120,7 +123,6 @@ type StorageConfigType = {
   emptyBucketMax: number
   storageBackendType: StorageBackendType
   tenantId: string
-  requestUrlLengthLimit: number
   requestXForwardedHostRegExp?: string
   requestAllowXForwardedPrefix?: boolean
   storagePublicUrl?: string
@@ -260,6 +262,22 @@ export function normalizeDatabaseEngine(engine: string | null | undefined): Data
   throw new Error(`Invalid database engine "${engine}". Expected "postgres" or "multigres".`)
 }
 
+function normalizeStorageS3ChecksumConfig(
+  value: string | undefined,
+  envKey: string
+): StorageS3ChecksumConfig | undefined {
+  if (!value) {
+    return undefined
+  }
+
+  const normalizedValue = value.toUpperCase()
+  if (normalizedValue === 'WHEN_SUPPORTED' || normalizedValue === 'WHEN_REQUIRED') {
+    return normalizedValue
+  }
+
+  throw new Error(`Invalid ${envKey} "${value}". Expected "WHEN_SUPPORTED" or "WHEN_REQUIRED".`)
+}
+
 function getOptionalIfMultitenantConfigFromEnv(key: string, fallback?: string): string | undefined {
   return getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
     ? getOptionalConfigFromEnv(key, fallback)
@@ -285,7 +303,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   envPaths.map((envPath) => dotenv.config({ path: envPath, override: false }))
 
   const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
-
   config = {
     serviceName: getOptionalConfigFromEnv('SERVICE_NAME') || 'storage_api',
     numWorkers: envNumber(getOptionalConfigFromEnv('WORKERS_NUM'), 1),
@@ -315,9 +332,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     requestAllowXForwardedPrefix:
       getOptionalConfigFromEnv('REQUEST_ALLOW_X_FORWARDED_PATH') === 'true',
+    requestHardLimitsEnabled: getOptionalConfigFromEnv('REQUEST_HARD_LIMITS_ENABLED') === 'true',
     storagePublicUrl: getOptionalConfigFromEnv('STORAGE_PUBLIC_URL'),
-    requestUrlLengthLimit:
-      Number(getOptionalConfigFromEnv('REQUEST_URL_LENGTH_LIMIT', 'URL_LENGTH_LIMIT')) || 7_500,
     requestTraceHeader: getOptionalConfigFromEnv('REQUEST_TRACE_HEADER', 'REQUEST_ID_HEADER'),
     requestEtagHeaders: getOptionalConfigFromEnv('REQUEST_ETAG_HEADERS')?.trim().split(',') || [
       'if-none-match',
@@ -398,7 +414,14 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('STORAGE_S3_MAX_SOCKETS', 'GLOBAL_S3_MAX_SOCKETS') || '200',
       10
     ),
-    storageS3DisableChecksum: getOptionalConfigFromEnv('STORAGE_S3_DISABLE_CHECKSUM') === 'true',
+    storageS3RequestChecksumCalculation: normalizeStorageS3ChecksumConfig(
+      getOptionalConfigFromEnv('STORAGE_S3_REQUEST_CHECKSUM_CALCULATION'),
+      'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION'
+    ),
+    storageS3ResponseChecksumValidation: normalizeStorageS3ChecksumConfig(
+      getOptionalConfigFromEnv('STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION'),
+      'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION'
+    ),
     storageS3UploadPartSize: Math.max(
       envNumber(getOptionalConfigFromEnv('STORAGE_S3_UPLOAD_PART_SIZE')) ??
         DEFAULT_S3_UPLOAD_PART_SIZE,

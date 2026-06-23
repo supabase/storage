@@ -55,7 +55,7 @@ INSERT INTO "storage"."objects" ("id", "bucket_id", "name", "owner", "created_at
 ;
 INSERT INTO "storage"."objects" ("id", "bucket_id", "name", "owner", "created_at", "updated_at", "last_accessed_at", "metadata")
 SELECT gen_random_uuid(), 'bucket2', 'authenticated/' || i, '317eadce-631a-4429-a0bb-f19a7a517b4a', now(), now(), now(), '{"size": 1234}'
-from generate_series(0, 10000) i;
+from generate_series(0, 999) i;
 
 -- add policies
 -- allows user to CRUD all buckets

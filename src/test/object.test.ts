@@ -13,6 +13,7 @@ import {
 } from '@internal/auth'
 import { getPostgresConnection, getServiceKeyUser, PgTransaction } from '@internal/database'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import FormData from 'form-data'
@@ -28,6 +29,12 @@ const { jwtSecret, serviceKeyAsync, tenantId } = getConfig()
 const anonKey = process.env.ANON_KEY || ''
 const S3Backend = backends.S3Backend
 let appInstance: FastifyInstance
+
+type SignedUrlResult = {
+  error: string | null
+  path: string
+  signedURL: string | null
+}
 
 let tnx: PgTransaction | undefined
 async function getSuperuserPostgrestClient() {
@@ -91,6 +98,20 @@ async function deleteObjectsByName(db: PgTransaction, bucketId: string, names: s
         AND name = ANY($2::text[])
     `,
     values: [bucketId, Array.isArray(names) ? names : [names]],
+  })
+}
+
+async function insertObjectNames(db: PgTransaction, bucketId: string, names: string[]) {
+  const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
+  const versions = names.map((_, index) => `test-version-${randomUUID()}-${index}`)
+
+  await db.query({
+    text: `
+      INSERT INTO objects (bucket_id, name, owner, owner_id, version, metadata)
+      SELECT $1, seeded.name, $2::uuid, $2::text, seeded.version, $3::jsonb
+      FROM unnest($4::text[], $5::text[]) AS seeded(name, version)
+    `,
+    values: [bucketId, owner, { size: 1234 }, names, versions],
   })
 }
 
@@ -1809,7 +1830,48 @@ describe('testing delete object', () => {
  * DELETE /objects
  * */
 describe('testing deleting multiple objects', () => {
-  test('check if RLS policies are respected: authenticated user is able to delete authenticated resource', async () => {
+  test('authenticated user can bulk delete objects up to the request cap', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectNames = [...Array(MAX_OBJECTS_PER_REQUEST).keys()].map(
+      (i) => `authenticated/bulk-delete-${runId}/${i}`
+    )
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'DELETE',
+        url: `/object/${bucketName}`,
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+        payload: {
+          prefixes: objectNames,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+
+      const result = JSON.parse(response.body)
+      expect(result).toHaveLength(MAX_OBJECTS_PER_REQUEST)
+      expect(result.map((row: { name: string }) => row.name)).toEqual(
+        expect.arrayContaining(objectNames)
+      )
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('allows delete requests over the object request cap when hard limits are disabled', async () => {
     const response = await appInstance.inject({
       method: 'DELETE',
       url: '/object/bucket2',
@@ -1817,16 +1879,15 @@ describe('testing deleting multiple objects', () => {
         authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
       payload: {
-        prefixes: [...Array(10001).keys()].map((i) => `authenticated/${i}`),
+        prefixes: [...Array(MAX_OBJECTS_PER_REQUEST + 1).keys()].map(
+          (i) => `authenticated/too-many-${i}`
+        ),
       },
     })
-    expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
 
-    const result = JSON.parse(response.body)
-    expect(result).toHaveLength(10001)
-    expect(result[0].name).toBe('authenticated/0')
-    expect(result[1].name).toBe('authenticated/1')
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.body)).toEqual([])
+    expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
   })
 
   test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {
@@ -2460,12 +2521,54 @@ describe('testing generating signed URLs', () => {
       },
       payload: {
         expiresIn: 1000,
-        paths: [...Array(10001).keys()].map((i) => `authenticated/${i}`),
+        paths: [...Array(MAX_OBJECTS_PER_REQUEST).keys()].map((i) => `authenticated/${i}`),
       },
     })
     expect(response.statusCode).toBe(200)
     const result = JSON.parse(response.body)
-    expect(result).toHaveLength(10001)
+    expect(result).toHaveLength(MAX_OBJECTS_PER_REQUEST)
+  })
+
+  test('authenticated user can sign URLs up to the request cap', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectNames = [...Array(MAX_OBJECTS_PER_REQUEST).keys()].map(
+      (i) => `authenticated/bulk-sign-${runId}/${i}`
+    )
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/sign/${bucketName}`,
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+        payload: {
+          expiresIn: 1000,
+          paths: objectNames,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      const result = JSON.parse(response.body) as SignedUrlResult[]
+      expect(result).toHaveLength(MAX_OBJECTS_PER_REQUEST)
+      expect(
+        result.every(({ error, signedURL }) => {
+          return error === null && signedURL !== null
+        })
+      ).toBe(true)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
   })
 
   test('check if RLS policies are respected: anon user is not able to generate signedURLs for authenticated resource', async () => {
@@ -2477,7 +2580,7 @@ describe('testing generating signed URLs', () => {
       },
       payload: {
         expiresIn: 1000,
-        paths: [...Array(10001).keys()].map((i) => `authenticated/${i}`),
+        paths: [...Array(MAX_OBJECTS_PER_REQUEST).keys()].map((i) => `authenticated/${i}`),
       },
     })
     expect(response.statusCode).toBe(200)
@@ -2491,9 +2594,27 @@ describe('testing generating signed URLs', () => {
       url: '/object/sign/bucket2',
       payload: {
         expiresIn: 1000,
-        paths: [...Array(10001).keys()].map((i) => `authenticated/${i}`),
+        paths: [...Array(MAX_OBJECTS_PER_REQUEST).keys()].map((i) => `authenticated/${i}`),
       },
     })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('rejects signed URL requests over the object request cap', async () => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+        paths: [...Array(MAX_OBJECTS_PER_REQUEST + 1).keys()].map(
+          (i) => `authenticated/too-many-${i}`
+        ),
+      },
+    })
+
     expect(response.statusCode).toBe(400)
   })
 
@@ -2506,7 +2627,7 @@ describe('testing generating signed URLs', () => {
       },
       payload: {
         expiresIn: 1000,
-        paths: [...Array(10001).keys()].map((i) => `authenticated/${i}`),
+        paths: [...Array(MAX_OBJECTS_PER_REQUEST).keys()].map((i) => `authenticated/${i}`),
       },
     })
     expect(response.statusCode).toBe(200)

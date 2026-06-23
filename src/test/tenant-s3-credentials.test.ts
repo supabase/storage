@@ -22,8 +22,8 @@ import {
 } from '@internal/database'
 import * as metrics from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
+import { TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES } from '@storage/protocols/s3/credentials'
 import dotenv from 'dotenv'
-import objectSizeOf from 'object-sizeof'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 import { assertLogicalLookupMetrics } from './utils/cache-metrics'
@@ -500,17 +500,8 @@ describe('Tenant S3 credentials', () => {
 
   test('Config evicts oversized cold credentials from cache', async () => {
     const credentialBlob = 'x'.repeat(256)
-    const templateCredential = {
-      accessKey: 'template-access-key',
-      secretKey: encrypt('secret-template-access-key'),
-      claims: {
-        issuer: `supabase.storage.${tenantId}`,
-        role: 'service_role',
-        blob: credentialBlob,
-      },
-    }
     const s3CredentialsManagerWithSmallCache = await loadS3CredentialsManager(
-      objectSizeOf(templateCredential) + 1
+      TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES + 1
     )
     const getByKeySpy = vi.spyOn(s3CredentialsManagerWithSmallCache['storage'], 'getOneByAccessKey')
 

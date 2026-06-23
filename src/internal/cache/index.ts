@@ -1,4 +1,5 @@
 export * from './adapter'
 export * from './lru'
 export * from './names'
+export * from './size'
 export * from './ttl'

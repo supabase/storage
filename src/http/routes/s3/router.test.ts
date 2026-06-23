@@ -1,3 +1,4 @@
+import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import { vi } from 'vitest'
 import { S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
 import { Uploader } from '../../../storage/uploader'
@@ -242,6 +243,189 @@ describe('CompleteMultipartUpload route mapping', () => {
 })
 
 describe('DeleteObject route mapping', () => {
+  it('accepts DeleteObjects payloads at the object request cap in router validation', async () => {
+    const { default: DeleteObject } = await import('./commands/delete-object')
+    const router = new Router()
+
+    DeleteObject(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket')
+      ?.find(
+        (candidate) =>
+          candidate.method === 'post' &&
+          candidate.querystringMatches.some((match) => match.key === 'delete')
+      )
+
+    expect(route).toBeDefined()
+
+    const validate = route!.compiledSchema()
+    const data = {
+      Params: { Bucket: 'bucket' },
+      Querystring: { delete: '' },
+      Body: {
+        Delete: {
+          Object: [...Array(MAX_OBJECTS_PER_REQUEST).keys()].map((i) => ({
+            Key: `object-${i}`,
+          })),
+        },
+      },
+    }
+
+    expect(data.Body.Delete.Object).toHaveLength(MAX_OBJECTS_PER_REQUEST)
+    expect(validate(data)).toBe(true)
+    expect(validate.errors).toBeNull()
+  })
+
+  it('accepts DeleteObjects payloads over the object request cap by default', async () => {
+    const { default: DeleteObject } = await import('./commands/delete-object')
+    const router = new Router()
+
+    DeleteObject(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket')
+      ?.find(
+        (candidate) =>
+          candidate.method === 'post' &&
+          candidate.querystringMatches.some((match) => match.key === 'delete')
+      )
+
+    expect(route).toBeDefined()
+
+    const validate = route!.compiledSchema()
+    const data = {
+      Params: { Bucket: 'bucket' },
+      Querystring: { delete: '' },
+      Body: {
+        Delete: {
+          Object: [...Array(MAX_OBJECTS_PER_REQUEST + 1).keys()].map((i) => ({
+            Key: `object-${i}`,
+          })),
+        },
+      },
+    }
+
+    expect(validate(data)).toBe(true)
+    expect(validate.errors).toBeNull()
+  })
+
+  it('keeps DeleteObjects router validation tenant-agnostic when hard limits are enabled', async () => {
+    const previousHardLimitsEnabled = process.env.REQUEST_HARD_LIMITS_ENABLED
+    process.env.REQUEST_HARD_LIMITS_ENABLED = 'true'
+    vi.resetModules()
+
+    try {
+      const [{ Router: FreshRouter }, { default: DeleteObject }] = await Promise.all([
+        import('./router'),
+        import('./commands/delete-object'),
+      ])
+      const router = new FreshRouter()
+
+      DeleteObject(router as unknown as S3Router)
+
+      const route = router
+        .routes()
+        .get('/:Bucket')
+        ?.find(
+          (candidate) =>
+            candidate.method === 'post' &&
+            candidate.querystringMatches.some((match) => match.key === 'delete')
+        )
+
+      expect(route).toBeDefined()
+
+      const validate = route!.compiledSchema()
+      const data = {
+        Params: { Bucket: 'bucket' },
+        Querystring: { delete: '' },
+        Body: {
+          Delete: {
+            Object: [...Array(MAX_OBJECTS_PER_REQUEST + 1).keys()].map((i) => ({
+              Key: `object-${i}`,
+            })),
+          },
+        },
+      }
+
+      expect(validate(data)).toBe(true)
+      expect(validate.errors).toBeNull()
+    } finally {
+      if (previousHardLimitsEnabled === undefined) {
+        delete process.env.REQUEST_HARD_LIMITS_ENABLED
+      } else {
+        process.env.REQUEST_HARD_LIMITS_ENABLED = previousHardLimitsEnabled
+      }
+      vi.resetModules()
+    }
+  })
+
+  it('rejects DeleteObjects payloads over the default cap in the handler when hard limits are enabled', async () => {
+    const previousHardLimitsEnabled = process.env.REQUEST_HARD_LIMITS_ENABLED
+    const previousMultiTenant = process.env.MULTI_TENANT
+    process.env.REQUEST_HARD_LIMITS_ENABLED = 'true'
+    process.env.MULTI_TENANT = 'false'
+    vi.resetModules()
+
+    try {
+      const [{ Router: FreshRouter }, { default: DeleteObject }] = await Promise.all([
+        import('./router'),
+        import('./commands/delete-object'),
+      ])
+      const router = new FreshRouter()
+
+      DeleteObject(router as unknown as S3Router)
+
+      const route = router
+        .routes()
+        .get('/:Bucket')
+        ?.find(
+          (candidate) =>
+            candidate.method === 'post' &&
+            candidate.querystringMatches.some((match) => match.key === 'delete')
+        )
+
+      expect(route).toBeDefined()
+
+      await expect(
+        route!.handler!(
+          {
+            Params: { Bucket: 'bucket' },
+            Querystring: { delete: '' },
+            Headers: {},
+            Body: {
+              Delete: {
+                Object: [...Array(MAX_OBJECTS_PER_REQUEST + 1).keys()].map((i) => ({
+                  Key: `object-${i}`,
+                })),
+              },
+            },
+          },
+          {
+            tenantId: 'tenant-id',
+          } as never
+        )
+      ).rejects.toMatchObject({
+        code: 'InvalidRequest',
+        message: `Bulk object requests are limited to ${MAX_OBJECTS_PER_REQUEST} objects per request.`,
+      })
+    } finally {
+      if (previousHardLimitsEnabled === undefined) {
+        delete process.env.REQUEST_HARD_LIMITS_ENABLED
+      } else {
+        process.env.REQUEST_HARD_LIMITS_ENABLED = previousHardLimitsEnabled
+      }
+      if (previousMultiTenant === undefined) {
+        delete process.env.MULTI_TENANT
+      } else {
+        process.env.MULTI_TENANT = previousMultiTenant
+      }
+      vi.resetModules()
+    }
+  })
+
   it('returns 204 from iceberg single-object deletes', async () => {
     const previousIcebergDeleteEnabled = process.env.ICEBERG_S3_DELETE_ENABLED
     process.env.ICEBERG_S3_DELETE_ENABLED = 'true'

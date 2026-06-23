@@ -99,11 +99,15 @@ export default async function routes(fastify: FastifyInstance) {
                 const headers = output.headers
 
                 if (headers) {
-                  Object.keys(headers).forEach((header) => {
+                  for (const header in headers) {
+                    if (!Object.prototype.hasOwnProperty.call(headers, header)) {
+                      continue
+                    }
+
                     if (headers[header]) {
                       reply.header(header, headers[header])
                     }
-                  })
+                  }
                 }
                 return reply.status(output.statusCode || 200).send(output.responseBody)
               } catch (e) {
@@ -151,8 +155,8 @@ export default async function routes(fastify: FastifyInstance) {
               'application/json',
               { parseAs: 'string' },
               (request, body, done) => {
-                const requestUrl = new URL(request.url, 'http://storage.local')
-                const allowsEmptyBody = requestUrl.searchParams.has('uploads')
+                const allowsEmptyBody =
+                  (request.query as { uploads?: unknown }).uploads !== undefined
 
                 if (!body && allowsEmptyBody) {
                   done(null, null)

@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
 import {
+  calculateMaxCacheSizeBytes,
+  createConstantSizeCalculation,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   JWT_CACHE_NAME,
@@ -15,7 +17,6 @@ import {
   jwtVerify,
   SignJWT,
 } from 'jose'
-import objectSizeOf from 'object-sizeof'
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 
 const { jwtAlgorithm } = getConfig()
@@ -197,14 +198,21 @@ function getJWTCacheKey(token: string, secret: string, jwks?: { keys: JwksConfig
 
 // JWT payloads are comparatively small and high-churn, so keep a higher
 // cardinality guardrail than the longer-lived config-style caches.
+// Max 65,536 items. At ~2KB per JWT, this uses roughly ~130MB of heap memory worst-case.
 export const JWT_CACHE_MAX_ITEMS = 65536
-export const JWT_CACHE_MAX_SIZE_BYTES = 1024 * 1024 * 50 // 50 MiB
+export const JWT_CACHE_ESTIMATED_ENTRY_SIZE_BYTES = 2 * 1024
+export const JWT_CACHE_MAX_SIZE_BYTES = calculateMaxCacheSizeBytes(
+  JWT_CACHE_MAX_ITEMS,
+  JWT_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
+)
 export const JWT_CACHE_TTL_RESOLUTION_MS = 5000 // 5 seconds
 
 const jwtCache = createLruCache<string, JWTPayload>(JWT_CACHE_NAME, {
   max: JWT_CACHE_MAX_ITEMS,
   maxSize: JWT_CACHE_MAX_SIZE_BYTES,
-  sizeCalculation: (value) => objectSizeOf(value),
+  sizeCalculation: createConstantSizeCalculation<JWTPayload, string>(
+    JWT_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
+  ),
   ttlResolution: JWT_CACHE_TTL_RESOLUTION_MS,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
 })
@@ -227,20 +235,16 @@ export async function verifyJWTWithCache(
     return Promise.resolve(cachedPayload)
   }
 
-  try {
-    const payload = await verifyJWT(token, secret, jwks)
-    if (!payload.exp) {
-      return payload
-    }
-
-    const ttl = payload.exp * 1000 - Date.now()
-    if (ttl > 0) {
-      jwtCache.set(cacheKey, payload, { ttl })
-    }
+  const payload = await verifyJWT(token, secret, jwks)
+  if (!payload.exp) {
     return payload
-  } catch (e) {
-    throw e
   }
+
+  const ttl = payload.exp * 1000 - Date.now()
+  if (ttl > 0) {
+    jwtCache.set(cacheKey, payload, { ttl })
+  }
+  return payload
 }
 
 /**

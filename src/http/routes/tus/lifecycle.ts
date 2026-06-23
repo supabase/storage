@@ -260,18 +260,12 @@ export function namingFunction(rawReq: Request, metadata?: Record<string, string
     throw ERRORS.MetadataRequired()
   }
 
-  try {
-    const version = randomUUID()
-
-    return new UploadId({
-      tenant: req.upload.tenantId,
-      bucket: metadata.bucketName || '',
-      objectName: metadata.objectName || '',
-      version,
-    }).toString()
-  } catch (e) {
-    throw e
-  }
+  return new UploadId({
+    tenant: req.upload.tenantId,
+    bucket: metadata.bucketName || '',
+    objectName: metadata.objectName || '',
+    version: randomUUID(),
+  }).toString()
 }
 
 /**

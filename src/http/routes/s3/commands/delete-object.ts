@@ -1,3 +1,4 @@
+import { DELETE_OBJECTS_LIMIT_DESCRIPTION, enforceDeleteObjectsLimit } from '@storage/limits'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { getConfig } from '../../../../config'
 import { ROUTE_OPERATIONS } from '../../operations'
@@ -33,6 +34,7 @@ const DeleteObjectsInput = {
         properties: {
           Object: {
             type: 'array',
+            description: DELETE_OBJECTS_LIMIT_DESCRIPTION,
             items: {
               type: 'object',
               properties: {
@@ -63,7 +65,9 @@ export default function DeleteObject(s3Router: S3Router) {
   s3Router.post(
     '/:Bucket?delete',
     { schema: DeleteObjectsInput, operation: ROUTE_OPERATIONS.S3_DELETE_OBJECTS },
-    (req, ctx) => {
+    async (req, ctx) => {
+      await enforceDeleteObjectsLimit(ctx.tenantId, req.Body.Delete.Object.length)
+
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
       return s3Protocol.deleteObjects({

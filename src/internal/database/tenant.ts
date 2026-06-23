@@ -1,4 +1,6 @@
 import {
+  calculateMaxCacheSizeBytes,
+  createConstantSizeCalculation,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_CONFIG_CACHE_NAME,
@@ -11,7 +13,6 @@ import {
   S3CredentialsManagerStorePg,
 } from '@storage/protocols/s3/credentials'
 import { JWTPayload } from 'jose'
-import objectSizeOf from 'object-sizeof'
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import { decrypt } from '../auth'
 import { JWKSManager, JWKSManagerStorePg } from '../auth/jwks'
@@ -35,6 +36,7 @@ interface TenantConfig {
   serviceKeyPayload: {
     role: string
   }
+  deleteObjectsLimit?: number
   migrationVersion?: keyof typeof DBMigration
   migrationStatus?: TenantMigrationStatus
   syncMigrationsDone?: boolean
@@ -87,15 +89,22 @@ const {
   databaseMaxConnections,
 } = getConfig()
 
+// Max 16,384 items. At ~2KB per config, this uses roughly ~32MB of heap memory worst-case.
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
-export const TENANT_CONFIG_CACHE_MAX_SIZE_BYTES = 1024 * 1024 * 50 // 50 MiB
+export const TENANT_CONFIG_CACHE_ESTIMATED_ENTRY_SIZE_BYTES = 2 * 1024
+export const TENANT_CONFIG_CACHE_MAX_SIZE_BYTES = calculateMaxCacheSizeBytes(
+  TENANT_CONFIG_CACHE_MAX_ITEMS,
+  TENANT_CONFIG_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
+)
 export const TENANT_CONFIG_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 
 const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CACHE_NAME, {
   max: TENANT_CONFIG_CACHE_MAX_ITEMS,
   maxSize: TENANT_CONFIG_CACHE_MAX_SIZE_BYTES,
   ttl: TENANT_CONFIG_CACHE_TTL_MS,
-  sizeCalculation: (value) => objectSizeOf(value),
+  sizeCalculation: createConstantSizeCalculation<TenantConfig, string>(
+    TENANT_CONFIG_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
+  ),
   updateAgeOnGet: true,
   allowStale: false,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
@@ -227,6 +236,7 @@ export async function getTenantConfig(
       image_transformation_max_resolution,
       database_pool_url,
       max_connections,
+      delete_objects_limit,
       migrations_version,
       migrations_status,
       tracing_mode,
@@ -246,6 +256,10 @@ export async function getTenantConfig(
       serviceKey,
       serviceKeyPayload: { role: dbServiceRole },
       maxConnections: max_connections ? Number(max_connections) : undefined,
+      deleteObjectsLimit:
+        delete_objects_limit === null || delete_objects_limit === undefined
+          ? undefined
+          : Number(delete_objects_limit),
       features: {
         imageTransformation: {
           enabled: Boolean(feature_image_transformation),
@@ -387,6 +401,16 @@ export async function getJwtSecret(tenantId: string): Promise<{
 export async function getFileSizeLimit(tenantId: string): Promise<number> {
   const { fileSizeLimit } = await getTenantConfig(tenantId)
   return fileSizeLimit
+}
+
+/**
+ * Get the maximum objects allowed per bulk object request for a tenant.
+ * Undefined means the tenant uses the service default.
+ * @param tenantId
+ */
+export async function getDeleteObjectsLimit(tenantId: string): Promise<number | undefined> {
+  const { deleteObjectsLimit } = await getTenantConfig(tenantId)
+  return deleteObjectsLimit
 }
 
 /**

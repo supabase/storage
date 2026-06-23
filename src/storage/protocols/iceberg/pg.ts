@@ -569,21 +569,25 @@ export class PgMetastore implements Metastore<PgTransaction> {
     values: unknown[],
     limit: number
   ): Promise<number> {
-    const queryValues = [...values, limit]
-    const result = await this.query<{ count: string | number }>(
-      `
-        SELECT count(*) AS count
-        FROM (
-          SELECT 1
-          FROM ${this.table(tableName)}
-          ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
-          LIMIT $${queryValues.length}
-        ) limited_rows
-      `,
-      queryValues
-    )
+    values.push(limit)
+    try {
+      const result = await this.query<{ count: string | number }>(
+        `
+          SELECT count(*) AS count
+          FROM (
+            SELECT 1
+            FROM ${this.table(tableName)}
+            ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+            LIMIT $${values.length}
+          ) limited_rows
+        `,
+        values
+      )
 
-    return Number(result.rows[0]?.count ?? 0)
+      return Number(result.rows[0]?.count ?? 0)
+    } finally {
+      values.pop()
+    }
   }
 
   private addTenantCondition(

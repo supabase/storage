@@ -1,6 +1,8 @@
 import crypto from 'node:crypto'
 import { decrypt, encrypt } from '@internal/auth'
 import {
+  calculateMaxCacheSizeBytes,
+  createConstantSizeCalculation,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_S3_CREDENTIALS_CACHE_NAME,
@@ -8,15 +10,19 @@ import {
 import { createMutexByKey } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
-import objectSizeOf from 'object-sizeof'
 import { getConfig } from '../../../../config'
 import { S3Credentials, S3CredentialsManagerStore, S3CredentialsRaw } from './store'
 
 const TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL = 'tenants_s3_credentials_update'
 // S3 credential entries are heavier and have a lower expected working-set
 // cardinality than JWT payloads, so keep a tighter entry-count guardrail.
+// Max 16,384 items. At ~0.5KB per credential, this uses roughly ~8MB of heap memory worst-case.
 export const TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS = 16384
-export const TENANT_S3_CREDENTIALS_CACHE_MAX_SIZE_BYTES = 1024 * 1024 * 50 // 50 MiB
+export const TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES = 512
+export const TENANT_S3_CREDENTIALS_CACHE_MAX_SIZE_BYTES = calculateMaxCacheSizeBytes(
+  TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS,
+  TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
+)
 export const TENANT_S3_CREDENTIALS_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 
 const tenantS3CredentialsCache = createLruCache<string, S3Credentials>(
@@ -25,7 +31,9 @@ const tenantS3CredentialsCache = createLruCache<string, S3Credentials>(
     max: TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS,
     maxSize: TENANT_S3_CREDENTIALS_CACHE_MAX_SIZE_BYTES,
     ttl: TENANT_S3_CREDENTIALS_CACHE_TTL_MS,
-    sizeCalculation: (value) => objectSizeOf(value),
+    sizeCalculation: createConstantSizeCalculation<S3Credentials, string>(
+      TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
+    ),
     updateAgeOnGet: true,
     allowStale: false,
     purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,

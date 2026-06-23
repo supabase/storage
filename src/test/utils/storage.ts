@@ -16,9 +16,6 @@ import { Storage } from '@storage/storage'
 import { Uploader } from '@storage/uploader'
 import { getConfig } from '../../config'
 
-// import { CreateBucketCommand, HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
-// import { isS3Error } from '@internal/errors'
-
 const { databaseURL, tenantId, storageBackendType, storageS3Bucket } = getConfig()
 
 /**
@@ -91,9 +88,6 @@ export function useStorage(options: { ensureMigrations?: boolean } = {}) {
   })
 
   return {
-    // get connection() {
-    //   return connection
-    // },
     get random() {
       return {
         name(prefix: string) {

@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
-import { URL } from 'node:url'
 import { normalizeRawError } from '@internal/errors'
+import fastJson from 'fast-json-stringify'
+import fastQuerystring from 'fast-querystring'
 import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from 'fastify'
 import pino, { Logger } from 'pino'
 import { getConfig } from '../../config'
@@ -33,6 +34,39 @@ interface SerializedReplyLogShape {
 export interface SerializedReplyLog extends SerializedReplyLogShape {
   readonly [serializedReplyLogSymbol]: true
 }
+
+const safeHeadersSchema = {
+  type: 'object',
+  additionalProperties: { type: 'string' },
+} as const
+
+// JSON schemas for the structured payloads that appear on every request log.
+// They are compiled into fast-json-stringify serializers and wired into pino as
+// per-key stringifiers (see registerLogStringifiers), so the hot path avoids
+// pino's generic stringify for these objects.
+export const serializeRequestLogToJson = fastJson({
+  type: 'object',
+  properties: {
+    region: { type: 'string' },
+    traceId: { type: 'string' },
+    method: { type: 'string' },
+    url: { type: 'string' },
+    headers: safeHeadersSchema,
+    hostname: { type: 'string' },
+    remoteAddress: { type: 'string' },
+    remotePort: { type: 'integer' },
+  },
+  additionalProperties: false,
+})
+
+export const serializeReplyLogToJson = fastJson({
+  type: 'object',
+  properties: {
+    statusCode: { type: 'integer' },
+    headers: safeHeadersSchema,
+  },
+  additionalProperties: false,
+})
 
 const {
   logLevel,
@@ -71,10 +105,39 @@ export const baseLogger = pino({
   timestamp: pino.stdTimeFunctions.isoTime,
 })
 
+registerLogStringifiers(baseLogger)
+
 export let logger = baseLogger.child({ region, appVersion })
 
 export function setLogger(newLogger: Logger) {
   logger = newLogger
+}
+
+type LogStringifier = (value: unknown) => string
+
+/**
+ * Wires the schema-compiled serializers into pino as per-key stringifiers.
+ *
+ * pino applies the `req`/`res` serializers first to normalize the values, then
+ * hands the result to the matching stringifier to produce the embedded JSON.
+ * Child loggers inherit the stringifiers through the prototype chain, so the
+ * whole logger tree benefits without re-registration.
+ */
+function registerLogStringifiers(target: Logger) {
+  const stringifiersSym = pino.symbols?.stringifiersSym
+  if (!stringifiersSym) {
+    return
+  }
+
+  const stringifiers = (target as unknown as Record<symbol, Record<string, LogStringifier>>)[
+    stringifiersSym
+  ]
+  if (!stringifiers) {
+    return
+  }
+
+  stringifiers.req = serializeRequestLogToJson as LogStringifier
+  stringifiers.res = serializeReplyLogToJson as LogStringifier
 }
 
 export interface RequestLogContext {
@@ -246,7 +309,7 @@ export function serializeRequestLog(req: FastifyRequest): SerializedRequestLog {
     region,
     traceId: req.id,
     method: req.method,
-    url: redactLogUrl(req.url),
+    url: redactLogUrl(req.url, req.query),
     headers: whitelistHeaders(req.headers),
     hostname: req.hostname,
     remoteAddress: req.ip,
@@ -333,23 +396,30 @@ function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-function redactLogUrl(url: string) {
+function redactLogUrl(url: string, query?: unknown): string {
   const qIdx = url.indexOf('?')
 
   // Fast path: no query string, nothing to redact
   if (qIdx === -1) return url
 
-  const query = url.slice(qIdx + 1)
-  // Fast path: no sensitive params present
-  if (!redactedQueryParams.some((p) => query.includes(p))) return url
+  // Reuse the query Fastify already parsed (and percent-decoded) during routing;
+  // only parse here when it is unavailable, e.g. raw non-Fastify log values. A key
+  // sent as `to%6Ben` is decoded to `token`, so encoded secrets are still matched.
+  const parsed = isRecord(query) ? query : fastQuerystring.parse(url.slice(qIdx + 1))
 
-  const lUrl = new URL(url, 'http://storage.local')
-  redactedQueryParams.forEach((param) => {
-    if (lUrl.searchParams.has(param)) {
-      lUrl.searchParams.set(param, 'redacted')
+  // Redact only when a sensitive key is present, cloning lazily so the request's
+  // own query object is never mutated. When nothing is sensitive, return the URL
+  // untouched and do no extra work.
+  let redacted: Record<string, unknown> | undefined
+  for (const param of redactedQueryParams) {
+    if (param in parsed) {
+      redacted ??= { ...parsed }
+      redacted[param] = 'redacted'
     }
-  })
-  return `${lUrl.pathname}${lUrl.search}`
+  }
+  if (redacted === undefined) return url
+
+  return `${url.slice(0, qIdx)}?${fastQuerystring.stringify(redacted)}`
 }
 
 function statusOfType(statusCode: number, ofType: number) {

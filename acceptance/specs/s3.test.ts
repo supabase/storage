@@ -294,12 +294,17 @@ describeAcceptance(
           },
         })
 
-        const futureDate = new Date((head.LastModified?.getTime() ?? Date.now()) + 60_000)
+        // S3 compares If-Modified-Since against the object's sub-second mtime while Last-Modified
+        // is floored to the whole second, and (per RFC 2616) treats a date later than the server's
+        // current time as invalid (serving a normal 200). Wait so the server clock advances, then
+        // use Last-Modified+1s: strictly after the true mtime (not modified -> 304) yet not a
+        // future date.
+        await new Promise((resolve) => setTimeout(resolve, 2500))
         await expect(
           client.send(
             new GetObjectCommand({
               Bucket: bucketName,
-              IfModifiedSince: futureDate,
+              IfModifiedSince: new Date((head.LastModified?.getTime() ?? Date.now()) + 1000),
               Key: key,
             })
           )

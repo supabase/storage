@@ -15,7 +15,6 @@ import { ERRORS } from '@internal/errors'
 import { StorageObjectLocator } from '@storage/locator'
 import { Obj } from '@storage/schemas'
 import { FastifyRequest } from 'fastify/types/request'
-import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import {
@@ -26,10 +25,12 @@ import {
   ObjectRemovedMove,
   ObjectUpdatedMetadata,
 } from './events'
-import { mustBeValidKey } from './limits'
+import {
+  MAX_OBJECTS_PER_DELETE_BATCH,
+  MAX_OBJECTS_PER_LOOKUP_BATCH,
+  mustBeValidKey,
+} from './limits'
 import { CanUploadMetadata, fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
-
-const { requestUrlLengthLimit } = getConfig()
 
 interface CopyObjectParams {
   sourceKey: string
@@ -179,45 +180,31 @@ export class ObjectStorage {
    * @param prefixes
    */
   async deleteObjects(prefixes: string[]) {
-    let results: { name: string }[] = []
+    const results: { name: string }[] = []
 
-    for (let i = 0; i < prefixes.length; ) {
-      const prefixesSubset: string[] = []
-      let urlParamLength = 0
-
-      for (; i < prefixes.length && urlParamLength < requestUrlLengthLimit; i++) {
-        const prefix = prefixes[i]
-        prefixesSubset.push(prefix)
-        urlParamLength += encodeURIComponent(prefix).length + 9 // length of '%22%2C%22'
-      }
+    for (let i = 0; i < prefixes.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
+      const prefixesSubset = prefixes.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
 
       await this.db.withTransaction(async (db) => {
         const data = await db.deleteObjects(this.bucketId, prefixesSubset, 'name')
 
         if (data.length > 0) {
-          results = results.concat(data)
+          results.push(...data)
 
           // if successfully deleted, delete from s3 too
           // todo: consider moving this to a queue
           const prefixesToDelete = data.reduce((all, { name, version }) => {
-            all.push(
-              this.location.getKeyLocation({
-                tenantId: db.tenantId,
-                bucketId: this.bucketId,
-                objectName: name,
-                version,
-              })
-            )
+            const location = this.location.getKeyLocation({
+              tenantId: db.tenantId,
+              bucketId: this.bucketId,
+              objectName: name,
+              version,
+            })
+
+            all.push(location)
 
             if (version) {
-              all.push(
-                this.location.getKeyLocation({
-                  tenantId: db.tenantId,
-                  bucketId: this.bucketId,
-                  objectName: name,
-                  version,
-                }) + '.info'
-              )
+              all.push(`${location}.info`)
             }
             return all
           }, [] as string[])
@@ -673,28 +660,26 @@ export class ObjectStorage {
       searchResult = delimitedResults
     }
 
-    let isTruncated = false
-
-    if (searchResult.length > limit) {
-      searchResult = searchResult.slice(0, limit)
-      isTruncated = true
-    }
+    const isTruncated = searchResult.length > limit
+    const resultCount = isTruncated ? limit : searchResult.length
 
     const folders: Obj[] = []
     const objects: Obj[] = []
-    searchResult.forEach((obj) => {
+    for (let index = 0; index < resultCount; index++) {
+      const obj = searchResult[index]
       const target = obj.id === null ? folders : objects
       const name = obj.id === null && !obj.name.endsWith('/') ? obj.name + '/' : obj.name
       target.push({
         ...obj,
         name: options?.encodingType === 'url' ? encodeURIComponent(name) : name,
       })
-    })
+    }
 
     let nextContinuationToken: string | undefined
     let nextCursorKey: string | undefined
 
     if (isTruncated) {
+      const lastObject = searchResult[resultCount - 1]
       const sortColumn = (cursor?.sortColumn || options?.sortBy?.column) as
         | 'name'
         | 'created_at'
@@ -702,15 +687,15 @@ export class ObjectStorage {
         | undefined
 
       nextContinuationToken = encodeContinuationToken({
-        startAfter: searchResult[searchResult.length - 1].name,
+        startAfter: lastObject.name,
         sortOrder: cursor?.sortOrder || options?.sortBy?.order,
         sortColumn,
         sortColumnAfter:
-          sortColumn && sortColumn !== 'name' && searchResult[searchResult.length - 1][sortColumn]
-            ? new Date(searchResult[searchResult.length - 1][sortColumn] || '').toISOString()
+          sortColumn && sortColumn !== 'name' && lastObject[sortColumn]
+            ? new Date(lastObject[sortColumn] || '').toISOString()
             : undefined,
       })
-      nextCursorKey = searchResult[searchResult.length - 1].name
+      nextCursorKey = lastObject.name
     }
 
     return {
@@ -737,12 +722,16 @@ export class ObjectStorage {
   ) {
     await this.findObject(objectName)
 
-    metadata = Object.keys(metadata || {}).reduce((all, key) => {
-      if (!all[key]) {
-        delete all[key]
+    metadata = metadata || {}
+    for (const key in metadata) {
+      if (!Object.prototype.hasOwnProperty.call(metadata, key)) {
+        continue
       }
-      return all
-    }, metadata || {})
+
+      if (!metadata[key]) {
+        delete metadata[key]
+      }
+    }
 
     // security-in-depth: as signObjectUrl could be used as a signing oracle,
     // make sure it's never able to specify a role JWT claim, nor the claims that
@@ -779,23 +768,25 @@ export class ObjectStorage {
    * @param expiresIn
    */
   async signObjectUrls(paths: string[], expiresIn: number) {
-    let results: { name: string }[] = []
+    let results: { name: string }[]
 
-    for (let i = 0; i < paths.length; ) {
-      const pathsSubset = []
-      let urlParamLength = 0
+    if (paths.length <= MAX_OBJECTS_PER_LOOKUP_BATCH) {
+      results = await this.findObjects(paths, 'name')
+    } else {
+      results = []
 
-      for (; i < paths.length && urlParamLength < requestUrlLengthLimit; i++) {
-        const path = paths[i]
-        pathsSubset.push(path)
-        urlParamLength += encodeURIComponent(path).length + 9 // length of '%22%2C%22'
+      for (let i = 0; i < paths.length; i += MAX_OBJECTS_PER_LOOKUP_BATCH) {
+        const pathsSubset = paths.slice(i, i + MAX_OBJECTS_PER_LOOKUP_BATCH)
+
+        const objects = await this.findObjects(pathsSubset, 'name')
+        results.push(...objects)
       }
-
-      const objects = await this.findObjects(pathsSubset, 'name')
-      results = results.concat(objects)
     }
 
-    const nameSet = new Set(results.map(({ name }) => name))
+    const nameSet = new Set<string>()
+    for (const { name } of results) {
+      nameSet.add(name)
+    }
 
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
 

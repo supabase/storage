@@ -65,8 +65,6 @@ export class ObjectScanner {
         }
         yield orphan
       }
-    } catch (e) {
-      throw e
     } finally {
       if (!options.keepTmpTable) {
         await this.storage.db.dropS3KeysTempTable(tmpTable)
@@ -134,8 +132,6 @@ export class ObjectScanner {
       for await (const result of iterator) {
         yield result
       }
-    } catch (e) {
-      throw e
     } finally {
       await this.storage.db.dropS3KeysTempTable(tmpTable)
     }

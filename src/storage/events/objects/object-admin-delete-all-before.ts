@@ -4,6 +4,7 @@ import { withOptionalVersion } from '@storage/backend'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
 import { Storage } from '../../index'
+import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
 import { BaseEvent } from '../base-event'
 import { ObjectRemoved } from '../lifecycle/object-removed'
 
@@ -14,7 +15,7 @@ export interface ObjectDeleteAllBeforeEvent extends BasePayload {
   bucketId: string
 }
 
-const { storageS3Bucket, requestUrlLengthLimit } = getConfig()
+const { storageS3Bucket } = getConfig()
 
 export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeEvent> {
   static queueName = 'object:admin:delete-all-before'
@@ -57,7 +58,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
         }
       )
 
-      const batchLimit = Math.floor(requestUrlLengthLimit / (36 + 3))
+      const batchLimit = MAX_OBJECTS_PER_DELETE_BATCH
 
       let moreObjectsToDelete = false
       const start = Date.now()

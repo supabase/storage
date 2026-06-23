@@ -43,7 +43,7 @@ export default async function routes(fastify: FastifyInstance) {
           const matchHeaders = (req.headers as Record<string, string>) || {}
 
           for (const route of routesByMethod) {
-            if (s3Router.matchRoute(route, matchType, matchQuery, matchHeaders)) {
+            if (route.matches(matchType, matchQuery, matchHeaders)) {
               if (!route.handler) {
                 throw new Error('no handler found')
               }
@@ -55,7 +55,7 @@ export default async function routes(fastify: FastifyInstance) {
               }
 
               try {
-                req.operation = { type: route.operation }
+                req.operation = route.operationConfig
 
                 if (req.operation.type && typeof req.opentelemetry === 'function') {
                   req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)

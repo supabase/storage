@@ -293,6 +293,26 @@ describe('S3 router registration precomputation', () => {
 
     expect(route!.operation).toBe('storage.s3.iceberg.object.get')
   })
+
+  it('stores a reusable operation object for request metadata', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*',
+      {
+        schema: {},
+        operation: 'storage.s3.object.get',
+        type: 'iceberg',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(route!.operationConfig).toEqual({ type: 'storage.s3.iceberg.object.get' })
+    expect(route!.operationConfig).toBe(route!.operationConfig)
+  })
 })
 
 describe('S3ProtocolHandler.parseMetadataHeaders', () => {

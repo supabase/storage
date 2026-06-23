@@ -124,6 +124,8 @@ type Route<S extends Schema, Context> = {
   allowEmptyJsonBody?: boolean
   acceptMultiformData?: boolean
   operation: string
+  // Precompiled operation: allocated operation object at registration
+  operationConfig: { type: string }
   validate: ValidateFunction<JTDDataType<S>>
   // Precompiled matcher: the query/header criteria are parsed once at registration
   // time so request-time matching is a single closure call with no string parsing.
@@ -218,6 +220,8 @@ export class Router<Context = unknown> {
 
     const validate = this.ajv.getSchema(schemaKey) as ValidateFunction<JTDDataType<Schema>>
 
+    const compiledOperation = compileOperation(operation, options.type)
+
     const newRoute: Route<Schema, Context> = {
       method,
       path: normalizedUrl,
@@ -229,7 +233,8 @@ export class Router<Context = unknown> {
       disableContentTypeParser,
       allowEmptyJsonBody,
       acceptMultiformData,
-      operation: compileOperation(operation, options.type),
+      operation: compiledOperation,
+      operationConfig: { type: compiledOperation },
       type: options.type,
       matches: compileMatcher(query, headers, options.type),
     }

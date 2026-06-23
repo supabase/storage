@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
 import { normalizeRawError } from '@internal/errors'
+import fastJson from 'fast-json-stringify'
 import fastQuerystring from 'fast-querystring'
 import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from 'fastify'
 import pino, { Logger } from 'pino'
@@ -33,6 +34,39 @@ interface SerializedReplyLogShape {
 export interface SerializedReplyLog extends SerializedReplyLogShape {
   readonly [serializedReplyLogSymbol]: true
 }
+
+const safeHeadersSchema = {
+  type: 'object',
+  additionalProperties: { type: 'string' },
+} as const
+
+// JSON schemas for the structured payloads that appear on every request log.
+// They are compiled into fast-json-stringify serializers and wired into pino as
+// per-key stringifiers (see registerLogStringifiers), so the hot path avoids
+// pino's generic stringify for these objects.
+export const serializeRequestLogToJson = fastJson({
+  type: 'object',
+  properties: {
+    region: { type: 'string' },
+    traceId: { type: 'string' },
+    method: { type: 'string' },
+    url: { type: 'string' },
+    headers: safeHeadersSchema,
+    hostname: { type: 'string' },
+    remoteAddress: { type: 'string' },
+    remotePort: { type: 'integer' },
+  },
+  additionalProperties: false,
+})
+
+export const serializeReplyLogToJson = fastJson({
+  type: 'object',
+  properties: {
+    statusCode: { type: 'integer' },
+    headers: safeHeadersSchema,
+  },
+  additionalProperties: false,
+})
 
 const {
   logLevel,
@@ -71,10 +105,39 @@ export const baseLogger = pino({
   timestamp: pino.stdTimeFunctions.isoTime,
 })
 
+registerLogStringifiers(baseLogger)
+
 export let logger = baseLogger.child({ region, appVersion })
 
 export function setLogger(newLogger: Logger) {
   logger = newLogger
+}
+
+type LogStringifier = (value: unknown) => string
+
+/**
+ * Wires the schema-compiled serializers into pino as per-key stringifiers.
+ *
+ * pino applies the `req`/`res` serializers first to normalize the values, then
+ * hands the result to the matching stringifier to produce the embedded JSON.
+ * Child loggers inherit the stringifiers through the prototype chain, so the
+ * whole logger tree benefits without re-registration.
+ */
+function registerLogStringifiers(target: Logger) {
+  const stringifiersSym = pino.symbols?.stringifiersSym
+  if (!stringifiersSym) {
+    return
+  }
+
+  const stringifiers = (target as unknown as Record<symbol, Record<string, LogStringifier>>)[
+    stringifiersSym
+  ]
+  if (!stringifiers) {
+    return
+  }
+
+  stringifiers.req = serializeRequestLogToJson as LogStringifier
+  stringifiers.res = serializeReplyLogToJson as LogStringifier
 }
 
 export interface RequestLogContext {

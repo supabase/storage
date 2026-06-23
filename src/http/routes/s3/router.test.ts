@@ -40,12 +40,7 @@ describe('S3 router query matching', () => {
     const route = router.routes().get('/:Bucket/*')?.[0]
     expect(route).toBeDefined()
 
-    expect(
-      router.matchRoute(route!, {
-        query: { uploads: undefined },
-        headers: {},
-      })
-    ).toBe(true)
+    expect(router.matchRoute(route!, undefined, { uploads: undefined }, {})).toBe(true)
   })
 
   it('matches valued query params when the value matches', () => {
@@ -63,12 +58,7 @@ describe('S3 router query matching', () => {
     const route = router.routes().get('/:Bucket/*')?.[0]
     expect(route).toBeDefined()
 
-    expect(
-      router.matchRoute(route!, {
-        query: { 'list-type': '2' },
-        headers: {},
-      })
-    ).toBe(true)
+    expect(router.matchRoute(route!, undefined, { 'list-type': '2' }, {})).toBe(true)
   })
 
   it('does not match valued query params when the value differs', () => {
@@ -86,12 +76,7 @@ describe('S3 router query matching', () => {
     const route = router.routes().get('/:Bucket/*')?.[0]
     expect(route).toBeDefined()
 
-    expect(
-      router.matchRoute(route!, {
-        query: { 'list-type': '1' },
-        headers: {},
-      })
-    ).toBe(false)
+    expect(router.matchRoute(route!, undefined, { 'list-type': '1' }, {})).toBe(false)
   })
 
   it('matches wildcard routes even when the request has query params', () => {
@@ -109,12 +94,7 @@ describe('S3 router query matching', () => {
     const route = router.routes().get('/:Bucket/*')?.[0]
     expect(route).toBeDefined()
 
-    expect(
-      router.matchRoute(route!, {
-        query: { uploads: undefined },
-        headers: {},
-      })
-    ).toBe(true)
+    expect(router.matchRoute(route!, undefined, { uploads: undefined }, {})).toBe(true)
   })
 
   it('does not enumerate request query keys for wildcard-only routes', () => {
@@ -141,12 +121,7 @@ describe('S3 router query matching', () => {
       }
     )
 
-    expect(
-      router.matchRoute(route!, {
-        query,
-        headers: {},
-      })
-    ).toBe(true)
+    expect(router.matchRoute(route!, undefined, query, {})).toBe(true)
   })
 })
 
@@ -167,10 +142,7 @@ describe('S3 router header matching', () => {
     expect(route).toBeDefined()
 
     expect(
-      router.matchRoute(route!, {
-        query: {},
-        headers: { 'x-amz-copy-source': '/source-bucket/source-key' },
-      })
+      router.matchRoute(route!, undefined, {}, { 'x-amz-copy-source': '/source-bucket/source-key' })
     ).toBe(true)
   })
 
@@ -190,10 +162,12 @@ describe('S3 router header matching', () => {
     expect(route).toBeDefined()
 
     expect(
-      router.matchRoute(route!, {
-        query: {},
-        headers: { 'content-type': 'multipart/form-data; boundary=abc123' },
-      })
+      router.matchRoute(
+        route!,
+        undefined,
+        {},
+        { 'content-type': 'multipart/form-data; boundary=abc123' }
+      )
     ).toBe(true)
   })
 
@@ -212,18 +186,10 @@ describe('S3 router header matching', () => {
     const route = router.routes().get('/:Bucket')?.[0]
     expect(route).toBeDefined()
 
-    expect(
-      router.matchRoute(route!, {
-        query: {},
-        headers: {},
-      })
-    ).toBe(false)
-    expect(
-      router.matchRoute(route!, {
-        query: {},
-        headers: { 'content-type': 'application/json' },
-      })
-    ).toBe(false)
+    expect(router.matchRoute(route!, undefined, {}, {})).toBe(false)
+    expect(router.matchRoute(route!, undefined, {}, { 'content-type': 'application/json' })).toBe(
+      false
+    )
   })
 })
 
@@ -244,8 +210,8 @@ describe('S3 router type matching', () => {
     const route = router.routes().get('/:Bucket/*')?.[0]
     expect(route).toBeDefined()
 
-    expect(router.matchRoute(route!, { type: 'iceberg', query: {}, headers: {} })).toBe(true)
-    expect(router.matchRoute(route!, { query: {}, headers: {} })).toBe(false)
+    expect(router.matchRoute(route!, 'iceberg', {}, {})).toBe(true)
+    expect(router.matchRoute(route!, undefined, {}, {})).toBe(false)
   })
 
   it('matches untyped routes only for untyped requests', () => {
@@ -263,8 +229,8 @@ describe('S3 router type matching', () => {
     const route = router.routes().get('/:Bucket/*')?.[0]
     expect(route).toBeDefined()
 
-    expect(router.matchRoute(route!, { query: {}, headers: {} })).toBe(true)
-    expect(router.matchRoute(route!, { type: 'iceberg', query: {}, headers: {} })).toBe(false)
+    expect(router.matchRoute(route!, undefined, {}, {})).toBe(true)
+    expect(router.matchRoute(route!, 'iceberg', {}, {})).toBe(false)
   })
 })
 

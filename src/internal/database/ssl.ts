@@ -1,5 +1,5 @@
+import { isIP } from 'node:net'
 import { logger } from '@internal/monitoring'
-import * as ipAddr from 'ip-address'
 import { ConnectionOptions } from 'tls'
 
 export function getSslSettings({
@@ -30,5 +30,5 @@ export function getSslSettings({
 export function isIpAddress(ip: string) {
   // IP might be URL-encoded
   const decodedIp = decodeURIComponent(ip)
-  return ipAddr.Address6.isValid(decodedIp) || ipAddr.Address4.isValid(decodedIp)
+  return isIP(decodedIp) !== 0
 }

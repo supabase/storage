@@ -375,7 +375,7 @@ function matchQueryString(
   received: RouteQuery
 ) {
   for (const match of valuedMatches) {
-    if (!Object.prototype.hasOwnProperty.call(received, match.key)) {
+    if (!(match.key in received)) {
       return hasWildcard
     }
 

@@ -15,7 +15,7 @@ import {
 import { s3ErrorHandler } from './error-handler'
 import { findArrayPathsInSchemas, getRouter, RequestInput, RouteQuery } from './router'
 
-const { s3ProtocolEnabled } = getConfig()
+const { s3ProtocolEnabled, tracingEnabled } = getConfig()
 
 export default async function routes(fastify: FastifyInstance) {
   if (!s3ProtocolEnabled) {
@@ -36,13 +36,16 @@ export default async function routes(fastify: FastifyInstance) {
 
       methods.forEach((method) => {
         const routesByMethod = routes.filter((e) => e.method === method)
+        const icebergRoutes = routesByMethod.filter((e) => e.type === 'iceberg')
+        const standardRoutes = routesByMethod.filter((e) => e.type === undefined)
 
         const routeHandler: RouteHandlerMethod = async (req, reply) => {
           const matchType = req.isIcebergBucket ? 'iceberg' : undefined
           const matchQuery = (req.query as RouteQuery) || {}
           const matchHeaders = (req.headers as Record<string, string>) || {}
+          const candidates = matchType === 'iceberg' ? icebergRoutes : standardRoutes
 
-          for (const route of routesByMethod) {
+          for (const route of candidates) {
             if (route.matches(matchType, matchQuery, matchHeaders)) {
               if (!route.handler) {
                 throw new Error('no handler found')
@@ -57,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
               try {
                 req.operation = route.operationConfig
 
-                if (req.operation.type && typeof req.opentelemetry === 'function') {
+                if (tracingEnabled && req.operation.type) {
                   req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)
                 }
 

@@ -228,54 +228,50 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
       })
 
       try {
-        try {
-          await super.createNamespace({
-            namespace: [namespaceName],
-            warehouse: shardKey,
-            // Note: Underline catalog doesn't support this
-            // properties: {
-            //   ...(dbNamespace.metadata ? dbNamespace.metadata : {}),
-            //   'bucket-name': catalog.name,
-            //   'tenant-id': this.tenantId,
-            // },
-          })
-        } catch (e) {
-          if (e instanceof IcebergError && e.code === IcebergHttpStatusCode.Conflict) {
-            // Namespace already exists, ignore
-          } else {
-            throw e
-          }
-        }
-
-        const icebergTable = await super.createTable({
-          ...table,
+        await super.createNamespace({
+          namespace: [namespaceName],
           warehouse: shardKey,
-          namespace: namespaceName,
+          // Note: Underline catalog doesn't support this
+          // properties: {
+          //   ...(dbNamespace.metadata ? dbNamespace.metadata : {}),
+          //   'bucket-name': catalog.name,
+          //   'tenant-id': this.tenantId,
+          // },
         })
-
-        await store.createTable({
-          name: table.name,
-          bucketId: catalog.id,
-          bucketName: catalog.name,
-          namespaceId: dbNamespace.id,
-          tenantId: this.options.tenantId,
-          location: icebergTable['metadata'].location as string,
-          shardKey,
-          shardId,
-          remoteTableId: icebergTable['metadata']['table-uuid'],
-        })
-
-        await sharder.confirm(reservationId, {
-          logicalName: `${dbNamespace.id}/${table.name}`,
-          tenantId: this.tenantId,
-          kind: 'iceberg-table',
-          bucketName: catalog.id,
-        })
-
-        return icebergTable
       } catch (e) {
-        throw e
+        if (e instanceof IcebergError && e.code === IcebergHttpStatusCode.Conflict) {
+          // Namespace already exists, ignore
+        } else {
+          throw e
+        }
       }
+
+      const icebergTable = await super.createTable({
+        ...table,
+        warehouse: shardKey,
+        namespace: namespaceName,
+      })
+
+      await store.createTable({
+        name: table.name,
+        bucketId: catalog.id,
+        bucketName: catalog.name,
+        namespaceId: dbNamespace.id,
+        tenantId: this.options.tenantId,
+        location: icebergTable['metadata'].location as string,
+        shardKey,
+        shardId,
+        remoteTableId: icebergTable['metadata']['table-uuid'],
+      })
+
+      await sharder.confirm(reservationId, {
+        logicalName: `${dbNamespace.id}/${table.name}`,
+        tenantId: this.tenantId,
+        kind: 'iceberg-table',
+        bucketName: catalog.id,
+      })
+
+      return icebergTable
     })
   }
 

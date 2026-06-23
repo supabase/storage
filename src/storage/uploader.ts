@@ -218,7 +218,7 @@ export class Uploader {
           dontErrorOnEmpty: true,
         })
 
-        const isNew = !Boolean(currentObj)
+        const isNew = !currentObj
 
         // update object
         const newObject = await db.upsertObject({

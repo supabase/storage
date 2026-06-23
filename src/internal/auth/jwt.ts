@@ -235,20 +235,16 @@ export async function verifyJWTWithCache(
     return Promise.resolve(cachedPayload)
   }
 
-  try {
-    const payload = await verifyJWT(token, secret, jwks)
-    if (!payload.exp) {
-      return payload
-    }
-
-    const ttl = payload.exp * 1000 - Date.now()
-    if (ttl > 0) {
-      jwtCache.set(cacheKey, payload, { ttl })
-    }
+  const payload = await verifyJWT(token, secret, jwks)
+  if (!payload.exp) {
     return payload
-  } catch (e) {
-    throw e
   }
+
+  const ttl = payload.exp * 1000 - Date.now()
+  if (ttl > 0) {
+    jwtCache.set(cacheKey, payload, { ttl })
+  }
+  return payload
 }
 
 /**

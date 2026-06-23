@@ -45,18 +45,14 @@ export class ObjectBackup {
    * Initiates the backup (copy) process for the specified object.
    */
   public async backup(): Promise<void> {
-    try {
-      const { size } = this.objectInfo
+    const { size } = this.objectInfo
 
-      if (size > FIVE_GB) {
-        // Perform multipart copy for large files
-        await this.multipartCopy()
-      } else {
-        // Perform single copy for smaller files
-        await this.singleCopy()
-      }
-    } catch (error) {
-      throw error
+    if (size > FIVE_GB) {
+      // Perform multipart copy for large files
+      await this.multipartCopy()
+    } else {
+      // Perform single copy for smaller files
+      await this.singleCopy()
     }
   }
 
@@ -182,11 +178,7 @@ export class ObjectBackup {
         while (currentPart <= numParts) {
           const partToCopy = currentPart
           currentPart += 1
-          try {
-            await copyPart(partToCopy)
-          } catch (error) {
-            throw error
-          }
+          await copyPart(partToCopy)
         }
       })()
       workers.push(worker)

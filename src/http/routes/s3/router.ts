@@ -124,7 +124,7 @@ type Route<S extends Schema, Context> = {
   allowEmptyJsonBody?: boolean
   acceptMultiformData?: boolean
   operation: string
-  compiledSchema: () => ValidateFunction<JTDDataType<S>>
+  validate: ValidateFunction<JTDDataType<S>>
   // Precompiled matcher: the query/header criteria are parsed once at registration
   // time so request-time matching is a single closure call with no string parsing.
   matches: (type: string | undefined, query: RouteQuery, headers: Record<string, string>) => boolean
@@ -202,7 +202,8 @@ export class Router<Context = unknown> {
       }
     })
 
-    const existingSchema = this.ajv.getSchema(method + url)
+    const schemaKey = method + url
+    const existingSchema = this.ajv.getSchema(schemaKey)
 
     if (!existingSchema) {
       this.ajv.addSchema(
@@ -211,9 +212,11 @@ export class Router<Context = unknown> {
           properties: schemaToCompile,
           required: required.filter(Boolean),
         },
-        method + url
+        schemaKey
       )
     }
+
+    const validate = this.ajv.getSchema(schemaKey) as ValidateFunction<JTDDataType<Schema>>
 
     const newRoute: Route<Schema, Context> = {
       method,
@@ -221,13 +224,12 @@ export class Router<Context = unknown> {
       querystringMatches: query,
       headersMatches: headers,
       schema,
-      compiledSchema: () =>
-        this.ajv.getSchema(method + url) as ValidateFunction<JTDDataType<Schema>>,
+      validate,
       handler,
       disableContentTypeParser,
       allowEmptyJsonBody,
       acceptMultiformData,
-      operation,
+      operation: compileOperation(operation, options.type),
       type: options.type,
       matches: compileMatcher(query, headers, options.type),
     }
@@ -291,6 +293,10 @@ export class Router<Context = unknown> {
   ) {
     return route.matches(type, query, headers)
   }
+}
+
+function compileOperation(operation: string, type?: string) {
+  return type ? operation.replaceAll('s3.', `s3.${type}.`) : operation
 }
 
 /**

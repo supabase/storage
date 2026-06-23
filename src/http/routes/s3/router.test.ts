@@ -234,6 +234,67 @@ describe('S3 router type matching', () => {
   })
 })
 
+describe('S3 router registration precomputation', () => {
+  it('stores the compiled validator directly on the route', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*?list-type=2',
+      {
+        schema: {
+          Params: {
+            type: 'object',
+            properties: {
+              Bucket: { type: 'string' },
+              '*': { type: 'string' },
+            },
+            required: ['Bucket', '*'],
+          },
+          Querystring: {
+            type: 'object',
+            properties: {
+              'list-type': { type: 'string', enum: ['2'] },
+            },
+            required: ['list-type'],
+          },
+        },
+        operation: 'storage.s3.object.list',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Querystring: { 'list-type': '2' },
+      })
+    ).toBe(true)
+    expect(route!.validate.errors).toBeNull()
+  })
+
+  it('precomputes typed route operation names', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*',
+      {
+        schema: {},
+        operation: 'storage.s3.object.get',
+        type: 'iceberg',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(route!.operation).toBe('storage.s3.iceberg.object.get')
+  })
+})
+
 describe('S3ProtocolHandler.parseMetadataHeaders', () => {
   it('returns only x-amz-meta headers without the prefix', () => {
     const handler = createHandler()
@@ -376,7 +437,7 @@ describe('DeleteObject route mapping', () => {
 
     expect(route).toBeDefined()
 
-    const validate = route!.compiledSchema()
+    const validate = route!.validate
     const data = {
       Params: { Bucket: 'bucket' },
       Querystring: { delete: '' },
@@ -411,7 +472,7 @@ describe('DeleteObject route mapping', () => {
 
     expect(route).toBeDefined()
 
-    const validate = route!.compiledSchema()
+    const validate = route!.validate
     const data = {
       Params: { Bucket: 'bucket' },
       Querystring: { delete: '' },
@@ -453,7 +514,7 @@ describe('DeleteObject route mapping', () => {
 
       expect(route).toBeDefined()
 
-      const validate = route!.compiledSchema()
+      const validate = route!.validate
       const data = {
         Params: { Bucket: 'bucket' },
         Querystring: { delete: '' },

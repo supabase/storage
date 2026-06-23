@@ -55,11 +55,7 @@ export default async function routes(fastify: FastifyInstance) {
               }
 
               try {
-                const operation = route.type
-                  ? route.operation.replaceAll('s3.', `s3.${route.type}.`)
-                  : route.operation
-
-                req.operation = { type: operation }
+                req.operation = { type: route.operation }
 
                 if (req.operation.type && typeof req.opentelemetry === 'function') {
                   req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)
@@ -71,15 +67,14 @@ export default async function routes(fastify: FastifyInstance) {
                   Headers: req.headers,
                   Querystring: req.query,
                 } as RequestInput<typeof route.schema>
-                const compiler = route.compiledSchema()
-                const isValid = compiler(data)
+                const isValid = route.validate(data)
 
                 if (!isValid) {
                   const validationError = ERRORS.InvalidRequest('Invalid request') as Error & {
                     validation?: unknown
                   }
                   // validation property is required to send correct reply in error-handler.ts
-                  validationError.validation = compiler.errors
+                  validationError.validation = route.validate.errors
                   throw validationError
                 }
 

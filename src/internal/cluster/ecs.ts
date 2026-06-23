@@ -1,4 +1,4 @@
-import { type DesiredStatus, ECSClient, ListTasksCommand } from '@aws-sdk/client-ecs'
+import { ECSClient, ListTasksCommand } from '@aws-sdk/client-ecs'
 
 type ECSTaskMetadata = {
   Cluster: string
@@ -7,6 +7,7 @@ type ECSTaskMetadata = {
 
 export class ClusterDiscoveryECS {
   private client: ECSClient
+  private taskMetadata?: Promise<ECSTaskMetadata>
 
   constructor() {
     this.client = new ECSClient()
@@ -17,14 +18,9 @@ export class ClusterDiscoveryECS {
       throw new Error('ECS_CONTAINER_METADATA_URI is not set')
     }
 
-    const metadata = await this.getTaskMetadata(process.env.ECS_CONTAINER_METADATA_URI)
+    const metadata = await this.getCachedTaskMetadata(process.env.ECS_CONTAINER_METADATA_URI)
 
-    const [running, pending] = await Promise.all([
-      this.listTasks(metadata, 'RUNNING'),
-      this.listTasks(metadata, 'PENDING'),
-    ])
-
-    return running + pending
+    return await this.listTasks(metadata)
   }
 
   private async getTaskMetadata(metadataUri: string): Promise<ECSTaskMetadata> {
@@ -42,11 +38,20 @@ export class ClusterDiscoveryECS {
     return (await response.json()) as ECSTaskMetadata
   }
 
-  private async listTasks(metadata: ECSTaskMetadata, status: DesiredStatus) {
+  private getCachedTaskMetadata(metadataUri: string): Promise<ECSTaskMetadata> {
+    this.taskMetadata ??= this.getTaskMetadata(metadataUri).catch((error) => {
+      this.taskMetadata = undefined
+      throw error
+    })
+
+    return this.taskMetadata
+  }
+
+  private async listTasks(metadata: ECSTaskMetadata) {
     const command = new ListTasksCommand({
       family: metadata.Family,
       cluster: metadata.Cluster,
-      desiredStatus: status,
+      desiredStatus: 'RUNNING',
     })
     const response = await this.client.send(command)
     return response.taskArns?.length || 0

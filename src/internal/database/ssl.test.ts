@@ -10,6 +10,8 @@ describe('database utils', () => {
     ['121.212.187.123', true],
     ['121.212.187.5', true],
     ['2001:db8:3333:4444:5555:6666:7777:8888', true],
+    ['[2001:db8:3333:4444:5555:6666:7777:8888]', true],
+    ['%5B2001%3Adb8%3A3333%3A4444%3A5555%3A6666%3A7777%3A8888%5D', true],
     ['2001:db8:3333:4444:CCCC:DDDD:EEEE:FFFF', true],
     ['2406%3Ada18%3A4fd%3A9b09%3A2c76%3A5d38%3Ade30%3A7904', true],
   ])('is %s ip address, expected %s', (text: string, expected: boolean) => {
@@ -30,6 +32,55 @@ describe('database utils', () => {
           databaseSSLRootCert: '<cert>',
         })
       ).toStrictEqual({ ca: '<cert>', rejectUnauthorized: false })
+    })
+
+    test('should detect IP host without constructing a URL', () => {
+      const originalUrl = global.URL
+
+      try {
+        global.URL = class {
+          constructor() {
+            throw new Error('URL parsing should not be used')
+          }
+        } as unknown as typeof URL
+
+        expect(
+          getSslSettings({
+            connectionString: 'postgres://foo:bar@1.2.3.4:5432/postgres',
+            databaseSSLRootCert: '<cert>',
+          })
+        ).toStrictEqual({ ca: '<cert>', rejectUnauthorized: false })
+      } finally {
+        global.URL = originalUrl
+      }
+    })
+
+    test('should return SSL settings if hostname is a bracketed IPv6 address', () => {
+      expect(
+        getSslSettings({
+          connectionString:
+            'postgres://foo:bar@[2001:db8:3333:4444:5555:6666:7777:8888]:5432/postgres',
+          databaseSSLRootCert: '<cert>',
+        })
+      ).toStrictEqual({ ca: '<cert>', rejectUnauthorized: false })
+    })
+
+    test('should detect an IP host even when the password contains an @', () => {
+      expect(
+        getSslSettings({
+          connectionString: 'postgres://user:p@ss@1.2.3.4:5432/postgres',
+          databaseSSLRootCert: '<cert>',
+        })
+      ).toStrictEqual({ ca: '<cert>', rejectUnauthorized: false })
+    })
+
+    test('should not treat an IP in the userinfo as the host', () => {
+      expect(
+        getSslSettings({
+          connectionString: 'postgres://1.2.3.4@db.ref.supabase.red:5432/postgres',
+          databaseSSLRootCert: '<cert>',
+        })
+      ).toStrictEqual({ ca: '<cert>' })
     })
 
     test('should return SSL settings if hostname is not an IP address', () => {

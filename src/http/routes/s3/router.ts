@@ -308,6 +308,7 @@ function compileMatcher(
 ): (match: RouteMatch) => boolean {
   const hasWildcardQuery = query.some((match) => match.key === '*')
   const valuedQueryMatches = query.filter((match) => match.key !== '*')
+  const hasOnlyWildcardQuery = hasWildcardQuery && valuedQueryMatches.length === 0
   const headerMatches = headers.map(parseHeaderMatch)
   const hasHeaderMatches = headerMatches.length > 0
 
@@ -319,6 +320,10 @@ function compileMatcher(
 
     if (hasHeaderMatches && !matchHeaders(headerMatches, match.headers)) {
       return false
+    }
+
+    if (hasOnlyWildcardQuery) {
+      return true
     }
 
     return matchQueryString(valuedQueryMatches, hasWildcardQuery, match.query)
@@ -357,18 +362,6 @@ function matchQueryString(
   received?: RouteQuery
 ) {
   if (!received) {
-    return hasWildcard
-  }
-
-  let hasReceivedQuery = false
-  for (const key in received) {
-    if (Object.prototype.hasOwnProperty.call(received, key)) {
-      hasReceivedQuery = true
-      break
-    }
-  }
-
-  if (!hasReceivedQuery) {
     return hasWildcard
   }
 

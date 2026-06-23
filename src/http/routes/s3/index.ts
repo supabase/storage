@@ -13,7 +13,7 @@ import {
   xmlParser,
 } from '../../plugins'
 import { s3ErrorHandler } from './error-handler'
-import { findArrayPathsInSchemas, getRouter, RequestInput, RouteQuery } from './router'
+import { findArrayPathsInSchemas, getRouter, RequestInput, RouteMatch, RouteQuery } from './router'
 
 const { s3ProtocolEnabled } = getConfig()
 
@@ -38,14 +38,14 @@ export default async function routes(fastify: FastifyInstance) {
         const routesByMethod = routes.filter((e) => e.method === method)
 
         const routeHandler: RouteHandlerMethod = async (req, reply) => {
+          const match: RouteMatch = {
+            type: req.isIcebergBucket ? 'iceberg' : undefined,
+            query: (req.query as RouteQuery) || {},
+            headers: (req.headers as Record<string, string>) || {},
+          }
+
           for (const route of routesByMethod) {
-            if (
-              s3Router.matchRoute(route, {
-                type: req.isIcebergBucket ? 'iceberg' : undefined,
-                query: (req.query as RouteQuery) || {},
-                headers: (req.headers as Record<string, string>) || {},
-              })
-            ) {
+            if (s3Router.matchRoute(route, match)) {
               if (!route.handler) {
                 throw new Error('no handler found')
               }

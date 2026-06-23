@@ -116,6 +116,156 @@ describe('S3 router query matching', () => {
       })
     ).toBe(true)
   })
+
+  it('does not enumerate request query keys for wildcard-only routes', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    const query = new Proxy(
+      {},
+      {
+        ownKeys: () => {
+          throw new Error('wildcard-only query match should not enumerate request query keys')
+        },
+      }
+    )
+
+    expect(
+      router.matchRoute(route!, {
+        query,
+        headers: {},
+      })
+    ).toBe(true)
+  })
+})
+
+describe('S3 router header matching', () => {
+  it('matches routes that require a header by presence', () => {
+    const router = new Router()
+
+    router.put(
+      '/:Bucket/*|x-amz-copy-source',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(
+      router.matchRoute(route!, {
+        query: {},
+        headers: { 'x-amz-copy-source': '/source-bucket/source-key' },
+      })
+    ).toBe(true)
+  })
+
+  it('matches routes that require a header value prefix', () => {
+    const router = new Router()
+
+    router.post(
+      '/:Bucket|content-type=multipart/form-data',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket')?.[0]
+    expect(route).toBeDefined()
+
+    expect(
+      router.matchRoute(route!, {
+        query: {},
+        headers: { 'content-type': 'multipart/form-data; boundary=abc123' },
+      })
+    ).toBe(true)
+  })
+
+  it('rejects routes when a required header is missing or has the wrong value', () => {
+    const router = new Router()
+
+    router.post(
+      '/:Bucket|content-type=multipart/form-data',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket')?.[0]
+    expect(route).toBeDefined()
+
+    expect(
+      router.matchRoute(route!, {
+        query: {},
+        headers: {},
+      })
+    ).toBe(false)
+    expect(
+      router.matchRoute(route!, {
+        query: {},
+        headers: { 'content-type': 'application/json' },
+      })
+    ).toBe(false)
+  })
+})
+
+describe('S3 router type matching', () => {
+  it('matches iceberg-typed routes only for iceberg requests', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*',
+      {
+        schema: {},
+        operation: 'test.operation',
+        type: 'iceberg',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(router.matchRoute(route!, { type: 'iceberg', query: {}, headers: {} })).toBe(true)
+    expect(router.matchRoute(route!, { query: {}, headers: {} })).toBe(false)
+  })
+
+  it('matches untyped routes only for untyped requests', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(router.matchRoute(route!, { query: {}, headers: {} })).toBe(true)
+    expect(router.matchRoute(route!, { type: 'iceberg', query: {}, headers: {} })).toBe(false)
+  })
 })
 
 describe('S3ProtocolHandler.parseMetadataHeaders', () => {

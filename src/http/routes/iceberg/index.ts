@@ -13,9 +13,9 @@ import catalogue from './catalog'
 import namespace from './namespace'
 import table from './table'
 
-const { dbServiceRole, icebergEnabled, isMultitenant } = getConfig()
-
 export default async function routes(fastify: FastifyInstance) {
+  const { dbServiceRole, icebergEnabled, isMultitenant } = getConfig()
+
   // Disable iceberg routes if the feature is not enabled
   if (!icebergEnabled && !isMultitenant) {
     return
@@ -26,7 +26,7 @@ export default async function routes(fastify: FastifyInstance) {
       enforceJwtRoles: [dbServiceRole],
     })
 
-    if (!icebergEnabled && isMultitenant) {
+    if (isMultitenant) {
       fastify.register(requireTenantFeature('icebergCatalog'))
     }
 

@@ -813,9 +813,9 @@ describe('PgTenantConnection', () => {
 
     expect(query).toHaveBeenCalledTimes(1)
     const [statement, values] = query.mock.calls[0]
-    expect(statement).toContain("set_config('statement_timeout'")
+    expect(statement).toContain("set_config('role', $1, true)")
+    expect(statement).toContain("set_config('statement_timeout', $10, true)")
     expect(values).toEqual([
-      '4321ms',
       'authenticated',
       'authenticated',
       'jwt',
@@ -825,6 +825,7 @@ describe('PgTenantConnection', () => {
       '',
       '',
       '',
+      '4321ms',
     ])
   })
 
@@ -860,9 +861,9 @@ describe('PgTenantConnection', () => {
 
     expect(query).toHaveBeenCalledTimes(2)
     const [scopeStatement, scopeValues] = query.mock.calls[1]
-    expect(scopeStatement).toContain("set_config('statement_timeout'")
+    expect(scopeStatement).toContain("set_config('role', $1, true)")
+    expect(scopeStatement).toContain("set_config('statement_timeout', $10, true)")
     expect(scopeValues).toEqual([
-      '4321ms',
       'authenticated',
       'authenticated',
       'jwt',
@@ -872,6 +873,7 @@ describe('PgTenantConnection', () => {
       '',
       '',
       '',
+      '4321ms',
     ])
   })
 

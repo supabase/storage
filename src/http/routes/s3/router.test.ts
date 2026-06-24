@@ -1,5 +1,5 @@
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { vi } from 'vitest'
 import { S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
 import { Uploader } from '../../../storage/uploader'
@@ -312,7 +312,13 @@ describe('S3 router route resolution', () => {
 })
 
 describe('S3 route handler matching', () => {
-  it('returns 404 from the S3 route handler when no command route matches', async () => {
+  async function withMockedS3App(
+    callback: (app: FastifyInstance) => Promise<void>,
+    options: {
+      configureRequest?: (request: FastifyRequest) => void
+      tracingEnabled?: boolean
+    } = {}
+  ) {
     const previousS3ProtocolEnabled = process.env.S3_PROTOCOL_ENABLED
     process.env.S3_PROTOCOL_ENABLED = 'true'
 
@@ -322,10 +328,10 @@ describe('S3 route handler matching', () => {
 
       return {
         ...actual,
-        getConfig: (options?: Parameters<typeof actual.getConfig>[0]) => ({
-          ...actual.getConfig(options),
+        getConfig: (getConfigOptions?: Parameters<typeof actual.getConfig>[0]) => ({
+          ...actual.getConfig(getConfigOptions),
           s3ProtocolEnabled: true,
-          tracingEnabled: false,
+          tracingEnabled: options.tracingEnabled ?? false,
         }),
       }
     })
@@ -333,8 +339,9 @@ describe('S3 route handler matching', () => {
       const { default: fastifyPlugin } = await import('fastify-plugin')
       const noopPlugin = fastifyPlugin(async () => {})
       const routeMarkerPlugin = fastifyPlugin(async (fastify: FastifyInstance) => {
-        fastify.addHook('preHandler', async (_request, reply) => {
+        fastify.addHook('preHandler', async (request, reply) => {
           reply.header('x-s3-route-handler-test', '1')
+          options.configureRequest?.(request)
         })
       })
 
@@ -356,14 +363,7 @@ describe('S3 route handler matching', () => {
     try {
       await app.register(routes)
       await app.ready()
-
-      const response = await app.inject({
-        method: 'POST',
-        url: '/bucket/object',
-      })
-
-      expect(response.statusCode).toBe(404)
-      expect(response.headers['x-s3-route-handler-test']).toBe('1')
+      await callback(app)
     } finally {
       await app.close()
       vi.doUnmock('../../plugins')
@@ -376,6 +376,51 @@ describe('S3 route handler matching', () => {
         process.env.S3_PROTOCOL_ENABLED = previousS3ProtocolEnabled
       }
     }
+  }
+
+  it('returns 404 from the S3 route handler when no command route matches', async () => {
+    await withMockedS3App(async (app) => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/bucket/object',
+      })
+
+      expect(response.statusCode).toBe(404)
+      expect(response.headers['x-s3-route-handler-test']).toBe('1')
+    })
+  })
+
+  it('sets the S3 operation span attribute when opentelemetry is available', async () => {
+    const setAttribute = vi.fn()
+
+    await withMockedS3App(
+      async (app) => {
+        const response = await app.inject({
+          method: 'GET',
+          url: '/',
+        })
+
+        expect(response.statusCode).toBe(200)
+      },
+      {
+        configureRequest: (request) => {
+          Object.assign(request, {
+            opentelemetry: () => ({ span: { setAttribute } }),
+            owner: 'owner-id',
+            signals: {
+              body: new AbortController(),
+              response: new AbortController(),
+            },
+            storage: {
+              listBuckets: vi.fn().mockResolvedValue([]),
+            },
+            tenantId: 'tenant-id',
+          })
+        },
+      }
+    )
+
+    expect(setAttribute).toHaveBeenCalledWith('http.operation', 'storage.s3.bucket.list')
   })
 })
 

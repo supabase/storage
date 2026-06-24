@@ -15,7 +15,7 @@ import {
 import { s3ErrorHandler } from './error-handler'
 import { findArrayPathsInSchemas, getRouter, RequestInput, RouteQuery } from './router'
 
-const { s3ProtocolEnabled, tracingEnabled } = getConfig()
+const { s3ProtocolEnabled } = getConfig()
 
 export default async function routes(fastify: FastifyInstance) {
   if (!s3ProtocolEnabled) {
@@ -60,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
               try {
                 req.operation = route.operationConfig
 
-                if (tracingEnabled && req.operation.type) {
+                if (req.operation.type && typeof req.opentelemetry === 'function') {
                   req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)
                 }
 

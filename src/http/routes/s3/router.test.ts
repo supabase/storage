@@ -1,9 +1,10 @@
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { vi } from 'vitest'
 import { S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
 import { Uploader } from '../../../storage/uploader'
 import CompleteMultipartUpload from './commands/complete-multipart-upload'
-import { Router, type S3Router } from './router'
+import { getRouter, type RouteQuery, Router, type S3Router } from './router'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -40,12 +41,7 @@ describe('S3 router query matching', () => {
     const route = router.routes().get('/:Bucket/*')?.[0]
     expect(route).toBeDefined()
 
-    expect(
-      router.matchRoute(route!, {
-        query: { uploads: undefined },
-        headers: {},
-      })
-    ).toBe(true)
+    expect(router.matchRoute(route!, undefined, { uploads: undefined }, {})).toBe(true)
   })
 
   it('matches valued query params when the value matches', () => {
@@ -63,12 +59,7 @@ describe('S3 router query matching', () => {
     const route = router.routes().get('/:Bucket/*')?.[0]
     expect(route).toBeDefined()
 
-    expect(
-      router.matchRoute(route!, {
-        query: { 'list-type': '2' },
-        headers: {},
-      })
-    ).toBe(true)
+    expect(router.matchRoute(route!, undefined, { 'list-type': '2' }, {})).toBe(true)
   })
 
   it('does not match valued query params when the value differs', () => {
@@ -86,12 +77,7 @@ describe('S3 router query matching', () => {
     const route = router.routes().get('/:Bucket/*')?.[0]
     expect(route).toBeDefined()
 
-    expect(
-      router.matchRoute(route!, {
-        query: { 'list-type': '1' },
-        headers: {},
-      })
-    ).toBe(false)
+    expect(router.matchRoute(route!, undefined, { 'list-type': '1' }, {})).toBe(false)
   })
 
   it('matches wildcard routes even when the request has query params', () => {
@@ -109,12 +95,478 @@ describe('S3 router query matching', () => {
     const route = router.routes().get('/:Bucket/*')?.[0]
     expect(route).toBeDefined()
 
+    expect(router.matchRoute(route!, undefined, { uploads: undefined }, {})).toBe(true)
+  })
+
+  it('does not enumerate request query keys for wildcard-only routes', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    const query = new Proxy(
+      {},
+      {
+        ownKeys: () => {
+          throw new Error('wildcard-only query match should not enumerate request query keys')
+        },
+      }
+    )
+
+    expect(router.matchRoute(route!, undefined, query, {})).toBe(true)
+  })
+
+  it('requires every key-only query matcher to be present', () => {
+    const router = new Router()
+
+    router.put(
+      '/:Bucket/*?partNumber&uploadId',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
     expect(
-      router.matchRoute(route!, {
-        query: { uploads: undefined },
-        headers: {},
+      router.matchRoute(route!, undefined, { partNumber: '1', uploadId: 'upload-id' }, {})
+    ).toBe(true)
+    expect(router.matchRoute(route!, undefined, { partNumber: '1' }, {})).toBe(false)
+    expect(router.matchRoute(route!, undefined, { uploadId: 'upload-id' }, {})).toBe(false)
+    expect(router.matchRoute(route!, undefined, {}, {})).toBe(false)
+  })
+
+  it('allows wildcard query matchers to fall back when valued query matchers miss', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*?list-type=2&*',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(router.matchRoute(route!, undefined, { 'list-type': '2' }, {})).toBe(true)
+    expect(router.matchRoute(route!, undefined, { 'list-type': '1' }, {})).toBe(true)
+    expect(router.matchRoute(route!, undefined, {}, {})).toBe(true)
+  })
+})
+
+describe('S3 router header matching', () => {
+  it('matches routes that require a header by presence', () => {
+    const router = new Router()
+
+    router.put(
+      '/:Bucket/*|x-amz-copy-source',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(
+      router.matchRoute(route!, undefined, {}, { 'x-amz-copy-source': '/source-bucket/source-key' })
+    ).toBe(true)
+  })
+
+  it('matches routes that require a header value prefix', () => {
+    const router = new Router()
+
+    router.post(
+      '/:Bucket|content-type=multipart/form-data',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket')?.[0]
+    expect(route).toBeDefined()
+
+    expect(
+      router.matchRoute(
+        route!,
+        undefined,
+        {},
+        { 'content-type': 'multipart/form-data; boundary=abc123' }
+      )
+    ).toBe(true)
+  })
+
+  it('rejects routes when a required header is missing or has the wrong value', () => {
+    const router = new Router()
+
+    router.post(
+      '/:Bucket|content-type=multipart/form-data',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket')?.[0]
+    expect(route).toBeDefined()
+
+    expect(router.matchRoute(route!, undefined, {}, {})).toBe(false)
+    expect(router.matchRoute(route!, undefined, {}, { 'content-type': 'application/json' })).toBe(
+      false
+    )
+  })
+
+  it('requires query and header matchers to pass together', () => {
+    const router = new Router()
+
+    router.put(
+      '/:Bucket/*?partNumber&uploadId|x-amz-copy-source',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(
+      router.matchRoute(
+        route!,
+        undefined,
+        { partNumber: '1', uploadId: 'upload-id' },
+        { 'x-amz-copy-source': '/source-bucket/source-key' }
+      )
+    ).toBe(true)
+    expect(
+      router.matchRoute(
+        route!,
+        undefined,
+        { partNumber: '1' },
+        { 'x-amz-copy-source': '/source-bucket/source-key' }
+      )
+    ).toBe(false)
+    expect(
+      router.matchRoute(route!, undefined, { partNumber: '1', uploadId: 'upload-id' }, {})
+    ).toBe(false)
+  })
+})
+
+describe('S3 router route resolution', () => {
+  it('keeps first-match order for overlapping standard PUT object routes', () => {
+    const router = getRouter()
+    const routes = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.filter((route) => route.method === 'put' && route.type === undefined)
+
+    expect(routes?.map((route) => route.operation)).toEqual([
+      'storage.s3.upload.part_copy',
+      'storage.s3.object.copy',
+      'storage.s3.upload.part',
+      'storage.s3.upload',
+    ])
+
+    const findOperation = (
+      query: RouteQuery,
+      headers: Record<string, string>
+    ): string | undefined => {
+      return routes?.find((route) => route.matches(undefined, query, headers))?.operation
+    }
+
+    expect(
+      findOperation(
+        { partNumber: '1', uploadId: 'upload-id' },
+        { 'x-amz-copy-source': '/source-bucket/source-key' }
+      )
+    ).toBe('storage.s3.upload.part_copy')
+    expect(findOperation({}, { 'x-amz-copy-source': '/source-bucket/source-key' })).toBe(
+      'storage.s3.object.copy'
+    )
+    expect(findOperation({ partNumber: '1', uploadId: 'upload-id' }, {})).toBe(
+      'storage.s3.upload.part'
+    )
+    expect(findOperation({}, {})).toBe('storage.s3.upload')
+  })
+})
+
+describe('S3 route handler matching', () => {
+  async function withMockedS3App(
+    callback: (app: FastifyInstance) => Promise<void>,
+    options: {
+      configureRequest?: (request: FastifyRequest) => void
+      tracingEnabled?: boolean
+    } = {}
+  ) {
+    const previousS3ProtocolEnabled = process.env.S3_PROTOCOL_ENABLED
+    process.env.S3_PROTOCOL_ENABLED = 'true'
+
+    vi.resetModules()
+    vi.doMock('../../../config', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../../../config')>()
+
+      return {
+        ...actual,
+        getConfig: (getConfigOptions?: Parameters<typeof actual.getConfig>[0]) => ({
+          ...actual.getConfig(getConfigOptions),
+          s3ProtocolEnabled: true,
+          tracingEnabled: options.tracingEnabled ?? false,
+        }),
+      }
+    })
+    vi.doMock('../../plugins', async () => {
+      const { default: fastifyPlugin } = await import('fastify-plugin')
+      const noopPlugin = fastifyPlugin(async () => {})
+      const routeMarkerPlugin = fastifyPlugin(async (fastify: FastifyInstance) => {
+        fastify.addHook('preHandler', async (request, reply) => {
+          reply.header('x-s3-route-handler-test', '1')
+          options.configureRequest?.(request)
+        })
+      })
+
+      return {
+        db: noopPlugin,
+        detectS3IcebergBucket: noopPlugin,
+        icebergRestCatalog: noopPlugin,
+        requireTenantFeature: () => routeMarkerPlugin,
+        signatureV4: noopPlugin,
+        storage: noopPlugin,
+        xmlParser: noopPlugin,
+      }
+    })
+
+    const { default: fastify } = await import('fastify')
+    const { default: routes } = await import('./index')
+    const app = fastify()
+
+    try {
+      await app.register(routes)
+      await app.ready()
+      await callback(app)
+    } finally {
+      await app.close()
+      vi.doUnmock('../../plugins')
+      vi.doUnmock('../../../config')
+      vi.resetModules()
+
+      if (previousS3ProtocolEnabled === undefined) {
+        delete process.env.S3_PROTOCOL_ENABLED
+      } else {
+        process.env.S3_PROTOCOL_ENABLED = previousS3ProtocolEnabled
+      }
+    }
+  }
+
+  it('returns 404 from the S3 route handler when no command route matches', async () => {
+    await withMockedS3App(async (app) => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/bucket/object',
+      })
+
+      expect(response.statusCode).toBe(404)
+      expect(response.headers['x-s3-route-handler-test']).toBe('1')
+    })
+  })
+
+  it('sets the S3 operation span attribute when opentelemetry is available', async () => {
+    const setAttribute = vi.fn()
+
+    await withMockedS3App(
+      async (app) => {
+        const response = await app.inject({
+          method: 'GET',
+          url: '/',
+        })
+
+        expect(response.statusCode).toBe(200)
+      },
+      {
+        configureRequest: (request) => {
+          Object.assign(request, {
+            opentelemetry: () => ({ span: { setAttribute } }),
+            owner: 'owner-id',
+            signals: {
+              body: new AbortController(),
+              response: new AbortController(),
+            },
+            storage: {
+              listBuckets: vi.fn().mockResolvedValue([]),
+            },
+            tenantId: 'tenant-id',
+          })
+        },
+      }
+    )
+
+    expect(setAttribute).toHaveBeenCalledWith('http.operation', 'storage.s3.bucket.list')
+  })
+})
+
+describe('S3 router type matching', () => {
+  it('matches iceberg-typed routes only for iceberg requests', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*',
+      {
+        schema: {},
+        operation: 'test.operation',
+        type: 'iceberg',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(router.matchRoute(route!, 'iceberg', {}, {})).toBe(true)
+    expect(router.matchRoute(route!, undefined, {}, {})).toBe(false)
+  })
+
+  it('matches untyped routes only for untyped requests', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(router.matchRoute(route!, undefined, {}, {})).toBe(true)
+    expect(router.matchRoute(route!, 'iceberg', {}, {})).toBe(false)
+  })
+})
+
+describe('S3 router registration precomputation', () => {
+  it('delegates public route matching to the precompiled route matcher', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*?uploads',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    const query = { uploads: undefined }
+    const headers = { 'x-test-header': 'value' }
+    route!.matches = vi.fn(() => true)
+
+    expect(router.matchRoute(route!, 'iceberg', query, headers)).toBe(true)
+    expect(route!.matches).toHaveBeenCalledTimes(1)
+    expect(route!.matches).toHaveBeenCalledWith('iceberg', query, headers)
+  })
+
+  it('stores the compiled validator directly on the route', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*?list-type=2',
+      {
+        schema: {
+          Params: {
+            type: 'object',
+            properties: {
+              Bucket: { type: 'string' },
+              '*': { type: 'string' },
+            },
+            required: ['Bucket', '*'],
+          },
+          Querystring: {
+            type: 'object',
+            properties: {
+              'list-type': { type: 'string', enum: ['2'] },
+            },
+            required: ['list-type'],
+          },
+        },
+        operation: 'storage.s3.object.list',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Querystring: { 'list-type': '2' },
       })
     ).toBe(true)
+    expect(route!.validate.errors).toBeNull()
+  })
+
+  it('precomputes typed route operation names', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*',
+      {
+        schema: {},
+        operation: 'storage.s3.object.get',
+        type: 'iceberg',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(route!.operation).toBe('storage.s3.iceberg.object.get')
+  })
+
+  it('stores a reusable operation object for request metadata', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*',
+      {
+        schema: {},
+        operation: 'storage.s3.object.get',
+        type: 'iceberg',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(route!.operationConfig).toEqual({ type: 'storage.s3.iceberg.object.get' })
+    expect(route!.operationConfig).toBe(route!.operationConfig)
   })
 })
 
@@ -260,7 +712,7 @@ describe('DeleteObject route mapping', () => {
 
     expect(route).toBeDefined()
 
-    const validate = route!.compiledSchema()
+    const validate = route!.validate
     const data = {
       Params: { Bucket: 'bucket' },
       Querystring: { delete: '' },
@@ -295,7 +747,7 @@ describe('DeleteObject route mapping', () => {
 
     expect(route).toBeDefined()
 
-    const validate = route!.compiledSchema()
+    const validate = route!.validate
     const data = {
       Params: { Bucket: 'bucket' },
       Querystring: { delete: '' },
@@ -337,7 +789,7 @@ describe('DeleteObject route mapping', () => {
 
       expect(route).toBeDefined()
 
-      const validate = route!.compiledSchema()
+      const validate = route!.validate
       const data = {
         Params: { Bucket: 'bucket' },
         Querystring: { delete: '' },

@@ -36,16 +36,17 @@ export default async function routes(fastify: FastifyInstance) {
 
       methods.forEach((method) => {
         const routesByMethod = routes.filter((e) => e.method === method)
+        const icebergRoutes = routesByMethod.filter((e) => e.type === 'iceberg')
+        const standardRoutes = routesByMethod.filter((e) => e.type === undefined)
 
         const routeHandler: RouteHandlerMethod = async (req, reply) => {
-          for (const route of routesByMethod) {
-            if (
-              s3Router.matchRoute(route, {
-                type: req.isIcebergBucket ? 'iceberg' : undefined,
-                query: (req.query as RouteQuery) || {},
-                headers: (req.headers as Record<string, string>) || {},
-              })
-            ) {
+          const matchType = req.isIcebergBucket ? 'iceberg' : undefined
+          const matchQuery = (req.query as RouteQuery) || {}
+          const matchHeaders = (req.headers as Record<string, string>) || {}
+          const candidates = matchType === 'iceberg' ? icebergRoutes : standardRoutes
+
+          for (const route of candidates) {
+            if (route.matches(matchType, matchQuery, matchHeaders)) {
               if (!route.handler) {
                 throw new Error('no handler found')
               }
@@ -57,11 +58,7 @@ export default async function routes(fastify: FastifyInstance) {
               }
 
               try {
-                const operation = route.type
-                  ? route.operation.replaceAll('s3.', `s3.${route.type}.`)
-                  : route.operation
-
-                req.operation = { type: operation }
+                req.operation = route.operationConfig
 
                 if (req.operation.type && typeof req.opentelemetry === 'function') {
                   req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)
@@ -73,15 +70,14 @@ export default async function routes(fastify: FastifyInstance) {
                   Headers: req.headers,
                   Querystring: req.query,
                 } as RequestInput<typeof route.schema>
-                const compiler = route.compiledSchema()
-                const isValid = compiler(data)
+                const isValid = route.validate(data)
 
                 if (!isValid) {
                   const validationError = ERRORS.InvalidRequest('Invalid request') as Error & {
                     validation?: unknown
                   }
                   // validation property is required to send correct reply in error-handler.ts
-                  validationError.validation = compiler.errors
+                  validationError.validation = route.validate.errors
                   throw validationError
                 }
 

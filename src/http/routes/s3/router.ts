@@ -105,6 +105,11 @@ export type QuerystringMatch = {
   value: string | undefined
 }
 
+export type HeaderMatch = {
+  name: string
+  value?: string
+}
+
 export type RouteQuery = Record<string, string | undefined>
 
 type Route<S extends Schema, Context> = {
@@ -119,7 +124,12 @@ type Route<S extends Schema, Context> = {
   allowEmptyJsonBody?: boolean
   acceptMultiformData?: boolean
   operation: string
-  compiledSchema: () => ValidateFunction<JTDDataType<S>>
+  // Precompiled operation: allocated operation object at registration
+  operationConfig: { type: string }
+  validate: ValidateFunction<JTDDataType<S>>
+  // Precompiled matcher: the query/header criteria are parsed once at registration
+  // time so request-time matching is a single closure call with no string parsing.
+  matches: (type: string | undefined, query: RouteQuery, headers: Record<string, string>) => boolean
 }
 
 interface RouteOptions<S extends Schema> {
@@ -194,7 +204,8 @@ export class Router<Context = unknown> {
       }
     })
 
-    const existingSchema = this.ajv.getSchema(method + url)
+    const schemaKey = method + url
+    const existingSchema = this.ajv.getSchema(schemaKey)
 
     if (!existingSchema) {
       this.ajv.addSchema(
@@ -203,9 +214,13 @@ export class Router<Context = unknown> {
           properties: schemaToCompile,
           required: required.filter(Boolean),
         },
-        method + url
+        schemaKey
       )
     }
+
+    const validate = this.ajv.getSchema(schemaKey) as ValidateFunction<JTDDataType<Schema>>
+
+    const compiledOperation = compileOperation(operation, options.type)
 
     const newRoute: Route<Schema, Context> = {
       method,
@@ -213,14 +228,15 @@ export class Router<Context = unknown> {
       querystringMatches: query,
       headersMatches: headers,
       schema,
-      compiledSchema: () =>
-        this.ajv.getSchema(method + url) as ValidateFunction<JTDDataType<Schema>>,
+      validate,
       handler,
       disableContentTypeParser,
       allowEmptyJsonBody,
       acceptMultiformData,
-      operation,
+      operation: compiledOperation,
+      operationConfig: { type: compiledOperation },
       type: options.type,
+      matches: compileMatcher(query, headers, options.type),
     }
 
     if (!existingPath) {
@@ -276,79 +292,99 @@ export class Router<Context = unknown> {
 
   matchRoute(
     route: Route<Schema, Context>,
-    match: { query: RouteQuery; headers: Record<string, string>; type?: string }
+    type: string | undefined,
+    query: RouteQuery,
+    headers: Record<string, string>
   ) {
-    const isOfType = match.type ? match.type === route.type : route.type === undefined
+    return route.matches(type, query, headers)
+  }
+}
 
-    if ((route.headersMatches?.length || 0) > 0) {
-      return (
-        this.matchHeaders(route.headersMatches, match.headers) &&
-        this.matchQueryString(route.querystringMatches, match.query) &&
-        isOfType
-      )
+function compileOperation(operation: string, type?: string) {
+  return type ? operation.replaceAll('s3.', `s3.${type}.`) : operation
+}
+
+/**
+ * Precompiles a route's query/header/type criteria into a single matcher closure.
+ *
+ * The query wildcard flag and the header name/value pairs are derived once here
+ * instead of on every request, so request-time matching is a closure call with no
+ * per-request string splitting or array scanning to recompute static information.
+ */
+function compileMatcher(
+  query: QuerystringMatch[],
+  headers: string[],
+  type?: string
+): (
+  matchType: string | undefined,
+  reqQuery: RouteQuery,
+  reqHeaders: Record<string, string>
+) => boolean {
+  const hasWildcardQuery = query.some((match) => match.key === '*')
+  const valuedQueryMatches = query.filter((match) => match.key !== '*')
+  const hasOnlyWildcardQuery = hasWildcardQuery && valuedQueryMatches.length === 0
+  const headerMatches = headers.map(parseHeaderMatch)
+  const hasHeaderMatches = headerMatches.length > 0
+
+  return (
+    matchType: string | undefined,
+    reqQuery: RouteQuery,
+    reqHeaders: Record<string, string>
+  ) => {
+    if (matchType !== type) {
+      return false
     }
 
-    return this.matchQueryString(route.querystringMatches, match.query) && isOfType
+    if (hasHeaderMatches && !matchHeaders(headerMatches, reqHeaders)) {
+      return false
+    }
+
+    if (hasOnlyWildcardQuery) {
+      return true
+    }
+
+    return matchQueryString(valuedQueryMatches, hasWildcardQuery, reqQuery)
+  }
+}
+
+function parseHeaderMatch(header: string): HeaderMatch {
+  const separatorIndex = header.indexOf('=')
+  if (separatorIndex === -1) {
+    return { name: header }
+  }
+  return { name: header.slice(0, separatorIndex), value: header.slice(separatorIndex + 1) }
+}
+
+function matchHeaders(matches: HeaderMatch[], received: Record<string, string>) {
+  for (const match of matches) {
+    const value = received[match.name]
+    if (value === undefined) {
+      return false
+    }
+    if (match.value && !value.startsWith(match.value)) {
+      return false
+    }
   }
 
-  protected matchHeaders(headers: string[], received?: Record<string, string>) {
-    if (!received) {
-      return headers.length === 0
-    }
+  return true
+}
 
-    return headers.every((header) => {
-      const headerParts = header.split('=')
-      const headerName = headerParts[0]
-      const headerValue = headerParts[1]
-
-      const matchHeaderName = received[headerName] !== undefined
-      const matchHeaderValue = headerValue ? received[headerName]?.startsWith(headerValue) : true
-
-      return matchHeaderName && matchHeaderValue
-    })
-  }
-
-  protected matchQueryString(matches: QuerystringMatch[], received?: RouteQuery) {
-    let hasWildcard = false
-    for (const match of matches) {
-      if (match.key === '*') {
-        hasWildcard = true
-        break
-      }
-    }
-
-    if (!received) {
+function matchQueryString(
+  valuedMatches: QuerystringMatch[],
+  hasWildcard: boolean,
+  received: RouteQuery
+) {
+  for (const match of valuedMatches) {
+    if (!(match.key in received)) {
       return hasWildcard
     }
 
-    let hasReceivedQuery = false
-    for (const key in received) {
-      if (Object.prototype.hasOwnProperty.call(received, key)) {
-        hasReceivedQuery = true
-        break
-      }
-    }
-
-    if (!hasReceivedQuery) {
+    if (match.value !== undefined && match.value !== received[match.key]) {
       return hasWildcard
     }
-
-    for (const match of matches) {
-      if (match.key === '*') {
-        continue
-      }
-
-      if (!Object.prototype.hasOwnProperty.call(received, match.key)) {
-        return hasWildcard
-      }
-
-      if (match.value !== undefined && match.value !== received[match.key]) {
-        return hasWildcard
-      }
-    }
-
-    return true
   }
+
+  return true
 }
 
 /**

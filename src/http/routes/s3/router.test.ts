@@ -1,9 +1,10 @@
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
+import type { FastifyInstance } from 'fastify'
 import { vi } from 'vitest'
 import { S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
 import { Uploader } from '../../../storage/uploader'
 import CompleteMultipartUpload from './commands/complete-multipart-upload'
-import { Router, type S3Router } from './router'
+import { getRouter, type RouteQuery, Router, type S3Router } from './router'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -123,6 +124,49 @@ describe('S3 router query matching', () => {
 
     expect(router.matchRoute(route!, undefined, query, {})).toBe(true)
   })
+
+  it('requires every key-only query matcher to be present', () => {
+    const router = new Router()
+
+    router.put(
+      '/:Bucket/*?partNumber&uploadId',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(
+      router.matchRoute(route!, undefined, { partNumber: '1', uploadId: 'upload-id' }, {})
+    ).toBe(true)
+    expect(router.matchRoute(route!, undefined, { partNumber: '1' }, {})).toBe(false)
+    expect(router.matchRoute(route!, undefined, { uploadId: 'upload-id' }, {})).toBe(false)
+    expect(router.matchRoute(route!, undefined, {}, {})).toBe(false)
+  })
+
+  it('allows wildcard query matchers to fall back when valued query matchers miss', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*?list-type=2&*',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(router.matchRoute(route!, undefined, { 'list-type': '2' }, {})).toBe(true)
+    expect(router.matchRoute(route!, undefined, { 'list-type': '1' }, {})).toBe(true)
+    expect(router.matchRoute(route!, undefined, {}, {})).toBe(true)
+  })
 })
 
 describe('S3 router header matching', () => {
@@ -191,6 +235,148 @@ describe('S3 router header matching', () => {
       false
     )
   })
+
+  it('requires query and header matchers to pass together', () => {
+    const router = new Router()
+
+    router.put(
+      '/:Bucket/*?partNumber&uploadId|x-amz-copy-source',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    expect(
+      router.matchRoute(
+        route!,
+        undefined,
+        { partNumber: '1', uploadId: 'upload-id' },
+        { 'x-amz-copy-source': '/source-bucket/source-key' }
+      )
+    ).toBe(true)
+    expect(
+      router.matchRoute(
+        route!,
+        undefined,
+        { partNumber: '1' },
+        { 'x-amz-copy-source': '/source-bucket/source-key' }
+      )
+    ).toBe(false)
+    expect(
+      router.matchRoute(route!, undefined, { partNumber: '1', uploadId: 'upload-id' }, {})
+    ).toBe(false)
+  })
+})
+
+describe('S3 router route resolution', () => {
+  it('keeps first-match order for overlapping standard PUT object routes', () => {
+    const router = getRouter()
+    const routes = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.filter((route) => route.method === 'put' && route.type === undefined)
+
+    expect(routes?.map((route) => route.operation)).toEqual([
+      'storage.s3.upload.part_copy',
+      'storage.s3.object.copy',
+      'storage.s3.upload.part',
+      'storage.s3.upload',
+    ])
+
+    const findOperation = (
+      query: RouteQuery,
+      headers: Record<string, string>
+    ): string | undefined => {
+      return routes?.find((route) => route.matches(undefined, query, headers))?.operation
+    }
+
+    expect(
+      findOperation(
+        { partNumber: '1', uploadId: 'upload-id' },
+        { 'x-amz-copy-source': '/source-bucket/source-key' }
+      )
+    ).toBe('storage.s3.upload.part_copy')
+    expect(findOperation({}, { 'x-amz-copy-source': '/source-bucket/source-key' })).toBe(
+      'storage.s3.object.copy'
+    )
+    expect(findOperation({ partNumber: '1', uploadId: 'upload-id' }, {})).toBe(
+      'storage.s3.upload.part'
+    )
+    expect(findOperation({}, {})).toBe('storage.s3.upload')
+  })
+})
+
+describe('S3 route handler matching', () => {
+  it('returns 404 from the S3 route handler when no command route matches', async () => {
+    const previousS3ProtocolEnabled = process.env.S3_PROTOCOL_ENABLED
+    process.env.S3_PROTOCOL_ENABLED = 'true'
+
+    vi.resetModules()
+    vi.doMock('../../../config', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../../../config')>()
+
+      return {
+        ...actual,
+        getConfig: (options?: Parameters<typeof actual.getConfig>[0]) => ({
+          ...actual.getConfig(options),
+          s3ProtocolEnabled: true,
+          tracingEnabled: false,
+        }),
+      }
+    })
+    vi.doMock('../../plugins', async () => {
+      const { default: fastifyPlugin } = await import('fastify-plugin')
+      const noopPlugin = fastifyPlugin(async () => {})
+      const routeMarkerPlugin = fastifyPlugin(async (fastify: FastifyInstance) => {
+        fastify.addHook('preHandler', async (_request, reply) => {
+          reply.header('x-s3-route-handler-test', '1')
+        })
+      })
+
+      return {
+        db: noopPlugin,
+        detectS3IcebergBucket: noopPlugin,
+        icebergRestCatalog: noopPlugin,
+        requireTenantFeature: () => routeMarkerPlugin,
+        signatureV4: noopPlugin,
+        storage: noopPlugin,
+        xmlParser: noopPlugin,
+      }
+    })
+
+    const { default: fastify } = await import('fastify')
+    const { default: routes } = await import('./index')
+    const app = fastify()
+
+    try {
+      await app.register(routes)
+      await app.ready()
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/bucket/object',
+      })
+
+      expect(response.statusCode).toBe(404)
+      expect(response.headers['x-s3-route-handler-test']).toBe('1')
+    } finally {
+      await app.close()
+      vi.doUnmock('../../plugins')
+      vi.doUnmock('../../../config')
+      vi.resetModules()
+
+      if (previousS3ProtocolEnabled === undefined) {
+        delete process.env.S3_PROTOCOL_ENABLED
+      } else {
+        process.env.S3_PROTOCOL_ENABLED = previousS3ProtocolEnabled
+      }
+    }
+  })
 })
 
 describe('S3 router type matching', () => {
@@ -235,6 +421,30 @@ describe('S3 router type matching', () => {
 })
 
 describe('S3 router registration precomputation', () => {
+  it('delegates public route matching to the precompiled route matcher', () => {
+    const router = new Router()
+
+    router.get(
+      '/:Bucket/*?uploads',
+      {
+        schema: {},
+        operation: 'test.operation',
+      },
+      async () => ({})
+    )
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+    expect(route).toBeDefined()
+
+    const query = { uploads: undefined }
+    const headers = { 'x-test-header': 'value' }
+    route!.matches = vi.fn(() => true)
+
+    expect(router.matchRoute(route!, 'iceberg', query, headers)).toBe(true)
+    expect(route!.matches).toHaveBeenCalledTimes(1)
+    expect(route!.matches).toHaveBeenCalledWith('iceberg', query, headers)
+  })
+
   it('stores the compiled validator directly on the route', () => {
     const router = new Router()
 

@@ -32,7 +32,7 @@ export default async function routes(fastify: FastifyInstance) {
   }
 
   fastify.register(async function authenticated(fastify) {
-    if (!vectorEnabled && isMultitenant) {
+    if (isMultitenant) {
       fastify.register(requireTenantFeature('vectorBuckets'))
     }
 

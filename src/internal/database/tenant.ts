@@ -80,14 +80,7 @@ export enum TenantMigrationStatus {
   FAILED_STALE = 'FAILED_STALE',
 }
 
-const {
-  isMultitenant,
-  dbServiceRole,
-  dbMigrationFreezeAt,
-  icebergEnabled,
-  vectorEnabled,
-  databaseMaxConnections,
-} = getConfig()
+const { isMultitenant, dbServiceRole, dbMigrationFreezeAt, databaseMaxConnections } = getConfig()
 
 // Max 16,384 items. At ~2KB per config, this uses roughly ~32MB of heap memory worst-case.
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
@@ -272,13 +265,13 @@ export async function getTenantConfig(
           enabled: Boolean(feature_purge_cache),
         },
         icebergCatalog: {
-          enabled: Boolean(icebergEnabled || feature_iceberg_catalog),
+          enabled: Boolean(feature_iceberg_catalog),
           maxNamespaces: feature_iceberg_catalog_max_namespaces ?? 0,
           maxTables: feature_iceberg_catalog_max_tables ?? 0,
           maxCatalogs: feature_iceberg_catalog_max_catalogs ?? 0,
         },
         vectorBuckets: {
-          enabled: Boolean(vectorEnabled || feature_vector_buckets),
+          enabled: Boolean(feature_vector_buckets),
           maxBuckets: feature_vector_buckets_max_buckets ?? 0,
           maxIndexes: feature_vector_buckets_max_indexes ?? 0,
         },

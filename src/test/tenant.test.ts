@@ -587,6 +587,108 @@ describe('Tenant configs', () => {
     expect(getResponseJSON).toEqual({ ...payload, fileSizeLimit: 2 })
   })
 
+  test('Update tenant config partially can disable globally enabled icebergCatalog', async () => {
+    const createResponse = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(createResponse.statusCode).toBe(201)
+
+    const patchResponse = await adminApp.inject({
+      method: 'PATCH',
+      url: `/tenants/abc`,
+      payload: {
+        features: {
+          icebergCatalog: {
+            enabled: false,
+          },
+        },
+      },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(patchResponse.statusCode).toBe(204)
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(JSON.parse(getResponse.body).features.icebergCatalog).toEqual({
+      ...payload.features.icebergCatalog,
+      enabled: false,
+    })
+
+    deleteTenantConfig('abc')
+    await expect(getTenantConfig('abc')).resolves.toMatchObject({
+      features: {
+        icebergCatalog: {
+          ...payload.features.icebergCatalog,
+          enabled: false,
+        },
+      },
+    })
+  })
+
+  test('Update tenant config partially can disable globally enabled vectorBuckets', async () => {
+    const createResponse = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(createResponse.statusCode).toBe(201)
+
+    const patchResponse = await adminApp.inject({
+      method: 'PATCH',
+      url: `/tenants/abc`,
+      payload: {
+        features: {
+          vectorBuckets: {
+            enabled: false,
+          },
+        },
+      },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(patchResponse.statusCode).toBe(204)
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(JSON.parse(getResponse.body).features.vectorBuckets).toEqual({
+      ...payload.features.vectorBuckets,
+      enabled: false,
+    })
+
+    deleteTenantConfig('abc')
+    await expect(getTenantConfig('abc')).resolves.toMatchObject({
+      features: {
+        vectorBuckets: {
+          ...payload.features.vectorBuckets,
+          enabled: false,
+        },
+      },
+    })
+  })
+
   test('Tenant config maxConnections nullish transitions do not destroy cached pg pool', async () => {
     const tenantId = 'pool-max-connections-nullish-change'
     const encryptedTenant = {

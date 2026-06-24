@@ -137,8 +137,7 @@ interface tenantDBInterface {
   disable_events?: string[] | null
 }
 
-const { dbMigrationFreezeAt, icebergEnabled, vectorEnabled, adminReturnTenantSensitiveData } =
-  getConfig()
+const { dbMigrationFreezeAt, adminReturnTenantSensitiveData } = getConfig()
 const migrationQueueName = RunMigrationsOnTenants.getQueueName()
 const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
 const migrationAdminStorePg = new MigrationAdminStorePg(multitenantPgExecutor, PG_BOSS_SCHEMA)
@@ -318,13 +317,13 @@ export default async function routes(fastify: FastifyInstance) {
             enabled: feature_s3_protocol,
           },
           icebergCatalog: {
-            enabled: icebergEnabled || feature_iceberg_catalog,
+            enabled: feature_iceberg_catalog,
             maxNamespaces: feature_iceberg_catalog_max_namespaces,
             maxTables: feature_iceberg_catalog_max_tables,
             maxCatalogs: feature_iceberg_catalog_max_catalogs,
           },
           vectorBuckets: {
-            enabled: vectorEnabled || feature_vector_buckets,
+            enabled: feature_vector_buckets,
             maxBuckets: feature_vector_buckets_max_buckets,
             maxIndexes: feature_vector_buckets_max_indexes,
           },
@@ -406,13 +405,13 @@ export default async function routes(fastify: FastifyInstance) {
             enabled: feature_s3_protocol,
           },
           icebergCatalog: {
-            enabled: icebergEnabled || feature_iceberg_catalog,
+            enabled: feature_iceberg_catalog,
             maxNamespaces: feature_iceberg_catalog_max_namespaces,
             maxTables: feature_iceberg_catalog_max_tables,
             maxCatalogs: feature_iceberg_catalog_max_catalogs,
           },
           vectorBuckets: {
-            enabled: vectorEnabled || feature_vector_buckets,
+            enabled: feature_vector_buckets,
             maxBuckets: feature_vector_buckets_max_buckets,
             maxIndexes: feature_vector_buckets_max_indexes,
           },

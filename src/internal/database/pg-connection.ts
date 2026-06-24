@@ -38,23 +38,36 @@ export interface PgQueryOptions {
 
 type PgQueryArgument = PgQueryOptions | unknown[]
 
-const scopeConfigNames = [
-  'role',
-  'request.jwt.claim.role',
-  'request.jwt',
-  'request.jwt.claim.sub',
-  'request.jwt.claims',
-  'request.headers',
-  'request.method',
-  'request.path',
-  'storage.operation',
-] as const
+// The first nine placeholders must stay in the same order as getScopeValues().
+// The timeout variant appends statement_timeout as $10.
+const scopeConfigStatement = `
+        SELECT
+          set_config('role', $1, true),
+          set_config('request.jwt.claim.role', $2, true),
+          set_config('request.jwt', $3, true),
+          set_config('request.jwt.claim.sub', $4, true),
+          set_config('request.jwt.claims', $5, true),
+          set_config('request.headers', $6, true),
+          set_config('request.method', $7, true),
+          set_config('request.path', $8, true),
+          set_config('storage.operation', $9, true),
+          set_config('storage.allow_delete_query', 'true', true);
+      `
 
-const scopeConfigStatement = buildScopeConfigStatement(scopeConfigNames)
-const scopeConfigStatementWithTimeout = buildScopeConfigStatement([
-  'statement_timeout',
-  ...scopeConfigNames,
-])
+const scopeConfigStatementWithTimeout = `
+        SELECT
+          set_config('role', $1, true),
+          set_config('request.jwt.claim.role', $2, true),
+          set_config('request.jwt', $3, true),
+          set_config('request.jwt.claim.sub', $4, true),
+          set_config('request.jwt.claims', $5, true),
+          set_config('request.headers', $6, true),
+          set_config('request.method', $7, true),
+          set_config('request.path', $8, true),
+          set_config('storage.operation', $9, true),
+          set_config('storage.allow_delete_query', 'true', true),
+          set_config('statement_timeout', $10, true);
+      `
 
 export interface PgExecutor {
   query<T extends QueryResultRow = QueryResultRow>(
@@ -304,18 +317,6 @@ function wait(timeoutMs: number): Promise<void> {
 
 function pulsePgPoolQueue(pool: Pool): void {
   ;(pool as Pool & { _pulseQueue?: () => void })._pulseQueue?.()
-}
-
-function buildScopeConfigStatement(configNames: readonly string[]): string {
-  const configStatements = configNames.map((name, index) => {
-    return `set_config('${name}', $${index + 1}, true)`
-  })
-  configStatements.push(`set_config('storage.allow_delete_query', 'true', true)`)
-
-  return `
-        SELECT
-          ${configStatements.join(',\n          ')};
-      `
 }
 
 export class PgPoolManager extends PoolManager<PgPoolStrategy> {
@@ -754,7 +755,25 @@ export class PgTenantConnection {
     const pendingStatementTimeout = transaction ? transaction.takePendingStatementTimeout() : 0
     const isMultigres = this.isMultigresDatabase()
     const statementTimeout = isMultigres ? 0 : pendingStatementTimeout
-    const scopeValues = [
+    const scopeValues = this.getScopeValues()
+
+    await tnx.query({
+      text: statementTimeout ? scopeConfigStatementWithTimeout : scopeConfigStatement,
+      values: statementTimeout ? [...scopeValues, `${statementTimeout}ms`] : scopeValues,
+    })
+
+    if (isMultigres && transaction) {
+      // Multigres requires SET LOCAL for statement_timeout, and role scope setup resets it.
+      const timeoutToReapply = transaction.getAppliedStatementTimeout()
+
+      if (timeoutToReapply && timeoutToReapply > 0) {
+        await transaction.query(buildSetLocalStatementTimeoutStatement(timeoutToReapply))
+      }
+    }
+  }
+
+  private getScopeValues(): unknown[] {
+    return [
       this.role,
       this.role,
       this.options.user.jwt || '',
@@ -765,21 +784,6 @@ export class PgTenantConnection {
       this.options.path || '',
       this.options.operation?.() || '',
     ]
-
-    await tnx.query({
-      text: statementTimeout ? scopeConfigStatementWithTimeout : scopeConfigStatement,
-      values: statementTimeout ? [`${statementTimeout}ms`, ...scopeValues] : scopeValues,
-    })
-
-    if (isMultigres && transaction) {
-      // Multigres requires SET LOCAL for statement_timeout, and role scope setup resets it.
-      const timeoutToReapply = transaction.getAppliedStatementTimeout()
-
-      if (timeoutToReapply && timeoutToReapply > 0) {
-        await transaction.query(buildSetLocalStatementTimeoutStatement(timeoutToReapply))
-        transaction.setAppliedStatementTimeout(timeoutToReapply)
-      }
-    }
   }
 }
 

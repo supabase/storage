@@ -87,8 +87,12 @@ export default async function routes(fastify: FastifyInstance) {
                   tenantId: req.tenantId,
                   owner: req.owner,
                   signals: {
-                    body: req.signals.body.signal,
-                    response: req.signals.response.signal,
+                    get body() {
+                      return req.signals.body.signal
+                    },
+                    get response() {
+                      return req.signals.response.signal
+                    },
                   },
                 })
 

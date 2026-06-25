@@ -1,7 +1,6 @@
-import { EventEmitter } from 'node:events'
-import { request as httpRequest } from 'node:http'
+import { EventEmitter, once } from 'node:events'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { setTimeout as sleep } from 'node:timers/promises'
+import { request as httpRequest } from 'node:http'
 import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
 import { RequestSignals, signals as signalsPlugin } from './signals'
@@ -23,6 +22,21 @@ function build() {
     res as unknown as ServerResponse
   )
   return { req, res, signals }
+}
+
+async function withTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), 1000)
+  })
+
+  try {
+    return await Promise.race([promise, timeoutPromise])
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout)
+    }
+  }
 }
 
 describe('RequestSignals', () => {
@@ -174,20 +188,60 @@ describe('signals plugin', () => {
     try {
       client.flushHeaders()
       client.write('partial body')
-      await Promise.race([
-        requestStarted,
-        sleep(1000).then(() => {
-          throw new Error('Timed out waiting for request start')
-        }),
-      ])
+      await withTimeout(requestStarted, 'Timed out waiting for request start')
       client.destroy()
 
-      await Promise.race([
-        bodyAborted,
-        sleep(1000).then(() => {
-          throw new Error('Timed out waiting for request abort')
-        }),
-      ])
+      await withTimeout(bodyAborted, 'Timed out waiting for request abort')
+    } finally {
+      client.destroy()
+      await app.close()
+    }
+  })
+
+  it('aborts response and disconnect signals for real socket disconnects mid-response', async () => {
+    const app = Fastify()
+    let resolveResponseAbort!: () => void
+    let resolveDisconnectAbort!: () => void
+    const responseAborted = new Promise<void>((resolve) => {
+      resolveResponseAbort = resolve
+    })
+    const disconnectAborted = new Promise<void>((resolve) => {
+      resolveDisconnectAbort = resolve
+    })
+
+    await app.register(signalsPlugin)
+    app.get('/stream', async (request, reply) => {
+      request.signals.response.signal.addEventListener('abort', resolveResponseAbort, {
+        once: true,
+      })
+      request.signals.disconnect.signal.addEventListener('abort', resolveDisconnectAbort, {
+        once: true,
+      })
+
+      reply.hijack()
+      reply.raw.writeHead(200, { 'content-type': 'text/plain' })
+      reply.raw.write('partial response')
+
+      await Promise.all([responseAborted, disconnectAborted])
+    })
+
+    const address = await app.listen({ host: '127.0.0.1', port: 0 })
+    const client = httpRequest(`${address}/stream`, { method: 'GET' })
+    client.on('error', () => {})
+
+    try {
+      client.end()
+      const [response] = await withTimeout(
+        once(client, 'response') as Promise<[IncomingMessage]>,
+        'Timed out waiting for streaming response'
+      )
+      await withTimeout(once(response, 'data'), 'Timed out waiting for response data')
+      response.destroy()
+
+      await withTimeout(
+        Promise.all([responseAborted, disconnectAborted]),
+        'Timed out waiting for response abort'
+      )
     } finally {
       client.destroy()
       await app.close()

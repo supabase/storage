@@ -102,7 +102,10 @@ describe('dbSuperUser plugin', () => {
 describe.each([
   {
     name: 'db plugin',
-    register: async (app: ReturnType<typeof Fastify>, plugins: Awaited<ReturnType<typeof loadDbPlugins>>) => {
+    register: async (
+      app: ReturnType<typeof Fastify>,
+      plugins: Awaited<ReturnType<typeof loadDbPlugins>>
+    ) => {
       app.addHook('onRequest', async (request: FastifyRequest) => {
         request.jwt = 'user-jwt'
         request.jwtPayload = {
@@ -191,6 +194,33 @@ describe.each([
       expect(response.statusCode).toBe(200)
       expect(disconnectGetter).toHaveBeenCalledTimes(1)
       expect(plugins.requestDb.setAbortSignal).toHaveBeenCalledWith(disconnectController.signal)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('does not require request signals when query cancellation is enabled', async () => {
+    const plugins = await loadDbPlugins({ databaseEnableQueryCancellation: true })
+    const app = Fastify()
+
+    app.decorateRequest('tenantId')
+    app.addHook('onRequest', async (request) => {
+      request.tenantId = 'tenant-id'
+    })
+    await register(app, plugins)
+    app.get('/test', async () => ({ ok: true }))
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/test',
+        headers: {
+          'x-forwarded-host': 'tenant.local.test',
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(plugins.requestDb.setAbortSignal).not.toHaveBeenCalled()
     } finally {
       await app.close()
     }

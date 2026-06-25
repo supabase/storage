@@ -1,7 +1,10 @@
 import { EventEmitter } from 'node:events'
+import { request as httpRequest } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { setTimeout as sleep } from 'node:timers/promises'
+import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
-import { RequestSignals } from './signals'
+import { RequestSignals, signals as signalsPlugin } from './signals'
 
 class FakeReq extends EventEmitter {
   aborted = false
@@ -131,5 +134,63 @@ describe('RequestSignals', () => {
     // disconnect was never accessed; accessing it now should create a fresh,
     // non-aborted controller since the raw request was never actually aborted
     expect(signals.disconnect.signal.aborted).toBe(false)
+  })
+})
+
+describe('signals plugin', () => {
+  it('aborts request-side signals through Fastify onRequestAbort for real socket disconnects', async () => {
+    const app = Fastify()
+    let resolveBodyAbort!: () => void
+    let resolveRequestStarted!: () => void
+    const bodyAborted = new Promise<void>((resolve) => {
+      resolveBodyAbort = resolve
+    })
+    const requestStarted = new Promise<void>((resolve) => {
+      resolveRequestStarted = resolve
+    })
+
+    await app.register(signalsPlugin)
+    app.addHook('onRequest', async (request) => {
+      resolveRequestStarted()
+      request.signals.body.signal.addEventListener('abort', resolveBodyAbort, { once: true })
+    })
+    app.addContentTypeParser('application/octet-stream', (_request, payload, done) => {
+      payload.resume()
+      payload.once('end', () => done(null))
+      payload.once('error', done)
+    })
+    app.post('/upload', async () => ({ ok: true }))
+
+    const address = await app.listen({ host: '127.0.0.1', port: 0 })
+    const client = httpRequest(`${address}/upload`, {
+      headers: {
+        'content-length': '1000000',
+        'content-type': 'application/octet-stream',
+      },
+      method: 'POST',
+    })
+    client.on('error', () => {})
+
+    try {
+      client.flushHeaders()
+      client.write('partial body')
+      await Promise.race([
+        requestStarted,
+        sleep(1000).then(() => {
+          throw new Error('Timed out waiting for request start')
+        }),
+      ])
+      client.destroy()
+
+      await Promise.race([
+        bodyAborted,
+        sleep(1000).then(() => {
+          throw new Error('Timed out waiting for request abort')
+        }),
+      ])
+    } finally {
+      client.destroy()
+      await app.close()
+    }
   })
 })

@@ -1,77 +1,102 @@
-import { vi } from 'vitest'
+import { MAX_HEADER_NAME_LENGTH } from '@internal/http/header'
+import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 
-// fs-xattr is pulled in transitively through the file backend; it has no Windows build.
-vi.mock('fs-xattr', () => ({
-  set: vi.fn(() => Promise.resolve()),
-  get: vi.fn(() => Promise.resolve(undefined)),
-}))
+describe('S3ProtocolHandler.dbHeadObject', () => {
+  it('emits empty user metadata values as valid S3 metadata headers', async () => {
+    const findObject = vi.fn().mockResolvedValue({
+      created_at: '2026-06-25T00:00:00.000Z',
+      metadata: {
+        eTag: '"etag"',
+        mimetype: 'text/plain',
+        size: '0',
+      },
+      updated_at: '2026-06-25T00:00:00.000Z',
+      user_metadata: {
+        color: 'blue',
+        empty: '',
+      },
+    })
+    const storage = {
+      from: vi.fn(() => ({
+        findObject,
+      })),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
 
-import { isValidHeader, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+    const response = await handler.dbHeadObject({
+      Bucket: 'bucket',
+      Key: 'object.txt',
+    })
 
-// Mirror the constants in s3-handler.ts
-const MAX_HEADER_NAME_LENGTH = 1024 * 8
-const MAX_HEADER_VALUE_LENGTH = 1024 * 8
-
-describe('isValidHeader', () => {
-  it('accepts a typical header name and value', () => {
-    expect(isValidHeader('content-type', 'application/json')).toBe(true)
+    expect(response.headers).toMatchObject({
+      'x-amz-meta-color': 'blue',
+      'x-amz-meta-empty': '',
+    })
+    expect(response.headers).not.toHaveProperty('x-amz-missing-meta')
   })
 
-  it('accepts all token chars permitted by RFC7230 §3.2.6', () => {
-    expect(isValidHeader("!#$%&'*+-.^_`|~09AZaz", 'v')).toBe(true)
+  it('counts metadata as missing when the emitted S3 metadata header name is too long', async () => {
+    const prefix = 'x-amz-meta-'
+    const key = 'a'.repeat(MAX_HEADER_NAME_LENGTH - prefix.length + 1)
+    const findObject = vi.fn().mockResolvedValue({
+      created_at: '2026-06-25T00:00:00.000Z',
+      metadata: {
+        eTag: '"etag"',
+        mimetype: 'text/plain',
+        size: '0',
+      },
+      updated_at: '2026-06-25T00:00:00.000Z',
+      user_metadata: {
+        [key]: 'value',
+      },
+    })
+    const storage = {
+      from: vi.fn(() => ({
+        findObject,
+      })),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.dbHeadObject({
+      Bucket: 'bucket',
+      Key: 'object.txt',
+    })
+
+    expect(response.headers).toHaveProperty('x-amz-missing-meta', 1)
+    expect(response.headers).not.toHaveProperty(prefix + key)
   })
 
-  it('rejects header names containing characters outside the token set', () => {
-    expect(isValidHeader('bad name', 'v')).toBe(false)
-    expect(isValidHeader('bad:name', 'v')).toBe(false)
-    expect(isValidHeader('bad(name)', 'v')).toBe(false)
-  })
+  it('counts empty user metadata keys as missing', async () => {
+    const findObject = vi.fn().mockResolvedValue({
+      created_at: '2026-06-25T00:00:00.000Z',
+      metadata: {
+        eTag: '"etag"',
+        mimetype: 'text/plain',
+        size: '0',
+      },
+      updated_at: '2026-06-25T00:00:00.000Z',
+      user_metadata: {
+        '': 'value',
+        color: 'blue',
+      },
+    })
+    const storage = {
+      from: vi.fn(() => ({
+        findObject,
+      })),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
 
-  it('rejects an empty header name', () => {
-    expect(isValidHeader('', 'v')).toBe(false)
-  })
+    const response = await handler.dbHeadObject({
+      Bucket: 'bucket',
+      Key: 'object.txt',
+    })
 
-  it('rejects header names exceeding the max byte length', () => {
-    const oversizedName = 'a'.repeat(MAX_HEADER_NAME_LENGTH + 1)
-    expect(isValidHeader(oversizedName, 'value')).toBe(false)
-  })
-
-  it('rejects oversized names even when all characters are otherwise valid', () => {
-    // Long + regex-matching still has to fail: the length check must not be bypassed.
-    const oversizedValid = 'a'.repeat(MAX_HEADER_NAME_LENGTH + 100)
-    expect(isValidHeader(oversizedValid, 'ok')).toBe(false)
-  })
-
-  it('accepts header names exactly at the max byte length', () => {
-    const maxName = 'a'.repeat(MAX_HEADER_NAME_LENGTH)
-    expect(isValidHeader(maxName, 'value')).toBe(true)
-  })
-
-  it('rejects header values containing control characters', () => {
-    expect(isValidHeader('x-custom', 'bad\x00value')).toBe(false)
-    expect(isValidHeader('x-custom', 'bad\nvalue')).toBe(false)
-  })
-
-  it('rejects header values containing CRLF (header injection)', () => {
-    expect(isValidHeader('x-custom', 'innocent\r\nX-Injected: 1')).toBe(false)
-  })
-
-  it('rejects header values exceeding the max byte length', () => {
-    const oversizedValue = 'a'.repeat(MAX_HEADER_VALUE_LENGTH + 1)
-    expect(isValidHeader('x-custom', oversizedValue)).toBe(false)
-  })
-
-  it('accepts header values exactly at the max byte length', () => {
-    const maxValue = 'a'.repeat(MAX_HEADER_VALUE_LENGTH)
-    expect(isValidHeader('x-custom', maxValue)).toBe(true)
-  })
-
-  it('accepts an array of values when all are valid', () => {
-    expect(isValidHeader('x-custom', ['one', 'two', 'three'])).toBe(true)
-  })
-
-  it('rejects an array of values when any are invalid', () => {
-    expect(isValidHeader('x-custom', ['ok', 'bad\x00value'])).toBe(false)
+    expect(response.headers).toMatchObject({
+      'x-amz-meta-color': 'blue',
+      'x-amz-missing-meta': 1,
+    })
+    expect(response.headers).not.toHaveProperty('x-amz-meta-')
   })
 })
 

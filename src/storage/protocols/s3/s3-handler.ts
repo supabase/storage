@@ -19,6 +19,7 @@ import {
 } from '@aws-sdk/client-s3'
 import { decrypt, encrypt } from '@internal/auth'
 import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
+import { isValidHeader } from '@internal/http/header'
 import { logger, logSchema } from '@internal/monitoring'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
@@ -856,7 +857,7 @@ export class S3ProtocolHandler {
     let metadataHeaders: Record<string, unknown> = {}
 
     if (object.user_metadata) {
-      metadataHeaders = toAwsMeatadataHeaders(object.user_metadata)
+      metadataHeaders = toAwsMetadataHeaders(object.user_metadata)
     }
 
     return {
@@ -943,7 +944,7 @@ export class S3ProtocolHandler {
     let metadataHeaders: Record<string, unknown> = {}
 
     if (userMetadata) {
-      metadataHeaders = toAwsMeatadataHeaders(userMetadata)
+      metadataHeaders = toAwsMetadataHeaders(userMetadata)
     }
 
     const headers: Record<string, string> = {
@@ -1450,28 +1451,7 @@ export class S3ProtocolHandler {
   }
 }
 
-const MAX_HEADER_NAME_LENGTH = 1024 * 8 // 8KB, per RFC7230 §3.2.6
-const MAX_HEADER_VALUE_LENGTH = 1024 * 8 // 8KB, per RFC7230 §3.2.4
-
-// Allowed header‐name chars per RFC7230 §3.2.6 “token”
-// (note that the backtick ` is escaped)
-const HEADER_NAME_RE = /^[!#$%&'*+\-.\^_`|~0-9A-Za-z]+$/
-
-// Allowed header‐value chars per RFC7230 §3.2.4
-// (horizontal tab, space–tilde, and 0x80–0xFF)
-const HEADER_VALUE_RE = /^[\t\x20-\x7e\x80-\xff]+$/
-
-export function isValidHeader(name: string, value: string | string[]): boolean {
-  if (Buffer.from(`${name}`).byteLength > MAX_HEADER_NAME_LENGTH || !HEADER_NAME_RE.test(name)) {
-    return false
-  }
-  const values = Array.isArray(value) ? value : [value]
-  return values.every(
-    (v) => Buffer.from(`${v}`).byteLength <= MAX_HEADER_VALUE_LENGTH && HEADER_VALUE_RE.test(v)
-  )
-}
-
-function toAwsMeatadataHeaders(records: Record<string, unknown>) {
+function toAwsMetadataHeaders(records: Record<string, unknown>) {
   const metadataHeaders: Record<string, unknown> = {}
   let missingCount = 0
 
@@ -1480,9 +1460,15 @@ function toAwsMeatadataHeaders(records: Record<string, unknown>) {
       continue
     }
 
+    if (key.length === 0) {
+      missingCount++
+      continue
+    }
+
     const value = records[key]
-    if (value && typeof value === 'string' && isUSASCII(value) && isValidHeader(key, value)) {
-      metadataHeaders['x-amz-meta-' + key.toLowerCase()] = value
+    const headerName = 'x-amz-meta-' + key.toLowerCase()
+    if (typeof value === 'string' && isUSASCII(value) && isValidHeader(headerName, value)) {
+      metadataHeaders[headerName] = value
     } else {
       missingCount++
     }

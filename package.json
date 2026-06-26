@@ -111,7 +111,7 @@
     "pprof-format": "^2.2.1",
     "safe-stable-stringify": "^2.3.1",
     "undici": "^7.24.0",
-    "wattpm": "^3.52.0",
+    "wattpm": "^3.57.0",
     "xml2js": "^0.6.2"
   },
   "devDependencies": {

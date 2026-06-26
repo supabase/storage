@@ -104,8 +104,9 @@ export default async function routes(fastify: FastifyInstance) {
                       continue
                     }
 
-                    if (headers[header]) {
-                      reply.header(header, headers[header])
+                    const value = headers[header]
+                    if (value || (value === '' && header.startsWith('x-amz-meta-'))) {
+                      reply.header(header, value)
                     }
                   }
                 }

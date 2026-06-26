@@ -422,6 +422,52 @@ describe('S3 route handler matching', () => {
 
     expect(setAttribute).toHaveBeenCalledWith('http.operation', 'storage.s3.bucket.list')
   })
+
+  it('forwards empty S3 metadata response headers', async () => {
+    const findObject = vi.fn().mockResolvedValue({
+      created_at: '2026-06-25T00:00:00.000Z',
+      metadata: {
+        eTag: '"etag"',
+        mimetype: 'text/plain',
+        size: '0',
+      },
+      updated_at: '2026-06-25T00:00:00.000Z',
+      user_metadata: {
+        empty: '',
+      },
+    })
+
+    await withMockedS3App(
+      async (app) => {
+        const response = await app.inject({
+          method: 'HEAD',
+          url: '/bucket/object.txt',
+        })
+
+        expect(response.statusCode).toBe(200)
+        expect(response.headers['x-amz-meta-empty']).toBe('')
+        expect(response.headers.expires).toBeUndefined()
+        expect(response.headers['cache-control']).toBeUndefined()
+      },
+      {
+        configureRequest: (request) => {
+          Object.assign(request, {
+            owner: 'owner-id',
+            signals: {
+              body: new AbortController(),
+              response: new AbortController(),
+            },
+            storage: {
+              from: vi.fn(() => ({
+                findObject,
+              })),
+            },
+            tenantId: 'tenant-id',
+          })
+        },
+      }
+    )
+  })
 })
 
 describe('S3 router type matching', () => {
@@ -583,6 +629,18 @@ describe('S3ProtocolHandler.parseMetadataHeaders', () => {
     ).toEqual({
       color: 'blue',
       size: 'large',
+    })
+  })
+
+  it('keeps empty string metadata values', () => {
+    const handler = createHandler()
+
+    expect(
+      handler.parseMetadataHeaders({
+        'x-amz-meta-empty': '',
+      })
+    ).toEqual({
+      empty: '',
     })
   })
 

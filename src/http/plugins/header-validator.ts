@@ -1,14 +1,7 @@
 import { ERRORS } from '@internal/errors'
+import { hasInvalidHeaderValueChars } from '@internal/http/header'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
-
-/**
- * Matches invalid HTTP header characters per RFC 7230 field-vchar specification.
- * Valid: TAB (0x09), visible ASCII (0x20-0x7E), obs-text (0x80-0xFF).
- * Invalid: control characters (0x00-0x1F except TAB) and DEL (0x7F).
- * @see https://tools.ietf.org/html/rfc7230#section-3.2
- */
-const INVALID_HEADER_CHAR_PATTERN = /[^\t\x20-\x7e\x80-\xff]/
 
 interface HeaderValidatorOptions {
   excludeUrls?: string[]
@@ -34,11 +27,14 @@ export const headerValidator = (options: HeaderValidatorOptions = {}) =>
             continue
           }
           const value = headers[key]
-          if (typeof value === 'string' && INVALID_HEADER_CHAR_PATTERN.test(value)) {
-            throw ERRORS.InvalidHeaderChar(key, value)
+          if (typeof value === 'string') {
+            if (hasInvalidHeaderValueChars(value)) {
+              throw ERRORS.InvalidHeaderChar(key, value)
+            }
           } else if (Array.isArray(value)) {
-            for (const item of value) {
-              if (typeof item === 'string' && INVALID_HEADER_CHAR_PATTERN.test(item)) {
+            for (let j = 0; j < value.length; j++) {
+              const item = value[j]
+              if (typeof item === 'string' && hasInvalidHeaderValueChars(item)) {
                 throw ERRORS.InvalidHeaderChar(key, item)
               }
             }

@@ -40,7 +40,7 @@ declare module 'fastify' {
 export const logRequest = (options: RequestLoggerOptions) =>
   fastifyPlugin(
     async (fastify) => {
-      fastify.addHook('onRequest', async (req, res) => {
+      fastify.addHook('onRequest', (req, res, done) => {
         req.startTime = Date.now()
 
         res.raw.once('close', () => {
@@ -61,12 +61,13 @@ export const logRequest = (options: RequestLoggerOptions) =>
             })
           }
         })
+        done()
       })
 
       /**
        * Adds req.resources and req.operation to the request object
        */
-      fastify.addHook('preHandler', async (req) => {
+      fastify.addHook('preHandler', (req, _reply, done) => {
         let resources = req.resources
 
         if (resources === undefined) {
@@ -97,14 +98,15 @@ export const logRequest = (options: RequestLoggerOptions) =>
         if (req.operation && typeof req.opentelemetry === 'function') {
           req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)
         }
+        done()
       })
 
-      fastify.addHook('onSend', async (req, _, payload) => {
+      fastify.addHook('onSend', (req, _reply, payload, done) => {
         req.executionTime = Date.now() - req.startTime
-        return payload
+        done(null, payload)
       })
 
-      fastify.addHook('onResponse', async (req, reply) => {
+      fastify.addHook('onResponse', (req, reply, done) => {
         doRequestLog(req, {
           reply,
           excludeUrls: options.excludeUrls,
@@ -112,6 +114,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
           responseTime: reply.elapsedTime,
           executionTime: req.executionTime,
         })
+        done()
       })
     },
     { name: 'log-request' }

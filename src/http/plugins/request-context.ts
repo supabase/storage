@@ -10,8 +10,9 @@ declare module 'fastify' {
 export const requestContext = fastifyPlugin(
   async (fastify) => {
     fastify.decorateRequest('sbReqId', undefined)
-    fastify.addHook('onRequest', async (request) => {
+    fastify.addHook('onRequest', (request, _reply, done) => {
       request.sbReqId = getSbReqId(request.headers)
+      done()
     })
   },
   { name: 'request-context' }

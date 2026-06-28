@@ -12,14 +12,26 @@ const { isMultitenant, tenantId: defaultTenantId, requestXForwardedHostRegExp } 
 export const tenantId = fastifyPlugin(
   async (fastify) => {
     fastify.decorateRequest('tenantId', defaultTenantId)
-    fastify.addHook('onRequest', async (request) => {
-      if (!isMultitenant || !requestXForwardedHostRegExp) return
+    fastify.addHook('onRequest', (request, _reply, done) => {
+      if (!isMultitenant || !requestXForwardedHostRegExp) {
+        done()
+        return
+      }
+
       const xForwardedHost = request.headers['x-forwarded-host']
-      if (typeof xForwardedHost !== 'string') return
+      if (typeof xForwardedHost !== 'string') {
+        done()
+        return
+      }
+
       const result = xForwardedHost.match(requestXForwardedHostRegExp)
-      if (!result) return
+      if (!result) {
+        done()
+        return
+      }
 
       request.tenantId = result[1]
+      done()
     })
   },
   { name: 'tenant-id' }
@@ -28,11 +40,15 @@ export const tenantId = fastifyPlugin(
 export const adminTenantId = fastifyPlugin(
   async (fastify) => {
     fastify.decorateRequest('tenantId', defaultTenantId)
-    fastify.addHook('onRequest', async (request) => {
+    fastify.addHook('onRequest', (request, _reply, done) => {
       const tenantId = (request.params as Record<string, undefined | string>).tenantId
-      if (!tenantId) return
+      if (!tenantId) {
+        done()
+        return
+      }
 
       request.tenantId = tenantId
+      done()
     })
   },
   { name: 'admin-tenant-id' }

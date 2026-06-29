@@ -250,7 +250,9 @@ export async function getTenantConfig(
       serviceKeyPayload: { role: dbServiceRole },
       maxConnections: max_connections ? Number(max_connections) : undefined,
       deleteObjectsLimit:
-        delete_objects_limit === null || delete_objects_limit === undefined
+        delete_objects_limit === null ||
+        delete_objects_limit === undefined ||
+        delete_objects_limit <= 0
           ? undefined
           : Number(delete_objects_limit),
       features: {

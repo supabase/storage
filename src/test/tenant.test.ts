@@ -116,6 +116,41 @@ const payload2 = {
   disableEvents: null,
 }
 
+function createEncryptedTenantRow(
+  tenantId: string,
+  tenantPayload: typeof payload | typeof payload2 = payload
+) {
+  return {
+    id: tenantId,
+    anon_key: encrypt(tenantPayload.anonKey),
+    database_url: encrypt(tenantPayload.databaseUrl),
+    database_pool_url: tenantPayload.databasePoolUrl
+      ? encrypt(tenantPayload.databasePoolUrl)
+      : tenantPayload.databasePoolUrl,
+    max_connections: tenantPayload.maxConnections,
+    file_size_limit: tenantPayload.fileSizeLimit,
+    delete_objects_limit: tenantPayload.deleteObjectsLimit,
+    jwt_secret: encrypt(tenantPayload.jwtSecret),
+    jwks: tenantPayload.jwks,
+    service_key: encrypt(tenantPayload.serviceKey),
+    feature_purge_cache: tenantPayload.features.purgeCache.enabled,
+    feature_image_transformation: tenantPayload.features.imageTransformation.enabled,
+    feature_s3_protocol: tenantPayload.features.s3Protocol.enabled,
+    feature_iceberg_catalog: tenantPayload.features.icebergCatalog.enabled,
+    feature_iceberg_catalog_max_catalogs: tenantPayload.features.icebergCatalog.maxCatalogs,
+    feature_iceberg_catalog_max_namespaces: tenantPayload.features.icebergCatalog.maxNamespaces,
+    feature_iceberg_catalog_max_tables: tenantPayload.features.icebergCatalog.maxTables,
+    feature_vector_buckets: tenantPayload.features.vectorBuckets.enabled,
+    feature_vector_buckets_max_buckets: tenantPayload.features.vectorBuckets.maxBuckets,
+    feature_vector_buckets_max_indexes: tenantPayload.features.vectorBuckets.maxIndexes,
+    image_transformation_max_resolution: tenantPayload.features.imageTransformation.maxResolution,
+    migrations_version: tenantPayload.migrationVersion,
+    migrations_status: tenantPayload.migrationStatus,
+    tracing_mode: tenantPayload.tracingMode,
+    disable_events: tenantPayload.disableEvents,
+  }
+}
+
 type TenantModule = typeof import('../internal/database/tenant')
 type MultitenantPgModule = typeof import('../internal/database/multitenant-pg')
 
@@ -196,6 +231,34 @@ describe('Tenant configs', () => {
         ...finalPayload,
       },
     ])
+  })
+
+  test.each([
+    0, -1,
+  ])('Get all tenant configs omits non-positive delete objects limit %i', async (deleteObjectsLimit) => {
+    const tenantId = `list-delete-objects-limit-${deleteObjectsLimit}`
+    const encryptedTenant = {
+      ...createEncryptedTenantRow(tenantId),
+      delete_objects_limit: deleteObjectsLimit,
+    }
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+
+    try {
+      const response = await adminApp.inject({
+        method: 'GET',
+        url: `/tenants`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(JSON.parse(response.body)[0].deleteObjectsLimit).toBeUndefined()
+    } finally {
+      querySpy.mockRestore()
+    }
   })
 
   test('Get nonexistent tenant config', async () => {
@@ -692,29 +755,9 @@ describe('Tenant configs', () => {
   test('Tenant config maxConnections nullish transitions do not destroy cached pg pool', async () => {
     const tenantId = 'pool-max-connections-nullish-change'
     const encryptedTenant = {
-      anon_key: encrypt('anon'),
-      database_url: encrypt('postgres://tenant'),
-      file_size_limit: 1,
-      jwt_secret: encrypt('jwt-secret'),
-      jwks: null,
-      service_key: encrypt('service-key'),
-      feature_purge_cache: false,
-      feature_image_transformation: false,
-      feature_s3_protocol: false,
-      feature_iceberg_catalog: false,
-      feature_iceberg_catalog_max_catalogs: 0,
-      feature_iceberg_catalog_max_namespaces: 0,
-      feature_iceberg_catalog_max_tables: 0,
-      feature_vector_buckets: false,
-      feature_vector_buckets_max_buckets: 0,
-      feature_vector_buckets_max_indexes: 0,
-      image_transformation_max_resolution: null,
+      ...createEncryptedTenantRow(tenantId),
       database_pool_url: null,
       max_connections: null,
-      migrations_version: migrationVersion,
-      migrations_status: 'COMPLETED',
-      tracing_mode: null,
-      disable_events: null,
     }
     const querySpy = vi
       .spyOn(multitenantPgExecutor, 'query')
@@ -977,6 +1020,26 @@ describe('Tenant configs', () => {
     await expect(getTenantConfig('zzz')).rejects.toThrow('Missing tenant config for tenant zzz')
   })
 
+  test.each([
+    0, -1,
+  ])('Get delete objects limit returns undefined for non-positive stored value %i', async (deleteObjectsLimit) => {
+    const tenantId = `delete-objects-limit-${deleteObjectsLimit}`
+    const encryptedTenant = {
+      ...createEncryptedTenantRow(tenantId),
+      delete_objects_limit: deleteObjectsLimit,
+    }
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+
+    try {
+      await expect(getDeleteObjectsLimit(tenantId)).resolves.toBeUndefined()
+    } finally {
+      deleteTenantConfig(tenantId)
+      querySpy.mockRestore()
+    }
+  })
+
   test('Get tenant config always retrieves concurrent requests from cache', async () => {
     const tenantId = 'cache-test-abc'
     await adminApp.inject({
@@ -1015,31 +1078,7 @@ describe('Tenant configs', () => {
 
   test('Get tenant config evicts cold tenants from cache', async () => {
     const tenantIds = ['cache-eviction-1', 'cache-eviction-2', 'cache-eviction-3']
-    const encryptedTenant = {
-      anon_key: encrypt('anon'),
-      database_url: encrypt('postgres://tenant'),
-      file_size_limit: 1,
-      jwt_secret: encrypt('jwt-secret'),
-      jwks: null,
-      service_key: encrypt('service-key'),
-      feature_purge_cache: false,
-      feature_image_transformation: false,
-      feature_s3_protocol: false,
-      feature_iceberg_catalog: false,
-      feature_iceberg_catalog_max_catalogs: 0,
-      feature_iceberg_catalog_max_namespaces: 0,
-      feature_iceberg_catalog_max_tables: 0,
-      feature_vector_buckets: false,
-      feature_vector_buckets_max_buckets: 0,
-      feature_vector_buckets_max_indexes: 0,
-      image_transformation_max_resolution: null,
-      database_pool_url: null,
-      max_connections: null,
-      migrations_version: migrationVersion,
-      migrations_status: 'COMPLETED',
-      tracing_mode: null,
-      disable_events: null,
-    }
+    const encryptedTenant = createEncryptedTenantRow(tenantIds[0])
 
     const { tenantModule, multitenantPgModule } = await loadTenantModule(2)
     const querySpy = vi
@@ -1069,29 +1108,8 @@ describe('Tenant configs', () => {
   test('Tenant config maxConnections change rebalances cached pg pool without destroying it', async () => {
     const tenantId = 'pool-max-connections-change'
     const encryptedTenant = {
-      anon_key: encrypt('anon'),
-      database_url: encrypt('postgres://tenant'),
-      file_size_limit: 1,
-      jwt_secret: encrypt('jwt-secret'),
-      jwks: null,
-      service_key: encrypt('service-key'),
-      feature_purge_cache: false,
-      feature_image_transformation: false,
-      feature_s3_protocol: false,
-      feature_iceberg_catalog: false,
-      feature_iceberg_catalog_max_catalogs: 0,
-      feature_iceberg_catalog_max_namespaces: 0,
-      feature_iceberg_catalog_max_tables: 0,
-      feature_vector_buckets: false,
-      feature_vector_buckets_max_buckets: 0,
-      feature_vector_buckets_max_indexes: 0,
-      image_transformation_max_resolution: null,
-      database_pool_url: null,
+      ...createEncryptedTenantRow(tenantId),
       max_connections: 20,
-      migrations_version: migrationVersion,
-      migrations_status: 'COMPLETED',
-      tracing_mode: null,
-      disable_events: null,
     }
     const querySpy = vi
       .spyOn(multitenantPgExecutor, 'query')
@@ -1122,29 +1140,9 @@ describe('Tenant configs', () => {
   test('Tenant config databaseUrl change destroys the cached pg pool', async () => {
     const tenantId = 'pool-dburl-change'
     const encryptedTenant = {
-      anon_key: encrypt('anon'),
+      ...createEncryptedTenantRow(tenantId),
       database_url: encrypt('postgres://old-host'),
-      file_size_limit: 1,
-      jwt_secret: encrypt('jwt-secret'),
-      jwks: null,
-      service_key: encrypt('service-key'),
-      feature_purge_cache: false,
-      feature_image_transformation: false,
-      feature_s3_protocol: false,
-      feature_iceberg_catalog: false,
-      feature_iceberg_catalog_max_catalogs: 0,
-      feature_iceberg_catalog_max_namespaces: 0,
-      feature_iceberg_catalog_max_tables: 0,
-      feature_vector_buckets: false,
-      feature_vector_buckets_max_buckets: 0,
-      feature_vector_buckets_max_indexes: 0,
-      image_transformation_max_resolution: null,
-      database_pool_url: null,
       max_connections: 20,
-      migrations_version: migrationVersion,
-      migrations_status: 'COMPLETED',
-      tracing_mode: null,
-      disable_events: null,
     }
     const querySpy = vi
       .spyOn(multitenantPgExecutor, 'query')
@@ -1175,29 +1173,9 @@ describe('Tenant configs', () => {
   test('Tenant config databasePoolUrl change destroys the cached pg pool', async () => {
     const tenantId = 'pool-dbpoolurl-change'
     const encryptedTenant = {
-      anon_key: encrypt('anon'),
-      database_url: encrypt('postgres://tenant'),
-      file_size_limit: 1,
-      jwt_secret: encrypt('jwt-secret'),
-      jwks: null,
-      service_key: encrypt('service-key'),
-      feature_purge_cache: false,
-      feature_image_transformation: false,
-      feature_s3_protocol: false,
-      feature_iceberg_catalog: false,
-      feature_iceberg_catalog_max_catalogs: 0,
-      feature_iceberg_catalog_max_namespaces: 0,
-      feature_iceberg_catalog_max_tables: 0,
-      feature_vector_buckets: false,
-      feature_vector_buckets_max_buckets: 0,
-      feature_vector_buckets_max_indexes: 0,
-      image_transformation_max_resolution: null,
+      ...createEncryptedTenantRow(tenantId),
       database_pool_url: encrypt('postgres://old-pooler'),
       max_connections: 20,
-      migrations_version: migrationVersion,
-      migrations_status: 'COMPLETED',
-      tracing_mode: null,
-      disable_events: null,
     }
     const querySpy = vi
       .spyOn(multitenantPgExecutor, 'query')
@@ -1228,29 +1206,9 @@ describe('Tenant configs', () => {
   test('Tenant config dbUrl change with maxConnections change destroys instead of rebalancing', async () => {
     const tenantId = 'pool-dburl-and-max-change'
     const encryptedTenant = {
-      anon_key: encrypt('anon'),
+      ...createEncryptedTenantRow(tenantId),
       database_url: encrypt('postgres://old-host'),
-      file_size_limit: 1,
-      jwt_secret: encrypt('jwt-secret'),
-      jwks: null,
-      service_key: encrypt('service-key'),
-      feature_purge_cache: false,
-      feature_image_transformation: false,
-      feature_s3_protocol: false,
-      feature_iceberg_catalog: false,
-      feature_iceberg_catalog_max_catalogs: 0,
-      feature_iceberg_catalog_max_namespaces: 0,
-      feature_iceberg_catalog_max_tables: 0,
-      feature_vector_buckets: false,
-      feature_vector_buckets_max_buckets: 0,
-      feature_vector_buckets_max_indexes: 0,
-      image_transformation_max_resolution: null,
-      database_pool_url: null,
       max_connections: 20,
-      migrations_version: migrationVersion,
-      migrations_status: 'COMPLETED',
-      tracing_mode: null,
-      disable_events: null,
     }
     const querySpy = vi
       .spyOn(multitenantPgExecutor, 'query')
@@ -1284,29 +1242,8 @@ describe('Tenant configs', () => {
     const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const tenantId = 'cache-metrics-lookup'
     const encryptedTenant = {
-      anon_key: encrypt('anon'),
+      ...createEncryptedTenantRow(tenantId),
       database_url: encrypt('postgres://tenant'),
-      file_size_limit: 1,
-      jwt_secret: encrypt('jwt-secret'),
-      jwks: null,
-      service_key: encrypt('service-key'),
-      feature_purge_cache: false,
-      feature_image_transformation: false,
-      feature_s3_protocol: false,
-      feature_iceberg_catalog: false,
-      feature_iceberg_catalog_max_catalogs: 0,
-      feature_iceberg_catalog_max_namespaces: 0,
-      feature_iceberg_catalog_max_tables: 0,
-      feature_vector_buckets: false,
-      feature_vector_buckets_max_buckets: 0,
-      feature_vector_buckets_max_indexes: 0,
-      image_transformation_max_resolution: null,
-      database_pool_url: null,
-      max_connections: null,
-      migrations_version: migrationVersion,
-      migrations_status: 'COMPLETED',
-      tracing_mode: null,
-      disable_events: null,
     }
 
     const tenantQuery = Promise.withResolvers<never>()

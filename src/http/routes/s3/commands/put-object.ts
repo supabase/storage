@@ -220,21 +220,29 @@ export default function PutObject(s3Router: S3Router) {
 
       const maxFileSize = await getStandardMaxFileSizeLimit(ctx.tenantId, bucket.file_size_limit)
 
-      return pipeline(file.file, new ByteLimitTransformStream(maxFileSize), async (fileStream) => {
-        return s3Protocol.putObject(
-          {
-            Body: fileStream as stream.Readable,
-            Bucket: req.Params.Bucket,
-            Key: fieldsObject.key as string,
-            CacheControl: fieldsObject['cache-control'] as string,
-            ContentType: fieldsObject['content-type'] as string,
-            Expires: expiresField ? new Date(expiresField) : undefined,
-            ContentEncoding: fieldsObject['content-encoding'] as string,
-            Metadata: metadata,
-          },
-          { signal: ctx.signals.body, isTruncated: () => file.file.truncated }
-        )
-      })
+      const policyMaxSize = ctx.req.s3PostPolicyContentLengthMax
+      const effectiveMaxFileSize =
+        policyMaxSize !== undefined ? Math.min(maxFileSize, policyMaxSize) : maxFileSize
+
+      return pipeline(
+        file.file,
+        new ByteLimitTransformStream(effectiveMaxFileSize),
+        async (fileStream) => {
+          return s3Protocol.putObject(
+            {
+              Body: fileStream as stream.Readable,
+              Bucket: req.Params.Bucket,
+              Key: fieldsObject.key as string,
+              CacheControl: fieldsObject['cache-control'] as string,
+              ContentType: fieldsObject['content-type'] as string,
+              Expires: expiresField ? new Date(expiresField) : undefined,
+              ContentEncoding: fieldsObject['content-encoding'] as string,
+              Metadata: metadata,
+            },
+            { signal: ctx.signals.body, isTruncated: () => file.file.truncated }
+          )
+        }
+      )
     }
   )
 }

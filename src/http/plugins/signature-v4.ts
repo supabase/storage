@@ -41,6 +41,7 @@ declare module 'fastify' {
     streamingSignatureV4?: ChunkSignatureV4Parser
     multiPartFileStream?: MultipartFile
     bodySha256: string
+    s3PostPolicyContentLengthMax?: number
   }
 }
 
@@ -160,6 +161,13 @@ async function authorizeRequestSignV4(
     )
   }
 
+  if (clientSignature.policy) {
+    request.s3PostPolicyContentLengthMax = signatureV4.validatePostPolicyConditions(
+      clientSignature,
+      { bucket: (request.params as Record<string, string | undefined>)?.Bucket }
+    )
+  }
+
   const wasBodyHashed = allowBodyHash && byteHasherStream && byteHasherStream.writableEnded
 
   const returnStream = wasBodyHashed
@@ -203,7 +211,7 @@ async function authorizeRequestSignV4(
   return returnStream
 }
 
-async function extractSignature(req: AWSRequest) {
+async function extractSignature(req: AWSRequest): Promise<ClientSignature> {
   if (typeof req.headers.authorization === 'string') {
     return SignatureV4.parseAuthorizationHeader(req.headers)
   }

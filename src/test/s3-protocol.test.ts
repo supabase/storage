@@ -931,6 +931,23 @@ describe('S3 Protocol', () => {
     }
 
     describe('MultiPart Form Data Upload', () => {
+      // Hand-signs a POST policy with the server's S3 credentials, returning the
+      // form fields a client would submit. Lets us craft conditions the AWS SDK
+      // won't generate on its own
+      function signPostPolicy(policy: Record<string, unknown>) {
+        const shortDate = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+        const policyB64 = Buffer.from(JSON.stringify(policy)).toString('base64')
+        const hmac = (key: Buffer | string, data: string) =>
+          createHmac('sha256', key).update(data, 'utf-8').digest()
+        const kDate = hmac('AWS4' + s3ProtocolAccessKeySecret!, shortDate)
+        const kRegion = hmac(kDate, storageS3Region)
+        const kService = hmac(kRegion, 's3')
+        const kSigning = hmac(kService, 'aws4_request')
+        const signature = hmac(kSigning, policyB64).toString('hex')
+        const credential = `${s3ProtocolAccessKeyId}/${shortDate}/${storageS3Region}/s3/aws4_request`
+        return { policyB64, signature, credential }
+      }
+
       it('can upload using multipart/form-data', async () => {
         const webhookSpy = vi
           .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
@@ -1005,6 +1022,166 @@ describe('S3 Protocol', () => {
 
         expect(resp.status).toBe(413)
         expect(resp.statusText).toBe('Payload Too Large')
+      })
+
+      it('rejects a presigned POST replayed against a different bucket', async () => {
+        const signedBucket = await createBucket(client)
+        const otherBucket = await createBucket(client)
+
+        const signedURL = await createPresignedPost(client, {
+          Bucket: signedBucket,
+          Key: 'allowed/test.jpg',
+          Expires: 5000,
+          Fields: { 'Content-Type': 'image/jpg' },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        formData.set('key', 'other/object.txt')
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'object.txt')
+
+        const otherUrl = signedURL.url.replace(`/s3/${signedBucket}`, `/s3/${otherBucket}`)
+        const resp = await fetch(otherUrl, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(403)
+      })
+
+      it('rejects a presigned POST whose key violates the signed starts-with condition', async () => {
+        const bucketName = await createBucket(client)
+
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          // ${filename} produces a `["starts-with", "$key", "allowed/"]` condition
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: AWS POST uses a literal ${filename} token
+          Key: 'allowed/${filename}',
+          Expires: 5000,
+          Fields: { 'Content-Type': 'image/jpg' },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        formData.set('key', 'outside/object.txt')
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'object.txt')
+
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(403)
+      })
+
+      it('rejects an expired policy even with a far-future X-Amz-Date', async () => {
+        const bucketName = await createBucket(client)
+
+        const { policyB64, signature, credential } = signPostPolicy({
+          expiration: '2020-01-01T00:00:00Z',
+          conditions: [{ bucket: bucketName }, ['starts-with', '$key', '']],
+        })
+
+        const formData = new FormData()
+        formData.set('key', 'some-key.txt')
+        formData.set('Policy', policyB64)
+        formData.set('X-Amz-Algorithm', 'AWS4-HMAC-SHA256')
+        formData.set('X-Amz-Credential', credential)
+        formData.set('X-Amz-Date', '99991231T235959Z')
+        formData.set('X-Amz-Signature', signature)
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'some-key.txt')
+
+        const resp = await fetch(`${baseUrl}/s3/${bucketName}`, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(400)
+      })
+
+      it('rejects a key that violates an "eq" key condition', async () => {
+        const bucketName = await createBucket(client)
+
+        const { policyB64, signature, credential } = signPostPolicy({
+          expiration: '2099-01-01T00:00:00Z',
+          conditions: [{ bucket: bucketName }, ['eq', '$key', 'allowed/exact.txt']],
+        })
+
+        const formData = new FormData()
+        formData.set('key', 'allowed/different.txt')
+        formData.set('Policy', policyB64)
+        formData.set('X-Amz-Algorithm', 'AWS4-HMAC-SHA256')
+        formData.set('X-Amz-Credential', credential)
+        formData.set('X-Amz-Date', '99991231T235959Z')
+        formData.set('X-Amz-Signature', signature)
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'object.txt')
+
+        const resp = await fetch(`${baseUrl}/s3/${bucketName}`, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(403)
+      })
+
+      it('enforces the content-length-range upper bound', async () => {
+        const bucketName = await createBucket(client)
+
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          Key: 'test.jpg',
+          Expires: 5000,
+          Conditions: [['content-length-range', 0, 1024]],
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        formData.set('file', new Blob([Buffer.alloc(1024 * 2)]), 'test.jpg')
+
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(413)
+      })
+
+      it('accepts (and ignores) a field Storage does not act on, when covered by a condition', async () => {
+        const bucketName = await createBucket(client)
+
+        // `acl` is a valid AWS POST field that Storage does not implement. As long
+        // as it is covered by a condition (the SDK adds one for every Fields
+        // entry) it is accepted and ignored, matching AWS-compatible behavior.
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          Key: 'test.jpg',
+          Expires: 5000,
+          Fields: { acl: 'public-read' },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'test.jpg')
+
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(200)
+      })
+
+      it('rejects a submitted field that is not covered by any policy condition', async () => {
+        const bucketName = await createBucket(client)
+
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          Key: 'test.jpg',
+          Expires: 5000,
+          Fields: { 'Content-Type': 'image/jpg' },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        // An extra field the signed policy never constrained with a condition.
+        formData.set('x-amz-meta-extra', 'value')
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'test.jpg')
+
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(403)
       })
     })
 

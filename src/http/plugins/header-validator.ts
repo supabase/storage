@@ -16,9 +16,10 @@ interface HeaderValidatorOptions {
 export const headerValidator = (options: HeaderValidatorOptions = {}) =>
   fastifyPlugin(
     async function headerValidatorPlugin(fastify: FastifyInstance) {
-      fastify.addHook('onSend', async (request: FastifyRequest, reply: FastifyReply, payload) => {
+      fastify.addHook('onSend', (request: FastifyRequest, reply: FastifyReply, payload, done) => {
         if (options.excludeUrls?.includes(request.url.toLowerCase())) {
-          return payload
+          done(null, payload)
+          return
         }
 
         const headers = reply.getHeaders()
@@ -41,7 +42,7 @@ export const headerValidator = (options: HeaderValidatorOptions = {}) =>
           }
         }
 
-        return payload
+        done(null, payload)
       })
     },
     { name: 'header-validator' }

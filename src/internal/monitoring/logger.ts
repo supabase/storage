@@ -84,17 +84,6 @@ export const baseLogger = pino({
     error(error) {
       return normalizeRawError(error, logLevel)
     },
-    reqMetadata(metadata?: Record<string, unknown>) {
-      if (!metadata) {
-        return undefined
-      }
-
-      try {
-        return JSON.stringify(metadata)
-      } catch {
-        // no-op
-      }
-    },
     // doRequestLog passes branded values from serializeRequestLog/serializeReplyLog,
     // so the common path is a passthrough. If Fastify's auto-logger ever emits raw
     // FastifyRequest/Reply values, fall back to the safe serializers.
@@ -151,7 +140,7 @@ export interface RequestLog extends RequestLogContext {
   type: 'request'
   req: SerializedRequestLog
   res?: SerializedReplyLog
-  reqMetadata?: Record<string, unknown>
+  reqMetadata: string
   responseTime: number
   executionTime?: number
   error?: Error | unknown

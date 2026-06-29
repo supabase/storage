@@ -299,7 +299,9 @@ export default async function routes(fastify: FastifyInstance) {
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
         deleteObjectsLimit:
-          delete_objects_limit === null || delete_objects_limit === undefined
+          delete_objects_limit === null ||
+          delete_objects_limit === undefined ||
+          delete_objects_limit <= 0
             ? undefined
             : Number(delete_objects_limit),
         migrationVersion: migrations_version,
@@ -389,7 +391,9 @@ export default async function routes(fastify: FastifyInstance) {
         maxConnections: max_connections ? Number(max_connections) : undefined,
         fileSizeLimit: Number(file_size_limit),
         deleteObjectsLimit:
-          delete_objects_limit === null || delete_objects_limit === undefined
+          delete_objects_limit === null ||
+          delete_objects_limit === undefined ||
+          delete_objects_limit <= 0
             ? undefined
             : Number(delete_objects_limit),
         capabilities,

@@ -559,9 +559,7 @@ describe('PgTransaction', () => {
       query: vi.fn().mockResolvedValue({ rows: [] }),
       release: vi.fn(),
     } as unknown as PoolClient
-    const transaction = new PgTransaction(client)
-
-    transaction.setPendingStatementTimeout(4321)
+    const transaction = new PgTransaction(client, undefined, { statementTimeoutMs: 4321 })
 
     await transaction.query('SELECT 1')
     await transaction.query('SELECT 2')
@@ -581,9 +579,7 @@ describe('PgTransaction', () => {
       query: vi.fn().mockResolvedValue({ rows: [] }),
       release: vi.fn(),
     } as unknown as PoolClient
-    const transaction = new PgTransaction(client)
-
-    transaction.setPendingStatementTimeout(4321)
+    const transaction = new PgTransaction(client, undefined, { statementTimeoutMs: 4321 })
 
     await expect(
       transaction.query('SELECT 1', { signal: AbortSignal.abort() })
@@ -609,9 +605,7 @@ describe('PgTransaction', () => {
       }),
       release: vi.fn(),
     }) as unknown as PoolClient & EventEmitter
-    const transaction = new PgTransaction(client)
-
-    transaction.setPendingStatementTimeout(4321)
+    const transaction = new PgTransaction(client, undefined, { statementTimeoutMs: 4321 })
 
     await expect(
       transaction.query('SELECT 1', { signal: controller.signal })
@@ -793,10 +787,18 @@ describe('PgTenantConnection', () => {
       query,
       release: vi.fn(),
     } as unknown as PoolClient
-    const transaction = new PgTransaction(client)
+    let transaction: PgTransaction
+    const beginTransaction = vi.fn(
+      async (options?: { statementTimeoutMs?: number }): Promise<PgTransaction> => {
+        transaction = new PgTransaction(client, undefined, {
+          statementTimeoutMs: options?.statementTimeoutMs,
+        })
+        return transaction
+      }
+    )
     const pool = {
       acquire: vi.fn().mockReturnValue({
-        beginTransaction: vi.fn().mockResolvedValue(transaction),
+        beginTransaction,
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
@@ -806,10 +808,14 @@ describe('PgTenantConnection', () => {
       })
     )
 
-    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction)
+    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
+    expect(beginTransaction).toHaveBeenCalledWith({
+      timeout: 4321,
+      statementTimeoutMs: 4321,
+    })
     expect(query).not.toHaveBeenCalled()
 
-    await connection.setScope(transaction)
+    await connection.setScope(transaction!)
 
     expect(query).toHaveBeenCalledTimes(1)
     const [statement, values] = query.mock.calls[0]
@@ -835,10 +841,18 @@ describe('PgTenantConnection', () => {
       query,
       release: vi.fn(),
     } as unknown as PoolClient
-    const transaction = new PgTransaction(client)
+    let transaction: PgTransaction
+    const beginTransaction = vi.fn(
+      async (options?: { statementTimeoutMs?: number }): Promise<PgTransaction> => {
+        transaction = new PgTransaction(client, undefined, {
+          statementTimeoutMs: options?.statementTimeoutMs,
+        })
+        return transaction
+      }
+    )
     const pool = {
       acquire: vi.fn().mockReturnValue({
-        beginTransaction: vi.fn().mockResolvedValue(transaction),
+        beginTransaction,
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
@@ -848,7 +862,11 @@ describe('PgTenantConnection', () => {
       })
     )
 
-    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction)
+    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
+    expect(beginTransaction).toHaveBeenCalledWith({
+      timeout: 4321,
+      statementTimeoutMs: 4321,
+    })
 
     expect(query).toHaveBeenCalledTimes(1)
     expect(query).toHaveBeenNthCalledWith(
@@ -857,7 +875,7 @@ describe('PgTenantConnection', () => {
       expect.any(Array)
     )
 
-    await connection.setScope(transaction)
+    await connection.setScope(transaction!)
 
     expect(query).toHaveBeenCalledTimes(2)
     const [scopeStatement, scopeValues] = query.mock.calls[1]
@@ -883,10 +901,22 @@ describe('PgTenantConnection', () => {
       query,
       release: vi.fn(),
     } as unknown as PoolClient
-    const transaction = new PgTransaction(client)
+    let transaction: PgTransaction
+    const beginTransaction = vi.fn(
+      async (options?: {
+        statementTimeoutMs?: number
+        statementTimeoutMode?: 'set-config' | 'set-local'
+      }): Promise<PgTransaction> => {
+        transaction = new PgTransaction(client, undefined, {
+          statementTimeoutMs: options?.statementTimeoutMs,
+          statementTimeoutMode: options?.statementTimeoutMode,
+        })
+        return transaction
+      }
+    )
     const pool = {
       acquire: vi.fn().mockReturnValue({
-        beginTransaction: vi.fn().mockResolvedValue(transaction),
+        beginTransaction,
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
@@ -897,7 +927,12 @@ describe('PgTenantConnection', () => {
       })
     )
 
-    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction)
+    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
+    expect(beginTransaction).toHaveBeenCalledWith({
+      timeout: 4321,
+      statementTimeoutMs: 4321,
+      statementTimeoutMode: 'set-local',
+    })
 
     expect(query).toHaveBeenCalledTimes(2)
     expect(query).toHaveBeenNthCalledWith(
@@ -907,7 +942,7 @@ describe('PgTenantConnection', () => {
     )
     expect(query).toHaveBeenNthCalledWith(2, "SET LOCAL statement_timeout = '4321ms'", undefined)
 
-    await connection.setScope(transaction)
+    await connection.setScope(transaction!)
 
     expect(query).toHaveBeenCalledTimes(4)
     const [scopeStatement, scopeValues] = query.mock.calls[2]
@@ -932,10 +967,18 @@ describe('PgTenantConnection', () => {
       query,
       release: vi.fn(),
     } as unknown as PoolClient
-    const transaction = new PgTransaction(client)
+    let transaction: PgTransaction
+    const beginTransaction = vi.fn(
+      async (options?: { statementTimeoutMs?: number }): Promise<PgTransaction> => {
+        transaction = new PgTransaction(client, undefined, {
+          statementTimeoutMs: options?.statementTimeoutMs,
+        })
+        return transaction
+      }
+    )
     const pool = {
       acquire: vi.fn().mockReturnValue({
-        beginTransaction: vi.fn().mockResolvedValue(transaction),
+        beginTransaction,
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
@@ -946,8 +989,8 @@ describe('PgTenantConnection', () => {
     )
 
     await connection.transaction({ timeout: 4321 })
-    await connection.setScope(transaction)
-    await transaction.query('SELECT 1')
+    await connection.setScope(transaction!)
+    await transaction!.query('SELECT 1')
 
     expect(query).toHaveBeenCalledTimes(2)
     expect(query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
@@ -994,7 +1037,8 @@ describe('PgTenantConnection', () => {
     const setupError = new Error('search_path setup failed')
     const rollbackError = new Error('rollback failed')
     const transaction = {
-      query: vi.fn().mockRejectedValue(setupError),
+      query: vi.fn(),
+      runSetupQuery: vi.fn().mockRejectedValue(setupError),
       rollback: vi.fn().mockRejectedValue(rollbackError),
     } as unknown as PgTransaction
     const pool = {

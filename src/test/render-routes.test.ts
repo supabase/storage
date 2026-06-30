@@ -271,6 +271,49 @@ describe('image rendering routes', () => {
     )
   })
 
+  it('will preserve Cache-Control when rendering a transformed image from a signed url', async () => {
+    const assetUrl = 'bucket2/authenticated/casestudy.png'
+    const signURLResponse = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/' + assetUrl,
+      payload: {
+        expiresIn: 60000,
+        transform: {
+          width: 100,
+          height: 100,
+          resize: 'contain',
+        },
+      },
+      headers: {
+        authorization: `Bearer ${process.env.SERVICE_KEY}`,
+      },
+    })
+
+    const signedURLBody = signURLResponse.json<{ signedURL: string }>()
+    expect(signedURLBody.signedURL).toContain('?token=')
+
+    const { client: testClient } = createMockRendererClient()
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
+    vi.mocked(S3Backend.prototype.headObject).mockResolvedValueOnce({
+      httpStatusCode: 200,
+      size: 3746,
+      mimetype: 'image/png',
+      eTag: 'abc',
+      cacheControl: 'max-age=31536000',
+      lastModified: new Date('Wed, 12 Oct 2022 11:17:02 GMT'),
+      contentLength: 3746,
+    })
+
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: signedURLBody.signedURL,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['expires']).toBeTruthy()
+    expect(response.headers['cache-control']).toBe('max-age=31536000')
+  })
+
   it('will render a transformed image providing a signed url (using url signing jwk if set)', async () => {
     const signingJwk = { ...(await generateHS512JWK()), kid: 'qwerty-09876' }
     const jwtJWKS: JwksConfig = { keys: [signingJwk], urlSigningKey: signingJwk }

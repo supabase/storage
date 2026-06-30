@@ -1,6 +1,23 @@
 import { isIP } from 'node:net'
 import fastDecodeURIComponent from 'fast-decode-uri-component'
-import { ConnectionOptions } from 'tls'
+import { ConnectionOptions, createSecureContext, SecureContext } from 'tls'
+
+// A SecureContext encapsulates only the CA trust anchor and crypto parameters,
+// not the target host (SNI/servername and hostname verification stay
+// per-connection tls.connect options). Passing a raw `ca` PEM string instead
+// forces to re-parse the PEM and rebuild the X509 trust store on every TLS handshake.
+// Build the context once and share it across all pools/connections.
+// Keyed by cert string so this stays correct if differing certs are ever passed in.
+const secureContextCache = new Map<string, SecureContext>()
+
+function getSharedSecureContext(rootCert: string): SecureContext {
+  let secureContext = secureContextCache.get(rootCert)
+  if (!secureContext) {
+    secureContext = createSecureContext({ ca: rootCert })
+    secureContextCache.set(rootCert, secureContext)
+  }
+  return secureContext
+}
 
 export function getSslSettings({
   connectionString,
@@ -11,15 +28,17 @@ export function getSslSettings({
 }): ConnectionOptions | undefined {
   if (!databaseSSLRootCert) return undefined
 
+  const secureContext = getSharedSecureContext(databaseSSLRootCert)
+
   // When connecting through PGBouncer, we connect through an IPv6 address rather than a hostname.
   // When passing in the root CA for SSL, this will always fail,
-  // so we need to skip passing the SSL root cert if host name is an IP address.
+  // so we need to skip verification if host name is an IP address.
   const hostname = getConnectionStringHostname(connectionString)
   if (hostname && isIpAddress(hostname)) {
-    return { ca: databaseSSLRootCert, rejectUnauthorized: false }
+    return { secureContext, rejectUnauthorized: false }
   }
 
-  return { ca: databaseSSLRootCert }
+  return { secureContext }
 }
 
 export function isIpAddress(ip: string) {

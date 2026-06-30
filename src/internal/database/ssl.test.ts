@@ -25,13 +25,14 @@ describe('database utils', () => {
       ).toBeUndefined()
     })
 
-    test('should return SSL settings if hostname is an IP address', () => {
-      expect(
-        getSslSettings({
-          connectionString: 'postgres://foo:bar@1.2.3.4:5432/postgres',
-          databaseSSLRootCert: '<cert>',
-        })
-      ).toStrictEqual({ ca: '<cert>', rejectUnauthorized: false })
+    test('should skip verification with a shared context if hostname is an IP address', () => {
+      const settings = getSslSettings({
+        connectionString: 'postgres://foo:bar@1.2.3.4:5432/postgres',
+        databaseSSLRootCert: '<cert>',
+      })
+      expect(settings?.secureContext).toBeDefined()
+      expect(settings?.rejectUnauthorized).toBe(false)
+      expect(settings).not.toHaveProperty('ca')
     })
 
     test('should detect IP host without constructing a URL', () => {
@@ -44,61 +45,88 @@ describe('database utils', () => {
           }
         } as unknown as typeof URL
 
-        expect(
-          getSslSettings({
-            connectionString: 'postgres://foo:bar@1.2.3.4:5432/postgres',
-            databaseSSLRootCert: '<cert>',
-          })
-        ).toStrictEqual({ ca: '<cert>', rejectUnauthorized: false })
+        const settings = getSslSettings({
+          connectionString: 'postgres://foo:bar@1.2.3.4:5432/postgres',
+          databaseSSLRootCert: '<cert>',
+        })
+        expect(settings?.secureContext).toBeDefined()
+        expect(settings?.rejectUnauthorized).toBe(false)
       } finally {
         global.URL = originalUrl
       }
     })
 
-    test('should return SSL settings if hostname is a bracketed IPv6 address', () => {
-      expect(
-        getSslSettings({
-          connectionString:
-            'postgres://foo:bar@[2001:db8:3333:4444:5555:6666:7777:8888]:5432/postgres',
-          databaseSSLRootCert: '<cert>',
-        })
-      ).toStrictEqual({ ca: '<cert>', rejectUnauthorized: false })
+    test('should skip verification if hostname is a bracketed IPv6 address', () => {
+      const settings = getSslSettings({
+        connectionString:
+          'postgres://foo:bar@[2001:db8:3333:4444:5555:6666:7777:8888]:5432/postgres',
+        databaseSSLRootCert: '<cert>',
+      })
+      expect(settings?.secureContext).toBeDefined()
+      expect(settings?.rejectUnauthorized).toBe(false)
     })
 
     test('should detect an IP host even when the password contains an @', () => {
-      expect(
-        getSslSettings({
-          connectionString: 'postgres://user:p@ss@1.2.3.4:5432/postgres',
-          databaseSSLRootCert: '<cert>',
-        })
-      ).toStrictEqual({ ca: '<cert>', rejectUnauthorized: false })
+      const settings = getSslSettings({
+        connectionString: 'postgres://user:p@ss@1.2.3.4:5432/postgres',
+        databaseSSLRootCert: '<cert>',
+      })
+      expect(settings?.secureContext).toBeDefined()
+      expect(settings?.rejectUnauthorized).toBe(false)
     })
 
-    test('should not treat an IP in the userinfo as the host', () => {
-      expect(
-        getSslSettings({
-          connectionString: 'postgres://1.2.3.4@db.ref.supabase.red:5432/postgres',
-          databaseSSLRootCert: '<cert>',
-        })
-      ).toStrictEqual({ ca: '<cert>' })
+    test('should verify (no rejectUnauthorized override) when an IP is only in the userinfo', () => {
+      const settings = getSslSettings({
+        connectionString: 'postgres://1.2.3.4@db.ref.supabase.red:5432/postgres',
+        databaseSSLRootCert: '<cert>',
+      })
+      expect(settings?.secureContext).toBeDefined()
+      expect(settings?.rejectUnauthorized).toBeUndefined()
+      expect(settings).not.toHaveProperty('ca')
     })
 
-    test('should return SSL settings if hostname is not an IP address', () => {
-      expect(
-        getSslSettings({
-          connectionString: 'postgres://foo:bar@db.ref.supabase.red:5432/postgres',
-          databaseSSLRootCert: '<cert>',
-        })
-      ).toStrictEqual({ ca: '<cert>' })
+    test('should verify against the shared context if hostname is not an IP address', () => {
+      const settings = getSslSettings({
+        connectionString: 'postgres://foo:bar@db.ref.supabase.red:5432/postgres',
+        databaseSSLRootCert: '<cert>',
+      })
+      expect(settings?.secureContext).toBeDefined()
+      expect(settings?.rejectUnauthorized).toBeUndefined()
+      expect(settings).not.toHaveProperty('ca')
     })
 
     test('should return SSL settings if hostname is not parseable', () => {
-      expect(
-        getSslSettings({
-          connectionString: 'postgres://foo:bar@db.ref.supabase."red:5432/postgres',
-          databaseSSLRootCert: '<cert>',
-        })
-      ).toStrictEqual({ ca: '<cert>' })
+      const settings = getSslSettings({
+        connectionString: 'postgres://foo:bar@db.ref.supabase."red:5432/postgres',
+        databaseSSLRootCert: '<cert>',
+      })
+      expect(settings?.secureContext).toBeDefined()
+      expect(settings?.rejectUnauthorized).toBeUndefined()
+    })
+
+    test('reuses one SecureContext per root cert across different hosts', () => {
+      const ipHost = getSslSettings({
+        connectionString: 'postgres://foo:bar@1.2.3.4:5432/postgres',
+        databaseSSLRootCert: '<shared-cert>',
+      })
+      const namedHost = getSslSettings({
+        connectionString: 'postgres://foo:bar@db.ref.supabase.red:5432/postgres',
+        databaseSSLRootCert: '<shared-cert>',
+      })
+      expect(ipHost?.secureContext).toBeDefined()
+      expect(ipHost?.secureContext).toBe(namedHost?.secureContext)
+    })
+
+    test('builds distinct SecureContexts for distinct root certs', () => {
+      const certA = getSslSettings({
+        connectionString: 'postgres://foo:bar@db.ref.supabase.red:5432/postgres',
+        databaseSSLRootCert: '<cert-a>',
+      })
+      const certB = getSslSettings({
+        connectionString: 'postgres://foo:bar@db.ref.supabase.red:5432/postgres',
+        databaseSSLRootCert: '<cert-b>',
+      })
+      expect(certA?.secureContext).not.toBe(certB?.secureContext)
     })
   })
 })

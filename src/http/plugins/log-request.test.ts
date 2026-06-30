@@ -126,6 +126,40 @@ describe('log-request plugin', () => {
     expect(requestLogLine).toContain('"project":"tenant-a"')
   })
 
+  it('keeps configured route metadata in request logs', async () => {
+    app.get(
+      '/metadata-log',
+      {
+        config: {
+          logMetadata: () => ({
+            bucketId: 'bucket-a',
+            objectName: 'file.txt',
+          }),
+        },
+      },
+      async () => {
+        return { ok: true }
+      }
+    )
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/metadata-log',
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const requestLogLine = lines.find((line) => line.includes('"type":"request"'))
+    expect(requestLogLine).toBeDefined()
+
+    const requestLog = JSON.parse(requestLogLine ?? '{}')
+
+    expect(JSON.parse(requestLog.reqMetadata)).toEqual({
+      bucketId: 'bucket-a',
+      objectName: 'file.txt',
+    })
+  })
+
   it('logs redacted urls without leaking sensitive request data', async () => {
     const response = await app.inject({
       method: 'GET',

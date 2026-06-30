@@ -144,16 +144,18 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
   const error = req.raw.executionError || req.executionError
   const tenantId = req.tenantId
 
-  let reqMetadata: Record<string, unknown> = {}
+  let reqMetadata = '{}'
 
   if (req.routeOptions.config.logMetadata) {
     try {
-      reqMetadata = req.routeOptions.config.logMetadata(req)
+      const metadata = req.routeOptions.config.logMetadata(req)
 
-      if (reqMetadata) {
+      if (metadata) {
         try {
+          reqMetadata = JSON.stringify(metadata)
+
           if (typeof req.opentelemetry === 'function') {
-            req.opentelemetry()?.span?.setAttribute('http.metadata', JSON.stringify(reqMetadata))
+            req.opentelemetry()?.span?.setAttribute('http.metadata', reqMetadata)
           }
         } catch (e) {
           // do nothing

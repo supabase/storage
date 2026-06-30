@@ -42,7 +42,7 @@ jobs:
   acceptance_local:
     name: Local / ${{ matrix.storage_backend }} / ${{ matrix.database }} / ${{ matrix.tenancy }}
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.acceptance_environment == 'local' }}
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     strategy:
       fail-fast: false

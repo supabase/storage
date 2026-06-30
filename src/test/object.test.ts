@@ -2724,6 +2724,33 @@ describe('testing retrieving signed URL', () => {
     expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
   })
 
+  test('get object with a token preserves object Cache-Control with signed URL Expires', async () => {
+    vi.mocked(S3Backend.prototype.getObject).mockResolvedValueOnce({
+      metadata: {
+        httpStatusCode: 200,
+        size: 3746,
+        mimetype: 'image/png',
+        lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
+        eTag: 'abc',
+        cacheControl: 'max-age=31536000',
+        contentLength: 3746,
+      },
+      httpStatusCode: 200,
+      body: Buffer.from(''),
+    })
+
+    const urlToSign = 'bucket2/public/sadcat-upload.png'
+    const jwtToken = await signJWT({ url: urlToSign }, jwtSecret, 100)
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/object/sign/${urlToSign}?token=${jwtToken}`,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['expires']).toBeTruthy()
+    expect(response.headers['cache-control']).toBe('max-age=31536000')
+  })
+
   test('get object with jwk generated token', async () => {
     const signingJwk = { ...(await generateHS512JWK()), kid: 'abc-123' } as JwksConfigKeyOCT
     mergeConfig({ jwtJWKS: { keys: [signingJwk] } })

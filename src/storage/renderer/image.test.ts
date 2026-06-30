@@ -361,6 +361,31 @@ describe('ImageRenderer fetch client', () => {
     )
   })
 
+  it('emits Cache-Control metadata when an Expires header is set', async () => {
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            cacheControl: 'max-age=31536000',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    await new TestRenderer().render(createRequest(), reply as never, {
+      ...createRenderOptions(),
+      expires: 'Wed, 30 Jun 2027 12:00:00 GMT',
+    })
+
+    expect(reply.header).toHaveBeenCalledWith('Expires', 'Wed, 30 Jun 2027 12:00:00 GMT')
+    expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'max-age=31536000')
+  })
+
   it('passes an undici dispatcher to fetch when imgproxy socket pooling is enabled', async () => {
     const agentInstances: Array<{ instance: unknown; options: unknown }> = []
     const composedHandlers: unknown[] = []

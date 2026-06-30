@@ -128,9 +128,8 @@ export abstract class Renderer {
 
     if (options.expires) {
       response.header('Expires', options.expires)
-    } else {
-      this.handleCacheControl(request, response, data.metadata)
     }
+    this.handleCacheControl(request, response, data.metadata)
 
     if (data.metadata.contentRange) {
       response.header('Content-Range', data.metadata.contentRange)

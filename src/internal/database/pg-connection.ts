@@ -449,7 +449,8 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
 
     const clientErrorTracker = new PgClientErrorTracker(client)
     const transaction = new PgTransaction(client, clientErrorTracker, {
-      statementTimeoutMs: options?.statementTimeoutMs,
+      statementTimeoutMs:
+        options?.statementTimeoutMs ?? normalizeStatementTimeoutMs(options?.timeout),
       statementTimeoutMode: options?.statementTimeoutMode,
     })
 
@@ -473,6 +474,7 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
 export class PgTransaction implements PgExecutor {
   private completed = false
   private statementTimeoutMs?: number
+  private localStatementTimeoutApplied = false
   private readonly statementTimeoutMode: PgStatementTimeoutMode
 
   constructor(
@@ -480,7 +482,7 @@ export class PgTransaction implements PgExecutor {
     private readonly clientErrorTracker?: PgClientErrorTracker,
     options: PgTransactionOptions = {}
   ) {
-    this.statementTimeoutMs = normalizeStatementTimeoutMs(options.statementTimeoutMs)
+    this.statementTimeoutMs = options.statementTimeoutMs
     this.statementTimeoutMode = options.statementTimeoutMode ?? 'set-config'
   }
 
@@ -507,19 +509,24 @@ export class PgTransaction implements PgExecutor {
     const statementTimeout = this.consumeStatementTimeoutForSetConfig()
 
     await this.runQuery(buildScopeConfigQuery(scopeValues, statementTimeout), undefined, false)
-    await this.reapplyLocalStatementTimeoutAfterScope()
+    this.localStatementTimeoutApplied = false
+    await this.applyLocalStatementTimeout()
   }
 
-  async applyLocalStatementTimeout(): Promise<void> {
-    if (this.statementTimeoutMode !== 'set-local' || !this.statementTimeoutMs) {
+  async applyLocalStatementTimeout(signal?: AbortSignal): Promise<void> {
+    if (
+      this.statementTimeoutMode !== 'set-local' ||
+      this.localStatementTimeoutApplied ||
+      !this.statementTimeoutMs
+    ) {
       return
     }
 
-    await this.runQuery(
-      buildSetLocalStatementTimeoutStatement(this.statementTimeoutMs),
-      undefined,
-      false
-    )
+    await runPgQuery(this.client, buildSetLocalStatementTimeoutStatement(this.statementTimeoutMs), {
+      signal,
+    })
+    this.clientErrorTracker?.throwIfErrored()
+    this.localStatementTimeoutApplied = true
   }
 
   private async runQuery<T extends QueryResultRow = QueryResultRow>(
@@ -606,6 +613,11 @@ export class PgTransaction implements PgExecutor {
   }
 
   private async applyPendingStatementTimeoutBeforeQuery(signal?: AbortSignal): Promise<void> {
+    if (this.statementTimeoutMode === 'set-local') {
+      await this.applyLocalStatementTimeout(signal)
+      return
+    }
+
     const timeoutMs = this.consumeStatementTimeoutForSetConfig()
     if (!timeoutMs) {
       return
@@ -629,19 +641,6 @@ export class PgTransaction implements PgExecutor {
     const timeoutMs = this.statementTimeoutMs
     this.statementTimeoutMs = undefined
     return timeoutMs
-  }
-
-  private async reapplyLocalStatementTimeoutAfterScope(): Promise<void> {
-    if (this.statementTimeoutMode !== 'set-local' || !this.statementTimeoutMs) {
-      return
-    }
-
-    // Multigres requires SET LOCAL for statement_timeout, and role scope setup resets it.
-    await this.runQuery(
-      buildSetLocalStatementTimeoutStatement(this.statementTimeoutMs),
-      undefined,
-      false
-    )
   }
 }
 
@@ -778,10 +777,6 @@ export class PgTenantConnection {
         }
       }
 
-      if (isMultigres) {
-        await this.applyStatementTimeoutImmediately(transaction)
-      }
-
       return transaction
     } catch (e) {
       if (isConnectionTimeoutError(e)) {
@@ -878,23 +873,15 @@ export class PgTenantConnection {
 }
 
 function buildScopeConfigQuery(scopeValues: unknown[], statementTimeout?: number): PgStatement {
-  const normalizedStatementTimeout = normalizeStatementTimeoutMs(statementTimeout)
-
   return {
-    text: normalizedStatementTimeout ? scopeConfigStatementWithTimeout : scopeConfigStatement,
-    values: normalizedStatementTimeout
-      ? [...scopeValues, `${normalizedStatementTimeout}ms`]
-      : scopeValues,
+    text: statementTimeout ? scopeConfigStatementWithTimeout : scopeConfigStatement,
+    values: statementTimeout ? [...scopeValues, `${statementTimeout}ms`] : scopeValues,
   }
 }
 
 function normalizeStatementTimeoutMs(timeoutMs: number | undefined): number | undefined {
-  if (timeoutMs === undefined || timeoutMs <= 0) {
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return undefined
-  }
-
-  if (!Number.isFinite(timeoutMs)) {
-    throw new Error(`Invalid statement timeout: ${timeoutMs}`)
   }
 
   return timeoutMs

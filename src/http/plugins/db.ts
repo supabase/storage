@@ -1,4 +1,4 @@
-import { createMutexByKey } from '@internal/concurrency'
+import { createSingleFlightByKey } from '@internal/concurrency'
 import {
   getPostgresConnection,
   getServiceKeyUser,
@@ -27,6 +27,8 @@ declare module 'fastify' {
 
 const { databaseEnableQueryCancellation, dbMigrationStrategy, isMultitenant, dbMigrationFreezeAt } =
   getConfig()
+
+const migrationSingleFlight = createSingleFlightByKey<void>()
 
 export const db = fastifyPlugin(
   async function db(fastify) {
@@ -159,8 +161,6 @@ export const migrations = fastifyPlugin(
     })
 
     if (dbMigrationStrategy === MultitenantMigrationStrategy.ON_REQUEST) {
-      const migrationsMutex = createMutexByKey<void>()
-
       fastify.addHook('preHandler', async (request) => {
         // migrations are handled via async migrations
         if (!isMultitenant) {
@@ -168,16 +168,13 @@ export const migrations = fastifyPlugin(
         }
 
         const tenant = await getTenantConfig(request.tenantId)
-        const migrationsUpToDate = await areMigrationsUpToDate(request.tenantId)
-
-        if (tenant.syncMigrationsDone || migrationsUpToDate) {
+        if (tenant.syncMigrationsDone) {
           return
         }
 
-        await migrationsMutex(request.tenantId, async () => {
-          const tenant = await getTenantConfig(request.tenantId)
-
-          if (tenant.syncMigrationsDone) {
+        await migrationSingleFlight(request.tenantId, async () => {
+          if (await areMigrationsUpToDate(request.tenantId)) {
+            tenant.syncMigrationsDone = true
             return
           }
 
@@ -199,10 +196,13 @@ export const migrations = fastifyPlugin(
         }
 
         const tenant = await getTenantConfig(request.tenantId)
-        const migrationsUpToDate = await areMigrationsUpToDate(request.tenantId)
+        if (tenant.syncMigrationsDone) {
+          return
+        }
 
         // migrations are up to date
-        if (tenant.syncMigrationsDone || migrationsUpToDate) {
+        if (await areMigrationsUpToDate(request.tenantId)) {
+          tenant.syncMigrationsDone = true
           return
         }
 

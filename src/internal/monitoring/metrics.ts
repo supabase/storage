@@ -381,6 +381,15 @@ export const queueJobCompleted = registerMetric('queue_job_completed', 'updownco
   })
 )
 
+export const queueJobCompleteFailed = registerMetric(
+  'queue_job_complete_failed',
+  'updowncounter',
+  () =>
+    meter.createUpDownCounter('queue_job_complete_failed', {
+      description: 'Current number of processed messages that could not be marked as completed',
+    })
+)
+
 export const queueJobRetryFailed = registerMetric('queue_job_retry_failed', 'updowncounter', () =>
   meter.createUpDownCounter('queue_job_retry_failed', {
     description: 'Current number of failed attempts messages in the queue',

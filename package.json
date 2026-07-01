@@ -80,7 +80,6 @@
     "@platformatic/globals": "^3.59.0",
     "@platformatic/node": "^3.59.0",
     "@platformatic/wattpm-pprof-capture": "^3.59.0",
-    "@shopify/semaphore": "^3.0.2",
     "@smithy/node-http-handler": "^2.3.1",
     "@tus/file-store": "2.1.0",
     "@tus/s3-store": "2.0.3",

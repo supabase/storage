@@ -1,4 +1,5 @@
 export * from './async-abort-controller'
+export * from './limit-concurrency'
 export * from './merge-async-itertor'
-export * from './mutex'
+export * from './single-flight'
 export * from './wait'

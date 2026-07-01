@@ -1,10 +1,15 @@
+import { createConcurrencyLimiter, wait } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { QueueDB } from '@internal/queue/database'
-import { Semaphore } from '@shopify/semaphore'
 import PgBoss, { Db, Job, JobWithMetadata } from 'pg-boss'
 import { getConfig } from '../../config'
 import { getSbReqIdFromPayload, logger, logSchema } from '../monitoring'
-import { queueJobCompleted, queueJobError, queueJobRetryFailed } from '../monitoring/metrics'
+import {
+  queueJobCompleted,
+  queueJobCompleteFailed,
+  queueJobError,
+  queueJobRetryFailed,
+} from '../monitoring/metrics'
 import { Event } from './event'
 
 type RegisteredEvent = {
@@ -20,6 +25,8 @@ type RegisteredEvent = {
 
 export const PG_BOSS_SCHEMA = 'pgboss_v10'
 const queueStopTimeoutMs = 25_000
+const jobAckMaxAttempts = 3
+const jobAckRetryDelayMs = 250
 
 export abstract class Queue {
   protected static events: RegisteredEvent[] = []
@@ -292,6 +299,25 @@ export abstract class Queue {
     })
   }
 
+  /**
+   * an unacked job sits in the active state until pg-boss expires it,
+   * re-running the handler and blocking singleton queues.
+   * Retry transient errors briefly before giving up.
+   */
+  private static async ackWithRetry(ack: () => Promise<void> | undefined) {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await ack()
+      } catch (e) {
+        if (attempt >= jobAckMaxAttempts) {
+          throw e
+        }
+
+        await wait(jobAckRetryDelayMs * attempt)
+      }
+    }
+  }
+
   protected static pollQueue(
     event: RegisteredEvent,
     queueOpts: {
@@ -300,7 +326,7 @@ export abstract class Queue {
       signal?: AbortSignal
     }
   ) {
-    const semaphore = new Semaphore(queueOpts.concurrentTaskCount)
+    const limitConcurrency = createConcurrencyLimiter(queueOpts.concurrentTaskCount)
     const pollingInterval = (event.getWorkerOptions().pollingIntervalSeconds || 5) * 1000
     const batchSize =
       event.getWorkerOptions().batchSize ||
@@ -350,6 +376,31 @@ export abstract class Queue {
 
         if (queueOpts.signal?.aborted) {
           started = false
+
+          // The fetch above already marked these jobs as active. Fail them so
+          // they become retryable right after restart instead of sitting in the
+          // active state until pg-boss expires them.
+          if (jobs && jobs.length > 0) {
+            jobFetched = Math.max(0, jobFetched - jobs.length)
+
+            try {
+              await this.pgBoss?.fail(
+                event.getQueueName(),
+                jobs.map((job) => job.id)
+              )
+            } catch (e) {
+              logSchema.error(
+                logger,
+                `[Queue] Error failing jobs fetched during shutdown ${event.name}`,
+                {
+                  type: 'queue',
+                  error: e,
+                  metadata: JSON.stringify({ queueName: event.getQueueName(), jobs: jobs.length }),
+                }
+              )
+            }
+          }
+
           return
         }
 
@@ -359,62 +410,74 @@ export abstract class Queue {
         }
 
         await Promise.allSettled(
-          jobs.map(async (job) => {
-            const lock = await semaphore.acquire()
-            const sbReqId = getSbReqIdFromPayload(job.data)
-
-            try {
-              queueOpts.onMessage?.(job as Job)
-
-              await event.handle(job, { signal: queueOpts.signal })
-
-              await this.pgBoss?.complete(event.getQueueName(), job.id)
-              queueJobCompleted.add(1, {
-                name: event.getQueueName(),
-              })
-            } catch (e) {
-              queueJobRetryFailed.add(1, {
-                name: event.getQueueName(),
-              })
-
-              await this.pgBoss?.fail(event.getQueueName(), job.id)
-
-              try {
-                const dbJob: JobWithMetadata | null =
-                  (job as JobWithMetadata).priority !== undefined
-                    ? (job as JobWithMetadata)
-                    : await Queue.getInstance().getJobById(event.getQueueName(), job.id)
-
-                if (!dbJob) {
-                  return
-                }
-                if (dbJob.retryCount >= dbJob.retryLimit) {
-                  queueJobError.add(1, {
-                    name: event.getQueueName(),
-                  })
-                }
-              } catch (e) {
-                logSchema.error(logger, `[Queue Handler] fetching job ${event.name}`, {
+          jobs.map((job) =>
+            limitConcurrency(async () => {
+              const sbReqId = getSbReqIdFromPayload(job.data)
+              const logJobError = (message: string, error: unknown) => {
+                logSchema.error(logger, message, {
                   type: 'queue-task',
-                  error: e,
+                  error,
                   metadata: JSON.stringify(job),
                   sbReqId,
                 })
               }
 
-              logSchema.error(logger, `[Queue Handler] Error while processing job ${event.name}`, {
-                type: 'queue-task',
-                error: e,
-                metadata: JSON.stringify(job),
-                sbReqId,
-              })
+              try {
+                try {
+                  queueOpts.onMessage?.(job as Job)
 
-              throw e
-            } finally {
-              jobFetched = Math.max(0, jobFetched - 1)
-              await lock.release()
-            }
-          })
+                  await event.handle(job, { signal: queueOpts.signal })
+                } catch (e) {
+                  queueJobRetryFailed.add(1, {
+                    name: event.getQueueName(),
+                  })
+
+                  logJobError(`[Queue Handler] Error while processing job ${event.name}`, e)
+
+                  try {
+                    await this.ackWithRetry(() => this.pgBoss?.fail(event.getQueueName(), job.id))
+
+                    try {
+                      const dbJob: JobWithMetadata | null =
+                        (job as JobWithMetadata).priority !== undefined
+                          ? (job as JobWithMetadata)
+                          : await Queue.getInstance().getJobById(event.getQueueName(), job.id)
+
+                      if (dbJob && dbJob.retryCount >= dbJob.retryLimit) {
+                        queueJobError.add(1, {
+                          name: event.getQueueName(),
+                        })
+                      }
+                    } catch (fetchError) {
+                      logJobError(`[Queue Handler] fetching job ${event.name}`, fetchError)
+                    }
+                  } catch (failError) {
+                    logJobError(
+                      `[Queue Handler] Error while marking job as failed ${event.name}`,
+                      failError
+                    )
+                  }
+
+                  throw e
+                }
+
+                try {
+                  await this.ackWithRetry(() => this.pgBoss?.complete(event.getQueueName(), job.id))
+                  queueJobCompleted.add(1, {
+                    name: event.getQueueName(),
+                  })
+                } catch (e) {
+                  queueJobCompleteFailed.add(1, {
+                    name: event.getQueueName(),
+                  })
+                  logJobError(`[Queue Handler] Error while completing job ${event.name}`, e)
+                  throw e
+                }
+              } finally {
+                jobFetched = Math.max(0, jobFetched - 1)
+              }
+            })
+          )
         )
       } catch (e) {
         logSchema.error(logger, `[Queue] Error while polling queue ${event.name}`, {

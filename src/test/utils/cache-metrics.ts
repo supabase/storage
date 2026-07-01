@@ -44,9 +44,9 @@ export async function assertLogicalLookupMetrics<T>({
   await waitForImmediate()
 
   // Each caller records its initial logical miss.
-  // Waiters re-check the cache inside
-  // the mutex with recordMetrics: false
-  // so only these three outer misses are emitted.
+  // Concurrent same-key lookups share the
+  // same in-flight cache fill, so only these
+  // three outer misses are emitted.
   const misses: CacheRequestRecordCall[] = [
     [cacheName, 'miss'],
     [cacheName, 'miss'],

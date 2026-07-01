@@ -624,8 +624,8 @@ export default async function routes(fastify: FastifyInstance) {
         tenantInfo.feature_s3_protocol = features?.s3Protocol?.enabled
       }
 
-      if (databasePoolUrl) {
-        tenantInfo.database_pool_url = encrypt(databasePoolUrl)
+      if (databasePoolUrl !== undefined) {
+        tenantInfo.database_pool_url = databasePoolUrl === null ? null : encrypt(databasePoolUrl)
       }
 
       if (maxConnections) {

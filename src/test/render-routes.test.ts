@@ -2,6 +2,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
   generateHS512JWK,
+  SIGNED_URL_SCOPE_DOWNLOAD,
   SIGNED_URL_SCOPE_UPLOAD,
   SignedToken,
   signJWT,
@@ -15,7 +16,9 @@ import { Readable } from 'stream'
 import app from '../app'
 import { getConfig, JwksConfig, mergeConfig } from '../config'
 import { S3Backend } from '../storage/backend'
+import { ObjectStorage } from '../storage/object'
 import { ImageRenderer } from '../storage/renderer'
+import { Obj } from '../storage/schemas'
 import { useMockObject } from './common'
 
 dotenv.config({ path: '.env.test' })
@@ -241,11 +244,12 @@ describe('image rendering routes', () => {
         },
       },
       headers: {
-        authorization: `Bearer ${process.env.SERVICE_KEY}`,
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
       },
     })
 
     const signedURLBody = signURLResponse.json<{ signedURL: string }>()
+    expect(signURLResponse.statusCode).toBe(200)
     expect(signedURLBody.signedURL).toContain('?token=')
 
     // verify was correctly signed with jwtSecret
@@ -271,26 +275,22 @@ describe('image rendering routes', () => {
     )
   })
 
-  it('will preserve Cache-Control when rendering a transformed image from a signed url', async () => {
+  it('will emit browser no-store and token-bounded Cloudflare cache control for a signed transformed image', async () => {
     const assetUrl = 'bucket2/authenticated/casestudy.png'
-    const signURLResponse = await appInstance.inject({
-      method: 'POST',
-      url: '/object/sign/' + assetUrl,
-      payload: {
-        expiresIn: 60000,
-        transform: {
-          width: 100,
-          height: 100,
-          resize: 'contain',
-        },
-      },
-      headers: {
-        authorization: `Bearer ${process.env.SERVICE_KEY}`,
-      },
-    })
+    vi.spyOn(ObjectStorage.prototype, 'findObject').mockResolvedValueOnce({
+      version: '1',
+      metadata: {},
+    } as Obj)
 
-    const signedURLBody = signURLResponse.json<{ signedURL: string }>()
-    expect(signedURLBody.signedURL).toContain('?token=')
+    const token = await signJWT(
+      {
+        url: assetUrl,
+        scope: SIGNED_URL_SCOPE_DOWNLOAD,
+        transformations: 'height:100,width:100,resize:contain',
+      },
+      jwtSecret,
+      60000
+    )
 
     const { client: testClient } = createMockRendererClient()
     vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
@@ -306,12 +306,23 @@ describe('image rendering routes', () => {
 
     const response = await appInstance.inject({
       method: 'GET',
-      url: signedURLBody.signedURL,
+      url: `/render/image/sign/${assetUrl}?token=${token}`,
     })
 
     expect(response.statusCode).toBe(200)
     expect(response.headers['expires']).toBeTruthy()
-    expect(response.headers['cache-control']).toBe('max-age=31536000')
+    expect(response.headers['cache-control']).toBe('no-store')
+    expect(response.headers['cloudflare-cdn-cache-control']).toMatch(
+      /^public, s-maxage=\d+, must-revalidate$/
+    )
+
+    const edgeMaxAge = Number(
+      /^public, s-maxage=(\d+), must-revalidate$/.exec(
+        String(response.headers['cloudflare-cdn-cache-control'])
+      )?.[1]
+    )
+    expect(edgeMaxAge).toBeGreaterThan(0)
+    expect(edgeMaxAge).toBeLessThanOrEqual(59999)
   })
 
   it('will render a transformed image providing a signed url (using url signing jwk if set)', async () => {

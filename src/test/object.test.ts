@@ -22,6 +22,7 @@ import app from '../app'
 import { getConfig, JwksConfig, JwksConfigKeyOCT, mergeConfig } from '../config'
 import { backends, Obj } from '../storage'
 import { ObjectAdminDelete } from '../storage/events'
+import { ObjectStorage } from '../storage/object'
 import { useMockObject, useMockQueue } from './common'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
@@ -2724,7 +2725,7 @@ describe('testing retrieving signed URL', () => {
     expect(response.headers['last-modified']).toBe('Thu, 12 Aug 2021 16:00:00 GMT')
   })
 
-  test('get object with a token preserves object Cache-Control with signed URL Expires', async () => {
+  test('get object with a token emits browser no-store and token-bounded Cloudflare cache control', async () => {
     vi.mocked(S3Backend.prototype.getObject).mockResolvedValueOnce({
       metadata: {
         httpStatusCode: 200,
@@ -2739,8 +2740,17 @@ describe('testing retrieving signed URL', () => {
       body: Buffer.from(''),
     })
 
-    const urlToSign = 'bucket2/public/sadcat-upload.png'
-    const jwtToken = await signJWT({ url: urlToSign }, jwtSecret, 100)
+    vi.spyOn(ObjectStorage.prototype, 'findObject').mockResolvedValueOnce({
+      version: '1',
+      metadata: {},
+    } as Obj)
+
+    const urlToSign = 'bucket2/authenticated/cat.jpg'
+    const jwtToken = await signJWT(
+      { url: urlToSign, scope: SIGNED_URL_SCOPE_DOWNLOAD },
+      jwtSecret,
+      100
+    )
     const response = await appInstance.inject({
       method: 'GET',
       url: `/object/sign/${urlToSign}?token=${jwtToken}`,
@@ -2748,7 +2758,18 @@ describe('testing retrieving signed URL', () => {
 
     expect(response.statusCode).toBe(200)
     expect(response.headers['expires']).toBeTruthy()
-    expect(response.headers['cache-control']).toBe('max-age=31536000')
+    expect(response.headers['cache-control']).toBe('no-store')
+    expect(response.headers['cloudflare-cdn-cache-control']).toMatch(
+      /^public, s-maxage=\d+, must-revalidate$/
+    )
+
+    const edgeMaxAge = Number(
+      /^public, s-maxage=(\d+), must-revalidate$/.exec(
+        String(response.headers['cloudflare-cdn-cache-control'])
+      )?.[1]
+    )
+    expect(edgeMaxAge).toBeGreaterThan(0)
+    expect(edgeMaxAge).toBeLessThanOrEqual(99)
   })
 
   test('get object with jwk generated token', async () => {

@@ -361,6 +361,97 @@ describe('ImageRenderer fetch client', () => {
     )
   })
 
+  it('emits browser no-store and token-bounded Cloudflare cache control for signed URLs', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00.000Z'))
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+    const signedUrlExpiresAt = Math.floor(new Date('2026-06-30T12:01:40.000Z').getTime() / 1000)
+    const expires = new Date(signedUrlExpiresAt * 1000).toUTCString()
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            cacheControl: 'max-age=31536000',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    await new TestRenderer().render(createRequest(), reply as never, {
+      ...createRenderOptions(),
+      expires,
+      signedUrlExpiresAt,
+    })
+
+    expect(reply.header).toHaveBeenCalledWith('Expires', expires)
+    expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'no-store')
+    expect(reply.header).toHaveBeenCalledWith(
+      'Cloudflare-CDN-Cache-Control',
+      'public, s-maxage=99, must-revalidate'
+    )
+  })
+
+  it('does not emit Cloudflare cache control for signed URLs with restrictive object cache metadata', async () => {
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            cacheControl: 'public, s-maxage=600, no-cache',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    await new TestRenderer().render(createRequest(), reply as never, {
+      ...createRenderOptions(),
+      expires: new Date(Date.now() + 60_000).toUTCString(),
+      signedUrlExpiresAt: Math.floor(Date.now() / 1000) + 60,
+    })
+
+    expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'no-store')
+    expect(reply.header).not.toHaveBeenCalledWith('Cloudflare-CDN-Cache-Control', expect.anything())
+  })
+
+  it('caps signed URL Cloudflare cache control by object s-maxage when shorter than token expiry', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00.000Z'))
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+    const signedUrlExpiresAt = Math.floor(new Date('2026-06-30T12:01:40.000Z').getTime() / 1000)
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            cacheControl: 'public, max-age=0, s-maxage=12, immutable',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    await new TestRenderer().render(createRequest(), reply as never, {
+      ...createRenderOptions(),
+      expires: new Date(signedUrlExpiresAt * 1000).toUTCString(),
+      signedUrlExpiresAt,
+    })
+
+    expect(reply.header).toHaveBeenCalledWith(
+      'Cloudflare-CDN-Cache-Control',
+      'public, s-maxage=12, must-revalidate'
+    )
+  })
+
   it('passes an undici dispatcher to fetch when imgproxy socket pooling is enabled', async () => {
     const agentInstances: Array<{ instance: unknown; options: unknown }> = []
     const composedHandlers: unknown[] = []

@@ -77,6 +77,10 @@ const IMGPROXY_SOURCE_IMAGE_BAD_REQUESTS = [
   },
   {
     message: IMGPROXY_SOURCE_IMAGE_INVALID_OR_UNSUPPORTED_MESSAGE,
+    pattern: /XML parse error:/i,
+  },
+  {
+    message: IMGPROXY_SOURCE_IMAGE_INVALID_OR_UNSUPPORTED_MESSAGE,
     pattern: /^Invalid source image$/i,
   },
   {

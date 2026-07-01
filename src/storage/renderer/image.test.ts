@@ -612,6 +612,12 @@ describe('ImageRenderer fetch client', () => {
       400,
       'The source image is invalid or unsupported for rendering',
     ],
+    [
+      500,
+      'glib: XML parse error: warning code=100 (3) in (null):8:23: xmlns: URI ns_sfw; is not absolute',
+      400,
+      'The source image is invalid or unsupported for rendering',
+    ],
     [422, 'Invalid source image', 400, 'The source image is invalid or unsupported for rendering'],
     [
       422,

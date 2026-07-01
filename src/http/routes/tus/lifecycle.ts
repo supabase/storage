@@ -336,7 +336,7 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       }
     }
 
-    await uploader.completeUpload({
+    const result = await uploader.completeUpload({
       version: resourceId.version,
       bucketId: resourceId.bucket,
       objectName: resourceId.objectName,
@@ -350,6 +350,7 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
     return {
       headers: {
         'Tus-Complete': '1',
+        ...(result.obj.id ? { 'x-supabase-id': result.obj.id } : {}),
       },
     }
   } catch (e) {

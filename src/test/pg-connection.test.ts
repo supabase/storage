@@ -17,6 +17,7 @@ describe('Pg database foundation', () => {
       tenantId,
       isExternalPool: true,
       maxConnections: 2,
+      databaseEngine: getConfig().databaseEngine,
       dbUrl: databasePoolURL || databaseURL,
       user: superUser,
       superUser,
@@ -127,7 +128,6 @@ describe('Pg database foundation', () => {
         request_path: string
         storage_operation: string
         allow_delete: string
-        statement_timeout: string
       }>({
         text: `
           SELECT
@@ -135,10 +135,12 @@ describe('Pg database foundation', () => {
             current_setting('request.jwt.claim.role', true) as jwt_role,
             current_setting('request.path', true) as request_path,
             current_setting('storage.operation', true) as storage_operation,
-            current_setting('storage.allow_delete_query', true) as allow_delete,
-            current_setting('statement_timeout', true) as statement_timeout
+            current_setting('storage.allow_delete_query', true) as allow_delete
         `,
       })
+      const timeout = await transaction.query<{ statement_timeout: string }>(
+        'SHOW statement_timeout'
+      )
 
       expect(result.rows[0]).toEqual(
         expect.objectContaining({
@@ -147,9 +149,9 @@ describe('Pg database foundation', () => {
           request_path: '/pg-foundation',
           storage_operation: 'pg-foundation-test',
           allow_delete: 'true',
-          statement_timeout: '1234ms',
         })
       )
+      expect(timeout.rows[0].statement_timeout).toBe('1234ms')
 
       await transaction.commit()
     } catch (e) {

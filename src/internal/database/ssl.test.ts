@@ -32,6 +32,8 @@ describe('database utils', () => {
       })
       expect(settings?.secureContext).toBeDefined()
       expect(settings?.rejectUnauthorized).toBe(false)
+      expect(settings?.checkServerIdentity).toBeInstanceOf(Function)
+      expect(settings?.checkServerIdentity?.('1.2.3.4', {} as never)).toBeUndefined()
       expect(settings).not.toHaveProperty('ca')
     })
 
@@ -82,6 +84,7 @@ describe('database utils', () => {
       })
       expect(settings?.secureContext).toBeDefined()
       expect(settings?.rejectUnauthorized).toBeUndefined()
+      expect(settings?.checkServerIdentity).toBeUndefined()
       expect(settings).not.toHaveProperty('ca')
     })
 

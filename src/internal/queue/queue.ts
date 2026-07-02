@@ -1,4 +1,4 @@
-import { createConcurrencyLimiter, wait } from '@internal/concurrency'
+import { createConcurrencyLimiter } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { QueueDB } from '@internal/queue/database'
 import PgBoss, { Db, Job, JobWithMetadata } from 'pg-boss'
@@ -25,8 +25,6 @@ type RegisteredEvent = {
 
 export const PG_BOSS_SCHEMA = 'pgboss_v10'
 const queueStopTimeoutMs = 25_000
-const jobAckMaxAttempts = 3
-const jobAckRetryDelayMs = 250
 
 export abstract class Queue {
   protected static events: RegisteredEvent[] = []
@@ -299,25 +297,6 @@ export abstract class Queue {
     })
   }
 
-  /**
-   * an unacked job sits in the active state until pg-boss expires it,
-   * re-running the handler and blocking singleton queues.
-   * Retry transient errors briefly before giving up.
-   */
-  private static async ackWithRetry(ack: () => Promise<void> | undefined) {
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return await ack()
-      } catch (e) {
-        if (attempt >= jobAckMaxAttempts) {
-          throw e
-        }
-
-        await wait(jobAckRetryDelayMs * attempt)
-      }
-    }
-  }
-
   protected static pollQueue(
     event: RegisteredEvent,
     queueOpts: {
@@ -435,7 +414,7 @@ export abstract class Queue {
                   logJobError(`[Queue Handler] Error while processing job ${event.name}`, e)
 
                   try {
-                    await this.ackWithRetry(() => this.pgBoss?.fail(event.getQueueName(), job.id))
+                    await this.pgBoss?.fail(event.getQueueName(), job.id)
 
                     try {
                       const dbJob: JobWithMetadata | null =
@@ -462,7 +441,7 @@ export abstract class Queue {
                 }
 
                 try {
-                  await this.ackWithRetry(() => this.pgBoss?.complete(event.getQueueName(), job.id))
+                  await this.pgBoss?.complete(event.getQueueName(), job.id)
                   queueJobCompleted.add(1, {
                     name: event.getQueueName(),
                   })

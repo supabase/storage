@@ -245,11 +245,9 @@ describe('Queue worker', () => {
     })
 
     await vi.advanceTimersByTimeAsync(1_000)
-    // Completion is retried with backoff before giving up.
-    await vi.advanceTimersByTimeAsync(1_000)
     abortController.abort()
 
-    expect(complete).toHaveBeenCalledTimes(3)
+    expect(complete).toHaveBeenCalledTimes(1)
     expect(fail).not.toHaveBeenCalled()
     expect(errorSpy).toHaveBeenCalledWith(
       monitoringModule.logger,
@@ -259,26 +257,6 @@ describe('Queue worker', () => {
         error: completeError,
       })
     )
-  })
-
-  it('recovers when a completion retry succeeds', async () => {
-    vi.useFakeTimers()
-
-    const { abortController, errorSpy, complete, fail } = await startWorker({
-      complete: vi
-        .fn()
-        .mockRejectedValueOnce(new Error('complete failed'))
-        .mockResolvedValueOnce(undefined),
-      handle: vi.fn().mockResolvedValue(undefined),
-    })
-
-    await vi.advanceTimersByTimeAsync(1_000)
-    await vi.advanceTimersByTimeAsync(1_000)
-    abortController.abort()
-
-    expect(complete).toHaveBeenCalledTimes(2)
-    expect(fail).not.toHaveBeenCalled()
-    expect(errorSpy).not.toHaveBeenCalled()
   })
 
   it('logs the original handler error when marking the job as failed rejects', async () => {
@@ -292,10 +270,9 @@ describe('Queue worker', () => {
     })
 
     await vi.advanceTimersByTimeAsync(1_000)
-    await vi.advanceTimersByTimeAsync(1_000)
     abortController.abort()
 
-    expect(fail).toHaveBeenCalledTimes(3)
+    expect(fail).toHaveBeenCalledTimes(1)
     expect(complete).not.toHaveBeenCalled()
     expect(errorSpy).toHaveBeenCalledWith(
       monitoringModule.logger,

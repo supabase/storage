@@ -1,3 +1,4 @@
+import type { PeerCertificate } from 'node:tls'
 import { getSslSettings, isIpAddress } from '@internal/database/ssl'
 
 describe('database utils', () => {
@@ -33,7 +34,7 @@ describe('database utils', () => {
       expect(settings?.secureContext).toBeDefined()
       expect(settings?.rejectUnauthorized).toBe(false)
       expect(settings?.checkServerIdentity).toBeInstanceOf(Function)
-      expect(settings?.checkServerIdentity?.('1.2.3.4', {} as never)).toBeUndefined()
+      expect(settings?.checkServerIdentity?.('1.2.3.4', {} as PeerCertificate)).toBeUndefined()
       expect(settings).not.toHaveProperty('ca')
     })
 

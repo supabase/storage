@@ -19,6 +19,8 @@ function getSharedSecureContext(rootCert: string): SecureContext {
   return secureContext
 }
 
+const dontCheckServerIdentity = () => undefined
+
 export function getSslSettings({
   connectionString,
   databaseSSLRootCert,
@@ -35,7 +37,11 @@ export function getSslSettings({
   // so we need to skip verification if host name is an IP address.
   const hostname = getConnectionStringHostname(connectionString)
   if (hostname && isIpAddress(hostname)) {
-    return { secureContext, rejectUnauthorized: false }
+    return {
+      secureContext,
+      rejectUnauthorized: false,
+      checkServerIdentity: dontCheckServerIdentity,
+    }
   }
 
   return { secureContext }

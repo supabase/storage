@@ -2,7 +2,6 @@ import { S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { PgTenantConnection } from '@internal/database'
 import { Event as QueueBaseEvent } from '@internal/queue'
-import { Permit, Semaphore } from '@shopify/semaphore'
 import { S3Backend } from '@storage/backend'
 import { StoragePgDB } from '@storage/database'
 import { ObjectStorage } from '@storage/object'
@@ -160,16 +159,6 @@ export const classInstrumentations = [
     targetClass: PgLock,
     enabled: true,
     methodsToInstrument: ['lock', 'unlock', 'acquireLock'],
-  }),
-  new ClassInstrumentation({
-    targetClass: Semaphore,
-    enabled: true,
-    methodsToInstrument: ['acquire'],
-  }),
-  new ClassInstrumentation({
-    targetClass: Permit,
-    enabled: true,
-    methodsToInstrument: ['release'],
   }),
   new ClassInstrumentation({
     targetClass: S3Client,

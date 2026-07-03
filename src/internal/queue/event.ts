@@ -311,6 +311,19 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         },
       })
 
+      // pg-boss returns null when the insert was dropped by a queue policy
+      // (e.g. an exactly_once job with the same singleton key is still queued or active).
+      if (res === null) {
+        logSchema.info(logger, `[Queue Sender] Job not queued, dropped by queue policy`, {
+          type: 'queue',
+          project: this.payload.tenant?.ref || SYSTEM_TENANT_REF,
+          metadata: JSON.stringify({ queue: eventClass.getQueueName() }),
+          sbReqId: this.payload.sbReqId,
+        })
+
+        return res
+      }
+
       queueJobScheduled.add(1, {
         name: eventClass.getQueueName(),
       })

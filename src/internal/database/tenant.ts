@@ -16,7 +16,7 @@ import { JWTPayload } from 'jose'
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import { decrypt } from '../auth'
 import { JWKSManager, JWKSManagerStorePg } from '../auth/jwks'
-import { createMutexByKey } from '../concurrency'
+import { createSingleFlightByKey } from '../concurrency'
 import { isStringMessage, PubSubAdapter } from '../pubsub'
 import { DBMigration } from './migrations/types'
 import { multitenantPgExecutor } from './multitenant-pg'
@@ -103,7 +103,7 @@ const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CAC
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
 })
 
-const tenantMutex = createMutexByKey<TenantConfig>()
+const tenantConfigSingleFlight = createSingleFlightByKey<TenantConfig>()
 
 export const jwksManager = new JWKSManager(new JWKSManagerStorePg(multitenantPgExecutor))
 
@@ -198,12 +198,7 @@ export async function getTenantConfig(
     return cachedConfig
   }
 
-  return tenantMutex(tenantId, async () => {
-    const cachedConfig = tenantConfigCache.get(tenantId, { recordMetrics: false })
-    if (cachedConfig !== undefined) {
-      return cachedConfig
-    }
-
+  return tenantConfigSingleFlight(tenantId, async () => {
     const tenant = await getTenantConfigRow(tenantId)
 
     if (!tenant) {

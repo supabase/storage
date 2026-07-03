@@ -7,7 +7,7 @@ import {
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_S3_CREDENTIALS_CACHE_NAME,
 } from '@internal/cache'
-import { createMutexByKey } from '@internal/concurrency'
+import { createSingleFlightByKey } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
 import { getConfig } from '../../../../config'
@@ -40,7 +40,7 @@ const tenantS3CredentialsCache = createLruCache<string, S3Credentials>(
   }
 )
 
-const s3CredentialsMutex = createMutexByKey<S3Credentials>()
+const s3CredentialsSingleFlight = createSingleFlightByKey<S3Credentials>()
 
 export class S3CredentialsManager {
   private dbServiceRole: string
@@ -117,15 +117,7 @@ export class S3CredentialsManager {
       return cachedCredentials
     }
 
-    return s3CredentialsMutex(cacheKey, async () => {
-      const cachedCredentials = tenantS3CredentialsCache.get(cacheKey, {
-        recordMetrics: false,
-      })
-
-      if (cachedCredentials !== undefined) {
-        return cachedCredentials
-      }
-
+    return s3CredentialsSingleFlight(cacheKey, async () => {
       const data = await this.storage.getOneByAccessKey(tenantId, accessKey)
 
       if (!data) {

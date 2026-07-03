@@ -6,7 +6,7 @@ import {
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_JWKS_CACHE_NAME,
 } from '@internal/cache'
-import { createMutexByKey } from '@internal/concurrency'
+import { createSingleFlightByKey } from '@internal/concurrency'
 import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
 import { JwksConfig, JwksConfigKeyOCT } from '../../../config'
 import { TENANTS_JWKS_UPDATE_CHANNEL } from './channels'
@@ -15,7 +15,7 @@ import { JWKSManagerStore } from './store'
 const JWK_KIND_STORAGE_URL_SIGNING = 'storage-url-signing-key'
 const JWK_KID_SEPARATOR = '_'
 
-const tenantJwksMutex = createMutexByKey<JwksConfig>()
+const tenantJwksSingleFlight = createSingleFlightByKey<JwksConfig>()
 // Max 16,384 items. At ~2.5KB per JWKS, this uses roughly ~40MB of heap memory worst-case.
 export const TENANT_JWKS_CACHE_MAX_ITEMS = 16384
 export const TENANT_JWKS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES = 2.5 * 1024
@@ -133,13 +133,7 @@ export class JWKSManager<TRX> {
       return cachedJwks
     }
 
-    return tenantJwksMutex(tenantId, async () => {
-      const cachedJwks = tenantJwksConfigCache.get(tenantId, { recordMetrics: false })
-
-      if (cachedJwks !== undefined) {
-        return cachedJwks
-      }
-
+    return tenantJwksSingleFlight(tenantId, async () => {
       const data = await this.storage.listActive(tenantId)
 
       let urlSigningKey: JwksConfigKeyOCT | undefined

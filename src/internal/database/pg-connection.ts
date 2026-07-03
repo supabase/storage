@@ -13,6 +13,7 @@ import {
   TenantConnectionOptions,
 } from './pool'
 import { getSslSettings } from './ssl'
+import { getTlsSessionResumptionClient } from './tls-session-resumption'
 
 const {
   databaseApplicationName,
@@ -22,6 +23,7 @@ const {
   databasePoolDrainTimeout,
   databaseSSLRootCert,
   databaseStatementTimeout,
+  databaseTlsSessionResumption,
 } = getConfig()
 
 pg.types.setTypeParser(20, 'text', parseInt)
@@ -184,6 +186,8 @@ export class PgPoolStrategy {
         connectionTimeoutMillis: databaseConnectionTimeout,
         idleTimeoutMillis: settings.idleTimeoutMillis,
         ssl: sslSettings ? { ...sslSettings } : undefined,
+        Client:
+          databaseTlsSessionResumption && sslSettings ? getTlsSessionResumptionClient() : undefined,
         application_name: databaseApplicationName,
         options: settings.searchPath
           ? `-c search_path=${settings.searchPath.join(',')}`

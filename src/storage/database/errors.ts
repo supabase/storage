@@ -25,6 +25,11 @@ export class DBError extends StorageBackendError implements RenderableError {
       case '23505':
         return ERRORS.ResourceAlreadyExists(pgError).withMetadata(pgErrorMetadata(pgError, context))
       case '23503':
+        if (pgError.detail?.includes('is still referenced from table')) {
+          return ERRORS.ResourceReferenced(pgError.detail, pgError).withMetadata(
+            pgErrorMetadata(pgError, context)
+          )
+        }
         return ERRORS.RelatedResourceNotFound(pgError).withMetadata(
           pgErrorMetadata(pgError, context)
         )

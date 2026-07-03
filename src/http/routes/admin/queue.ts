@@ -1,5 +1,5 @@
 import { SYSTEM_TENANT } from '@internal/queue/constants'
-import { MoveJobs } from '@storage/events'
+import { MoveJobs, UpgradePgBossV12 } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
@@ -56,4 +56,17 @@ export default async function routes(fastify: FastifyInstance) {
       return reply.send({ message: 'Move jobs scheduled' })
     }
   )
+
+  fastify.post('/migrate/pgboss-v12', { schema: { tags: ['queue'] } }, async (req, reply) => {
+    if (!pgQueueEnable) {
+      return reply.status(400).send({ message: 'Queue is not enabled' })
+    }
+
+    await UpgradePgBossV12.send({
+      sbReqId: req.sbReqId,
+      tenant: SYSTEM_TENANT,
+    })
+
+    return reply.send({ message: 'Migration scheduled' })
+  })
 }

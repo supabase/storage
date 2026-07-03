@@ -1,7 +1,7 @@
 import { createConcurrencyLimiter } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { QueueDB } from '@internal/queue/database'
-import PgBoss, { Db, Job, JobWithMetadata } from 'pg-boss'
+import { Db, Job, JobWithMetadata, PgBoss, QueueOptions } from 'pg-boss'
 import { getConfig } from '../../config'
 import { getSbReqIdFromPayload, logger, logSchema } from '../monitoring'
 import {
@@ -23,13 +23,13 @@ type RegisteredEvent = {
   name: string
 }
 
-export const PG_BOSS_SCHEMA = 'pgboss_v10'
+export const PG_BOSS_SCHEMA = 'pgboss_v12'
 const queueStopTimeoutMs = 25_000
 
 export abstract class Queue {
   protected static events: RegisteredEvent[] = []
   private static pgBoss?: PgBoss
-  private static pgBossDb?: PgBoss.Db
+  private static pgBossDb?: QueueDB
 
   static createPgBoss(opts: { db: Db; enableWorkers: boolean }) {
     const {
@@ -38,10 +38,6 @@ export abstract class Queue {
       multitenantDatabasePoolUrl,
       multitenantDatabaseUrl,
       pgQueueConnectionURL,
-      pgQueueArchiveCompletedAfterSeconds,
-      pgQueueDeleteAfterDays,
-      pgQueueDeleteAfterHours,
-      pgQueueRetentionDays,
     } = getConfig()
 
     let url = pgQueueConnectionURL ?? databaseURL
@@ -65,18 +61,29 @@ export abstract class Queue {
       migrate,
       db: opts.db,
       schema: PG_BOSS_SCHEMA,
-      ...(pgQueueDeleteAfterHours
-        ? { deleteAfterHours: pgQueueDeleteAfterHours }
-        : { deleteAfterDays: pgQueueDeleteAfterDays }),
-      archiveCompletedAfterSeconds: pgQueueArchiveCompletedAfterSeconds,
-      retentionDays: pgQueueRetentionDays,
-      retryBackoff: true,
-      retryLimit: 20,
-      expireInHours: 23,
       maintenanceIntervalSeconds: 60 * 5,
       schedule: opts.enableWorkers,
       supervise: opts.enableWorkers,
     })
+  }
+
+  /**
+   * Retention, expiration and retry settings moved from the pg-boss constructor
+   * to per-queue options in pg-boss v11+. These defaults are applied when each
+   * queue is created and can be overridden per event via getQueueOptions().
+   */
+  static getDefaultQueueOptions(): QueueOptions {
+    const { pgQueueDeleteAfterDays, pgQueueDeleteAfterHours, pgQueueRetentionDays } = getConfig()
+
+    return {
+      deleteAfterSeconds: pgQueueDeleteAfterHours
+        ? pgQueueDeleteAfterHours * 60 * 60
+        : (pgQueueDeleteAfterDays ?? 2) * 24 * 60 * 60,
+      retentionSeconds: (pgQueueRetentionDays ?? 2) * 24 * 60 * 60,
+      expireInSeconds: 23 * 60 * 60,
+      retryBackoff: true,
+      retryLimit: 20,
+    }
   }
 
   static async start(opts: {
@@ -123,6 +130,10 @@ export abstract class Queue {
       application_name: databaseApplicationName,
       statement_timeout: pgQueueReadWriteTimeout > 0 ? pgQueueReadWriteTimeout : undefined,
     })
+
+    // pg-boss v11+ only opens/closes the connection pool of its own internal
+    // db, so an externally provided db must be opened before start.
+    await Queue.pgBossDb.open()
 
     Queue.pgBoss = this.createPgBoss({
       db: Queue.pgBossDb,
@@ -210,7 +221,6 @@ export abstract class Queue {
         boss.stop({
           timeout: 20 * 1000,
           graceful: isProduction,
-          wait: true,
         }),
         'Queue stop'
       )
@@ -218,6 +228,12 @@ export abstract class Queue {
       try {
         await withQueueStopTimeout(this.callClose(), 'Queue close')
       } finally {
+        try {
+          await db?.close()
+        } catch {
+          // no-op
+        }
+
         if (Queue.pgBoss === boss) {
           Queue.pgBoss = undefined
         }
@@ -267,23 +283,22 @@ export abstract class Queue {
     const concurrentTaskCount = event.getWorkerOptions().concurrentTaskCount || maxConcurrentTasks
     try {
       // Create dead-letter queue and the normal queue
-      const queueOptions = {
-        policy: 'standard',
+      const { name: _name, ...eventQueueOptions } = {
+        policy: 'standard' as const,
+        ...Queue.getDefaultQueueOptions(),
         ...event.getQueueOptions(),
-      } as const
+      }
 
       // dead-letter
       await this.pgBoss?.createQueue(deadLetterName, {
-        ...queueOptions,
-        name: deadLetterName,
-        retentionDays: 30,
+        ...eventQueueOptions,
+        retentionSeconds: 30 * 24 * 60 * 60,
         retryBackoff: true,
       })
 
-      // // normal queue
+      // normal queue
       await this.pgBoss?.createQueue(queueName, {
-        ...queueOptions,
-        name: queueName,
+        ...eventQueueOptions,
         deadLetter: deadLetterName,
       })
     } catch {

@@ -218,12 +218,12 @@ describe('ProgressiveMigrations', () => {
     })
 
     mockRunMigrationsBatchSend
-      .mockImplementationOnce(async () => {
+      .mockImplementationOnce((async () => {
         queueMicrotask(() => {
           migrations.addTenant('tenant-b')
           void migrations.drain()
         })
-      })
+      }) as never)
       .mockResolvedValueOnce(undefined as never)
 
     migrations.seed('tenant-a')

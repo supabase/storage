@@ -534,9 +534,11 @@ describe('Admin migrations routes', () => {
   })
 
   test('returns queue progress for the current migration queue', async () => {
-    const getQueueSize = vi.fn().mockResolvedValue(7)
+    const getQueueStats = vi.fn().mockResolvedValue([{ queuedCount: 7 }])
+    const getQueue = vi.fn().mockResolvedValue({ name: RunMigrationsOnTenants.getQueueName() })
     vi.spyOn(Queue, 'getInstance').mockReturnValue({
-      getQueueSize,
+      getQueue,
+      getQueueStats,
     } as never)
 
     const response = await adminApp.inject({
@@ -547,7 +549,7 @@ describe('Admin migrations routes', () => {
 
     expect(response.statusCode).toBe(200)
     expect(JSON.parse(response.body)).toEqual({ remaining: 7 })
-    expect(getQueueSize).toHaveBeenCalledWith(RunMigrationsOnTenants.getQueueName())
+    expect(getQueueStats).toHaveBeenCalledWith(RunMigrationsOnTenants.getQueueName())
   })
 
   test('lists failed tenants and paginates by cursor', async () => {

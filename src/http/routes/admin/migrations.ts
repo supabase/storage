@@ -98,8 +98,15 @@ export default async function routes(fastify: FastifyInstance) {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
-    const queueSize = await Queue.getInstance().getQueueSize(RunMigrationsOnTenants.getQueueName())
-    return { remaining: queueSize }
+    const queueName = RunMigrationsOnTenants.getQueueName()
+    const queue = await Queue.getInstance().getQueue(queueName)
+
+    if (!queue) {
+      return { remaining: 0 }
+    }
+
+    const stats = await Queue.getInstance().getQueueStats(queueName)
+    return { remaining: stats.at(-1)?.queuedCount ?? 0 }
   })
 
   fastify.get<FailedMigrationsRequest>(

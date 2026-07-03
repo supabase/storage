@@ -27,7 +27,7 @@ vi.mock('@internal/monitoring', () => ({
 }))
 
 vi.mock('@internal/queue', () => ({
-  PG_BOSS_SCHEMA: 'pgboss_v10',
+  PG_BOSS_SCHEMA: 'pgboss_v12',
   SYSTEM_TENANT_REF: 'system-tenant',
   Queue: {
     getInstance: () => ({
@@ -41,6 +41,7 @@ vi.mock('../base-event', () => ({
 }))
 
 import { MoveJobs } from './move-jobs'
+import { UpgradePgBossV12 } from './upgrade-v12'
 
 function makeTransaction() {
   return {
@@ -64,6 +65,17 @@ function makeMoveJob() {
   }
 }
 
+function makeUpgradeJob() {
+  return {
+    data: {
+      sbReqId: 'sb-req-456',
+      tenant: {
+        ref: 'tenant-a',
+      },
+    },
+  }
+}
+
 describe('pg-boss maintenance pg branches', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -75,7 +87,7 @@ describe('pg-boss maintenance pg branches', () => {
     mockBeginTransaction.mockResolvedValue(tx)
     mockGetQueue.mockResolvedValue({
       name: 'target-queue',
-      policy: 'exactly_once',
+      policy: 'exclusive',
     })
 
     await MoveJobs.handle(makeMoveJob() as never)
@@ -83,10 +95,41 @@ describe('pg-boss maintenance pg branches', () => {
     expect(tx.query).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        text: expect.stringContaining('INSERT INTO pgboss_v10.job'),
-        values: ['target-queue', 'exactly_once', 'source-queue'],
+        text: expect.stringContaining('INSERT INTO pgboss_v12.job'),
+        values: ['target-queue', 'exclusive', 'source-queue'],
       })
     )
+    expect(tx.commit).toHaveBeenCalledTimes(1)
+    expect(tx.rollback).not.toHaveBeenCalled()
+  })
+
+  it('copies pending jobs from the pgboss_v10 schema through the pg transaction branch', async () => {
+    const tx = makeTransaction()
+    tx.query
+      .mockResolvedValueOnce({ rows: [{ locked: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({ rows: [] })
+    mockBeginTransaction.mockResolvedValue(tx)
+
+    await UpgradePgBossV12.handle(makeUpgradeJob() as never)
+
+    const copySql = tx.query.mock.calls[2][0] as string
+    expect(copySql).toContain('INSERT INTO pgboss_v12.job')
+    expect(copySql).toContain('FROM pgboss_v10.job')
+    expect(tx.commit).toHaveBeenCalledTimes(1)
+    expect(tx.rollback).not.toHaveBeenCalled()
+  })
+
+  it('skips the copy when the pgboss_v10 schema does not exist', async () => {
+    const tx = makeTransaction()
+    tx.query
+      .mockResolvedValueOnce({ rows: [{ locked: true }] })
+      .mockResolvedValueOnce({ rows: [{ exists: false }] })
+    mockBeginTransaction.mockResolvedValue(tx)
+
+    await UpgradePgBossV12.handle(makeUpgradeJob() as never)
+
+    expect(tx.query).toHaveBeenCalledTimes(2)
     expect(tx.commit).toHaveBeenCalledTimes(1)
     expect(tx.rollback).not.toHaveBeenCalled()
   })

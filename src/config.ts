@@ -138,7 +138,6 @@ type StorageConfigType = {
   pgQueueConnectionURL?: string
   pgQueueDeleteAfterHours?: number
   pgQueueDeleteAfterDays?: number
-  pgQueueArchiveCompletedAfterSeconds?: number
   pgQueueRetentionDays?: number
   pgQueueConcurrentTasksPerQueue: number
   webhookURL?: string
@@ -563,10 +562,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     pgQueueDeleteAfterHours:
       envNumber(getOptionalConfigFromEnv('PG_QUEUE_DELETE_AFTER_HOURS')) || undefined,
-    pgQueueArchiveCompletedAfterSeconds: parseInt(
-      getOptionalConfigFromEnv('PG_QUEUE_ARCHIVE_COMPLETED_AFTER_SECONDS') || '7200',
-      10
-    ),
     pgQueueRetentionDays: parseInt(getOptionalConfigFromEnv('PG_QUEUE_RETENTION_DAYS') || '2', 10),
     pgQueueConcurrentTasksPerQueue: parseInt(
       getOptionalConfigFromEnv('PG_QUEUE_CONCURRENT_TASKS_PER_QUEUE') || '50',

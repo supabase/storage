@@ -4,7 +4,7 @@ import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { queueJobScheduled, queueJobSchedulingTime } from '@internal/monitoring/metrics'
 import { PgQueueDB } from '@internal/queue/database'
-import PgBoss, { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
+import { Job, JobInsert, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../config'
 import { SYSTEM_TENANT_REF } from './constants'
 import { PG_BOSS_SCHEMA, Queue } from './queue'
@@ -31,6 +31,21 @@ function withPayloadVersion<TPayload extends BasePayload>(
   return {
     ...payload,
     $version: payload.$version ?? version,
+  }
+}
+
+/**
+ * Builds an in-memory job for handlers invoked synchronously (without going
+ * through pg-boss), matching the pg-boss v12 Job shape.
+ */
+function syncJob<T>(name: string, data: T): Job<T> {
+  return {
+    id: '__sync',
+    name,
+    data,
+    expireInSeconds: 0,
+    heartbeatSeconds: null,
+    signal: new AbortController().signal,
   }
 }
 
@@ -112,10 +127,10 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     }
 
     return Queue.getInstance().insert(
+      eventClass.getQueueName(),
       messages.map((message) => {
         const payloadWithVersion = withPayloadVersion(message.payload, eventClass.version)
-        const sendOptions =
-          (eventClass.getSendOptions(payloadWithVersion) as PgBoss.JobInsert) || {}
+        const sendOptions = (eventClass.getSendOptions(payloadWithVersion) as JobInsert) || {}
 
         if (payloadWithVersion.scheduleAt) {
           sendOptions.startAfter = new Date(payloadWithVersion.scheduleAt)
@@ -123,7 +138,6 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
 
         return {
           ...sendOptions,
-          name: eventClass.getQueueName(),
           data: payloadWithVersion,
           deadLetter: eventClass.deadLetterQueueName(),
         }
@@ -234,16 +248,13 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       throw ERRORS.InternalError(undefined, 'Cannot send this event synchronously')
     }
 
-    await eventClass.handle({
-      id: '__sync',
-      expireInSeconds: 0,
-      name: eventClass.getQueueName(),
-      data: {
+    await eventClass.handle(
+      syncJob(eventClass.getQueueName(), {
         region,
         ...this.payload,
         $version: eventClass.version,
-      },
-    })
+      })
+    )
   }
 
   async send(
@@ -259,16 +270,13 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
 
     if (!pgQueueEnable) {
       if (eventClass.allowSync) {
-        return eventClass.handle({
-          id: '__sync',
-          expireInSeconds: 0,
-          name: eventClass.getQueueName(),
-          data: {
+        return eventClass.handle(
+          syncJob(eventClass.getQueueName(), {
             region,
             ...this.payload,
             $version: eventClass.version,
-          },
-        })
+          })
+        )
       } else {
         logger.warn(
           {
@@ -312,7 +320,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       })
 
       // pg-boss returns null when the insert was dropped by a queue policy
-      // (e.g. an exactly_once job with the same singleton key is still queued or active).
+      // (e.g. an exclusive job with the same singleton key is still queued or active).
       if (res === null) {
         logSchema.info(logger, `[Queue Sender] Job not queued, dropped by queue policy`, {
           type: 'queue',
@@ -349,16 +357,13 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         throw e
       }
 
-      return eventClass.handle({
-        id: '__sync',
-        expireInSeconds: 0,
-        name: eventClass.getQueueName(),
-        data: {
+      return eventClass.handle(
+        syncJob(eventClass.getQueueName(), {
           region,
           ...this.payload,
           $version: eventClass.version,
-        },
-      })
+        })
+      )
     } finally {
       const duration = Number(process.hrtime.bigint() - startTime) / 1e9
       queueJobSchedulingTime.record(duration, {

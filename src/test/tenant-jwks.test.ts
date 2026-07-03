@@ -512,9 +512,10 @@ describe('Tenant jwks configs', () => {
 
       await queueSpyAwaiter
       expect(queueInsertSpy).toHaveBeenCalledTimes(1)
-      const [[callArg]] = queueInsertSpy.mock.calls
+      const [[queueName, callArg]] = queueInsertSpy.mock.calls
+      expect(queueName).toBe('tenants-jwks-create-v2')
       expect(callArg).toHaveLength(1)
-      expect(callArg[0]).toMatchObject({ data: { tenantId }, name: 'tenants-jwks-create-v2' })
+      expect(callArg[0]).toMatchObject({ data: { tenantId } })
     } finally {
       queueInsertSpy.mockRestore()
     }

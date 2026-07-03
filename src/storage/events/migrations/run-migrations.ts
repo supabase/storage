@@ -23,7 +23,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
   static getQueueOptions(): Queue {
     return {
       name: this.queueName,
-      policy: 'exactly_once',
+      policy: 'exclusive',
     } as const
   }
 
@@ -36,8 +36,8 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
   static getSendOptions(payload: RunMigrationsPayload): SendOptions {
     return {
       singletonKey: `migrations_${payload.tenantId}`,
-      singletonHours: 1,
-      expireInMinutes: 10,
+      singletonSeconds: 60 * 60,
+      expireInSeconds: 10 * 60,
       retryLimit: 3,
       retryDelay: 5,
       priority: 10,

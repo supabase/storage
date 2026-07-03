@@ -1,13 +1,17 @@
 import { SYSTEM_TENANT } from '@internal/queue'
 import { vi } from 'vitest'
 
-const { mockMoveJobsSend } = vi.hoisted(() => ({
+const { mockMoveJobsSend, mockUpgradeSend } = vi.hoisted(() => ({
   mockMoveJobsSend: vi.fn(),
+  mockUpgradeSend: vi.fn(),
 }))
 
 vi.mock('@storage/events', () => ({
   MoveJobs: {
     send: mockMoveJobsSend,
+  },
+  UpgradePgBossV12: {
+    send: mockUpgradeSend,
   },
 }))
 
@@ -61,6 +65,50 @@ describe('admin queue routes', () => {
         toQueue: 'target-queue',
         deleteJobsFromOriginalQueue: true,
         sbReqId: 'sb-req-123',
+        tenant: SYSTEM_TENANT,
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('schedules the pgboss v12 migration', async () => {
+    vi.resetModules()
+
+    const { mergeConfig } = await import('../../../config')
+    mergeConfig({
+      pgQueueEnable: true,
+      adminApiKeys: 'test-admin-key',
+    })
+
+    const fastify = (await import('fastify')).default
+    const { default: routes } = await import('./queue')
+
+    const app = fastify()
+    app.decorateRequest('sbReqId', undefined)
+    app.addHook('onRequest', (request, _reply, done) => {
+      request.sbReqId =
+        typeof request.headers['sb-request-id'] === 'string'
+          ? request.headers['sb-request-id']
+          : undefined
+      done()
+    })
+    app.register(routes, { prefix: '/queue' })
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/queue/migrate/pgboss-v12',
+        headers: {
+          apikey: 'test-admin-key',
+          'sb-request-id': 'sb-req-456',
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({ message: 'Migration scheduled' })
+      expect(mockUpgradeSend).toHaveBeenCalledWith({
+        sbReqId: 'sb-req-456',
         tenant: SYSTEM_TENANT,
       })
     } finally {

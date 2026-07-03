@@ -127,6 +127,23 @@ describe('normalizeRawError', () => {
     expect(result.raw).not.toContain('secret root cert')
     expect(JSON.parse(result.raw)).toEqual({ code: '08006' })
   })
+
+  it('handles S3 errors with correct errorCode and statusCode', () => {
+    const s3Error = new Error('The specified upload does not exist.')
+    s3Error.name = 'NoSuchUpload'
+    Object.assign(s3Error, {
+      $metadata: {
+        httpStatusCode: 404,
+      },
+    })
+
+    const result = normalizeRawError(s3Error, 'info')
+
+    expect(result.errorCode).toBe(ErrorCode.S3Error)
+    expect(result.statusCode).toBe(404)
+    expect(result.name).toBe('NoSuchUpload')
+    expect(result.message).toBe('The specified upload does not exist.')
+  })
 })
 
 describe('getErrorCode', () => {

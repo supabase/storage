@@ -32,14 +32,14 @@ runs:
         OVERRIDE_FILE: ${{ inputs.override-file }}
         EXTRA_EXCLUDES: ${{ inputs.additional-exclude-table-data }}
       run: |
-        override_arg=""
-        [ -n "$OVERRIDE_FILE" ] && override_arg="-f $OVERRIDE_FILE"
+        compose_files=(-f ./.docker/docker-compose-infra.yml)
+        [ -n "$OVERRIDE_FILE" ] && compose_files+=(-f "$OVERRIDE_FILE")
         exclude_args=(--exclude-table-data=storage.migrations)
         for t in $EXTRA_EXCLUDES; do
           exclude_args+=("--exclude-table-data=$t")
         done
         docker compose --project-directory . \
-          -f ./.docker/docker-compose-infra.yml $override_arg \
+          "${compose_files[@]}" \
           exec -T -e PGPASSWORD=postgres tenant_db \
           pg_dump -h 127.0.0.1 -p 5432 -U postgres -d postgres \
           "${exclude_args[@]}" \
@@ -58,14 +58,14 @@ runs:
         OVERRIDE_FILE: ${{ inputs.override-file }}
         EXTRA_EXCLUDES: ${{ inputs.additional-exclude-table-data }}
       run: |
-        override_arg=""
-        [ -n "$OVERRIDE_FILE" ] && override_arg="-f $OVERRIDE_FILE"
+        compose_files=(-f ./.docker/docker-compose-infra.yml)
+        [ -n "$OVERRIDE_FILE" ] && compose_files+=(-f "$OVERRIDE_FILE")
         exclude_args=(--exclude-table-data=storage.migrations)
         for t in $EXTRA_EXCLUDES; do
           exclude_args+=("--exclude-table-data=$t")
         done
         docker compose --project-directory . \
-          -f ./.docker/docker-compose-infra.yml $override_arg \
+          "${compose_files[@]}" \
           exec -T -e PGPASSWORD=postgres tenant_db \
           pg_dump -h 127.0.0.1 -p 5432 -U postgres -d postgres \
           "${exclude_args[@]}" \

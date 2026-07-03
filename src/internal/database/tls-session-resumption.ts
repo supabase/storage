@@ -1,83 +1,83 @@
-import {
-  createLruCache,
-  DisposableCache,
-  LruCacheSetOptions,
-  TLS_SESSION_CACHE_NAME,
-} from '@internal/cache'
 import { recordTlsSessionResumption } from '@internal/monitoring/metrics'
 import { Client } from 'pg'
 import type { ConnectionOptions } from 'tls'
-import { TENANT_CONFIG_CACHE_MAX_ITEMS } from './tenant'
 
 /**
- * Client-side TLS session cache for tenant DB connections.
+ * TLS session resumption for tenant DB connections, coupled to the pool.
  *
- * Node skips the per-handshake certificate extraction and identity verification work
- * only when a session is resumed and resumed handshakes are also cheaper on the wire.
- * pg implements no client session cache, so every reconnect pays the full handshake.
- * Pass a getter in ssl options of the pool which is reevaluated on every physical
- * connection and capture the session from the TLS socket. There can be multiple session
- * tickets per host but last one wins. Finally, a stale or rejected ticket downgrades to
- * a full handshake inside the same connection attempt and resumption failure is never
- * a connection error. If the server issues no tickets the cache, cache simply stays empty.
+ * Node skips the per-handshake certificate extraction and identity verification work only
+ * when a session is resumed, and resumed handshakes are cheaper on the wire. pg implements
+ * no client session cache, so every reconnect pays the full handshake.
+ *
+ * Each PgPoolStrategy owns one TlsSessionSlot (1 pool = 1 tenant = 1 host:port). The pool's
+ * ssl options get an enumerable session getter whose value pg copies into the tls.connect
+ * options with Object.assign on every physical connect, so each new connection offers the
+ * freshest ticket. The slot itself rides along as a non-enumerable property of the same ssl
+ * object to prevent copying into the tls.connect options while still being accessible to the
+ * client to attach a listener to the connection to capture newer tickets and observability.
+ *
+ * The slot lives exactly as long as the strategy is cached in the tenant pool cache.
+ * That's why it's important to have TENANT_POOL_CACHE_TTL_MS set appropriately (1-2h)
+ * to benefit from session resumption. Pool-cache entries refresh their TTL on access,
+ * so busy tenants keep the slot alive indefinitely, the slot's storedAt bound is the
+ * only cap on ticket age to free stale tickets on peek.
+ *
+ * A stale or rejected ticket downgrades to a full handshake inside the same connection
+ * attempt so resumption failure is never a connection error and if the server issues no
+ * tickets the slot simply stays empty.
  */
 
-export const TLS_SESSION_CACHE_MAX_SIZE_BYTES = 100 * 1024 * 1024 // 100MB
-export const TLS_SESSION_CACHE_MAX_AGE_MS = 60 * 60 * 1000
-export function getTlsSessionCacheMaxEntries(): number {
-  // 4x tenant config cache max entries due to longer TTL
-  return 4 * TENANT_CONFIG_CACHE_MAX_ITEMS
+export const TLS_SESSION_MAX_AGE_MS = 60 * 60 * 1000
+
+export type TlsSessionSlot = {
+  session?: Buffer
+  storedAt: number
 }
 
-type SessionCache = DisposableCache<string, Buffer, LruCacheSetOptions<string, Buffer>>
+const kTlsSessionSlot = Symbol('tlsSessionSlot')
 
-let sessionCache: SessionCache | undefined
+export function createTlsSessionSlot(): TlsSessionSlot {
+  return { storedAt: 0 }
+}
 
-// Lazy initialization to avoid metric observables if feature is unused.
-function getSessionCache(): SessionCache {
-  if (!sessionCache) {
-    sessionCache = createLruCache<string, Buffer>(TLS_SESSION_CACHE_NAME, {
-      max: getTlsSessionCacheMaxEntries(),
-      maxSize: TLS_SESSION_CACHE_MAX_SIZE_BYTES,
-      sizeCalculation: (session) => Math.max(session.length, 1),
-      ttl: TLS_SESSION_CACHE_MAX_AGE_MS,
-    })
+export function storeTlsSession(slot: TlsSessionSlot, session: Buffer): void {
+  slot.session = session
+  slot.storedAt = Date.now()
+}
+
+export function peekTlsSession(slot: TlsSessionSlot): Buffer | undefined {
+  if (!slot.session) {
+    return undefined
   }
 
-  return sessionCache
+  if (Date.now() - slot.storedAt > TLS_SESSION_MAX_AGE_MS) {
+    slot.session = undefined
+    return undefined
+  }
+
+  return slot.session
 }
 
-export function storeTlsSession(key: string, session: Buffer): void {
-  getSessionCache().set(key, session)
+function getTlsSessionSlot(ssl: object): TlsSessionSlot | undefined {
+  return (ssl as Record<symbol, TlsSessionSlot | undefined>)[kTlsSessionSlot]
 }
 
-export function getTlsSession(key: string): Buffer | undefined {
-  return getSessionCache().get(key)
-}
-
-export function clearTlsSessionCache(): void {
-  sessionCache?.dispose()
-  sessionCache = undefined
-}
-
-export function getTlsSessionCacheSize(): number {
-  return sessionCache?.getStats().entries ?? 0
-}
-
-export function installTlsSessionInjection(ssl: ConnectionOptions, key: string): void {
-  if (Object.getOwnPropertyDescriptor(ssl, 'session')) {
+export function installTlsSessionResumption(ssl: ConnectionOptions, slot: TlsSessionSlot): void {
+  if (getTlsSessionSlot(ssl) || Object.getOwnPropertyDescriptor(ssl, 'session')) {
     return
   }
 
+  // non-enumerable to prevent copying into the tls.connect options
+  Object.defineProperty(ssl, kTlsSessionSlot, { value: slot })
   Object.defineProperty(ssl, 'session', {
     // enumerable to copy into tls.connect options
     enumerable: true,
     configurable: true,
-    get: () => getTlsSession(key),
+    get: () => peekTlsSession(slot),
   })
 }
 
-export function attachTlsSessionCapture(stream: unknown, key: string): void {
+export function attachTlsSessionCapture(stream: unknown, slot: TlsSessionSlot): void {
   const socket = stream as
     | { on?: (event: string, listener: (arg: Buffer) => void) => unknown }
     | undefined
@@ -86,14 +86,12 @@ export function attachTlsSessionCapture(stream: unknown, key: string): void {
   }
 
   socket.on('session', (session: Buffer) => {
-    storeTlsSession(key, session)
+    storeTlsSession(slot, session)
   })
 }
 
-const disabledMetrics = { recordMetrics: false } as const
-
 // Record whether the server actually resumed the offered session
-export function observeTlsSessionResumption(stream: unknown, key: string): void {
+export function observeTlsSessionResumption(stream: unknown, slot: TlsSessionSlot): void {
   const socket = stream as
     | {
         once?: (event: string, listener: () => void) => unknown
@@ -108,7 +106,7 @@ export function observeTlsSessionResumption(stream: unknown, key: string): void 
     return
   }
 
-  const offered = getSessionCache().get(key, disabledMetrics) !== undefined
+  const offered = peekTlsSession(slot) !== undefined
 
   socket.once('secureConnect', () => {
     const reused = socket.isSessionReused?.() === true
@@ -118,7 +116,7 @@ export function observeTlsSessionResumption(stream: unknown, key: string): void 
 
 // Dependency contract to fail in CI if pg changes between upgrades.
 type PgClientInternals = {
-  connectionParameters?: { host?: string; port?: number; ssl?: unknown }
+  connectionParameters?: { ssl?: unknown }
   connection?: {
     once?: (event: string, listener: () => void) => unknown
     stream?: unknown
@@ -131,7 +129,7 @@ type TlsSessionResumptionClientCtor = new (
 
 let cachedClientClass: TlsSessionResumptionClientCtor | undefined
 
-// Client that resumes TLS sessions per host:port.
+// Client that resumes TLS sessions from the slot installed on the pool's ssl options.
 export function getTlsSessionResumptionClient(): TlsSessionResumptionClientCtor {
   if (!cachedClientClass) {
     cachedClientClass = class TlsSessionResumptionClient extends Client {
@@ -144,13 +142,15 @@ export function getTlsSessionResumptionClient(): TlsSessionResumptionClientCtor 
           return
         }
 
-        const key = `${internals.connectionParameters?.host}:${internals.connectionParameters?.port}`
-        installTlsSessionInjection(ssl as ConnectionOptions, key)
+        const slot = getTlsSessionSlot(ssl)
+        if (!slot) {
+          return
+        }
 
         const connection = internals.connection
         connection?.once?.('sslconnect', () => {
-          attachTlsSessionCapture(connection.stream, key)
-          observeTlsSessionResumption(connection.stream, key)
+          attachTlsSessionCapture(connection.stream, slot)
+          observeTlsSessionResumption(connection.stream, slot)
         })
       }
     }

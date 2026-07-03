@@ -166,6 +166,24 @@ async function waitForDrainCheck(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve))
 }
 
+async function loadPgConnectionModuleWithConfig(configOverrides: Record<string, unknown>) {
+  vi.resetModules()
+
+  const configModule = await import('../../config')
+  configModule.getConfig({ reload: true })
+  configModule.mergeConfig({
+    databaseApplicationName: 'storage-test',
+    databaseConnectionTimeout: 3000,
+    databaseFreePoolAfterInactivity: 1000,
+    databaseMaxConnections: 20,
+    databaseSSLRootCert: undefined,
+    databaseTlsSessionResumption: false,
+    ...configOverrides,
+  } as Parameters<typeof configModule.mergeConfig>[0])
+
+  return import('./pg-connection')
+}
+
 describe('getPgCancelConnectionTarget', () => {
   it('uses direct client host and port for TCP cancel connections', () => {
     expect(
@@ -1064,6 +1082,98 @@ describe('PgPoolStrategy', () => {
     } finally {
       logSpy.mockRestore()
       vi.useRealTimers()
+    }
+  })
+})
+
+describe('PgPoolStrategy TLS session resumption wiring', () => {
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  function createDynamicTestablePgPoolStrategy(PgPoolStrategyCtor: typeof PgPoolStrategy) {
+    return class DynamicTestablePgPoolStrategy extends PgPoolStrategyCtor {
+      getCurrentPoolForTest(): Pool {
+        return this.getPool()
+      }
+    }
+  }
+
+  it('installs the session getter, slot marker, and custom client when enabled with SSL', async () => {
+    const { PgPoolStrategy: DynamicPgPoolStrategy } = await loadPgConnectionModuleWithConfig({
+      databaseSSLRootCert: '<cert>',
+      databaseTlsSessionResumption: true,
+    })
+    const { getTlsSessionResumptionClient } = await import('./tls-session-resumption')
+    const DynamicTestablePgPoolStrategy = createDynamicTestablePgPoolStrategy(DynamicPgPoolStrategy)
+    const strategy = new DynamicTestablePgPoolStrategy(
+      createPoolStrategySettings({
+        dbUrl: 'postgres://postgres:postgres@1.2.3.4:5432/postgres',
+      })
+    )
+
+    try {
+      const pool = strategy.getCurrentPoolForTest()
+      const ssl = pool.options.ssl as object
+
+      expect(ssl).toBeDefined()
+      expect(pool.options.Client).toBe(getTlsSessionResumptionClient())
+
+      const sessionDescriptor = Object.getOwnPropertyDescriptor(ssl, 'session')
+      expect(sessionDescriptor?.get).toBeInstanceOf(Function)
+      expect(sessionDescriptor?.enumerable).toBe(true)
+      expect(sessionDescriptor?.configurable).toBe(true)
+      expect(sessionDescriptor?.get?.call(ssl)).toBeUndefined()
+
+      expect(Object.getOwnPropertySymbols(ssl)).toHaveLength(1)
+      const tlsConnectOptions = Object.assign({}, ssl)
+      expect(Object.getOwnPropertySymbols(tlsConnectOptions)).toHaveLength(0)
+      expect(Object.prototype.hasOwnProperty.call(tlsConnectOptions, 'session')).toBe(true)
+    } finally {
+      await strategy.destroy()
+    }
+  })
+
+  it('leaves SSL options untouched when the feature flag is disabled', async () => {
+    const { PgPoolStrategy: DynamicPgPoolStrategy } = await loadPgConnectionModuleWithConfig({
+      databaseSSLRootCert: '<cert>',
+      databaseTlsSessionResumption: false,
+    })
+    const DynamicTestablePgPoolStrategy = createDynamicTestablePgPoolStrategy(DynamicPgPoolStrategy)
+    const strategy = new DynamicTestablePgPoolStrategy(
+      createPoolStrategySettings({
+        dbUrl: 'postgres://postgres:postgres@1.2.3.4:5432/postgres',
+      })
+    )
+
+    try {
+      const pool = strategy.getCurrentPoolForTest()
+      const ssl = pool.options.ssl as object
+
+      expect(ssl).toBeDefined()
+      expect(pool.options.Client).toBeUndefined()
+      expect(Object.getOwnPropertyDescriptor(ssl, 'session')).toBeUndefined()
+      expect(Object.getOwnPropertySymbols(ssl)).toHaveLength(0)
+    } finally {
+      await strategy.destroy()
+    }
+  })
+
+  it('does not install the custom client when SSL settings are absent', async () => {
+    const { PgPoolStrategy: DynamicPgPoolStrategy } = await loadPgConnectionModuleWithConfig({
+      databaseSSLRootCert: undefined,
+      databaseTlsSessionResumption: true,
+    })
+    const DynamicTestablePgPoolStrategy = createDynamicTestablePgPoolStrategy(DynamicPgPoolStrategy)
+    const strategy = new DynamicTestablePgPoolStrategy(createPoolStrategySettings())
+
+    try {
+      const pool = strategy.getCurrentPoolForTest()
+
+      expect(pool.options.ssl).toBeUndefined()
+      expect(pool.options.Client).toBeUndefined()
+    } finally {
+      await strategy.destroy()
     }
   })
 })

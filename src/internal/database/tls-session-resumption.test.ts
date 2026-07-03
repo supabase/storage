@@ -7,68 +7,54 @@ import { join } from 'node:path'
 import tls from 'node:tls'
 import {
   attachTlsSessionCapture,
-  clearTlsSessionCache,
-  getTlsSession,
-  getTlsSessionCacheMaxEntries,
-  getTlsSessionCacheSize,
+  createTlsSessionSlot,
   getTlsSessionResumptionClient,
-  installTlsSessionInjection,
+  installTlsSessionResumption,
   observeTlsSessionResumption,
+  peekTlsSession,
   storeTlsSession,
-  TLS_SESSION_CACHE_MAX_AGE_MS,
+  TLS_SESSION_MAX_AGE_MS,
 } from '@internal/database/tls-session-resumption'
 import * as metrics from '@internal/monitoring/metrics'
 import { vi } from 'vitest'
 
-describe('tls session cache', () => {
+describe('tls session slot', () => {
   afterEach(() => {
-    clearTlsSessionCache()
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
-  test('stores and returns the latest session per key', () => {
+  test('stores and returns the latest session', () => {
+    const slot = createTlsSessionSlot()
     const first = Buffer.from('first')
     const second = Buffer.from('second')
 
-    storeTlsSession('host:5432', first)
-    expect(getTlsSession('host:5432')).toBe(first)
+    expect(peekTlsSession(slot)).toBeUndefined()
 
-    storeTlsSession('host:5432', second)
-    expect(getTlsSession('host:5432')).toBe(second)
-    expect(getTlsSession('other:5432')).toBeUndefined()
+    storeTlsSession(slot, first)
+    expect(peekTlsSession(slot)).toBe(first)
+
+    storeTlsSession(slot, second)
+    expect(peekTlsSession(slot)).toBe(second)
   })
 
-  test('expires sessions after the max age', async () => {
-    let now = 1
-    vi.spyOn(performance, 'now').mockImplementation(() => now)
+  test('expires sessions after the max age', () => {
+    vi.useFakeTimers()
+    const slot = createTlsSessionSlot()
 
-    storeTlsSession('host:5432', Buffer.from('ticket'))
+    storeTlsSession(slot, Buffer.from('ticket'))
+    vi.advanceTimersByTime(TLS_SESSION_MAX_AGE_MS - 1)
+    expect(peekTlsSession(slot)).toBeInstanceOf(Buffer)
 
-    now += TLS_SESSION_CACHE_MAX_AGE_MS - 1
-    expect(getTlsSession('host:5432')).toBeInstanceOf(Buffer)
-
-    await new Promise((resolve) => setTimeout(resolve, 2))
-
-    now += 2
-    expect(getTlsSession('host:5432')).toBeUndefined()
-    expect(getTlsSessionCacheSize()).toBe(0)
-  })
-
-  test('evicts the oldest entry beyond the size bound', () => {
-    const maxEntries = getTlsSessionCacheMaxEntries()
-    const session = Buffer.from('ticket')
-    for (let i = 0; i <= maxEntries; i++) {
-      storeTlsSession(`host-${i}:5432`, session)
-    }
-
-    expect(getTlsSessionCacheSize()).toBe(maxEntries)
-    expect(getTlsSession('host-0:5432')).toBeUndefined()
-    expect(getTlsSession(`host-${maxEntries}:5432`)).toBe(session)
+    vi.advanceTimersByTime(2)
+    expect(peekTlsSession(slot)).toBeUndefined()
+    expect(slot.session).toBeUndefined()
   })
 
   test('injection getter is enumerable and re-evaluated per Object.assign', () => {
+    const slot = createTlsSessionSlot()
     const ssl: tls.ConnectionOptions = { rejectUnauthorized: false }
-    installTlsSessionInjection(ssl, 'host:5432')
+    installTlsSessionResumption(ssl, slot)
 
     const descriptor = Object.getOwnPropertyDescriptor(ssl, 'session')
     expect(descriptor?.get).toBeInstanceOf(Function)
@@ -77,48 +63,63 @@ describe('tls session cache', () => {
     expect(Object.assign({}, ssl).session).toBeUndefined()
 
     const first = Buffer.from('first')
-    storeTlsSession('host:5432', first)
+    storeTlsSession(slot, first)
     expect(Object.assign({}, ssl).session).toBe(first)
 
     const second = Buffer.from('second')
-    storeTlsSession('host:5432', second)
+    storeTlsSession(slot, second)
     expect(Object.assign({}, ssl).session).toBe(second)
   })
 
-  test('injection install is idempotent', () => {
+  test('slot reference does not leak into tls.connect options', () => {
+    const slot = createTlsSessionSlot()
+    const ssl: tls.ConnectionOptions = { rejectUnauthorized: false }
+    installTlsSessionResumption(ssl, slot)
+
+    // pg builds the tls.connect options with Object.assign(options, ssl) — only the
+    // enumerable `session` getter value may cross, never the slot itself
+    const options = Object.assign({ host: '127.0.0.1' }, ssl)
+    expect(Object.getOwnPropertySymbols(options)).toHaveLength(0)
+    expect(Object.keys(options).sort()).toEqual(['host', 'rejectUnauthorized', 'session'].sort())
+  })
+
+  test('install is idempotent', () => {
+    const first = createTlsSessionSlot()
+    const second = createTlsSessionSlot()
     const ssl: tls.ConnectionOptions = {}
-    installTlsSessionInjection(ssl, 'host:5432')
-    installTlsSessionInjection(ssl, 'other:5432')
+    installTlsSessionResumption(ssl, first)
+    installTlsSessionResumption(ssl, second)
 
-    storeTlsSession('host:5432', Buffer.from('host-session'))
-    storeTlsSession('other:5432', Buffer.from('other-session'))
+    storeTlsSession(first, Buffer.from('first-slot'))
+    storeTlsSession(second, Buffer.from('second-slot'))
 
-    expect(Object.assign({}, ssl).session).toEqual(Buffer.from('host-session'))
+    expect(Object.assign({}, ssl).session).toEqual(Buffer.from('first-slot'))
   })
 
   test('capture stores every session emitted by the socket', () => {
+    const slot = createTlsSessionSlot()
     const socket = new EventEmitter()
-    attachTlsSessionCapture(socket, 'host:5432')
+    attachTlsSessionCapture(socket, slot)
 
     const first = Buffer.from('first')
     const second = Buffer.from('second')
     socket.emit('session', first)
-    expect(getTlsSession('host:5432')).toBe(first)
+    expect(peekTlsSession(slot)).toBe(first)
 
     socket.emit('session', second)
-    expect(getTlsSession('host:5432')).toBe(second)
+    expect(peekTlsSession(slot)).toBe(second)
   })
 
   test('capture tolerates streams without listener support', () => {
-    expect(() => attachTlsSessionCapture(undefined, 'host:5432')).not.toThrow()
-    expect(() => attachTlsSessionCapture({}, 'host:5432')).not.toThrow()
-    expect(() => attachTlsSessionCapture(null, 'host:5432')).not.toThrow()
+    const slot = createTlsSessionSlot()
+    expect(() => attachTlsSessionCapture(undefined, slot)).not.toThrow()
+    expect(() => attachTlsSessionCapture({}, slot)).not.toThrow()
+    expect(() => attachTlsSessionCapture(null, slot)).not.toThrow()
   })
 })
 
 describe('resumption outcome observability', () => {
   afterEach(() => {
-    clearTlsSessionCache()
     vi.restoreAllMocks()
   })
 
@@ -130,10 +131,11 @@ describe('resumption outcome observability', () => {
 
   test("records 'resumed' when the server accepts the offered session", () => {
     const recordSpy = vi.spyOn(metrics, 'recordTlsSessionResumption')
-    storeTlsSession('host:5432', Buffer.from('ticket'))
+    const slot = createTlsSessionSlot()
+    storeTlsSession(slot, Buffer.from('ticket'))
 
     const socket = fakeTlsSocket(true)
-    observeTlsSessionResumption(socket, 'host:5432')
+    observeTlsSessionResumption(socket, slot)
     socket.emit('secureConnect')
 
     expect(recordSpy).toHaveBeenCalledWith('resumed')
@@ -141,10 +143,11 @@ describe('resumption outcome observability', () => {
 
   test("records 'rejected' when a session was offered but the handshake was full", () => {
     const recordSpy = vi.spyOn(metrics, 'recordTlsSessionResumption')
-    storeTlsSession('host:5432', Buffer.from('ticket'))
+    const slot = createTlsSessionSlot()
+    storeTlsSession(slot, Buffer.from('ticket'))
 
     const socket = fakeTlsSocket(false)
-    observeTlsSessionResumption(socket, 'host:5432')
+    observeTlsSessionResumption(socket, slot)
     socket.emit('secureConnect')
 
     expect(recordSpy).toHaveBeenCalledWith('rejected')
@@ -152,26 +155,33 @@ describe('resumption outcome observability', () => {
 
   test("records 'uncached' when no session was available to offer", () => {
     const recordSpy = vi.spyOn(metrics, 'recordTlsSessionResumption')
+    const slot = createTlsSessionSlot()
 
     const socket = fakeTlsSocket(false)
-    observeTlsSessionResumption(socket, 'host:5432')
+    observeTlsSessionResumption(socket, slot)
     socket.emit('secureConnect')
 
     expect(recordSpy).toHaveBeenCalledWith('uncached')
   })
 
-  test('offer peek does not distort cache request metrics', () => {
-    const cacheSpy = vi.spyOn(metrics, 'recordCacheRequest')
+  test('samples the offer when attached, not when the handshake completes', () => {
+    const recordSpy = vi.spyOn(metrics, 'recordTlsSessionResumption')
+    const slot = createTlsSessionSlot()
 
-    observeTlsSessionResumption(fakeTlsSocket(false), 'host:5432')
+    const socket = fakeTlsSocket(false)
+    observeTlsSessionResumption(socket, slot)
 
-    expect(cacheSpy).not.toHaveBeenCalled()
+    storeTlsSession(slot, Buffer.from('ticket'))
+    socket.emit('secureConnect')
+
+    expect(recordSpy).toHaveBeenCalledWith('uncached')
   })
 
   test('tolerates sockets without resumption support', () => {
-    expect(() => observeTlsSessionResumption(new EventEmitter(), 'host:5432')).not.toThrow()
-    expect(() => observeTlsSessionResumption(undefined, 'host:5432')).not.toThrow()
-    expect(() => observeTlsSessionResumption({}, 'host:5432')).not.toThrow()
+    const slot = createTlsSessionSlot()
+    expect(() => observeTlsSessionResumption(new EventEmitter(), slot)).not.toThrow()
+    expect(() => observeTlsSessionResumption(undefined, slot)).not.toThrow()
+    expect(() => observeTlsSessionResumption({}, slot)).not.toThrow()
   })
 })
 
@@ -179,7 +189,6 @@ describe('resumption outcome observability', () => {
 // rather than silently disabling the feature.
 describe('TlsSessionResumptionClient pg wiring', () => {
   afterEach(() => {
-    clearTlsSessionCache()
     vi.restoreAllMocks()
   })
 
@@ -187,9 +196,12 @@ describe('TlsSessionResumptionClient pg wiring', () => {
     expect(getTlsSessionResumptionClient()).toBe(getTlsSessionResumptionClient())
   })
 
-  test('installs injection on the ssl object and captures sessions on sslconnect', () => {
+  test('finds the slot on the ssl options and captures sessions on sslconnect', () => {
     const TlsSessionResumptionClient = getTlsSessionResumptionClient()
+    const slot = createTlsSessionSlot()
     const ssl: tls.ConnectionOptions = { rejectUnauthorized: false }
+    installTlsSessionResumption(ssl, slot)
+
     const client = new TlsSessionResumptionClient({
       host: '1.2.3.4',
       port: 5433,
@@ -198,9 +210,6 @@ describe('TlsSessionResumptionClient pg wiring', () => {
       database: 'db',
       ssl,
     })
-
-    const descriptor = Object.getOwnPropertyDescriptor(ssl, 'session')
-    expect(descriptor?.get).toBeInstanceOf(Function)
 
     const internals = client as unknown as {
       connection: EventEmitter & { stream: unknown }
@@ -216,12 +225,27 @@ describe('TlsSessionResumptionClient pg wiring', () => {
 
     const session = Buffer.from('ticket')
     stream.emit('session', session)
-    expect(getTlsSession('1.2.3.4:5433')).toBe(session)
+    expect(peekTlsSession(slot)).toBe(session)
 
     expect(Object.assign({}, ssl).session).toBe(session)
 
     stream.emit('secureConnect')
     expect(recordSpy).toHaveBeenCalledWith('uncached')
+  })
+
+  test('does nothing without a slot on the ssl options', () => {
+    const TlsSessionResumptionClient = getTlsSessionResumptionClient()
+    const client = new TlsSessionResumptionClient({
+      host: '1.2.3.4',
+      port: 5432,
+      user: 'user',
+      password: 'password',
+      database: 'db',
+      ssl: { rejectUnauthorized: false },
+    })
+
+    const internals = client as unknown as { connection: EventEmitter }
+    expect(internals.connection.listenerCount('sslconnect')).toBe(0)
   })
 
   test('does nothing without object-form ssl settings', () => {
@@ -285,7 +309,7 @@ describe.runIf(opensslAvailable)('TLS session resumption against a real TLS serv
   })
 
   afterEach(() => {
-    clearTlsSessionCache()
+    vi.restoreAllMocks()
   })
 
   test.each([['TLSv1.2'], ['TLSv1.3']])('resumes a session over %s', async (version) => {
@@ -298,11 +322,14 @@ describe.runIf(opensslAvailable)('TLS session resumption against a real TLS serv
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as AddressInfo).port
-    const cacheKey = `127.0.0.1:${port}`
+    const slot = createTlsSessionSlot()
+
+    const recordSpy = vi.spyOn(metrics, 'recordTlsSessionResumption')
 
     try {
       const first = tls.connect({ host: '127.0.0.1', port, rejectUnauthorized: false })
-      attachTlsSessionCapture(first, cacheKey)
+      attachTlsSessionCapture(first, slot)
+      observeTlsSessionResumption(first, slot)
       const sessionArrived = new Promise<void>((resolve, reject) => {
         first.once('session', () => resolve())
         first.once('error', reject)
@@ -315,14 +342,16 @@ describe.runIf(opensslAvailable)('TLS session resumption against a real TLS serv
       await sessionArrived
       first.destroy()
 
-      expect(getTlsSession(cacheKey)).toBeInstanceOf(Buffer)
+      expect(peekTlsSession(slot)).toBeInstanceOf(Buffer)
+      expect(recordSpy).toHaveBeenNthCalledWith(1, 'uncached')
 
       const ssl: tls.ConnectionOptions = { rejectUnauthorized: false }
-      installTlsSessionInjection(ssl, cacheKey)
+      installTlsSessionResumption(ssl, slot)
       const options: tls.ConnectionOptions = { host: '127.0.0.1', port }
       Object.assign(options, ssl)
 
       const second = tls.connect(options)
+      observeTlsSessionResumption(second, slot)
       await new Promise<void>((resolve, reject) => {
         second.once('secureConnect', resolve)
         second.once('error', reject)
@@ -331,6 +360,7 @@ describe.runIf(opensslAvailable)('TLS session resumption against a real TLS serv
       second.destroy()
 
       expect(reused).toBe(true)
+      expect(recordSpy).toHaveBeenNthCalledWith(2, 'resumed')
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }

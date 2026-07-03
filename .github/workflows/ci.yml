@@ -133,6 +133,7 @@ jobs:
         with:
           override-file: ./.docker/docker-compose-infra-multigres-override.yml
           label: multigres
+          additional-exclude-table-data: multigres.heartbeat
 
   coveralls_finish:
     name: Coveralls / Finalize

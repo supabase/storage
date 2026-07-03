@@ -14,6 +14,14 @@ inputs:
   database-url:
     description: Connection string the idempotency script migrates against
     default: postgresql://postgres:postgres@127.0.0.1/postgres
+  additional-exclude-table-data:
+    description: >
+      Space-separated list of extra schema.table entries to exclude from data
+      diffing, on top of storage.migrations. Use this for engine-internal
+      tables whose data legitimately changes between dumps regardless of
+      migration idempotency (e.g. multigres.heartbeat).
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -22,14 +30,19 @@ runs:
       shell: bash
       env:
         OVERRIDE_FILE: ${{ inputs.override-file }}
+        EXTRA_EXCLUDES: ${{ inputs.additional-exclude-table-data }}
       run: |
         override_arg=""
         [ -n "$OVERRIDE_FILE" ] && override_arg="-f $OVERRIDE_FILE"
+        exclude_args=(--exclude-table-data=storage.migrations)
+        for t in $EXTRA_EXCLUDES; do
+          exclude_args+=("--exclude-table-data=$t")
+        done
         docker compose --project-directory . \
           -f ./.docker/docker-compose-infra.yml $override_arg \
           exec -T -e PGPASSWORD=postgres tenant_db \
           pg_dump -h 127.0.0.1 -p 5432 -U postgres -d postgres \
-          --exclude-table-data=storage.migrations \
+          "${exclude_args[@]}" \
           --restrict-key=test \
           > before-${{ inputs.label }}.sql
 
@@ -43,14 +56,19 @@ runs:
       shell: bash
       env:
         OVERRIDE_FILE: ${{ inputs.override-file }}
+        EXTRA_EXCLUDES: ${{ inputs.additional-exclude-table-data }}
       run: |
         override_arg=""
         [ -n "$OVERRIDE_FILE" ] && override_arg="-f $OVERRIDE_FILE"
+        exclude_args=(--exclude-table-data=storage.migrations)
+        for t in $EXTRA_EXCLUDES; do
+          exclude_args+=("--exclude-table-data=$t")
+        done
         docker compose --project-directory . \
           -f ./.docker/docker-compose-infra.yml $override_arg \
           exec -T -e PGPASSWORD=postgres tenant_db \
           pg_dump -h 127.0.0.1 -p 5432 -U postgres -d postgres \
-          --exclude-table-data=storage.migrations \
+          "${exclude_args[@]}" \
           --restrict-key=test \
           > after-${{ inputs.label }}.sql
 

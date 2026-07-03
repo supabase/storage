@@ -205,10 +205,18 @@ export class PgMetastore implements Metastore<PgTransaction> {
     return catalog
   }
 
-  async countCatalogs(params: { tenantId: string; limit: number }): Promise<number> {
+  async countCatalogs(params: {
+    tenantId: string
+    limit: number
+    deleted?: boolean
+  }): Promise<number> {
     const values: unknown[] = []
     const conditions: string[] = []
     this.addTenantCondition(conditions, values, params.tenantId)
+
+    if (!params.deleted) {
+      conditions.push('deleted_at IS NULL')
+    }
 
     return this.countRows('iceberg_catalogs', conditions, values, params.limit)
   }

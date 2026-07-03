@@ -91,7 +91,7 @@ export interface Metastore<Tnx = unknown> {
   ): Promise<T>
 
   assignCatalog(param: { bucketName: string; bucketId: string; tenantId: string }): Promise<Catalog>
-  countCatalogs(params: { tenantId: string; limit: number }): Promise<number>
+  countCatalogs(params: { tenantId: string; limit: number; deleted?: boolean }): Promise<number>
   countNamespaces(param: { tenantId: string; limit: number }): Promise<number>
   countTables(params: { namespaceId: string; tenantId?: string; limit: number }): Promise<number>
   countResources(params: {

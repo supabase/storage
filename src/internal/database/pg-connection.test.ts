@@ -8,10 +8,12 @@ import { vi } from 'vitest'
 import {
   getPgCancelConnectionTarget,
   PgPoolExecutor,
+  PgPoolManager,
   PgPoolStrategy,
   PgTenantConnection,
   PgTransaction,
 } from './pg-connection'
+import type { TenantConnectionOptions } from './pool'
 
 class TestablePgPoolStrategy extends PgPoolStrategy {
   getCurrentPoolForTest(): Pool {
@@ -24,8 +26,8 @@ class TestablePgPoolStrategy extends PgPoolStrategy {
 }
 
 function createPoolStrategySettings(
-  overrides: Partial<ConstructorParameters<typeof PgPoolStrategy>[0]> = {}
-): ConstructorParameters<typeof PgPoolStrategy>[0] {
+  overrides: Partial<TenantConnectionOptions> = {}
+): TenantConnectionOptions {
   return {
     tenantId: 'pg-pool-strategy-test',
     dbUrl: 'postgres://postgres:postgres@localhost:5432/postgres',
@@ -737,6 +739,38 @@ describe('PgTenantConnection', () => {
       )
     } finally {
       logSpy.mockRestore()
+    }
+  })
+})
+
+describe('PgPoolManager', () => {
+  it('caches strategies without retaining request-scoped options', async () => {
+    const manager = new PgPoolManager()
+    const tenantId = 'pg-pool-manager-prune-test'
+    const request = { operation: { type: 'upload' } }
+
+    const strategy = manager.getPool(
+      createPoolStrategySettings({
+        tenantId,
+        headers: { authorization: 'Bearer secret' },
+        method: 'POST',
+        path: '/object/bucket/key',
+        operation: () => request.operation.type,
+      })
+    )
+
+    try {
+      const retained = (strategy as unknown as { options: Record<string, unknown> }).options
+      expect(Object.keys(retained).sort()).toEqual([
+        'clusterSize',
+        'dbUrl',
+        'isExternalPool',
+        'maxConnections',
+        'numWorkers',
+        'tenantId',
+      ])
+    } finally {
+      await manager.destroy(tenantId)
     }
   })
 })

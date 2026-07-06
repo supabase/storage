@@ -7,6 +7,7 @@ import {
   PgTransaction,
 } from '@internal/database'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
+import type { TenantConnectionOptions } from '@internal/database/pool'
 import { logger, logSchema } from '@internal/monitoring'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { StoragePgDB } from '@storage/database'
@@ -22,7 +23,7 @@ describe('StoragePgDB bucket metadata', () => {
   let db: StoragePgDB
   let runId: string
   let superUser: Awaited<ReturnType<typeof getServiceKeyUser>>
-  let connectionSettings: ConstructorParameters<typeof PgPoolStrategy>[0]
+  let connectionSettings: TenantConnectionOptions
 
   beforeAll(async () => {
     await runMigrationsOnTenant({

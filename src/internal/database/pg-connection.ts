@@ -9,6 +9,7 @@ import {
   PoolManager,
   PoolRebalanceOptions,
   PoolStats,
+  PoolStrategySettings,
   searchPath,
   TenantConnectionOptions,
 } from './pool'
@@ -95,7 +96,7 @@ export class PgPoolStrategy {
   protected pool?: Pool
   protected tlsSession?: TlsSessionSlot
 
-  constructor(protected readonly options: TenantConnectionOptions) {}
+  constructor(protected readonly options: PoolStrategySettings) {}
 
   acquire(): PgPoolExecutor {
     return new PgPoolExecutor(this.getPool())
@@ -303,7 +304,7 @@ function pulsePgPoolQueue(pool: Pool): void {
 }
 
 export class PgPoolManager extends PoolManager<PgPoolStrategy> {
-  protected newPool(settings: TenantConnectionOptions): PgPoolStrategy {
+  protected newPool(settings: PoolStrategySettings): PgPoolStrategy {
     return new PgPoolStrategy(settings)
   }
 }

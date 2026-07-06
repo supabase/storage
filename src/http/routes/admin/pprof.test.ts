@@ -19,6 +19,7 @@ const runtimeApiClient = vi.hoisted(() => ({
   close: vi.fn(),
 }))
 const waitForMultipartPprofWindowMock = vi.hoisted(() => vi.fn())
+const getManagementMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@platformatic/control', () => ({
   RuntimeApiClient: class MockRuntimeApiClient {
@@ -31,6 +32,7 @@ vi.mock('@platformatic/control', () => ({
 
 vi.mock('@platformatic/globals', () => ({
   getGlobal: vi.fn(),
+  getManagement: getManagementMock,
 }))
 
 vi.mock('../../plugins/apikey', () => ({
@@ -296,6 +298,7 @@ describe('admin pprof routes', () => {
       applicationId: 'storage',
       workerId: 2,
     } as never)
+    getManagementMock.mockReturnValue(undefined)
 
     runtimeApiClient.getRuntimeApplications.mockResolvedValue({
       applications: [{ id: 'storage', workers: 2 }],
@@ -616,6 +619,80 @@ describe('admin pprof routes', () => {
           .map((sample) => sample.value[0])
           .sort((left, right) => Number(left) - Number(right))
       ).toEqual([11, 22])
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('retries whole-app captures with live worker ids from worker-not-found errors', async () => {
+    runtimeApiClient.startApplicationProfiling.mockImplementation(
+      async (_pid, applicationId: string) => {
+        if (applicationId === 'storage:0' || applicationId === 'storage:1') {
+          throw Object.assign(
+            new Error(
+              `Failed to start profiling for service "${applicationId}": ` +
+                'Worker 0 of application storage not found. Available applications are: 4, 5, 6'
+            ),
+            {
+              code: 'PLT_CTR_FAILED_TO_START_PROFILING',
+            }
+          )
+        }
+      }
+    )
+    runtimeApiClient.stopApplicationProfiling
+      .mockResolvedValueOnce(buildProfile('worker-four', 44).buffer)
+      .mockResolvedValueOnce(buildProfile('worker-five', 55).buffer)
+      .mockResolvedValueOnce(buildProfile('worker-six', 66).buffer)
+
+    const app = await buildApp()
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/heap?seconds=1',
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.headers['x-platformatic-worker-count']).toBe('3')
+      expect(runtimeApiClient.startApplicationProfiling).toHaveBeenCalledTimes(5)
+      for (const workerId of [0, 1, 4, 5, 6]) {
+        expect(runtimeApiClient.startApplicationProfiling).toHaveBeenCalledWith(
+          process.pid,
+          `storage:${workerId}`,
+          {
+            type: 'heap',
+          }
+        )
+      }
+      expect(runtimeApiClient.stopApplicationProfiling).toHaveBeenCalledTimes(3)
+      for (const [call, workerId] of [
+        [1, 4],
+        [2, 5],
+        [3, 6],
+      ]) {
+        expect(runtimeApiClient.stopApplicationProfiling).toHaveBeenNthCalledWith(
+          call,
+          process.pid,
+          `storage:${workerId}`,
+          {
+            type: 'heap',
+          }
+        )
+      }
+
+      const parts = parseMultipartParts(response.rawPayload, response.headers['content-type'])
+      expect(JSON.parse(parts[0].body.toString('utf8'))).toMatchObject({
+        event: 'started',
+        workerCount: 3,
+      })
+
+      const mergedProfile = Profile.decode(parts[1].body)
+      expect(
+        mergedProfile.sample
+          .map((sample) => sample.value[0])
+          .sort((left, right) => Number(left) - Number(right))
+      ).toEqual([44, 55, 66])
     } finally {
       await app.close()
     }

@@ -72,11 +72,11 @@ export const ERRORS = {
       message: `The bucket you tried to delete is not empty`,
       originalError: e,
     }),
-  IcebergMaximumResourceLimit: (limit: number, e?: Error) =>
+  IcebergMaximumResourceLimit: (resource: string, limit: number, e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.IcebergMaximumResourceLimit,
       httpStatusCode: 409,
-      message: `The maximum number of this resource ${limit} is reached`,
+      message: `The maximum number of this resource (${resource}) ${limit} is reached`,
       originalError: e,
     }),
   IcebergResourceNotEmpty: (resource: string, name: string, e?: Error) =>

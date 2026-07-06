@@ -15,9 +15,9 @@ import {
 import { getSslSettings } from './ssl'
 import {
   createTlsSessionSlot,
-  getTlsSessionResumptionClient,
   installTlsSessionResumption,
-  TlsSessionSlot,
+  TlsSessionResumptionClient,
+  type TlsSessionSlot,
 } from './tls-session-resumption'
 
 const {
@@ -198,7 +198,7 @@ export class PgPoolStrategy {
         connectionTimeoutMillis: databaseConnectionTimeout,
         idleTimeoutMillis: settings.idleTimeoutMillis,
         ssl,
-        Client: databaseTlsSessionResumption && ssl ? getTlsSessionResumptionClient() : undefined,
+        Client: databaseTlsSessionResumption && ssl ? TlsSessionResumptionClient : undefined,
         application_name: databaseApplicationName,
         options: settings.searchPath
           ? `-c search_path=${settings.searchPath.join(',')}`

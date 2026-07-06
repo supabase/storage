@@ -8,12 +8,12 @@ import tls from 'node:tls'
 import {
   attachTlsSessionCapture,
   createTlsSessionSlot,
-  getTlsSessionResumptionClient,
   installTlsSessionResumption,
   observeTlsSessionResumption,
   peekTlsSession,
   storeTlsSession,
   TLS_SESSION_MAX_AGE_MS,
+  TlsSessionResumptionClient,
 } from '@internal/database/tls-session-resumption'
 import * as metrics from '@internal/monitoring/metrics'
 import { vi } from 'vitest'
@@ -192,12 +192,7 @@ describe('TlsSessionResumptionClient pg wiring', () => {
     vi.restoreAllMocks()
   })
 
-  test('returns the same class on every call', () => {
-    expect(getTlsSessionResumptionClient()).toBe(getTlsSessionResumptionClient())
-  })
-
   test('finds the slot on the ssl options and captures sessions on sslconnect', () => {
-    const TlsSessionResumptionClient = getTlsSessionResumptionClient()
     const slot = createTlsSessionSlot()
     const ssl: tls.ConnectionOptions = { rejectUnauthorized: false }
     installTlsSessionResumption(ssl, slot)
@@ -234,7 +229,6 @@ describe('TlsSessionResumptionClient pg wiring', () => {
   })
 
   test('does nothing without a slot on the ssl options', () => {
-    const TlsSessionResumptionClient = getTlsSessionResumptionClient()
     const client = new TlsSessionResumptionClient({
       host: '1.2.3.4',
       port: 5432,
@@ -249,7 +243,6 @@ describe('TlsSessionResumptionClient pg wiring', () => {
   })
 
   test('does nothing without object-form ssl settings', () => {
-    const TlsSessionResumptionClient = getTlsSessionResumptionClient()
     const client = new TlsSessionResumptionClient({
       host: 'db.example.com',
       port: 5432,

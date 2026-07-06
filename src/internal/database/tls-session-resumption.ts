@@ -127,34 +127,30 @@ type TlsSessionResumptionClientCtor = new (
   config?: ConstructorParameters<typeof Client>[0]
 ) => Client
 
-let cachedClientClass: TlsSessionResumptionClientCtor | undefined
-
-// Client that resumes TLS sessions from the slot installed on the pool's ssl options.
-export function getTlsSessionResumptionClient(): TlsSessionResumptionClientCtor {
-  if (!cachedClientClass) {
-    cachedClientClass = class TlsSessionResumptionClient extends Client {
-      constructor(config?: ConstructorParameters<typeof Client>[0]) {
-        super(config)
-
-        const internals = this as unknown as PgClientInternals
-        const ssl = internals.connectionParameters?.ssl
-        if (!ssl || typeof ssl !== 'object') {
-          return
-        }
-
-        const slot = getTlsSessionSlot(ssl)
-        if (!slot) {
-          return
-        }
-
-        const connection = internals.connection
-        connection?.once?.('sslconnect', () => {
-          attachTlsSessionCapture(connection.stream, slot)
-          observeTlsSessionResumption(connection.stream, slot)
-        })
-      }
-    }
+function attachTlsSessionResumption(client: Client): void {
+  const internals = client as unknown as PgClientInternals
+  const ssl = internals.connectionParameters?.ssl
+  if (!ssl || typeof ssl !== 'object') {
+    return
   }
 
-  return cachedClientClass
+  const slot = getTlsSessionSlot(ssl)
+  if (!slot) {
+    return
+  }
+
+  const connection = internals.connection
+  connection?.once?.('sslconnect', () => {
+    attachTlsSessionCapture(connection.stream, slot)
+    observeTlsSessionResumption(connection.stream, slot)
+  })
 }
+
+// Client constructor that resumes TLS sessions from the slot installed on the pool's ssl options.
+export const TlsSessionResumptionClient = class TlsSessionResumptionClient {
+  constructor(config?: ConstructorParameters<typeof Client>[0]) {
+    const client = new Client(config)
+    attachTlsSessionResumption(client)
+    return client
+  }
+} as unknown as TlsSessionResumptionClientCtor

@@ -1104,7 +1104,7 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
       databaseSSLRootCert: '<cert>',
       databaseTlsSessionResumption: true,
     })
-    const { getTlsSessionResumptionClient } = await import('./tls-session-resumption')
+    const { TlsSessionResumptionClient } = await import('./tls-session-resumption')
     const DynamicTestablePgPoolStrategy = createDynamicTestablePgPoolStrategy(DynamicPgPoolStrategy)
     const strategy = new DynamicTestablePgPoolStrategy(
       createPoolStrategySettings({
@@ -1117,7 +1117,7 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
       const ssl = pool.options.ssl as object
 
       expect(ssl).toBeDefined()
-      expect(pool.options.Client).toBe(getTlsSessionResumptionClient())
+      expect(pool.options.Client).toBe(TlsSessionResumptionClient)
 
       const sessionDescriptor = Object.getOwnPropertyDescriptor(ssl, 'session')
       expect(sessionDescriptor?.get).toBeInstanceOf(Function)

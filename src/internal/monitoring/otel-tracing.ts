@@ -5,17 +5,13 @@ const {
   version,
   requestTraceHeader,
   isMultitenant,
-  requestXForwardedHostRegExp,
   tenantId: defaultTenantId,
   region,
   serviceName,
   storageS3InternalTracesEnabled,
 } = getConfig()
 
-const xForwardedHostRegExp = getXForwardedHostRegExp({
-  isMultitenant,
-  requestXForwardedHostRegExp,
-})
+const xForwardedHostRegExp = getXForwardedHostRegExp()
 
 import { FastifyOtelInstrumentation } from '@fastify/otel'
 import * as grpc from '@grpc/grpc-js'

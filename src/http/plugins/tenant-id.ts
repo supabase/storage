@@ -8,12 +8,9 @@ declare module 'fastify' {
   }
 }
 
-const { isMultitenant, tenantId: defaultTenantId, requestXForwardedHostRegExp } = getConfig()
+const { isMultitenant, tenantId: defaultTenantId } = getConfig()
 
-const xForwardedHostRegExp = getXForwardedHostRegExp({
-  isMultitenant,
-  requestXForwardedHostRegExp,
-})
+const xForwardedHostRegExp = getXForwardedHostRegExp()
 
 export const tenantId = fastifyPlugin(
   async (fastify) => {

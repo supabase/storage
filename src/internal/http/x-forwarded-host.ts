@@ -1,25 +1,16 @@
-interface XForwardedHostRegExpConfig {
-  isMultitenant: boolean
-  requestXForwardedHostRegExp?: string
-}
+import { getConfig } from '../../config'
 
-let cachedPattern: string | undefined
-let cachedRegExp: RegExp | undefined
+const xForwardedHostRegExp = createXForwardedHostRegExp()
 
-export function getXForwardedHostRegExp({
-  isMultitenant,
-  requestXForwardedHostRegExp,
-}: XForwardedHostRegExpConfig): RegExp | undefined {
+function createXForwardedHostRegExp(): RegExp | undefined {
+  const { isMultitenant, requestXForwardedHostRegExp } = getConfig()
   if (!isMultitenant || !requestXForwardedHostRegExp) {
     return undefined
   }
 
-  if (requestXForwardedHostRegExp !== cachedPattern) {
-    const nextRegExp = new RegExp(requestXForwardedHostRegExp)
+  return new RegExp(requestXForwardedHostRegExp)
+}
 
-    cachedPattern = requestXForwardedHostRegExp
-    cachedRegExp = nextRegExp
-  }
-
-  return cachedRegExp
+export function getXForwardedHostRegExp(): RegExp | undefined {
+  return xForwardedHostRegExp
 }

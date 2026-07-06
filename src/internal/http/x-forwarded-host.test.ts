@@ -1,62 +1,107 @@
-import { getXForwardedHostRegExp } from './x-forwarded-host'
+const xForwardedHostEnvKeys = [
+  'MULTI_TENANT',
+  'IS_MULTITENANT',
+  'REQUEST_X_FORWARDED_HOST_REGEXP',
+  'X_FORWARDED_HOST_REGEXP',
+] as const
+
+const originalEnv = Object.fromEntries(
+  xForwardedHostEnvKeys.map((key) => [key, process.env[key]])
+) as Record<(typeof xForwardedHostEnvKeys)[number], string | undefined>
+
+async function loadXForwardedHostRegExp({
+  isMultitenant,
+  pattern,
+}: {
+  isMultitenant: boolean
+  pattern?: string
+}) {
+  vi.resetModules()
+
+  process.env.MULTI_TENANT = isMultitenant ? 'true' : 'false'
+  process.env.IS_MULTITENANT = isMultitenant ? 'true' : 'false'
+  process.env.X_FORWARDED_HOST_REGEXP = ''
+
+  if (pattern === undefined) {
+    process.env.REQUEST_X_FORWARDED_HOST_REGEXP = ''
+  } else {
+    process.env.REQUEST_X_FORWARDED_HOST_REGEXP = pattern
+  }
+
+  return await import('./x-forwarded-host')
+}
+
+function restoreXForwardedHostEnv() {
+  for (const key of xForwardedHostEnvKeys) {
+    const value = originalEnv[key]
+    if (value === undefined) {
+      delete process.env[key]
+    } else {
+      process.env[key] = value
+    }
+  }
+}
+
+afterEach(() => {
+  restoreXForwardedHostEnv()
+  vi.resetModules()
+})
 
 describe('getXForwardedHostRegExp', () => {
-  it('skips compiling the host pattern when multitenancy is disabled', () => {
-    expect(
-      getXForwardedHostRegExp({
-        isMultitenant: false,
-        requestXForwardedHostRegExp: '[',
-      })
-    ).toBeUndefined()
-  })
-
-  it('reuses the compiled regexp for the same pattern', () => {
-    const config = {
-      isMultitenant: true,
-      requestXForwardedHostRegExp: '^([a-z]+)\\.local$',
-    }
-
-    expect(getXForwardedHostRegExp(config)).toBe(getXForwardedHostRegExp(config))
-  })
-
-  it('recompiles when the configured pattern changes', () => {
-    const first = getXForwardedHostRegExp({
-      isMultitenant: true,
-      requestXForwardedHostRegExp: '^([a-z]+)\\.local$',
-    })
-    const second = getXForwardedHostRegExp({
-      isMultitenant: true,
-      requestXForwardedHostRegExp: '^([0-9]+)\\.local$',
+  it('skips compiling the host pattern when multitenancy is disabled', async () => {
+    const { getXForwardedHostRegExp } = await loadXForwardedHostRegExp({
+      isMultitenant: false,
+      pattern: '[',
     })
 
-    expect(second).not.toBe(first)
-    expect('123.local'.match(second!)).toBeTruthy()
+    expect(getXForwardedHostRegExp()).toBeUndefined()
   })
 
-  it('does not replace the cache when a new pattern is invalid', () => {
-    const previous = getXForwardedHostRegExp({
+  it('returns undefined when no host pattern is configured', async () => {
+    const { getXForwardedHostRegExp } = await loadXForwardedHostRegExp({
       isMultitenant: true,
-      requestXForwardedHostRegExp: '^([a-z]+)\\.local$',
     })
 
-    expect(() =>
-      getXForwardedHostRegExp({
-        isMultitenant: true,
-        requestXForwardedHostRegExp: '[',
-      })
-    ).toThrow(SyntaxError)
-    expect(() =>
-      getXForwardedHostRegExp({
-        isMultitenant: true,
-        requestXForwardedHostRegExp: '[',
-      })
-    ).toThrow(SyntaxError)
+    expect(getXForwardedHostRegExp()).toBeUndefined()
+  })
 
-    expect(
-      getXForwardedHostRegExp({
+  it('reuses the compiled regexp from startup config', async () => {
+    const { getXForwardedHostRegExp } = await loadXForwardedHostRegExp({
+      isMultitenant: true,
+      pattern: '^([a-z]+)\\.local$',
+    })
+
+    const first = getXForwardedHostRegExp()
+    const second = getXForwardedHostRegExp()
+
+    expect(second).toBe(first)
+    expect('tenant.local'.match(first!)).toBeTruthy()
+  })
+
+  it('does not recompile when config is reloaded after module load', async () => {
+    const { getXForwardedHostRegExp } = await loadXForwardedHostRegExp({
+      isMultitenant: true,
+      pattern: '^([a-z]+)\\.local$',
+    })
+    const previous = getXForwardedHostRegExp()
+
+    process.env.REQUEST_X_FORWARDED_HOST_REGEXP = '^([0-9]+)\\.local$'
+    const { getConfig } = await import('../../config')
+    getConfig({ reload: true })
+
+    const current = getXForwardedHostRegExp()
+
+    expect(current).toBe(previous)
+    expect('tenant.local'.match(current!)).toBeTruthy()
+    expect('123.local'.match(current!)).toBeFalsy()
+  })
+
+  it('throws while loading the helper when the configured pattern is invalid', async () => {
+    await expect(
+      loadXForwardedHostRegExp({
         isMultitenant: true,
-        requestXForwardedHostRegExp: '^([a-z]+)\\.local$',
+        pattern: '[',
       })
-    ).toBe(previous)
+    ).rejects.toThrow(SyntaxError)
   })
 })

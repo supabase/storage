@@ -6,6 +6,8 @@ import { PgTenantConnection } from './pg-connection'
 import { User } from './pool'
 import { getTenantConfig } from './tenant'
 
+const xForwardedHostRegExp = getXForwardedHostRegExp()
+
 interface ConnectionOptions {
   host: string
   tenantId: string
@@ -39,13 +41,7 @@ async function getDbSettings(
   host: string | undefined,
   options?: { disableHostCheck?: boolean }
 ) {
-  const {
-    isMultitenant,
-    databasePoolURL,
-    databaseURL,
-    databaseMaxConnections,
-    requestXForwardedHostRegExp,
-  } = getConfig()
+  const { isMultitenant, databasePoolURL, databaseURL, databaseMaxConnections } = getConfig()
 
   let dbUrl = databasePoolURL || databaseURL
   let maxConnections = databaseMaxConnections
@@ -57,11 +53,6 @@ async function getDbSettings(
     }
 
     if (!options?.disableHostCheck) {
-      const xForwardedHostRegExp = getXForwardedHostRegExp({
-        isMultitenant,
-        requestXForwardedHostRegExp,
-      })
-
       if (xForwardedHostRegExp) {
         const xForwardedHost = host
 

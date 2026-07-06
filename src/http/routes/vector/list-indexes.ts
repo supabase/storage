@@ -32,7 +32,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       validatorCompiler: listIndexesValidator,
       config: {
-        operation: { type: ROUTE_OPERATIONS.LIST_VECTOR_INDEXES },
+        operation: ROUTE_OPERATIONS.LIST_VECTOR_INDEXES,
       },
       schema: {
         ...listIndex,

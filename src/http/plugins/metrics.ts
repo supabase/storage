@@ -90,8 +90,7 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
         // Calculate duration in seconds
         const durationSeconds = (performance.now() - startTime) / 1000
 
-        const operation =
-          request.operation?.type || request.routeOptions?.config?.operation?.type || 'unknown'
+        const operation = request.operation || request.routeOptions?.config?.operation || 'unknown'
 
         // Record request size from content-length header
         const requestContentLength = request.headers['content-length']

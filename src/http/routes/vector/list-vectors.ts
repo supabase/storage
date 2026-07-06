@@ -45,7 +45,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       validatorCompiler: listVectorsValidator,
       config: {
-        operation: { type: ROUTE_OPERATIONS.LIST_VECTORS },
+        operation: ROUTE_OPERATIONS.LIST_VECTORS,
       },
       schema: {
         ...listVectors,

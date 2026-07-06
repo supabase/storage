@@ -385,7 +385,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/:prefix/namespaces/:namespace/tables',
     {
       config: {
-        operation: { type: ROUTE_OPERATIONS.ICEBERG_LIST_TABLES },
+        operation: ROUTE_OPERATIONS.ICEBERG_LIST_TABLES,
       },
       schema: {
         ...listTableSchema,
@@ -418,7 +418,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/:prefix/namespaces/:namespace/tables/:table',
     {
       config: {
-        operation: { type: ROUTE_OPERATIONS.ICEBERG_LOAD_TABLE },
+        operation: ROUTE_OPERATIONS.ICEBERG_LOAD_TABLE,
       },
       schema: {
         ...loadTableSchema,
@@ -451,7 +451,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/:prefix/namespaces/:namespace/tables/:table',
     {
       config: {
-        operation: { type: ROUTE_OPERATIONS.ICEBERG_TABLE_EXISTS },
+        operation: ROUTE_OPERATIONS.ICEBERG_TABLE_EXISTS,
       },
       schema: {
         ...loadTableSchema,
@@ -492,7 +492,7 @@ export default async function routes(fastify: FastifyInstance) {
       '/:prefix/namespaces/:namespace/tables/:table',
       {
         config: {
-          operation: { type: ROUTE_OPERATIONS.ICEBERG_DROP_TABLE },
+          operation: ROUTE_OPERATIONS.ICEBERG_DROP_TABLE,
         },
         schema: { ...dropTableSchema, tags: ['iceberg'] },
       },
@@ -541,7 +541,7 @@ export default async function routes(fastify: FastifyInstance) {
       '/:prefix/namespaces/:namespace/tables/:table',
       {
         config: {
-          operation: { type: ROUTE_OPERATIONS.ICEBERG_COMMIT_TABLE },
+          operation: ROUTE_OPERATIONS.ICEBERG_COMMIT_TABLE,
         },
         schema: {
           ...commitTransactionSchema,

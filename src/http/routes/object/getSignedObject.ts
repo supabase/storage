@@ -51,7 +51,7 @@ export default async function routes(fastify: FastifyInstance) {
         tags: ['object'],
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.GET_SIGNED_OBJECT },
+        operation: ROUTE_OPERATIONS.GET_SIGNED_OBJECT,
       },
     },
     async (request, response) => {

@@ -50,7 +50,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       schema,
       config: {
-        operation: { type: ROUTE_OPERATIONS.DELETE_OBJECTS },
+        operation: ROUTE_OPERATIONS.DELETE_OBJECTS,
         resources: (req: FastifyRequest<deleteObjectsInterface>) => {
           const { prefixes } = req.body
           return prefixes.map((prefix) => `${req.params.bucketName}/${prefix}`)

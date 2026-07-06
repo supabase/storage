@@ -36,7 +36,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       validatorCompiler: deleteVectorsValidator,
       config: {
-        operation: { type: ROUTE_OPERATIONS.DELETE_VECTORS },
+        operation: ROUTE_OPERATIONS.DELETE_VECTORS,
       },
       schema: {
         ...deleteVector,

@@ -265,7 +265,7 @@ const authenticatedRoutes = fastifyPlugin(
         {
           schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['resumable'] },
           config: {
-            operation: { type: `${ROUTE_OPERATIONS.TUS_CREATE_UPLOAD}${options.operation || ''}` },
+            operation: `${ROUTE_OPERATIONS.TUS_CREATE_UPLOAD}${options.operation || ''}`,
           },
         },
         async (req, res) => {
@@ -278,7 +278,7 @@ const authenticatedRoutes = fastifyPlugin(
         {
           schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['resumable'] },
           config: {
-            operation: { type: `${ROUTE_OPERATIONS.TUS_CREATE_UPLOAD}${options.operation || ''}` },
+            operation: `${ROUTE_OPERATIONS.TUS_CREATE_UPLOAD}${options.operation || ''}`,
           },
         },
         async (req, res) => {
@@ -291,7 +291,7 @@ const authenticatedRoutes = fastifyPlugin(
         {
           schema: { summary: 'Handle PUT request for TUS Resumable uploads', tags: ['resumable'] },
           config: {
-            operation: { type: `${ROUTE_OPERATIONS.TUS_UPLOAD_PART}${options.operation || ''}` },
+            operation: `${ROUTE_OPERATIONS.TUS_UPLOAD_PART}${options.operation || ''}`,
           },
         },
         async (req, res) => {
@@ -306,7 +306,7 @@ const authenticatedRoutes = fastifyPlugin(
             tags: ['resumable'],
           },
           config: {
-            operation: { type: `${ROUTE_OPERATIONS.TUS_UPLOAD_PART}${options.operation || ''}` },
+            operation: `${ROUTE_OPERATIONS.TUS_UPLOAD_PART}${options.operation || ''}`,
           },
         },
         async (req, res) => {
@@ -318,7 +318,7 @@ const authenticatedRoutes = fastifyPlugin(
         {
           schema: { summary: 'Handle HEAD request for TUS Resumable uploads', tags: ['resumable'] },
           config: {
-            operation: { type: `${ROUTE_OPERATIONS.TUS_GET_UPLOAD}${options.operation || ''}` },
+            operation: `${ROUTE_OPERATIONS.TUS_GET_UPLOAD}${options.operation || ''}`,
           },
         },
         async (req, res) => {
@@ -333,7 +333,7 @@ const authenticatedRoutes = fastifyPlugin(
             tags: ['resumable'],
           },
           config: {
-            operation: { type: `${ROUTE_OPERATIONS.TUS_DELETE_UPLOAD}${options.operation || ''}` },
+            operation: `${ROUTE_OPERATIONS.TUS_DELETE_UPLOAD}${options.operation || ''}`,
           },
         },
         async (req, res) => {
@@ -373,7 +373,7 @@ export const publicRoutes = fastifyPlugin(
             description: 'Handle OPTIONS request for TUS Resumable uploads',
           },
           config: {
-            operation: { type: `${ROUTE_OPERATIONS.TUS_OPTIONS}${options.operation || ''}` },
+            operation: `${ROUTE_OPERATIONS.TUS_OPTIONS}${options.operation || ''}`,
           },
         },
         async (req, res) => {
@@ -390,7 +390,7 @@ export const publicRoutes = fastifyPlugin(
             description: 'Handle OPTIONS request for TUS Resumable uploads',
           },
           config: {
-            operation: { type: `${ROUTE_OPERATIONS.TUS_OPTIONS}${options.operation || ''}` },
+            operation: `${ROUTE_OPERATIONS.TUS_OPTIONS}${options.operation || ''}`,
           },
         },
         async (req, res) => {

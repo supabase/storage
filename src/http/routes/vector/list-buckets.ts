@@ -30,7 +30,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       validatorCompiler: listBucketsValidator,
       config: {
-        operation: { type: ROUTE_OPERATIONS.LIST_VECTOR_BUCKETS },
+        operation: ROUTE_OPERATIONS.LIST_VECTOR_BUCKETS,
       },
       schema: {
         ...listBucket,

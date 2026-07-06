@@ -195,7 +195,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       validatorCompiler: queryVectorsValidator,
       config: {
-        operation: { type: ROUTE_OPERATIONS.QUERY_VECTORS },
+        operation: ROUTE_OPERATIONS.QUERY_VECTORS,
       },
       schema: {
         body: { $ref: 'queryVectorBodyDoc#' },

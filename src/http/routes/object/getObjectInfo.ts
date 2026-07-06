@@ -101,7 +101,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#' } },
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.INFO_PUBLIC_OBJECT },
+        operation: ROUTE_OPERATIONS.INFO_PUBLIC_OBJECT,
       },
     },
     async (request, response) => {
@@ -122,7 +122,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#' } },
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.INFO_PUBLIC_OBJECT },
+        operation: ROUTE_OPERATIONS.INFO_PUBLIC_OBJECT,
       },
     },
     async (request, response) => {
@@ -145,7 +145,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         tags: ['object'],
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.HEAD_AUTH_OBJECT_INFO },
+        operation: ROUTE_OPERATIONS.HEAD_AUTH_OBJECT_INFO,
       },
     },
     async (request, response) => {
@@ -165,7 +165,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         tags: ['object'],
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT_INFO },
+        operation: ROUTE_OPERATIONS.GET_AUTH_OBJECT_INFO,
       },
     },
     async (request, response) => {
@@ -185,7 +185,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#' } },
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT_INFO },
+        operation: ROUTE_OPERATIONS.GET_AUTH_OBJECT_INFO,
         allowInvalidJwt: true,
       },
     },
@@ -206,7 +206,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#' } },
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.HEAD_AUTH_OBJECT_INFO },
+        operation: ROUTE_OPERATIONS.HEAD_AUTH_OBJECT_INFO,
         allowInvalidJwt: true,
       },
     },

@@ -41,7 +41,6 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
           { name: 'migration', description: 'Database migrations' },
           { name: 's3-credentials', description: 'S3 credentials management' },
           { name: 'queue', description: 'Queue management' },
-          { name: 'metrics', description: 'Metrics configuration' },
           ...(isRunningUnderWatt
             ? [{ name: 'pprof', description: 'Runtime profiling via Watt control APIs' }]
             : []),
@@ -67,7 +66,6 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   }
   app.register(routes.s3Credentials, { prefix: 's3' })
   app.register(routes.queue, { prefix: 'queue' })
-  app.register(routes.metricsConfig, { prefix: 'metrics' })
 
   // Register /metrics endpoint - uses OTel Prometheus exporter
   if (prometheusMetricsEnabled) {

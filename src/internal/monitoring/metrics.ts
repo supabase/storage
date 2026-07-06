@@ -9,7 +9,7 @@ import {
 import { HTTP_SIZE_METRICS_MAX_STATES } from './metric-limits'
 
 // ============================================================================
-// Metric Registry — tracks all metrics for admin API
+// Metric Registry
 // ============================================================================
 export type MetricType = 'histogram' | 'counter' | 'gauge' | 'updowncounter'
 
@@ -28,12 +28,7 @@ const disabledMetrics = new Set(
     .filter(Boolean)
 )
 
-/** Returns all registered metrics with their status */
-export function getMetricsConfig(): MetricRegistryEntry[] {
-  return Array.from(metricsRegistry.values())
-}
-
-/** Enable or disable specific metrics by OTel instrument name */
+/** Enable or disable specific metrics by OTel instrument name. */
 export function setMetricsEnabled(changes: { name: string; enabled: boolean }[]): void {
   for (const { name, enabled } of changes) {
     const entry = metricsRegistry.get(name)

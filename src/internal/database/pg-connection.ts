@@ -13,6 +13,12 @@ import {
   TenantConnectionOptions,
 } from './pool'
 import { getSslSettings } from './ssl'
+import {
+  createTlsSessionSlot,
+  installTlsSessionResumption,
+  TlsSessionResumptionClient,
+  type TlsSessionSlot,
+} from './tls-session-resumption'
 
 const {
   databaseApplicationName,
@@ -22,6 +28,7 @@ const {
   databasePoolDrainTimeout,
   databaseSSLRootCert,
   databaseStatementTimeout,
+  databaseTlsSessionResumption,
 } = getConfig()
 
 pg.types.setTypeParser(20, 'text', parseInt)
@@ -86,6 +93,7 @@ export type PgCancelConnectionTarget =
 
 export class PgPoolStrategy {
   protected pool?: Pool
+  protected tlsSession?: TlsSessionSlot
 
   constructor(protected readonly options: TenantConnectionOptions) {}
 
@@ -176,6 +184,12 @@ export class PgPoolStrategy {
       databaseSSLRootCert,
     })
 
+    const ssl = sslSettings ? { ...sslSettings } : undefined
+    if (databaseTlsSessionResumption && ssl) {
+      this.tlsSession ??= createTlsSessionSlot()
+      installTlsSessionResumption(ssl, this.tlsSession)
+    }
+
     return attachPgPoolErrorHandler(
       new Pool({
         min: 0,
@@ -183,7 +197,8 @@ export class PgPoolStrategy {
         connectionString: settings.dbUrl,
         connectionTimeoutMillis: databaseConnectionTimeout,
         idleTimeoutMillis: settings.idleTimeoutMillis,
-        ssl: sslSettings ? { ...sslSettings } : undefined,
+        ssl,
+        Client: databaseTlsSessionResumption && ssl ? TlsSessionResumptionClient : undefined,
         application_name: databaseApplicationName,
         options: settings.searchPath
           ? `-c search_path=${settings.searchPath.join(',')}`

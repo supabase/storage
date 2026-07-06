@@ -1,4 +1,5 @@
 import {
+  AbortMultipartUploadCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -545,6 +546,41 @@ describe('S3Backend', () => {
         expect(isStorageError(ErrorCode.AbortedTerminate, error)).toBe(true)
         expect((error as Error).message).toBe('Upload was aborted')
       }
+    })
+  })
+
+  describe('abortMultipartUpload', () => {
+    test('includes version in S3 key when version is provided', async () => {
+      const backend = createBackend()
+      const bucketName = 'test-bucket'
+      const key = 'test-folder/test-object.txt'
+      const uploadId = 'test-upload-id'
+      const version = 'version-123'
+
+      await backend.abortMultipartUpload(bucketName, key, uploadId, version)
+
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      const command = mockSend.mock.calls[0][0] as AbortMultipartUploadCommand
+      expect(command).toBeInstanceOf(AbortMultipartUploadCommand)
+      expect(command.input.Bucket).toBe(bucketName)
+      expect(command.input.Key).toBe(`${key}/${version}`)
+      expect(command.input.UploadId).toBe(uploadId)
+    })
+
+    test('does not include version in S3 key when version is undefined', async () => {
+      const backend = createBackend()
+      const bucketName = 'test-bucket'
+      const key = 'test-folder/test-object.txt'
+      const uploadId = 'test-upload-id'
+
+      await backend.abortMultipartUpload(bucketName, key, uploadId, undefined)
+
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      const command = mockSend.mock.calls[0][0] as AbortMultipartUploadCommand
+      expect(command).toBeInstanceOf(AbortMultipartUploadCommand)
+      expect(command.input.Bucket).toBe(bucketName)
+      expect(command.input.Key).toBe(key)
+      expect(command.input.UploadId).toBe(uploadId)
     })
   })
 })

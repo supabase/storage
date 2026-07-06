@@ -1,9 +1,12 @@
 import { Cluster } from '@internal/cluster'
 import { ERRORS } from '@internal/errors'
+import { getXForwardedHostRegExp } from '@internal/http/x-forwarded-host'
 import { getConfig } from '../../config'
 import { PgTenantConnection } from './pg-connection'
 import { User } from './pool'
 import { getTenantConfig } from './tenant'
+
+const xForwardedHostRegExp = getXForwardedHostRegExp()
 
 interface ConnectionOptions {
   host: string
@@ -38,13 +41,7 @@ async function getDbSettings(
   host: string | undefined,
   options?: { disableHostCheck?: boolean }
 ) {
-  const {
-    isMultitenant,
-    databasePoolURL,
-    databaseURL,
-    databaseMaxConnections,
-    requestXForwardedHostRegExp,
-  } = getConfig()
+  const { isMultitenant, databasePoolURL, databaseURL, databaseMaxConnections } = getConfig()
 
   let dbUrl = databasePoolURL || databaseURL
   let maxConnections = databaseMaxConnections
@@ -55,16 +52,18 @@ async function getDbSettings(
       throw ERRORS.InvalidTenantId()
     }
 
-    if (requestXForwardedHostRegExp && !options?.disableHostCheck) {
-      const xForwardedHost = host
+    if (!options?.disableHostCheck) {
+      if (xForwardedHostRegExp) {
+        const xForwardedHost = host
 
-      if (typeof xForwardedHost !== 'string') {
-        throw ERRORS.InvalidXForwardedHeader('X-Forwarded-Host header is not a string')
-      }
-      if (!new RegExp(requestXForwardedHostRegExp).test(xForwardedHost)) {
-        throw ERRORS.InvalidXForwardedHeader(
-          'X-Forwarded-Host header does not match regular expression'
-        )
+        if (typeof xForwardedHost !== 'string') {
+          throw ERRORS.InvalidXForwardedHeader('X-Forwarded-Host header is not a string')
+        }
+        if (!xForwardedHostRegExp.test(xForwardedHost)) {
+          throw ERRORS.InvalidXForwardedHeader(
+            'X-Forwarded-Host header does not match regular expression'
+          )
+        }
       }
     }
 

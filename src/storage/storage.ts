@@ -21,6 +21,10 @@ import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 
 const { emptyBucketMax } = getConfig()
 
+function assertNever(value: never): never {
+  throw new Error(`Unexpected renderer type: ${String(value)}`)
+}
+
 /**
  * Storage
  * interacts with the storage backend of choice and the database
@@ -56,14 +60,18 @@ export class Storage {
    * @param type
    */
   renderer(type: 'asset' | 'head' | 'image' | 'info') {
-    const renderers = {
-      asset: () => new AssetRenderer(this.backend),
-      head: () => new HeadRenderer(),
-      image: () => new ImageRenderer(this.backend),
-      info: () => new InfoRenderer(),
+    switch (type) {
+      case 'asset':
+        return new AssetRenderer(this.backend)
+      case 'head':
+        return new HeadRenderer()
+      case 'image':
+        return new ImageRenderer(this.backend)
+      case 'info':
+        return new InfoRenderer()
+      default:
+        return assertNever(type)
     }
-
-    return renderers[type]()
   }
 
   /**

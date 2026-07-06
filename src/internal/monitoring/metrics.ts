@@ -334,6 +334,45 @@ export const cacheSizeBytes = registerMetric('cache_size_bytes', 'gauge', () =>
 )
 
 // ============================================================================
+// DB TLS Session Resumption Metrics
+//
+// * resumed: the offered session was accepted
+// * rejected: a session was offered but the server completed a full handshake
+//             stale/rotated ticket or no server support
+// * uncached: no session was available to offer (cold host, TTL expiry, eviction)
+// ============================================================================
+export type TlsSessionResumptionOutcome = 'resumed' | 'rejected' | 'uncached'
+
+type TlsSessionResumptionMetricsState = {
+  handshakes: Record<TlsSessionResumptionOutcome, ObservableCounterSeries>
+}
+
+const tlsSessionResumptionMetrics = createBatchObservableCounterGroup({
+  meter,
+  registerMetric,
+  maxStates: 1,
+  counters: {
+    handshakes: {
+      name: 'db_tls_session_resumption_total',
+      description: 'Total DB TLS handshakes by session resumption outcome',
+    },
+  },
+  getKey: (scope: 'db') => scope,
+  createState: (): TlsSessionResumptionMetricsState => ({
+    handshakes: {
+      resumed: { count: 0, attributes: { outcome: 'resumed' } },
+      rejected: { count: 0, attributes: { outcome: 'rejected' } },
+      uncached: { count: 0, attributes: { outcome: 'uncached' } },
+    },
+  }),
+})
+
+/** Records the resumption outcome of one DB TLS handshake. */
+export function recordTlsSessionResumption(outcome: TlsSessionResumptionOutcome): void {
+  tlsSessionResumptionMetrics.addHandshakes('db', outcome)
+}
+
+// ============================================================================
 // Database Metrics
 // ============================================================================
 export const dbQueryPerformance = registerMetric(

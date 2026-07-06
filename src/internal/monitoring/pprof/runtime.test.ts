@@ -1,11 +1,16 @@
 import { vi } from 'vitest'
 
 const getGlobalMock = vi.hoisted(() => vi.fn())
+const getManagementMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@platformatic/globals', () => ({
   getGlobal: getGlobalMock,
+  getManagement: getManagementMock,
 }))
 
+import { FailedToStartProfiling } from '@platformatic/control'
+// @ts-expect-error the deep errors module ships no type declarations
+import { WorkerNotFoundError } from '@platformatic/runtime/lib/errors.js'
 import {
   asProfilingRuntimeApiClient,
   buildPprofFilename,
@@ -18,9 +23,17 @@ import {
   normalizeNodeModulesSourceMaps,
   PPROF_CONTROL_ERROR_CODES,
   resolvePprofFilenameTarget,
+  resolveRuntimeWorkerIdsFromError,
   resolveWattPprofSelection,
 } from './runtime'
 import type { ProfilingRuntimeApiClient, WattPprofSelection } from './types'
+
+// The shipped platformatic .d.ts files lag the real @fastify/error constructors, so re-type
+// them as plain error constructors for fixture building.
+type PlatformaticErrorConstructor = new (...args: (string | number)[]) => Error
+const workerNotFoundError = WorkerNotFoundError as PlatformaticErrorConstructor
+const failedToStartProfilingError =
+  FailedToStartProfiling as unknown as PlatformaticErrorConstructor
 
 function createClient(overrides?: {
   close?: ProfilingRuntimeApiClient['close']
@@ -45,6 +58,7 @@ function createClient(overrides?: {
 describe('pprof runtime helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    getManagementMock.mockReturnValue(undefined)
   })
 
   describe('normalizeNodeModulesSourceMaps', () => {
@@ -346,6 +360,227 @@ describe('pprof runtime helpers', () => {
       })
     })
 
+    it('uses live worker ids when the runtime exposes non-dense worker details', async () => {
+      getGlobalMock.mockReturnValue({
+        applicationId: 'storage',
+        workerId: '4',
+      })
+
+      const client = createClient({
+        getRuntimeApplications: vi.fn().mockResolvedValue({
+          applications: [
+            {
+              id: 'storage',
+              workers: [{ worker: 4 }, { worker: 5 }],
+            },
+          ],
+        }),
+      })
+
+      await expect(resolveWattPprofSelection(client, undefined)).resolves.toEqual({
+        applicationId: 'storage',
+        runtimePid: process.pid,
+        servingWorkerId: 4,
+        scopeKey: 'all',
+        targets: [
+          {
+            applicationId: 'storage',
+            runtimePid: process.pid,
+            targetApplicationId: 'storage:4',
+            workerId: 4,
+          },
+          {
+            applicationId: 'storage',
+            runtimePid: process.pid,
+            targetApplicationId: 'storage:5',
+            workerId: 5,
+          },
+        ],
+      })
+    })
+
+    it('uses the management worker map before falling back to count-based selection', async () => {
+      getGlobalMock.mockReturnValue({
+        applicationId: 'storage',
+        workerId: '4',
+      })
+      getManagementMock.mockReturnValue({
+        getWorkers: vi.fn().mockResolvedValue({
+          'storage:4': {
+            application: 'storage',
+            worker: '4',
+            status: 'started',
+            thread: 11,
+          },
+          'storage:5': {
+            application: 'storage',
+            worker: '5',
+            status: 'started',
+            thread: 12,
+          },
+          'worker-service:2': {
+            application: 'worker-service',
+            worker: '2',
+            status: 'started',
+            thread: 13,
+          },
+        }),
+      })
+
+      const client = createClient({
+        getRuntimeApplications: vi.fn().mockResolvedValue({
+          applications: [{ id: 'storage', workers: 2 }],
+        }),
+      })
+
+      await expect(resolveWattPprofSelection(client, undefined)).resolves.toEqual({
+        applicationId: 'storage',
+        runtimePid: process.pid,
+        servingWorkerId: 4,
+        scopeKey: 'all',
+        targets: [
+          {
+            applicationId: 'storage',
+            runtimePid: process.pid,
+            targetApplicationId: 'storage:4',
+            workerId: 4,
+          },
+          {
+            applicationId: 'storage',
+            runtimePid: process.pid,
+            targetApplicationId: 'storage:5',
+            workerId: 5,
+          },
+        ],
+      })
+      expect(client.getRuntimeApplications).not.toHaveBeenCalled()
+    })
+
+    it('ignores non-started workers from the management worker map', async () => {
+      getGlobalMock.mockReturnValue({
+        applicationId: 'storage',
+        workerId: '4',
+      })
+      getManagementMock.mockReturnValue({
+        getWorkers: vi.fn().mockResolvedValue({
+          'storage:4': {
+            application: 'storage',
+            worker: '4',
+            status: 'started',
+            thread: 11,
+          },
+          'storage:5': {
+            application: 'storage',
+            worker: '5',
+            status: 'starting',
+            thread: 12,
+          },
+          'storage:6': {
+            application: 'storage',
+            worker: '6',
+            status: 'stopping',
+            thread: 13,
+          },
+        }),
+      })
+
+      const client = createClient()
+
+      await expect(resolveWattPprofSelection(client, undefined)).resolves.toEqual({
+        applicationId: 'storage',
+        runtimePid: process.pid,
+        servingWorkerId: 4,
+        scopeKey: 'all',
+        targets: [
+          {
+            applicationId: 'storage',
+            runtimePid: process.pid,
+            targetApplicationId: 'storage:4',
+            workerId: 4,
+          },
+        ],
+      })
+      expect(client.getRuntimeApplications).not.toHaveBeenCalled()
+    })
+
+    it('falls back to runtime application discovery when management workers are unavailable', async () => {
+      getGlobalMock.mockReturnValue({
+        applicationId: 'storage',
+        workerId: '4',
+      })
+      getManagementMock.mockReturnValue({
+        getWorkers: vi.fn().mockRejectedValue(new Error('Operation "getWorkers" is not allowed')),
+      })
+
+      const client = createClient({
+        getRuntimeApplications: vi.fn().mockResolvedValue({
+          applications: [{ id: 'storage', workers: 2 }],
+        }),
+      })
+
+      await expect(resolveWattPprofSelection(client, undefined)).resolves.toEqual({
+        applicationId: 'storage',
+        requestedWorkerId: undefined,
+        runtimePid: process.pid,
+        servingWorkerId: 4,
+        scopeKey: 'all',
+        targets: [
+          {
+            applicationId: 'storage',
+            runtimePid: process.pid,
+            targetApplicationId: 'storage:0',
+            workerId: 0,
+          },
+          {
+            applicationId: 'storage',
+            runtimePid: process.pid,
+            targetApplicationId: 'storage:1',
+            workerId: 1,
+          },
+        ],
+      })
+      expect(client.getRuntimeApplications).toHaveBeenCalledWith(process.pid)
+    })
+
+    it('falls back to dense worker ids when worker details are only partially recognized', async () => {
+      getGlobalMock.mockReturnValue({
+        applicationId: 'storage',
+        workerId: '4',
+      })
+
+      const client = createClient({
+        getRuntimeApplications: vi.fn().mockResolvedValue({
+          applications: [
+            {
+              id: 'storage',
+              workers: [{ worker: 4 }, { status: 'starting' }],
+            },
+          ],
+        }),
+      })
+
+      await expect(resolveWattPprofSelection(client, undefined)).resolves.toEqual({
+        applicationId: 'storage',
+        runtimePid: process.pid,
+        servingWorkerId: 4,
+        scopeKey: 'all',
+        targets: [
+          {
+            applicationId: 'storage',
+            runtimePid: process.pid,
+            targetApplicationId: 'storage:0',
+            workerId: 0,
+          },
+          {
+            applicationId: 'storage',
+            runtimePid: process.pid,
+            targetApplicationId: 'storage:1',
+            workerId: 1,
+          },
+        ],
+      })
+    })
+
     it('falls back to the current worker when only one worker is reported', async () => {
       getGlobalMock.mockReturnValue({
         applicationId: 'storage',
@@ -399,6 +634,45 @@ describe('pprof runtime helpers', () => {
           },
         ],
       })
+    })
+  })
+
+  describe('resolveRuntimeWorkerIdsFromError', () => {
+    it('extracts live worker ids from the installed platformatic error classes', () => {
+      // Built from the real error classes so a wattpm upgrade that rewords the message turns
+      // this into a failing test instead of a silently dead retry.
+      const workerNotFound = new workerNotFoundError(0, 'storage', '4, 5')
+      const failedToStart = new failedToStartProfilingError('storage:0', workerNotFound.message)
+
+      expect(failedToStart.message).toBe(
+        'Failed to start profiling for service "storage:0": ' +
+          'Worker 0 of application storage not found. Available applications are: 4, 5'
+      )
+      expect(resolveRuntimeWorkerIdsFromError(failedToStart)).toEqual([4, 5])
+    })
+
+    it('keeps the full id list when text follows it', () => {
+      expect(
+        resolveRuntimeWorkerIdsFromError(
+          new Error(
+            'Worker 0 of application storage not found. Available applications are: 4, 5\n2 workers required'
+          )
+        )
+      ).toEqual([4, 5])
+    })
+
+    it('returns undefined for errors without a worker-not-found message', () => {
+      expect(
+        resolveRuntimeWorkerIdsFromError(
+          new Error('Profiling is already started for application "storage" (all workers).')
+        )
+      ).toBeUndefined()
+      expect(
+        resolveRuntimeWorkerIdsFromError(
+          new Error('Application storage not found. Available applications are: 4, 5')
+        )
+      ).toBeUndefined()
+      expect(resolveRuntimeWorkerIdsFromError(undefined)).toBeUndefined()
     })
   })
 })

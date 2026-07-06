@@ -1,3 +1,4 @@
+import { getXForwardedHostRegExp } from '@internal/http/x-forwarded-host'
 import fastifyPlugin from 'fastify-plugin'
 import { getConfig } from '../../config'
 
@@ -7,13 +8,15 @@ declare module 'fastify' {
   }
 }
 
-const { isMultitenant, tenantId: defaultTenantId, requestXForwardedHostRegExp } = getConfig()
+const { isMultitenant, tenantId: defaultTenantId } = getConfig()
+
+const xForwardedHostRegExp = getXForwardedHostRegExp()
 
 export const tenantId = fastifyPlugin(
   async (fastify) => {
     fastify.decorateRequest('tenantId', defaultTenantId)
     fastify.addHook('onRequest', (request, _reply, done) => {
-      if (!isMultitenant || !requestXForwardedHostRegExp) {
+      if (!isMultitenant || !xForwardedHostRegExp) {
         done()
         return
       }
@@ -24,7 +27,7 @@ export const tenantId = fastifyPlugin(
         return
       }
 
-      const result = xForwardedHost.match(requestXForwardedHostRegExp)
+      const result = xForwardedHost.match(xForwardedHostRegExp)
       if (!result) {
         done()
         return

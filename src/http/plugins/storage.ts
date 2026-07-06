@@ -19,6 +19,9 @@ const { storageBackendType, storageS3Bucket } = getConfig()
 
 const storageBackend = createStorageBackend(storageBackendType)
 
+// TenantLocation is immutable so singleton not to allocate per request.
+const tenantLocation = new TenantLocation(storageS3Bucket)
+
 export const storage = fastifyPlugin(
   async function storagePlugin(fastify) {
     fastify.decorateRequest('storage')
@@ -35,7 +38,7 @@ export const storage = fastifyPlugin(
 
       const location = request.isIcebergBucket
         ? new PassThroughLocation(request.internalIcebergBucketName!)
-        : new TenantLocation(storageS3Bucket)
+        : tenantLocation
 
       request.backend = storageBackend
       request.storage = new Storage(storageBackend, database, location)

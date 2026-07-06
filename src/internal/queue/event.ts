@@ -281,7 +281,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       }
     }
 
-    const startTime = process.hrtime.bigint()
+    const startTime = performance.now()
     const sendOptions = eventClass.getSendOptions(this.payload) || {}
 
     if (this.payload.scheduleAt) {
@@ -360,7 +360,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         },
       })
     } finally {
-      const duration = Number(process.hrtime.bigint() - startTime) / 1e9
+      const duration = (performance.now() - startTime) / 1000
       queueJobSchedulingTime.record(duration, {
         name: eventClass.getQueueName(),
       })

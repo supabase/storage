@@ -14,7 +14,9 @@ import {
   normalizeNodeModulesSourceMaps,
   PPROF_CONTROL_ERROR_CODES,
   resolvePprofFilenameTarget,
+  resolveRuntimeWorkerIdsFromError,
   resolveWattPprofSelection,
+  resolveWattPprofSelectionForWorkerIds,
 } from '@internal/monitoring/pprof/runtime'
 import type {
   ActivePprofSession,
@@ -200,18 +202,33 @@ async function startPprofSession(
     return session
   } catch (error) {
     activePprofSessions.delete(key)
+    await stopProfilingTargets(client, startedTargets, options.type)
+    throw error
+  }
+}
 
-    if (startedTargets.length > 0) {
-      await Promise.allSettled(
-        startedTargets.map((target) =>
-          client.stopApplicationProfiling(target.runtimePid, target.targetApplicationId, {
-            type: options.type,
-          })
-        )
-      )
+async function startPprofSessionWithLiveWorkerRetry(
+  client: ProfilingRuntimeApiClient,
+  selection: WattPprofSelection,
+  options: PprofCaptureOptions
+) {
+  try {
+    return await startPprofSession(client, selection, options)
+  } catch (error) {
+    if (options.signal.aborted || selection.requestedWorkerId !== undefined) {
+      throw error
     }
 
-    throw error
+    const liveWorkerSelection = resolveWattPprofSelectionForWorkerIds(
+      selection,
+      resolveRuntimeWorkerIdsFromError(error)
+    )
+
+    if (!liveWorkerSelection) {
+      throw error
+    }
+
+    return startPprofSession(client, liveWorkerSelection, options)
   }
 }
 
@@ -221,7 +238,10 @@ async function captureAndSendPprof(
   client: ProfilingRuntimeApiClient = asProfilingRuntimeApiClient(new RuntimeApiClient())
 ) {
   try {
-    const selection = await resolveWattPprofSelection(client, options.workerId)
+    let selection: WattPprofSelection | null = await resolveWattPprofSelection(
+      client,
+      options.workerId
+    )
 
     if (!selection) {
       return reply.status(501).send({
@@ -233,7 +253,8 @@ async function captureAndSendPprof(
     let writer: MultipartPprofWriter | undefined
 
     try {
-      session = await startPprofSession(client, selection, options)
+      session = await startPprofSessionWithLiveWorkerRetry(client, selection, options)
+      selection = session
       writer = createMultipartPprofWriter(reply, selection, options.type, options.seconds)
       await waitForMultipartPprofWindow(reply, writer, options.seconds, options.signal)
 

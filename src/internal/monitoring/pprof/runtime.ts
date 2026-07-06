@@ -1,4 +1,4 @@
-import { getGlobal } from '@platformatic/globals'
+import { getGlobal, getManagement } from '@platformatic/globals'
 import type {
   PprofCaptureType,
   PprofKnownError,
@@ -40,6 +40,10 @@ function normalizeWorkersCount(value: unknown): number | undefined {
     return value
   }
 
+  if (Array.isArray(value) && value.length > 0) {
+    return value.length
+  }
+
   if (typeof value === 'object' && value !== null) {
     const workerConfig = value as {
       static?: unknown
@@ -55,6 +59,78 @@ function normalizeWorkersCount(value: unknown): number | undefined {
   }
 
   return undefined
+}
+
+function normalizeWorkerDetailId(value: unknown) {
+  if (typeof value === 'object' && value !== null) {
+    const worker = value as {
+      id?: unknown
+      worker?: unknown
+      workerId?: unknown
+    }
+
+    return (
+      normalizeWorkerId(worker.worker) ??
+      normalizeWorkerId(worker.workerId) ??
+      normalizeWorkerId(worker.id)
+    )
+  }
+
+  return normalizeWorkerId(value)
+}
+
+function normalizeRuntimeWorkerIds(value: unknown) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined
+  }
+
+  const workerIds = new Set<number>()
+
+  for (const worker of value) {
+    const workerId = normalizeWorkerDetailId(worker)
+
+    if (workerId === undefined) {
+      return undefined
+    }
+
+    workerIds.add(workerId)
+  }
+
+  return [...workerIds]
+}
+
+function normalizeManagementWorkerIds(value: unknown, applicationId: string) {
+  if (typeof value !== 'object' || value === null) {
+    return undefined
+  }
+
+  const workerIds = new Set<number>()
+
+  for (const [key, worker] of Object.entries(value)) {
+    if (
+      typeof worker !== 'object' ||
+      worker === null ||
+      !('application' in worker) ||
+      worker.application !== applicationId ||
+      !('status' in worker) ||
+      worker.status !== 'started'
+    ) {
+      continue
+    }
+
+    const fallbackWorkerId = key.startsWith(`${applicationId}:`)
+      ? key.slice(applicationId.length + 1)
+      : undefined
+    const workerId = normalizeWorkerDetailId(worker) ?? normalizeWorkerId(fallbackWorkerId)
+
+    if (workerId === undefined) {
+      return undefined
+    }
+
+    workerIds.add(workerId)
+  }
+
+  return workerIds.size > 0 ? [...workerIds] : undefined
 }
 
 export function normalizeNodeModulesSourceMaps(value: string | string[] | undefined) {
@@ -139,6 +215,56 @@ function getErrorMessage(error: unknown) {
     typeof error.message === 'string'
     ? error.message
     : undefined
+}
+
+export function resolveRuntimeWorkerIdsFromError(error: unknown) {
+  const message = getErrorMessage(error)
+  if (!message || !/\bWorker\s+\d+\s+of application\b/i.test(message)) {
+    return undefined
+  }
+
+  // Capture only a comma-separated id list so trailing text like
+  // "Available applications are: 4, 5\n2 workers required" can never glue onto the last id.
+  const match = message.match(/\bAvailable (?:applications|workers) are:\s*(\d+(?:\s*,\s*\d+)*)/i)
+  if (!match) {
+    return undefined
+  }
+
+  return normalizeRuntimeWorkerIds(match[1].split(','))
+}
+
+export function resolveWattPprofSelectionForWorkerIds(
+  selection: Omit<WattPprofSelection, 'targets'>,
+  workerIds: number[] | undefined
+) {
+  if (!workerIds || workerIds.length === 0) {
+    return undefined
+  }
+
+  return {
+    ...selection,
+    requestedWorkerId: undefined,
+    scopeKey: 'all',
+    targets: workerIds.map((workerId) => ({
+      applicationId: selection.applicationId,
+      runtimePid: selection.runtimePid,
+      targetApplicationId: `${selection.applicationId}:${workerId}`,
+      workerId,
+    })),
+  } satisfies WattPprofSelection
+}
+
+async function resolveManagementWorkerIds(applicationId: string) {
+  const management = getManagement({ throwOnMissing: false })
+  if (typeof management?.getWorkers !== 'function') {
+    return undefined
+  }
+
+  try {
+    return normalizeManagementWorkerIds(await management.getWorkers(), applicationId)
+  } catch {
+    return undefined
+  }
 }
 
 function getErrorCause(error: unknown) {
@@ -274,6 +400,21 @@ export async function resolveWattPprofSelection(
     } satisfies WattPprofSelection
   }
 
+  const baseSelection = {
+    applicationId: context.applicationId,
+    runtimePid: context.runtimePid,
+    servingWorkerId: context.workerId,
+    scopeKey: 'all',
+  } satisfies Omit<WattPprofSelection, 'targets'>
+  const managementWorkerSelection = resolveWattPprofSelectionForWorkerIds(
+    baseSelection,
+    await resolveManagementWorkerIds(context.applicationId)
+  )
+
+  if (managementWorkerSelection) {
+    return managementWorkerSelection
+  }
+
   const runtimeApplications = await client.getRuntimeApplications(context.runtimePid)
   const currentApplication = runtimeApplications.applications?.find(
     (application) => application.id === context.applicationId
@@ -282,36 +423,26 @@ export async function resolveWattPprofSelection(
     normalizeWorkersCount(currentApplication?.workers) ??
     normalizeWorkersCount(currentApplication?.config?.workers) ??
     1
+  const workerIds =
+    normalizeRuntimeWorkerIds(currentApplication?.workers) ??
+    (workersCount > 1 ? Array.from({ length: workersCount }, (_, workerId) => workerId) : undefined)
+  const workerSelection = resolveWattPprofSelectionForWorkerIds(baseSelection, workerIds)
 
-  if (workersCount <= 1) {
-    const workerId = context.workerId
-    return {
-      applicationId: context.applicationId,
-      runtimePid: context.runtimePid,
-      servingWorkerId: context.workerId,
-      scopeKey: 'all',
-      targets: [
-        {
-          applicationId: context.applicationId,
-          runtimePid: context.runtimePid,
-          targetApplicationId:
-            workerId === undefined ? context.applicationId : `${context.applicationId}:${workerId}`,
-          workerId,
-        },
-      ],
-    } satisfies WattPprofSelection
+  if (workerSelection) {
+    return workerSelection
   }
 
+  const workerId = context.workerId
   return {
-    applicationId: context.applicationId,
-    runtimePid: context.runtimePid,
-    servingWorkerId: context.workerId,
-    scopeKey: 'all',
-    targets: Array.from({ length: workersCount }, (_, workerId) => ({
-      applicationId: context.applicationId,
-      runtimePid: context.runtimePid,
-      targetApplicationId: `${context.applicationId}:${workerId}`,
-      workerId,
-    })),
+    ...baseSelection,
+    targets: [
+      {
+        applicationId: context.applicationId,
+        runtimePid: context.runtimePid,
+        targetApplicationId:
+          workerId === undefined ? context.applicationId : `${context.applicationId}:${workerId}`,
+        workerId,
+      },
+    ],
   } satisfies WattPprofSelection
 }

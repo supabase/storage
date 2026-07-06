@@ -1,3 +1,4 @@
+import { getXForwardedHostRegExp } from '@internal/http/x-forwarded-host'
 import { getConfig } from '../../config'
 
 const {
@@ -10,6 +11,11 @@ const {
   serviceName,
   storageS3InternalTracesEnabled,
 } = getConfig()
+
+const xForwardedHostRegExp = getXForwardedHostRegExp({
+  isMultitenant,
+  requestXForwardedHostRegExp,
+})
 
 import { FastifyOtelInstrumentation } from '@fastify/otel'
 import * as grpc from '@grpc/grpc-js'
@@ -154,11 +160,11 @@ if (tracingEnabled && traceExporter && spanProcessors.length > 0) {
         startIncomingSpanHook: (req) => {
           let tenantId = ''
           if (isMultitenant) {
-            if (requestXForwardedHostRegExp) {
+            if (xForwardedHostRegExp) {
               const serverRequest = req
               const xForwardedHost = serverRequest.headers['x-forwarded-host']
               if (typeof xForwardedHost !== 'string') return {}
-              const result = xForwardedHost.match(requestXForwardedHostRegExp)
+              const result = xForwardedHost.match(xForwardedHostRegExp)
               if (!result) return {}
               tenantId = result[1]
             }

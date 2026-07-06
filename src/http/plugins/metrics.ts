@@ -68,7 +68,7 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
       // Hook into request lifecycle to measure duration
       fastify.addHook('onRequest', (request, _reply, done) => {
         // Store start time on request for later use
-        request.metricsStartTime = process.hrtime.bigint()
+        request.metricsStartTime = performance.now()
         done()
       })
 
@@ -82,15 +82,13 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
         }
 
         const startTime = request.metricsStartTime
-        if (!startTime) {
+        if (startTime === undefined) {
           done()
           return
         }
 
         // Calculate duration in seconds
-        const endTime = process.hrtime.bigint()
-        const durationNs = endTime - startTime
-        const durationSeconds = Number(durationNs) / 1e9
+        const durationSeconds = (performance.now() - startTime) / 1000
 
         const operation =
           request.operation?.type || request.routeOptions?.config?.operation?.type || 'unknown'
@@ -120,6 +118,6 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
 // Extend FastifyRequest to include metricsStartTime
 declare module 'fastify' {
   interface FastifyRequest {
-    metricsStartTime?: bigint
+    metricsStartTime?: number
   }
 }

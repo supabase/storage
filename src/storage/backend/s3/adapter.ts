@@ -580,7 +580,7 @@ export class S3Backend implements StorageBackendAdapter {
     try {
       const paralellUploadS3 = new UploadPartCommand({
         Bucket: bucketName,
-        Key: version ? `${key}/${version}` : key,
+        Key: withOptionalVersion(key, version),
         UploadId: uploadId,
         PartNumber: partNumber,
         Body: body,
@@ -617,7 +617,7 @@ export class S3Backend implements StorageBackendAdapter {
     if (parts.length === 0) {
       const listPartsInput = new ListPartsCommand({
         Bucket: bucketName,
-        Key: version ? key + '/' + version : key,
+        Key: withOptionalVersion(key, version),
         UploadId: uploadId,
       })
 
@@ -627,7 +627,7 @@ export class S3Backend implements StorageBackendAdapter {
 
     const completeUpload = new CompleteMultipartUploadCommand({
       Bucket: bucketName,
-      Key: version ? key + '/' + version : key,
+      Key: withOptionalVersion(key, version),
       UploadId: uploadId,
       MultipartUpload:
         parts.length === 0
@@ -658,10 +658,15 @@ export class S3Backend implements StorageBackendAdapter {
     }
   }
 
-  async abortMultipartUpload(bucketName: string, key: string, uploadId: string): Promise<void> {
+  async abortMultipartUpload(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    version?: string
+  ): Promise<void> {
     const abortUpload = new AbortMultipartUploadCommand({
       Bucket: bucketName,
-      Key: key,
+      Key: withOptionalVersion(key, version),
       UploadId: uploadId,
     })
     await this.client.send(abortUpload)

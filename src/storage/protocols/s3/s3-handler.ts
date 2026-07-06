@@ -18,7 +18,7 @@ import {
   UploadPartCopyCommandInput,
 } from '@aws-sdk/client-s3'
 import { decrypt, encrypt } from '@internal/auth'
-import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
+import { ERRORS, ErrorCode, isS3Error, isStorageError } from '@internal/errors'
 import { isValidHeader } from '@internal/http/header'
 import { logger, logSchema } from '@internal/monitoring'
 import { PassThrough, Readable } from 'stream'
@@ -787,16 +787,25 @@ export class S3ProtocolHandler {
       metadata: multipart.metadata || undefined,
     })
 
-    await this.storage.backend.abortMultipartUpload(
-      storageS3Bucket,
-      this.storage.location.getKeyLocation({
-        bucketId: Bucket,
-        objectName: Key,
-        tenantId: this.tenantId,
-      }),
-      UploadId,
-      multipart.version
-    )
+    try {
+      await this.storage.backend.abortMultipartUpload(
+        storageS3Bucket,
+        this.storage.location.getKeyLocation({
+          bucketId: Bucket,
+          objectName: Key,
+          tenantId: this.tenantId,
+        }),
+        UploadId,
+        multipart.version
+      )
+    } catch (e) {
+      // gracefully continue if the upload part was already deleted/aborted on the S3 side
+      // error.name: NoSuchUpload
+      // error.message: The specified upload does not exist. The upload ID may be invalid, or the upload may have been aborted or completed.
+      if (!isS3Error(e) || e.name !== 'NoSuchUpload') {
+        throw e
+      }
+    }
 
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
 

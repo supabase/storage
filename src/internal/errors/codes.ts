@@ -1,7 +1,7 @@
 import { IcebergError } from '@storage/protocols/iceberg/catalog/errors'
 import { DatabaseError } from 'pg'
 import { configure } from 'safe-stable-stringify'
-import { StorageBackendError } from './storage-error'
+import { isS3Error, StorageBackendError } from './storage-error'
 
 export enum ErrorCode {
   NoSuchBucket = 'NoSuchBucket',
@@ -592,6 +592,9 @@ function hasStringErrorCode(error: Error): error is Error & { code: string } {
 }
 
 export function getErrorCode(error: Error): string {
+  if (isS3Error(error)) {
+    return ErrorCode.S3Error
+  }
   if (error instanceof IcebergError && error.error) {
     return error.error
   }
@@ -607,6 +610,9 @@ export function getErrorCode(error: Error): string {
 }
 
 function getErrorStatusCode(error: Error): number {
+  if (isS3Error(error) && error.$metadata.httpStatusCode) {
+    return error.$metadata.httpStatusCode
+  }
   if (error instanceof StorageBackendError && error.httpStatusCode) {
     return error.httpStatusCode
   }

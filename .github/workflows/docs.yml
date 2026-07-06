@@ -16,13 +16,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy docs
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
+  build-docs:
+    name: Build docs
     runs-on: ubuntu-24.04
 
     steps:
@@ -59,6 +54,17 @@ jobs:
         with:
           path: "./swagger-ui"
 
+  deploy:
+    name: Deploy docs
+    needs: build-docs
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-24.04
+
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

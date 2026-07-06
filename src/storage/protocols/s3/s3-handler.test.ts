@@ -156,3 +156,146 @@ describe('S3ProtocolHandler.getObject', () => {
     )
   })
 })
+
+describe('S3ProtocolHandler.abortMultipartUpload', () => {
+  it('aborts multipart upload and deletes from database when backend succeeds', async () => {
+    const uploadId = 'test-upload-id'
+    const findMultipartUpload = vi.fn().mockResolvedValue({
+      id: uploadId,
+      version: 'test-version',
+      user_metadata: { key: 'value' },
+      metadata: { mimetype: 'text/plain' },
+    })
+    const deleteMultipartUpload = vi.fn().mockResolvedValue(undefined)
+    const testPermission = vi.fn().mockResolvedValue(undefined)
+    const abortMultipartUpload = vi.fn().mockResolvedValue(undefined)
+    const getKeyLocation = vi.fn(() => 'tenant-id/bucket/object.txt')
+
+    const storage = {
+      backend: {
+        abortMultipartUpload,
+      },
+      db: {
+        asSuperUser: vi.fn(() => ({
+          findMultipartUpload,
+          deleteMultipartUpload,
+        })),
+        testPermission,
+      },
+      location: {
+        getKeyLocation,
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.abortMultipartUpload({
+      Bucket: 'bucket',
+      Key: 'object.txt',
+      UploadId: uploadId,
+    })
+
+    expect(response).toEqual({})
+    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, 'id,version,user_metadata,metadata')
+    expect(abortMultipartUpload).toHaveBeenCalled()
+    expect(deleteMultipartUpload).toHaveBeenCalledWith(uploadId)
+  })
+
+  it('deletes from database when backend throws NoSuchUpload error', async () => {
+    const uploadId = 'test-upload-id'
+    const findMultipartUpload = vi.fn().mockResolvedValue({
+      id: uploadId,
+      version: 'test-version',
+      user_metadata: null,
+      metadata: null,
+    })
+    const deleteMultipartUpload = vi.fn().mockResolvedValue(undefined)
+    const testPermission = vi.fn().mockResolvedValue(undefined)
+    const noSuchUploadError = {
+      name: 'NoSuchUpload',
+      message: 'The specified upload does not exist.',
+      $metadata: {
+        httpStatusCode: 404,
+      },
+    }
+    const abortMultipartUpload = vi.fn().mockRejectedValue(noSuchUploadError)
+    const getKeyLocation = vi.fn(() => 'tenant-id/bucket/object.txt')
+
+    const storage = {
+      backend: {
+        abortMultipartUpload,
+      },
+      db: {
+        asSuperUser: vi.fn(() => ({
+          findMultipartUpload,
+          deleteMultipartUpload,
+        })),
+        testPermission,
+      },
+      location: {
+        getKeyLocation,
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.abortMultipartUpload({
+      Bucket: 'bucket',
+      Key: 'object.txt',
+      UploadId: uploadId,
+    })
+
+    expect(response).toEqual({})
+    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, 'id,version,user_metadata,metadata')
+    expect(abortMultipartUpload).toHaveBeenCalled()
+    expect(deleteMultipartUpload).toHaveBeenCalledWith(uploadId)
+  })
+
+  it('throws error when backend throws non-NoSuchUpload error', async () => {
+    const uploadId = 'test-upload-id'
+    const findMultipartUpload = vi.fn().mockResolvedValue({
+      id: uploadId,
+      version: 'test-version',
+      user_metadata: null,
+      metadata: null,
+    })
+    const deleteMultipartUpload = vi.fn().mockResolvedValue(undefined)
+    const testPermission = vi.fn().mockResolvedValue(undefined)
+    const otherError = {
+      name: 'AccessDenied',
+      message: 'Access Denied',
+      $metadata: {
+        httpStatusCode: 403,
+      },
+    }
+    const abortMultipartUpload = vi.fn().mockRejectedValue(otherError)
+    const getKeyLocation = vi.fn(() => 'tenant-id/bucket/object.txt')
+
+    const storage = {
+      backend: {
+        abortMultipartUpload,
+      },
+      db: {
+        asSuperUser: vi.fn(() => ({
+          findMultipartUpload,
+          deleteMultipartUpload,
+        })),
+        testPermission,
+      },
+      location: {
+        getKeyLocation,
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(
+      handler.abortMultipartUpload({
+        Bucket: 'bucket',
+        Key: 'object.txt',
+        UploadId: uploadId,
+      })
+    ).rejects.toEqual(otherError)
+
+    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, 'id,version,user_metadata,metadata')
+    expect(abortMultipartUpload).toHaveBeenCalled()
+    expect(deleteMultipartUpload).not.toHaveBeenCalled()
+  })
+})

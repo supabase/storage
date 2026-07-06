@@ -10,6 +10,10 @@ class TestStoragePgDB extends StoragePgDB {
     return this.runUnscopedQuery('MetricWithoutTenantAttribute', async () => 'ok')
   }
 
+  runScopedMetricProbe(): Promise<string> {
+    return this.runQuery('ScopedMetricDuration', async () => 'ok')
+  }
+
   runErrorMappingProbe(): Promise<unknown> {
     return this.runQuery('FindBucketById', (db) => {
       return this.query(db, 'SELECT * FROM storage.buckets WHERE id = $1')
@@ -47,11 +51,15 @@ describe('StoragePgDB metrics', () => {
       host: 'localhost',
     })
     const recordSpy = vi.spyOn(dbQueryPerformance, 'record')
+    const performanceNowSpy = vi
+      .spyOn(performance, 'now')
+      .mockReturnValueOnce(10)
+      .mockReturnValueOnce(15)
 
     try {
       await expect(storage.runMetricProbe()).resolves.toBe('ok')
 
-      expect(recordSpy).toHaveBeenCalledWith(expect.any(Number), {
+      expect(recordSpy).toHaveBeenCalledWith(0.005, {
         name: 'MetricWithoutTenantAttribute',
         requestAborted: false,
         requestAbortedBeforeStart: false,
@@ -59,6 +67,43 @@ describe('StoragePgDB metrics', () => {
       })
       expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
     } finally {
+      performanceNowSpy.mockRestore()
+      recordSpy.mockRestore()
+    }
+  })
+
+  test('records scoped DB query duration from numeric monotonic timestamps', async () => {
+    const transaction = {
+      commit: vi.fn(),
+      rollback: vi.fn(),
+      isCompleted: vi.fn().mockReturnValue(false),
+    }
+    const connection = {
+      getAbortSignal: vi.fn().mockReturnValue(undefined),
+      transaction: vi.fn().mockResolvedValue(transaction),
+      setScope: vi.fn(),
+    } as unknown as PgTenantConnection
+    const storage = new TestStoragePgDB(connection, {
+      tenantId: 'metric-cardinality-tenant',
+      host: 'localhost',
+    })
+    const recordSpy = vi.spyOn(dbQueryPerformance, 'record')
+    const performanceNowSpy = vi
+      .spyOn(performance, 'now')
+      .mockReturnValueOnce(2)
+      .mockReturnValueOnce(9)
+
+    try {
+      await expect(storage.runScopedMetricProbe()).resolves.toBe('ok')
+
+      expect(recordSpy).toHaveBeenCalledWith(0.007, {
+        name: 'ScopedMetricDuration',
+        requestAborted: false,
+        requestAbortedBeforeStart: false,
+        requestAbortedAfterStart: false,
+      })
+    } finally {
+      performanceNowSpy.mockRestore()
       recordSpy.mockRestore()
     }
   })

@@ -1,5 +1,4 @@
 export { default as jwks } from './jwks'
-export { default as metricsConfig } from './metrics'
 export { default as migrations } from './migrations'
 export { default as objects } from './objects'
 export { default as pprof } from './pprof'

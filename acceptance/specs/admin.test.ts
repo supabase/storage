@@ -9,15 +9,6 @@ interface TenantSummary {
   id: string
 }
 
-interface MetricConfigEntry {
-  enabled: boolean
-  name: string
-}
-
-interface MetricsConfigResponse {
-  metrics: MetricConfigEntry[]
-}
-
 interface TenantFeatures {
   icebergCatalog?: {
     enabled?: boolean
@@ -103,7 +94,7 @@ describeAcceptance(
     requires: ['admin'],
   },
   () => {
-    it('covers tenant reads, migration and queue validation, metrics config, JWKS validation, orphan validation, and S3 credential CRUD', async () => {
+    it('covers tenant reads, migration and queue validation, JWKS validation, orphan validation, and S3 credential CRUD', async () => {
       const config = getAcceptanceConfig()
       const client = createAdminClient()
       const headers = {
@@ -128,12 +119,6 @@ describeAcceptance(
           headers,
         })
         expect(migrations.json).toBeTruthy()
-
-        const metrics = await client.request<MetricsConfigResponse>('GET', '/metrics/config', {
-          expectedStatus: 200,
-          headers,
-        })
-        expect(Array.isArray(metrics.json?.metrics)).toBe(true)
 
         await client.request('GET', '/migrations/failed?cursor=not-a-number', {
           expectedStatus: 400,
@@ -468,8 +453,6 @@ describeAcceptance(
           )
         }
 
-        await expectMetricsConfigMutation(client, headers)
-
         await client.request('DELETE', `/tenants/${createdTenantId}`, {
           expectedStatus: 204,
           headers,
@@ -513,70 +496,6 @@ async function resolveTenantId(
   }
 
   return tenantId
-}
-
-async function expectMetricsConfigMutation(
-  client: AcceptanceHttpClient,
-  headers: Record<string, string>
-) {
-  const metrics = await client.request<MetricsConfigResponse>('GET', '/metrics/config', {
-    expectedStatus: 200,
-    headers,
-  })
-  const metric = metrics.json?.metrics[0]
-  expect(metric).toBeTruthy()
-  if (!metric) {
-    throw new Error('Admin metrics config did not include any registered metrics')
-  }
-
-  const metricToRestore = {
-    enabled: metric.enabled,
-    name: metric.name,
-  }
-  const toggledMetric = {
-    enabled: !metric.enabled,
-    name: metric.name,
-  }
-
-  try {
-    const toggledMetrics = await client.request<MetricsConfigResponse>('PUT', '/metrics/config', {
-      body: {
-        metrics: [toggledMetric],
-      },
-      expectedStatus: 200,
-      headers,
-    })
-    expect(
-      toggledMetrics.json?.metrics.find((candidate) => candidate.name === metric.name)?.enabled
-    ).toBe(toggledMetric.enabled)
-
-    const persistedMetrics = await client.request<MetricsConfigResponse>('GET', '/metrics/config', {
-      expectedStatus: 200,
-      headers,
-    })
-    expect(
-      persistedMetrics.json?.metrics.find((candidate) => candidate.name === metric.name)?.enabled
-    ).toBe(toggledMetric.enabled)
-  } finally {
-    const restoredMetrics = await client.request<MetricsConfigResponse>('PUT', '/metrics/config', {
-      body: {
-        metrics: [metricToRestore],
-      },
-      expectedStatus: 200,
-      headers,
-    })
-    expect(
-      restoredMetrics.json?.metrics.find((candidate) => candidate.name === metric.name)?.enabled
-    ).toBe(metricToRestore.enabled)
-
-    const persistedRestore = await client.request<MetricsConfigResponse>('GET', '/metrics/config', {
-      expectedStatus: 200,
-      headers,
-    })
-    expect(
-      persistedRestore.json?.metrics.find((candidate) => candidate.name === metric.name)?.enabled
-    ).toBe(metricToRestore.enabled)
-  }
 }
 
 async function deactivateJwks(

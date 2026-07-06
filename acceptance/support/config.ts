@@ -15,6 +15,8 @@ export type AcceptanceCapability =
 export interface AcceptanceConfig {
   adminApiKey?: string
   adminUrl?: string
+  adminReturnSensitiveData: boolean
+  adminDatabaseUrlOverride?: string
   allowDestructive: boolean
   anonKey?: string
   authenticatedKey?: string
@@ -128,6 +130,10 @@ function buildAcceptanceConfig(): AcceptanceConfig {
     'enable-admin',
     envOption('ACCEPTANCE_ENABLE_ADMIN')
   )
+  const adminReturnSensitiveData = boolOptionDefaultTrue(
+    'enable-admin-sensitive-data',
+    envOption('ACCEPTANCE_ADMIN_RETURN_TENANT_SENSITIVE_DATA')
+  )
   const runId = sanitizeRunId(
     readOption('run-id') ??
       envOption('ACCEPTANCE_RUN_ID') ??
@@ -148,6 +154,8 @@ function buildAcceptanceConfig(): AcceptanceConfig {
   const config: AcceptanceConfig = {
     adminApiKey,
     adminUrl,
+    adminReturnSensitiveData,
+    adminDatabaseUrlOverride: envOption('ACCEPTANCE_ADMIN_DATABASE_URL_OVERRIDE'),
     allowDestructive: boolOption('allow-destructive', envOption('ACCEPTANCE_ALLOW_DESTRUCTIVE')),
     anonKey: envOption('ACCEPTANCE_ANON_KEY'),
     authenticatedKey: envOption('ACCEPTANCE_AUTHENTICATED_KEY'),

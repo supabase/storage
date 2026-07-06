@@ -40,6 +40,16 @@ export interface TenantConnectionOptions {
   operation?: () => string | undefined
 }
 
+// Pool cache entries are long-lived:
+//  * minimum TENANT_POOL_CACHE_TTL_MS
+//  * refreshed on access
+// Strategies must retain only pool settings and can't capture the request
+// that created them (headers, the operation closure over the whole Fastify request).
+export type PoolStrategySettings = Pick<
+  TenantConnectionOptions,
+  'tenantId' | 'dbUrl' | 'isExternalPool' | 'maxConnections' | 'clusterSize' | 'numWorkers'
+>
+
 export interface User {
   jwt: string
   payload: { role?: string } & JWTPayload
@@ -263,7 +273,14 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
       return existingPool as TPool
     }
 
-    const newPool = this.newPool({ ...settings, numWorkers: this.numWorkers })
+    const newPool = this.newPool({
+      tenantId: settings.tenantId,
+      dbUrl: settings.dbUrl,
+      isExternalPool: settings.isExternalPool,
+      maxConnections: settings.maxConnections,
+      clusterSize: settings.clusterSize,
+      numWorkers: this.numWorkers,
+    })
 
     tenantPools.set(settings.tenantId, newPool)
     return newPool
@@ -296,5 +313,5 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
     return Promise.allSettled(promises)
   }
 
-  protected abstract newPool(settings: TenantConnectionOptions): TPool
+  protected abstract newPool(settings: PoolStrategySettings): TPool
 }

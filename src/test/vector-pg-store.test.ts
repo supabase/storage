@@ -5,6 +5,7 @@ import {
   PgTransaction,
 } from '@internal/database'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
+import type { TenantConnectionOptions } from '@internal/database/pool'
 import { logger, logSchema } from '@internal/monitoring'
 import { PgVectorMetadataDB } from '@storage/protocols/vector'
 import { DatabaseError, type PoolClient } from 'pg'
@@ -25,14 +26,15 @@ describe('PgVectorMetadataDB', () => {
     })
 
     const superUser = await getServiceKeyUser(tenantId)
-    pool = new PgPoolStrategy({
+    const connectionSettings: TenantConnectionOptions = {
       tenantId,
       dbUrl: databaseURL!,
       isExternalPool: false,
       maxConnections: 2,
       user: superUser,
       superUser,
-    })
+    }
+    pool = new PgPoolStrategy(connectionSettings)
     db = new PgVectorMetadataDB(pool.acquire())
   })
 

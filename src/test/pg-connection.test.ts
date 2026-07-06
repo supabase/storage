@@ -4,6 +4,7 @@ import {
   PgPoolStrategy,
   PgTenantConnection,
 } from '@internal/database'
+import type { TenantConnectionOptions } from '@internal/database/pool'
 import { getConfig } from '../config'
 
 const { databaseURL, databasePoolURL, tenantId } = getConfig()
@@ -11,8 +12,8 @@ const { databaseURL, databasePoolURL, tenantId } = getConfig()
 describe('Pg database foundation', () => {
   function createConnectionSettings(
     superUser: Awaited<ReturnType<typeof getServiceKeyUser>>,
-    overrides?: Partial<ConstructorParameters<typeof PgPoolStrategy>[0]>
-  ): ConstructorParameters<typeof PgPoolStrategy>[0] {
+    overrides?: Partial<TenantConnectionOptions>
+  ): TenantConnectionOptions {
     return {
       tenantId,
       isExternalPool: true,

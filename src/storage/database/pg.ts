@@ -1754,7 +1754,7 @@ export class StoragePgDB implements Database {
     queryName: string,
     fn: (db: PgExecutor, signal?: AbortSignal) => Promise<T>
   ): Promise<T> {
-    const startTime = process.hrtime.bigint()
+    const startTime = performance.now()
     const abortSignal = this.connection.getAbortSignal()
     const recordDuration = this.createDurationRecorder(queryName, startTime, abortSignal)
 
@@ -1885,7 +1885,7 @@ export class StoragePgDB implements Database {
     queryName: string,
     fn: (db: PgExecutor, signal?: AbortSignal) => Promise<T>
   ): Promise<T> {
-    const startTime = process.hrtime.bigint()
+    const startTime = performance.now()
     const abortSignal = this.connection.getAbortSignal()
     const recordDuration = this.createDurationRecorder(queryName, startTime, abortSignal)
 
@@ -1912,13 +1912,13 @@ export class StoragePgDB implements Database {
 
   private createDurationRecorder(
     queryName: string,
-    startTime: bigint,
+    startTime: number,
     abortSignal?: AbortSignal
   ): () => void {
     const requestAbortedBeforeStart = Boolean(abortSignal?.aborted)
 
     return () => {
-      const duration = Number(process.hrtime.bigint() - startTime) / 1e9
+      const duration = (performance.now() - startTime) / 1000
       // This intentionally reads the signal after the query work settles. The
       // attributes describe request abort observation, not proof that PostgreSQL
       // cancelled this specific statement.

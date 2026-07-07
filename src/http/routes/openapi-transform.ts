@@ -1,3 +1,4 @@
+import { SwaggerTransformObject } from '@fastify/swagger'
 import { FastifySchema, RouteOptions } from 'fastify'
 
 const WILDCARD_PARAM = '*'
@@ -88,10 +89,14 @@ export function createOpenApiTransform() {
       return { schema, url }
     }
 
-    let operationId = operationToId(operation)
+    const baseId = operationToId(operation)
+    let operationId = baseId
     if (seenIds.has(operationId)) {
       const method = Array.isArray(route.method) ? route.method[0] : route.method
-      operationId += method[0].toUpperCase() + method.slice(1).toLowerCase()
+      operationId = baseId + method[0].toUpperCase() + method.slice(1).toLowerCase()
+    }
+    for (let suffix = 2; seenIds.has(operationId); suffix++) {
+      operationId = baseId + suffix
     }
     seenIds.add(operationId)
 
@@ -100,4 +105,43 @@ export function createOpenApiTransform() {
       url,
     }
   }
+}
+
+/**
+ * A handful of paths are reachable both with and without a trailing slash - either because
+ * Fastify's own `exposeHeadRoutes` derives a HEAD route from the un-prefixed path (e.g.
+ * /health vs /health/) or because a route is explicitly registered both ways (the S3
+ * protocol surface). Both forms genuinely work at runtime, but documenting them as two
+ * unrelated paths just doubles the number of operations a generated SDK has to deal with
+ * for the same endpoint. Keep the slash-less form and fold the other one's methods into it.
+ */
+export const dedupeTrailingSlashPaths: SwaggerTransformObject = (documentObject) => {
+  if (!('openapiObject' in documentObject)) {
+    return documentObject.swaggerObject
+  }
+
+  const { openapiObject } = documentObject
+  const paths = openapiObject.paths as Record<string, Record<string, unknown>> | undefined
+  if (!paths) {
+    return openapiObject
+  }
+
+  for (const url of Object.keys(paths)) {
+    if (url === '/' || !url.endsWith('/')) {
+      continue
+    }
+
+    const canonicalUrl = url.slice(0, -1)
+    const canonicalPathItem = paths[canonicalUrl]
+    if (!canonicalPathItem) {
+      continue
+    }
+
+    for (const [method, operation] of Object.entries(paths[url])) {
+      canonicalPathItem[method] ??= operation
+    }
+    delete paths[url]
+  }
+
+  return openapiObject
 }

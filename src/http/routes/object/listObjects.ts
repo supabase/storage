@@ -1,4 +1,3 @@
-import { objectSchema } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
 import { FastifyRequest } from 'fastify/types/request'
 import { FromSchema } from 'json-schema-to-ts'
@@ -35,7 +34,7 @@ const searchRequestBodySchema = {
 } as const
 const successResponseSchema = {
   type: 'array',
-  items: objectSchema,
+  items: { $ref: 'objectSchema#' },
 }
 interface searchRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof searchRequestBodySchema>

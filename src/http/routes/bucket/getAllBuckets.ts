@@ -1,5 +1,4 @@
 import { isClientVersionBefore } from '@storage/limits'
-import { bucketSchema } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
@@ -8,7 +7,7 @@ import { ROUTE_OPERATIONS } from '../operations'
 
 const successResponseSchema = {
   type: 'array',
-  items: bucketSchema,
+  items: { $ref: 'bucketSchema#' },
   examples: [
     [
       {

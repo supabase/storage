@@ -1,5 +1,4 @@
 import { DELETE_OBJECTS_LIMIT_DESCRIPTION, enforceDeleteObjectsLimit } from '@storage/limits'
-import { objectSchema } from '@storage/schemas/object'
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
@@ -28,7 +27,7 @@ const deleteObjectsBodySchema = {
 } as const
 const successResponseSchema = {
   type: 'array',
-  items: objectSchema,
+  items: { $ref: 'objectSchema#' },
 }
 interface deleteObjectsInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof deleteObjectsParamsSchema>

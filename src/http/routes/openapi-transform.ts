@@ -1,6 +1,21 @@
 import { SwaggerTransformObject } from '@fastify/swagger'
 import { FastifySchema, RouteOptions } from 'fastify'
 
+/**
+ * @fastify/swagger names every de-duplicated component schema `def-0`, `def-1`, ... by
+ * default, even for schemas registered with a meaningful `$id` (bucketSchema, errorSchema).
+ * Use the `$id` as the component name instead, falling back to the default `def-N` for
+ * anonymous schemas so unrelated inline schemas don't collide.
+ */
+export function nameSchemaByDollarId(
+  json: { $id?: string },
+  _baseUri: unknown,
+  _fragment: unknown,
+  i: number
+) {
+  return json.$id || `def-${i}`
+}
+
 const WILDCARD_PARAM = '*'
 const WILDCARD_DOC_NAME = 'wildcard'
 

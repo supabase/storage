@@ -1,4 +1,3 @@
-import { bucketSchema } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
@@ -13,7 +12,7 @@ const getBucketParamsSchema = {
   required: ['bucketId'],
 } as const
 
-const successResponseSchema = bucketSchema
+const successResponseSchema = { $ref: 'bucketSchema#' }
 interface getBucketRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof getBucketParamsSchema>
 }

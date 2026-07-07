@@ -1,3 +1,4 @@
+export { default as icebergAdmin } from './iceberg-admin'
 export { default as jwks } from './jwks'
 export { default as migrations } from './migrations'
 export { default as objects } from './objects'

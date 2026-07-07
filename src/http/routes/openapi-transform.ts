@@ -1,5 +1,46 @@
 import { FastifySchema, RouteOptions } from 'fastify'
 
+const WILDCARD_PARAM = '*'
+const WILDCARD_DOC_NAME = 'wildcard'
+
+/**
+ * Fastify's catch-all route segment is `*`, and its request params are keyed by the
+ * literal `*` character (`request.params['*']`). @fastify/swagger mirrors that straight
+ * into the OpenAPI doc as a path template `{*}` with a parameter named `*`, which isn't a
+ * legal parameter/identifier name for any code generator. Rewrite it to a readable name for
+ * docs only - the raw url string returned here still goes through Fastify's own `:name`
+ * path-param formatting, and `route.schema` (the live validation schema) is never mutated.
+ */
+function renameWildcardParam(
+  schema: FastifySchema,
+  url: string
+): { schema: FastifySchema; url: string } {
+  if (!url.split('/').includes(WILDCARD_PARAM)) {
+    return { schema, url }
+  }
+
+  const renamedUrl = url
+    .split('/')
+    .map((segment) => (segment === WILDCARD_PARAM ? `:${WILDCARD_DOC_NAME}` : segment))
+    .join('/')
+
+  const params = schema.params as
+    | { properties?: Record<string, unknown>; required?: string[] }
+    | undefined
+  if (!params?.properties?.[WILDCARD_PARAM]) {
+    return { schema, url: renamedUrl }
+  }
+
+  const { [WILDCARD_PARAM]: wildcardProperty, ...otherProperties } = params.properties
+  const renamedParams = {
+    ...params,
+    properties: { ...otherProperties, [WILDCARD_DOC_NAME]: wildcardProperty },
+    required: params.required?.map((name) => (name === WILDCARD_PARAM ? WILDCARD_DOC_NAME : name)),
+  }
+
+  return { schema: { ...schema, params: renamedParams }, url: renamedUrl }
+}
+
 /**
  * Derives a stable, unique operationId from the route's `config.operation`
  * (see ROUTE_OPERATIONS in ./operations.ts), e.g. `storage.object.get_public` -> `objectGetPublic`.
@@ -39,6 +80,8 @@ export function createOpenApiTransform() {
     url: string
     route: RouteOptions
   }): { schema: FastifySchema; url: string } {
+    ;({ schema, url } = renameWildcardParam(schema, url))
+
     const operation = (route.config as { operation?: string } | undefined)?.operation
 
     if (!operation || (schema as { operationId?: string }).operationId) {

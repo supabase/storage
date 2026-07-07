@@ -58,7 +58,7 @@ export default async function routes(fastify: FastifyInstance) {
           tags: ['bucket'],
         },
         config: {
-          operation: { type: ROUTE_OPERATIONS.DELETE_BUCKET },
+          operation: ROUTE_OPERATIONS.DELETE_BUCKET,
         },
       },
       async (request, response) => {
@@ -79,7 +79,7 @@ export default async function routes(fastify: FastifyInstance) {
         tags: ['bucket'],
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.CREATE_BUCKET },
+        operation: ROUTE_OPERATIONS.CREATE_BUCKET,
       },
     },
     async (request, response) => {
@@ -106,7 +106,7 @@ export default async function routes(fastify: FastifyInstance) {
         tags: ['bucket'],
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.LIST_BUCKET },
+        operation: ROUTE_OPERATIONS.LIST_BUCKET,
       },
     },
     async (request, response) => {

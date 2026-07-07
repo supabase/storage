@@ -51,7 +51,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       schema,
       config: {
-        operation: { type: ROUTE_OPERATIONS.COPY_OBJECT },
+        operation: ROUTE_OPERATIONS.COPY_OBJECT,
         resources: (req: FastifyRequest<copyRequestInterface>) => {
           const { sourceKey, destinationKey, bucketId, destinationBucket } = req.body
           return [`${bucketId}/${sourceKey}`, `${destinationBucket || bucketId}/${destinationKey}`]

@@ -62,7 +62,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       schema,
       config: {
-        operation: { type: ROUTE_OPERATIONS.UPDATE_OBJECT },
+        operation: ROUTE_OPERATIONS.UPDATE_OBJECT,
       },
     },
     async (request, response) => {

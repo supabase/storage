@@ -51,7 +51,7 @@ export default async function routes(fastify: FastifyInstance) {
         tags: ['object'],
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.LIST_OBJECTS_V2 },
+        operation: ROUTE_OPERATIONS.LIST_OBJECTS_V2,
         logMetadata: (req: FastifyRequest<searchRequestInterface>) => ({
           prefix: req.body.prefix,
           limit: req.body.limit,

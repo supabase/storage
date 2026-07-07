@@ -60,7 +60,7 @@ export default async function routes(fastify: FastifyInstance) {
         tags: ['cdn'],
       }),
       config: {
-        operation: { type: ROUTE_OPERATIONS.PURGE_TENANT_CACHE },
+        operation: ROUTE_OPERATIONS.PURGE_TENANT_CACHE,
       },
     },
     async (request, response) => {
@@ -86,7 +86,7 @@ export default async function routes(fastify: FastifyInstance) {
         tags: ['cdn'],
       }),
       config: {
-        operation: { type: ROUTE_OPERATIONS.PURGE_BUCKET_CACHE },
+        operation: ROUTE_OPERATIONS.PURGE_BUCKET_CACHE,
       },
     },
     async (request, response) => {
@@ -114,7 +114,7 @@ export default async function routes(fastify: FastifyInstance) {
         tags: ['cdn'],
       }),
       config: {
-        operation: { type: ROUTE_OPERATIONS.PURGE_OBJECT_CACHE },
+        operation: ROUTE_OPERATIONS.PURGE_OBJECT_CACHE,
       },
     },
     async (request, response) => {

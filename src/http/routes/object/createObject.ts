@@ -65,7 +65,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       schema,
       config: {
-        operation: { type: ROUTE_OPERATIONS.CREATE_OBJECT },
+        operation: ROUTE_OPERATIONS.CREATE_OBJECT,
       },
     },
     async (request, response) => {

@@ -50,7 +50,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/',
     {
       config: {
-        operation: { type: ROUTE_OPERATIONS.CREATE_BUCKET },
+        operation: ROUTE_OPERATIONS.CREATE_BUCKET,
         resources: (req: FastifyRequest<createBucketRequestInterface>) => [
           req.body.id || req.body.name || '',
         ],

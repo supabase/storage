@@ -58,10 +58,10 @@ export default async function routes(fastify: FastifyInstance) {
               }
 
               try {
-                req.operation = route.operationConfig
+                req.operation = route.operation
 
-                if (req.operation.type && typeof req.opentelemetry === 'function') {
-                  req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)
+                if (req.operation && typeof req.opentelemetry === 'function') {
+                  req.opentelemetry()?.span?.setAttribute('http.operation', req.operation)
                 }
 
                 const data = {

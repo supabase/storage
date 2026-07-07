@@ -25,7 +25,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/config',
     {
       config: {
-        operation: { type: ROUTE_OPERATIONS.ICEBERG_GET_CONFIG },
+        operation: ROUTE_OPERATIONS.ICEBERG_GET_CONFIG,
       },
       schema: {
         ...getConfigSchema,

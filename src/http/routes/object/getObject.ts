@@ -98,7 +98,7 @@ export default async function routes(fastify: FastifyInstance) {
         tags: ['object'],
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT },
+        operation: ROUTE_OPERATIONS.GET_AUTH_OBJECT,
       },
     },
     async (request, response) => {
@@ -119,7 +119,7 @@ export default async function routes(fastify: FastifyInstance) {
         response: { '4xx': { $ref: 'errorSchema#' } },
       },
       config: {
-        operation: { type: ROUTE_OPERATIONS.GET_AUTH_OBJECT },
+        operation: ROUTE_OPERATIONS.GET_AUTH_OBJECT,
         allowInvalidJwt: true,
       },
     },

@@ -93,7 +93,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/:prefix/namespaces',
     {
       config: {
-        operation: { type: ROUTE_OPERATIONS.ICEBERG_CREATE_NAMESPACE },
+        operation: ROUTE_OPERATIONS.ICEBERG_CREATE_NAMESPACE,
       },
       schema: { ...createNamespaceSchema, tags: ['iceberg'] },
     },
@@ -116,7 +116,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/:prefix/namespaces',
     {
       config: {
-        operation: { type: ROUTE_OPERATIONS.ICEBERG_LIST_NAMESPACES },
+        operation: ROUTE_OPERATIONS.ICEBERG_LIST_NAMESPACES,
       },
       schema: { ...listNamespaceSchema, tags: ['iceberg'] },
     },
@@ -140,7 +140,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/:prefix/namespaces/:namespace',
     {
       config: {
-        operation: { type: ROUTE_OPERATIONS.ICEBERG_NAMESPACE_EXISTS },
+        operation: ROUTE_OPERATIONS.ICEBERG_NAMESPACE_EXISTS,
       },
       schema: { ...loadNamespaceSchema, tags: ['iceberg'] },
     },
@@ -162,7 +162,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/:prefix/namespaces/:namespace',
     {
       config: {
-        operation: { type: ROUTE_OPERATIONS.ICEBERG_LOAD_NAMESPACE },
+        operation: ROUTE_OPERATIONS.ICEBERG_LOAD_NAMESPACE,
       },
       schema: { ...loadNamespaceSchema, tags: ['iceberg'] },
     },
@@ -189,7 +189,7 @@ export default async function routes(fastify: FastifyInstance) {
       '/:prefix/namespaces/:namespace',
       {
         config: {
-          operation: { type: ROUTE_OPERATIONS.ICEBERG_DROP_NAMESPACE },
+          operation: ROUTE_OPERATIONS.ICEBERG_DROP_NAMESPACE,
         },
         schema: { ...dropNamespaceSchema, tags: ['iceberg'] },
       },

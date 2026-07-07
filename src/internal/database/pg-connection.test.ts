@@ -747,7 +747,7 @@ describe('PgPoolManager', () => {
   it('caches strategies without retaining request-scoped options', async () => {
     const manager = new PgPoolManager()
     const tenantId = 'pg-pool-manager-prune-test'
-    const request = { operation: { type: 'upload' } }
+    const request = { operation: 'upload' }
 
     const strategy = manager.getPool(
       createPoolStrategySettings({
@@ -755,7 +755,7 @@ describe('PgPoolManager', () => {
         headers: { authorization: 'Bearer secret' },
         method: 'POST',
         path: '/object/bucket/key',
-        operation: () => request.operation.type,
+        operation: () => request.operation,
       })
     )
 

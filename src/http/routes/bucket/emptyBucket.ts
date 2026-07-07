@@ -41,7 +41,7 @@ export default async function routes(fastify: FastifyInstance) {
       {
         schema,
         config: {
-          operation: { type: ROUTE_OPERATIONS.EMPTY_BUCKET },
+          operation: ROUTE_OPERATIONS.EMPTY_BUCKET,
         },
       },
       async (request, response) => {

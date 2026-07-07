@@ -20,14 +20,14 @@ declare module 'http' {
 declare module 'fastify' {
   interface FastifyRequest {
     executionError?: Error
-    operation?: { type: string }
+    operation?: string
     resources?: string[]
     startTime: number
     executionTime?: number
   }
 
   interface FastifyContextConfig {
-    operation?: { type: string }
+    operation?: string
     resources?: BivariantHandler<[req: FastifyRequest], string[]>
     logMetadata?: BivariantHandler<[req: FastifyRequest], Record<string, unknown>>
   }
@@ -96,7 +96,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
         req.operation = req.routeOptions.config.operation
 
         if (req.operation && typeof req.opentelemetry === 'function') {
-          req.opentelemetry()?.span?.setAttribute('http.operation', req.operation.type)
+          req.opentelemetry()?.span?.setAttribute('http.operation', req.operation)
         }
         done()
       })
@@ -198,7 +198,7 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     owner: req.owner,
     role: req.jwtPayload?.role,
     resources: req.resources,
-    operation: req.operation?.type ?? req.routeOptions.config.operation?.type,
+    operation: req.operation ?? req.routeOptions.config.operation,
     serverTimes: req.serverTimings,
   })
 }

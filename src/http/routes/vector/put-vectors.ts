@@ -81,7 +81,7 @@ export default async function routes(fastify: FastifyInstance) {
       bodyLimit: 20 * 1024 * 1024, // 20 MB
       validatorCompiler: putVectorsValidator,
       config: {
-        operation: { type: ROUTE_OPERATIONS.PUT_VECTORS },
+        operation: ROUTE_OPERATIONS.PUT_VECTORS,
       },
       schema: {
         ...putVector,

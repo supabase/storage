@@ -39,7 +39,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       validatorCompiler: getVectorsValidator,
       config: {
-        operation: { type: ROUTE_OPERATIONS.GET_VECTORS },
+        operation: ROUTE_OPERATIONS.GET_VECTORS,
       },
       schema: {
         ...getVectors,

@@ -59,7 +59,7 @@ export default async function routes(fastify: FastifyInstance) {
     {
       validatorCompiler: createVectorIndexValidator,
       config: {
-        operation: { type: ROUTE_OPERATIONS.CREATE_VECTOR_INDEX },
+        operation: ROUTE_OPERATIONS.CREATE_VECTOR_INDEX,
       },
       schema: {
         ...createVectorIndex,

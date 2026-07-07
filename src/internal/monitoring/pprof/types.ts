@@ -1,5 +1,8 @@
+import type { Readable } from 'stream'
+
 export type PprofCaptureType = 'cpu' | 'heap'
-export type PprofRequestTargetType = 'heap' | 'profile'
+export type PprofRequestTargetType = 'heap' | 'heap-snapshot' | 'profile'
+export type HeapSnapshotStream = Readable
 
 export interface WattPprofTarget {
   applicationId: string
@@ -72,6 +75,7 @@ export interface ProfilingRuntimeApiClient {
       type: PprofCaptureType
     }
   ): Promise<ArrayBuffer>
+  takeApplicationHeapSnapshot(pid: number, applicationId: string): Promise<HeapSnapshotStream>
 }
 
 export type RuntimeApplicationWorkersShape = {

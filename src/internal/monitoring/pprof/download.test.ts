@@ -1,9 +1,10 @@
+import nodeFs from 'fs'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
-import { Readable } from 'stream'
+import { Readable, Writable } from 'stream'
 import { vi } from 'vitest'
-import { writeMultipartPprofToFile } from './download'
+import { writeMultipartPprofToFile, writePprofCaptureToFile } from './download'
 
 function buildMultipartBody(
   boundary: string,
@@ -48,6 +49,31 @@ function splitBuffer(buffer: Buffer, chunkSize: number) {
   }
 
   return chunks
+}
+
+function createIndexedAccessCountingChunk(content: Buffer) {
+  let indexedAccesses = 0
+  const bytes = new Uint8Array(content)
+  const chunk = new Proxy(bytes, {
+    get(target, property, receiver) {
+      if (typeof property === 'string' && /^\d+$/.test(property)) {
+        indexedAccesses += 1
+      }
+
+      if (property === 'byteLength' || property === 'length' || property === 'buffer') {
+        return Reflect.get(target, property, target)
+      }
+
+      return Reflect.get(target, property, receiver)
+    },
+  })
+
+  return {
+    chunk,
+    get indexedAccesses() {
+      return indexedAccesses
+    },
+  }
 }
 
 describe('writeMultipartPprofToFile', () => {
@@ -458,5 +484,204 @@ describe('writeMultipartPprofToFile', () => {
         'Pprof capture stream ended before the profile was delivered for storage (cpu, 45s).'
       ),
     })
+  })
+
+  it('does not add an error listener per backpressured profile write', async () => {
+    const boundary = 'pprof-test-boundary'
+    const profile = Buffer.alloc(24, 0x1)
+    const outputPath = path.join(tempDir, 'profile.pprof')
+    const writeStream = new Writable({
+      highWaterMark: 1,
+      write(_chunk, _encoding, callback) {
+        setImmediate(callback)
+      },
+    })
+    vi.spyOn(nodeFs, 'createWriteStream').mockReturnValue(writeStream as nodeFs.WriteStream)
+
+    const body = buildMultipartBody(boundary, [
+      {
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+        body: Buffer.from(
+          JSON.stringify({
+            applicationId: 'storage',
+            event: 'started',
+            filename: 'storage-cpu.pprof',
+            seconds: 60,
+            servingWorkerId: 2,
+            type: 'cpu',
+          }),
+          'utf8'
+        ),
+      },
+      {
+        headers: {
+          'Content-Disposition': 'attachment; filename="storage-cpu.pprof"',
+          'Content-Type': 'application/octet-stream',
+        },
+        body: profile,
+      },
+    ])
+
+    await writeMultipartPprofToFile(
+      Readable.from(splitBuffer(body, 1)),
+      `multipart/mixed; boundary="${boundary}"`,
+      {
+        outputPath,
+      }
+    )
+
+    expect(writeStream.listenerCount('error')).toBeLessThan(6)
+  })
+})
+
+describe('writePprofCaptureToFile', () => {
+  let tempDir: string
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pprof-download-'))
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await fs.rm(tempDir, { recursive: true, force: true })
+  })
+
+  it('writes raw full heap snapshot streams using the response filename', async () => {
+    const snapshot = Buffer.from('{"snapshot":true}')
+    vi.spyOn(process, 'cwd').mockReturnValue(tempDir)
+
+    const result = await writePprofCaptureToFile(Readable.from(splitBuffer(snapshot, 5)), {
+      contentDisposition: 'attachment; filename="..\\\\storage-worker-7.heapsnapshot"',
+      contentType: 'application/octet-stream',
+      type: 'heap-snapshot',
+    })
+
+    const expectedOutputPath = path.join(tempDir, 'dist', 'storage-worker-7.heapsnapshot')
+    expect(result.outputPath).toBe(expectedOutputPath)
+    expect(result).not.toHaveProperty('startedEvent')
+    await expect(fs.readFile(expectedOutputPath)).resolves.toEqual(snapshot)
+  })
+
+  it('uses a heap-snapshot fallback filename for malformed raw capture filenames', async () => {
+    const snapshot = Buffer.from('{"snapshot":true}')
+    vi.spyOn(process, 'cwd').mockReturnValue(tempDir)
+
+    const result = await writePprofCaptureToFile(Readable.from([snapshot]), {
+      contentDisposition: 'attachment; filename=".."',
+      contentType: 'application/octet-stream',
+      type: 'heap-snapshot',
+    })
+
+    const expectedOutputPath = path.join(tempDir, 'dist', 'heap-snapshot.heapsnapshot')
+    expect(result.outputPath).toBe(expectedOutputPath)
+    await expect(fs.readFile(expectedOutputPath)).resolves.toEqual(snapshot)
+  })
+
+  it('rejects empty raw full heap snapshot responses', async () => {
+    await expect(
+      writePprofCaptureToFile(Readable.from([]), {
+        contentDisposition: 'attachment; filename="empty.heapsnapshot"',
+        contentType: 'application/octet-stream',
+        type: 'heap-snapshot',
+      })
+    ).rejects.toThrow('Heap snapshot response was empty.')
+  })
+
+  it('rejects truncated raw full heap snapshot responses', async () => {
+    await expect(
+      writePprofCaptureToFile(Readable.from(['{"snapshot":true']), {
+        contentDisposition: 'attachment; filename="truncated.heapsnapshot"',
+        contentType: 'application/octet-stream',
+        type: 'heap-snapshot',
+      })
+    ).rejects.toThrow('Heap snapshot response is not a complete JSON object.')
+  })
+
+  it('does not scan every byte in heap snapshot chunks after finding the opening brace', async () => {
+    const writeStream = new Writable({
+      objectMode: true,
+      write(_chunk, _encoding, callback) {
+        callback()
+      },
+    })
+    vi.spyOn(nodeFs, 'createWriteStream').mockReturnValue(writeStream as nodeFs.WriteStream)
+
+    const firstChunk = createIndexedAccessCountingChunk(Buffer.from('{'))
+    const middleChunk = createIndexedAccessCountingChunk(Buffer.alloc(10_000, 0x78))
+    const lastChunk = createIndexedAccessCountingChunk(Buffer.from('}'))
+
+    await writePprofCaptureToFile(
+      Readable.from([firstChunk.chunk, middleChunk.chunk, lastChunk.chunk]),
+      {
+        contentDisposition: 'attachment; filename="profile.heapsnapshot"',
+        contentType: 'application/octet-stream',
+        type: 'heap-snapshot',
+      },
+      {
+        outputPath: path.join(tempDir, 'profile.heapsnapshot'),
+      }
+    )
+
+    expect(middleChunk.indexedAccesses).toBeLessThan(10)
+  })
+
+  it('keeps pprof captures on the multipart parser even with malformed response content-type', async () => {
+    await expect(
+      writePprofCaptureToFile(Readable.from(['profile-data']), {
+        contentType: 'application/octet-stream',
+        type: 'heap',
+      })
+    ).rejects.toThrow('Expected a multipart/mixed pprof response with a boundary parameter.')
+  })
+
+  it('keeps multipart pprof behavior behind the generic capture writer', async () => {
+    const boundary = 'pprof-test-boundary'
+    const profile = Buffer.from([1, 2, 3])
+    const outputPath = path.join(tempDir, 'profile.pprof')
+    const body = buildMultipartBody(boundary, [
+      {
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+        body: Buffer.from(
+          JSON.stringify({
+            applicationId: 'storage',
+            event: 'started',
+            filename: 'storage-cpu.pprof',
+            seconds: 60,
+            type: 'cpu',
+          }),
+          'utf8'
+        ),
+      },
+      {
+        headers: {
+          'Content-Disposition': 'attachment; filename="storage-cpu.pprof"',
+          'Content-Type': 'application/octet-stream',
+        },
+        body: profile,
+      },
+    ])
+
+    const result = await writePprofCaptureToFile(
+      Readable.from(splitBuffer(body, 7)),
+      {
+        contentType: `multipart/mixed; boundary=${boundary}`,
+        type: 'profile',
+      },
+      {
+        outputPath,
+      }
+    )
+
+    expect(result.outputPath).toBe(outputPath)
+    expect(result.startedEvent).toMatchObject({
+      applicationId: 'storage',
+      type: 'cpu',
+    })
+    await expect(fs.readFile(outputPath)).resolves.toEqual(profile)
   })
 })

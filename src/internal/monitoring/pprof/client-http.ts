@@ -6,6 +6,22 @@ const PPROF_ERROR_BODY_MAX_BYTES = 4 * 1024
 
 type PprofQueryValue = boolean | number | string | undefined
 
+type FetchPprofStreamOptions = {
+  adminUrl: string
+  apiKey: string
+  workerId?: number
+} & (
+  | {
+      nodeModulesSourceMaps?: string
+      seconds: number
+      sourceMaps?: boolean
+      type: Exclude<PprofRequestTargetType, 'heap-snapshot'>
+    }
+  | {
+      type: 'heap-snapshot'
+    }
+)
+
 export function resolvePprofAdminUrl(
   baseUrl: string,
   requestPath: string,
@@ -75,25 +91,24 @@ async function readResponseBody(response: Response) {
   return truncated ? `: ${bodyText}… [truncated]` : `: ${bodyText}`
 }
 
-export async function fetchPprofStream(options: {
-  adminUrl: string
-  apiKey: string
-  nodeModulesSourceMaps?: string
-  seconds: number
-  sourceMaps?: boolean
-  type: PprofRequestTargetType
-  workerId?: number
-}) {
+export async function fetchPprofStream(options: FetchPprofStreamOptions) {
+  const isHeapSnapshot = options.type === 'heap-snapshot'
+  const pprofParams =
+    options.type === 'heap-snapshot'
+      ? {}
+      : {
+          nodeModulesSourceMaps: options.nodeModulesSourceMaps,
+          seconds: options.seconds,
+          sourceMaps: options.sourceMaps,
+        }
   const response = await fetch(
     resolvePprofAdminUrl(options.adminUrl, `/debug/pprof/${options.type}`, {
-      nodeModulesSourceMaps: options.nodeModulesSourceMaps,
-      seconds: options.seconds,
-      sourceMaps: options.sourceMaps,
+      ...pprofParams,
       workerId: options.workerId,
     }),
     {
       headers: {
-        Accept: 'multipart/mixed',
+        Accept: isHeapSnapshot ? 'application/octet-stream' : 'multipart/mixed',
         ApiKey: options.apiKey,
       },
       method: 'GET',
@@ -112,6 +127,7 @@ export async function fetchPprofStream(options: {
   }
 
   return {
+    contentDisposition: response.headers.get('content-disposition') ?? undefined,
     contentType: response.headers.get('content-type') ?? undefined,
     // Node's Readable.fromWeb expects the stream/web type, while fetch exposes the DOM shape.
     stream: Readable.fromWeb(response.body as unknown as NodeReadableStream),

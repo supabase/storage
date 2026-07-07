@@ -666,6 +666,21 @@ describe('PgTransaction', () => {
     expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 2', undefined)
   })
 
+  it('normalizes invalid constructor statement timeouts as disabled', async () => {
+    for (const statementTimeoutMs of [-5, Number.NaN, Number.POSITIVE_INFINITY, 0]) {
+      const client = {
+        query: vi.fn().mockResolvedValue({ rows: [] }),
+        release: vi.fn(),
+      } as unknown as PoolClient
+      const transaction = new PgTransaction(client, undefined, { statementTimeoutMs })
+
+      await transaction.query('SELECT 1')
+
+      expect(client.query).toHaveBeenCalledTimes(1)
+      expect(client.query).toHaveBeenNthCalledWith(1, 'SELECT 1', undefined)
+    }
+  })
+
   it('rejects a pre-aborted direct query before applying a pending statement timeout', async () => {
     const client = {
       query: vi.fn().mockResolvedValue({ rows: [] }),

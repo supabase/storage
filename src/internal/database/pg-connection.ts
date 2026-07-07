@@ -475,7 +475,7 @@ export class PgTransaction implements PgExecutor {
     private readonly clientErrorTracker?: PgClientErrorTracker,
     options: PgTransactionOptions = {}
   ) {
-    this.statementTimeoutMs = options.statementTimeoutMs
+    this.statementTimeoutMs = normalizeStatementTimeoutMs(options.statementTimeoutMs)
   }
 
   isCompleted(): boolean {

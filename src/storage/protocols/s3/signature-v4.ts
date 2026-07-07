@@ -4,6 +4,7 @@ import { ERRORS } from '@internal/errors'
 import crypto from 'crypto'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
+import { assertPolicyNotExpired, Policy } from './policy'
 
 export enum SignatureV4Service {
   S3 = 's3',
@@ -53,19 +54,6 @@ interface Credentials {
 type SignatureHeaders = Record<string, string | string[] | undefined>
 type SignatureQuery = Record<string, unknown>
 
-export interface Policy {
-  expiration: string
-  conditions: PolicyCondition[]
-}
-
-/**
- * An AWS POST policy condition is either:
- *  - an exact-match object with a single key: `{ "bucket": "my-bucket" }`
- *  - a tuple: `["eq", "$key", "value"]`, `["starts-with", "$key", "prefix"]`,
- *    or `["content-length-range", min, max]`
- */
-export type PolicyCondition = Record<string, string> | (string | number)[]
-
 /**
  * Lists the headers that should never be included in the
  * request signature signature process.
@@ -92,21 +80,6 @@ export const ALWAYS_UNSIGNABLE_QUERY_PARAMS = {
 }
 
 export const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-
-/**
- * Submitted form fields that do NOT need to be covered by a policy condition,
- * keyed by their lowercased name. This matches AWS POST semantics: every other
- * field (including `key`, `bucket`, and every `x-amz-meta-*`) must be constrained
- * by a condition.
- */
-const EXEMPT_POLICY_FIELDS = new Set([
-  'policy',
-  'x-amz-signature',
-  'x-amz-algorithm',
-  'x-amz-credential',
-  'x-amz-date',
-  'x-amz-security-token',
-])
 
 export class SignatureV4 {
   public readonly serverCredentials: SignatureV4Options['credentials']
@@ -242,15 +215,15 @@ export class SignatureV4 {
     // A POST policy must declare an expiration; AWS treats a missing one as
     // invalid. Without this check a signed policy with no expiration would never
     // expire and could be replayed forever.
-    this.checkPolicyExpiration(xPolicy.expiration)
+    assertPolicyNotExpired(xPolicy.expiration)
 
-    const fields: Record<string, string> = {}
+    const fields: Record<string, string> = Object.create(null)
     form.forEach((value, key) => {
       if (typeof value !== 'string') {
         return
       }
       const normalizedKey = key.toLowerCase()
-      if (normalizedKey in fields) {
+      if (Object.prototype.hasOwnProperty.call(fields, normalizedKey)) {
         throw ERRORS.InvalidSignature('Duplicate form field in POST policy request')
       }
       fields[normalizedKey] = value
@@ -274,27 +247,6 @@ export class SignatureV4 {
         value: xPolicy,
         fields,
       },
-    }
-  }
-
-  /**
-   * Validates a POST policy `expiration`, which is an absolute ISO8601 timestamp
-   * (e.g. `2025-01-01T00:00:00Z`). Unlike {@link checkExpiration}, used by
-   * presigned query URLs, where the value is a number of seconds relative to
-   * X-Amz-Date.
-   */
-  protected static checkPolicyExpiration(expiration: string | undefined) {
-    if (!expiration) {
-      throw ERRORS.InvalidSignature('Missing policy expiration')
-    }
-
-    const expirationDate = new Date(expiration)
-    if (isNaN(expirationDate.getTime())) {
-      throw ERRORS.InvalidSignature('Invalid policy expiration')
-    }
-
-    if (expirationDate < new Date()) {
-      throw ERRORS.ExpiredSignature()
     }
   }
 
@@ -343,150 +295,6 @@ export class SignatureV4 {
       Buffer.from(clientSignature.signature),
       Buffer.from(serverSignature.signature)
     )
-  }
-
-  /**
-   * Evaluates the signed POST policy conditions against the values the client
-   * actually submitted, in a single pass, and:
-   *  - throws if any condition is not satisfied;
-   *  - throws if any submitted field is NOT covered by a condition
-   *  - returns the effective `content-length-range` upper bound
-   *
-   * The `bucket` value is taken from the request target (the URL), since AWS
-   * POST uploads carry the bucket in the path rather than as a form field.
-   */
-  validatePostPolicyConditions(
-    clientSignature: ClientSignature,
-    opts: { bucket?: string }
-  ): number | undefined {
-    const policy = clientSignature.policy
-    if (!policy) {
-      return undefined
-    }
-
-    const conditions = policy.value?.conditions
-    if (!Array.isArray(conditions)) {
-      throw ERRORS.InvalidSignature('Invalid policy conditions')
-    }
-
-    const fields: Record<string, string> = { ...policy.fields }
-    if (opts.bucket !== undefined) {
-      fields['bucket'] = opts.bucket
-    }
-
-    const coveredFields = new Set<string>()
-    let max: number | undefined
-
-    for (const condition of conditions) {
-      const result = this.evaluatePolicyCondition(condition, fields)
-      if (result.field) {
-        coveredFields.add(result.field)
-      }
-      if (result.max !== undefined) {
-        // Fold to the most restrictive upper bound across every content-length-range.
-        max = max === undefined ? result.max : Math.min(max, result.max)
-      }
-    }
-
-    // Every submitted field must be constrained by a condition
-    for (const field of Object.keys(fields)) {
-      if (EXEMPT_POLICY_FIELDS.has(field) || field.startsWith('x-ignore-')) {
-        continue
-      }
-      if (!coveredFields.has(field)) {
-        throw ERRORS.AccessDenied(
-          `Policy condition failed: field "${field}" is not covered by the policy`
-        )
-      }
-    }
-
-    return max
-  }
-
-  protected evaluatePolicyCondition(
-    condition: PolicyCondition,
-    fields: Record<string, string>
-  ): { field?: string; max?: number } {
-    const normalized = this.normalizePolicyCondition(condition)
-
-    if (normalized.operator === 'content-length-range') {
-      return { max: normalized.max }
-    }
-
-    if (normalized.operator === 'eq') {
-      this.assertFieldEquals(normalized.field, normalized.value, fields)
-    } else if (normalized.operator === 'starts-with') {
-      this.assertFieldStartsWith(normalized.field, normalized.value, fields)
-    }
-
-    return { field: normalized.field }
-  }
-
-  /**
-   * Normalize a raw policy condition into a single operator form, or throws
-   * if it is malformed. The exact-match object `{ field: value }` is the same
-   * as `["eq", "$field", value]`, so both collapse to the same `eq` shape.
-   */
-  private normalizePolicyCondition(
-    condition: PolicyCondition
-  ):
-    | { operator: 'eq' | 'starts-with'; field: string; value: string | number }
-    | { operator: 'content-length-range'; min: number; max: number } {
-    // Exact-match object form: { "field": "value" } with exactly one key.
-    if (condition && typeof condition === 'object' && !Array.isArray(condition)) {
-      const keys = Object.keys(condition)
-      if (keys.length !== 1) {
-        throw ERRORS.InvalidSignature('Invalid policy condition')
-      }
-      return { operator: 'eq', field: keys[0].toLowerCase(), value: condition[keys[0]] }
-    }
-
-    // Tuple form: ["eq" | "starts-with", "$field", value] or
-    // ["content-length-range", min, max].
-    if (Array.isArray(condition)) {
-      const [operator, target, value] = condition
-
-      if (operator === 'content-length-range') {
-        if (typeof target !== 'number' || typeof value !== 'number') {
-          throw ERRORS.InvalidSignature('Invalid content-length-range condition')
-        }
-        return { operator: 'content-length-range', min: target, max: value }
-      }
-
-      if (
-        (operator === 'eq' || operator === 'starts-with') &&
-        typeof target === 'string' &&
-        target.startsWith('$')
-      ) {
-        return { operator, field: target.slice(1).toLowerCase(), value }
-      }
-    }
-
-    throw ERRORS.InvalidSignature('Unsupported policy condition')
-  }
-
-  private assertFieldEquals(
-    field: string,
-    expected: string | number,
-    fields: Record<string, string>
-  ) {
-    const actual = fields[field]
-    if (actual === undefined || actual !== String(expected)) {
-      throw ERRORS.AccessDenied(`Policy condition failed: "${field}" does not match`)
-    }
-  }
-
-  private assertFieldStartsWith(
-    field: string,
-    prefix: string | number,
-    fields: Record<string, string>
-  ) {
-    const actual = fields[field]
-    if (actual === undefined || !actual.startsWith(String(prefix ?? ''))) {
-      throw ERRORS.AccessDenied(
-        `Policy condition failed: "${field}" does not start with "${prefix}"`
-      )
-    }
   }
 
   /**

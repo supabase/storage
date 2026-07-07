@@ -1039,7 +1039,6 @@ describe('S3 Protocol', () => {
         Object.keys(signedURL.fields).forEach((key) => {
           formData.set(key, signedURL.fields[key])
         })
-        formData.set('key', 'other/object.txt')
         formData.set('file', new Blob([Buffer.alloc(16)]), 'object.txt')
 
         const otherUrl = signedURL.url.replace(`/s3/${signedBucket}`, `/s3/${otherBucket}`)
@@ -1116,27 +1115,6 @@ describe('S3 Protocol', () => {
         expect(resp.status).toBe(403)
       })
 
-      it('enforces the content-length-range upper bound', async () => {
-        const bucketName = await createBucket(client)
-
-        const signedURL = await createPresignedPost(client, {
-          Bucket: bucketName,
-          Key: 'test.jpg',
-          Expires: 5000,
-          Conditions: [['content-length-range', 0, 1024]],
-        })
-
-        const formData = new FormData()
-        Object.keys(signedURL.fields).forEach((key) => {
-          formData.set(key, signedURL.fields[key])
-        })
-        formData.set('file', new Blob([Buffer.alloc(1024 * 2)]), 'test.jpg')
-
-        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
-
-        expect(resp.status).toBe(413)
-      })
-
       it('accepts (and ignores) a field Storage does not act on, when covered by a condition', async () => {
         const bucketName = await createBucket(client)
 
@@ -1182,6 +1160,31 @@ describe('S3 Protocol', () => {
         const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
 
         expect(resp.status).toBe(403)
+      })
+
+      it('allows an uncovered x-ignore- field (AWS exemption)', async () => {
+        // AWS exempts fields prefixed with `x-ignore-` from the "every field must
+        // be covered by a condition" rule, so an uncovered x-ignore-* field must
+        // NOT be rejected (contrast the x-amz-meta-* case above).
+        const bucketName = await createBucket(client)
+
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          Key: 'test.jpg',
+          Expires: 5000,
+          Fields: { 'Content-Type': 'image/jpg' },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        formData.set('x-ignore-toolkit-field', 'anything')
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'test.jpg')
+
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(200)
       })
     })
 

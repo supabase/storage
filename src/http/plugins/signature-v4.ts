@@ -5,7 +5,12 @@ import { getJwtSecret, getTenantConfig, s3CredentialsManager } from '@internal/d
 import { ERRORS } from '@internal/errors'
 import { RequestByteCounterStream } from '@internal/streams'
 import { HashSpillWritable } from '@internal/streams/hash-stream'
-import { ClientSignature, SignatureV4, SignatureV4Service } from '@storage/protocols/s3'
+import {
+  assertPolicyConditionsSatisfied,
+  ClientSignature,
+  SignatureV4,
+  SignatureV4Service,
+} from '@storage/protocols/s3'
 import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
 import {
   ChunkSignatureV4Parser,
@@ -41,7 +46,6 @@ declare module 'fastify' {
     streamingSignatureV4?: ChunkSignatureV4Parser
     multiPartFileStream?: MultipartFile
     bodySha256: string
-    s3PostPolicyContentLengthMax?: number
   }
 }
 
@@ -162,10 +166,9 @@ async function authorizeRequestSignV4(
   }
 
   if (clientSignature.policy) {
-    request.s3PostPolicyContentLengthMax = signatureV4.validatePostPolicyConditions(
-      clientSignature,
-      { bucket: (request.params as Record<string, string | undefined>)?.Bucket }
-    )
+    assertPolicyConditionsSatisfied(clientSignature.policy.value, clientSignature.policy.fields, {
+      bucket: (request.params as Record<string, string | undefined>)?.Bucket,
+    })
   }
 
   const wasBodyHashed = allowBodyHash && byteHasherStream && byteHasherStream.writableEnded

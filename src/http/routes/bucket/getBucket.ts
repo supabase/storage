@@ -22,6 +22,8 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     params: getBucketParamsSchema,
     summary,
+    description:
+      'Requires the caller to have access to the bucket via RLS policies, unlike the public bucket listing',
     tags: ['bucket'],
   })
   fastify.get<getBucketRequestInterface>(

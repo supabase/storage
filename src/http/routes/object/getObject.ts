@@ -94,6 +94,8 @@ export default async function routes(fastify: FastifyInstance) {
         querystring: getObjectQuerySchema,
         headers: { $ref: 'authSchema#' },
         summary,
+        description:
+          'Requires a valid auth token and checks bucket/object access via RLS, regardless of whether the bucket is public',
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },

@@ -45,6 +45,8 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     querystring: requestQuerySchema,
     summary,
+    description:
+      'Returns buckets owned by the authenticated user, supporting pagination via limit/offset plus sorting and search filters',
     tags: ['bucket'],
   })
 

@@ -68,6 +68,8 @@ export default async function routes(fastify: FastifyInstance) {
         params: uploadSignedObjectParamsSchema,
         querystring: uploadSignedObjectQSSchema,
         summary,
+        description:
+          'Verifies the token query parameter instead of requiring an authorization header, and does not need the caller to have direct bucket access',
         response: {
           200: { description: 'Successful response', ...successResponseSchema },
           '4xx': { $ref: 'errorSchema#', description: 'Error response' },

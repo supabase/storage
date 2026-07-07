@@ -9,6 +9,8 @@ export default async function routes(fastify: FastifyInstance) {
       schema: {
         operationId: 'healthcheck',
         summary,
+        description:
+          'Checks database connectivity and always responds with HTTP 200, reporting healthy: false in the body rather than an error status when the check fails',
         tags: ['health'],
       },
     },

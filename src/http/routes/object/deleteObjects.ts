@@ -41,6 +41,8 @@ export default async function routes(fastify: FastifyInstance) {
     body: deleteObjectsBodySchema,
     params: deleteObjectsParamsSchema,
     summary,
+    description:
+      'Accepts a list of object prefixes to delete in one request, capped by a configurable per-request limit',
     tags: ['object'],
   })
 

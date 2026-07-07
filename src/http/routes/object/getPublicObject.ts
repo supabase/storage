@@ -40,6 +40,8 @@ export default async function routes(fastify: FastifyInstance) {
         params: getPublicObjectParamsSchema,
         querystring: getObjectQuerySchema,
         summary,
+        description:
+          'Requires no authorization header but errors if the bucket is not marked public, unlike the authenticated retrieval endpoint',
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },

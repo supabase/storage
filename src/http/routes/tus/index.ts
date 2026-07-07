@@ -263,7 +263,12 @@ const authenticatedRoutes = fastifyPlugin(
       fastify.post(
         '/',
         {
-          schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['resumable'] },
+          schema: {
+            summary: 'Handle POST request for TUS Resumable uploads',
+            description:
+              'Creates a new resumable upload and returns its Location URL; the sign/ variant authorizes via the x-signature header from a presigned token instead of a JWT',
+            tags: ['resumable'],
+          },
           config: {
             operation: `${ROUTE_OPERATIONS.TUS_CREATE_UPLOAD}${options.operation || ''}`,
           },
@@ -276,7 +281,12 @@ const authenticatedRoutes = fastifyPlugin(
       fastify.post(
         '/*',
         {
-          schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['resumable'] },
+          schema: {
+            summary: 'Handle POST request for TUS Resumable uploads',
+            description:
+              'Creates a new resumable upload and returns its Location URL; the sign/ variant authorizes via the x-signature header from a presigned token instead of a JWT',
+            tags: ['resumable'],
+          },
           config: {
             operation: `${ROUTE_OPERATIONS.TUS_CREATE_UPLOAD}${options.operation || ''}`,
           },
@@ -289,7 +299,12 @@ const authenticatedRoutes = fastifyPlugin(
       fastify.put(
         '/*',
         {
-          schema: { summary: 'Handle PUT request for TUS Resumable uploads', tags: ['resumable'] },
+          schema: {
+            summary: 'Handle PUT request for TUS Resumable uploads',
+            description:
+              'Appends a chunk of upload data at the given Upload-Offset to an in-progress resumable upload created by the POST step',
+            tags: ['resumable'],
+          },
           config: {
             operation: `${ROUTE_OPERATIONS.TUS_UPLOAD_PART}${options.operation || ''}`,
           },
@@ -303,6 +318,8 @@ const authenticatedRoutes = fastifyPlugin(
         {
           schema: {
             summary: 'Handle PATCH request for TUS Resumable uploads',
+            description:
+              'Appends a chunk of upload data at the given Upload-Offset to an in-progress resumable upload, per the standard TUS PATCH semantics',
             tags: ['resumable'],
           },
           config: {
@@ -316,7 +333,12 @@ const authenticatedRoutes = fastifyPlugin(
       fastify.head(
         '/*',
         {
-          schema: { summary: 'Handle HEAD request for TUS Resumable uploads', tags: ['resumable'] },
+          schema: {
+            summary: 'Handle HEAD request for TUS Resumable uploads',
+            description:
+              'Returns the current Upload-Offset and Upload-Length of an in-progress upload without transferring any data, and does not require authorization',
+            tags: ['resumable'],
+          },
           config: {
             operation: `${ROUTE_OPERATIONS.TUS_GET_UPLOAD}${options.operation || ''}`,
           },
@@ -330,6 +352,8 @@ const authenticatedRoutes = fastifyPlugin(
         {
           schema: {
             summary: 'Handle DELETE request for TUS Resumable uploads',
+            description:
+              'Cancels an in-progress resumable upload and discards any data received so far',
             tags: ['resumable'],
           },
           config: {

@@ -141,6 +141,8 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         querystring: getObjectInfoQuerySchema,
         headers: { $ref: 'authSchema#' },
         summary,
+        description:
+          'Returns object metadata in headers only, with no body, and requires a valid auth token even for public buckets',
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },
@@ -161,6 +163,8 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         querystring: getObjectInfoQuerySchema,
         headers: { $ref: 'authSchema#' },
         summary,
+        description:
+          'Returns object metadata as a JSON body rather than headers only, and requires a valid auth token even for public buckets',
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['object'],
       },

@@ -47,6 +47,8 @@ export default async function routes(fastify: FastifyInstance) {
     body: searchRequestBodySchema,
     params: searchRequestParamsSchema,
     summary,
+    description:
+      'Legacy listing endpoint using limit/offset pagination and a required prefix, without the cursor-based pagination or delimiter grouping supported by list-v2',
     tags: ['object'],
   })
 

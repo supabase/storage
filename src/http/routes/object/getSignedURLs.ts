@@ -66,6 +66,8 @@ export default async function routes(fastify: FastifyInstance) {
     body: getSignedURLsBodySchema,
     params: getSignedURLsParamsSchema,
     summary,
+    description:
+      'Batches signed URL generation for multiple paths up to the configured max objects per request, returning a per-path error instead of failing the whole request when a path is inaccessible',
     tags: ['object'],
   })
 

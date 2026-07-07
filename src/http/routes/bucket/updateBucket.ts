@@ -52,6 +52,8 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     body: updateBucketBodySchema,
     summary,
+    description:
+      'Requires at least one of public, file_size_limit or allowed_mime_types in the body, and only the fields provided are changed',
     tags: ['bucket'],
   })
   fastify.put<updateBucketRequestInterface>(

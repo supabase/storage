@@ -39,6 +39,8 @@ export default async function routes(fastify: FastifyInstance) {
         params: renderAuthenticatedImageParamsSchema,
         querystring: renderImageQuerySchema,
         summary,
+        description:
+          'Requires a valid auth token and checks RLS access to the object, with transformation options passed directly as query parameters',
         response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
         tags: ['transformation'],
       },

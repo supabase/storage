@@ -4,7 +4,7 @@ import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
 import { registerApiKeyAuth } from '../../plugins/apikey'
 
-const { isMultitenant } = getConfig()
+const { isMultitenant, pgQueueEnable } = getConfig()
 
 interface IcebergCatalogRow {
   id: string
@@ -32,8 +32,10 @@ export default async function routes(fastify: FastifyInstance) {
     '/iceberg/orphan-catalogs',
     { schema: { tags: ['iceberg'] } },
     async (_request, reply) => {
-      if (!isMultitenant) {
-        return reply.status(400).send({ error: 'This endpoint only supports multitenant mode' })
+      if (!isMultitenant || !pgQueueEnable) {
+        return reply
+          .status(400)
+          .send({ error: 'This endpoint only supports multitenant mode with the queue enabled' })
       }
 
       const { rows } = await getOrphanIcebergCatalogs()
@@ -49,8 +51,10 @@ export default async function routes(fastify: FastifyInstance) {
     '/iceberg/orphan-catalogs',
     { schema: { tags: ['iceberg'] } },
     async (request, reply) => {
-      if (!isMultitenant) {
-        return reply.status(400).send({ error: 'This endpoint only supports multitenant mode' })
+      if (!isMultitenant || !pgQueueEnable) {
+        return reply
+          .status(400)
+          .send({ error: 'This endpoint only supports multitenant mode with the queue enabled' })
       }
 
       const { rows } = await getOrphanIcebergCatalogs()

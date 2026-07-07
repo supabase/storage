@@ -31,6 +31,7 @@ export enum ErrorCode {
   SignatureDoesNotMatch = 'SignatureDoesNotMatch',
   AccessDenied = 'AccessDenied',
   ResourceLocked = 'ResourceLocked',
+  ResourceReferenced = 'ResourceReferenced',
   DatabaseError = 'DatabaseError',
   TransactionError = 'TransactionError',
   MissingContentLength = 'MissingContentLength',
@@ -433,6 +434,14 @@ export const ERRORS = {
       code: ErrorCode.ResourceLocked,
       httpStatusCode: 423,
       message: `The resource is locked`,
+      originalError: e,
+    }),
+
+  ResourceReferenced: (message: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.ResourceReferenced,
+      httpStatusCode: 409,
+      message,
       originalError: e,
     }),
 

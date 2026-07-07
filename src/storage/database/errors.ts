@@ -25,6 +25,19 @@ export class DBError extends StorageBackendError implements RenderableError {
       case '23505':
         return ERRORS.ResourceAlreadyExists(pgError).withMetadata(pgErrorMetadata(pgError, context))
       case '23503':
+        if (pgError.detail?.includes('is still referenced from table')) {
+          const isOrphanMultipart =
+            pgError.constraint === 's3_multipart_uploads_bucket_id_fkey' ||
+            pgError.constraint === 's3_multipart_uploads_parts_bucket_id_fkey'
+
+          const message = isOrphanMultipart
+            ? 'The bucket could not be updated because it is referenced by a pending multipart upload.'
+            : 'The resource could not be updated or removed due to a foreign key constraint'
+
+          return ERRORS.ResourceReferenced(message, pgError).withMetadata(
+            pgErrorMetadata(pgError, context)
+          )
+        }
         return ERRORS.RelatedResourceNotFound(pgError).withMetadata(
           pgErrorMetadata(pgError, context)
         )

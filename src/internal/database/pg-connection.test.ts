@@ -60,7 +60,6 @@ function createDatabaseError(code: string | undefined, message = 'database error
 type TestPgBeginTransactionOptions = {
   timeout?: number
   statementTimeoutMs?: number
-  statementTimeoutMode?: 'set-config' | 'set-local'
 }
 
 function normalizeTestStatementTimeoutMs(
@@ -88,7 +87,6 @@ function createMockTenantConnectionWithTransaction(
     async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
       transaction = new PgTransaction(client, undefined, {
         statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
-        statementTimeoutMode: options?.statementTimeoutMode,
       })
       return transaction
     }
@@ -668,27 +666,6 @@ describe('PgTransaction', () => {
     expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 2', undefined)
   })
 
-  it('applies SET LOCAL for set-local direct queries', async () => {
-    const client = {
-      query: vi.fn().mockResolvedValue({ rows: [] }),
-      release: vi.fn(),
-    } as unknown as PoolClient
-    const transaction = new PgTransaction(client, undefined, {
-      statementTimeoutMs: 4321,
-      statementTimeoutMode: 'set-local',
-    })
-
-    await transaction.query('SELECT 1')
-
-    expect(client.query).toHaveBeenCalledTimes(2)
-    expect(client.query).toHaveBeenNthCalledWith(
-      1,
-      "SET LOCAL statement_timeout = '4321ms'",
-      undefined
-    )
-    expect(client.query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
-  })
-
   it('rejects a pre-aborted direct query before applying a pending statement timeout', async () => {
     const client = {
       query: vi.fn().mockResolvedValue({ rows: [] }),
@@ -1073,7 +1050,7 @@ describe('PgTenantConnection', () => {
     ])
   })
 
-  it('applies Multigres statement_timeout after scope setup', async () => {
+  it('folds Multigres statement_timeout into scope setup', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] })
     const client = {
       query,
@@ -1084,7 +1061,6 @@ describe('PgTenantConnection', () => {
       async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
         transaction = new PgTransaction(client, undefined, {
           statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
-          statementTimeoutMode: options?.statementTimeoutMode,
         })
         return transaction
       }
@@ -1094,19 +1070,18 @@ describe('PgTenantConnection', () => {
         beginTransaction,
       }),
     } as unknown as PgPoolStrategy
-    const connection = new PgTenantConnection(
-      pool,
-      createPoolStrategySettings({
+    const settings = {
+      ...createPoolStrategySettings({
         isExternalPool: true,
-        databaseEngine: 'multigres',
-      })
-    )
+      }),
+      databaseEngine: 'multigres',
+    } as TenantConnectionOptions
+    const connection = new PgTenantConnection(pool, settings)
 
     await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
     expect(beginTransaction).toHaveBeenCalledWith({
       timeout: 4321,
       statementTimeoutMs: 4321,
-      statementTimeoutMode: 'set-local',
     })
 
     expect(query).toHaveBeenCalledTimes(1)
@@ -1118,9 +1093,9 @@ describe('PgTenantConnection', () => {
 
     await connection.setScope(transaction!)
 
-    expect(query).toHaveBeenCalledTimes(3)
+    expect(query).toHaveBeenCalledTimes(2)
     const [scopeStatement, scopeValues] = query.mock.calls[1]
-    expect(scopeStatement).not.toContain("set_config('statement_timeout'")
+    expect(scopeStatement).toContain("set_config('statement_timeout', $10, true)")
     expect(scopeValues).toEqual([
       'authenticated',
       'authenticated',
@@ -1131,80 +1106,19 @@ describe('PgTenantConnection', () => {
       '',
       '',
       '',
+      '4321ms',
     ])
-    expect(query).toHaveBeenNthCalledWith(3, "SET LOCAL statement_timeout = '4321ms'", undefined)
-  })
-
-  it('applies Multigres statement_timeout before the first direct transaction query', async () => {
-    const { beginTransaction, connection, query, getTransaction } =
-      createMockTenantConnectionWithTransaction({
-        isExternalPool: false,
-        databaseEngine: 'multigres',
-      })
-
-    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(getTransaction())
-    expect(beginTransaction).toHaveBeenCalledWith({
-      timeout: 4321,
-      statementTimeoutMs: 4321,
-      statementTimeoutMode: 'set-local',
-    })
-    expect(query).not.toHaveBeenCalled()
-
-    await getTransaction().query('SELECT 1')
-
-    expect(query).toHaveBeenCalledTimes(2)
-    expect(query).toHaveBeenNthCalledWith(1, "SET LOCAL statement_timeout = '4321ms'", undefined)
-    expect(query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
-  })
-
-  it('applies SET LOCAL once for low-level Multigres beginTransaction before direct queries', async () => {
-    const { beginTransaction, connection, query, getTransaction } =
-      createMockTenantConnectionWithTransaction({
-        isExternalPool: false,
-        databaseEngine: 'multigres',
-      })
-
-    await expect(connection.beginTransaction({ timeout: 4321 })).resolves.toBe(getTransaction())
-    expect(beginTransaction).toHaveBeenCalledWith({
-      timeout: 4321,
-      statementTimeoutMs: 4321,
-      statementTimeoutMode: 'set-local',
-    })
-    expect(query).toHaveBeenCalledTimes(1)
-    expect(query).toHaveBeenNthCalledWith(1, "SET LOCAL statement_timeout = '4321ms'", undefined)
-
-    await getTransaction().query('SELECT 1')
-
-    expect(query).toHaveBeenCalledTimes(2)
-    expect(query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
-    expect(
-      query.mock.calls.filter(([statement]) =>
-        String(statement).includes("set_config('statement_timeout'")
-      )
-    ).toHaveLength(0)
-    expect(
-      query.mock.calls.filter(([statement]) =>
-        String(statement).includes('SET LOCAL statement_timeout')
-      )
-    ).toHaveLength(1)
   })
 
   it('omits statement_timeout setup for low-level beginTransaction without a positive timeout', async () => {
     const cases: Array<{
-      databaseEngine?: 'multigres'
       options?: { timeout: number }
-    }> = [
-      {},
-      { options: { timeout: 0 } },
-      { databaseEngine: 'multigres' },
-      { databaseEngine: 'multigres', options: { timeout: 0 } },
-    ]
+    }> = [{}, { options: { timeout: 0 } }]
 
-    for (const { databaseEngine, options } of cases) {
+    for (const { options } of cases) {
       const { beginTransaction, connection, query, getTransaction } =
         createMockTenantConnectionWithTransaction({
           isExternalPool: false,
-          databaseEngine,
         })
 
       await connection.beginTransaction(options)
@@ -1218,31 +1132,7 @@ describe('PgTenantConnection', () => {
       expect(scopeStatement).toContain("set_config('role', $1, true)")
       expect(scopeStatement).not.toContain("set_config('statement_timeout'")
       expect(scopeValues).toHaveLength(9)
-      expect(
-        query.mock.calls.filter(([statement]) =>
-          String(statement).includes('SET LOCAL statement_timeout')
-        )
-      ).toHaveLength(0)
     }
-  })
-
-  it('rolls back and propagates Multigres SET LOCAL setup failures', async () => {
-    const setupError = new Error('statement_timeout setup failed')
-    const query = vi.fn().mockRejectedValueOnce(setupError).mockResolvedValue({ rows: [] })
-    const { client, connection } = createMockTenantConnectionWithTransaction(
-      {
-        isExternalPool: false,
-        databaseEngine: 'multigres',
-      },
-      query
-    )
-
-    await expect(connection.beginTransaction({ timeout: 4321 })).rejects.toBe(setupError)
-
-    expect(query).toHaveBeenCalledTimes(2)
-    expect(query).toHaveBeenNthCalledWith(1, "SET LOCAL statement_timeout = '4321ms'", undefined)
-    expect(query).toHaveBeenNthCalledWith(2, 'ROLLBACK', undefined)
-    expect(client.release).toHaveBeenCalledWith(undefined)
   })
 
   it('does not re-apply statement_timeout after setScope consumes it', async () => {

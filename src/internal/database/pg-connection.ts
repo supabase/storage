@@ -28,7 +28,6 @@ const {
   databaseMaxConnections,
   databasePoolDrainTimeout,
   databaseSSLRootCert,
-  databaseEngine,
   databaseStatementTimeout,
   databaseTlsSessionResumption,
 } = getConfig()
@@ -46,11 +45,8 @@ export interface PgQueryOptions {
 
 type PgQueryArgument = PgQueryOptions | unknown[]
 
-type PgStatementTimeoutMode = 'set-config' | 'set-local'
-
 interface PgTransactionOptions {
   statementTimeoutMs?: number
-  statementTimeoutMode?: PgStatementTimeoutMode
 }
 
 type PgBeginTransactionOptions = TransactionOptions & PgTransactionOptions
@@ -451,7 +447,6 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
     const transaction = new PgTransaction(client, clientErrorTracker, {
       statementTimeoutMs:
         options?.statementTimeoutMs ?? normalizeStatementTimeoutMs(options?.timeout),
-      statementTimeoutMode: options?.statementTimeoutMode,
     })
 
     try {
@@ -474,8 +469,6 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
 export class PgTransaction implements PgExecutor {
   private completed = false
   private statementTimeoutMs?: number
-  private localStatementTimeoutApplied = false
-  private readonly statementTimeoutMode: PgStatementTimeoutMode
 
   constructor(
     private readonly client: PoolClient,
@@ -483,7 +476,6 @@ export class PgTransaction implements PgExecutor {
     options: PgTransactionOptions = {}
   ) {
     this.statementTimeoutMs = options.statementTimeoutMs
-    this.statementTimeoutMode = options.statementTimeoutMode ?? 'set-config'
   }
 
   isCompleted(): boolean {
@@ -509,24 +501,6 @@ export class PgTransaction implements PgExecutor {
     const statementTimeout = this.consumeStatementTimeoutForSetConfig()
 
     await this.runQuery(buildScopeConfigQuery(scopeValues, statementTimeout), undefined, false)
-    this.localStatementTimeoutApplied = false
-    await this.applyLocalStatementTimeout()
-  }
-
-  async applyLocalStatementTimeout(signal?: AbortSignal): Promise<void> {
-    if (
-      this.statementTimeoutMode !== 'set-local' ||
-      this.localStatementTimeoutApplied ||
-      !this.statementTimeoutMs
-    ) {
-      return
-    }
-
-    await runPgQuery(this.client, buildSetLocalStatementTimeoutStatement(this.statementTimeoutMs), {
-      signal,
-    })
-    this.clientErrorTracker?.throwIfErrored()
-    this.localStatementTimeoutApplied = true
   }
 
   private async runQuery<T extends QueryResultRow = QueryResultRow>(
@@ -613,11 +587,6 @@ export class PgTransaction implements PgExecutor {
   }
 
   private async applyPendingStatementTimeoutBeforeQuery(signal?: AbortSignal): Promise<void> {
-    if (this.statementTimeoutMode === 'set-local') {
-      await this.applyLocalStatementTimeout(signal)
-      return
-    }
-
     const timeoutMs = this.consumeStatementTimeoutForSetConfig()
     if (!timeoutMs) {
       return
@@ -634,10 +603,6 @@ export class PgTransaction implements PgExecutor {
   }
 
   private consumeStatementTimeoutForSetConfig(): number | undefined {
-    if (this.statementTimeoutMode !== 'set-config') {
-      return undefined
-    }
-
     const timeoutMs = this.statementTimeoutMs
     this.statementTimeoutMs = undefined
     return timeoutMs
@@ -694,22 +659,9 @@ export class PgTenantConnection {
   async beginTransaction(options?: TransactionOptions): Promise<PgTransaction> {
     this.assertNotDisposed()
     const statementTimeout = options?.timeout
-    const isMultigres = this.isMultigresDatabase()
-    const transaction = await this.pool
+    return await this.pool
       .acquire()
-      .beginTransaction(
-        this.withStatementTimeout(
-          options,
-          statementTimeout,
-          isMultigres ? 'set-local' : 'set-config'
-        )
-      )
-
-    if (isMultigres) {
-      await this.applyStatementTimeoutImmediately(transaction)
-    }
-
-    return transaction
+      .beginTransaction(this.withStatementTimeout(options, statementTimeout))
   }
 
   asSuperUser() {
@@ -732,12 +684,7 @@ export class PgTenantConnection {
 
     try {
       const statementTimeout = opts?.timeout ?? databaseStatementTimeout
-      const isMultigres = this.isMultigresDatabase()
-      const beginOptions = this.withStatementTimeout(
-        opts,
-        statementTimeout,
-        isMultigres ? 'set-local' : 'set-config'
-      )
+      const beginOptions = this.withStatementTimeout(opts, statementTimeout)
       const transaction = await retry<PgTransaction>(
         async (bail) => {
           if (this.disposed) {
@@ -787,19 +734,6 @@ export class PgTenantConnection {
     }
   }
 
-  private isMultigresDatabase(): boolean {
-    return (this.options.databaseEngine ?? databaseEngine) === 'multigres'
-  }
-
-  private async applyStatementTimeoutImmediately(transaction: PgTransaction): Promise<void> {
-    try {
-      await transaction.applyLocalStatementTimeout()
-    } catch (e) {
-      await this.rollbackTransactionSafely(transaction, e, 'statement_timeout setup')
-      throw e
-    }
-  }
-
   private assertNotDisposed(): void {
     if (this.disposed) {
       throw createDisposedTenantConnectionError()
@@ -841,8 +775,7 @@ export class PgTenantConnection {
 
   private withStatementTimeout(
     options: TransactionOptions | undefined,
-    statementTimeout: number | undefined,
-    statementTimeoutMode: PgStatementTimeoutMode
+    statementTimeout: number | undefined
   ): PgBeginTransactionOptions | undefined {
     const statementTimeoutMs = normalizeStatementTimeoutMs(statementTimeout)
 
@@ -853,7 +786,6 @@ export class PgTenantConnection {
     return {
       ...options,
       statementTimeoutMs,
-      ...(statementTimeoutMode === 'set-local' ? { statementTimeoutMode } : undefined),
     }
   }
 
@@ -885,14 +817,6 @@ function normalizeStatementTimeoutMs(timeoutMs: number | undefined): number | un
   }
 
   return timeoutMs
-}
-
-function buildSetLocalStatementTimeoutStatement(statementTimeout: number): string {
-  if (!Number.isFinite(statementTimeout) || statementTimeout <= 0) {
-    throw new Error(`Invalid statement timeout: ${statementTimeout}`)
-  }
-
-  return `SET LOCAL statement_timeout = '${statementTimeout}ms'`
 }
 
 function createDisposedTenantConnectionError(): Error {

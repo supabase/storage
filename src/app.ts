@@ -53,7 +53,14 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
         tags: [
           { name: 'object', description: 'Object end-points' },
           { name: 'bucket', description: 'Bucket end-points' },
-          { name: 's3', description: 'S3 end-points' },
+          {
+            name: 's3',
+            description:
+              'S3-compatible protocol. Not enumerated here: each operation is dispatched ' +
+              'by query string/header on a handful of shared routes, which OpenAPI cannot ' +
+              'express as distinct operations. See src/http/routes/s3/commands for the ' +
+              'per-command request/response contract, or use any S3 SDK against this endpoint.',
+          },
           { name: 'transformation', description: 'Image transformation' },
           { name: 'resumable', description: 'Resumable Upload end-points' },
           { name: 'cdn', description: 'CDN cache management' },

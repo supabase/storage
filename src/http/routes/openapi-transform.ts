@@ -58,6 +58,22 @@ function renameWildcardParam(
 }
 
 /**
+ * The S3-compatible surface dispatches ~18 real commands (PutObject, ListObjects,
+ * CreateMultipartUpload, ...) from a handful of generic Fastify routes based on query
+ * string/header matching done entirely inside the internal `s3/router.ts` Router - see
+ * `s3/index.ts`. Fastify (and therefore @fastify/swagger) only ever sees the outer
+ * catch-all route with no request/response schema, since OpenAPI has no way to express
+ * "N distinct operations, same path and method, picked by a query parameter". Documenting
+ * that catch-all as-is would give SDK generators a single method with an untyped body and
+ * an untyped response for a request that's actually the whole S3 API - worse than nothing.
+ * Hide it instead; the real per-command schemas remain the source of truth in s3/commands/*.
+ */
+function isS3ProtocolCatchAll(schema: FastifySchema | undefined, route: RouteOptions): boolean {
+  const operation = (route.config as { operation?: string } | undefined)?.operation
+  return (schema?.tags?.includes('s3') ?? false) && !operation
+}
+
+/**
  * Derives a stable, unique operationId from the route's `config.operation`
  * (see ROUTE_OPERATIONS in ./operations.ts), e.g. `storage.object.get_public` -> `objectGetPublic`.
  * Routes without a `config.operation` (protocol-level catch-alls like /s3 and /upload/resumable)
@@ -96,6 +112,10 @@ export function createOpenApiTransform() {
     url: string
     route: RouteOptions
   }): { schema: FastifySchema; url: string } {
+    if (isS3ProtocolCatchAll(schema, route)) {
+      return { schema: { ...schema, hide: true }, url }
+    }
+
     ;({ schema, url } = renameWildcardParam(schema, url))
 
     const operation = (route.config as { operation?: string } | undefined)?.operation

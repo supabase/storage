@@ -5,6 +5,7 @@ import { getGlobal } from '@platformatic/globals'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, setErrorHandler } from './http'
+import { createOpenApiTransform } from './http/routes/openapi-transform'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -19,6 +20,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {
       exposeHeadRoutes: true,
+      transform: createOpenApiTransform(),
       openapi: {
         info: {
           title: 'Supabase Storage Admin API',

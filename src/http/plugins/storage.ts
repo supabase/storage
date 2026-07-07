@@ -1,5 +1,4 @@
 import { createStorageBackend, StorageBackendAdapter } from '@storage/backend'
-import { CdnCacheManager } from '@storage/cdn/cdn-cache-manager'
 import type { Database } from '@storage/database'
 import { StoragePgDB } from '@storage/database'
 import { PassThroughLocation, TenantLocation } from '@storage/locator'
@@ -11,7 +10,6 @@ declare module 'fastify' {
   interface FastifyRequest {
     storage: Storage
     backend: StorageBackendAdapter
-    cdnCache: CdnCacheManager
   }
 }
 
@@ -42,7 +40,6 @@ export const storage = fastifyPlugin(
 
       request.backend = storageBackend
       request.storage = new Storage(storageBackend, database, location)
-      request.cdnCache = new CdnCacheManager(request.storage)
     })
 
     fastify.addHook('onClose', async () => {

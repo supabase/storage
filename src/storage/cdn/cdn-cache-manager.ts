@@ -1,5 +1,4 @@
 import { ERRORS } from '@internal/errors'
-import { Storage } from '@storage/storage'
 import { Agent } from 'undici'
 
 import { getConfig } from '../../config'
@@ -81,8 +80,6 @@ async function assertOkResponse(response: Response) {
 }
 
 export class CdnCacheManager {
-  constructor(protected readonly storage: Storage) {}
-
   async purge(opts: PurgeCacheInput) {
     if (!cdnPurgeUrl) {
       throw ERRORS.MissingParameter('CDN_PURGE_ENDPOINT_URL is not set')

@@ -1,9 +1,7 @@
 import { CdnCacheManager } from '@storage/cdn/cdn-cache-manager'
 import { FastifyInstance } from 'fastify'
 import { SignJWT } from 'jose'
-import { Readable } from 'stream'
 import { getConfig, mergeConfig } from '../config'
-import { useStorage } from './utils/storage'
 
 getConfig()
 mergeConfig({
@@ -14,30 +12,21 @@ mergeConfig({
 const { serviceKeyAsync, anonKeyAsync, tenantId, jwtSecret } = getConfig()
 
 describe('CDN Cache Manager', () => {
-  const storageHook = useStorage()
   let appInstance: FastifyInstance
-  let buildApp: typeof import('../app').default
-
   const bucketName = 'cdn-cache-manager-test-' + Date.now()
-  beforeAll(async () => {
-    await storageHook.storage.createBucket({
-      id: bucketName,
-      name: bucketName,
-    })
-    buildApp = (await import('../app')).default
-  })
 
-  beforeEach(() => {
+  beforeAll(async () => {
+    const buildApp = (await import('../app')).default
     appInstance = buildApp()
   })
 
-  afterEach(async () => {
-    await appInstance.close()
+  afterEach(() => {
     vi.restoreAllMocks()
     vi.clearAllMocks()
   })
 
-  afterAll(() => {
+  afterAll(async () => {
+    await appInstance.close()
     getConfig({ reload: true })
   })
 
@@ -70,20 +59,8 @@ describe('CDN Cache Manager', () => {
     expect(responseAuthenticated.statusCode).toBe(403)
   })
 
-  it('will allow calling the purge endpoint when using service_key', async () => {
+  it('will allow purging an object when using service_key', async () => {
     const objectName = `purge-file-${Date.now()}.txt`
-    await storageHook.storage.from(bucketName).uploadNewObject({
-      isUpsert: true,
-      objectName,
-      userMetadata: {},
-      file: {
-        body: Readable.from(Buffer.from('test')),
-        cacheControl: 'public, max-age=31536000',
-        mimeType: 'text/plain',
-        isTruncated: () => false,
-      },
-    })
-
     const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
 
     const response = await appInstance.inject({
@@ -108,18 +85,6 @@ describe('CDN Cache Manager', () => {
 
   it('will purge object transformations when transformations query param is true', async () => {
     const objectName = `purge-file-transforms-${Date.now()}.txt`
-    await storageHook.storage.from(bucketName).uploadNewObject({
-      isUpsert: true,
-      objectName,
-      userMetadata: {},
-      file: {
-        body: Readable.from(Buffer.from('test')),
-        cacheControl: 'public, max-age=31536000',
-        mimeType: 'text/plain',
-        isTruncated: () => false,
-      },
-    })
-
     const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
 
     const response = await appInstance.inject({

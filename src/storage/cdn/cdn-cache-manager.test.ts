@@ -1,4 +1,3 @@
-import type { Storage } from '@storage/storage'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { spyOnAbortSignalTimeout } from '../../test/utils/abort-signal'
 
@@ -17,21 +16,6 @@ async function importCdnCacheManager(config: CdnConfig = {}) {
   return import('./cdn-cache-manager')
 }
 
-function createStorageMock(findObject = vi.fn().mockResolvedValue({ id: 'object-id' })) {
-  const storageAsSuperUser = vi.fn(() => ({
-    findBucket: vi.fn().mockResolvedValue({ id: 'object-id' }),
-  }))
-  const asSuperUser = vi.fn(() => ({ findObject }))
-  const from = vi.fn(() => ({ asSuperUser }))
-
-  return {
-    storage: { from, asSuperUser: storageAsSuperUser } as unknown as Storage,
-    from,
-    asSuperUser,
-    findObject,
-  }
-}
-
 describe('CdnCacheManager', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -48,9 +32,8 @@ describe('CdnCacheManager', () => {
       cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
       cdnPurgeEndpointKey: 'test-key',
     })
-    const storage = createStorageMock()
 
-    await new CdnCacheManager(storage.storage).purge({
+    await new CdnCacheManager().purge({
       type: 'object',
       tenant: 'tenant-ref',
       bucket: 'bucket-id',
@@ -88,9 +71,8 @@ describe('CdnCacheManager', () => {
       cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
       cdnPurgeEndpointKey: undefined,
     })
-    const storage = createStorageMock()
 
-    await new CdnCacheManager(storage.storage).purge({
+    await new CdnCacheManager().purge({
       type: 'object',
       tenant: 'tenant-ref',
       bucket: 'bucket-id',
@@ -119,10 +101,9 @@ describe('CdnCacheManager', () => {
       cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
       cdnPurgeEndpointKey: 'test-key',
     })
-    const storage = createStorageMock()
 
     await expect(
-      new CdnCacheManager(storage.storage).purge({
+      new CdnCacheManager().purge({
         type: 'object',
         tenant: 'tenant-ref',
         bucket: 'bucket-id',
@@ -148,10 +129,9 @@ describe('CdnCacheManager', () => {
       cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
       cdnPurgeEndpointKey: 'test-key',
     })
-    const storage = createStorageMock()
 
     await expect(
-      new CdnCacheManager(storage.storage).purge({
+      new CdnCacheManager().purge({
         type: 'object',
         tenant: 'tenant-ref',
         bucket: 'bucket-id',
@@ -175,10 +155,9 @@ describe('CdnCacheManager', () => {
       cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
       cdnPurgeEndpointKey: 'test-key',
     })
-    const storage = createStorageMock()
 
     await expect(
-      new CdnCacheManager(storage.storage).purge({
+      new CdnCacheManager().purge({
         type: 'object',
         tenant: 'tenant-ref',
         bucket: 'bucket-id',
@@ -194,17 +173,16 @@ describe('CdnCacheManager', () => {
     })
   })
 
-  it('requires a CDN purge endpoint URL before checking object existence', async () => {
+  it('requires a CDN purge endpoint URL before sending a purge request', async () => {
     const fetchMock = vi.fn<typeof fetch>()
     vi.stubGlobal('fetch', fetchMock)
 
     const { CdnCacheManager } = await importCdnCacheManager({
       cdnPurgeEndpointKey: 'test-key',
     })
-    const storage = createStorageMock()
 
     await expect(
-      new CdnCacheManager(storage.storage).purge({
+      new CdnCacheManager().purge({
         type: 'object',
         tenant: 'tenant-ref',
         bucket: 'bucket-id',
@@ -215,7 +193,6 @@ describe('CdnCacheManager', () => {
       message: 'Missing Required Parameter CDN_PURGE_ENDPOINT_URL is not set',
     })
 
-    expect(storage.from).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -227,16 +204,12 @@ describe('CdnCacheManager', () => {
       cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
       cdnPurgeEndpointKey: 'test-key',
     })
-    const storage = createStorageMock()
 
-    await new CdnCacheManager(storage.storage).purge({
+    await new CdnCacheManager().purge({
       type: 'bucket',
       tenant: 'tenant-ref',
       bucket: 'bucket-id',
     })
-
-    expect(storage.from).not.toHaveBeenCalled()
-    expect(storage.findObject).not.toHaveBeenCalled()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
@@ -264,15 +237,11 @@ describe('CdnCacheManager', () => {
       cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
       cdnPurgeEndpointKey: 'test-key',
     })
-    const storage = createStorageMock()
 
-    await new CdnCacheManager(storage.storage).purge({
+    await new CdnCacheManager().purge({
       type: 'tenant',
       tenant: 'tenant-ref',
     })
-
-    expect(storage.from).not.toHaveBeenCalled()
-    expect(storage.findObject).not.toHaveBeenCalled()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
@@ -299,9 +268,8 @@ describe('CdnCacheManager', () => {
       cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
       cdnPurgeEndpointKey: 'test-key',
     })
-    const storage = createStorageMock()
 
-    await new CdnCacheManager(storage.storage).purge({
+    await new CdnCacheManager().purge({
       type: 'object-transforms',
       tenant: 'tenant-ref',
       bucket: 'bucket-id',
@@ -335,16 +303,12 @@ describe('CdnCacheManager', () => {
       cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
       cdnPurgeEndpointKey: 'test-key',
     })
-    const storage = createStorageMock()
 
-    await new CdnCacheManager(storage.storage).purge({
+    await new CdnCacheManager().purge({
       type: 'bucket-transforms',
       tenant: 'tenant-ref',
       bucket: 'bucket-id',
     })
-
-    expect(storage.from).not.toHaveBeenCalled()
-    expect(storage.findObject).not.toHaveBeenCalled()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
@@ -372,15 +336,11 @@ describe('CdnCacheManager', () => {
       cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
       cdnPurgeEndpointKey: 'test-key',
     })
-    const storage = createStorageMock()
 
-    await new CdnCacheManager(storage.storage).purge({
+    await new CdnCacheManager().purge({
       type: 'tenant-transforms',
       tenant: 'tenant-ref',
     })
-
-    expect(storage.from).not.toHaveBeenCalled()
-    expect(storage.findObject).not.toHaveBeenCalled()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
 

@@ -60,6 +60,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(routes.tenants, { prefix: 'tenants' })
   app.register(routes.objects, { prefix: 'tenants' })
   app.register(routes.jwks, { prefix: 'tenants' })
+  app.register(routes.icebergAdmin, { prefix: 'tenants' })
   app.register(routes.migrations, { prefix: 'migrations' })
   if (isRunningUnderWatt) {
     app.register(routes.pprof, { prefix: 'debug/pprof' })

@@ -445,8 +445,7 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
 
     const clientErrorTracker = new PgClientErrorTracker(client)
     const transaction = new PgTransaction(client, clientErrorTracker, {
-      statementTimeoutMs:
-        options?.statementTimeoutMs ?? normalizeStatementTimeoutMs(options?.timeout),
+      statementTimeoutMs: options?.statementTimeoutMs ?? options?.timeout,
     })
 
     try {

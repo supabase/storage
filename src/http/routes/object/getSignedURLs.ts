@@ -37,7 +37,8 @@ const successResponseSchema = {
     type: 'object',
     properties: {
       error: {
-        type: ['string', 'null'],
+        type: 'string',
+        nullable: true,
         examples: ['Either the object does not exist or you do not have access to it'],
       },
       path: {
@@ -45,7 +46,8 @@ const successResponseSchema = {
         examples: ['folder/cat.png'],
       },
       signedURL: {
-        type: ['string', 'null'],
+        type: 'string',
+        nullable: true,
         examples: [
           '/object/sign/avatars/folder/cat.png?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cmwiOiJhdmF0YXJzL2ZvbGRlci9jYXQucG5nIiwiaWF0IjoxNjE3NzI2MjczLCJleHAiOjE2MTc3MjcyNzN9.s7Gt8ME80iREVxPhH01ZNv8oUn4XtaWsmiQ5csiUHn4',
         ],

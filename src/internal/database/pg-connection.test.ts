@@ -1058,7 +1058,7 @@ describe('PgTenantConnection', () => {
     ])
   })
 
-  it('folds Multigres statement_timeout into scope setup', async () => {
+  it('folds deferred statement_timeout into scope setup', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] })
     const client = {
       query,
@@ -1078,13 +1078,12 @@ describe('PgTenantConnection', () => {
         beginTransaction,
       }),
     } as unknown as PgPoolStrategy
-    const settings = {
-      ...createPoolStrategySettings({
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
         isExternalPool: true,
-      }),
-      databaseEngine: 'multigres',
-    } as TenantConnectionOptions
-    const connection = new PgTenantConnection(pool, settings)
+      })
+    )
 
     await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
     expect(beginTransaction).toHaveBeenCalledWith({ timeout: 4321 })

@@ -1787,13 +1787,33 @@ describe('StoragePgDB bucket metadata', () => {
   }
 
   async function readCurrentStatementTimeoutMsFromExecutor(pg: PgExecutor): Promise<number> {
-    const result = await pg.query<{ statement_timeout_ms: number }>(`
-      SELECT setting::int AS statement_timeout_ms
-      FROM pg_settings
-      WHERE name = 'statement_timeout'
-    `)
+    const result = await pg.query<{ statement_timeout: string }>('SHOW statement_timeout')
 
-    return result.rows[0].statement_timeout_ms
+    return parseStatementTimeoutMs(result.rows[0].statement_timeout)
+  }
+
+  function parseStatementTimeoutMs(statementTimeout: string): number {
+    const value = statementTimeout.trim()
+    if (value === '0') {
+      return 0
+    }
+
+    const match = /^(\d+(?:\.\d+)?)\s*(ms|s|min|h|d)?$/.exec(value)
+    if (!match) {
+      throw new Error(`Unexpected statement_timeout value: ${statementTimeout}`)
+    }
+
+    const multipliers = {
+      ms: 1,
+      s: 1000,
+      min: 60 * 1000,
+      h: 60 * 60 * 1000,
+      d: 24 * 60 * 60 * 1000,
+    }
+    const amount = Number(match[1])
+    const unit = (match[2] ?? 'ms') as keyof typeof multipliers
+
+    return Math.round(amount * multipliers[unit])
   }
 
   async function withAuthenticatedDb(

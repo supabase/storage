@@ -75,7 +75,7 @@ function normalizeTestStatementTimeoutMs(
 }
 
 function createMockTenantConnectionWithTransaction(
-  overrides: Partial<ConstructorParameters<typeof PgPoolStrategy>[0]> = {},
+  overrides: Partial<TenantConnectionOptions> = {},
   query = vi.fn().mockResolvedValue({ rows: [] })
 ) {
   const client = {

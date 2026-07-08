@@ -396,7 +396,7 @@ describe('StoragePgDB bucket metadata', () => {
       await authenticatedDb.withTransaction(
         async (tx) => {
           await expect(readCurrentRole(tx)).resolves.toBe('authenticated')
-          await expect(readCurrentStatementTimeout(tx)).resolves.toBe('4321ms')
+          await expect(readCurrentStatementTimeoutMs(tx)).resolves.toBe(4321)
 
           await expect(
             runStorageQuery(
@@ -404,13 +404,13 @@ describe('StoragePgDB bucket metadata', () => {
               'ReadSuperUserStatementTimeout',
               async (pg) => {
                 await expect(readCurrentRoleFromExecutor(pg)).resolves.toBe(superUser.payload.role)
-                await expect(readCurrentStatementTimeoutFromExecutor(pg)).resolves.toBe('4321ms')
+                await expect(readCurrentStatementTimeoutMsFromExecutor(pg)).resolves.toBe(4321)
               }
             )
           ).resolves.toBeUndefined()
 
           await expect(readCurrentRole(tx)).resolves.toBe('authenticated')
-          await expect(readCurrentStatementTimeout(tx)).resolves.toBe('4321ms')
+          await expect(readCurrentStatementTimeoutMs(tx)).resolves.toBe(4321)
         },
         { timeout: 4321 }
       )
@@ -422,7 +422,7 @@ describe('StoragePgDB bucket metadata', () => {
       await authenticatedDb.withTransaction(
         async (tx) => {
           await expect(readCurrentRole(tx)).resolves.toBe('authenticated')
-          await expect(readCurrentStatementTimeout(tx)).resolves.toBe('4321ms')
+          await expect(readCurrentStatementTimeoutMs(tx)).resolves.toBe(4321)
 
           await expect(
             runStorageQuery(
@@ -430,16 +430,16 @@ describe('StoragePgDB bucket metadata', () => {
               'FailSuperUserStatementTimeout',
               async (pg) => {
                 await expect(readCurrentRoleFromExecutor(pg)).resolves.toBe(superUser.payload.role)
-                await expect(readCurrentStatementTimeoutFromExecutor(pg)).resolves.toBe('4321ms')
+                await expect(readCurrentStatementTimeoutMsFromExecutor(pg)).resolves.toBe(4321)
                 await pg.query("SELECT set_config('statement_timeout', '30s', true)")
-                await expect(readCurrentStatementTimeoutFromExecutor(pg)).resolves.toBe('30s')
+                await expect(readCurrentStatementTimeoutMsFromExecutor(pg)).resolves.toBe(30000)
                 throw new Error('failed nested super-user timeout query')
               }
             )
           ).rejects.toThrow('failed nested super-user timeout query')
 
           await expect(readCurrentRole(tx)).resolves.toBe('authenticated')
-          await expect(readCurrentStatementTimeout(tx)).resolves.toBe('4321ms')
+          await expect(readCurrentStatementTimeoutMs(tx)).resolves.toBe(4321)
         },
         { timeout: 4321 }
       )
@@ -1780,16 +1780,20 @@ describe('StoragePgDB bucket metadata', () => {
     return result.rows[0].role
   }
 
-  function readCurrentStatementTimeout(storage: StoragePgDB): Promise<string> {
+  function readCurrentStatementTimeoutMs(storage: StoragePgDB): Promise<number> {
     return runStorageQuery(storage, 'ReadCurrentStatementTimeout', (pg) =>
-      readCurrentStatementTimeoutFromExecutor(pg)
+      readCurrentStatementTimeoutMsFromExecutor(pg)
     )
   }
 
-  async function readCurrentStatementTimeoutFromExecutor(pg: PgExecutor): Promise<string> {
-    const result = await pg.query<{ statement_timeout: string }>('SHOW statement_timeout')
+  async function readCurrentStatementTimeoutMsFromExecutor(pg: PgExecutor): Promise<number> {
+    const result = await pg.query<{ statement_timeout_ms: number }>(`
+      SELECT setting::int AS statement_timeout_ms
+      FROM pg_settings
+      WHERE name = 'statement_timeout'
+    `)
 
-    return result.rows[0].statement_timeout
+    return result.rows[0].statement_timeout_ms
   }
 
   async function withAuthenticatedDb(

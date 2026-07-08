@@ -82,22 +82,9 @@ jobs:
           fail-on-error: false
         continue-on-error: true
       - name: Verify migration idempotency
-        env: &migration_idempotency_env
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
-        run: |
-          pg_dump "$DATABASE_URL" \
-            --exclude-table-data=storage.migrations \
-            --restrict-key=test \
-            > before.sql
-
-          npm run migration:test-idempotency
-
-          pg_dump "$DATABASE_URL" \
-            --exclude-table-data=storage.migrations \
-            --restrict-key=test \
-            > after.sql
-
-          diff before.sql after.sql || (echo 'Schema mismatch!'; exit 1)
+        uses: ./.github/actions/verify-migration-idempotency
+        with:
+          label: postgres
 
   test_oriole:
     name: Test / OrioleDB
@@ -117,29 +104,10 @@ jobs:
           mkdir -p data && chmod -R 777 data && \
           npm run test:oriole:ci
       - name: Verify OrioleDB migration idempotency
-        env: *migration_idempotency_env
-        run: |
-          docker compose --project-directory . \
-            -f ./.docker/docker-compose-infra.yml \
-            -f ./.docker/docker-compose-infra-oriole-override.yml \
-            exec -T tenant_db \
-            pg_dump -U postgres -d postgres \
-            --exclude-table-data=storage.migrations \
-            --restrict-key=test \
-            > before-oriole.sql
-
-          npm run migration:test-idempotency
-
-          docker compose --project-directory . \
-            -f ./.docker/docker-compose-infra.yml \
-            -f ./.docker/docker-compose-infra-oriole-override.yml \
-            exec -T tenant_db \
-            pg_dump -U postgres -d postgres \
-            --exclude-table-data=storage.migrations \
-            --restrict-key=test \
-            > after-oriole.sql
-
-          diff before-oriole.sql after-oriole.sql || (echo 'Oriole schema mismatch!'; exit 1)
+        uses: ./.github/actions/verify-migration-idempotency
+        with:
+          override-file: ./.docker/docker-compose-infra-oriole-override.yml
+          label: oriole
 
   test_multigres:
     name: Test / Multigres
@@ -160,6 +128,12 @@ jobs:
         run: |
           mkdir -p data && chmod -R 777 data && \
           npm run test:multigres:ci
+      - name: Verify Multigres migration idempotency
+        uses: ./.github/actions/verify-migration-idempotency
+        with:
+          override-file: ./.docker/docker-compose-infra-multigres-override.yml
+          label: multigres
+          additional-exclude-table-data: multigres.heartbeat
 
   coveralls_finish:
     name: Coveralls / Finalize

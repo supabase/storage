@@ -1,3 +1,4 @@
+import { CdnCacheManager } from '@storage/cdn/cdn-cache-manager'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema, createResponse } from '../../routes-helper'
@@ -50,6 +51,8 @@ interface PurgeTenantRequestInterface extends AuthenticatedRequest {
 }
 
 export default async function routes(fastify: FastifyInstance) {
+  const cdnCache = new CdnCacheManager()
+
   // Purge tenant cache
   fastify.delete<PurgeTenantRequestInterface>(
     '/',
@@ -66,7 +69,7 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { transformations } = request.query
 
-      await request.cdnCache.purge({
+      await cdnCache.purge({
         type: transformations ? 'tenant-transforms' : 'tenant',
         tenant: request.tenantId,
       })
@@ -93,7 +96,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { bucketName } = request.params
       const { transformations } = request.query
 
-      await request.cdnCache.purge({
+      await cdnCache.purge({
         type: transformations ? 'bucket-transforms' : 'bucket',
         bucket: bucketName,
         tenant: request.tenantId,
@@ -122,7 +125,7 @@ export default async function routes(fastify: FastifyInstance) {
       const objectName = request.params['*']
       const { transformations } = request.query
 
-      await request.cdnCache.purge({
+      await cdnCache.purge({
         type: transformations ? 'object-transforms' : 'object',
         bucket: bucketName,
         objectName,

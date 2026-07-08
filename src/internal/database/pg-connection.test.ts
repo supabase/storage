@@ -927,7 +927,6 @@ describe('PgTenantConnection', () => {
       timeout: 4321,
       isolation: 'serializable',
       readOnly: true,
-      statementTimeoutMs: 4321,
     })
     expect(query).not.toHaveBeenCalled()
 
@@ -979,10 +978,7 @@ describe('PgTenantConnection', () => {
     )
 
     await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
-    expect(beginTransaction).toHaveBeenCalledWith({
-      timeout: 4321,
-      statementTimeoutMs: 4321,
-    })
+    expect(beginTransaction).toHaveBeenCalledWith({ timeout: 4321 })
     expect(query).not.toHaveBeenCalled()
 
     await connection.setScope(transaction!)
@@ -1033,10 +1029,7 @@ describe('PgTenantConnection', () => {
     )
 
     await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
-    expect(beginTransaction).toHaveBeenCalledWith({
-      timeout: 4321,
-      statementTimeoutMs: 4321,
-    })
+    expect(beginTransaction).toHaveBeenCalledWith({ timeout: 4321 })
 
     expect(query).toHaveBeenCalledTimes(1)
     expect(query).toHaveBeenNthCalledWith(
@@ -1094,10 +1087,7 @@ describe('PgTenantConnection', () => {
     const connection = new PgTenantConnection(pool, settings)
 
     await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
-    expect(beginTransaction).toHaveBeenCalledWith({
-      timeout: 4321,
-      statementTimeoutMs: 4321,
-    })
+    expect(beginTransaction).toHaveBeenCalledWith({ timeout: 4321 })
 
     expect(query).toHaveBeenCalledTimes(1)
     expect(query).toHaveBeenNthCalledWith(

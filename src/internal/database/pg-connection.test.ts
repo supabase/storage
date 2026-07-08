@@ -7,6 +7,7 @@ import PgConnection from 'pg/lib/connection'
 import { vi } from 'vitest'
 import {
   getPgCancelConnectionTarget,
+  type PgExecutor,
   PgPoolExecutor,
   PgPoolManager,
   PgPoolStrategy,
@@ -54,6 +55,62 @@ function createDatabaseError(code: string | undefined, message = 'database error
   const error = new DatabaseError(message, message.length, 'error')
   error.code = code
   return error
+}
+
+type TestPgBeginTransactionOptions = {
+  timeout?: number
+  statementTimeoutMs?: number
+}
+
+function normalizeTestStatementTimeoutMs(
+  options?: TestPgBeginTransactionOptions
+): number | undefined {
+  const timeoutMs = options?.statementTimeoutMs ?? options?.timeout
+
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined
+  }
+
+  return timeoutMs
+}
+
+function createMockTenantConnectionWithTransaction(
+  overrides: Partial<TenantConnectionOptions> = {},
+  query = vi.fn().mockResolvedValue({ rows: [] })
+) {
+  const client = {
+    query,
+    release: vi.fn(),
+  } as unknown as PoolClient
+  let transaction: PgTransaction | undefined
+  const beginTransaction = vi.fn(
+    async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
+      transaction = new PgTransaction(client, undefined, {
+        statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
+      })
+      return transaction
+    }
+  )
+  const pool = {
+    acquire: vi.fn().mockReturnValue({
+      beginTransaction,
+    }),
+  } as unknown as PgPoolStrategy
+  const connection = new PgTenantConnection(pool, createPoolStrategySettings(overrides))
+
+  return {
+    beginTransaction,
+    client,
+    connection,
+    query,
+    getTransaction() {
+      if (!transaction) {
+        throw new Error('Expected test transaction to be created')
+      }
+
+      return transaction
+    },
+  }
 }
 
 async function expectQueryErrorRelease(error: Error): Promise<ReturnType<typeof vi.fn>> {
@@ -402,6 +459,42 @@ describe('PgPoolExecutor', () => {
     expect(client.listenerCount('error')).toBe(0)
   })
 
+  it('uses transaction timeout with isolation and read-only begin modes', async () => {
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    const transaction = await executor.beginTransaction({
+      timeout: 4321,
+      isolation: 'repeatable read',
+      readOnly: true,
+    })
+
+    expect(client.query).toHaveBeenCalledTimes(1)
+    expect(client.query).toHaveBeenNthCalledWith(
+      1,
+      'BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY',
+      undefined
+    )
+
+    await transaction.query('SELECT 1')
+
+    expect(client.query).toHaveBeenCalledTimes(3)
+    expect(client.query).toHaveBeenNthCalledWith(
+      2,
+      "SELECT set_config('statement_timeout', $1, true)",
+      ['4321ms']
+    )
+    expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 1', undefined)
+
+    await transaction.rollback()
+  })
+
   it('returns clients to the pool after regular SQL errors', async () => {
     for (const code of ['42P01', '23505', '23503', '42501', '22P02', '42703']) {
       const error = createDatabaseError(code)
@@ -553,6 +646,93 @@ describe('PgPoolExecutor', () => {
 })
 
 describe('PgTransaction', () => {
+  it('applies a pending statement timeout before the first direct query', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    } as unknown as PoolClient
+    const transaction = new PgTransaction(client, undefined, { statementTimeoutMs: 4321 })
+
+    await transaction.query('SELECT 1')
+    await transaction.query('SELECT 2')
+
+    expect(client.query).toHaveBeenCalledTimes(3)
+    expect(client.query).toHaveBeenNthCalledWith(
+      1,
+      "SELECT set_config('statement_timeout', $1, true)",
+      ['4321ms']
+    )
+    expect(client.query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
+    expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 2', undefined)
+  })
+
+  it('normalizes invalid constructor statement timeouts as disabled', async () => {
+    for (const statementTimeoutMs of [-5, Number.NaN, Number.POSITIVE_INFINITY, 0]) {
+      const client = {
+        query: vi.fn().mockResolvedValue({ rows: [] }),
+        release: vi.fn(),
+      } as unknown as PoolClient
+      const transaction = new PgTransaction(client, undefined, { statementTimeoutMs })
+
+      await transaction.query('SELECT 1')
+
+      expect(client.query).toHaveBeenCalledTimes(1)
+      expect(client.query).toHaveBeenNthCalledWith(1, 'SELECT 1', undefined)
+    }
+  })
+
+  it('rejects a pre-aborted direct query before applying a pending statement timeout', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    } as unknown as PoolClient
+    const transaction = new PgTransaction(client, undefined, { statementTimeoutMs: 4321 })
+
+    await expect(
+      transaction.query('SELECT 1', { signal: AbortSignal.abort() })
+    ).rejects.toMatchObject({
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    })
+    expect(client.query).not.toHaveBeenCalled()
+    expect(client.release).toHaveBeenCalledWith(expect.objectContaining({ name: 'AbortError' }))
+
+    await expect(transaction.query('SELECT 2')).rejects.toThrow(
+      'Cannot query a completed transaction'
+    )
+    expect(client.query).not.toHaveBeenCalled()
+  })
+
+  it('honors abort signals while applying a pending statement timeout', async () => {
+    const controller = new AbortController()
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn(() => {
+        controller.abort()
+        return new Promise(() => undefined)
+      }),
+      release: vi.fn(),
+    }) as unknown as PoolClient & EventEmitter
+    const transaction = new PgTransaction(client, undefined, { statementTimeoutMs: 4321 })
+
+    await expect(
+      transaction.query('SELECT 1', { signal: controller.signal })
+    ).rejects.toMatchObject({
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    })
+
+    expect(client.query).toHaveBeenCalledTimes(1)
+    expect(client.query).toHaveBeenNthCalledWith(
+      1,
+      "SELECT set_config('statement_timeout', $1, true)",
+      ['4321ms']
+    )
+    expect(client.release).toHaveBeenCalledWith(expect.objectContaining({ name: 'AbortError' }))
+
+    await transaction.rollback()
+    expect(client.query).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects queries after commit releases the client', async () => {
     const client = {
       query: vi.fn().mockResolvedValue({ rows: [] }),
@@ -708,11 +888,335 @@ describe('PgTenantConnection', () => {
     })
   })
 
+  it('treats non-finite transaction timeouts as disabled', async () => {
+    for (const timeout of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const { beginTransaction, connection, query, getTransaction } =
+        createMockTenantConnectionWithTransaction({
+          isExternalPool: false,
+        })
+
+      const transaction = await connection.transaction({ timeout })
+      expect(transaction).toBe(getTransaction())
+      expect(beginTransaction).toHaveBeenCalledWith({ timeout })
+      expect(query).not.toHaveBeenCalled()
+
+      await connection.setScope(getTransaction())
+
+      expect(query).toHaveBeenCalledTimes(1)
+      const [scopeStatement, scopeValues] = query.mock.calls[0]
+      expect(scopeStatement).toContain("set_config('role', $1, true)")
+      expect(scopeStatement).not.toContain("set_config('statement_timeout'")
+      expect(scopeValues).toHaveLength(9)
+    }
+  })
+
+  it('defers statement_timeout for low-level Postgres beginTransaction', async () => {
+    const { beginTransaction, connection, query, getTransaction } =
+      createMockTenantConnectionWithTransaction({
+        isExternalPool: false,
+      })
+
+    await expect(
+      connection.beginTransaction({
+        timeout: 4321,
+        isolation: 'serializable',
+        readOnly: true,
+      })
+    ).resolves.toBe(getTransaction())
+    expect(beginTransaction).toHaveBeenCalledWith({
+      timeout: 4321,
+      isolation: 'serializable',
+      readOnly: true,
+    })
+    expect(query).not.toHaveBeenCalled()
+
+    await connection.setScope(getTransaction())
+
+    expect(query).toHaveBeenCalledTimes(1)
+    const [scopeStatement, scopeValues] = query.mock.calls[0]
+    expect(scopeStatement).toContain("set_config('role', $1, true)")
+    expect(scopeStatement).toContain("set_config('statement_timeout', $10, true)")
+    expect(scopeValues).toEqual([
+      'authenticated',
+      'authenticated',
+      'jwt',
+      '',
+      JSON.stringify({ role: 'authenticated' }),
+      '{}',
+      '',
+      '',
+      '',
+      '4321ms',
+    ])
+  })
+
+  it('defers statement_timeout setup until the first scope application', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] })
+    const client = {
+      query,
+      release: vi.fn(),
+    } as unknown as PoolClient
+    let transaction: PgTransaction
+    const beginTransaction = vi.fn(
+      async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
+        transaction = new PgTransaction(client, undefined, {
+          statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
+        })
+        return transaction
+      }
+    )
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction,
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: false,
+      })
+    )
+
+    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
+    expect(beginTransaction).toHaveBeenCalledWith({ timeout: 4321 })
+    expect(query).not.toHaveBeenCalled()
+
+    await connection.setScope(transaction!)
+
+    expect(query).toHaveBeenCalledTimes(1)
+    const [statement, values] = query.mock.calls[0]
+    expect(statement).toContain("set_config('role', $1, true)")
+    expect(statement).toContain("set_config('statement_timeout', $10, true)")
+    expect(values).toEqual([
+      'authenticated',
+      'authenticated',
+      'jwt',
+      '',
+      JSON.stringify({ role: 'authenticated' }),
+      '{}',
+      '',
+      '',
+      '',
+      '4321ms',
+    ])
+  })
+
+  it('keeps external-pool search_path setup before deferring statement_timeout', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] })
+    const client = {
+      query,
+      release: vi.fn(),
+    } as unknown as PoolClient
+    let transaction: PgTransaction
+    const beginTransaction = vi.fn(
+      async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
+        transaction = new PgTransaction(client, undefined, {
+          statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
+        })
+        return transaction
+      }
+    )
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction,
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: true,
+      })
+    )
+
+    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
+    expect(beginTransaction).toHaveBeenCalledWith({ timeout: 4321 })
+
+    expect(query).toHaveBeenCalledTimes(1)
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      "SELECT set_config('search_path', $1, true)",
+      expect.any(Array)
+    )
+
+    await connection.setScope(transaction!)
+
+    expect(query).toHaveBeenCalledTimes(2)
+    const [scopeStatement, scopeValues] = query.mock.calls[1]
+    expect(scopeStatement).toContain("set_config('role', $1, true)")
+    expect(scopeStatement).toContain("set_config('statement_timeout', $10, true)")
+    expect(scopeValues).toEqual([
+      'authenticated',
+      'authenticated',
+      'jwt',
+      '',
+      JSON.stringify({ role: 'authenticated' }),
+      '{}',
+      '',
+      '',
+      '',
+      '4321ms',
+    ])
+  })
+
+  it('folds deferred statement_timeout into scope setup', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] })
+    const client = {
+      query,
+      release: vi.fn(),
+    } as unknown as PoolClient
+    let transaction: PgTransaction
+    const beginTransaction = vi.fn(
+      async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
+        transaction = new PgTransaction(client, undefined, {
+          statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
+        })
+        return transaction
+      }
+    )
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction,
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: true,
+      })
+    )
+
+    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
+    expect(beginTransaction).toHaveBeenCalledWith({ timeout: 4321 })
+
+    expect(query).toHaveBeenCalledTimes(1)
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      "SELECT set_config('search_path', $1, true)",
+      expect.any(Array)
+    )
+
+    await connection.setScope(transaction!)
+
+    expect(query).toHaveBeenCalledTimes(2)
+    const [scopeStatement, scopeValues] = query.mock.calls[1]
+    expect(scopeStatement).toContain("set_config('statement_timeout', $10, true)")
+    expect(scopeValues).toEqual([
+      'authenticated',
+      'authenticated',
+      'jwt',
+      '',
+      JSON.stringify({ role: 'authenticated' }),
+      '{}',
+      '',
+      '',
+      '',
+      '4321ms',
+    ])
+  })
+
+  it('omits statement_timeout setup for low-level beginTransaction without a positive timeout', async () => {
+    const cases: Array<{
+      options?: { timeout: number }
+    }> = [{}, { options: { timeout: 0 } }]
+
+    for (const { options } of cases) {
+      const { beginTransaction, connection, query, getTransaction } =
+        createMockTenantConnectionWithTransaction({
+          isExternalPool: false,
+        })
+
+      await connection.beginTransaction(options)
+      expect(beginTransaction).toHaveBeenCalledWith(options)
+      expect(query).not.toHaveBeenCalled()
+
+      await connection.setScope(getTransaction())
+
+      expect(query).toHaveBeenCalledTimes(1)
+      const [scopeStatement, scopeValues] = query.mock.calls[0]
+      expect(scopeStatement).toContain("set_config('role', $1, true)")
+      expect(scopeStatement).not.toContain("set_config('statement_timeout'")
+      expect(scopeValues).toHaveLength(9)
+    }
+  })
+
+  it('does not re-apply statement_timeout after setScope consumes it', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] })
+    const client = {
+      query,
+      release: vi.fn(),
+    } as unknown as PoolClient
+    let transaction: PgTransaction
+    const beginTransaction = vi.fn(
+      async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
+        transaction = new PgTransaction(client, undefined, {
+          statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
+        })
+        return transaction
+      }
+    )
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction,
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: false,
+      })
+    )
+
+    await connection.transaction({ timeout: 4321 })
+    await connection.setScope(transaction!)
+    await transaction!.query('SELECT 1')
+
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
+    expect(
+      query.mock.calls.filter(([statement]) => String(statement).includes('statement_timeout'))
+    ).toHaveLength(1)
+  })
+
+  it('reuses precomputed scope JSON payloads across repeated scope applications', async () => {
+    const pool = {
+      acquire: vi.fn(),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        headers: {
+          'x-test-header': 'test-value',
+        },
+        user: {
+          jwt: 'jwt',
+          payload: {
+            role: 'authenticated',
+            sub: 'user-id',
+          },
+        },
+      })
+    )
+    const executor = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+    } as unknown as PgExecutor
+    const stringifySpy = vi.spyOn(JSON, 'stringify')
+
+    try {
+      await connection.setScope(executor)
+      await connection.setScope(executor)
+
+      expect(stringifySpy).not.toHaveBeenCalled()
+    } finally {
+      stringifySpy.mockRestore()
+    }
+  })
+
   it('preserves setup errors when external-pool rollback fails', async () => {
     const setupError = new Error('search_path setup failed')
     const rollbackError = new Error('rollback failed')
     const transaction = {
-      query: vi.fn().mockRejectedValue(setupError),
+      query: vi.fn(),
+      runSetupQuery: vi.fn().mockRejectedValue(setupError),
       rollback: vi.fn().mockRejectedValue(rollbackError),
     } as unknown as PgTransaction
     const pool = {

@@ -45,6 +45,42 @@ export interface PgQueryOptions {
 
 type PgQueryArgument = PgQueryOptions | unknown[]
 
+interface PgTransactionOptions {
+  statementTimeoutMs?: number
+}
+
+type PgBeginTransactionOptions = TransactionOptions & PgTransactionOptions
+
+const defaultStatementTimeoutMs = normalizeStatementTimeoutMs(databaseStatementTimeout)
+
+// Shared frozen options for the common transaction() call without caller options.
+const defaultBeginTransactionOptions: PgBeginTransactionOptions | undefined =
+  defaultStatementTimeoutMs !== undefined
+    ? Object.freeze({ statementTimeoutMs: defaultStatementTimeoutMs })
+    : undefined
+
+const scopeConfigSetters = `set_config('role', $1, true),
+          set_config('request.jwt.claim.role', $2, true),
+          set_config('request.jwt', $3, true),
+          set_config('request.jwt.claim.sub', $4, true),
+          set_config('request.jwt.claims', $5, true),
+          set_config('request.headers', $6, true),
+          set_config('request.method', $7, true),
+          set_config('request.path', $8, true),
+          set_config('storage.operation', $9, true),
+          set_config('storage.allow_delete_query', 'true', true)`
+
+const scopeConfigSql = `
+        SELECT
+          ${scopeConfigSetters};
+      `
+
+const scopeConfigSqlWithStatementTimeout = `
+        SELECT
+          ${scopeConfigSetters},
+          set_config('statement_timeout', $10, true);
+      `
+
 export interface PgExecutor {
   query<T extends QueryResultRow = QueryResultRow>(
     statement: string | PgStatement,
@@ -53,7 +89,7 @@ export interface PgExecutor {
 }
 
 export interface PgTransactionalExecutor extends PgExecutor {
-  beginTransaction(options?: TransactionOptions): Promise<PgTransaction>
+  beginTransaction(options?: PgBeginTransactionOptions): Promise<PgTransaction>
 }
 
 interface PgPoolErrorContext {
@@ -398,7 +434,7 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
     }
   }
 
-  async beginTransaction(options?: TransactionOptions): Promise<PgTransaction> {
+  async beginTransaction(options?: PgBeginTransactionOptions): Promise<PgTransaction> {
     let client: PoolClient
     try {
       client = await this.pool.connect()
@@ -411,10 +447,12 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
     }
 
     const clientErrorTracker = new PgClientErrorTracker(client)
-    const transaction = new PgTransaction(client, clientErrorTracker)
+    const transaction = new PgTransaction(client, clientErrorTracker, {
+      statementTimeoutMs: options?.statementTimeoutMs ?? options?.timeout,
+    })
 
     try {
-      await transaction.query(buildBeginStatement(options))
+      await transaction.runSetupQuery(buildBeginStatement(options))
       return transaction
     } catch (e) {
       if (!transaction.isCompleted()) {
@@ -432,11 +470,15 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
 
 export class PgTransaction implements PgExecutor {
   private completed = false
+  private statementTimeoutMs?: number
 
   constructor(
     private readonly client: PoolClient,
-    private readonly clientErrorTracker?: PgClientErrorTracker
-  ) {}
+    private readonly clientErrorTracker?: PgClientErrorTracker,
+    options: PgTransactionOptions = {}
+  ) {
+    this.statementTimeoutMs = normalizeStatementTimeoutMs(options.statementTimeoutMs)
+  }
 
   isCompleted(): boolean {
     return this.completed
@@ -446,11 +488,43 @@ export class PgTransaction implements PgExecutor {
     statement: string | PgStatement,
     options?: PgQueryArgument
   ): Promise<QueryResult<T>> {
+    return this.runQuery(statement, options, true)
+  }
+
+  async runSetupQuery<T extends QueryResultRow = QueryResultRow>(
+    statement: string | PgStatement,
+    options?: PgQueryArgument
+  ): Promise<QueryResult<T>> {
+    // Setup statements must not consume a deferred timeout before scope can fold it in.
+    return this.runQuery(statement, options, false)
+  }
+
+  // Hands the deferred timeout to the caller (setScope) so it can be folded
+  // into its next statement instead of costing a separate set_config round trip.
+  takePendingStatementTimeoutMs(): number | undefined {
+    const timeoutMs = this.statementTimeoutMs
+    this.statementTimeoutMs = undefined
+    return timeoutMs
+  }
+
+  private async runQuery<T extends QueryResultRow = QueryResultRow>(
+    statement: string | PgStatement,
+    options: PgQueryArgument | undefined,
+    applyPendingStatementTimeout: boolean
+  ): Promise<QueryResult<T>> {
     if (this.completed) {
       throw new Error('Cannot query a completed transaction')
     }
 
+    const signal = getQuerySignal(options)
+
     try {
+      assertValidSignal(signal)
+
+      if (applyPendingStatementTimeout) {
+        await this.applyPendingStatementTimeoutBeforeQuery(signal)
+      }
+
       const result = await runPgQuery<T>(this.client, statement, options)
       this.clientErrorTracker?.throwIfErrored()
       return result
@@ -515,6 +589,22 @@ export class PgTransaction implements PgExecutor {
       this.clientErrorTracker?.detach()
     }
   }
+
+  private async applyPendingStatementTimeoutBeforeQuery(signal?: AbortSignal): Promise<void> {
+    const timeoutMs = this.takePendingStatementTimeoutMs()
+    if (!timeoutMs) {
+      return
+    }
+
+    await runPgQuery(
+      this.client,
+      {
+        text: `SELECT set_config('statement_timeout', $1, true)`,
+        values: [`${timeoutMs}ms`],
+      },
+      { signal }
+    )
+  }
 }
 
 export class PgTenantConnection {
@@ -522,12 +612,16 @@ export class PgTenantConnection {
   public readonly role: string
   private abortSignal?: AbortSignal
   private disposed = false
+  private readonly headersPayload: string
+  private readonly userPayload: string
 
   constructor(
     public readonly pool: PgPoolStrategy,
     protected readonly options: TenantConnectionOptions
   ) {
     this.role = options.user.payload.role || 'anon'
+    this.headersPayload = JSON.stringify(options.headers || {})
+    this.userPayload = JSON.stringify(options.user.payload)
   }
 
   static stop() {
@@ -562,6 +656,7 @@ export class PgTenantConnection {
 
   async beginTransaction(options?: TransactionOptions): Promise<PgTransaction> {
     this.assertNotDisposed()
+    // PgPoolExecutor derives the deferred statement_timeout from options.timeout.
     return this.pool.acquire().beginTransaction(options)
   }
 
@@ -584,6 +679,7 @@ export class PgTenantConnection {
     this.assertNotDisposed()
 
     try {
+      const beginOptions = withDefaultStatementTimeout(opts)
       const transaction = await retry<PgTransaction>(
         async (bail) => {
           if (this.disposed) {
@@ -592,7 +688,7 @@ export class PgTenantConnection {
           }
 
           try {
-            return await this.pool.acquire().beginTransaction(opts)
+            return await this.pool.acquire().beginTransaction(beginOptions)
           } catch (e) {
             if (isConnectionLimitError(e)) {
               throw e
@@ -613,25 +709,12 @@ export class PgTenantConnection {
 
       if (this.options.isExternalPool) {
         try {
-          await transaction.query({
+          await transaction.runSetupQuery({
             text: `SELECT set_config('search_path', $1, true)`,
             values: [searchPath.join(',')],
           })
         } catch (e) {
           await this.rollbackTransactionSafely(transaction, e, 'search_path setup')
-          throw e
-        }
-      }
-
-      const statementTimeout = opts?.timeout ?? databaseStatementTimeout
-      if (statementTimeout > 0) {
-        try {
-          await transaction.query({
-            text: `SELECT set_config('statement_timeout', $1, true)`,
-            values: [`${statementTimeout}ms`],
-          })
-        } catch (e) {
-          await this.rollbackTransactionSafely(transaction, e, 'statement_timeout setup')
           throw e
         }
       }
@@ -674,34 +757,54 @@ export class PgTenantConnection {
   }
 
   async setScope(tnx: PgExecutor) {
-    const headers = JSON.stringify(this.options.headers || {})
+    const statementTimeoutMs =
+      tnx instanceof PgTransaction ? tnx.takePendingStatementTimeoutMs() : undefined
+
+    const values: unknown[] = [
+      this.role,
+      this.role,
+      this.options.user.jwt || '',
+      this.options.user.payload.sub || '',
+      this.userPayload,
+      this.headersPayload,
+      this.options.method || '',
+      this.options.path || '',
+      this.options.operation?.() || '',
+    ]
+
+    if (statementTimeoutMs) {
+      values.push(`${statementTimeoutMs}ms`)
+    }
+
     await tnx.query({
-      text: `
-        SELECT
-          set_config('role', $1, true),
-          set_config('request.jwt.claim.role', $2, true),
-          set_config('request.jwt', $3, true),
-          set_config('request.jwt.claim.sub', $4, true),
-          set_config('request.jwt.claims', $5, true),
-          set_config('request.headers', $6, true),
-          set_config('request.method', $7, true),
-          set_config('request.path', $8, true),
-          set_config('storage.operation', $9, true),
-          set_config('storage.allow_delete_query', 'true', true);
-      `,
-      values: [
-        this.role,
-        this.role,
-        this.options.user.jwt || '',
-        this.options.user.payload.sub || '',
-        JSON.stringify(this.options.user.payload),
-        headers,
-        this.options.method || '',
-        this.options.path || '',
-        this.options.operation?.() || '',
-      ],
+      text: statementTimeoutMs ? scopeConfigSqlWithStatementTimeout : scopeConfigSql,
+      values,
     })
   }
+}
+
+// PgPoolExecutor already derives the deferred statement_timeout from options.timeout,
+// so options only need rewriting when the global default has to be injected.
+function withDefaultStatementTimeout(
+  options: TransactionOptions | undefined
+): PgBeginTransactionOptions | undefined {
+  if (!defaultBeginTransactionOptions || options?.timeout !== undefined) {
+    return options
+  }
+
+  if (!options) {
+    return defaultBeginTransactionOptions
+  }
+
+  return { ...options, statementTimeoutMs: defaultStatementTimeoutMs }
+}
+
+function normalizeStatementTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined
+  }
+
+  return timeoutMs
 }
 
 function createDisposedTenantConnectionError(): Error {

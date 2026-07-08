@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream'
 import fastify, { type FastifyInstance, FastifyReply } from 'fastify'
 import {
   Function as PprofFunction,
@@ -16,6 +17,7 @@ const runtimeApiClient = vi.hoisted(() => ({
   getRuntimeApplications: vi.fn(),
   startApplicationProfiling: vi.fn(),
   stopApplicationProfiling: vi.fn(),
+  takeApplicationHeapSnapshot: vi.fn(),
   close: vi.fn(),
 }))
 const waitForMultipartPprofWindowMock = vi.hoisted(() => vi.fn())
@@ -26,6 +28,7 @@ vi.mock('@platformatic/control', () => ({
     getRuntimeApplications = runtimeApiClient.getRuntimeApplications
     startApplicationProfiling = runtimeApiClient.startApplicationProfiling
     stopApplicationProfiling = runtimeApiClient.stopApplicationProfiling
+    takeApplicationHeapSnapshot = runtimeApiClient.takeApplicationHeapSnapshot
     close = runtimeApiClient.close
   },
 }))
@@ -239,6 +242,7 @@ function createReplyDouble() {
     socket: {
       setKeepAlive: vi.fn(),
     },
+    once: vi.fn(),
     writableEnded: false,
     write: vi.fn(() => true),
     writeHead: vi.fn(),
@@ -249,10 +253,12 @@ function createReplyDouble() {
     raw,
     send: vi.fn(),
     status: vi.fn(),
+    headers: vi.fn(),
   }
 
   reply.status.mockReturnValue(reply)
   reply.send.mockReturnValue(reply)
+  reply.headers.mockReturnValue(reply)
 
   return reply as unknown as FastifyReply
 }
@@ -306,6 +312,9 @@ describe('admin pprof routes', () => {
     runtimeApiClient.startApplicationProfiling.mockResolvedValue(undefined)
     runtimeApiClient.stopApplicationProfiling.mockResolvedValue(
       buildProfile('default-worker', 3).buffer
+    )
+    runtimeApiClient.takeApplicationHeapSnapshot.mockResolvedValue(
+      Readable.from(['{"snapshot":true}'])
     )
     runtimeApiClient.close.mockResolvedValue(undefined)
     installMultipartWindowMock()
@@ -619,6 +628,193 @@ describe('admin pprof routes', () => {
           .map((sample) => sample.value[0])
           .sort((left, right) => Number(left) - Number(right))
       ).toEqual([11, 22])
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('streams a full heap snapshot for the requested worker via Watt control', async () => {
+    runtimeApiClient.takeApplicationHeapSnapshot.mockResolvedValue(
+      Readable.from(['{"snapshot":', 'true}'])
+    )
+
+    const app = await buildApp()
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/heap-snapshot?workerId=7',
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.headers['content-type']).toContain('application/octet-stream')
+      expect(response.headers['cache-control']).toBe('no-store')
+      expect(response.headers['x-platformatic-application-id']).toBe('storage')
+      expect(response.headers['x-platformatic-worker-id']).toBe('7')
+      expect(response.headers['content-disposition']).toContain('storage-worker-7.heapsnapshot')
+      expect(response.body).toBe('{"snapshot":true}')
+      expect(runtimeApiClient.takeApplicationHeapSnapshot).toHaveBeenCalledWith(
+        process.pid,
+        'storage:7'
+      )
+      expect(runtimeApiClient.close).toHaveBeenCalledTimes(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('requires workerId for full heap snapshots and lists discovered workers', async () => {
+    const app = await buildApp()
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/heap-snapshot',
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toEqual({
+        message:
+          'Full heap snapshots are per V8 isolate; pass workerId to capture exactly one worker. Available workerIds: 0, 1.',
+      })
+      expect(runtimeApiClient.takeApplicationHeapSnapshot).not.toHaveBeenCalled()
+      expect(runtimeApiClient.close).toHaveBeenCalledTimes(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('requires workerId for full heap snapshots even when worker discovery degrades to one target', async () => {
+    runtimeApiClient.getRuntimeApplications.mockResolvedValue({
+      applications: [{ id: 'storage' }],
+    })
+
+    const app = await buildApp()
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/heap-snapshot',
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toEqual({
+        message:
+          'Full heap snapshots are per V8 isolate; pass workerId to capture exactly one worker. Available workerIds: 2.',
+      })
+      expect(runtimeApiClient.takeApplicationHeapSnapshot).not.toHaveBeenCalled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('rejects overlapping full heap snapshots for the same worker', async () => {
+    const harness = await buildRouteHarness()
+    const firstReply = createReplyDouble()
+    const secondReply = createReplyDouble()
+    const snapshotHandler = harness.getHandler('/heap-snapshot')
+    const openSnapshot = new Readable({
+      read() {},
+    })
+
+    runtimeApiClient.takeApplicationHeapSnapshot.mockResolvedValueOnce(openSnapshot)
+
+    await expect(
+      snapshotHandler(
+        {
+          query: {
+            workerId: 7,
+          },
+          signals: {
+            disconnect: new AbortController(),
+          },
+        },
+        firstReply
+      )
+    ).resolves.toBe(firstReply)
+
+    await expect(
+      snapshotHandler(
+        {
+          query: {
+            workerId: 7,
+          },
+          signals: {
+            disconnect: new AbortController(),
+          },
+        },
+        secondReply
+      )
+    ).resolves.toBe(secondReply)
+
+    expect(secondReply.status).toHaveBeenCalledWith(409)
+    expect(secondReply.send).toHaveBeenCalledWith({
+      message: 'Heap snapshot capture is already running for service "storage:7".',
+    })
+    expect(runtimeApiClient.takeApplicationHeapSnapshot).toHaveBeenCalledTimes(1)
+
+    openSnapshot.destroy()
+    await harness.onClose()
+  })
+
+  it('destroys the heap snapshot stream and closes the control client on disconnect', async () => {
+    const harness = await buildRouteHarness()
+    const reply = createReplyDouble()
+    const controller = new AbortController()
+    const snapshotHandler = harness.getHandler('/heap-snapshot')
+    const snapshot = new Readable({
+      read() {},
+    })
+    const destroySpy = vi.spyOn(snapshot, 'destroy')
+
+    runtimeApiClient.takeApplicationHeapSnapshot.mockResolvedValueOnce(snapshot)
+
+    await expect(
+      snapshotHandler(
+        {
+          query: {
+            workerId: 7,
+          },
+          signals: {
+            disconnect: controller,
+          },
+        },
+        reply
+      )
+    ).resolves.toBe(reply)
+
+    controller.abort()
+
+    expect(destroySpy).toHaveBeenCalled()
+    expect(runtimeApiClient.close).toHaveBeenCalledTimes(1)
+
+    await harness.onClose()
+  })
+
+  it('returns live worker ids when a requested snapshot worker is stale', async () => {
+    runtimeApiClient.takeApplicationHeapSnapshot.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Failed to take heap snapshot for service "storage:0": Worker 0 of application storage not found. Available applications are: 4, 5'
+        ),
+        {
+          code: 'PLT_CTR_FAILED_TO_TAKE_HEAP_SNAPSHOT',
+        }
+      )
+    )
+
+    const app = await buildApp()
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/heap-snapshot?workerId=0',
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toEqual({
+        message: 'Worker 0 is not available. Available workerIds: 4, 5.',
+      })
     } finally {
       await app.close()
     }

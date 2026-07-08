@@ -4,6 +4,7 @@ import {
   parseNonNegativeIntegerEnv,
   parsePositiveIntegerEnv,
   parsePprofTarget,
+  resolvePprofClientFlameMdFormat,
 } from './pprof-client'
 
 describe('parsePprofTarget', () => {
@@ -15,6 +16,9 @@ describe('parsePprofTarget', () => {
     expect(parsePprofTarget('heap', 30)).toEqual({
       seconds: 30,
       type: 'heap',
+    })
+    expect(parsePprofTarget('heap-snapshot', 30)).toEqual({
+      type: 'heap-snapshot',
     })
   })
 
@@ -32,6 +36,7 @@ describe('parsePprofTarget', () => {
   it('rejects invalid targets', () => {
     expect(() => parsePprofTarget(undefined, 60)).toThrow('Usage:')
     expect(() => parsePprofTarget('cpu', 60)).toThrow('Usage:')
+    expect(() => parsePprofTarget('heap-snapshot:10', 60)).toThrow('Usage:')
     expect(() => parsePprofTarget('profile:abc', 60)).toThrow('seconds must be a positive integer')
     expect(() => parsePprofTarget('heap:0', 60)).toThrow('seconds must be a positive integer')
     expect(() => parsePprofTarget('profile:10abc', 60)).toThrow(
@@ -76,5 +81,22 @@ describe('pprof client env parsing', () => {
     expect(() => parseNonNegativeIntegerEnv('7x', 'PPROF_WORKER_ID')).toThrow(
       'PPROF_WORKER_ID must be a non-negative integer'
     )
+  })
+})
+
+describe('resolvePprofClientFlameMdFormat', () => {
+  it('only resolves the flame markdown format when flame generation will run', () => {
+    expect(
+      resolvePprofClientFlameMdFormat(false, { type: 'profile', seconds: 60 }, 'invalid')
+    ).toBeUndefined()
+    expect(
+      resolvePprofClientFlameMdFormat(true, { type: 'heap-snapshot' }, 'invalid')
+    ).toBeUndefined()
+    expect(resolvePprofClientFlameMdFormat(true, { type: 'profile', seconds: 60 }, 'summary')).toBe(
+      'summary'
+    )
+    expect(() =>
+      resolvePprofClientFlameMdFormat(true, { type: 'heap', seconds: 60 }, 'invalid')
+    ).toThrow('Invalid PPROF_FLAME_MD_FORMAT')
   })
 })

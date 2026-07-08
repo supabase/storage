@@ -21,11 +21,6 @@ const updateBucketBodySchema = {
       items: { type: 'string', examples: [['image/png', 'image/jpg']] },
     },
   },
-  anyOf: [
-    { required: ['public'] },
-    { required: ['file_size_limit'] },
-    { required: ['allowed_mime_types'] },
-  ],
 } as const
 const updateBucketParamsSchema = {
   type: 'object',

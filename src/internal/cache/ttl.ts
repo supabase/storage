@@ -31,7 +31,7 @@ export class TtlCache<K, V> implements DisposableCache<K, V, TtlCacheSetOptions>
   }
 
   get(key: K, options?: CacheLookupOptions): V | undefined {
-    return this.getWithOutcome(key).value
+    return this.cache.get(key)
   }
 
   getWithOutcome(key: K) {

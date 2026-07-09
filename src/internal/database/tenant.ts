@@ -48,6 +48,8 @@ type GetTenantConfigOptions = {
   recordMetrics?: boolean
 }
 
+const GET_TENANT_CONFIG_WITHOUT_METRICS: GetTenantConfigOptions = { recordMetrics: false }
+
 type LegacyJwksConfig = NonNullable<TenantConfig['jwks']>
 
 export interface Features {
@@ -191,9 +193,7 @@ export async function getTenantConfig(
     throw ERRORS.InvalidTenantId()
   }
 
-  const cachedConfig = tenantConfigCache.get(tenantId, {
-    recordMetrics: options?.recordMetrics,
-  })
+  const cachedConfig = tenantConfigCache.get(tenantId, options)
   if (cachedConfig !== undefined) {
     return cachedConfig
   }
@@ -434,7 +434,7 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
  * @param cacheKey
  */
 export async function onTenantConfigChange(cacheKey: string) {
-  const oldConfig = tenantConfigCache.get(cacheKey, { recordMetrics: false })
+  const oldConfig = tenantConfigCache.get(cacheKey, GET_TENANT_CONFIG_WITHOUT_METRICS)
   tenantConfigCache.delete(cacheKey)
 
   if (!oldConfig) {
@@ -442,7 +442,7 @@ export async function onTenantConfigChange(cacheKey: string) {
   }
 
   try {
-    const newConfig = await getTenantConfig(cacheKey, { recordMetrics: false })
+    const newConfig = await getTenantConfig(cacheKey, GET_TENANT_CONFIG_WITHOUT_METRICS)
 
     // 1. DB endpoint changed: the cached pool's connection string is stale, and
     //    so are its open sockets. Hard destroy so the next request rebuilds

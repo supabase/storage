@@ -60,14 +60,14 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
     })
   }
 
-  const excludedRoutesFromMonitoring = [
+  const excludedRoutesFromMonitoring = new Set([
     '/status',
     '/metrics',
     '/health',
     '/healthcheck',
     '/version',
     '/documentation',
-  ]
+  ])
 
   // add in common schemas
   app.addSchema(schemas.authSchema)

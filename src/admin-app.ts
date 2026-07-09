@@ -56,7 +56,9 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(plugins.requestContext)
   app.register(plugins.signals)
   app.register(plugins.adminTenantId)
-  app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health', '/version'] }))
+  app.register(
+    plugins.logRequest({ excludeUrls: new Set(['/status', '/metrics', '/health', '/version']) })
+  )
   app.register(routes.tenants, { prefix: 'tenants' })
   app.register(routes.objects, { prefix: 'tenants' })
   app.register(routes.jwks, { prefix: 'tenants' })

@@ -4,7 +4,7 @@ import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'
 import { getGlobal } from '@platformatic/globals'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
-import { plugins, routes, setErrorHandler } from './http'
+import { plugins, routes, schemas, setErrorHandler } from './http'
 import {
   createOpenApiTransform,
   dedupeTrailingSlashPaths,
@@ -60,6 +60,8 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
       routePrefix: '/documentation',
     })
   }
+
+  app.addSchema(schemas.errorSchema)
 
   app.register(plugins.requestContext)
   app.register(plugins.signals)

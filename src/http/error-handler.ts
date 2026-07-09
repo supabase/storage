@@ -23,6 +23,20 @@ export const setErrorHandler = (
     formatter?: (error: StorageError) => Record<string, unknown>
   }
 ) => {
+  // Every route can hit this handler and get back the {statusCode, error, message} shape
+  // sent below, regardless of app (main or admin) or which helper built its schema - default
+  // every route's OpenAPI doc to that shape for any 4xx, without overriding a status code a
+  // route already documents more specifically (e.g. jwt.ts's 403, apikey.ts's 401).
+  app.addHook('onRoute', (routeOptions) => {
+    routeOptions.schema = routeOptions.schema || {}
+    const hadResponseSchema = Boolean(routeOptions.schema.response)
+    routeOptions.schema.response = {
+      ...(hadResponseSchema ? undefined : { 200: { description: 'Default Response' } }),
+      '4xx': { description: 'Error response', $ref: 'errorSchema#' },
+      ...(routeOptions.schema.response as object | undefined),
+    }
+  })
+
   app.setErrorHandler<Error>(function (error, request, reply) {
     const formatter = options?.formatter || ((e) => e)
     // We assign the error received.

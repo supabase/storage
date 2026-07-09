@@ -1,10 +1,21 @@
 import { vi } from 'vitest'
 
 const getGlobal = vi.hoisted(() => vi.fn())
+const lastLocalMigrationName = vi.hoisted(() => vi.fn())
 
 vi.mock('@platformatic/globals', () => ({
   getGlobal,
 }))
+
+vi.mock('@internal/database/migrations', async () => {
+  const actual = await vi.importActual<typeof import('@internal/database/migrations')>(
+    '@internal/database/migrations'
+  )
+  return {
+    ...actual,
+    lastLocalMigrationName,
+  }
+})
 
 async function buildAdminApp() {
   vi.resetModules()
@@ -14,7 +25,11 @@ async function buildAdminApp() {
   return app
 }
 
-describe('admin app pprof registration', () => {
+describe('admin app', () => {
+  beforeEach(() => {
+    lastLocalMigrationName.mockResolvedValue('storage-schema')
+  })
+
   it('does not register pprof endpoints outside Watt', async () => {
     getGlobal.mockReturnValue(undefined)
 
@@ -47,6 +62,27 @@ describe('admin app pprof registration', () => {
       })
 
       expect(response.statusCode).toBe(401)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('returns the stack migration version', async () => {
+    getGlobal.mockReturnValue(undefined)
+    lastLocalMigrationName.mockResolvedValue('create-migrations-table')
+
+    const app = await buildAdminApp()
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/migration-version',
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({
+        migrationVersion: 'create-migrations-table',
+      })
     } finally {
       await app.close()
     }

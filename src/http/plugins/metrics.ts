@@ -19,7 +19,7 @@ function parseMetricSizeHeader(value: number | string | string[] | undefined): n
 
 interface MetricsOptions {
   enabledEndpoint?: boolean
-  excludeRoutes?: string[]
+  excludeRoutes?: Set<string>
 }
 
 export const metrics = (options: MetricsOptions = {}) =>
@@ -47,7 +47,7 @@ export const metricsEndpoint = ({ enabledEndpoint }: MetricsOptions) => {
 
 interface HttpMetricsOptions {
   /** Routes to exclude from metrics collection */
-  excludeRoutes?: string[]
+  excludeRoutes?: Set<string>
 }
 
 /**
@@ -58,12 +58,10 @@ interface HttpMetricsOptions {
 export const httpMetrics = (options: HttpMetricsOptions = {}) =>
   fastifyPlugin(
     async (fastify) => {
-      const excludeRoutes = options.excludeRoutes || [
-        '/metrics',
-        '/status',
-        '/health',
-        '/healthcheck',
-      ]
+      const excludeRoutes = options.excludeRoutes?.size
+        ? options.excludeRoutes
+        : new Set(['/metrics', '/status', '/health', '/healthcheck'])
+      const excludePrefixes = Array.from(excludeRoutes, (route) => route + '/')
 
       // Hook into request lifecycle to measure duration
       fastify.addHook('onRequest', (request, _reply, done) => {
@@ -75,10 +73,16 @@ export const httpMetrics = (options: HttpMetricsOptions = {}) =>
       fastify.addHook('onResponse', (request, reply, done) => {
         const route = request.routeOptions?.url || 'unknown'
 
-        // Skip excluded routes (match start of path)
-        if (excludeRoutes.some((r) => route === r || route.startsWith(r + '/'))) {
+        // Skip excluded routes (exact match or subpath)
+        if (excludeRoutes.has(route)) {
           done()
           return
+        }
+        for (let i = 0; i < excludePrefixes.length; i++) {
+          if (route.startsWith(excludePrefixes[i])) {
+            done()
+            return
+          }
         }
 
         const startTime = request.metricsStartTime

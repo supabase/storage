@@ -1,7 +1,7 @@
 import {
   getSbReqId,
   getSbReqIdFromPayload,
-  getTraceIdFromTraceparent,
+  getValidTraceparent,
   SUPABASE_REQUEST_ID_HEADER,
   TRACEPARENT_HEADER,
 } from './request-context'
@@ -49,19 +49,19 @@ describe('request log context helpers', () => {
     expect(getSbReqIdFromPayload(undefined)).toBeUndefined()
   })
 
-  it('extracts trace ids from valid traceparent headers', () => {
+  it('returns valid traceparent headers', () => {
     expect(
-      getTraceIdFromTraceparent({
+      getValidTraceparent({
         [TRACEPARENT_HEADER]: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
       })
-    ).toBe('4bf92f3577b34da6a3ce929d0e0e4736')
+    ).toBe('00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01')
 
     expect(
-      getTraceIdFromTraceparent({
+      getValidTraceparent({
         [TRACEPARENT_HEADER]:
           '01-fbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00-future-field',
       })
-    ).toBe('fbf92f3577b34da6a3ce929d0e0e4736')
+    ).toBe('01-fbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00-future-field')
   })
 
   it.each([
@@ -88,7 +88,7 @@ describe('request log context helpers', () => {
     ['all-zero parent id', '00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01'],
   ])('ignores %s traceparent headers', (_name, traceparent) => {
     expect(
-      getTraceIdFromTraceparent({
+      getValidTraceparent({
         [TRACEPARENT_HEADER]: traceparent,
       })
     ).toBeUndefined()

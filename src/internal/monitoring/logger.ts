@@ -139,6 +139,7 @@ export interface RequestLogContext {
 export interface RequestLog extends RequestLogContext {
   type: 'request'
   traceId: string
+  spanId: string
   req: SerializedRequestLog
   res?: SerializedReplyLog
   reqMetadata: string

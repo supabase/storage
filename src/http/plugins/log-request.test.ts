@@ -111,7 +111,7 @@ describe('log-request plugin', () => {
     expect(requestLogLine).not.toContain('"request_id"')
   })
 
-  it('threads traceId from a valid traceparent header into the request log data', async () => {
+  it('threads traceId and spanId from a valid traceparent header into the request log data', async () => {
     const response = await app.inject({
       method: 'GET',
       url: '/request-log',
@@ -127,10 +127,12 @@ describe('log-request plugin', () => {
 
     const requestLog = JSON.parse(requestLogLine ?? '{}')
     expect(requestLog.traceId).toBe('4bf92f3577b34da6a3ce929d0e0e4736')
+    expect(requestLog.spanId).toBe('00f067aa0ba902b7')
     expect(requestLog).not.toHaveProperty('trace_id')
+    expect(requestLog).not.toHaveProperty('span_id')
   })
 
-  it('logs an empty traceId when traceparent is malformed', async () => {
+  it('logs empty traceId and spanId values when traceparent is malformed', async () => {
     const response = await app.inject({
       method: 'GET',
       url: '/request-log',
@@ -146,10 +148,12 @@ describe('log-request plugin', () => {
 
     const requestLog = JSON.parse(requestLogLine ?? '{}')
     expect(requestLog.traceId).toBe('')
+    expect(requestLog.spanId).toBe('')
     expect(requestLog).not.toHaveProperty('trace_id')
+    expect(requestLog).not.toHaveProperty('span_id')
   })
 
-  it('logs an empty traceId when traceparent is missing', async () => {
+  it('logs empty traceId and spanId values when traceparent is missing', async () => {
     const response = await app.inject({
       method: 'GET',
       url: '/request-log',
@@ -162,7 +166,9 @@ describe('log-request plugin', () => {
 
     const requestLog = JSON.parse(requestLogLine ?? '{}')
     expect(requestLog.traceId).toBe('')
+    expect(requestLog.spanId).toBe('')
     expect(requestLog).not.toHaveProperty('trace_id')
+    expect(requestLog).not.toHaveProperty('span_id')
   })
 
   it('threads tenant context into the request log data', async () => {

@@ -94,6 +94,33 @@ function operationToId(operation: string): string {
 }
 
 /**
+ * Every route can end up hitting setErrorHandler and getting back a {statusCode, error,
+ * message, code} body (or, for a subtree with its own formatter, whatever that subtree
+ * documents instead) - default the doc to that shape for any otherwise-undocumented 4xx.
+ * Doc-only on purpose: several handlers reply with an ad-hoc, partial error body directly
+ * (`reply.status(400).send({message: '...'})`, bypassing the formatter entirely), and an
+ * earlier version of this defaulted via a real onRoute hook that made Fastify enforce
+ * errorSchema's `required` fields during response *serialization* - which threw on exactly
+ * those ad-hoc replies (fast-json-stringify errors on a missing required property rather
+ * than dropping it). A transform can't affect request handling, so it can't cause that.
+ */
+function defaultErrorResponse(schema: FastifySchema | undefined): FastifySchema {
+  const response = schema?.response as Record<string, unknown> | undefined
+  if (schema && response && Object.keys(response).some((status) => /^4xx$/i.test(status))) {
+    return schema
+  }
+
+  return {
+    ...schema,
+    response: {
+      ...(response ? undefined : { 200: { description: 'Default Response' } }),
+      '4xx': { description: 'Error response', $ref: 'errorSchema#' },
+      ...response,
+    },
+  }
+}
+
+/**
  * OpenAPI requires operationId to be unique across the whole document. `exposeHeadRoutes`
  * auto-derives a HEAD operation from every GET route re-using the same `config.operation`,
  * so the id needs a per-method suffix to stay unique when that happens.
@@ -117,6 +144,7 @@ export function createOpenApiTransform() {
     }
 
     ;({ schema, url } = renameWildcardParam(schema, url))
+    schema = defaultErrorResponse(schema)
 
     const operation = (route.config as { operation?: string } | undefined)?.operation
 

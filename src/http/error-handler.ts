@@ -8,7 +8,6 @@ import {
 } from '@internal/errors'
 import { isDatabaseSlowDownError } from '@internal/errors/database-error'
 import { FastifyInstance } from 'fastify'
-import { errorSchema } from './schemas/error'
 
 /**
  * The global error handler for all the uncaught exceptions within a request.
@@ -28,36 +27,25 @@ export const setErrorHandler = (
     errorResponseSchema?: object
   }
 ) => {
-  // Every route can hit this handler and get back the shape sent below, regardless of app
-  // (main or admin) or which helper built its schema - default every route's OpenAPI doc to
-  // that shape for any 4xx: a plain flat {statusCode, error, message, code} normally, or
-  // `errorResponseSchema` when this call also passes a custom `formatter` that reshapes the
-  // wire response (e.g. iceberg/index.ts's REST-catalog-spec {error: {message, type, code}}).
-  // The formatter branch below overrides rather than only filling a gap, since this hook runs
-  // after any ancestor's (registerJwtAuth's 403, or a shallower setErrorHandler's own flat
-  // default - both added earlier in every caller of this file) and a subtree with its own
-  // formatter must not stay stuck documenting its ancestor's flat shape. That's not just a doc
-  // bug: fast-json-stringify chokes on the type mismatch (error typed as a string in
-  // errorSchema, sent as an object by the REST-catalog formatter) and 500s.
-  if (!options?.formatter) {
-    // The onRoute hook below needs errorSchema registered on this instance to resolve its
-    // $ref - register it here instead of requiring every caller (including tests that build
-    // a bare Fastify() and only call setErrorHandler) to remember to do it themselves. Guarded
-    // since app.ts/admin-app.ts also register it directly for their own schemas' sake.
-    if (!app.getSchema('errorSchema')) {
-      app.addSchema(errorSchema)
-    }
-
-    app.addHook('onRoute', (routeOptions) => {
-      routeOptions.schema = routeOptions.schema || {}
-      const hadResponseSchema = Boolean(routeOptions.schema.response)
-      routeOptions.schema.response = {
-        ...(hadResponseSchema ? undefined : { 200: { description: 'Default Response' } }),
-        '4xx': { description: 'Error response', $ref: 'errorSchema#' },
-        ...(routeOptions.schema.response as object | undefined),
-      }
-    })
-  } else if (options.errorResponseSchema) {
+  // registerJwtAuth's onRoute hook documents a flat {statusCode, error, message, code} 403 on
+  // every route it guards, since that's what a real AccessDenied error always renders as - true
+  // for every subtree except one with a custom `formatter` here that reshapes the wire response
+  // entirely (e.g. iceberg/index.ts's REST-catalog-spec {error: {message, type, code}}). Without
+  // this override, that subtree's routes would keep documenting (and, worse, get response-
+  // schema-serialized against) the wrong flat shape: fast-json-stringify chokes on the type
+  // mismatch (error typed as a string in errorSchema, sent as an object) and 500s. This hook
+  // runs after registerJwtAuth's (added earlier in every caller of this file) so it overrides
+  // rather than only filling a gap.
+  //
+  // There's deliberately no equivalent generic default for the plain (no formatter) case: this
+  // codebase has many handlers that reply with an ad-hoc, partial error body directly
+  // (`reply.status(400).send({message: '...'})`, bypassing this file's formatter entirely), and
+  // forcing errorSchema's `required` fields onto those routes' response serialization makes
+  // fast-json-stringify throw on the ones actually missing a field - a real, previously-hit
+  // regression (see git history). The generic "errorSchema is probably the shape of a 4xx"
+  // default lives in openapi-transform.ts's doc-only transform instead, which can't affect
+  // real request handling either way.
+  if (options?.formatter && options.errorResponseSchema) {
     app.addHook('onRoute', (routeOptions) => {
       routeOptions.schema = routeOptions.schema || {}
       const hadResponseSchema = Boolean(routeOptions.schema.response)

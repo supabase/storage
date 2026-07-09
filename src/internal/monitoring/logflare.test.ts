@@ -72,4 +72,46 @@ describe('logflare helpers', () => {
 
     expect(errorSpy).toHaveBeenCalledWith('[Logflare][Error] boom - stack-trace')
   })
+
+  it('includes response diagnostics without logging the full batch', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { onError } = await import('./logflare')
+    const err = Object.assign(new Error('boom'), {
+      response: { status: 422 },
+      data: { error: 'invalid payload' },
+    })
+    err.stack = 'stack-trace'
+
+    onError(
+      {
+        batch: [
+          { metadata: { context: { type: 'request' } }, sensitive: 'hidden' },
+          { metadata: { context: { type: 'event' } } },
+        ],
+      },
+      err
+    )
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[Logflare][Error] boom (status=422 data={"error":"invalid payload"} batchSize=2 batchTypes=request,event) - stack-trace'
+    )
+    expect(errorSpy.mock.calls[0]?.[0]).not.toContain('hidden')
+  })
+
+  it('does not throw when response diagnostics are not serializable', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { onError } = await import('./logflare')
+    const data: { self?: unknown } = {}
+    data.self = data
+    const err = Object.assign(new Error('boom'), {
+      response: { status: 422 },
+      data,
+    })
+    err.stack = 'stack-trace'
+
+    expect(() => onError({}, err)).not.toThrow()
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[Logflare][Error] boom (status=422 data=[unserializable]) - stack-trace'
+    )
+  })
 })

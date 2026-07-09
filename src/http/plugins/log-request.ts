@@ -107,7 +107,7 @@ export const logRequest = (options: RequestLoggerOptions) =>
       })
 
       fastify.addHook('onSend', (req, _reply, payload, done) => {
-        req.executionTime = performance.now() - req.startTime
+        req.executionTime = Math.round(performance.now() - req.startTime)
         done(null, payload)
       })
 

@@ -49,6 +49,21 @@ export default async function routes(fastify: FastifyInstance) {
           },
         }
       },
+      errorResponseSchema: {
+        type: 'object',
+        properties: {
+          error: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+              type: { type: 'string' },
+              code: { type: 'number' },
+            },
+            required: ['message', 'type', 'code'],
+          },
+        },
+        required: ['error'],
+      },
     })
   })
 }

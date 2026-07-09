@@ -5,6 +5,7 @@ export const errorSchema = {
     statusCode: { type: 'string' },
     error: { type: 'string' },
     message: { type: 'string' },
+    code: { type: 'string' },
   },
-  required: ['statusCode', 'error', 'message'],
+  required: ['statusCode', 'error', 'message', 'code'],
 } as const

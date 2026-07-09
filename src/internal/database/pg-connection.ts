@@ -1,7 +1,6 @@
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { TransactionOptions } from '@storage/database'
-import retry from 'async-retry'
 import pg, { DatabaseError, Pool, PoolClient, QueryResult, QueryResultRow } from 'pg'
 import PgConnection from 'pg/lib/connection'
 import { getConfig } from '../../config'
@@ -116,6 +115,10 @@ type DisposableQueryError = Error & {
 }
 
 const poolDrainCheckIntervalMs = 200
+const transactionSetupMaxAttempts = 11
+const transactionSetupTotalBudgetMs = 3000
+const transactionSetupRetryMinDelayMs = 50
+const transactionSetupRetryMaxDelayMs = 200
 
 export type PgCancelConnectionTarget =
   | {
@@ -655,9 +658,7 @@ export class PgTenantConnection {
   }
 
   async beginTransaction(options?: TransactionOptions): Promise<PgTransaction> {
-    this.assertNotDisposed()
-    // PgPoolExecutor derives the deferred statement_timeout from options.timeout.
-    return this.pool.acquire().beginTransaction(options)
+    return this.beginTransactionWithRetry(options)
   }
 
   asSuperUser() {
@@ -680,32 +681,7 @@ export class PgTenantConnection {
 
     try {
       const beginOptions = withDefaultStatementTimeout(opts)
-      const transaction = await retry<PgTransaction>(
-        async (bail) => {
-          if (this.disposed) {
-            bail(createDisposedTenantConnectionError())
-            return undefined as never
-          }
-
-          try {
-            return await this.pool.acquire().beginTransaction(beginOptions)
-          } catch (e) {
-            if (isConnectionLimitError(e)) {
-              throw e
-            }
-
-            bail(e as Error)
-            // bail rejects the retry promise; this return only satisfies the callback type.
-            return undefined as never
-          }
-        },
-        {
-          minTimeout: 50,
-          maxTimeout: 200,
-          maxRetryTime: 3000,
-          retries: 10,
-        }
-      )
+      const transaction = await this.beginTransactionWithRetry(beginOptions)
 
       if (this.options.isExternalPool) {
         try {
@@ -727,6 +703,43 @@ export class PgTenantConnection {
 
       throw e
     }
+  }
+
+  private async beginTransactionWithRetry(
+    opts?: PgBeginTransactionOptions
+  ): Promise<PgTransaction> {
+    const startedAt = performance.now()
+    let delayMs = transactionSetupRetryMinDelayMs
+
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.beginTransactionForRequest(opts)
+      } catch (e) {
+        // Full jitter with exponential backoff: 50-100, 100-200, then 200ms.
+        const sleepMs = Math.min(delayMs * (1 + Math.random()), transactionSetupRetryMaxDelayMs)
+        const elapsedMs = performance.now() - startedAt
+
+        if (
+          !isRetryableTransactionSetupError(e) ||
+          attempt >= transactionSetupMaxAttempts ||
+          elapsedMs + sleepMs >= transactionSetupTotalBudgetMs
+        ) {
+          throw e
+        }
+
+        await wait(sleepMs)
+        delayMs = Math.min(delayMs * 2, transactionSetupRetryMaxDelayMs)
+      }
+    }
+  }
+
+  private beginTransactionForRequest(opts?: PgBeginTransactionOptions): Promise<PgTransaction> {
+    this.assertNotDisposed()
+    if (this.abortSignal?.aborted) {
+      throw createAbortError()
+    }
+    // PgPoolExecutor derives the deferred statement_timeout from options.timeout.
+    return this.pool.acquire().beginTransaction(opts)
   }
 
   private assertNotDisposed(): void {
@@ -943,6 +956,33 @@ function isConnectionLimitError(error: unknown): boolean {
     error instanceof DatabaseError &&
     ((error.code === '08P01' && error.message.includes('no more connections allowed')) ||
       error.message.includes('Max client connections reached'))
+  )
+}
+
+function isRetryableTransactionSetupError(error: unknown): boolean {
+  return (
+    isConnectionStateError(error) || isConnectionLimitError(error) || isBrokenClientError(error)
+  )
+}
+
+// Socket-level of a dead pooled connection can surface as a plain Error.
+// No setup is run yet, so a fresh client can safely retry.
+// Connection-establishment failures (ECONNREFUSED, connect timeouts) aren't retried.
+function isBrokenClientError(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name === 'AbortError') {
+    return false
+  }
+
+  if ((error as DisposableQueryError)[disposeClientOnRelease] === true) {
+    return true
+  }
+
+  const code = (error as NodeJS.ErrnoException).code
+  return (
+    code === 'ECONNRESET' ||
+    code === 'EPIPE' ||
+    error.message === 'Connection terminated unexpectedly' ||
+    error.message === 'Client has encountered a connection error and is not queryable'
   )
 }
 

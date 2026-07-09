@@ -16,6 +16,8 @@ export class LruCache<K extends {}, V extends {}>
 {
   private readonly cache: BaseLruCache<K, V>
   private readonly purgeStaleTimer?: ReturnType<typeof setInterval>
+  private readonly lookupStatus: BaseLruCache.Status<V> = {}
+  private readonly lookupOptions = { status: this.lookupStatus }
 
   constructor(options: LruCacheOptions<K, V>) {
     const { purgeStaleIntervalMs, ...cacheOptions } = options
@@ -33,13 +35,14 @@ export class LruCache<K extends {}, V extends {}>
   }
 
   get(key: K, options?: CacheLookupOptions): V | undefined {
-    return this.getWithOutcome(key).value
+    return this.cache.get(key)
   }
 
   getWithOutcome(key: K) {
-    const status: BaseLruCache.Status<V> = {}
-    const value = this.cache.get(key, { status })
-    const outcome = (status.get || (value === undefined ? 'miss' : 'hit')) as CacheLookupOutcome
+    this.lookupStatus.get = undefined
+    const value = this.cache.get(key, this.lookupOptions)
+    const outcome = (this.lookupStatus.get ||
+      (value === undefined ? 'miss' : 'hit')) as CacheLookupOutcome
 
     return { value, outcome }
   }

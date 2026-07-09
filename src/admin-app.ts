@@ -1,5 +1,6 @@
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
+import { lastLocalMigrationName } from '@internal/database/migrations'
 import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'
 import { getGlobal } from '@platformatic/globals'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
@@ -57,7 +58,9 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(plugins.signals)
   app.register(plugins.adminTenantId)
   app.register(
-    plugins.logRequest({ excludeUrls: new Set(['/status', '/metrics', '/health', '/version']) })
+    plugins.logRequest({
+      excludeUrls: new Set(['/status', '/metrics', '/health', '/version', '/migration-version']),
+    })
   )
   app.register(routes.tenants, { prefix: 'tenants' })
   app.register(routes.objects, { prefix: 'tenants' })
@@ -77,6 +80,16 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
 
   app.get('/version', (_, reply) => {
     reply.send(version)
+  })
+  app.register(async (protectedRoutes) => {
+    plugins.registerApiKeyAuth(protectedRoutes)
+    protectedRoutes.get(
+      '/migration-version',
+      { schema: { tags: ['migration'] } },
+      async (_, reply) => {
+        reply.send({ migrationVersion: await lastLocalMigrationName() })
+      }
+    )
   })
   app.get('/status', async (_, response) => response.status(200).send())
 

@@ -49,14 +49,21 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
   }
 
   static async handle(job: Job<DeleteIcebergResourcesPayload>) {
-    let storage: Storage | undefined
+    let eventStorage: Storage | undefined
 
     try {
-      storage = await this.createStorage(job.data)
-      const eventStorage = storage
+      try {
+        eventStorage = await this.createStorage(job.data)
+      } catch (e) {
+        // don't require tenant db for multitenant
+        // if the tenant was removed we can still cleanup the resources and multitenant db
+        if (!isMultitenant) {
+          throw e
+        }
+      }
 
       const metastore = new PgMetastore(
-        isMultitenant ? multitenantPgExecutor : eventStorage.db.connection.pool.acquire(),
+        isMultitenant ? multitenantPgExecutor : eventStorage!.db.connection.pool.acquire(),
         {
           multiTenant: isMultitenant,
           schema: isMultitenant ? 'public' : 'storage',
@@ -166,14 +173,14 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
           soft: false,
         })
 
-        if (isMultitenant) {
+        if (isMultitenant && eventStorage) {
           // Delete the underlying bucket
           await eventStorage.db.deleteAnalyticsBucket(job.data.catalogId)
         }
       })
     } finally {
-      if (storage) {
-        await storage.db.destroyConnection().catch((e) => {
+      if (eventStorage) {
+        await eventStorage.db.destroyConnection().catch((e) => {
           logger.error(
             { error: e, sbReqId: job.data.sbReqId },
             `[DeleteIcebergResources] ${job.data.tenant.ref} - FAILED DISPOSING CONNECTION`

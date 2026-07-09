@@ -858,6 +858,340 @@ describe('PgTenantConnection', () => {
     }
   })
 
+  it('starts successful transactions without scheduling retry timers', async () => {
+    vi.useFakeTimers()
+
+    const transaction = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+    } as unknown as PgTransaction
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction: vi.fn().mockResolvedValue(transaction),
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: false,
+      })
+    )
+
+    try {
+      await expect(connection.transaction()).resolves.toBe(transaction)
+
+      expect(pool.acquire).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('retries transaction setup after connection-state errors', async () => {
+    vi.useFakeTimers()
+
+    const connectionStateError = createDatabaseError('08006', 'connection failure')
+    const transaction = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+    } as unknown as PgTransaction
+    const beginTransaction = vi
+      .fn()
+      .mockRejectedValueOnce(connectionStateError)
+      .mockResolvedValue(transaction)
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction,
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: false,
+      })
+    )
+
+    try {
+      const transactionPromise = connection.transaction()
+      const transactionResult = transactionPromise.then(
+        (value) => ({ status: 'resolved' as const, value }),
+        (error) => ({ status: 'rejected' as const, error })
+      )
+
+      await vi.advanceTimersByTimeAsync(100) // max of jitter
+
+      await expect(transactionResult).resolves.toEqual({
+        status: 'resolved',
+        value: transaction,
+      })
+      expect(pool.acquire).toHaveBeenCalledTimes(2)
+      expect(beginTransaction).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('retries transaction setup after socket-level connection errors', async () => {
+    vi.useFakeTimers()
+
+    const socketError = new Error('Connection terminated unexpectedly')
+    const transaction = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+    } as unknown as PgTransaction
+    const beginTransaction = vi
+      .fn()
+      .mockRejectedValueOnce(socketError)
+      .mockResolvedValue(transaction)
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction,
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: false,
+      })
+    )
+
+    try {
+      const transactionPromise = connection.transaction()
+      const transactionResult = transactionPromise.then(
+        (value) => ({ status: 'resolved' as const, value }),
+        (error) => ({ status: 'rejected' as const, error })
+      )
+
+      await vi.advanceTimersByTimeAsync(100)
+
+      await expect(transactionResult).resolves.toEqual({
+        status: 'resolved',
+        value: transaction,
+      })
+      expect(pool.acquire).toHaveBeenCalledTimes(2)
+      expect(beginTransaction).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('retries transaction setup after coded socket errors', async () => {
+    vi.useFakeTimers()
+
+    try {
+      for (const code of ['ECONNRESET', 'EPIPE']) {
+        const socketError = Object.assign(new Error(`write ${code}`), { code })
+        const transaction = {
+          query: vi.fn().mockResolvedValue({ rows: [] }),
+        } as unknown as PgTransaction
+        const beginTransaction = vi
+          .fn()
+          .mockRejectedValueOnce(socketError)
+          .mockResolvedValue(transaction)
+        const pool = {
+          acquire: vi.fn().mockReturnValue({
+            beginTransaction,
+          }),
+        } as unknown as PgPoolStrategy
+        const connection = new PgTenantConnection(
+          pool,
+          createPoolStrategySettings({
+            isExternalPool: false,
+          })
+        )
+
+        const transactionPromise = connection.transaction()
+        const transactionResult = transactionPromise.then(
+          (value) => ({ status: 'resolved' as const, value }),
+          (error) => ({ status: 'rejected' as const, error })
+        )
+
+        await vi.advanceTimersByTimeAsync(100)
+
+        await expect(transactionResult).resolves.toEqual({
+          status: 'resolved',
+          value: transaction,
+        })
+        expect(pool.acquire).toHaveBeenCalledTimes(2)
+        expect(beginTransaction).toHaveBeenCalledTimes(2)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('retries public beginTransaction on connection-state errors', async () => {
+    vi.useFakeTimers()
+
+    const connectionStateError = createDatabaseError('08006', 'connection failure')
+    const transaction = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+    } as unknown as PgTransaction
+    const beginTransaction = vi
+      .fn()
+      .mockRejectedValueOnce(connectionStateError)
+      .mockResolvedValue(transaction)
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction,
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: false,
+      })
+    )
+
+    try {
+      const transactionPromise = connection.beginTransaction()
+      const transactionResult = transactionPromise.then(
+        (value) => ({ status: 'resolved' as const, value }),
+        (error) => ({ status: 'rejected' as const, error })
+      )
+
+      await vi.advanceTimersByTimeAsync(100)
+
+      await expect(transactionResult).resolves.toEqual({
+        status: 'resolved',
+        value: transaction,
+      })
+      expect(pool.acquire).toHaveBeenCalledTimes(2)
+      expect(beginTransaction).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not retry when the eager attempt consumed the setup budget', async () => {
+    vi.useFakeTimers()
+
+    const connectionStateError = createDatabaseError('08006', 'connection failure')
+    const beginTransaction = vi.fn().mockImplementationOnce(async () => {
+      vi.advanceTimersByTime(3500)
+      throw connectionStateError
+    })
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction,
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: false,
+      })
+    )
+
+    try {
+      await expect(connection.transaction()).rejects.toBe(connectionStateError)
+      expect(pool.acquire).toHaveBeenCalledTimes(1)
+      expect(beginTransaction).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('retries transaction setup after connection-limit errors', async () => {
+    vi.useFakeTimers()
+
+    const connectionLimitError = createDatabaseError(undefined, 'Max client connections reached')
+    const transaction = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+    } as unknown as PgTransaction
+    const beginTransaction = vi
+      .fn()
+      .mockRejectedValueOnce(connectionLimitError)
+      .mockResolvedValue(transaction)
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction,
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: false,
+      })
+    )
+
+    try {
+      const transactionPromise = connection.transaction()
+      const transactionResult = transactionPromise.then(
+        (value) => ({ status: 'resolved' as const, value }),
+        (error) => ({ status: 'rejected' as const, error })
+      )
+
+      await vi.advanceTimersByTimeAsync(100)
+
+      await expect(transactionResult).resolves.toEqual({
+        status: 'resolved',
+        value: transaction,
+      })
+      expect(pool.acquire).toHaveBeenCalledTimes(2)
+      expect(beginTransaction).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('fails transaction setup fast on non-retryable errors', async () => {
+    const permissionError = createDatabaseError('42501', 'permission denied')
+    const beginTransaction = vi.fn().mockRejectedValue(permissionError)
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction,
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: false,
+      })
+    )
+
+    await expect(connection.transaction()).rejects.toBe(permissionError)
+    expect(pool.acquire).toHaveBeenCalledTimes(1)
+    expect(beginTransaction).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops transaction retries once the abort signal fires', async () => {
+    vi.useFakeTimers()
+
+    const connectionStateError = createDatabaseError('08006', 'connection failure')
+    const beginTransaction = vi.fn().mockRejectedValue(connectionStateError)
+    const pool = {
+      acquire: vi.fn().mockReturnValue({
+        beginTransaction,
+      }),
+    } as unknown as PgPoolStrategy
+    const connection = new PgTenantConnection(
+      pool,
+      createPoolStrategySettings({
+        isExternalPool: false,
+      })
+    )
+    const abortController = new AbortController()
+    connection.setAbortSignal(abortController.signal)
+
+    try {
+      const transactionPromise = connection.transaction()
+      const transactionErrorPromise = transactionPromise.catch((error) => error)
+
+      await vi.advanceTimersByTimeAsync(0)
+      expect(pool.acquire).toHaveBeenCalledTimes(1)
+
+      abortController.abort()
+      await vi.advanceTimersByTimeAsync(100)
+
+      await expect(transactionErrorPromise).resolves.toMatchObject({
+        name: 'AbortError',
+        code: 'ABORT_ERR',
+      })
+      expect(pool.acquire).toHaveBeenCalledTimes(1)
+      expect(beginTransaction).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('maps pg-pool acquisition timeouts to DatabaseTimeout', async () => {
     const timeoutError = new Error('timeout exceeded when trying to connect')
     const pool = {

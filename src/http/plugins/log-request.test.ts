@@ -160,6 +160,31 @@ describe('log-request plugin', () => {
     })
   })
 
+  it('logs executionTime as integer milliseconds', async () => {
+    let now = 100.25
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => {
+      now += 0.501
+      return now
+    })
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/request-log',
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const requestLogLine = lines.find((line) => line.includes('"type":"request"'))
+    expect(requestLogLine).toBeDefined()
+
+    const requestLog = JSON.parse(requestLogLine ?? '{}')
+
+    expect(requestLog.executionTime).toBeGreaterThan(0)
+    expect(Number.isInteger(requestLog.executionTime)).toBe(true)
+
+    nowSpy.mockRestore()
+  })
+
   it('logs redacted urls without leaking sensitive request data', async () => {
     const response = await app.inject({
       method: 'GET',

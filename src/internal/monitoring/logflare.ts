@@ -13,6 +13,7 @@ export function onPreparePayload(payload: Record<string, unknown>, meta: Payload
   const item = defaultPreparePayload(payload, meta)
   item.project = payload.project
   item.request_id = payload.sbReqId
+  item.trace_id = payload.traceId
   return item
 }
 

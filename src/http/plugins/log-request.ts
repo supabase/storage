@@ -1,4 +1,9 @@
-import { logSchema, serializeReplyLog, serializeRequestLog } from '@internal/monitoring'
+import {
+  getTraceIdFromTraceparent,
+  logSchema,
+  serializeReplyLog,
+  serializeRequestLog,
+} from '@internal/monitoring'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 
@@ -147,6 +152,7 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
   const statusCode = options.statusCode
   const error = req.raw.executionError || req.executionError
   const tenantId = req.tenantId
+  const traceId = getTraceIdFromTraceparent(req.headers) ?? ''
 
   let reqMetadata = '{}'
 
@@ -193,6 +199,7 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     project: tenantId,
     reqId: rId,
     sbReqId: req.sbReqId,
+    traceId,
     req: requestLog,
     reqMetadata,
     res: replyLog,

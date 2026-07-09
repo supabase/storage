@@ -8,8 +8,6 @@ export const TRACEPARENT_HEADER = 'traceparent'
 const TRACEPARENT_PATTERN =
   /^(?!ff)[\da-f]{2}-(?!0{32})[\da-f]{32}-(?!0{16})[\da-f]{16}-[\da-f]{2}(?:-.*)?$/
 const TRACEPARENT_V0_LENGTH = 55
-const TRACE_ID_START = 3
-const TRACE_ID_END = 35
 
 export function getSbReqId(headers: IncomingHttpHeaders): string | undefined {
   const sbReqId = headers[SUPABASE_REQUEST_ID_HEADER]
@@ -17,7 +15,7 @@ export function getSbReqId(headers: IncomingHttpHeaders): string | undefined {
   return getNonEmptyString(sbReqId)
 }
 
-export function getTraceIdFromTraceparent(headers: IncomingHttpHeaders): string | undefined {
+export function getValidTraceparent(headers: IncomingHttpHeaders): string | undefined {
   const traceparent = headers[TRACEPARENT_HEADER]
 
   if (
@@ -28,7 +26,7 @@ export function getTraceIdFromTraceparent(headers: IncomingHttpHeaders): string 
     return undefined
   }
 
-  return traceparent.slice(TRACE_ID_START, TRACE_ID_END)
+  return traceparent
 }
 
 export function getSbReqIdFromPayload(payload: unknown): string | undefined {

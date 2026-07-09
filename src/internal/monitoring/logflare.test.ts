@@ -20,7 +20,7 @@ describe('logflare helpers', () => {
     vi.resetModules()
   })
 
-  it('promotes project, sbReqId, and traceId onto the prepared payload', async () => {
+  it('promotes project, sbReqId, traceId, and spanId onto the prepared payload', async () => {
     defaultPreparePayloadMock.mockReturnValue({
       log_entry: 'hello',
       metadata: { level: 'info' },
@@ -32,6 +32,7 @@ describe('logflare helpers', () => {
       project: 'tenant-a',
       sbReqId: 'sb-req-123',
       traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
+      spanId: '00f067aa0ba902b7',
       msg: { text: 'hello' },
     }
 
@@ -41,11 +42,12 @@ describe('logflare helpers', () => {
       project: 'tenant-a',
       request_id: 'sb-req-123',
       trace_id: '4bf92f3577b34da6a3ce929d0e0e4736',
+      span_id: '00f067aa0ba902b7',
     })
     expect(defaultPreparePayloadMock).toHaveBeenCalledWith(payload, meta)
   })
 
-  it('leaves project, request_id, and trace_id undefined when they are missing', async () => {
+  it('leaves project, request_id, trace_id, and span_id undefined when they are missing', async () => {
     defaultPreparePayloadMock.mockReturnValue({
       log_entry: 'hello',
       metadata: {},
@@ -62,6 +64,7 @@ describe('logflare helpers', () => {
       project: undefined,
       request_id: undefined,
       trace_id: undefined,
+      span_id: undefined,
     })
   })
 

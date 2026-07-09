@@ -14,6 +14,7 @@ export function onPreparePayload(payload: Record<string, unknown>, meta: Payload
   item.project = payload.project
   item.request_id = payload.sbReqId
   item.trace_id = payload.traceId
+  item.span_id = payload.spanId
   return item
 }
 

@@ -1,5 +1,5 @@
 import {
-  getTraceIdFromTraceparent,
+  getValidTraceparent,
   logSchema,
   serializeReplyLog,
   serializeRequestLog,
@@ -10,6 +10,12 @@ import fastifyPlugin from 'fastify-plugin'
 interface RequestLoggerOptions {
   excludeUrls?: Set<string>
 }
+
+// Fixed positions in a validated W3C traceparent value.
+const TRACE_ID_START = 3
+const TRACE_ID_END = 35
+const SPAN_ID_START = 36
+const SPAN_ID_END = 52
 
 type BivariantHandler<Args extends unknown[], Return> = {
   bivarianceHack(...args: Args): Return
@@ -152,7 +158,9 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
   const statusCode = options.statusCode
   const error = req.raw.executionError || req.executionError
   const tenantId = req.tenantId
-  const traceId = getTraceIdFromTraceparent(req.headers) ?? ''
+  const traceparent = getValidTraceparent(req.headers)
+  const traceId = traceparent?.slice(TRACE_ID_START, TRACE_ID_END) ?? ''
+  const spanId = traceparent?.slice(SPAN_ID_START, SPAN_ID_END) ?? ''
 
   let reqMetadata = '{}'
 
@@ -200,6 +208,7 @@ function doRequestLog(req: FastifyRequest, options: LogRequestOptions) {
     reqId: rId,
     sbReqId: req.sbReqId,
     traceId,
+    spanId,
     req: requestLog,
     reqMetadata,
     res: replyLog,

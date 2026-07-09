@@ -5,58 +5,25 @@ const {
   MockRestCatalogClient,
   MockShardCatalog,
   MockPgShardStoreFactory,
-  mockWithTnx,
+  mockConfig,
   mockCreateStorage,
   mockMultitenantPgExecutor,
-  mockPgMetastoreTransaction,
-  mockLockResource,
-  mockFindCatalogById,
-  mockListNamespaces,
-  mockListTables,
-  mockDropTable,
-  mockDropNamespace,
-  mockDropCatalog,
-  mockDeleteAnalyticsBucket,
-  mockDestroyConnection,
-  mockRestCatalogDropTable,
-  mockRestCatalogListTables,
-  mockRestCatalogDropNamespace,
-  mockFreeByResource,
-  mockGetTnx,
-} = vi.hoisted(() => {
-  const mockWithTnx = vi.fn()
-  return {
-    MockPgMetastore: vi.fn(),
-    MockRestCatalogClient: vi.fn(),
-    MockShardCatalog: vi.fn(),
-    MockPgShardStoreFactory: vi.fn(),
-    mockWithTnx,
-    mockCreateStorage: vi.fn(),
-    mockMultitenantPgExecutor: 'mock-multitenant-executor',
-    mockPgMetastoreTransaction: vi.fn(),
-    mockLockResource: vi.fn(),
-    mockFindCatalogById: vi.fn(),
-    mockListNamespaces: vi.fn(),
-    mockListTables: vi.fn(),
-    mockDropTable: vi.fn(),
-    mockDropNamespace: vi.fn(),
-    mockDropCatalog: vi.fn(),
-    mockDeleteAnalyticsBucket: vi.fn(),
-    mockDestroyConnection: vi.fn(),
-    mockRestCatalogDropTable: vi.fn(),
-    mockRestCatalogListTables: vi.fn(),
-    mockRestCatalogDropNamespace: vi.fn(),
-    mockFreeByResource: vi.fn(),
-    mockGetTnx: vi.fn(),
-  }
-})
-
-vi.mock('../../../config', () => ({
-  getConfig: () => ({
+} = vi.hoisted(() => ({
+  MockPgMetastore: vi.fn(),
+  MockRestCatalogClient: vi.fn(),
+  MockShardCatalog: vi.fn(),
+  MockPgShardStoreFactory: vi.fn(),
+  mockConfig: {
     icebergCatalogUrl: 'http://catalog',
     icebergCatalogAuthType: 'none',
     isMultitenant: true,
-  }),
+  },
+  mockCreateStorage: vi.fn(),
+  mockMultitenantPgExecutor: 'mock-multitenant-executor',
+}))
+
+vi.mock('../../../config', () => ({
+  getConfig: () => mockConfig,
 }))
 
 vi.mock('@internal/database', () => ({
@@ -90,235 +57,218 @@ vi.mock('../base-event', () => ({
   },
 }))
 
-import { DeleteIcebergResources } from './delete-iceberg-resources'
+async function importHandler(isMultitenant: boolean) {
+  mockConfig.isMultitenant = isMultitenant
+  vi.resetModules()
+  return (await import('./delete-iceberg-resources')).DeleteIcebergResources
+}
 
-function makeJob(overrides?: Partial<Record<string, unknown>>) {
-  return {
+const jobData = {
+  catalogId: 'catalog-123',
+  tenant: {
+    ref: 'tenant-a',
+    host: '',
+  },
+  sbReqId: 'sb-req-123',
+}
+
+const metastore = { transaction: vi.fn() }
+
+const store = {
+  lockResource: vi.fn(),
+  findCatalogById: vi.fn(),
+  listNamespaces: vi.fn(),
+  listTables: vi.fn(),
+  dropTable: vi.fn(),
+  dropNamespace: vi.fn(),
+  dropCatalog: vi.fn(),
+  getTnx: vi.fn(),
+}
+
+const restCatalog = {
+  dropTable: vi.fn(),
+  listTables: vi.fn(),
+  dropNamespace: vi.fn(),
+}
+
+const shardCatalog = { withTnx: vi.fn() }
+const sharder = { freeByResource: vi.fn() }
+
+const db = {
+  connection: {
+    pool: {
+      acquire: vi.fn(),
+    },
+  },
+  deleteAnalyticsBucket: vi.fn(),
+  destroyConnection: vi.fn(),
+}
+
+function expectIcebergCleanup({ multitenant }: { multitenant: boolean }) {
+  expect(mockCreateStorage).toHaveBeenCalledWith(jobData)
+  expect(MockPgMetastore).toHaveBeenCalledWith(
+    multitenant ? mockMultitenantPgExecutor : 'mock-db-connection',
+    {
+      multiTenant: multitenant,
+      schema: multitenant ? 'public' : 'storage',
+    }
+  )
+  expect(metastore.transaction).toHaveBeenCalled()
+  expect(store.lockResource).toHaveBeenCalledWith('catalog', 'catalog-123')
+  expect(store.findCatalogById).toHaveBeenCalledWith({
+    id: 'catalog-123',
+    deleted: true,
+    tenantId: 'tenant-a',
+  })
+  expect(store.listNamespaces).toHaveBeenCalledWith({
+    catalogId: 'catalog-123',
+    tenantId: 'tenant-a',
+  })
+  expect(store.listTables).toHaveBeenCalledWith({
+    namespaceId: 'ns-1',
+    pageSize: 1000,
+    tenantId: 'tenant-a',
+  })
+  expect(restCatalog.dropTable).toHaveBeenCalledWith({
+    namespace: 'namespace-1',
+    table: 'table-1',
+    purgeRequested: true,
+    warehouse: 'shard-key-1',
+  })
+  expect(store.dropTable).toHaveBeenCalledWith({
+    name: 'table-1',
+    namespaceId: 'ns-1',
+    catalogId: 'catalog-123',
+    tenantId: 'tenant-a',
+  })
+  expect(restCatalog.listTables).toHaveBeenCalledWith({
+    namespace: 'tenant-a_ns_1',
+    warehouse: 'shard-key-1',
+    pageSize: 1,
+  })
+  expect(restCatalog.dropNamespace).toHaveBeenCalledWith({
+    namespace: 'namespace-1',
+    warehouse: 'shard-key-1',
+  })
+  expect(store.dropNamespace).toHaveBeenCalledWith({
+    namespace: 'namespace-1',
+    catalogId: 'catalog-123',
+    tenantId: 'tenant-a',
+  })
+  expect(store.dropCatalog).toHaveBeenCalledWith({
+    bucketId: 'catalog-123',
+    tenantId: 'tenant-a',
+    soft: false,
+  })
+
+  if (multitenant) {
+    expect(MockPgShardStoreFactory).toHaveBeenCalledWith(mockMultitenantPgExecutor)
+    expect(MockShardCatalog).toHaveBeenCalled()
+    expect(shardCatalog.withTnx).toHaveBeenCalledWith('mock-transaction')
+    expect(sharder.freeByResource).toHaveBeenCalledWith('shard-id-1', {
+      kind: 'iceberg-table',
+      tenantId: 'tenant-a',
+      bucketName: 'catalog-123',
+      logicalName: 'ns-1/table-1',
+    })
+  } else {
+    expect(MockShardCatalog).not.toHaveBeenCalled()
+  }
+}
+
+describe('DeleteIcebergResources.handle', () => {
+  let DeleteIcebergResources: Awaited<ReturnType<typeof importHandler>>
+
+  const makeJob = () => ({
     id: 'job-1',
     name: DeleteIcebergResources.getQueueName(),
-    data: {
-      catalogId: 'catalog-123',
-      tenant: {
-        ref: 'tenant-a',
-        host: '',
-      },
-      sbReqId: 'sb-req-123',
-    },
-    ...overrides,
-  }
-}
+    data: jobData,
+  })
 
-function createMockStorage() {
-  return {
-    db: {
-      deleteAnalyticsBucket: mockDeleteAnalyticsBucket,
-      destroyConnection: mockDestroyConnection,
-    },
-  }
-}
-
-function createMockStore() {
-  return {
-    lockResource: mockLockResource,
-    findCatalogById: mockFindCatalogById,
-    listNamespaces: mockListNamespaces,
-    listTables: mockListTables,
-    dropTable: mockDropTable,
-    dropNamespace: mockDropNamespace,
-    dropCatalog: mockDropCatalog,
-    getTnx: mockGetTnx,
-  }
-}
-
-describe('DeleteIcebergResources.handle - multitenant', () => {
   beforeEach(() => {
     vi.clearAllMocks()
 
-    const mockStore = createMockStore()
-    mockPgMetastoreTransaction.mockImplementation(async (fn) => fn(mockStore))
-    mockGetTnx.mockReturnValue('mock-transaction')
-    mockWithTnx.mockReturnValue({ freeByResource: mockFreeByResource })
-
     MockPgMetastore.mockImplementation(function () {
-      return { transaction: mockPgMetastoreTransaction }
+      return metastore
     })
-
     MockRestCatalogClient.mockImplementation(function () {
-      return {
-        dropTable: mockRestCatalogDropTable,
-        listTables: mockRestCatalogListTables,
-        dropNamespace: mockRestCatalogDropNamespace,
-      }
+      return restCatalog
     })
-
     MockShardCatalog.mockImplementation(function () {
-      return { withTnx: mockWithTnx }
+      return shardCatalog
     })
 
-    mockFindCatalogById.mockResolvedValue({ id: 'catalog-123', deleted_at: new Date() })
-    mockListNamespaces.mockResolvedValue([{ id: 'ns-1', name: 'namespace-1' }])
-    mockListTables.mockResolvedValue([
+    metastore.transaction.mockImplementation(async (fn) => fn(store))
+    store.getTnx.mockReturnValue('mock-transaction')
+    shardCatalog.withTnx.mockReturnValue(sharder)
+    db.connection.pool.acquire.mockReturnValue('mock-db-connection')
+
+    store.findCatalogById.mockResolvedValue({ id: 'catalog-123', deleted_at: new Date() })
+    store.listNamespaces.mockResolvedValue([{ id: 'ns-1', name: 'namespace-1' }])
+    store.listTables.mockResolvedValue([
       { name: 'table-1', shard_key: 'shard-key-1', shard_id: 'shard-id-1' },
     ])
-    mockRestCatalogDropTable.mockResolvedValue(undefined)
-    mockRestCatalogListTables.mockResolvedValue({ identifiers: [] })
-    mockRestCatalogDropNamespace.mockResolvedValue(undefined)
-    mockDropTable.mockResolvedValue(undefined)
-    mockDropNamespace.mockResolvedValue(undefined)
-    mockDropCatalog.mockResolvedValue(undefined)
-    mockLockResource.mockResolvedValue(undefined)
-    mockFreeByResource.mockResolvedValue(undefined)
-    mockDeleteAnalyticsBucket.mockResolvedValue(undefined)
-    mockDestroyConnection.mockResolvedValue(undefined)
+    restCatalog.listTables.mockResolvedValue({ identifiers: [] })
+    db.destroyConnection.mockResolvedValue(undefined)
   })
 
-  it('should remove all resources and multitenant db rows when createStorage fails', async () => {
-    const error = new Error('Tenant not found')
-    mockCreateStorage.mockRejectedValue(error)
+  describe('multitenant', () => {
+    beforeAll(async () => {
+      DeleteIcebergResources = await importHandler(true)
+    })
 
-    await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+    it('should remove all resources and multitenant db rows when createStorage fails', async () => {
+      mockCreateStorage.mockRejectedValue(new Error('Tenant not found'))
 
-    expect(mockCreateStorage).toHaveBeenCalledWith({
-      catalogId: 'catalog-123',
-      tenant: { ref: 'tenant-a', host: '' },
-      sbReqId: 'sb-req-123',
+      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+
+      expectIcebergCleanup({ multitenant: true })
+      expect(db.deleteAnalyticsBucket).not.toHaveBeenCalled()
+      expect(db.destroyConnection).not.toHaveBeenCalled()
     })
-    expect(MockPgMetastore).toHaveBeenCalledWith(mockMultitenantPgExecutor, {
-      multiTenant: true,
-      schema: 'public',
+
+    it('should remove all resources, multitenant db rows, and clean up tenant db when createStorage succeeds', async () => {
+      mockCreateStorage.mockResolvedValue({ db })
+
+      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+
+      expectIcebergCleanup({ multitenant: true })
+      expect(db.deleteAnalyticsBucket).toHaveBeenCalledWith('catalog-123')
+      expect(db.destroyConnection).toHaveBeenCalled()
     })
-    expect(mockPgMetastoreTransaction).toHaveBeenCalled()
-    expect(mockLockResource).toHaveBeenCalledWith('catalog', 'catalog-123')
-    expect(mockFindCatalogById).toHaveBeenCalledWith({
-      id: 'catalog-123',
-      deleted: true,
-      tenantId: 'tenant-a',
-    })
-    expect(mockListNamespaces).toHaveBeenCalledWith({
-      catalogId: 'catalog-123',
-      tenantId: 'tenant-a',
-    })
-    expect(mockListTables).toHaveBeenCalledWith({
-      namespaceId: 'ns-1',
-      pageSize: 1000,
-      tenantId: 'tenant-a',
-    })
-    expect(mockRestCatalogDropTable).toHaveBeenCalledWith({
-      namespace: 'namespace-1',
-      table: 'table-1',
-      purgeRequested: true,
-      warehouse: 'shard-key-1',
-    })
-    expect(mockDropTable).toHaveBeenCalledWith({
-      name: 'table-1',
-      namespaceId: 'ns-1',
-      catalogId: 'catalog-123',
-      tenantId: 'tenant-a',
-    })
-    expect(mockRestCatalogListTables).toHaveBeenCalledWith({
-      namespace: 'tenant-a_ns_1',
-      warehouse: 'shard-key-1',
-      pageSize: 1,
-    })
-    expect(mockRestCatalogDropNamespace).toHaveBeenCalledWith({
-      namespace: 'namespace-1',
-      warehouse: 'shard-key-1',
-    })
-    expect(mockDropNamespace).toHaveBeenCalledWith({
-      namespace: 'namespace-1',
-      catalogId: 'catalog-123',
-      tenantId: 'tenant-a',
-    })
-    expect(MockPgShardStoreFactory).toHaveBeenCalledWith(mockMultitenantPgExecutor)
-    expect(MockShardCatalog).toHaveBeenCalled()
-    expect(mockWithTnx).toHaveBeenCalledWith('mock-transaction')
-    expect(mockFreeByResource).toHaveBeenCalledWith('shard-id-1', {
-      kind: 'iceberg-table',
-      tenantId: 'tenant-a',
-      bucketName: 'catalog-123',
-      logicalName: 'ns-1/table-1',
-    })
-    expect(mockDropCatalog).toHaveBeenCalledWith({
-      bucketId: 'catalog-123',
-      tenantId: 'tenant-a',
-      soft: false,
-    })
-    expect(mockDeleteAnalyticsBucket).not.toHaveBeenCalled()
-    expect(mockDestroyConnection).not.toHaveBeenCalled()
   })
 
-  it('should remove all resources, multitenant db rows, and clean up tenant db when createStorage succeeds', async () => {
-    const mockStorage = createMockStorage()
-    mockCreateStorage.mockResolvedValue(mockStorage)
+  describe('non-multitenant', () => {
+    beforeAll(async () => {
+      DeleteIcebergResources = await importHandler(false)
+    })
 
-    await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+    it('should error when createStorage fails', async () => {
+      mockCreateStorage.mockRejectedValue(new Error('Failed to create storage'))
 
-    expect(mockCreateStorage).toHaveBeenCalledWith({
-      catalogId: 'catalog-123',
-      tenant: { ref: 'tenant-a', host: '' },
-      sbReqId: 'sb-req-123',
+      await expect(DeleteIcebergResources.handle(makeJob() as never)).rejects.toThrow(
+        'Failed to create storage'
+      )
+
+      expect(mockCreateStorage).toHaveBeenCalledWith(jobData)
+      expect(MockPgMetastore).not.toHaveBeenCalled()
+      expect(metastore.transaction).not.toHaveBeenCalled()
+      expect(store.lockResource).not.toHaveBeenCalled()
+      expect(store.dropCatalog).not.toHaveBeenCalled()
+      expect(db.connection.pool.acquire).not.toHaveBeenCalled()
+      expect(db.deleteAnalyticsBucket).not.toHaveBeenCalled()
+      expect(db.destroyConnection).not.toHaveBeenCalled()
     })
-    expect(MockPgMetastore).toHaveBeenCalledWith(mockMultitenantPgExecutor, {
-      multiTenant: true,
-      schema: 'public',
+
+    it('should remove all resources when createStorage succeeds', async () => {
+      mockCreateStorage.mockResolvedValue({ db })
+
+      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+
+      expect(db.connection.pool.acquire).toHaveBeenCalled()
+      expectIcebergCleanup({ multitenant: false })
+      expect(db.deleteAnalyticsBucket).not.toHaveBeenCalled()
+      expect(db.destroyConnection).toHaveBeenCalled()
     })
-    expect(mockPgMetastoreTransaction).toHaveBeenCalled()
-    expect(mockLockResource).toHaveBeenCalledWith('catalog', 'catalog-123')
-    expect(mockFindCatalogById).toHaveBeenCalledWith({
-      id: 'catalog-123',
-      deleted: true,
-      tenantId: 'tenant-a',
-    })
-    expect(mockListNamespaces).toHaveBeenCalledWith({
-      catalogId: 'catalog-123',
-      tenantId: 'tenant-a',
-    })
-    expect(mockListTables).toHaveBeenCalledWith({
-      namespaceId: 'ns-1',
-      pageSize: 1000,
-      tenantId: 'tenant-a',
-    })
-    expect(mockRestCatalogDropTable).toHaveBeenCalledWith({
-      namespace: 'namespace-1',
-      table: 'table-1',
-      purgeRequested: true,
-      warehouse: 'shard-key-1',
-    })
-    expect(mockDropTable).toHaveBeenCalledWith({
-      name: 'table-1',
-      namespaceId: 'ns-1',
-      catalogId: 'catalog-123',
-      tenantId: 'tenant-a',
-    })
-    expect(mockRestCatalogListTables).toHaveBeenCalledWith({
-      namespace: 'tenant-a_ns_1',
-      warehouse: 'shard-key-1',
-      pageSize: 1,
-    })
-    expect(mockRestCatalogDropNamespace).toHaveBeenCalledWith({
-      namespace: 'namespace-1',
-      warehouse: 'shard-key-1',
-    })
-    expect(mockDropNamespace).toHaveBeenCalledWith({
-      namespace: 'namespace-1',
-      catalogId: 'catalog-123',
-      tenantId: 'tenant-a',
-    })
-    expect(MockPgShardStoreFactory).toHaveBeenCalledWith(mockMultitenantPgExecutor)
-    expect(MockShardCatalog).toHaveBeenCalled()
-    expect(mockWithTnx).toHaveBeenCalledWith('mock-transaction')
-    expect(mockFreeByResource).toHaveBeenCalledWith('shard-id-1', {
-      kind: 'iceberg-table',
-      tenantId: 'tenant-a',
-      bucketName: 'catalog-123',
-      logicalName: 'ns-1/table-1',
-    })
-    expect(mockDropCatalog).toHaveBeenCalledWith({
-      bucketId: 'catalog-123',
-      tenantId: 'tenant-a',
-      soft: false,
-    })
-    expect(mockDeleteAnalyticsBucket).toHaveBeenCalledWith('catalog-123')
-    expect(mockDestroyConnection).toHaveBeenCalled()
   })
 })

@@ -52,10 +52,7 @@ describe('request log context helpers', () => {
   it('extracts trace ids from valid traceparent headers', () => {
     expect(
       getTraceIdFromTraceparent({
-        [TRACEPARENT_HEADER]: [
-          '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
-          '00-fbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00',
-        ],
+        [TRACEPARENT_HEADER]: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
       })
     ).toBe('4bf92f3577b34da6a3ce929d0e0e4736')
 
@@ -71,6 +68,13 @@ describe('request log context helpers', () => {
     ['missing', undefined],
     ['empty', ''],
     ['malformed', 'malformed-value'],
+    [
+      'multiple values',
+      [
+        '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+        '00-fbf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00',
+      ],
+    ],
     ['short trace id', '00-4bf92f3577b34da6a3ce929d0e0e47-00f067aa0ba902b7-01'],
     ['short parent id', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902-01'],
     ['uppercase hex', '00-4BF92F3577B34DA6A3CE929D0E0E4736-00F067AA0BA902B7-01'],

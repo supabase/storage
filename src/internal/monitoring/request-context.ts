@@ -18,10 +18,10 @@ export function getSbReqId(headers: IncomingHttpHeaders): string | undefined {
 }
 
 export function getTraceIdFromTraceparent(headers: IncomingHttpHeaders): string | undefined {
-  const traceparent = getNonEmptyString(headers[TRACEPARENT_HEADER])
+  const traceparent = headers[TRACEPARENT_HEADER]
 
   if (
-    !traceparent ||
+    typeof traceparent !== 'string' ||
     (traceparent.length > TRACEPARENT_V0_LENGTH && traceparent.startsWith('00-')) ||
     !TRACEPARENT_PATTERN.test(traceparent)
   ) {

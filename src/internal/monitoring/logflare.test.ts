@@ -114,4 +114,38 @@ describe('logflare helpers', () => {
       '[Logflare][Error] boom (status=422 data=[unserializable]) - stack-trace'
     )
   })
+
+  it('falls back when response diagnostics serialize to undefined', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { onError } = await import('./logflare')
+    const err = Object.assign(new Error('boom'), {
+      response: { status: 422 },
+      data: () => {},
+    })
+    err.stack = 'stack-trace'
+
+    onError({}, err)
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[Logflare][Error] boom (status=422 data=[unserializable]) - stack-trace'
+    )
+  })
+
+  it('truncates large response diagnostics', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { onError } = await import('./logflare')
+    const err = Object.assign(new Error('boom'), {
+      response: { status: 422 },
+      data: { error: 'x'.repeat(3000) },
+    })
+    err.stack = 'stack-trace'
+
+    onError({}, err)
+
+    const logLine = errorSpy.mock.calls[0]?.[0]
+    expect(logLine).toContain('data={"error":"')
+    expect(logLine).toContain('...[truncated]')
+    expect(logLine).toContain(' - stack-trace')
+    expect(logLine?.length).toBeLessThan(2100)
+  })
 })

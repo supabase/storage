@@ -1,6 +1,8 @@
 import { defaultPreparePayload } from 'pino-logflare'
 
 type PayloadMeta = Parameters<typeof defaultPreparePayload>[1]
+const LOGFLARE_ERROR_DATA_MAX_CHARS = 2000
+const LOGFLARE_ERROR_DATA_TRUNCATED_SUFFIX = '...[truncated]'
 
 interface LogflareNetworkError extends Error {
   response?: {
@@ -48,7 +50,20 @@ function formatErrorDetails(payload: Record<string, unknown>, err: Error): strin
 
 function stringifyLogflareData(data: unknown): string {
   try {
-    return JSON.stringify(data)
+    const serialized = JSON.stringify(data)
+
+    if (!serialized) {
+      return '[unserializable]'
+    }
+
+    if (serialized.length <= LOGFLARE_ERROR_DATA_MAX_CHARS) {
+      return serialized
+    }
+
+    return `${serialized.slice(
+      0,
+      LOGFLARE_ERROR_DATA_MAX_CHARS - LOGFLARE_ERROR_DATA_TRUNCATED_SUFFIX.length
+    )}${LOGFLARE_ERROR_DATA_TRUNCATED_SUFFIX}`
   } catch {
     return '[unserializable]'
   }

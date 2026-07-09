@@ -81,8 +81,15 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.get('/version', (_, reply) => {
     reply.send(version)
   })
-  app.get('/migration-version', { schema: { tags: ['migration'] } }, async (_, reply) => {
-    reply.send({ migrationVersion: await lastLocalMigrationName() })
+  app.register(async (protectedRoutes) => {
+    plugins.registerApiKeyAuth(protectedRoutes)
+    protectedRoutes.get(
+      '/migration-version',
+      { schema: { tags: ['migration'] } },
+      async (_, reply) => {
+        reply.send({ migrationVersion: await lastLocalMigrationName() })
+      }
+    )
   })
   app.get('/status', async (_, response) => response.status(200).send())
 

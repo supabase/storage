@@ -331,6 +331,28 @@ describe('getPgCancelConnectionTarget', () => {
 })
 
 describe('PgPoolExecutor', () => {
+  it('keeps no-signal transaction checkout on the direct pool path', async () => {
+    const addEventListener = vi.spyOn(AbortSignal.prototype, 'addEventListener')
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    try {
+      const transaction = await executor.beginTransaction()
+      await transaction.commit()
+
+      expect(pool.connect).toHaveBeenCalledOnce()
+      expect(addEventListener).not.toHaveBeenCalled()
+    } finally {
+      addEventListener.mockRestore()
+    }
+  })
+
   it('tracks checked-out client errors during direct queries', async () => {
     const socketError = new Error('socket reset')
     const client = Object.assign(new EventEmitter(), {
@@ -562,6 +584,50 @@ describe('PgPoolExecutor', () => {
       message: 'Query was aborted',
     })
     expect(pool.connect).not.toHaveBeenCalled()
+  })
+
+  it('rejects an aborted transaction checkout and releases a late client', async () => {
+    const controller = new AbortController()
+    let resolveConnect: (client: PoolClient) => void = () => undefined
+    const connectPromise = new Promise<PoolClient>((resolve) => {
+      resolveConnect = resolve
+    })
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn(() => connectPromise),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    const transactionPromise = executor.beginTransaction({
+      signal: controller.signal,
+    })
+    controller.abort()
+
+    const result = await Promise.race([
+      transactionPromise.then(
+        () => ({ status: 'resolved' as const }),
+        (error) => ({ status: 'rejected' as const, error })
+      ),
+      waitForDrainCheck().then(() => ({ status: 'pending' as const })),
+    ])
+
+    resolveConnect(client)
+    await waitForDrainCheck()
+
+    expect(result).toMatchObject({
+      status: 'rejected',
+      error: {
+        name: 'AbortError',
+        code: 'ABORT_ERR',
+        message: 'Query was aborted',
+      },
+    })
+    expect(client.query).not.toHaveBeenCalled()
+    expect(client.release).toHaveBeenCalledOnce()
+    expect(client.release).toHaveBeenCalledWith()
   })
 
   it('rejects aborted queries without waiting for the pg query to settle', async () => {

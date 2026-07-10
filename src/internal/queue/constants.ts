@@ -4,3 +4,4 @@
  */
 export const SYSTEM_TENANT_REF = 'SYSTEM_TENANT' as const
 export const SYSTEM_TENANT = { ref: '', host: '' } as const
+export const PG_BOSS_SCHEMA = 'pgboss_v10'

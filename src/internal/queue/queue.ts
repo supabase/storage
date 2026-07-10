@@ -10,6 +10,7 @@ import {
   queueJobError,
   queueJobRetryFailed,
 } from '../monitoring/metrics'
+import { PG_BOSS_SCHEMA } from './constants'
 import { Event } from './event'
 
 type RegisteredEvent = {
@@ -23,13 +24,14 @@ type RegisteredEvent = {
   name: string
 }
 
-export const PG_BOSS_SCHEMA = 'pgboss_v10'
+export { PG_BOSS_SCHEMA } from './constants'
+
 const queueStopTimeoutMs = 25_000
 
 export abstract class Queue {
   protected static events: RegisteredEvent[] = []
   private static pgBoss?: PgBoss
-  private static pgBossDb?: PgBoss.Db
+  private static pgBossDb?: QueueDB
 
   static createPgBoss(opts: { db: Db; enableWorkers: boolean }) {
     const {

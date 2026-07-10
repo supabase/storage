@@ -29,9 +29,9 @@ describe('Pg database foundation', () => {
     }
   }
 
-  async function createConnection() {
+  async function createConnection(overrides?: Partial<TenantConnectionOptions>) {
     const superUser = await getServiceKeyUser(tenantId)
-    const settings = createConnectionSettings(superUser)
+    const settings = createConnectionSettings(superUser, overrides)
 
     const pool = new PgPoolStrategy(settings)
     const connection = new PgTenantConnection(pool, settings)
@@ -204,6 +204,39 @@ describe('Pg database foundation', () => {
         code: 'ABORT_ERR',
         message: 'Query was aborted',
       })
+    } finally {
+      await pool.destroy()
+    }
+  })
+
+  it('releases the pending client unused when acquisition is aborted on an exhausted pool', async () => {
+    const { pool } = await createConnection({ maxConnections: 1 })
+
+    try {
+      const holder = await pool.acquire().beginTransaction()
+
+      try {
+        const controller = new AbortController()
+        const pending = pool.acquire().beginTransaction({ signal: controller.signal })
+        controller.abort()
+
+        await expect(pending).rejects.toMatchObject({
+          name: 'AbortError',
+          code: 'ABORT_ERR',
+          message: 'Query was aborted',
+        })
+
+        expect(pool.getPoolStats()).toEqual({ total: 1, used: 1 })
+      } finally {
+        await holder.rollback()
+      }
+
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(pool.getPoolStats()).toEqual({ total: 1, used: 0 })
+
+      const result = await pool.acquire().query<{ n: number }>('SELECT 1 AS n')
+      expect(result.rows[0].n).toBe(1)
+      expect(pool.getPoolStats()).toEqual({ total: 1, used: 0 })
     } finally {
       await pool.destroy()
     }

@@ -3,6 +3,7 @@ import type { DatabaseExecutor } from '@internal/database/connection'
 import { ERRORS } from '@internal/errors'
 import pg from 'pg'
 import { Db } from 'pg-boss'
+import { type PgBeginTransactionOptions, PgPoolExecutor } from '../database/pg-connection'
 
 export { quoteIdentifier } from '../database/sql'
 
@@ -30,6 +31,14 @@ export class QueueDB extends EventEmitter implements Db {
   async close() {
     this.opened = false
     await this.pool?.end()
+  }
+
+  beginTransaction(options?: PgBeginTransactionOptions) {
+    if (!this.opened || !this.pool) {
+      throw ERRORS.InternalError(undefined, `QueueDB not opened ${this.opened}`)
+    }
+
+    return new PgPoolExecutor(this.pool).beginTransaction(options)
   }
 
   protected async useTransaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {

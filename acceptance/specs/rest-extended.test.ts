@@ -241,6 +241,7 @@ describeAcceptance(
       const updatedPayload = `${payload}-updated`
       const signedPayload = `${payload}-signed`
       const trackedKeys = [objectKey, signedUploadKey, copyKey, movedKey]
+      const httpRetries = config.target === 'remote' ? 10 : 0
 
       try {
         await createRestBucket(bucketName, { isPublic: false })
@@ -456,7 +457,7 @@ describeAcceptance(
         await client.request(
           'GET',
           `/object/authenticated/${bucketName}/${encodePathSegments(copyKey)}`,
-          { expectedStatus: [400, 404], token }
+          { expectedStatus: [400, 404], token, retries: httpRetries }
         )
 
         const deleted = await client.request<unknown[]>('DELETE', `/object/${bucketName}`, {
@@ -476,7 +477,7 @@ describeAcceptance(
         await client.request(
           'GET',
           `/object/authenticated/${bucketName}/${encodePathSegments(objectKey)}`,
-          { expectedStatus: [400, 404], token }
+          { expectedStatus: [400, 404], token, retries: httpRetries }
         )
 
         const missingHead = await client.request(
@@ -510,6 +511,7 @@ describeAcceptance(
         runId: config.runId,
         nested: { value: 'alpha' },
       }
+      const httpRetries = config.target === 'remote' ? 10 : 0
 
       try {
         await createRestBucket(sourceBucket, { isPublic: false })
@@ -719,7 +721,7 @@ describeAcceptance(
         await client.request(
           'GET',
           `/object/authenticated/${sourceBucket}/${encodePathSegments(bravoKey)}`,
-          { expectedStatus: [400, 404], token }
+          { expectedStatus: [400, 404], token, retries: httpRetries }
         )
 
         const moved = await client.request(

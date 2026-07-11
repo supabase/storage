@@ -30,6 +30,21 @@ These run in the `wire` profile in addition to smoke coverage:
 | ---------- | ----------------------------------------------------------------------- |
 | Wire/SigV4 | raw `aws-chunked` PutObject and UploadPart, trailer-signature rejection |
 
+## CDN Edge Coverage
+
+These assert real Cloudflare edge cache behavior (`cf-cache-status` MISS/HIT, ETag/304, purge
+propagation) rather than the storage API's own request handling. There's no local equivalent -
+`cf-cache-status` is only ever set on responses that pass through the deployed edge - so this
+coverage only runs against a real remote target with CDN enabled (the `CDN Edge` capability below).
+
+| Area             | Covered APIs / behavior                                                                                                                                                 |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cache MISS/HIT   | MISS then HIT across public, authenticated, and signed access; signed invalid-token and authenticated anon-key denial still bypass the cache correctly                  |
+| Conditional GET  | ETag `If-None-Match` returns 304 on a cache HIT                                                                                                                         |
+| Object write ops | UPSERT, MOVE, and COPY create fresh cache entries without disturbing unrelated entries (old MOVE path, COPY source); DELETE invalidates the cache entry                 |
+| Transformations  | distinct transform dimensions cache independently of each other and of the base object                                                                                  |
+| Cache Purge      | object, bucket, and tenant purge only invalidate their own scope; object/bucket/tenant transformation purge invalidates the transform but leaves the base object cached |
+
 ## Capability-Gated Coverage
 
 These require target-specific capabilities. They run when the capability is enabled or derived from
@@ -38,7 +53,8 @@ the configured target, and the selected profile includes the spec:
 | Capability | Enable with                                                                             | Covered APIs / behavior                                                                                                                                                                                                                                                                                            |
 | ---------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Admin      | `ACCEPTANCE_ENABLE_ADMIN=true` plus admin URL/API key                                   | admin status, API key protection, tenant read/create/patch/upsert/delete/health, tenant migration run/reset-current/jobs, queue migration enabled/disabled contract, queue/migration validation, JWKS validation/add/deactivate/status, orphan scan/sync validation, S3 credential create/authenticate/list/delete |
-| CDN        | `ACCEPTANCE_ENABLE_CDN=true`                                                            | `/cdn/:bucket/*` cache purge for existing objects and documented missing-object error                                                                                                                                                                                                                              |
+| CDN        | `ACCEPTANCE_ENABLE_CDN=true`                                                            | `/cdn/:bucket/*` and `/cdn` cache purge for objects, buckets, the tenant, and their transformations; purge succeeds even when the target object no longer exists                                                                                                                                                   |
+| CDN Edge   | Derived from `ACCEPTANCE_ENABLE_CDN=true` and `ACCEPTANCE_TARGET=remote`                | Real Cloudflare edge cache behavior - see [CDN Edge Coverage](#cdn-edge-coverage) above                                                                                                                                                                                                                            |
 | Render     | `ACCEPTANCE_ENABLE_RENDER=true`                                                         | public, authenticated, and signed image transformation routes, `webp` output format, non-image input errors, invalid transformation validation                                                                                                                                                                     |
 | RLS        | `ACCEPTANCE_ENABLE_RLS_SETUP=true` plus anon/authenticated keys and RLS resource config | authenticated allow and anon deny for read/write on configured policies                                                                                                                                                                                                                                            |
 | Path edges | Derived from `ACCEPTANCE_TARGET` and `STORAGE_BACKEND`                                  | list-v2 preservation for object names with empty path segments; local S3/MinIO backends skip this case directly                                                                                                                                                                                                    |

@@ -106,15 +106,19 @@ describe('validateXRobotsTag', () => {
       expect(() => validateXRobotsTag('max-snippet: 0')).not.toThrow()
     })
 
-    it('should throw for max-snippet with negative number', () => {
+    it('should accept max-snippet with -1 (no snippet-length limit)', () => {
+      expect(() => validateXRobotsTag('max-snippet: -1')).not.toThrow()
+    })
+
+    it('should throw for max-snippet below -1', () => {
       expect(() => validateXRobotsTag('max-snippet: -5')).toThrow(
-        'X-Robots-Tag "max-snippet" value must be a non-negative number'
+        'X-Robots-Tag "max-snippet" value must be a number >= -1'
       )
     })
 
     it('should throw for max-snippet with non-numeric value', () => {
       expect(() => validateXRobotsTag('max-snippet: abc')).toThrow(
-        'X-Robots-Tag "max-snippet" value must be a non-negative number'
+        'X-Robots-Tag "max-snippet" value must be a number >= -1'
       )
     })
 

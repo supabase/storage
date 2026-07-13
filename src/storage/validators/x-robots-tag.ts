@@ -147,9 +147,11 @@ function validateParametricRule(
   switch (ruleName) {
     case 'max-snippet': {
       const num = parseInt(ruleValue, 10)
-      if (isNaN(num) || num < 0) {
+      // -1 ("no limit", the default) and 0 ("no snippet") are both valid per the
+      // robots meta spec, alongside any positive length.
+      if (isNaN(num) || num < -1) {
         throw ERRORS.InvalidXRobotsTag(
-          `X-Robots-Tag "max-snippet" value must be a non-negative number, got: "${ruleValue}"`
+          `X-Robots-Tag "max-snippet" value must be a number >= -1, got: "${ruleValue}"`
         )
       }
       break

@@ -1,102 +1,255 @@
-import {
-  parseBooleanEnv,
-  parseBooleanEnvWithDefault,
-  parseNonNegativeIntegerEnv,
-  parsePositiveIntegerEnv,
-  parsePprofTarget,
-  resolvePprofClientFlameMdFormat,
-} from './pprof-client'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { gzipSync } from 'node:zlib'
+import { executePprofCommand, parsePprofCommand } from './pprof-client'
 
-describe('parsePprofTarget', () => {
-  it('uses the default seconds when only the type is provided', () => {
-    expect(parsePprofTarget('profile', 60)).toEqual({
-      seconds: 60,
-      type: 'profile',
-    })
-    expect(parsePprofTarget('heap', 30)).toEqual({
+describe('parsePprofCommand', () => {
+  const now = new Date('2026-07-13T14:00:00.000Z')
+
+  it('parses capture commands', () => {
+    expect(parsePprofCommand(['capture', 'profile', '--seconds', '30'])).toEqual({
+      name: 'capture',
+      target: 'profile',
       seconds: 30,
-      type: 'heap',
     })
-    expect(parsePprofTarget('heap-snapshot', 30)).toEqual({
-      type: 'heap-snapshot',
+    expect(parsePprofCommand(['capture', 'heap'])).toEqual({
+      name: 'capture',
+      target: 'heap',
+      seconds: 30,
     })
-  })
-
-  it('parses inline seconds overrides', () => {
-    expect(parsePprofTarget('profile:10', 60)).toEqual({
-      seconds: 10,
-      type: 'profile',
-    })
-    expect(parsePprofTarget('heap:5', 60)).toEqual({
-      seconds: 5,
-      type: 'heap',
+    expect(
+      parsePprofCommand(['capture', 'heap-snapshot', '--output', 'heap.heapsnapshot'])
+    ).toEqual({
+      name: 'capture',
+      target: 'heap-snapshot',
+      output: 'heap.heapsnapshot',
     })
   })
 
-  it('rejects invalid targets', () => {
-    expect(() => parsePprofTarget(undefined, 60)).toThrow('Usage:')
-    expect(() => parsePprofTarget('cpu', 60)).toThrow('Usage:')
-    expect(() => parsePprofTarget('heap-snapshot:10', 60)).toThrow('Usage:')
-    expect(() => parsePprofTarget('profile:abc', 60)).toThrow('seconds must be a positive integer')
-    expect(() => parsePprofTarget('heap:0', 60)).toThrow('seconds must be a positive integer')
-    expect(() => parsePprofTarget('profile:10abc', 60)).toThrow(
+  it('parses stored profile commands', () => {
+    expect(
+      parsePprofCommand(['list', '--class', 'auto', '--kind', 'cpu', '--limit', '25'], now)
+    ).toEqual({
+      name: 'list',
+      class: 'auto',
+      kind: 'cpu',
+      date: '2026-07-13',
+      limit: 25,
+      cursor: undefined,
+      allPages: false,
+      downloadDirectory: undefined,
+      generateFlame: false,
+    })
+  })
+
+  it('selects UTC profile dates', () => {
+    expect(parsePprofCommand(['list', '--class', 'auto', '--days-ago', '1'], now)).toMatchObject({
+      date: '2026-07-12',
+    })
+    expect(
+      parsePprofCommand(['list', '--class', 'auto', '--date', '2026-07-01'], now)
+    ).toMatchObject({ date: '2026-07-01' })
+    expect(parsePprofCommand(['list', '--class', 'auto', '--all-dates'], now)).toMatchObject({
+      date: undefined,
+    })
+  })
+
+  it('parses list pagination and download options', () => {
+    expect(
+      parsePprofCommand(
+        [
+          'list',
+          '--class',
+          'manual',
+          '--all-dates',
+          '--all-pages',
+          '--download',
+          'profiles',
+          '--flame',
+        ],
+        now
+      )
+    ).toMatchObject({
+      name: 'list',
+      class: 'manual',
+      date: undefined,
+      allPages: true,
+      downloadDirectory: 'profiles',
+      generateFlame: true,
+    })
+  })
+
+  it('rejects invalid commands and options', () => {
+    expect(() => parsePprofCommand(['profile'])).toThrow('Usage:')
+    expect(() => parsePprofCommand(['capture', 'profile', '--seconds', '0'])).toThrow(
       'seconds must be a positive integer'
     )
-    expect(() => parsePprofTarget('profile:10:extra', 60)).toThrow('Usage:')
-  })
-})
-
-describe('pprof client env parsing', () => {
-  it('parses boolean env values', () => {
-    expect(parseBooleanEnv(undefined)).toBeUndefined()
-    expect(parseBooleanEnv('true')).toBe(true)
-    expect(parseBooleanEnv('OFF')).toBe(false)
-    expect(() => parseBooleanEnv('maybe')).toThrow('Invalid boolean value')
-  })
-
-  it('parses boolean env values with defaults', () => {
-    expect(parseBooleanEnvWithDefault(undefined, true)).toBe(true)
-    expect(parseBooleanEnvWithDefault(undefined, false)).toBe(false)
-    expect(parseBooleanEnvWithDefault('no', true)).toBe(false)
-  })
-
-  it('parses positive integer env values strictly', () => {
-    expect(parsePositiveIntegerEnv(undefined, 'PPROF_SECONDS', 60)).toBe(60)
-    expect(parsePositiveIntegerEnv('90', 'PPROF_SECONDS', 60)).toBe(90)
-    expect(() => parsePositiveIntegerEnv('0', 'PPROF_SECONDS', 60)).toThrow(
-      'PPROF_SECONDS must be a positive integer'
+    expect(() => parsePprofCommand(['capture', 'heap-snapshot', '--seconds', '10'])).toThrow(
+      "Unknown option '--seconds'"
     )
-    expect(() => parsePositiveIntegerEnv('12ms', 'PPROF_SECONDS', 60)).toThrow(
-      'PPROF_SECONDS must be a positive integer'
+    expect(() => parsePprofCommand(['capture', 'heap-snapshot', '--flame'])).toThrow(
+      "Unknown option '--flame'"
     )
-  })
-
-  it('parses non-negative integer env values strictly', () => {
-    expect(parseNonNegativeIntegerEnv(undefined, 'PPROF_WORKER_ID')).toBeUndefined()
-    expect(parseNonNegativeIntegerEnv('0', 'PPROF_WORKER_ID')).toBe(0)
-    expect(parseNonNegativeIntegerEnv('7', 'PPROF_WORKER_ID')).toBe(7)
-    expect(() => parseNonNegativeIntegerEnv('-1', 'PPROF_WORKER_ID')).toThrow(
-      'PPROF_WORKER_ID must be a non-negative integer'
+    expect(() => parsePprofCommand(['capture', 'profile', '--output', 'cpu.pb'])).toThrow(
+      "Unknown option '--output'"
     )
-    expect(() => parseNonNegativeIntegerEnv('7x', 'PPROF_WORKER_ID')).toThrow(
-      'PPROF_WORKER_ID must be a non-negative integer'
+    expect(() => parsePprofCommand(['capture', 'profile', '--flame'])).toThrow(
+      "Unknown option '--flame'"
     )
-  })
-})
-
-describe('resolvePprofClientFlameMdFormat', () => {
-  it('only resolves the flame markdown format when flame generation will run', () => {
-    expect(
-      resolvePprofClientFlameMdFormat(false, { type: 'profile', seconds: 60 }, 'invalid')
-    ).toBeUndefined()
-    expect(
-      resolvePprofClientFlameMdFormat(true, { type: 'heap-snapshot' }, 'invalid')
-    ).toBeUndefined()
-    expect(resolvePprofClientFlameMdFormat(true, { type: 'profile', seconds: 60 }, 'summary')).toBe(
-      'summary'
+    expect(() => parsePprofCommand(['capture', 'heap', '--output', 'heap.pb'])).toThrow(
+      "Unknown option '--output'"
+    )
+    expect(() => parsePprofCommand(['capture', 'heap', '--flame'])).toThrow(
+      "Unknown option '--flame'"
+    )
+    expect(() => parsePprofCommand(['list', '--class', 'automatic'])).toThrow(
+      '--class must be auto or manual'
     )
     expect(() =>
-      resolvePprofClientFlameMdFormat(true, { type: 'heap', seconds: 60 }, 'invalid')
-    ).toThrow('Invalid PPROF_FLAME_MD_FORMAT')
+      parsePprofCommand(['list', '--class', 'auto', '--date', '2026-02-30'], now)
+    ).toThrow('date must use YYYY-MM-DD')
+    expect(() =>
+      parsePprofCommand(['list', '--class', 'auto', '--days-ago', '1', '--all-dates'], now)
+    ).toThrow('mutually exclusive')
+    expect(() => parsePprofCommand(['list', '--class', 'auto', '--all'], now)).toThrow(
+      "Unknown option '--all'"
+    )
+    expect(() => parsePprofCommand(['list', '--class', 'auto', '--download='], now)).toThrow(
+      'download directory must not be empty'
+    )
+    expect(() => parsePprofCommand(['list', '--class', 'auto', '--flame'], now)).toThrow(
+      '--flame requires --download'
+    )
+    expect(() => parsePprofCommand(['download', 'profile-key'])).toThrow('Usage:')
+  })
+})
+
+describe('executePprofCommand list', () => {
+  let tempDir: string
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pprof-client-list-'))
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    await fs.rm(tempDir, { recursive: true, force: true })
+  })
+
+  it('follows every cursor and downloads every listed profile', async () => {
+    const profiles = [
+      {
+        key: 'v1/auto/8215147911279-cc8065289c6e/cpu/d000010s_reason_host_a.storage_w.0_p.123_1.2.3.pprof.gz',
+        class: 'auto' as const,
+        kind: 'cpu' as const,
+        reason: 'reason',
+        startedAt: '2026-07-13T14:00:00.000Z',
+        durationSeconds: 10,
+        hostname: 'host',
+        applicationId: 'storage',
+        workerId: '0',
+        processId: 123,
+        build: '1.2.3',
+      },
+      {
+        key: 'v1/auto/8215147910279-aabbccddeeff/heap/d000010s_reason_host_a.storage_w.1_p.123_1.2.3.pprof.gz',
+        class: 'auto' as const,
+        kind: 'heap' as const,
+        reason: 'reason',
+        startedAt: '2026-07-13T14:00:01.000Z',
+        durationSeconds: 10,
+        hostname: 'host',
+        applicationId: 'storage',
+        workerId: '1',
+        processId: 123,
+        build: '1.2.3',
+      },
+    ]
+    const profile = gzipSync('profile-data')
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ profiles: [profiles[0]], cursor: 'next-page' }))
+      .mockResolvedValueOnce(Response.json({ profiles: [profiles[1]] }))
+      .mockResolvedValueOnce(
+        new Response(profile, {
+          headers: { 'content-disposition': 'attachment; filename="ignored.pprof.gz"' },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(profile, {
+          headers: { 'content-disposition': 'attachment; filename="ignored.pprof.gz"' },
+        })
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await executePprofCommand(
+      parsePprofCommand([
+        'list',
+        '--class',
+        'auto',
+        '--date',
+        '2026-07-13',
+        '--limit',
+        '1',
+        '--all-pages',
+        '--download',
+        tempDir,
+      ]),
+      'https://example.com/admin',
+      'secret'
+    )
+
+    expect(result).toEqual({ profiles, cursor: undefined })
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://example.com/admin/debug/pprof/profiles?class=auto&date=2026-07-13&limit=1',
+      'https://example.com/admin/debug/pprof/profiles?class=auto&date=2026-07-13&limit=1&cursor=next-page',
+      `https://example.com/admin/debug/pprof/profiles/download?key=${encodeURIComponent(profiles[0].key)}`,
+      `https://example.com/admin/debug/pprof/profiles/download?key=${encodeURIComponent(profiles[1].key)}`,
+    ])
+    expect(await fs.readdir(tempDir)).toEqual([
+      'auto-cpu-2026-07-13T14-00-00-000Z-cc8065289c6e.pprof.gz',
+      'auto-heap-2026-07-13T14-00-01-000Z-aabbccddeeff.pprof.gz',
+    ])
+  })
+
+  it('downloads only the returned page unless all pages are requested', async () => {
+    const profile = {
+      key: 'v1/manual/8215147911279-cc8065289c6e/cpu/d000010s_admin_host_a.storage_w.0_p.123_1.2.3.pprof.gz',
+      class: 'manual' as const,
+      kind: 'cpu' as const,
+      reason: 'admin',
+      startedAt: '2026-07-13T14:00:00.000Z',
+      durationSeconds: 10,
+      hostname: 'host',
+      applicationId: 'storage',
+      workerId: '0',
+      processId: 123,
+      build: '1.2.3',
+    }
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ profiles: [profile], cursor: 'next-page' }))
+      .mockResolvedValueOnce(new Response(gzipSync('profile-data')))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await executePprofCommand(
+      parsePprofCommand([
+        'list',
+        '--class',
+        'manual',
+        '--date',
+        '2026-07-13',
+        '--download',
+        tempDir,
+      ]),
+      'https://example.com/admin',
+      'secret'
+    )
+
+    expect(result).toEqual({ profiles: [profile], cursor: 'next-page' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

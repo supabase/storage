@@ -197,6 +197,19 @@ type StorageConfigType = {
     upload: boolean
   }
   prometheusMetricsEnabled: boolean
+  profilingAutomaticEnabled: boolean
+  profilingS3Bucket?: string
+  profilingS3Region: string
+  profilingS3Endpoint?: string
+  profilingS3ForcePathStyle: boolean
+  profilingCaptureSeconds: number
+  profilingCpuIntervalMicros: number
+  profilingTriggerElu: number
+  profilingMaxElu: number
+  profilingTriggerDelayP99Ms: number
+  profilingSevereDelayP99Ms: number
+  profilingCooldownSeconds: number
+  profilingMaxCapturesPerHour: number
   tenantPoolCacheTtlMs: number
   tenantPoolCacheHitLogSampleRate: number
   tenantPoolCacheMissLogSampleRate: number
@@ -445,6 +458,46 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     storageS3Region: getOptionalConfigFromEnv('STORAGE_S3_REGION', 'REGION') as string,
     storageS3ClientTimeout: Number(getOptionalConfigFromEnv('STORAGE_S3_CLIENT_TIMEOUT') || `0`),
 
+    // Watt profiling uses a dedicated bucket/client and ELU-gated capture windows.
+    profilingAutomaticEnabled: getOptionalConfigFromEnv('PROFILING_AUTOMATIC_ENABLED') === 'true',
+    profilingS3Bucket: getOptionalConfigFromEnv('PROFILING_S3_BUCKET'),
+    profilingS3Region:
+      getOptionalConfigFromEnv('PROFILING_S3_REGION') ||
+      (getOptionalConfigFromEnv('STORAGE_S3_REGION', 'REGION') as string),
+    profilingS3Endpoint: getOptionalConfigFromEnv('PROFILING_S3_ENDPOINT'),
+    profilingS3ForcePathStyle: getOptionalConfigFromEnv('PROFILING_S3_FORCE_PATH_STYLE') === 'true',
+    profilingCaptureSeconds: envIntegerInRange(
+      getOptionalConfigFromEnv('PROFILING_CAPTURE_SECONDS'),
+      30,
+      1,
+      300
+    ),
+    profilingCpuIntervalMicros: envIntegerInRange(
+      getOptionalConfigFromEnv('PROFILING_CPU_INTERVAL_MICROS'),
+      10_000,
+      1_000,
+      1_000_000
+    ),
+    profilingTriggerElu: envSampleRate(getOptionalConfigFromEnv('PROFILING_TRIGGER_ELU'), 0.55),
+    profilingMaxElu: envSampleRate(getOptionalConfigFromEnv('PROFILING_MAX_ELU'), 0.8),
+    // Event-loop-delay capture triggers action only when watt health.maxEventLoopDelayP99 is set.
+    profilingTriggerDelayP99Ms: envPositiveInteger(
+      getOptionalConfigFromEnv('PROFILING_TRIGGER_DELAY_P99_MS'),
+      150
+    ),
+    profilingSevereDelayP99Ms: envPositiveInteger(
+      getOptionalConfigFromEnv('PROFILING_SEVERE_DELAY_P99_MS'),
+      1_000
+    ),
+    profilingCooldownSeconds: envNonNegativeInteger(
+      getOptionalConfigFromEnv('PROFILING_COOLDOWN_SECONDS'),
+      300
+    ),
+    profilingMaxCapturesPerHour: envNonNegativeInteger(
+      getOptionalConfigFromEnv('PROFILING_MAX_CAPTURES_PER_HOUR'),
+      6
+    ),
+
     // DB - Migrations
     dbAnonRole: getOptionalConfigFromEnv('DB_ANON_ROLE') || 'anon',
     dbServiceRole: getOptionalConfigFromEnv('DB_SERVICE_ROLE') || 'service_role',
@@ -689,6 +742,24 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     vectorMaxIndexesCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_INDEXES') || '20', 10),
   } as StorageConfigType
 
+  if (
+    config.profilingS3Bucket &&
+    config.storageS3Bucket &&
+    config.profilingS3Bucket === config.storageS3Bucket
+  ) {
+    throw new Error('PROFILING_S3_BUCKET must be different from the normal storage data bucket')
+  }
+
+  if (config.profilingMaxElu <= config.profilingTriggerElu) {
+    throw new Error('PROFILING_MAX_ELU must be greater than PROFILING_TRIGGER_ELU')
+  }
+
+  if (config.profilingSevereDelayP99Ms <= config.profilingTriggerDelayP99Ms) {
+    throw new Error(
+      'PROFILING_SEVERE_DELAY_P99_MS must be greater than PROFILING_TRIGGER_DELAY_P99_MS'
+    )
+  }
+
   const serviceKey = getOptionalConfigFromEnv('SERVICE_KEY') || ''
   if (!config.isMultitenant && !serviceKey) {
     config.serviceKeyAsync = new SignJWT({ role: config.dbServiceRole })
@@ -739,6 +810,25 @@ function envPositiveInteger(value: string | undefined, defaultValue: number): nu
   const parsed = envNumber(value, defaultValue)
 
   return parsed && parsed > 0 ? parsed : defaultValue
+}
+
+function envNonNegativeInteger(value: string | undefined, defaultValue: number): number {
+  const parsed = envNumber(value, defaultValue)
+
+  return parsed !== undefined && parsed >= 0 ? parsed : defaultValue
+}
+
+function envIntegerInRange(
+  value: string | undefined,
+  defaultValue: number,
+  minimum: number,
+  maximum: number
+): number {
+  if (!value) return defaultValue
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum
+    ? parsed
+    : defaultValue
 }
 
 function envSampleRate(value: string | undefined, defaultValue: number): number {

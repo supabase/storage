@@ -16,11 +16,10 @@ import {
   PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics'
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
-import { getGlobal } from '@platformatic/globals'
 import { FastifyReply, FastifyRequest } from 'fastify'
-import * as os from 'os'
 import { getConfig } from '../../config'
 import { HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT } from './metric-limits'
+import { resolveRuntimeIdentity } from './runtime-identity'
 
 const {
   version,
@@ -46,34 +45,6 @@ const PROCESS_PID_ATTRIBUTE = 'process.pid'
 const WORKER_ID_ATTRIBUTE = 'worker.id'
 const PLATFORMATIC_APPLICATION_ID_ATTRIBUTE = 'platformatic.application.id'
 
-function normalizeMetricIdentityPart(value: unknown): string | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return `${value}`
-  }
-
-  if (typeof value === 'string') {
-    const trimmed = value.trim()
-    return trimmed === '' ? undefined : trimmed
-  }
-
-  return undefined
-}
-
-function resolveMetricIdentity() {
-  const hostname = os.hostname()
-  const platformatic = getGlobal()
-  const applicationId = normalizeMetricIdentityPart(platformatic?.applicationId)
-  const workerId = normalizeMetricIdentityPart(platformatic?.workerId)
-  const runtimeId = workerId === undefined ? `pid:${process.pid}` : `worker:${workerId}`
-
-  return {
-    instance: hostname,
-    serviceInstanceId: [hostname, applicationId, runtimeId].filter(Boolean).join(':'),
-    applicationId,
-    workerId,
-  }
-}
-
 function unregisterMetricInstrumentation(unregister: (() => void) | undefined) {
   if (!unregister) {
     return
@@ -92,8 +63,8 @@ function unregisterMetricInstrumentation(unregister: (() => void) | undefined) {
 // =============================================================================
 // Shared config
 // =============================================================================
-const metricIdentity = resolveMetricIdentity()
-const instance = metricIdentity.instance
+const metricIdentity = resolveRuntimeIdentity()
+const instance = metricIdentity.hostname
 const headersEnv = process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS || ''
 const otlpEndpoint =
   process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT || process.env.OTEL_EXPORTER_OTLP_ENDPOINT

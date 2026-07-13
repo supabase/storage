@@ -1,240 +1,323 @@
-import { fetchPprofStream } from '@internal/monitoring/pprof/client-http'
+import path from 'node:path'
+import { parseArgs } from 'node:util'
+import type {
+  PprofArchivedProfile,
+  PprofArchivedProfileList,
+} from '@internal/monitoring/pprof/client-http'
+import {
+  downloadArchivedProfile,
+  fetchArchivedProfiles,
+  fetchPprofStream,
+  triggerPprofCapture,
+} from '@internal/monitoring/pprof/client-http'
 import { writePprofCaptureToFile } from '@internal/monitoring/pprof/download'
 import { generateFlameArtifacts, resolveFlameMdFormat } from '@internal/monitoring/pprof/flame'
-import type { PprofRequestTargetType } from '@internal/monitoring/pprof/types'
-import path from 'path'
+import type { ProfileClass, ProfileKind } from '@internal/monitoring/pprof/store-key'
 
-const ADMIN_URL = process.env.ADMIN_URL
-const ADMIN_API_KEY = process.env.ADMIN_API_KEY
-const PPROF_SECONDS = process.env.PPROF_SECONDS
-const PPROF_GENERATE_FLAME = process.env.PPROF_GENERATE_FLAME
-const PPROF_FLAME_MD_FORMAT = process.env.PPROF_FLAME_MD_FORMAT
-const PPROF_WORKER_ID = process.env.PPROF_WORKER_ID
-const PPROF_SOURCE_MAPS = process.env.PPROF_SOURCE_MAPS
-const PPROF_NODE_MODULES_SOURCE_MAPS = process.env.PPROF_NODE_MODULES_SOURCE_MAPS
-const PPROF_OUTPUT = process.env.PPROF_OUTPUT
-const PPROF_USAGE =
-  'Usage: tsx src/scripts/pprof-client.ts <profile[:seconds]|heap[:seconds]|heap-snapshot> [output-file]'
+const USAGE = `Usage:
+  npm run pprof -- capture <profile|heap> [--seconds N]
+  npm run pprof -- capture heap-snapshot [--output FILE]
+  npm run pprof -- list --class <auto|manual> [--kind <cpu|heap>] [--days-ago N | --date YYYY-MM-DD | --all-dates] [--limit N] [--cursor TOKEN] [--all-pages] [--download DIRECTORY] [--flame]`
 
-export function parseBooleanEnv(value: string | undefined) {
-  if (value === undefined) {
-    return undefined
-  }
-
-  const normalized = value.trim().toLowerCase()
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
-    return true
-  }
-
-  if (['0', 'false', 'no', 'off'].includes(normalized)) {
-    return false
-  }
-
-  throw new Error(`Invalid boolean value: ${value}`)
-}
-
-export function parseBooleanEnvWithDefault(value: string | undefined, defaultValue: boolean) {
-  if (value === undefined) {
-    return defaultValue
-  }
-
-  return parseBooleanEnv(value) === true
-}
-
-function parseUnsignedInteger(value: string, errorMessage: string) {
-  const normalized = value.trim()
-
-  if (!/^\d+$/.test(normalized)) {
-    throw new Error(errorMessage)
-  }
-
-  const parsed = Number.parseInt(normalized, 10)
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error(errorMessage)
-  }
-
-  return parsed
-}
-
-export function parsePositiveIntegerEnv(
-  value: string | undefined,
-  envName: string,
-  defaultValue: number
-) {
-  if (value === undefined) {
-    return defaultValue
-  }
-
-  const parsed = parseUnsignedInteger(value, `${envName} must be a positive integer`)
-  if (parsed <= 0) {
-    throw new Error(`${envName} must be a positive integer`)
-  }
-
-  return parsed
-}
-
-export function parseNonNegativeIntegerEnv(value: string | undefined, envName: string) {
-  if (value === undefined) {
-    return undefined
-  }
-
-  return parseUnsignedInteger(value, `${envName} must be a non-negative integer`)
-}
-
-export function parsePprofTarget(
-  value: string | undefined,
-  defaultSeconds: number
-):
-  | { seconds: number; type: Exclude<PprofRequestTargetType, 'heap-snapshot'> }
+type PprofCommand =
   | {
-      type: 'heap-snapshot'
-    } {
-  if (!value) {
-    throw new Error(PPROF_USAGE)
-  }
-
-  const [type, secondsValue, ...rest] = value.split(':')
-
-  if (rest.length > 0 || (type !== 'profile' && type !== 'heap' && type !== 'heap-snapshot')) {
-    throw new Error(PPROF_USAGE)
-  }
-
-  if (type === 'heap-snapshot') {
-    if (secondsValue !== undefined) {
-      throw new Error(PPROF_USAGE)
+      name: 'capture'
+      target: 'profile' | 'heap'
+      seconds: number
+    }
+  | {
+      name: 'capture'
+      target: 'heap-snapshot'
+      output?: string
+    }
+  | {
+      name: 'list'
+      class: ProfileClass
+      kind?: ProfileKind
+      date?: string
+      limit?: number
+      cursor?: string
+      allPages: boolean
+      downloadDirectory?: string
+      generateFlame: boolean
     }
 
-    return {
-      type,
-    }
+function parsePositiveInteger(value: string | undefined, name: string, maximum?: number) {
+  if (!value || !/^\d+$/.test(value)) throw new Error(`${name} must be a positive integer`)
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || (maximum !== undefined && parsed > maximum)) {
+    throw new Error(
+      `${name} must be a positive integer${maximum ? ` no greater than ${maximum}` : ''}`
+    )
   }
-
-  if (secondsValue === undefined || secondsValue === '') {
-    return {
-      seconds: defaultSeconds,
-      type,
-    }
-  }
-
-  const seconds = parseUnsignedInteger(secondsValue, 'seconds must be a positive integer')
-  if (seconds <= 0) {
-    throw new Error('seconds must be a positive integer')
-  }
-
-  return {
-    seconds,
-    type,
-  }
+  return parsed
 }
 
-export function resolvePprofClientFlameMdFormat(
-  generateFlame: boolean,
-  target: ReturnType<typeof parsePprofTarget>,
-  value: string | undefined
-) {
-  if (!generateFlame || target.type === 'heap-snapshot') {
-    return undefined
-  }
-
-  return resolveFlameMdFormat(value)
+function parseNonNegativeInteger(value: string, name: string) {
+  if (!/^\d+$/.test(value)) throw new Error(`${name} must be a non-negative integer`)
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${name} must be a non-negative integer`)
+  return parsed
 }
 
-function fail(message: string) {
-  process.exitCode = 1
-  console.error(message)
+function parseNonEmptyString(value: string | undefined, name: string) {
+  if (!value?.trim()) throw new Error(`${name} must not be empty`)
+  return value
 }
 
-async function main() {
-  const target = process.argv[2]
-  const outputArg = process.argv[3]
-  let parsedTarget: ReturnType<typeof parsePprofTarget>
-  let pprofSeconds: number
-  let sourceMaps: boolean | undefined
-  let workerId: number | undefined
-  let generateFlame: boolean
-
-  if (!ADMIN_URL) {
-    fail('Please provide ADMIN_URL')
-    return
+function parseProfileDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('date must use YYYY-MM-DD')
+  const timestamp = Date.parse(`${value}T00:00:00.000Z`)
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== value) {
+    throw new Error('date must use YYYY-MM-DD')
   }
+  return value
+}
 
-  if (!ADMIN_API_KEY) {
-    fail('Please provide ADMIN_API_KEY')
-    return
-  }
-
-  try {
-    pprofSeconds = parsePositiveIntegerEnv(PPROF_SECONDS, 'PPROF_SECONDS', 60)
-    parsedTarget = parsePprofTarget(target, pprofSeconds)
-    sourceMaps = parseBooleanEnv(PPROF_SOURCE_MAPS)
-    workerId = parseNonNegativeIntegerEnv(PPROF_WORKER_ID, 'PPROF_WORKER_ID')
-    generateFlame = parseBooleanEnvWithDefault(PPROF_GENERATE_FLAME, true)
-  } catch (error) {
-    process.exitCode = 1
-    console.error(error instanceof Error ? error.message : error)
-    return
-  }
-
-  const flameMdFormat = resolvePprofClientFlameMdFormat(
-    generateFlame,
-    parsedTarget,
-    PPROF_FLAME_MD_FORMAT
+function utcDateDaysAgo(now: Date, daysAgo: number) {
+  const date = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysAgo)
   )
+  if (Number.isNaN(date.getTime())) throw new Error('days-ago is outside the supported date range')
+  const formatted = date.toISOString().slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(formatted)) {
+    throw new Error('days-ago is outside the supported date range')
+  }
+  return formatted
+}
 
-  const response =
-    parsedTarget.type === 'heap-snapshot'
-      ? await fetchPprofStream({
-          adminUrl: ADMIN_URL,
-          apiKey: ADMIN_API_KEY,
-          type: 'heap-snapshot',
-          workerId,
-        })
-      : await fetchPprofStream({
-          adminUrl: ADMIN_URL,
-          apiKey: ADMIN_API_KEY,
-          nodeModulesSourceMaps: PPROF_NODE_MODULES_SOURCE_MAPS || undefined,
-          seconds: parsedTarget.seconds,
-          sourceMaps,
-          type: parsedTarget.type,
-          workerId,
-        })
+export function parsePprofCommand(args: string[], now = new Date()): PprofCommand {
+  const [name, ...rest] = args
 
-  const outputPath = outputArg
-    ? path.resolve(outputArg)
-    : PPROF_OUTPUT
-      ? path.resolve(PPROF_OUTPUT)
-      : undefined
-
-  const { outputPath: capturedProfilePath } = await writePprofCaptureToFile(
-    response.stream,
-    {
-      contentDisposition: response.contentDisposition,
-      contentType: response.contentType,
-      type: parsedTarget.type,
-    },
-    {
-      outputPath,
+  if (name === 'capture') {
+    const [target, ...captureArgs] = rest
+    if (target !== 'profile' && target !== 'heap' && target !== 'heap-snapshot') {
+      throw new Error(USAGE)
     }
-  )
 
-  if (!generateFlame || parsedTarget.type === 'heap-snapshot') {
-    return
+    if (target === 'heap-snapshot') {
+      const { values, positionals } = parseArgs({
+        args: captureArgs,
+        allowPositionals: true,
+        strict: true,
+        options: { output: { type: 'string' } },
+      })
+      if (positionals.length > 0) throw new Error(USAGE)
+      return { name, target, output: values.output }
+    }
+
+    const { values, positionals } = parseArgs({
+      args: captureArgs,
+      allowPositionals: true,
+      strict: true,
+      options: { seconds: { type: 'string' } },
+    })
+    if (positionals.length > 0) throw new Error(USAGE)
+    return {
+      name,
+      target,
+      seconds:
+        values.seconds === undefined ? 30 : parsePositiveInteger(values.seconds, 'seconds', 300),
+    }
   }
 
-  await generateFlameArtifacts(capturedProfilePath, {
+  if (name === 'list') {
+    const { values, positionals } = parseArgs({
+      args: rest,
+      allowPositionals: true,
+      strict: true,
+      options: {
+        class: { type: 'string' },
+        kind: { type: 'string' },
+        'days-ago': { type: 'string' },
+        date: { type: 'string' },
+        'all-dates': { type: 'boolean' },
+        'all-pages': { type: 'boolean' },
+        download: { type: 'string' },
+        flame: { type: 'boolean' },
+        limit: { type: 'string' },
+        cursor: { type: 'string' },
+      },
+    })
+    if (positionals.length > 0 || (values.class !== 'auto' && values.class !== 'manual')) {
+      throw new Error('--class must be auto or manual')
+    }
+    if (values.kind !== undefined && values.kind !== 'cpu' && values.kind !== 'heap') {
+      throw new Error('--kind must be cpu or heap')
+    }
+    const dateSelectors = [values['days-ago'], values.date, values['all-dates'] === true].filter(
+      (value) => value !== undefined && value !== false
+    )
+    if (dateSelectors.length > 1)
+      throw new Error('--days-ago, --date and --all-dates are mutually exclusive')
+    const daysAgo =
+      values['days-ago'] === undefined ? 0 : parseNonNegativeInteger(values['days-ago'], 'days-ago')
+    if (values.flame === true && values.download === undefined) {
+      throw new Error('--flame requires --download')
+    }
+    return {
+      name,
+      class: values.class,
+      kind: values.kind,
+      date:
+        values['all-dates'] === true
+          ? undefined
+          : values.date === undefined
+            ? utcDateDaysAgo(now, daysAgo)
+            : parseProfileDate(values.date),
+      limit:
+        values.limit === undefined ? undefined : parsePositiveInteger(values.limit, 'limit', 1000),
+      cursor: values.cursor,
+      allPages: values['all-pages'] === true,
+      downloadDirectory:
+        values.download === undefined
+          ? undefined
+          : parseNonEmptyString(values.download, 'download directory'),
+      generateFlame: values.flame === true,
+    }
+  }
+
+  throw new Error(USAGE)
+}
+
+async function generateFlame(profilePath: string, enabled: boolean) {
+  if (!enabled) return
+  await generateFlameArtifacts(profilePath, {
     env: {
       ...process.env,
       FLAME_SOURCEMAPS_DIRS: process.env.FLAME_SOURCEMAPS_DIRS || 'dist',
     },
-    mdFormat: flameMdFormat,
+    mdFormat: resolveFlameMdFormat(process.env.PPROF_FLAME_MD_FORMAT),
   })
 }
 
-// Keep the CLI side effect behind a CommonJS-friendly main-module gate so tests can import
-// the helpers without starting a capture.
+function bulkDownloadFilename(profile: PprofArchivedProfile) {
+  const key = profile.key.match(/^v1\/(auto|manual)\/\d{13}-([a-f0-9]{12})\/(cpu|heap)\//)
+  const startedAt = new Date(profile.startedAt)
+  if (!key || Number.isNaN(startedAt.getTime())) {
+    throw new Error(`Invalid profile returned by list: ${profile.key}`)
+  }
+  const timestamp = startedAt.toISOString().replace(/[:.]/g, '-')
+  return `${key[1]}-${key[3]}-${timestamp}-${key[2]}.pprof.gz`
+}
+
+async function fetchProfilePages(
+  command: Extract<PprofCommand, { name: 'list' }>,
+  adminUrl: string,
+  apiKey: string
+) {
+  const profiles: PprofArchivedProfile[] = []
+  const seenCursors = new Set<string>()
+  let cursor = command.cursor
+  if (cursor) seenCursors.add(cursor)
+
+  while (true) {
+    const page = await fetchArchivedProfiles({
+      adminUrl,
+      apiKey,
+      class: command.class,
+      kind: command.kind,
+      date: command.date,
+      limit: command.limit,
+      cursor,
+    })
+    profiles.push(...page.profiles)
+
+    if (!command.allPages || page.cursor === undefined) {
+      return {
+        profiles,
+        cursor: page.cursor,
+      } satisfies PprofArchivedProfileList
+    }
+    if (seenCursors.has(page.cursor)) {
+      throw new Error('Pprof list returned a repeated cursor')
+    }
+    seenCursors.add(page.cursor)
+    cursor = page.cursor
+  }
+}
+
+async function downloadProfiles(
+  profiles: PprofArchivedProfile[],
+  directory: string,
+  adminUrl: string,
+  apiKey: string,
+  generateFlameFiles: boolean
+) {
+  for (const profile of profiles) {
+    const response = await downloadArchivedProfile({ adminUrl, apiKey, key: profile.key })
+    const { outputPath } = await writePprofCaptureToFile(
+      response.stream,
+      {
+        contentDisposition: response.contentDisposition,
+        type: 'profile',
+      },
+      {
+        outputPath: path.join(directory, bulkDownloadFilename(profile)),
+      }
+    )
+    await generateFlame(outputPath, generateFlameFiles)
+  }
+}
+
+export async function executePprofCommand(command: PprofCommand, adminUrl: string, apiKey: string) {
+  if (command.name === 'list') {
+    const result = await fetchProfilePages(command, adminUrl, apiKey)
+    console.log(JSON.stringify(result, null, 2))
+    if (command.downloadDirectory) {
+      await downloadProfiles(
+        result.profiles,
+        command.downloadDirectory,
+        adminUrl,
+        apiKey,
+        command.generateFlame
+      )
+    }
+    return result
+  }
+
+  if (command.target !== 'heap-snapshot') {
+    console.log(
+      JSON.stringify(
+        await triggerPprofCapture({
+          adminUrl,
+          apiKey,
+          type: command.target === 'profile' ? 'cpu' : 'heap',
+          seconds: command.seconds,
+        }),
+        null,
+        2
+      )
+    )
+    return
+  }
+
+  const response = await fetchPprofStream({
+    adminUrl,
+    apiKey,
+    type: command.target,
+  })
+  await writePprofCaptureToFile(
+    response.stream,
+    {
+      contentDisposition: response.contentDisposition,
+      type: command.target,
+    },
+    { outputPath: command.output }
+  )
+}
+
+async function main() {
+  const adminUrl = process.env.ADMIN_URL
+  const apiKey = process.env.ADMIN_API_KEY
+  if (!adminUrl) throw new Error('Please provide ADMIN_URL')
+  if (!apiKey) throw new Error('Please provide ADMIN_API_KEY')
+  await executePprofCommand(parsePprofCommand(process.argv.slice(2)), adminUrl, apiKey)
+}
+
 if (require.main === module) {
   main().catch((error) => {
     process.exitCode = 1
-    console.error(error)
+    console.error(error instanceof Error ? error.message : error)
   })
 }

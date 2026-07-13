@@ -160,6 +160,7 @@ services:
       /usr/bin/mc mb supa-minio/supa-storage-bucket;
       /usr/bin/mc mb supa-minio/warehouse--table-s3;
       /usr/bin/mc policy set public supa-minio/warehouse--table-s3;
+      /usr/bin/mc mb supa-minio/supa-storage-profiles;
       exit 0;
       "
 

@@ -667,7 +667,6 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
 
             // check invalid token / access denied
             if (isSigned) {
-              // const { route } = items[0]
               const invalidRoute = withToken(items[0].route, getToken(items[1].route))
               const denied = await client.request('GET', invalidRoute, {
                 expectedCacheStatus: 'BYPASS',

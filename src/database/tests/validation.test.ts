@@ -37,9 +37,7 @@ describe('database request validation', () => {
   })
 
   it('rejects missing lock identifiers for lock-bound requests', () => {
-    expect(() => validateLockRequestEnvelope({ sql: 'SELECT 1' }, config)).toThrow(
-      /lockId/
-    )
+    expect(() => validateLockRequestEnvelope({ sql: 'SELECT 1' }, config)).toThrow(/lockId/)
   })
 
   it('rejects invalid SQL and parameter payloads', () => {
@@ -50,9 +48,7 @@ describe('database request validation', () => {
     expect(() => validateQueryEnvelope({ sql: 'SELECT 1', values: [1, 2, 3] }, config)).toThrow(
       /maxParameterCount/
     )
-    expect(() => validateQueryEnvelope({ sql: 'SELECT 1234567890' }, config)).toThrow(
-      /maxSqlBytes/
-    )
+    expect(() => validateQueryEnvelope({ sql: 'SELECT 1234567890' }, config)).toThrow(/maxSqlBytes/)
   })
 
   it('bounds metadata and serialized request size', () => {
@@ -61,7 +57,10 @@ describe('database request validation', () => {
     ).toThrow(/requestId/)
 
     expect(() =>
-      validateNonLockRequestEnvelope({ destination: 'a', operationName: 'too-long-operation' }, config)
+      validateNonLockRequestEnvelope(
+        { destination: 'a', operationName: 'too-long-operation' },
+        config
+      )
     ).toThrow(/operationName/)
 
     expect(() =>

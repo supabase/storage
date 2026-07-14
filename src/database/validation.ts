@@ -2,10 +2,7 @@ import { Buffer } from 'node:buffer'
 import type { DatabaseConfig } from './config.js'
 import { DatabaseWattError } from './errors.js'
 
-export function validateNonLockRequestEnvelope(
-  request: unknown,
-  config: DatabaseConfig
-): void {
+export function validateNonLockRequestEnvelope(request: unknown, config: DatabaseConfig): void {
   validateBaseEnvelope(request, config)
   const destination = (request as { destination?: unknown }).destination
   if (typeof destination !== 'string' || destination.length === 0) {
@@ -13,10 +10,7 @@ export function validateNonLockRequestEnvelope(
   }
 }
 
-export function validateLockRequestEnvelope(
-  request: unknown,
-  config: DatabaseConfig
-): void {
+export function validateLockRequestEnvelope(request: unknown, config: DatabaseConfig): void {
   validateBaseEnvelope(request, config)
   const lockId = (request as { lockId?: unknown }).lockId
   if (typeof lockId !== 'string' || lockId.length === 0) {
@@ -24,10 +18,7 @@ export function validateLockRequestEnvelope(
   }
 }
 
-export function validateQueryEnvelope(
-  request: unknown,
-  config: DatabaseConfig
-): void {
+export function validateQueryEnvelope(request: unknown, config: DatabaseConfig): void {
   const sql = (request as { sql?: unknown }).sql
   const values = (request as { values?: unknown }).values
 

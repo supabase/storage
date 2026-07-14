@@ -57,7 +57,8 @@ type ErrorResponse = {
   sqlState?: string
 }
 
-const describeDatabaseWattAcceptance = process.env.ACCEPTANCE_DATABASE_WATT === 'true' ? describeAcceptance : describe.skip
+const describeDatabaseWattAcceptance =
+  process.env.ACCEPTANCE_DATABASE_WATT === 'true' ? describeAcceptance : describe.skip
 let app: ApplicationContext | undefined
 let messaging: ReturnType<typeof setupLoopbackMessaging> | undefined
 
@@ -129,12 +130,17 @@ async function cleanupBucket(bucketName: string, destination = testDestination()
     )
     await checkedResult(sendDatabaseMessage('database.commitTransaction', { lockId: tx.lockId }))
   } catch (error) {
-    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(() => undefined)
+    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(
+      () => undefined
+    )
     throw error
   }
 }
 
-async function getBucket(bucketName: string, destination = testDestination()): Promise<BucketResponse | undefined> {
+async function getBucket(
+  bucketName: string,
+  destination = testDestination()
+): Promise<BucketResponse | undefined> {
   const result = await checkedResult<BucketRowsResponse>(
     sendDatabaseMessage('database.query', {
       destination,
@@ -172,7 +178,9 @@ async function commitBucketDatabaseWatt(): Promise<{ bucketName: string }> {
     await checkedResult(sendDatabaseMessage('database.commitTransaction', { lockId: tx.lockId }))
     return { bucketName }
   } catch (error) {
-    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(() => undefined)
+    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(
+      () => undefined
+    )
     throw error
   }
 }
@@ -191,7 +199,9 @@ async function masterTransaction(): Promise<{ value: number | undefined }> {
     await checkedResult(sendDatabaseMessage('database.commitTransaction', { lockId: tx.lockId }))
     return { value: result.rows[0]?.value }
   } catch (error) {
-    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(() => undefined)
+    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(
+      () => undefined
+    )
     throw error
   }
 }
@@ -212,7 +222,9 @@ async function rollbackDatabaseWatt(): Promise<RollbackResponse> {
     await checkedResult(sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }))
     return { bucketName }
   } catch (error) {
-    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(() => undefined)
+    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(
+      () => undefined
+    )
     throw error
   }
 }
@@ -256,7 +268,9 @@ async function savepointDatabaseWatt(): Promise<SavepointResponse> {
     await checkedResult(sendDatabaseMessage('database.commitTransaction', { lockId: tx.lockId }))
     return { innerBucket, outerBucket }
   } catch (error) {
-    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(() => undefined)
+    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(
+      () => undefined
+    )
     throw error
   }
 }
@@ -433,7 +447,7 @@ describeDatabaseWattAcceptance(
 
       try {
         await checkedResult(insertBucket(bucketName))
-        const duplicate = await insertBucket(bucketName) as ErrorResponse
+        const duplicate = (await insertBucket(bucketName)) as ErrorResponse
         const stats = await getDatabaseWattStats()
 
         expect(duplicate).toMatchObject({ code: 'POSTGRES_ERROR', sqlState: '23505' })

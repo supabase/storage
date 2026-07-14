@@ -19,15 +19,10 @@ function mockAdminAppDependencies() {
     plugins: {
       adminTenantId: async () => {},
       logRequest: () => async () => {},
-      registerApiKeyAuth: (fastify: {
-        addHook: (name: string, hook: Function) => void
-      }) => {
+      registerApiKeyAuth: (fastify: { addHook: (name: string, hook: Function) => void }) => {
         fastify.addHook(
           'onRequest',
-          async (
-            request: { headers: Record<string, unknown> },
-            reply: { status: Function }
-          ) => {
+          async (request: { headers: Record<string, unknown> }, reply: { status: Function }) => {
             if (request.headers.apikey !== adminApiKey) {
               return reply.status(401).send()
             }

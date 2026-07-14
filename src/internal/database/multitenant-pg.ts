@@ -154,11 +154,15 @@ const multitenantWattExecutor = new DatabaseWattPgExecutor('master', () => 'mult
 
 export const multitenantPgExecutor: PgTransactionalExecutor = {
   async query(statement, options) {
-    const executor = hasField('messaging') ? multitenantWattExecutor : multitenantPgPoolOwner.getExecutor()
+    const executor = hasField('messaging')
+      ? multitenantWattExecutor
+      : multitenantPgPoolOwner.getExecutor()
     return executor.query(statement, options)
   },
   async beginTransaction(options) {
-    const executor = hasField('messaging') ? multitenantWattExecutor : multitenantPgPoolOwner.getExecutor()
+    const executor = hasField('messaging')
+      ? multitenantWattExecutor
+      : multitenantPgPoolOwner.getExecutor()
     return executor.beginTransaction(options)
   },
 }

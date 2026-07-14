@@ -55,15 +55,19 @@ async function waitForWattApplication(applicationId: string, timeoutMs: number) 
     while (Date.now() - started < timeoutMs) {
       try {
         const runtime = await client.getMatchingRuntime()
-        const application = await client.getRuntimeApplications(runtime.pid).then(({ applications }) => {
-          return applications.find((application) => application.id === applicationId)
-        })
+        const application = await client
+          .getRuntimeApplications(runtime.pid)
+          .then(({ applications }) => {
+            return applications.find((application) => application.id === applicationId)
+          })
 
         if (application?.status === 'started') {
           return
         }
 
-        lastError = new Error(`Application ${applicationId} status is ${application?.status ?? 'unknown'}`)
+        lastError = new Error(
+          `Application ${applicationId} status is ${application?.status ?? 'unknown'}`
+        )
       } catch (error) {
         lastError = error
       }
@@ -447,7 +451,9 @@ async function stopServer(child: ChildProcess) {
   try {
     process.kill(-child.pid, 'SIGTERM')
   } catch (error) {
-    if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH')) {
+    if (
+      !(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH')
+    ) {
       throw error
     }
   }

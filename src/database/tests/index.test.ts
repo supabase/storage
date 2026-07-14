@@ -52,9 +52,6 @@ async function loadApp(
   vi.doMock('pg', () => {
     class MockDatabaseError extends Error {
       code?: string
-      constructor(message: string) {
-        super(message)
-      }
     }
 
     class MockPool {

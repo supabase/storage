@@ -14,15 +14,17 @@ afterEach(() => {
   vi.doUnmock('./pg-connection')
   vi.doUnmock('./tenant')
   vi.doUnmock('./watt-connection')
-  vi.resetModules()  
+  vi.resetModules()
   removeGlobals(['messaging'])
 })
 
 describe('database connection client', () => {
   it('uses Database Watt when messaging is available', async () => {
-    const { client, getTenantConfig, getWattPostgresConnection, wattConnection } = await loadClient({
-      hasWattMessaging: true,
-    })
+    const { client, getTenantConfig, getWattPostgresConnection, wattConnection } = await loadClient(
+      {
+        hasWattMessaging: true,
+      }
+    )
 
     const connection = await client.getPostgresConnection(createConnectionOptions())
 
@@ -110,20 +112,35 @@ async function loadClient(options: LoadClientOptions = {}) {
   }))
   vi.doMock('./tenant', () => ({ getTenantConfig }))
   vi.doMock('./watt-connection', () => ({
-    getWattPostgresConnection,    
+    getWattPostgresConnection,
   }))
 
-  if(options.hasWattMessaging) {
-    updateGlobals({ messaging: {} as unknown as any })
+  if (options.hasWattMessaging) {
+    updateGlobals({
+      messaging: {
+        handle: vi.fn(),
+        notify: vi.fn(),
+        send: vi.fn(),
+      },
+    })
   } else {
     removeGlobals(['messaging'])
   }
 
   const client = await import('./client')
-  return { client, getTenantConfig, getWattPostgresConnection, pgConnection, pgCreate, wattConnection }
+  return {
+    client,
+    getTenantConfig,
+    getWattPostgresConnection,
+    pgConnection,
+    pgCreate,
+    wattConnection,
+  }
 }
 
-function createConnectionOptions(overrides: Partial<Parameters<typeof import('./client').getPostgresConnection>[0]> = {}) {
+function createConnectionOptions(
+  overrides: Partial<Parameters<typeof import('./client').getPostgresConnection>[0]> = {}
+) {
   return {
     disableHostCheck: true,
     host: 'tenant-a.example.test',

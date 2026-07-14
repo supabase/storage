@@ -23,9 +23,12 @@ export class LockRegistry {
 
   constructor(config: DatabaseConfig) {
     this.config = config
-    this.cleanupInterval = setInterval(() => {
-      void this.expireLocks()
-    }, Math.min(config.lockIdleTimeoutMs, config.lockMaxLifetimeMs, 10_000))
+    this.cleanupInterval = setInterval(
+      () => {
+        void this.expireLocks()
+      },
+      Math.min(config.lockIdleTimeoutMs, config.lockMaxLifetimeMs, 10_000)
+    )
     this.cleanupInterval.unref()
   }
 

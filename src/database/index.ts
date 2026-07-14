@@ -48,25 +48,27 @@ export class Application {
       lockedQuery: 0,
       query: 0,
       release: 0,
-      rollbackTransaction: 0,  
+      rollbackTransaction: 0,
     }
-    
+
     this.#registerHandlers()
     registerDatabaseWattMetrics(this.#pools)
   }
 
-  close(): Promise<void> {      
+  close(): Promise<void> {
     this.#shuttingDown = true
 
     return this.#withShutdownTimeout(
-      Promise.allSettled([this.#locks.close(), this.#pools.close(), this.#resolver.close()]).then(() => undefined),
+      Promise.allSettled([this.#locks.close(), this.#pools.close(), this.#resolver.close()]).then(
+        () => undefined
+      ),
       this.#config.shutdownTimeoutMs
     )
   }
 
   #registerHandlers(): void {
-    const messaging = getMessaging({throwOnMissing: false})
-    
+    const messaging = getMessaging({ throwOnMissing: false })
+
     if (!messaging) {
       return
     }
@@ -80,7 +82,7 @@ export class Application {
     messaging.handle('database.rollbackTransaction', this.#handleRollbackTransaction.bind(this))
     messaging.handle('database.cancel', this.#handleCancel.bind(this))
     messaging.handle('database.test.stats', () => ({ ...this.#stats }))
-    messaging.handle('database.test.resetStats', this.#handleResetStats.bind(this))      
+    messaging.handle('database.test.resetStats', this.#handleResetStats.bind(this))
   }
 
   async #handleQuery(rawRequest: unknown): Promise<unknown> {
@@ -98,11 +100,8 @@ export class Application {
       this.#cancellations.start(request.requestId, { cancelled: false })
       cancellationRequestId = request.requestId
 
-      const response = await this.#pools.query(
-        destination,
-        request.sql,
-        request.values,
-        (client) => this.#cancellations.setClient(request?.requestId, client)
+      const response = await this.#pools.query(destination, request.sql, request.values, (client) =>
+        this.#cancellations.setClient(request?.requestId, client)
       )
       return enforceResultLimits(response, this.#config)
     } catch (error) {
@@ -159,7 +158,10 @@ export class Application {
   async #handleRelease(rawRequest: unknown): Promise<unknown> {
     this.#stats.release++
     let request: ReleaseConnectionRequest | undefined
-    let context: ReleaseConnectionRequest | (ReleaseConnectionRequest & { destination?: string }) | undefined
+    let context:
+      | ReleaseConnectionRequest
+      | (ReleaseConnectionRequest & { destination?: string })
+      | undefined
 
     try {
       validateLockRequestEnvelope(rawRequest, this.#config)
@@ -208,7 +210,10 @@ export class Application {
   async #handleCommitTransaction(rawRequest: unknown): Promise<unknown> {
     this.#stats.commitTransaction++
     let request: CommitTransactionRequest | undefined
-    let context: CommitTransactionRequest | (CommitTransactionRequest & { destination?: string }) | undefined
+    let context:
+      | CommitTransactionRequest
+      | (CommitTransactionRequest & { destination?: string })
+      | undefined
 
     try {
       validateLockRequestEnvelope(rawRequest, this.#config)
@@ -226,7 +231,10 @@ export class Application {
   async #handleRollbackTransaction(rawRequest: unknown): Promise<unknown> {
     this.#stats.rollbackTransaction++
     let request: RollbackTransactionRequest | undefined
-    let context: RollbackTransactionRequest | (RollbackTransactionRequest & { destination?: string }) | undefined
+    let context:
+      | RollbackTransactionRequest
+      | (RollbackTransactionRequest & { destination?: string })
+      | undefined
 
     try {
       validateLockRequestEnvelope(rawRequest, this.#config)
@@ -335,7 +343,7 @@ export interface ApplicationContext {
   close: () => Promise<void>
 }
 
-export function create() {  
+export function create() {
   const app = new Application()
 
   return {

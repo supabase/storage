@@ -5,12 +5,7 @@ import { getJwtSecret, getTenantConfig, s3CredentialsManager } from '@internal/d
 import { ERRORS } from '@internal/errors'
 import { RequestByteCounterStream } from '@internal/streams'
 import { HashSpillWritable } from '@internal/streams/hash-stream'
-import {
-  assertPolicyConditionsSatisfied,
-  ClientSignature,
-  SignatureV4,
-  SignatureV4Service,
-} from '@storage/protocols/s3'
+import { ClientSignature, SignatureV4, SignatureV4Service } from '@storage/protocols/s3'
 import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
 import {
   ChunkSignatureV4Parser,
@@ -150,6 +145,7 @@ async function authorizeRequestSignV4(
     query: request.query as Record<string, string>,
     prefix: storagePrefix,
     payloadHasher: hashStreamComposer,
+    bucket: (request.params as Record<string, string | undefined>)?.Bucket,
   })
 
   if (!isVerified && !sessionToken) {
@@ -163,12 +159,6 @@ async function authorizeRequestSignV4(
       'The request signature we calculated does not match the signature you provided, Check your credentials. ' +
         'The session token should be a valid JWT token'
     )
-  }
-
-  if (clientSignature.policy) {
-    assertPolicyConditionsSatisfied(clientSignature.policy.value, clientSignature.policy.fields, {
-      bucket: (request.params as Record<string, string | undefined>)?.Bucket,
-    })
   }
 
   const wasBodyHashed = allowBodyHash && byteHasherStream && byteHasherStream.writableEnded

@@ -4,7 +4,7 @@ import { ERRORS } from '@internal/errors'
 import crypto from 'crypto'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
-import { assertPolicyNotExpired, Policy } from './policy'
+import { assertPolicyConditionsSatisfied, assertPolicyNotExpired, Policy } from './policy'
 
 export enum SignatureV4Service {
   S3 = 's3',
@@ -42,6 +42,7 @@ interface SignatureRequest {
   query?: Record<string, string>
   prefix?: string
   payloadHasher?: Writable & { digestHex: () => string }
+  bucket?: string
 }
 
 interface Credentials {
@@ -212,11 +213,6 @@ export class SignatureV4 {
 
     const xPolicy: Policy = JSON.parse(Buffer.from(policy, 'base64').toString('utf-8'))
 
-    // A POST policy must declare an expiration; AWS treats a missing one as
-    // invalid. Without this check a signed policy with no expiration would never
-    // expire and could be replayed forever.
-    assertPolicyNotExpired(xPolicy.expiration)
-
     const fields: Record<string, string> = Object.create(null)
     form.forEach((value, key) => {
       if (typeof value !== 'string') {
@@ -287,7 +283,18 @@ export class SignatureV4 {
    */
   async verify(clientSignature: ClientSignature, request: SignatureRequest) {
     if (typeof clientSignature.policy?.raw === 'string') {
-      return this.verifyPostPolicySignature(clientSignature, clientSignature.policy.raw)
+      const verified = this.verifyPostPolicySignature(clientSignature, clientSignature.policy.raw)
+      if (!verified) {
+        return false
+      }
+
+      const { value, fields } = clientSignature.policy
+      // A POST policy must declare an expiration; AWS treats a missing one as
+      // invalid. Without this check a signed policy with no expiration would never
+      // expire and could be replayed forever.
+      assertPolicyNotExpired(value.expiration)
+      assertPolicyConditionsSatisfied(value, fields, { bucket: request.bucket })
+      return true
     }
 
     const serverSignature = await this.sign(clientSignature, request)

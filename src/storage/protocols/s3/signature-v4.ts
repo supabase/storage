@@ -4,6 +4,7 @@ import { ERRORS } from '@internal/errors'
 import crypto from 'crypto'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
+import { assertPolicyConditionsSatisfied, assertPolicyNotExpired, Policy } from './policy'
 
 export enum SignatureV4Service {
   S3 = 's3',
@@ -29,6 +30,7 @@ export interface ClientSignature {
   policy?: {
     raw: string
     value: Policy
+    fields: Record<string, string>
   }
 }
 
@@ -40,6 +42,7 @@ interface SignatureRequest {
   query?: Record<string, string>
   prefix?: string
   payloadHasher?: Writable & { digestHex: () => string }
+  bucket?: string
 }
 
 interface Credentials {
@@ -51,26 +54,6 @@ interface Credentials {
 
 type SignatureHeaders = Record<string, string | string[] | undefined>
 type SignatureQuery = Record<string, unknown>
-
-export interface Policy {
-  expiration: string
-  conditions: PolicyConditions
-}
-
-interface PolicyConditions {
-  policies: PolicyEntry[]
-  contentLengthRange: {
-    min: number
-    max: number
-    valid: boolean
-  }
-}
-
-interface PolicyEntry {
-  operator: string
-  key: string
-  value: string
-}
 
 /**
  * Lists the headers that should never be included in the
@@ -230,9 +213,17 @@ export class SignatureV4 {
 
     const xPolicy: Policy = JSON.parse(Buffer.from(policy, 'base64').toString('utf-8'))
 
-    if (xPolicy.expiration) {
-      this.checkExpiration(longDate, xPolicy.expiration)
-    }
+    const fields: Record<string, string> = Object.create(null)
+    form.forEach((value, key) => {
+      if (typeof value !== 'string') {
+        return
+      }
+      const normalizedKey = key.toLowerCase()
+      if (Object.prototype.hasOwnProperty.call(fields, normalizedKey)) {
+        throw ERRORS.InvalidSignature('Duplicate form field in POST policy request')
+      }
+      fields[normalizedKey] = value
+    })
 
     const credentialsPart = credentialPart.split('/')
     if (credentialsPart.length !== 5) {
@@ -250,6 +241,7 @@ export class SignatureV4 {
       policy: {
         raw: policy,
         value: xPolicy,
+        fields,
       },
     }
   }
@@ -291,7 +283,18 @@ export class SignatureV4 {
    */
   async verify(clientSignature: ClientSignature, request: SignatureRequest) {
     if (typeof clientSignature.policy?.raw === 'string') {
-      return this.verifyPostPolicySignature(clientSignature, clientSignature.policy.raw)
+      const verified = this.verifyPostPolicySignature(clientSignature, clientSignature.policy.raw)
+      if (!verified) {
+        return false
+      }
+
+      const { value, fields } = clientSignature.policy
+      // A POST policy must declare an expiration; AWS treats a missing one as
+      // invalid. Without this check a signed policy with no expiration would never
+      // expire and could be replayed forever.
+      assertPolicyNotExpired(value.expiration)
+      assertPolicyConditionsSatisfied(value, fields, { bucket: request.bucket })
+      return true
     }
 
     const serverSignature = await this.sign(clientSignature, request)

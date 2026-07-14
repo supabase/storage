@@ -145,6 +145,7 @@ async function authorizeRequestSignV4(
     query: request.query as Record<string, string>,
     prefix: storagePrefix,
     payloadHasher: hashStreamComposer,
+    bucket: (request.params as Record<string, string | undefined>)?.Bucket,
   })
 
   if (!isVerified && !sessionToken) {
@@ -203,7 +204,7 @@ async function authorizeRequestSignV4(
   return returnStream
 }
 
-async function extractSignature(req: AWSRequest) {
+async function extractSignature(req: AWSRequest): Promise<ClientSignature> {
   if (typeof req.headers.authorization === 'string') {
     return SignatureV4.parseAuthorizationHeader(req.headers)
   }

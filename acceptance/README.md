@@ -85,7 +85,7 @@ The file backend also works because imgproxy mounts the local `./data` directory
 
 ```bash
 mkdir -p data
-STORAGE_BACKEND=file ACCEPTANCE_ENABLE_RENDER=true npm run acceptance -- --profile full acceptance/specs/cdn-render.test.ts
+STORAGE_BACKEND=file ACCEPTANCE_ENABLE_RENDER=true npm run acceptance -- --profile full acceptance/specs/render.test.ts
 ```
 
 Local CI enables render tests for both S3 and file backend runs. The S3 matrix sets

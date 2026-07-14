@@ -104,9 +104,9 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
       logger.error(
         {
           error: e,
-          jodId: job.id,
+          jobId: job.id,
           type: 'event',
-          event: 'ObjectAdminDelete',
+          event: 'BackupObject',
           payload: JSON.stringify(job.data),
           objectPath: s3Key,
           objectVersion: job.data.version,
@@ -117,6 +117,7 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
         },
         `[Admin]: BackupObjectEvent ${s3Key} - FAILED`
       )
+      throw e
     } finally {
       storage.db
         .destroyConnection()

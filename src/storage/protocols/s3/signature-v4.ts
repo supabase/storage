@@ -4,7 +4,7 @@ import { ERRORS } from '@internal/errors'
 import crypto from 'crypto'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
-import { assertPolicyConditionsSatisfied, assertPolicyNotExpired, Policy } from './policy'
+import { assertPolicyConditionsSatisfied, assertPolicyNotExpired, parsePolicy } from './policy'
 
 export enum SignatureV4Service {
   S3 = 's3',
@@ -29,7 +29,6 @@ export interface ClientSignature {
   contentSha?: string
   policy?: {
     raw: string
-    value: Policy
     fields: Record<string, string>
   }
 }
@@ -211,8 +210,6 @@ export class SignatureV4 {
       throw ERRORS.InvalidSignature('Invalid signature format')
     }
 
-    const xPolicy: Policy = JSON.parse(Buffer.from(policy, 'base64').toString('utf-8'))
-
     const fields: Record<string, string> = Object.create(null)
     form.forEach((value, key) => {
       if (typeof value !== 'string') {
@@ -240,7 +237,6 @@ export class SignatureV4 {
       sessionToken,
       policy: {
         raw: policy,
-        value: xPolicy,
         fields,
       },
     }
@@ -288,12 +284,13 @@ export class SignatureV4 {
         return false
       }
 
-      const { value, fields } = clientSignature.policy
+      const value = parsePolicy(clientSignature.policy.raw)
+
       // A POST policy must declare an expiration; AWS treats a missing one as
       // invalid. Without this check a signed policy with no expiration would never
       // expire and could be replayed forever.
       assertPolicyNotExpired(value.expiration)
-      assertPolicyConditionsSatisfied(value, fields, { bucket: request.bucket })
+      assertPolicyConditionsSatisfied(value, clientSignature.policy.fields, request.bucket)
       return true
     }
 

@@ -45,12 +45,12 @@ export function assertPolicyNotExpired(expiration: string | undefined): void {
     throw ERRORS.InvalidSignature('Missing policy expiration')
   }
 
-  const expirationDate = new Date(expiration)
-  if (isNaN(expirationDate.getTime())) {
+  const expirationDate = Date.parse(expiration)
+  if (isNaN(expirationDate)) {
     throw ERRORS.InvalidSignature('Invalid policy expiration')
   }
 
-  if (expirationDate < new Date()) {
+  if (expirationDate < Date.now()) {
     throw ERRORS.ExpiredSignature()
   }
 }
@@ -66,12 +66,12 @@ export function assertPolicyNotExpired(expiration: string | undefined): void {
  *
  * @param policy the decoded policy document
  * @param submittedFields the submitted form fields, keyed by lowercased name
- * @param opts.bucket the bucket resolved from the request path
+ * @param bucket the bucket resolved from the request path
  */
 export function assertPolicyConditionsSatisfied(
   policy: Policy,
   submittedFields: Record<string, string>,
-  opts: { bucket?: string }
+  bucket?: string
 ): void {
   const conditions = policy?.conditions
   if (!Array.isArray(conditions)) {
@@ -79,8 +79,8 @@ export function assertPolicyConditionsSatisfied(
   }
 
   const fields: Record<string, string> = { ...submittedFields }
-  if (opts.bucket !== undefined) {
-    fields['bucket'] = opts.bucket
+  if (bucket !== undefined) {
+    fields['bucket'] = bucket
   }
 
   const coveredFields = new Set<string>()
@@ -166,5 +166,19 @@ function assertFieldStartsWith(
   const actual = fields[field]
   if (actual === undefined || !actual.startsWith(String(prefix ?? ''))) {
     throw ERRORS.AccessDenied(`Policy condition failed: "${field}" does not start with "${prefix}"`)
+  }
+}
+
+export function parsePolicy(encoded: string): Policy {
+  try {
+    const value: unknown = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'))
+
+    if (!value || typeof value !== 'object') {
+      throw new Error()
+    }
+
+    return value as Policy
+  } catch {
+    throw ERRORS.InvalidSignature('Invalid POST policy')
   }
 }

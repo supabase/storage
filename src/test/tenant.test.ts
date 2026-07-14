@@ -298,31 +298,6 @@ describe('Tenant configs', () => {
     await expect(getFeatures('abc')).resolves.toEqual(payload.features)
   })
 
-  test('Ignores legacy database pool mode fields on tenant writes', async () => {
-    const response = await adminApp.inject({
-      method: 'POST',
-      url: `/tenants/abc`,
-      payload: {
-        ...payload,
-        databasePoolMode: 'single_use',
-      },
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(response.statusCode).toBe(201)
-
-    const getResponse = await adminApp.inject({
-      method: 'GET',
-      url: `/tenants/abc`,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(getResponse.statusCode).toBe(200)
-    expect(JSON.parse(getResponse.body)).toEqual(payload)
-  })
-
   test('PATCH refreshes local tenant config changes before the notify cache path', async () => {
     const createResponse = await adminApp.inject({
       method: 'POST',

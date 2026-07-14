@@ -5,7 +5,6 @@ import { getSslSettings } from './ssl.js'
 import type { DestinationConfig } from './types.js'
 
 type TenantRow = {
-  database_pool_mode?: string | null
   database_pool_url?: string | null
   database_url: string
   max_connections?: number | null
@@ -38,7 +37,6 @@ export class DestinationResolver {
       id: destination,
       isExternalPool: this.config.poolIsExternal,
       maxConnections: this.config.destinationMaxConnections,
-      poolMode: this.config.poolMode,
     }
   }
 
@@ -53,7 +51,7 @@ export class DestinationResolver {
   private async resolveTenant(destination: string): Promise<DestinationConfig> {
     const result = await this.getMasterPool().query<TenantRow>(
       `
-        SELECT database_url, database_pool_url, database_pool_mode, max_connections
+        SELECT database_url, database_pool_url, max_connections
         FROM tenants
         WHERE id = $1
         LIMIT 1
@@ -76,7 +74,6 @@ export class DestinationResolver {
       id: destination,
       isExternalPool: Boolean(tenant.database_pool_url),
       maxConnections: tenant.max_connections || this.config.destinationMaxConnections,
-      poolMode: tenant.database_pool_mode,
     }
   }
 

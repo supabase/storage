@@ -56,5 +56,4 @@ export type DestinationConfig = {
   id: string
   isExternalPool: boolean
   maxConnections: number
-  poolMode?: string | null
 }

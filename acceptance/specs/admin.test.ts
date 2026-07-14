@@ -36,7 +36,6 @@ interface TenantFeatures {
 interface TenantDetailResponse {
   anonKey?: string
   capabilities?: Record<string, unknown>
-  databasePoolMode?: string | null
   databasePoolUrl?: string | null
   databaseUrl?: string
   fileSizeLimit?: number
@@ -572,10 +571,6 @@ function buildTenantProvisionBody(
     fileSizeLimit,
     jwtSecret: requireString(sourceTenant?.jwtSecret, 'jwtSecret'),
     serviceKey: requireString(sourceTenant?.serviceKey, 'serviceKey'),
-  }
-
-  if (typeof sourceTenant?.databasePoolMode === 'string') {
-    body.databasePoolMode = sourceTenant.databasePoolMode
   }
 
   if (typeof sourceTenant?.databasePoolUrl === 'string') {

@@ -238,6 +238,7 @@ describe('database Watt application messaging handlers', () => {
     expect(pools[0].queries[0]).toMatchObject({
       values: ['tenant-a'],
     })
+    expect(pools[0].queries[0].sql).not.toContain('database_pool_mode')
     expect(clients[0].query).toHaveBeenCalledWith('SELECT 1', undefined)
   })
 

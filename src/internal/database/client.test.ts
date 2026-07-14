@@ -34,7 +34,6 @@ describe('database connection client', () => {
       expect.objectContaining({
         dbUrl: '',
         isExternalPool: false,
-        isSingleUse: false,
         maxConnections: 20,
         tenantId: 'tenant-a',
       })
@@ -79,7 +78,6 @@ async function loadClient(options: LoadClientOptions = {}) {
   vi.resetModules()
 
   const getTenantConfig = vi.fn(async () => ({
-    databasePoolMode: 'transaction',
     databasePoolUrl: undefined,
     databaseUrl: 'postgres://tenant-db',
     maxConnections: 7,
@@ -99,13 +97,11 @@ async function loadClient(options: LoadClientOptions = {}) {
   vi.doMock('../../config', () => ({
     getConfig: () => ({
       databaseMaxConnections: 20,
-      databasePoolMode: 'transaction',
       databasePoolURL: undefined,
       databaseURL: 'postgres://default-db',
       isMultitenant: options.isMultitenant ?? true,
       requestXForwardedHostRegExp: '^tenant-[a-z]+\\.example\\.test$',
     }),
-    normalizeDatabasePoolMode: (value: string | undefined) => value,
   }))
   vi.doMock('./pg-connection', () => ({
     PgTenantConnection: { create: pgCreate },

@@ -79,7 +79,6 @@ export async function getPostgresConnection(
     ...options,
     dbUrl: '',
     isExternalPool: false,
-    isSingleUse: false,
     maxConnections: options.maxConnections ?? databaseMaxConnections,
   })
 }

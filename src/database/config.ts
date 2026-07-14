@@ -24,7 +24,6 @@ export type DatabaseConfig = {
   maxSqlBytes: number
   poolIsExternal: boolean
   poolConnectionString?: string
-  poolMode?: string
   rootCert?: string
   serverStatementTimeoutMs: number
   shutdownTimeoutMs: number
@@ -76,7 +75,6 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): DatabaseConfig
     maxSqlBytes: readPositiveInteger(env.DATABASE_WATT_MAX_SQL_BYTES, 1024 * 1024),
     poolIsExternal: Boolean(env.DATABASE_POOL_URL),
     poolConnectionString: env.DATABASE_POOL_URL || env.DATABASE_URL,
-    poolMode: env.DATABASE_POOL_MODE,
     rootCert: readRootCert(env.DATABASE_SSL_ROOT_CERT),
     serverStatementTimeoutMs: readInteger(env.DATABASE_STATEMENT_TIMEOUT, 30_000),
     shutdownTimeoutMs: readPositiveInteger(env.DATABASE_WATT_SHUTDOWN_TIMEOUT, 10_000),

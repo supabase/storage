@@ -233,7 +233,6 @@ function createConnectionOptions(): TenantConnectionOptions {
   return {
     dbUrl: '',
     isExternalPool: false,
-    isSingleUse: false,
     maxConnections: 10,
     operation: () => 'operation-a',
     superUser: {

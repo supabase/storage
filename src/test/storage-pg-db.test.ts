@@ -1787,7 +1787,9 @@ describe('StoragePgDB bucket metadata', () => {
   }
 
   async function readCurrentStatementTimeoutMsFromExecutor(pg: PgExecutor): Promise<number> {
-    const result = await pg.query<{ statement_timeout: string }>('SHOW statement_timeout')
+    const result = await pg.query<{ statement_timeout: string }>(`
+      SELECT current_setting('statement_timeout') AS statement_timeout
+    `)
 
     return parseStatementTimeoutMs(result.rows[0].statement_timeout)
   }

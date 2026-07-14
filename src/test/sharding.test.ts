@@ -23,8 +23,8 @@ describe('Sharding System', () => {
     await runMultitenantMigrations()
   })
 
-  afterAll(async () => {
-    await storageTest.database.connection.dispose()
+  afterAll(() => {
+    storageTest.database.connection.dispose()
   })
 
   beforeEach(async () => {

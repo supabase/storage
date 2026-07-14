@@ -127,7 +127,7 @@ describe('Vectors API', () => {
 
   afterAll(async () => {
     await appInstance.close()
-    await storageTest.database.connection.dispose()
+    storageTest.database.connection.dispose()
   })
 
   beforeEach(async () => {

@@ -213,8 +213,8 @@ describe('Pg database foundation', () => {
       isExternalPool: false,
     })
 
-    const first = await PgTenantConnection.create(settings)
-    const second = await PgTenantConnection.create(settings)
+    const first = PgTenantConnection.create(settings)
+    const second = PgTenantConnection.create(settings)
 
     expect(second.pool).toBe(first.pool)
 
@@ -234,15 +234,15 @@ describe('Pg database foundation', () => {
       isExternalPool: true,
     })
 
-    const first = await PgTenantConnection.create(settings)
-    const second = await PgTenantConnection.create(settings)
+    const first = PgTenantConnection.create(settings)
+    const second = PgTenantConnection.create(settings)
 
     expect(second.pool).toBe(first.pool)
 
     await first.pool.acquire().query('SELECT 1')
     expect(first.pool.getPoolStats()).not.toBeNull()
 
-    await first.dispose()
+    first.dispose()
     expect(first.pool.getPoolStats()).not.toBeNull()
     await expect(first.query('SELECT 1')).rejects.toThrow(
       'Cannot use a disposed PgTenantConnection'
@@ -250,7 +250,7 @@ describe('Pg database foundation', () => {
 
     // The shared pool stays usable for connections that were not disposed.
     await second.pool.acquire().query('SELECT 1')
-    await second.dispose()
+    second.dispose()
     await PgTenantConnection.poolManager.destroy('pg-foundation-external-pool')
   })
 
@@ -267,7 +267,7 @@ describe('Pg database foundation', () => {
       const result = await connection.pool.acquire().query<{ n: number }>('SELECT 1 AS n')
       expect(result.rows[0].n).toBe(1)
     } finally {
-      await connection.dispose()
+      connection.dispose()
     }
   })
 })

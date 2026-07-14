@@ -1,6 +1,5 @@
 import { multitenantPgExecutor } from '@internal/database'
 import { ERRORS } from '@internal/errors'
-import { logger } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { getCatalogAuthStrategy, RestCatalogClient } from '@storage/protocols/iceberg/catalog'
@@ -180,12 +179,7 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
       })
     } finally {
       if (eventStorage) {
-        await eventStorage.db.destroyConnection().catch((e) => {
-          logger.error(
-            { error: e, sbReqId: job.data.sbReqId },
-            `[DeleteIcebergResources] ${job.data.tenant.ref} - FAILED DISPOSING CONNECTION`
-          )
-        })
+        eventStorage.db.destroyConnection()
       }
     }
   }

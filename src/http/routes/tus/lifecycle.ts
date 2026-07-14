@@ -67,16 +67,7 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
   }
 
   res.on('finish', () => {
-    req.upload.db.dispose().catch((e) => {
-      logSchema.error(req.log, 'Error disposing db connection', {
-        type: 'db-connection',
-        tenantId: req.upload.tenantId,
-        project: req.upload.tenantId,
-        reqId: req.upload.reqId,
-        sbReqId: req.upload.sbReqId,
-        error: e,
-      })
-    })
+    req.upload.db.dispose()
   })
 
   const uploadID = UploadId.fromString(id)

@@ -2445,7 +2445,7 @@ describe('S3 Protocol', () => {
           anonClient.destroy()
           await db.query(`DROP POLICY IF EXISTS "${policyName}_select" ON storage.objects`)
           await db.query(`DROP POLICY IF EXISTS "${policyName}_delete" ON storage.objects`)
-          await connection.dispose()
+          connection.dispose()
           await client
             .send(
               new DeleteObjectsCommand({
@@ -3374,7 +3374,7 @@ describe('Migration compatibility', () => {
     afterAll(async () => {
       const db = new StoragePgDB(connection, { tenantId, host: 'localhost' })
       await db.deleteBucket(bucketId)
-      await connection.dispose()
+      connection.dispose()
     })
 
     const makeDB = (latestMigration?: keyof typeof DBMigration) =>

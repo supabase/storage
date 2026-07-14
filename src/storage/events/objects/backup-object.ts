@@ -118,17 +118,7 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
         `[Admin]: BackupObjectEvent ${s3Key} - FAILED`
       )
     } finally {
-      storage.db
-        .destroyConnection()
-        .then(() => {
-          // no-op
-        })
-        .catch((e) => {
-          logger.error(
-            { error: e, sbReqId: job.data.sbReqId },
-            `[Admin]: BackupObjectEvent ${tenantId} - FAILED DISPOSING CONNECTION`
-          )
-        })
+      storage.db.destroyConnection()
     }
   }
 }

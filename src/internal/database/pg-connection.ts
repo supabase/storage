@@ -134,11 +134,18 @@ export type PgCancelConnectionTarget =
 export class PgPoolStrategy {
   protected pool?: Pool
   protected tlsSession?: TlsSessionSlot
+  private executor?: PgPoolExecutor
+  private executorPool?: Pool
 
   constructor(protected readonly options: PoolStrategySettings) {}
 
   acquire(): PgPoolExecutor {
-    return new PgPoolExecutor(this.getPool())
+    const pool = this.getPool()
+    if (!this.executor || this.executorPool !== pool) {
+      this.executor = new PgPoolExecutor(pool)
+      this.executorPool = pool
+    }
+    return this.executor
   }
 
   async destroy(): Promise<void> {
@@ -148,6 +155,10 @@ export class PgPoolStrategy {
       return
     }
 
+    if (this.executorPool === originalPool) {
+      this.executor = undefined
+      this.executorPool = undefined
+    }
     this.pool = undefined
     await this.drainPool(originalPool, 'destroy')
   }

@@ -39,6 +39,11 @@ interface TransformParams {
   height: number
 }
 
+interface GetObjectUrlOptions {
+  transform?: TransformParams
+  expiresIn?: number
+}
+
 const onePixelPng = new Uint8Array(
   Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p94AAAAASUVORK5CYII=',
@@ -75,7 +80,7 @@ async function getObjectUrl(
   objectKey: string,
   bucketType: BucketType,
   accessMethod: AccessMethod,
-  transform?: TransformParams
+  { transform, expiresIn = SIGNED_EXPIRES_IN_S }: GetObjectUrlOptions = {}
 ): Promise<{ route: string; token?: string }> {
   const config = getAcceptanceConfig()
   const encodedKey = encodePathSegments(objectKey)
@@ -102,7 +107,7 @@ async function getObjectUrl(
       `/object/sign/${bucketName}/${encodedKey}`,
       {
         body: {
-          expiresIn: SIGNED_EXPIRES_IN_S,
+          expiresIn,
           ...(transform
             ? { transform: { height: transform.height, width: transform.width, resize: 'contain' } }
             : {}),
@@ -117,6 +122,22 @@ async function getObjectUrl(
   }
 
   throw new Error(`Invalid access method: ${accessMethod}`)
+}
+
+async function warmCacheEndpoint(client: AcceptanceHttpClient, route: string, token?: string) {
+  const miss = await client.request('GET', route, {
+    expectedCacheStatus: 'MISS',
+    expectedStatus: 200,
+    token,
+    retries: CACHE_RETRIES,
+  })
+  const hit = await client.request('GET', route, {
+    expectedCacheStatus: 'HIT',
+    expectedStatus: 200,
+    token,
+    retries: CACHE_RETRIES,
+  })
+  return { hit, miss }
 }
 
 /**
@@ -145,7 +166,8 @@ describeAcceptance(
   () => {
     let client: AcceptanceHttpClient
     let bucketName: string
-    const isCdnEdge = getAcceptanceConfig().capabilities.cdnEdge
+    const canCdnEdge = getAcceptanceConfig().capabilities.cdnEdge
+    const canRender = getAcceptanceConfig().capabilities.render
 
     beforeAll(async () => {
       client = createRestClient()
@@ -164,31 +186,15 @@ describeAcceptance(
       let controlRoute = ''
 
       try {
-        if (isCdnEdge) {
+        if (canCdnEdge) {
           await uploadRestObject(bucketName, purgedKey, 'cdn-purge-target-content')
           await uploadRestObject(bucketName, controlKey, 'cdn-purge-control-content')
 
           purgedRoute = (await getObjectUrl(bucketName, purgedKey, 'public', 'public')).route
           controlRoute = (await getObjectUrl(bucketName, controlKey, 'public', 'public')).route
 
-          await client.request('GET', purgedRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-          })
-          await client.request('GET', purgedRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
-          await client.request('GET', controlRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-          })
-          await client.request('GET', controlRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
+          await warmCacheEndpoint(client, purgedRoute)
+          await warmCacheEndpoint(client, controlRoute)
         }
 
         const purge = await client.request<CdnPurgeResponse>(
@@ -203,7 +209,7 @@ describeAcceptance(
           message: 'success',
         })
 
-        if (isCdnEdge) {
+        if (canCdnEdge) {
           await client.request('GET', purgedRoute, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
@@ -215,7 +221,7 @@ describeAcceptance(
           })
         }
       } finally {
-        if (isCdnEdge) {
+        if (canCdnEdge) {
           await cleanupRestObjects(bucketName, [purgedKey, controlKey], client)
         }
       }
@@ -227,7 +233,7 @@ describeAcceptance(
       let transformRoute = ''
 
       try {
-        if (isCdnEdge) {
+        if (canCdnEdge && canRender) {
           await uploadRestObject(bucketName, objectKey, onePixelPng, {
             contentType: 'image/png',
           })
@@ -235,29 +241,15 @@ describeAcceptance(
           objectRoute = (await getObjectUrl(bucketName, objectKey, 'public', 'public')).route
           transformRoute = (
             await getObjectUrl(bucketName, objectKey, 'public', 'public', {
-              width: 10,
-              height: 10,
+              transform: {
+                width: 10,
+                height: 10,
+              },
             })
           ).route
 
-          await client.request('GET', objectRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-          })
-          await client.request('GET', objectRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
-          await client.request('GET', transformRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-          })
-          await client.request('GET', transformRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
+          await warmCacheEndpoint(client, objectRoute)
+          await warmCacheEndpoint(client, transformRoute)
         }
 
         const purge = await client.request<CdnPurgeResponse>(
@@ -272,19 +264,11 @@ describeAcceptance(
           message: 'success',
         })
 
-        if (isCdnEdge) {
-          await client.request('GET', transformRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
-          await client.request('GET', objectRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-          })
+        if (canCdnEdge && canRender) {
+          await warmCacheEndpoint(client, transformRoute)
         }
       } finally {
-        if (isCdnEdge) {
+        if (canCdnEdge && canRender) {
           await cleanupRestObjects(bucketName, [objectKey], client)
         }
       }
@@ -298,7 +282,7 @@ describeAcceptance(
       let controlRoute = ''
 
       try {
-        if (isCdnEdge) {
+        if (canCdnEdge) {
           await createRestBucket(controlBucketName, { isPublic: true })
           await uploadRestObject(bucketName, objectKey, 'cdn-purge-bucket-target')
           await uploadRestObject(controlBucketName, controlKey, 'cdn-purge-bucket-control')
@@ -307,21 +291,8 @@ describeAcceptance(
           controlRoute = (await getObjectUrl(controlBucketName, controlKey, 'public', 'public'))
             .route
 
-          await client.request('GET', route, { expectedCacheStatus: 'MISS', expectedStatus: 200 })
-          await client.request('GET', route, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
-          await client.request('GET', controlRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-          })
-          await client.request('GET', controlRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
+          await warmCacheEndpoint(client, route)
+          await warmCacheEndpoint(client, controlRoute)
         }
 
         const purge = await client.request<CdnPurgeResponse>('DELETE', `/cdn/${bucketName}`, {
@@ -332,7 +303,7 @@ describeAcceptance(
           message: 'success',
         })
 
-        if (isCdnEdge) {
+        if (canCdnEdge) {
           await client.request('GET', route, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
@@ -344,7 +315,7 @@ describeAcceptance(
           })
         }
       } finally {
-        if (isCdnEdge) {
+        if (canCdnEdge) {
           await cleanupRestResources(controlBucketName, [controlKey], client)
           await cleanupRestObjects(bucketName, [objectKey], client)
         }
@@ -357,7 +328,7 @@ describeAcceptance(
       let transformRoute = ''
 
       try {
-        if (isCdnEdge) {
+        if (canCdnEdge && canRender) {
           await uploadRestObject(bucketName, objectKey, onePixelPng, {
             contentType: 'image/png',
           })
@@ -365,29 +336,15 @@ describeAcceptance(
           objectRoute = (await getObjectUrl(bucketName, objectKey, 'public', 'public')).route
           transformRoute = (
             await getObjectUrl(bucketName, objectKey, 'public', 'public', {
-              width: 10,
-              height: 10,
+              transform: {
+                width: 10,
+                height: 10,
+              },
             })
           ).route
 
-          await client.request('GET', objectRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-          })
-          await client.request('GET', objectRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
-          await client.request('GET', transformRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-          })
-          await client.request('GET', transformRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
+          await warmCacheEndpoint(client, objectRoute)
+          await warmCacheEndpoint(client, transformRoute)
         }
 
         const purge = await client.request<CdnPurgeResponse>(
@@ -402,7 +359,7 @@ describeAcceptance(
           message: 'success',
         })
 
-        if (isCdnEdge) {
+        if (canCdnEdge && canRender) {
           await client.request('GET', transformRoute, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
@@ -414,7 +371,7 @@ describeAcceptance(
           })
         }
       } finally {
-        if (isCdnEdge) {
+        if (canCdnEdge && canRender) {
           await cleanupRestObjects(bucketName, [objectKey], client)
         }
       }
@@ -428,7 +385,7 @@ describeAcceptance(
       let secondRoute = ''
 
       try {
-        if (isCdnEdge) {
+        if (canCdnEdge) {
           await createRestBucket(secondBucketName, { isPublic: true })
           await uploadRestObject(bucketName, objectKey, 'cdn-purge-tenant-target')
           await uploadRestObject(secondBucketName, secondKey, 'cdn-purge-tenant-target-2')
@@ -436,21 +393,8 @@ describeAcceptance(
           route = (await getObjectUrl(bucketName, objectKey, 'public', 'public')).route
           secondRoute = (await getObjectUrl(secondBucketName, secondKey, 'public', 'public')).route
 
-          await client.request('GET', route, { expectedCacheStatus: 'MISS', expectedStatus: 200 })
-          await client.request('GET', route, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
-          await client.request('GET', secondRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-          })
-          await client.request('GET', secondRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
+          await warmCacheEndpoint(client, route)
+          await warmCacheEndpoint(client, secondRoute)
         }
 
         const purge = await client.request<CdnPurgeResponse>('DELETE', '/cdn/', {
@@ -461,7 +405,7 @@ describeAcceptance(
           message: 'success',
         })
 
-        if (isCdnEdge) {
+        if (canCdnEdge) {
           await client.request('GET', route, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
@@ -474,7 +418,7 @@ describeAcceptance(
           })
         }
       } finally {
-        if (isCdnEdge) {
+        if (canCdnEdge) {
           await cleanupRestResources(secondBucketName, [secondKey], client)
           await cleanupRestObjects(bucketName, [objectKey], client)
         }
@@ -491,7 +435,7 @@ describeAcceptance(
       let secondTransformRoute = ''
 
       try {
-        if (isCdnEdge) {
+        if (canCdnEdge && canRender) {
           await createRestBucket(secondBucketName, { isPublic: true })
           await uploadRestObject(bucketName, objectKey, onePixelPng, { contentType: 'image/png' })
           await uploadRestObject(secondBucketName, secondKey, onePixelPng, {
@@ -501,55 +445,27 @@ describeAcceptance(
           objectRoute = (await getObjectUrl(bucketName, objectKey, 'public', 'public')).route
           transformRoute = (
             await getObjectUrl(bucketName, objectKey, 'public', 'public', {
-              width: 10,
-              height: 10,
+              transform: {
+                width: 10,
+                height: 10,
+              },
             })
           ).route
           secondObjectRoute = (await getObjectUrl(secondBucketName, secondKey, 'public', 'public'))
             .route
           secondTransformRoute = (
             await getObjectUrl(secondBucketName, secondKey, 'public', 'public', {
-              width: 10,
-              height: 10,
+              transform: {
+                width: 10,
+                height: 10,
+              },
             })
           ).route
 
-          await client.request('GET', objectRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-          })
-          await client.request('GET', objectRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
-          await client.request('GET', transformRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-          })
-          await client.request('GET', transformRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
-          await client.request('GET', secondObjectRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-          })
-          await client.request('GET', secondObjectRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
-          await client.request('GET', secondTransformRoute, {
-            expectedCacheStatus: 'MISS',
-            expectedStatus: 200,
-          })
-          await client.request('GET', secondTransformRoute, {
-            expectedCacheStatus: 'HIT',
-            expectedStatus: 200,
-            retries: CACHE_RETRIES,
-          })
+          await warmCacheEndpoint(client, objectRoute)
+          await warmCacheEndpoint(client, transformRoute)
+          await warmCacheEndpoint(client, secondObjectRoute)
+          await warmCacheEndpoint(client, secondTransformRoute)
         }
 
         const purge = await client.request<CdnPurgeResponse>(
@@ -564,7 +480,7 @@ describeAcceptance(
           message: 'success',
         })
 
-        if (isCdnEdge) {
+        if (canCdnEdge && canRender) {
           await client.request('GET', transformRoute, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
@@ -585,7 +501,7 @@ describeAcceptance(
           })
         }
       } finally {
-        if (isCdnEdge) {
+        if (canCdnEdge && canRender) {
           await cleanupRestResources(secondBucketName, [secondKey], client)
           await cleanupRestObjects(bucketName, [objectKey], client)
         }
@@ -609,6 +525,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
         requires: isAuthenticated ? ['cdnEdge', 'rlsSetup'] : ['cdnEdge'],
       },
       () => {
+        const canRender = getAcceptanceConfig().capabilities.render
         let client: AcceptanceHttpClient
         let bucketName: string
         let writePrefix: string | undefined
@@ -772,16 +689,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               accessMethod
             )
 
-            await client.request('GET', route, {
-              expectedCacheStatus: 'MISS',
-              expectedStatus: 200,
-              token,
-            })
-            await client.request('GET', route, {
-              expectedCacheStatus: 'HIT',
-              expectedStatus: 200,
-              token,
-            })
+            await warmCacheEndpoint(client, route, token)
 
             await uploadRestObject(bucketName, objectKey, updatedContent)
 
@@ -831,17 +739,17 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               accessMethod
             )
 
-            await client.request('GET', oldRoute, {
-              expectedCacheStatus: 'MISS',
-              expectedStatus: 200,
-              token: oldToken,
-            })
-            await client.request('GET', oldRoute, {
-              expectedCacheStatus: 'HIT',
-              expectedStatus: 200,
-              retries: CACHE_RETRIES,
-              token: oldToken,
-            })
+            await warmCacheEndpoint(client, oldRoute, oldToken)
+
+            let nonExpiringSignedRoute = ''
+            if (isSigned) {
+              nonExpiringSignedRoute = (
+                await getObjectUrl(bucketName, oldKey, bucketType, accessMethod, {
+                  expiresIn: 1000,
+                })
+              ).route
+              await warmCacheEndpoint(client, nonExpiringSignedRoute)
+            }
 
             await client.request('POST', '/object/move', {
               body: {
@@ -853,8 +761,20 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               token: requireServiceKey(config),
             })
 
-            // Signed requests return HIT for 60s or until the token expires
-            await delay(SIGNED_EXPIRES_IN_S * 1000)
+            if (isSigned) {
+              // Signed requests return HIT for 60s or until the token expires
+              await delay(60_000)
+
+              const oldResult = await client.request('GET', nonExpiringSignedRoute, {
+                expectedCacheStatus: 'BYPASS',
+                expectedStatus: 400,
+                retries: CACHE_RETRIES,
+              })
+              expect(parseStorageError(oldResult.json)).toMatchObject({
+                statusCode: '404',
+                error: 'not_found',
+              })
+            }
 
             const expectedError = isSigned
               ? { statusCode: '400', error: 'InvalidJWT' }
@@ -877,22 +797,13 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               accessMethod
             )
 
-            const newFirst = await client.request('GET', newRoute, {
-              expectedCacheStatus: 'MISS',
-              expectedStatus: 200,
-              token: newToken,
-            })
-            expect(newFirst.body).toBe(content)
-
-            await client.request('GET', newRoute, {
-              expectedCacheStatus: 'HIT',
-              expectedStatus: 200,
-              token: newToken,
-            })
+            const { hit, miss } = await warmCacheEndpoint(client, newRoute, newToken)
+            expect(hit.body).toBe(content)
+            expect(miss.body).toBe(content)
           } finally {
             await cleanupRestObjects(bucketName, [newKey], client)
           }
-        })
+        }, 90_000) // signed cache takes 60s to expire
 
         it('creates new cache entry for COPY destination without affecting source', async () => {
           const config = getAcceptanceConfig()
@@ -911,17 +822,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               bucketType,
               accessMethod
             )
-
-            await client.request('GET', sourceRoute, {
-              expectedCacheStatus: 'MISS',
-              expectedStatus: 200,
-              token: sourceToken,
-            })
-            await client.request('GET', sourceRoute, {
-              expectedCacheStatus: 'HIT',
-              expectedStatus: 200,
-              token: sourceToken,
-            })
+            await warmCacheEndpoint(client, sourceRoute, sourceToken)
 
             await client.request('POST', '/object/copy', {
               body: {
@@ -942,18 +843,10 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               accessMethod
             )
 
-            const destFirst = await client.request('GET', destRoute, {
-              expectedCacheStatus: 'MISS',
-              expectedStatus: 200,
-              token: destToken,
-            })
-            expect(destFirst.body).toBe(content)
+            const { hit, miss } = await warmCacheEndpoint(client, destRoute, destToken)
+            expect(hit.body).toBe(content)
+            expect(miss.body).toBe(content)
 
-            await client.request('GET', destRoute, {
-              expectedCacheStatus: 'HIT',
-              expectedStatus: 200,
-              token: destToken,
-            })
             await client.request('GET', sourceRoute, {
               expectedCacheStatus: 'HIT',
               expectedStatus: 200,
@@ -980,16 +873,17 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               accessMethod
             )
 
-            await client.request('GET', route, {
-              expectedCacheStatus: 'MISS',
-              expectedStatus: 200,
-              token,
-            })
-            await client.request('GET', route, {
-              expectedCacheStatus: 'HIT',
-              expectedStatus: 200,
-              token,
-            })
+            await warmCacheEndpoint(client, route, token)
+
+            let nonExpiringSignedRoute = ''
+            if (isSigned) {
+              nonExpiringSignedRoute = (
+                await getObjectUrl(bucketName, objectKey, bucketType, accessMethod, {
+                  expiresIn: 1000,
+                })
+              ).route
+              await warmCacheEndpoint(client, nonExpiringSignedRoute)
+            }
 
             await client.request(
               'DELETE',
@@ -1000,8 +894,20 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               }
             )
 
-            // Signed requests return HIT for 60s or until the token expires
-            await delay(SIGNED_EXPIRES_IN_S * 1000)
+            if (isSigned) {
+              // Signed requests return HIT for 60s or until the token expires
+              await delay(60_000)
+
+              const oldResult = await client.request('GET', nonExpiringSignedRoute, {
+                expectedCacheStatus: 'BYPASS',
+                expectedStatus: 400,
+                retries: CACHE_RETRIES,
+              })
+              expect(parseStorageError(oldResult.json)).toMatchObject({
+                statusCode: '404',
+                error: 'not_found',
+              })
+            }
 
             const expectedError = isSigned
               ? { statusCode: '400', error: 'InvalidJWT' }
@@ -1017,9 +923,9 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
           } finally {
             await cleanupRestObjects(bucketName, [objectKey], client)
           }
-        })
+        }, 90_000) // signed cache takes 60s to expire
 
-        it('caches different transformations independently', async () => {
+        it.skipIf(!canRender)('caches different transformations independently', async () => {
           const objectKey = makeObjectKey('transform', 'png')
 
           try {
@@ -1034,39 +940,18 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               objectKey,
               bucketType,
               accessMethod,
-              { width: 10, height: 10 }
+              { transform: { width: 10, height: 10 } }
             )
             const { route: transform2Route, token: token2 } = await getObjectUrl(
               bucketName,
               objectKey,
               bucketType,
               accessMethod,
-              { width: 20, height: 20 }
+              { transform: { width: 20, height: 20 } }
             )
 
-            await client.request('GET', transform1Route, {
-              expectedCacheStatus: 'MISS',
-              expectedStatus: 200,
-              token: token1,
-            })
-            await client.request('GET', transform1Route, {
-              expectedCacheStatus: 'HIT',
-              expectedStatus: 200,
-              retries: CACHE_RETRIES,
-              token: token1,
-            })
-
-            await client.request('GET', transform2Route, {
-              expectedCacheStatus: 'MISS',
-              expectedStatus: 200,
-              token: token2,
-            })
-            await client.request('GET', transform2Route, {
-              expectedCacheStatus: 'HIT',
-              expectedStatus: 200,
-              retries: CACHE_RETRIES,
-              token: token2,
-            })
+            await warmCacheEndpoint(client, transform1Route, token1)
+            await warmCacheEndpoint(client, transform2Route, token2)
 
             await client.request('GET', transform1Route, {
               expectedCacheStatus: 'HIT',

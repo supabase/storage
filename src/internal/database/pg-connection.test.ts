@@ -24,6 +24,10 @@ class TestablePgPoolStrategy extends PgPoolStrategy {
   setCurrentPoolForTest(pool: Pool): void {
     this.pool = pool
   }
+
+  getCachedExecutorPoolForTest(): Pool | undefined {
+    return Reflect.get(this, 'executorPool') as Pool | undefined
+  }
 }
 
 function createPoolStrategySettings(
@@ -2139,5 +2143,41 @@ describe('PgTenantConnection payload serialization', () => {
     } finally {
       stringifySpy.mockRestore()
     }
+  })
+})
+
+describe('PgPoolStrategy executor reuse', () => {
+  it('reuses one executor per physical pool and rebuilds it when the pool is replaced', () => {
+    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
+    const poolA = { options: { max: 8 } } as unknown as Pool
+    strategy.setCurrentPoolForTest(poolA)
+
+    const first = strategy.acquire()
+    expect(strategy.acquire()).toBe(first)
+
+    strategy.rebalance({ maxConnections: 4 })
+    expect(strategy.acquire()).toBe(first)
+
+    const poolB = { options: { max: 8 } } as unknown as Pool
+    strategy.setCurrentPoolForTest(poolB)
+    const replacement = strategy.acquire()
+    expect(replacement).not.toBe(first)
+    expect(strategy.acquire()).toBe(replacement)
+  })
+
+  it('releases the cached executor pool when the strategy is destroyed', async () => {
+    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
+    const pool = {
+      options: { max: 8 },
+      end: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Pool
+    strategy.setCurrentPoolForTest(pool)
+
+    strategy.acquire()
+    expect(strategy.getCachedExecutorPoolForTest()).toBe(pool)
+
+    await strategy.destroy()
+
+    expect(strategy.getCachedExecutorPoolForTest()).toBeUndefined()
   })
 })

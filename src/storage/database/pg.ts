@@ -28,7 +28,8 @@ import {
 } from './adapter'
 import { DBError, mapPgTransactionAbortedError, PgErrorContext } from './errors'
 
-const { databaseEngine, isMultitenant } = getConfig()
+const { databaseEngine, databaseStatementTimeout, isMultitenant, databaseHealthcheckUnscoped } =
+  getConfig()
 // Scanner cache tables are unlogged scratch tables, not session temp tables.
 // They must survive across pooled pg clients used by separate unscoped queries.
 const S3_KEYS_SCRATCH_TABLE_SCHEMA = 'storage'
@@ -50,6 +51,31 @@ interface PgDatabaseOptions {
   tnx?: PgTransaction
   parentTnx?: PgTransaction
   parentConnection?: PgTenantConnection
+}
+
+interface UnscopedQueryOptions {
+  readonly timeoutMs?: number
+}
+
+const HEALTHCHECK_SQL = 'SELECT id from storage.buckets limit 1'
+const HEALTHCHECK_QUERY_OPTIONS: UnscopedQueryOptions = Object.freeze({
+  timeoutMs: databaseStatementTimeout,
+})
+
+async function executeQuery<T extends QueryResultRow = QueryResultRow>(
+  db: PgExecutor,
+  statement: string | PgStatement,
+  signal?: AbortSignal
+) {
+  try {
+    return await db.query<T>(statement, { signal })
+  } catch (error) {
+    throw mapPgError(error, typeof statement === 'string' ? statement : statement.text)
+  }
+}
+
+function healthcheckProbe(db: PgExecutor, signal?: AbortSignal) {
+  return executeQuery(db, HEALTHCHECK_SQL, signal)
 }
 
 class TestPermissionRollbackError extends Error {
@@ -1666,9 +1692,11 @@ export class StoragePgDB implements Database {
   }
 
   async healthcheck() {
-    await this.runQuery('Healthcheck', (db, signal) => {
-      return this.query(db, 'SELECT id from storage.buckets limit 1', signal)
-    })
+    if (databaseHealthcheckUnscoped) {
+      await this.runUnscopedQuery('Healthcheck', healthcheckProbe, HEALTHCHECK_QUERY_OPTIONS)
+    } else {
+      await this.runQuery('Healthcheck', healthcheckProbe)
+    }
   }
 
   destroyConnection(): void {
@@ -1883,31 +1911,53 @@ export class StoragePgDB implements Database {
 
   protected async runUnscopedQuery<T>(
     queryName: string,
-    fn: (db: PgExecutor, signal?: AbortSignal) => Promise<T>
+    fn: (db: PgExecutor, signal?: AbortSignal) => Promise<T>,
+    options?: UnscopedQueryOptions
   ): Promise<T> {
     const startTime = performance.now()
-    const abortSignal = this.connection.getAbortSignal()
-    const recordDuration = this.createDurationRecorder(queryName, startTime, abortSignal)
+    const requestAbortSignal = this.connection.getAbortSignal()
+    const recordDuration = this.createDurationRecorder(queryName, startTime, requestAbortSignal)
+    const timeoutMs = normalizeTimeoutMs(options?.timeoutMs)
+
+    let controller: AbortController | undefined
+    let timer: NodeJS.Timeout | undefined
+    let onRequestAbort: (() => void) | undefined
+
+    if (timeoutMs !== undefined) {
+      controller = new AbortController()
+      timer = setTimeout(abortFromTimer, timeoutMs, controller)
+      timer.unref()
+
+      if (requestAbortSignal?.aborted) {
+        controller.abort()
+      } else if (requestAbortSignal) {
+        const timedController = controller
+        onRequestAbort = () => timedController.abort()
+        requestAbortSignal.addEventListener('abort', onRequestAbort, { once: true })
+      }
+    }
 
     try {
-      return await fn(this.connection.pool.acquire(), abortSignal)
+      return await fn(this.connection.pool.acquire(), controller?.signal ?? requestAbortSignal)
     } catch (e) {
       throw mapPgErrorWithQueryName(e, queryName)
     } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer)
+      }
+      if (onRequestAbort) {
+        requestAbortSignal?.removeEventListener('abort', onRequestAbort)
+      }
       recordDuration()
     }
   }
 
-  protected async query<T extends QueryResultRow = QueryResultRow>(
+  protected query<T extends QueryResultRow = QueryResultRow>(
     db: PgExecutor,
     statement: string | PgStatement,
     signal?: AbortSignal
   ) {
-    try {
-      return await db.query<T>(statement, { signal })
-    } catch (e) {
-      throw mapPgError(e, typeof statement === 'string' ? statement : statement.text)
-    }
+    return executeQuery<T>(db, statement, signal)
   }
 
   private createDurationRecorder(
@@ -1932,6 +1982,20 @@ export class StoragePgDB implements Database {
       })
     }
   }
+}
+
+function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined
+  }
+
+  return timeoutMs
+}
+
+// Static setTimeout callback taking the controller as an argument
+// so arming the deadline allocates no closure.
+function abortFromTimer(controller: AbortController): void {
+  controller.abort()
 }
 
 function selectColumns(columns: string | string[]): string {

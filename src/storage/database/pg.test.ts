@@ -1,7 +1,8 @@
-import { PgTenantConnection } from '@internal/database'
+import { type PgExecutor, PgPoolExecutor, PgTenantConnection } from '@internal/database'
 import { normalizeRawError } from '@internal/errors'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
-import { DatabaseError } from 'pg'
+import { EventEmitter } from 'events'
+import { DatabaseError, type Pool, type PoolClient } from 'pg'
 import { vi } from 'vitest'
 import { escapeLike, StoragePgDB } from './pg'
 
@@ -106,6 +107,193 @@ describe('StoragePgDB metrics', () => {
       performanceNowSpy.mockRestore()
       recordSpy.mockRestore()
     }
+  })
+})
+
+describe('StoragePgDB healthcheck', () => {
+  const probeSql = 'SELECT id from storage.buckets limit 1'
+  const expectedAbortError = {
+    name: 'AbortError',
+    code: 'ABORT_ERR',
+    message: 'Query was aborted',
+  }
+  let UnscopedStoragePgDB: typeof StoragePgDB
+
+  beforeAll(async () => {
+    vi.resetModules()
+    const configModule = await import('../../config')
+    const { databaseHealthcheckUnscoped } = configModule.getConfig()
+    configModule.mergeConfig({ databaseHealthcheckUnscoped: true })
+
+    try {
+      const pgModule = await import('./pg')
+      UnscopedStoragePgDB = pgModule.StoragePgDB
+    } finally {
+      configModule.mergeConfig({ databaseHealthcheckUnscoped })
+    }
+  })
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.clearAllTimers()
+    vi.useRealTimers()
+  })
+
+  function createHealthcheckFixture(
+    executor: PgExecutor,
+    options: {
+      requestSignal?: AbortSignal
+      StorageClass?: typeof StoragePgDB
+    } = {}
+  ) {
+    const { requestSignal, StorageClass = TestStoragePgDB } = options
+    const transaction = {
+      commit: vi.fn(),
+      rollback: vi.fn(),
+      isCompleted: vi.fn().mockReturnValue(false),
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+    }
+    const connection = {
+      getAbortSignal: vi.fn().mockReturnValue(requestSignal),
+      pool: {
+        acquire: vi.fn().mockReturnValue(executor),
+      },
+      transaction: vi.fn().mockResolvedValue(transaction),
+      setScope: vi.fn(),
+    } as unknown as PgTenantConnection
+    const storage = new StorageClass(connection, {
+      tenantId: 'healthcheck-tenant',
+      host: 'localhost',
+    })
+
+    return { connection, storage, transaction }
+  }
+
+  function createProbe(requestSignal?: AbortSignal) {
+    let finishQuery: (() => void) | undefined
+    const executor = {
+      query: vi.fn().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishQuery = () => resolve({ rows: [] })
+          })
+      ),
+    }
+    const fixture = createHealthcheckFixture(executor, {
+      requestSignal,
+      StorageClass: UnscopedStoragePgDB,
+    })
+
+    return {
+      ...fixture,
+      executor,
+      probeSignal: () => executor.query.mock.calls[0]?.[1]?.signal as AbortSignal | undefined,
+      finishQuery: () => {
+        if (!finishQuery) {
+          throw new Error('Probe query has not started')
+        }
+        finishQuery()
+      },
+    }
+  }
+
+  function createPendingPoolExecutor() {
+    const release = vi.fn()
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn(() => new Promise(() => undefined)),
+      release,
+    }) as unknown as PoolClient & EventEmitter
+    const connect = vi.fn().mockResolvedValue(client)
+    const pool = { connect } as unknown as Pool
+
+    return { client, connect, executor: new PgPoolExecutor(pool), release }
+  }
+
+  test('rejects and disposes the client when the healthcheck timeout elapses', async () => {
+    const { client, executor, release } = createPendingPoolExecutor()
+    const fixture = createHealthcheckFixture(executor, {
+      StorageClass: UnscopedStoragePgDB,
+    })
+    const probe = fixture.storage.healthcheck()
+    const rejection = expect(probe).rejects.toMatchObject(expectedAbortError)
+
+    await vi.advanceTimersByTimeAsync(0)
+    expect(client.query).toHaveBeenCalledWith(probeSql, undefined)
+
+    await vi.advanceTimersToNextTimerAsync()
+
+    await rejection
+    expect(release).toHaveBeenCalledWith(expect.objectContaining(expectedAbortError))
+
+    expect(fixture.connection.pool.acquire).toHaveBeenCalledTimes(1)
+    expect(fixture.connection.transaction).not.toHaveBeenCalled()
+    expect(fixture.connection.setScope).not.toHaveBeenCalled()
+  })
+
+  test('rejects and disposes the client when the request is canceled in flight', async () => {
+    const requestController = new AbortController()
+    const { client, executor, release } = createPendingPoolExecutor()
+    const fixture = createHealthcheckFixture(executor, {
+      requestSignal: requestController.signal,
+      StorageClass: UnscopedStoragePgDB,
+    })
+    const probe = fixture.storage.healthcheck()
+    const rejection = expect(probe).rejects.toMatchObject(expectedAbortError)
+
+    await vi.advanceTimersByTimeAsync(0)
+    expect(client.query).toHaveBeenCalledWith(probeSql, undefined)
+
+    requestController.abort()
+
+    await rejection
+    expect(release).toHaveBeenCalledWith(expect.objectContaining(expectedAbortError))
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  test('rejects before checkout when the request is already canceled', async () => {
+    const requestController = new AbortController()
+    requestController.abort()
+    const { connect, executor } = createPendingPoolExecutor()
+    const fixture = createHealthcheckFixture(executor, {
+      requestSignal: requestController.signal,
+      StorageClass: UnscopedStoragePgDB,
+    })
+
+    await expect(fixture.storage.healthcheck()).rejects.toMatchObject(expectedAbortError)
+
+    expect(connect).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  test('uses the scoped readiness probe by default', async () => {
+    const executor = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+    } as unknown as PgExecutor
+    const fixture = createHealthcheckFixture(executor)
+
+    await expect(fixture.storage.healthcheck()).resolves.toBeUndefined()
+
+    expect(fixture.connection.pool.acquire).not.toHaveBeenCalled()
+    expect(fixture.connection.transaction).toHaveBeenCalledTimes(1)
+    expect(fixture.connection.setScope).toHaveBeenCalledWith(fixture.transaction)
+    expect(fixture.transaction.query).toHaveBeenCalledWith(probeSql, { signal: undefined })
+    expect(fixture.transaction.commit).toHaveBeenCalledTimes(1)
+  })
+
+  test('clears the timeout and stops observing the request signal once the probe settles', async () => {
+    const requestController = new AbortController()
+    const probeFixture = createProbe(requestController.signal)
+    const probe = probeFixture.storage.healthcheck()
+    probeFixture.finishQuery()
+    await expect(probe).resolves.toBeUndefined()
+
+    expect(vi.getTimerCount()).toBe(0)
+
+    requestController.abort()
+    expect(probeFixture.probeSignal()?.aborted).toBe(false)
   })
 })
 

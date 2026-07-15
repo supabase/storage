@@ -14,7 +14,7 @@ async function loadDbPlugins({
   vi.resetModules()
 
   const requestDb = {
-    dispose: vi.fn().mockResolvedValue(undefined),
+    dispose: vi.fn(),
     setAbortSignal: vi.fn(),
   }
   const getPostgresConnection = vi.fn().mockResolvedValue(requestDb)

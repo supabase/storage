@@ -21,7 +21,7 @@ function createRawTusRequest({
     error: vi.fn(),
     warn: vi.fn(),
   }
-  const dispose = vi.fn().mockResolvedValue(undefined)
+  const dispose = vi.fn()
 
   const request = {
     headers,
@@ -64,29 +64,16 @@ describe('tus lifecycle logging', () => {
     vi.restoreAllMocks()
   })
 
-  it('logs db dispose failures with sbReqId through logSchema', async () => {
-    const error = new Error('dispose failed')
-    const errorSpy = vi.spyOn(logSchema, 'error').mockImplementation(() => undefined)
-    const { dispose, rawReq, reqLog, response } = createRawTusRequest({
+  it('disposes the db synchronously when the response finishes', async () => {
+    const { dispose, rawReq, response } = createRawTusRequest({
       method: 'HEAD',
     })
-
-    dispose.mockRejectedValueOnce(error)
 
     await onIncomingRequest(rawReq, uploadId, {} as DataStore)
 
     response.emit('finish')
-    await new Promise((resolve) => setImmediate(resolve))
 
-    expect(errorSpy).toHaveBeenCalledWith(reqLog, 'Error disposing db connection', {
-      type: 'db-connection',
-      tenantId: 'tenant-123',
-      project: 'tenant-123',
-      reqId: 'req-123',
-      error,
-      sbReqId: 'sb-req-123',
-    })
-    expect(reqLog.error).not.toHaveBeenCalled()
+    expect(dispose).toHaveBeenCalledOnce()
   })
 
   it('logs upload metadata parse failures with sbReqId through logSchema', async () => {

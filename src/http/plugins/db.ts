@@ -14,7 +14,6 @@ import {
   updateTenantMigrationsState,
 } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
-import { logSchema } from '@internal/monitoring'
 import fastifyPlugin from 'fastify-plugin'
 import { getConfig, MultitenantMigrationStrategy } from '../../config'
 
@@ -65,16 +64,16 @@ export const db = fastifyPlugin(
     })
 
     fastify.addHook('onSend', async (request, reply, payload) => {
-      disposeRequestConnections(request)
+      request.db?.dispose()
       return payload
     })
 
     fastify.addHook('onTimeout', async (request) => {
-      disposeRequestConnections(request)
+      request.db?.dispose()
     })
 
     fastify.addHook('onRequestAbort', async (request) => {
-      disposeRequestConnections(request)
+      request.db?.dispose()
     })
   },
   { name: 'db-init' }
@@ -111,39 +110,20 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
     })
 
     fastify.addHook('onSend', async (request, reply, payload) => {
-      disposeRequestConnections(request)
+      request.db?.dispose()
       return payload
     })
 
     fastify.addHook('onTimeout', async (request) => {
-      disposeRequestConnections(request)
+      request.db?.dispose()
     })
 
     fastify.addHook('onRequestAbort', async (request) => {
-      disposeRequestConnections(request)
+      request.db?.dispose()
     })
   },
   { name: 'db-superuser-init' }
 )
-
-function disposeRequestConnections(request: {
-  db?: PgTenantConnection
-  log: Parameters<typeof logSchema.error>[0]
-  tenantId: string
-  id: string
-  sbReqId?: string
-}) {
-  request.db?.dispose().catch((e) => {
-    logSchema.error(request.log, 'Error disposing db connection', {
-      type: 'db-connection',
-      tenantId: request.tenantId,
-      project: request.tenantId,
-      reqId: request.id,
-      sbReqId: request.sbReqId,
-      error: e,
-    })
-  })
-}
 
 /**
  * Handle database migration for multitenant applications when a request is made

@@ -118,12 +118,7 @@ export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
           )
         } finally {
           if (storage) {
-            await storage.db.destroyConnection().catch((e) => {
-              logger.error(
-                { error: e },
-                `[Upgrade][SyncCatalogIds] ${catalog.tenant_id} - FAILED DISPOSING CONNECTION`
-              )
-            })
+            storage.db.destroyConnection()
           }
         }
       })

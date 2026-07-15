@@ -1671,8 +1671,8 @@ export class StoragePgDB implements Database {
     })
   }
 
-  destroyConnection() {
-    return this.connection.dispose()
+  destroyConnection(): void {
+    this.connection.dispose()
   }
 
   /**

@@ -209,7 +209,7 @@ describe('DeleteIcebergResources.handle', () => {
       { name: 'table-1', shard_key: 'shard-key-1', shard_id: 'shard-id-1' },
     ])
     restCatalog.listTables.mockResolvedValue({ identifiers: [] })
-    db.destroyConnection.mockResolvedValue(undefined)
+    db.destroyConnection.mockReturnValue(undefined)
   })
 
   describe('multitenant', () => {

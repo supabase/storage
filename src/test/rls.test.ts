@@ -181,7 +181,7 @@ describe('RLS policies', () => {
 
   afterAll(async () => {
     await db.end()
-    await (currentStorage.db as StoragePgDB).connection.dispose()
+    ;(currentStorage.db as StoragePgDB).connection.dispose()
   })
 
   testSpec.tests.forEach((_test, index) => {

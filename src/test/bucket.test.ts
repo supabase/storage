@@ -61,7 +61,7 @@ afterEach(async () => {
 })
 
 afterAll(async () => {
-  await adminDb.destroyConnection()
+  adminDb.destroyConnection()
 })
 
 async function createBucket(name: string, authorization = authenticatedKey) {
@@ -594,7 +594,7 @@ describe('testing count objects in bucket', () => {
   afterAll(async () => {
     await db.deleteObjects(testBucketId, testObjectNames, 'name')
     await db.deleteBucket(testBucketId)
-    await db.destroyConnection()
+    db.destroyConnection()
   })
 
   it('should return correct object count', async () => {

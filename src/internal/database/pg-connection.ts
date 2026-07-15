@@ -653,14 +653,13 @@ export class PgTenantConnection {
     return PgTenantConnection.poolManager.destroyAll()
   }
 
-  static async create(options: TenantConnectionOptions) {
+  static create(options: TenantConnectionOptions): PgTenantConnection {
     const pgPool = PgTenantConnection.poolManager.getPool(options)
     return new this(pgPool, options)
   }
 
-  dispose() {
+  dispose(): void {
     this.disposed = true
-    return Promise.resolve()
   }
 
   setAbortSignal(signal: AbortSignal) {

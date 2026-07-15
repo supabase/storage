@@ -192,7 +192,7 @@ export interface Database {
 
   healthcheck(): Promise<void>
 
-  destroyConnection(): Promise<void>
+  destroyConnection(): void
 
   createMultipartUpload(
     uploadId: string,

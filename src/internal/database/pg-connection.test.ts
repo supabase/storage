@@ -807,7 +807,7 @@ describe('PgTenantConnection', () => {
       })
     )
 
-    await connection.dispose()
+    connection.dispose()
 
     await expect(connection.query('SELECT 1')).rejects.toThrow(
       'Cannot use a disposed PgTenantConnection'
@@ -848,7 +848,7 @@ describe('PgTenantConnection', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(pool.acquire).toHaveBeenCalledTimes(1)
 
-      await connection.dispose()
+      connection.dispose()
       await vi.advanceTimersByTimeAsync(200)
 
       await expect(transactionErrorPromise).resolves.toMatchObject({

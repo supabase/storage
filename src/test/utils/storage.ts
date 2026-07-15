@@ -84,7 +84,7 @@ export function useStorage(options: { ensureMigrations?: boolean } = {}) {
   })
 
   afterAll(async () => {
-    await connection.dispose()
+    connection.dispose()
   })
 
   return {

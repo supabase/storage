@@ -270,4 +270,41 @@ describe('Pg database foundation', () => {
       connection.dispose()
     }
   })
+
+  it('reuses the single-tenant pool after disposing a request-scoped connection', async () => {
+    expect(getConfig().isMultitenant).toBe(false)
+
+    const superUser = await getServiceKeyUser(tenantId)
+    const createRequestConnection = () =>
+      getPgPostgresConnection({
+        tenantId,
+        host: 'localhost',
+        user: superUser,
+        superUser,
+      })
+
+    const first = await createRequestConnection()
+    await first.query('SELECT 1')
+    expect(first.pool.getPoolStats()).toEqual({ total: 1, used: 0 })
+
+    first.dispose()
+    expect(first.pool.getPoolStats()).toEqual({ total: 1, used: 0 })
+
+    const second = await createRequestConnection()
+
+    try {
+      expect(second).not.toBe(first)
+      expect(second.pool).toBe(first.pool)
+      expect(second.pool.getPoolStats()).toEqual({ total: 1, used: 0 })
+      await expect(first.query('SELECT 1')).rejects.toThrow(
+        'Cannot use a disposed PgTenantConnection'
+      )
+      await expect(second.query<{ n: number }>('SELECT 2 AS n')).resolves.toMatchObject({
+        rows: [{ n: 2 }],
+      })
+      expect(second.pool.getPoolStats()).toEqual({ total: 1, used: 0 })
+    } finally {
+      second.dispose()
+    }
+  })
 })

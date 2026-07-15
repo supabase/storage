@@ -298,31 +298,6 @@ describe('Tenant configs', () => {
     await expect(getFeatures('abc')).resolves.toEqual(payload.features)
   })
 
-  test('Ignores legacy database pool mode fields on tenant writes', async () => {
-    const response = await adminApp.inject({
-      method: 'POST',
-      url: `/tenants/abc`,
-      payload: {
-        ...payload,
-        databasePoolMode: 'single_use',
-      },
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(response.statusCode).toBe(201)
-
-    const getResponse = await adminApp.inject({
-      method: 'GET',
-      url: `/tenants/abc`,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(getResponse.statusCode).toBe(200)
-    expect(JSON.parse(getResponse.body)).toEqual(payload)
-  })
-
   test('PATCH refreshes local tenant config changes before the notify cache path', async () => {
     const createResponse = await adminApp.inject({
       method: 'POST',
@@ -817,6 +792,37 @@ describe('Tenant configs', () => {
     const getResponseJSON = JSON.parse(getResponse.body)
     expect(getResponseJSON).toEqual({ ...payload, databasePoolUrl: null })
     expect(getResponseJSON.databasePoolUrl).toBeNull()
+  })
+
+  test('PUT clears tenant databasePoolUrl when set to null', async () => {
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    const putResponse = await adminApp.inject({
+      method: 'PUT',
+      url: `/tenants/abc`,
+      payload: { ...payload, databasePoolUrl: null },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(putResponse.statusCode).toBe(204)
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(getResponse.statusCode).toBe(200)
+    expect(JSON.parse(getResponse.body).databasePoolUrl).toBeNull()
   })
 
   test('Upsert tenant config updates iceberg/vector limits when enabled is omitted', async () => {

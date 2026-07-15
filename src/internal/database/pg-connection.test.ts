@@ -1511,7 +1511,7 @@ describe('PgTenantConnection', () => {
     ).toHaveLength(1)
   })
 
-  it('reuses precomputed scope JSON payloads across repeated scope applications', async () => {
+  it('reuses scope JSON payloads across repeated scope applications', async () => {
     const pool = {
       acquire: vi.fn(),
     } as unknown as PgPoolStrategy
@@ -1539,7 +1539,11 @@ describe('PgTenantConnection', () => {
       await connection.setScope(executor)
       await connection.setScope(executor)
 
-      expect(stringifySpy).not.toHaveBeenCalled()
+      expect(stringifySpy).toHaveBeenCalledTimes(1)
+      expect(stringifySpy).toHaveBeenCalledWith({
+        role: 'authenticated',
+        sub: 'user-id',
+      })
     } finally {
       stringifySpy.mockRestore()
     }
@@ -2046,6 +2050,94 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
       expect(pool.options.Client).toBeUndefined()
     } finally {
       await strategy.destroy()
+    }
+  })
+})
+
+describe('PgTenantConnection payload serialization', () => {
+  it('serializes only the payload of a connection that is scoped', async () => {
+    const userToJSON = vi.fn(() => ({ role: 'authenticated', sub: 'user-1' }))
+    const superUserToJSON = vi.fn(() => ({ role: 'service_role' }))
+    const options = createPoolStrategySettings({
+      user: {
+        jwt: 'user-jwt',
+        payload: { role: 'authenticated', sub: 'user-1', toJSON: userToJSON },
+      },
+      superUser: {
+        jwt: 'service-jwt',
+        payload: { role: 'service_role', toJSON: superUserToJSON },
+      },
+    })
+    const pool = {} as unknown as PgPoolStrategy
+
+    const parent = new PgTenantConnection(pool, options)
+    const superUser = parent.asSuperUser()
+
+    expect(userToJSON).not.toHaveBeenCalled()
+    expect(superUserToJSON).not.toHaveBeenCalled()
+
+    const query = vi.fn().mockResolvedValue({ rows: [] })
+    await superUser.setScope({ query } as unknown as PgExecutor)
+
+    expect(userToJSON).not.toHaveBeenCalled()
+    expect(superUserToJSON).toHaveBeenCalledTimes(1)
+    expect(query.mock.calls[0][0].values[4]).toBe('{"role":"service_role"}')
+  })
+
+  it('memoizes shared payload serializations and reuses parent headers for superuser scopes', async () => {
+    const headers = { 'x-forwarded-host': 'tenant.example.com' }
+    const userPayload = { role: 'authenticated', sub: 'user-1' }
+    const superPayload = { role: 'service_role' }
+    const expectedUserJson = JSON.stringify(userPayload)
+    const expectedSuperJson = JSON.stringify(superPayload)
+    const expectedHeadersJson = JSON.stringify(headers)
+    const options = createPoolStrategySettings({
+      headers,
+      user: { jwt: 'user-jwt', payload: userPayload },
+      superUser: { jwt: 'service-jwt', payload: superPayload },
+    })
+    const pool = {} as unknown as PgPoolStrategy
+
+    const stringifySpy = vi.spyOn(JSON, 'stringify')
+    try {
+      const parent = new PgTenantConnection(pool, options)
+      const afterParent = stringifySpy.mock.calls.length
+
+      const sibling = new PgTenantConnection(pool, options)
+      expect(sibling.role).toBe('authenticated')
+      expect(stringifySpy.mock.calls.length).toBe(afterParent + 1)
+
+      const superUser = parent.asSuperUser()
+      const afterSuperUser = stringifySpy.mock.calls.length
+      expect(afterSuperUser).toBe(afterParent + 1)
+
+      const secondSuperUser = parent.asSuperUser()
+      expect(stringifySpy.mock.calls.length).toBe(afterSuperUser)
+
+      const parentQuery = vi.fn().mockResolvedValue({ rows: [] })
+      await parent.setScope({ query: parentQuery } as unknown as PgExecutor)
+      const afterParentScope = stringifySpy.mock.calls.length
+      const siblingQuery = vi.fn().mockResolvedValue({ rows: [] })
+      await sibling.setScope({ query: siblingQuery } as unknown as PgExecutor)
+      expect(stringifySpy.mock.calls.length).toBe(afterParentScope)
+
+      const superUserQuery = vi.fn().mockResolvedValue({ rows: [] })
+      await superUser.setScope({ query: superUserQuery } as unknown as PgExecutor)
+      const afterSuperUserScope = stringifySpy.mock.calls.length
+      const secondSuperUserQuery = vi.fn().mockResolvedValue({ rows: [] })
+      await secondSuperUser.setScope({ query: secondSuperUserQuery } as unknown as PgExecutor)
+      expect(stringifySpy.mock.calls.length).toBe(afterSuperUserScope)
+      expect(stringifySpy).toHaveBeenCalledWith(userPayload)
+      expect(stringifySpy).toHaveBeenCalledWith(superPayload)
+
+      const parentValues = parentQuery.mock.calls[0][0].values
+      const superUserValues = superUserQuery.mock.calls[0][0].values
+      expect(parentValues[4]).toBe(expectedUserJson)
+      expect(superUserValues[4]).toBe(expectedSuperJson)
+      expect(parentValues[5]).toBe(expectedHeadersJson)
+      expect(superUserValues[5]).toBe(parentValues[5])
+    } finally {
+      stringifySpy.mockRestore()
     }
   })
 })

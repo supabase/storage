@@ -610,21 +610,32 @@ export class PgTransaction implements PgExecutor {
   }
 }
 
+const serializedJwtPayloads = new WeakMap<object, string>()
+
+function serializeJwtPayload(payload: object): string {
+  let serialized = serializedJwtPayloads.get(payload)
+  if (serialized === undefined) {
+    serialized = JSON.stringify(payload)
+    serializedJwtPayloads.set(payload, serialized)
+  }
+  return serialized
+}
+
 export class PgTenantConnection {
   static poolManager = new PgPoolManager()
   public readonly role: string
   private abortSignal?: AbortSignal
   private disposed = false
   private readonly headersPayload: string
-  private readonly userPayload: string
+  private userPayload?: string
 
   constructor(
     public readonly pool: PgPoolStrategy,
-    protected readonly options: TenantConnectionOptions
+    protected readonly options: TenantConnectionOptions,
+    headersPayload?: string
   ) {
     this.role = options.user.payload.role || 'anon'
-    this.headersPayload = JSON.stringify(options.headers || {})
-    this.userPayload = JSON.stringify(options.user.payload)
+    this.headersPayload = headersPayload ?? JSON.stringify(options.headers || {})
   }
 
   static stop() {
@@ -664,10 +675,14 @@ export class PgTenantConnection {
   asSuperUser() {
     this.assertNotDisposed()
 
-    const tenantConnection = new PgTenantConnection(this.pool, {
-      ...this.options,
-      user: this.options.superUser,
-    })
+    const tenantConnection = new PgTenantConnection(
+      this.pool,
+      {
+        ...this.options,
+        user: this.options.superUser,
+      },
+      this.headersPayload
+    )
 
     if (this.abortSignal) {
       tenantConnection.setAbortSignal(this.abortSignal)
@@ -778,7 +793,7 @@ export class PgTenantConnection {
       this.role,
       this.options.user.jwt || '',
       this.options.user.payload.sub || '',
-      this.userPayload,
+      this.getUserPayload(),
       this.headersPayload,
       this.options.method || '',
       this.options.path || '',
@@ -793,6 +808,11 @@ export class PgTenantConnection {
       text: statementTimeoutMs ? scopeConfigSqlWithStatementTimeout : scopeConfigSql,
       values,
     })
+  }
+
+  private getUserPayload(): string {
+    this.userPayload ??= serializeJwtPayload(this.options.user.payload)
+    return this.userPayload
   }
 }
 

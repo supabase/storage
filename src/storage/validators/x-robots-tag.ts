@@ -25,7 +25,7 @@ const PARAMETRIC_RULE_REGEX = new RegExp(`^(${parametricRulesPattern}):\\s*(.*)$
 const PARAMETRIC_RULE_START_REGEX = new RegExp(`^(${parametricRulesPattern}):`)
 const DECIMAL_INTEGER_REGEX = /^-?\d+$/
 const UNAVAILABLE_AFTER_END_REGEX = new RegExp(
-  `unavailable_after:\\s*(.+?)(?:,\\s*(?:${simpleRulesPattern}|${parametricRulesPattern}|[a-zA-Z0-9_-]+:)|$)`
+  `^unavailable_after:\\s*(.+?)(?=,\\s*(?:${simpleRulesPattern}|${parametricRulesPattern}|[a-zA-Z0-9_-]+:)|$)`
 )
 const VALID_IMAGE_PREVIEW_VALUES = new Set(['none', 'standard', 'large'])
 
@@ -110,7 +110,7 @@ function splitRules(value: string): string[] {
         if (dateEndMatch) {
           const fullRule = `unavailable_after: ${dateEndMatch[1].trim()}`
           parts.push(fullRule)
-          remaining = remaining.substring(fullRule.length).replace(/^,\s*/, '').trim()
+          remaining = remaining.substring(dateEndMatch[0].length).replace(/^,\s*/, '').trim()
         } else {
           parts.push(remaining)
           remaining = ''

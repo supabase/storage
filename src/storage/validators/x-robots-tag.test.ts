@@ -162,6 +162,12 @@ describe('validateXRobotsTag', () => {
       ).not.toThrow()
     })
 
+    it('should accept extra whitespace before an RFC 822 date followed by another rule', () => {
+      expect(() =>
+        validateXRobotsTag('unavailable_after:  Wed, 03 Dec 2025 13:09:53 GMT, noindex')
+      ).not.toThrow()
+    })
+
     it('should throw for invalid date', () => {
       expect(() => validateXRobotsTag('unavailable_after: not-a-date')).toThrow(
         'X-Robots-Tag "unavailable_after" value must be a valid date'

@@ -1,3 +1,4 @@
+import { decrypt } from '@internal/auth'
 import { Pool } from 'pg'
 import type { DatabaseConfig } from './config.js'
 import { DatabaseWattError } from './errors.js'
@@ -64,7 +65,7 @@ export class DestinationResolver {
       throw new DatabaseWattError('DESTINATION_UNKNOWN', 'Destination is unknown')
     }
 
-    const connectionString = tenant.database_pool_url || tenant.database_url
+    const connectionString = decrypt(tenant.database_pool_url || tenant.database_url)
     if (!connectionString) {
       throw new DatabaseWattError('DESTINATION_UNKNOWN', 'Destination has no database credentials')
     }

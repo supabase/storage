@@ -289,6 +289,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Bucket')
     }
 
+    const limit = command.MaxUploads ?? 1000
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+      throw ERRORS.InvalidParameter('MaxUploads')
+    }
+
     await this.storage.asSuperUser().findBucket(command.Bucket)
 
     const keyContinuationToken = command.KeyMarker
@@ -297,10 +302,7 @@ export class S3ProtocolHandler {
     const encodingType = command.EncodingType
     const delimiter = command.Delimiter
     const prefix = command.Prefix || ''
-    const maxKeys = command.MaxUploads
     const bucket = command.Bucket
-
-    const limit = maxKeys || 200
 
     const multipartUploads = await this.storage.db.listMultipartUploads(bucket, {
       prefix,

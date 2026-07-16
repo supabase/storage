@@ -2,8 +2,8 @@ import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
 
-const ListObjectsInput = {
-  summary: 'List Objects',
+const ListMultipartUploadsInput = {
+  summary: 'List Multipart Uploads',
   Params: {
     type: 'object',
     properties: {
@@ -17,7 +17,7 @@ const ListObjectsInput = {
       uploads: { type: 'string' },
       delimiter: { type: 'string' },
       'encoding-type': { type: 'string', enum: ['url'] },
-      'max-uploads': { type: 'number', minimum: 1 },
+      'max-uploads': { type: 'integer', minimum: 1, maximum: 1000 },
       'key-marker': { type: 'string' },
       'upload-id-marker': { type: 'string' },
       prefix: { type: 'string' },
@@ -29,7 +29,7 @@ const ListObjectsInput = {
 export default function ListMultipartUploads(s3Router: S3Router) {
   s3Router.get(
     '/:Bucket?uploads',
-    { schema: ListObjectsInput, operation: ROUTE_OPERATIONS.S3_LIST_MULTIPART },
+    { schema: ListMultipartUploadsInput, operation: ROUTE_OPERATIONS.S3_LIST_MULTIPART },
     async (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 

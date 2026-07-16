@@ -19,7 +19,7 @@ const LIST_PAGE_SIZE = 1000
 const EMPTY_BUCKET_POLL_INTERVAL_MS = 2000
 const EMPTY_BUCKET_POLL_TIMEOUT_MS = 5 * 60 * 1000
 
-const confirmed = process.argv.includes('--yes')
+const confirmed = process.argv.includes('--yes') && process.env.ACCEPTANCE_ALLOW_DESTRUCTIVE
 
 interface StorageBucket {
   id: string
@@ -53,7 +53,7 @@ async function main() {
   console.log(
     confirmed
       ? 'Mode: LIVE (--yes passed, resources will be deleted)'
-      : 'Mode: DRY RUN (pass --yes to actually delete anything)'
+      : 'Mode: DRY RUN (pass --yes and ensure ACCEPTANCE_ALLOW_DESTRUCTIVE is set to actually delete anything)'
   )
   if (config.rlsBucket) {
     console.log(`Preserving RLS fixture bucket: ${config.rlsBucket} (emptied, not deleted)`)

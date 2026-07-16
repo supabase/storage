@@ -4,8 +4,10 @@ import { withOptionalVersion } from '@storage/backend'
 import { BackupObjectEvent } from '@storage/events/objects/backup-object'
 import { Storage } from '@storage/storage'
 import { getConfig } from '../../config'
+import { defineObjectColumns } from '../database'
 
 const { storageS3Bucket } = getConfig()
+const SCANNER_OBJECT_COLUMNS = defineObjectColumns('id', 'name', 'version', 'metadata')
 
 const S3_KEYS_TMP_TABLE_NAME = 'storage._s3_remote_keys'
 
@@ -153,7 +155,7 @@ export class ObjectScanner {
     for (; !options.signal.aborted; ) {
       const storageObjects = await this.storage.db.listObjects(
         bucket,
-        'id,name,version,metadata',
+        SCANNER_OBJECT_COLUMNS,
         1000,
         options.before,
         nextToken
@@ -344,11 +346,7 @@ export class ObjectScanner {
         continue
       }
 
-      const dbObjects = await this.storage.db.findObjectVersions(
-        options.bucket,
-        localObjs,
-        'name,version'
-      )
+      const dbObjects = await this.storage.db.findObjectVersions(options.bucket, localObjs)
 
       const s3OrphanedKeys = tmpS3Objects.filter(
         (key) =>

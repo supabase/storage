@@ -1,14 +1,17 @@
 import {
   type DatabaseExecutor,
+  type DatabaseStatement,
   type DatabaseTransaction,
   PgPoolExecutor,
   PgTenantConnection,
 } from '@internal/database'
+import { DBMigration } from '@internal/database/migrations'
 import { normalizeRawError } from '@internal/errors'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { EventEmitter } from 'events'
 import { DatabaseError, type Pool, type PoolClient } from 'pg'
 import { vi } from 'vitest'
+import { defineBucketColumns, defineMultipartColumns, defineObjectColumns } from './columns'
 import { escapeLike, StoragePgDB } from './pg'
 
 class TestStoragePgDB extends StoragePgDB {
@@ -209,6 +212,78 @@ describe('StoragePgDB testPermission', () => {
     )
     expect(transaction.rollback).not.toHaveBeenCalled()
     expect(transaction.commit).not.toHaveBeenCalled()
+  })
+})
+
+describe('StoragePgDB compiled column selections', () => {
+  function createQueryCaptureStorage(latestMigration?: keyof typeof DBMigration) {
+    const transaction = {
+      commit: vi.fn(),
+      rollback: vi.fn(),
+      isCompleted: vi.fn().mockReturnValue(false),
+      query: vi.fn().mockResolvedValue({ rows: [{ id: 'row' }], rowCount: 1 }),
+    }
+    const connection = {
+      getAbortSignal: vi.fn().mockReturnValue(undefined),
+      transaction: vi.fn().mockResolvedValue(transaction),
+      setScope: vi.fn(),
+    } as unknown as PgTenantConnection
+    const storage = new StoragePgDB(connection, {
+      tenantId: 'compiled-columns-tenant',
+      host: 'localhost',
+      latestMigration,
+    })
+
+    return { storage, transaction }
+  }
+
+  function capturedSql(transaction: { query: ReturnType<typeof vi.fn> }): string {
+    const statement = transaction.query.mock.calls[0]?.[0] as DatabaseStatement
+    return statement.text.replace(/\s+/g, ' ').trim()
+  }
+
+  test('uses the current object projection without runtime compilation', async () => {
+    const fixture = createQueryCaptureStorage()
+    const columns = defineObjectColumns('id', 'metadata', 'user_metadata')
+
+    await fixture.storage.findObject('bucket', 'object', columns)
+
+    expect(capturedSql(fixture.transaction)).toContain(
+      'SELECT "id", "metadata", "user_metadata" FROM storage.objects'
+    )
+  })
+
+  test('selects the precompiled object variant before custom metadata exists', async () => {
+    const fixture = createQueryCaptureStorage('operation-function')
+    const columns = defineObjectColumns('id', 'metadata', 'user_metadata')
+
+    await fixture.storage.findObject('bucket', 'object', columns)
+
+    expect(capturedSql(fixture.transaction)).toContain(
+      'SELECT "id", "metadata" FROM storage.objects'
+    )
+  })
+
+  test('selects the multipart variant for its exact migration state', async () => {
+    const fixture = createQueryCaptureStorage('custom-metadata')
+    const columns = defineMultipartColumns('id', 'user_metadata', 'metadata')
+
+    await fixture.storage.findMultipartUpload('upload', columns)
+
+    expect(capturedSql(fixture.transaction)).toContain(
+      'SELECT "id", "user_metadata" FROM storage.s3_multipart_uploads'
+    )
+  })
+
+  test('selects synthetic bucket type without per-query column rewriting', async () => {
+    const fixture = createQueryCaptureStorage()
+    const columns = defineBucketColumns('id', 'type', 'name')
+
+    await fixture.storage.listBuckets(columns)
+
+    expect(capturedSql(fixture.transaction)).toContain(
+      `SELECT "id", "name", 'STANDARD' AS "type" FROM storage.buckets`
+    )
   })
 })
 

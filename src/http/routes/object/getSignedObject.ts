@@ -1,3 +1,4 @@
+import { defineObjectColumns } from '@storage/database'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
@@ -6,6 +7,7 @@ import { sharedErrorResponseSchemas } from '../../schemas/error'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
+const OBJECT_DOWNLOAD_COLUMNS = defineObjectColumns('id', 'version', 'metadata')
 
 const getSignedObjectParamsSchema = {
   type: 'object',
@@ -69,7 +71,7 @@ export default async function routes(fastify: FastifyInstance) {
       const obj = await request.storage
         .asSuperUser()
         .from(bucketName)
-        .findObject(objParts.join('/'), 'id,version,metadata')
+        .findObject(objParts.join('/'), OBJECT_DOWNLOAD_COLUMNS)
 
       return request.storage.renderer('asset').render(request, response, {
         bucket: storageS3Bucket,

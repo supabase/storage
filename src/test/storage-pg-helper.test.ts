@@ -1,4 +1,7 @@
+import { defineBucketColumns } from '@storage/database'
 import { useStorage } from './utils/storage'
+
+const BUCKET_ID_NAME_COLUMNS = defineBucketColumns('id', 'name')
 
 describe('pg storage test helper', () => {
   const t = useStorage()
@@ -11,7 +14,7 @@ describe('pg storage test helper', () => {
       name: bucketId,
     })
 
-    await expect(t.database.findBucketById(bucketId, 'id, name')).resolves.toEqual({
+    await expect(t.database.findBucketById(bucketId, BUCKET_ID_NAME_COLUMNS)).resolves.toEqual({
       id: bucketId,
       name: bucketId,
     })

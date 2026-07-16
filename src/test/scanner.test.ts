@@ -1,11 +1,13 @@
 import { eachParallel } from '@internal/testing/generators/array'
 import { withOptionalVersion } from '@storage/backend'
+import { defineObjectColumns } from '@storage/database'
 import { randomUUID } from 'crypto'
 import { Readable } from 'stream'
 import { getConfig } from '../config'
 import { useStorage } from './utils/storage'
 
 const { storageS3Bucket, tenantId } = getConfig()
+const OBJECT_NAME_COLUMNS = defineObjectColumns('name')
 
 describe('ObjectScanner', () => {
   const storage = useStorage()
@@ -50,7 +52,11 @@ describe('ObjectScanner', () => {
       s3ToDelete.map((o) => `${tenantId}/${bucket.id}/${o.name}/${o.version}`)
     )
 
-    const objectsAfterDel = await storage.database.listObjects(bucket.id, 'name', 10000)
+    const objectsAfterDel = await storage.database.listObjects(
+      bucket.id,
+      OBJECT_NAME_COLUMNS,
+      10000
+    )
     expect(objectsAfterDel).toHaveLength(maxUploads - numToDelete)
 
     const orphaned = storage.scanner.listOrphaned(bucket.id, {
@@ -110,7 +116,11 @@ describe('ObjectScanner', () => {
       'name'
     )
 
-    const objectsAfterDel = await storage.database.listObjects(bucket.id, 'name', 10000)
+    const objectsAfterDel = await storage.database.listObjects(
+      bucket.id,
+      OBJECT_NAME_COLUMNS,
+      10000
+    )
     expect(objectsAfterDel).toHaveLength(maxUploads - numToDelete)
 
     const orphaned = storage.scanner.deleteOrphans(bucket.id, options)

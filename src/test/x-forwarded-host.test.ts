@@ -48,7 +48,8 @@ vi.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
 }))
 
 // Mock module with inline implementation that doesn't depend on variables
-vi.mock('@storage/database', () => ({
+vi.mock('@storage/database', async (importOriginal) => ({
+  ...(await importOriginal()),
   StoragePgDB: vi.fn(function () {
     return {
       listBuckets: vi.fn().mockResolvedValue([{ id: 'abc123', name: 'def456' }]),

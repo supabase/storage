@@ -1,3 +1,4 @@
+import { defineBucketColumns } from '@storage/database'
 import { isClientVersionBefore } from '@storage/limits'
 import { bucketSchema } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
@@ -5,6 +6,28 @@ import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+
+const BUCKET_LIST_COLUMNS = defineBucketColumns(
+  'id',
+  'name',
+  'public',
+  'owner',
+  'created_at',
+  'updated_at',
+  'file_size_limit',
+  'allowed_mime_types',
+  'type'
+)
+const LEGACY_BUCKET_LIST_COLUMNS = defineBucketColumns(
+  'id',
+  'name',
+  'public',
+  'owner',
+  'created_at',
+  'updated_at',
+  'file_size_limit',
+  'allowed_mime_types'
+)
 
 const successResponseSchema = {
   type: 'array',
@@ -71,8 +94,7 @@ export default async function routes(fastify: FastifyInstance) {
         isClientVersionBefore('storage3', userAgent, '0.12.1')
 
       const results = await request.storage.listBuckets(
-        'id, name, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types' +
-          (omitBucketType ? '' : ', type'),
+        omitBucketType ? LEGACY_BUCKET_LIST_COLUMNS : BUCKET_LIST_COLUMNS,
         { limit, offset, sortColumn, sortOrder, search }
       )
 

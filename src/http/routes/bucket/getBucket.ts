@@ -1,9 +1,21 @@
+import { defineBucketColumns } from '@storage/database'
 import { bucketSchema } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+
+const BUCKET_DETAILS_COLUMNS = defineBucketColumns(
+  'id',
+  'name',
+  'owner',
+  'public',
+  'created_at',
+  'updated_at',
+  'file_size_limit',
+  'allowed_mime_types'
+)
 
 const getBucketParamsSchema = {
   type: 'object',
@@ -36,10 +48,7 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketId } = request.params
 
-      const results = await request.storage.findBucket(
-        bucketId,
-        'id, name, owner, public, created_at, updated_at, file_size_limit, allowed_mime_types'
-      )
+      const results = await request.storage.findBucket(bucketId, BUCKET_DETAILS_COLUMNS)
 
       return response.send(results)
     }

@@ -1,7 +1,7 @@
 import { ERRORS, ErrorCode } from '@internal/errors'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StorageBackendAdapter } from './backend'
-import { Database } from './database'
+import { Database, resolveColumns } from './database'
 import { ObjectRemoved } from './events'
 import {
   MAX_KEYS_PER_S3_DELETE,
@@ -65,9 +65,10 @@ describe('ObjectStorage.deleteObject', () => {
       message: 'Access denied',
     })
 
-    expect(findObject).toHaveBeenCalledWith('bucket', 'private/file.txt', 'id,version,metadata', {
+    expect(findObject).toHaveBeenCalledWith('bucket', 'private/file.txt', expect.anything(), {
       forUpdate: true,
     })
+    expect(resolveColumns(findObject.mock.calls[0][2])).toBe('"id", "version", "metadata"')
     expect(deleteObject).toHaveBeenCalledWith('bucket', 'private/file.txt')
     expect(backend.deleteObject).not.toHaveBeenCalled()
   })

@@ -5,6 +5,7 @@ import { ERRORS } from '@internal/errors'
 import { createAgent } from '@internal/http'
 import { logSchema } from '@internal/monitoring'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { defineBucketColumns } from '@storage/database'
 import { getFileSizeLimit } from '@storage/limits'
 import {
   AlsMemoryKV,
@@ -39,6 +40,8 @@ import {
   onUploadFinish,
   SIGNED_URL_SUFFIX,
 } from './lifecycle'
+
+const TUS_BUCKET_LIMIT_COLUMNS = defineBucketColumns('id', 'file_size_limit')
 
 const {
   storageS3MaxSockets,
@@ -164,7 +167,7 @@ function createTusServer(
 
       const bucket = await req.upload.storage
         .asSuperUser()
-        .findBucket(resourceId.bucket, 'id,file_size_limit')
+        .findBucket(resourceId.bucket, TUS_BUCKET_LIMIT_COLUMNS)
 
       const globalFileLimit = await getFileSizeLimit(req.upload.tenantId)
 

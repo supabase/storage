@@ -4,6 +4,11 @@ import { vi } from 'vitest'
 import { S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
 import { Uploader } from '../../../storage/uploader'
 import CompleteMultipartUpload from './commands/complete-multipart-upload'
+import ListMultipartUploads from './commands/list-multipart-uploads'
+import ListObjects from './commands/list-objects'
+import ListParts from './commands/list-parts'
+import UploadPart from './commands/upload-part'
+import UploadPartCopy from './commands/upload-part-copy'
 import { getRouter, type RouteQuery, Router, type S3Router } from './router'
 
 afterEach(() => {
@@ -665,6 +670,36 @@ describe('S3ProtocolHandler.parseMetadataHeaders', () => {
 })
 
 describe('CompleteMultipartUpload route mapping', () => {
+  it.each([
+    ['', false],
+    [0, false],
+    [1, true],
+    [10_000, true],
+    [10_001, false],
+  ])('validates body PartNumber %s against the S3 range', (partNumber, expected) => {
+    const router = new Router()
+    CompleteMultipartUpload(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'post' && candidate.type === undefined)
+
+    expect(route).toBeDefined()
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Querystring: { uploadId: 'upload-id' },
+        Headers: { authorization: 'authorization' },
+        Body: {
+          CompleteMultipartUpload: {
+            Part: [{ PartNumber: partNumber, ETag: 'etag' }],
+          },
+        },
+      })
+    ).toBe(expected)
+  })
+
   it('maps ChecksumCRC32C from the backend response on iceberg routes', async () => {
     const router = new Router()
     const completeMultipartUpload = vi.fn().mockResolvedValue({
@@ -729,6 +764,148 @@ describe('CompleteMultipartUpload route mapping', () => {
         },
       },
     })
+  })
+})
+
+describe('UploadPart route validation', () => {
+  it.each([
+    [0, false],
+    [1, true],
+    ['1', true],
+    [1.5, false],
+    ['1.5', false],
+    [10_000, true],
+    [10_001, false],
+  ])('validates query partNumber %s as an integer within the S3 range', (partNumber, expected) => {
+    const router = new Router()
+    UploadPart(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === undefined)
+
+    expect(route).toBeDefined()
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Querystring: { uploadId: 'upload-id', partNumber },
+      })
+    ).toBe(expected)
+  })
+})
+
+describe('UploadPartCopy route validation', () => {
+  it.each([
+    [0, false],
+    [1, true],
+    ['1', true],
+    [1.5, false],
+    ['1.5', false],
+    [10_000, true],
+    [10_001, false],
+  ])('validates query partNumber %s as an integer within the S3 range', (partNumber, expected) => {
+    const router = new Router()
+    UploadPartCopy(router as unknown as S3Router)
+
+    const route = router.routes().get('/:Bucket/*')?.[0]
+
+    expect(route).toBeDefined()
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Querystring: { uploadId: 'upload-id', partNumber },
+        Headers: { 'x-amz-copy-source': '/source-bucket/source-key' },
+      })
+    ).toBe(expected)
+  })
+})
+
+describe('ListParts route validation', () => {
+  it.each([
+    [0, false],
+    [1, true],
+    ['1', true],
+    [1.5, false],
+    ['1.5', false],
+    [1_000, true],
+    [1_001, false],
+  ])('validates max-parts %s as an integer within the S3 range', (maxParts, expected) => {
+    const router = new Router()
+    ListParts(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'get' && candidate.type === undefined)
+
+    expect(route).toBeDefined()
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Querystring: { uploadId: 'upload-id', 'max-parts': maxParts },
+      })
+    ).toBe(expected)
+  })
+})
+
+describe('ListMultipartUploads route validation', () => {
+  it.each([
+    [0, false],
+    [1, true],
+    [1.5, false],
+    [1_000, true],
+    [1_001, false],
+  ])('validates max-uploads %s against the S3 range', (maxUploads, expected) => {
+    const router = new Router()
+    ListMultipartUploads(router as unknown as S3Router)
+
+    const route = router.routes().get('/:Bucket')?.[0]
+
+    expect(route).toBeDefined()
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket' },
+        Querystring: { uploads: '', 'max-uploads': maxUploads },
+      })
+    ).toBe(expected)
+  })
+})
+
+describe.each([
+  ['V1', false],
+  ['V2', true],
+])('ListObjects %s route validation', (_version, isV2) => {
+  it.each([
+    [-1, false],
+    [0, true],
+    [1, true],
+    ['1', true],
+    [1.5, false],
+    ['1.5', false],
+  ])('validates max-keys %s as a non-negative integer', (maxKeys, expected) => {
+    const router = new Router()
+    ListObjects(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket')
+      ?.find((candidate) =>
+        isV2
+          ? candidate.querystringMatches.some((match) => match.key === 'list-type')
+          : candidate.querystringMatches.some((match) => match.key === '*')
+      )
+
+    expect(route).toBeDefined()
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket' },
+        Querystring: {
+          ...(isV2 ? { 'list-type': '2' } : {}),
+          'max-keys': maxKeys,
+        },
+      })
+    ).toBe(expected)
   })
 })
 

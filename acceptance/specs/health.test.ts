@@ -10,7 +10,7 @@ describeAcceptance(
     it('serves status and version endpoints', async () => {
       const client = createRestClient()
 
-      await client.request('GET', '/status', { expectedStatus: 200 })
+      await client.request('GET', '/statusz', { expectedStatus: 200 })
       const version = await client.request('GET', '/version', { expectedStatus: 200 })
 
       expect(version.body.trim().length).toBeGreaterThan(0)
@@ -29,7 +29,7 @@ describeAcceptance(
       const config = getAcceptanceConfig()
       const client = createAdminClient()
 
-      await client.request('GET', '/status', { expectedStatus: 200 })
+      await client.request('GET', '/statusz', { expectedStatus: 200 })
       await client.request('GET', '/tenants', { expectedStatus: 401 })
       await client.request('GET', '/tenants', {
         expectedStatus: 200,

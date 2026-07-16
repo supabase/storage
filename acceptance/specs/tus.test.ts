@@ -543,7 +543,13 @@ async function createTusUpload({
       method: 'OPTIONS',
     })
     expect([200, 204]).toContain(options.status)
-    expect(options.headers.get('tus-version')).toContain(tusVersion)
+    if (options.headers.has('cf-ray')) {
+      // api gateway does not proxy OPTIONS calls so the tus headers are not included
+      expect(options.headers.has('tus-version')).toBe(false)
+    } else {
+      // without gateway tus-version should be set
+      expect(options.headers.get('tus-version')).toContain(tusVersion)
+    }
   } finally {
     await options?.body?.cancel()
   }

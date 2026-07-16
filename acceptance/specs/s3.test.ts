@@ -456,7 +456,7 @@ describeAcceptance(
             Key: keyA,
             ResponseCacheControl: 'no-cache, no-store',
             ResponseContentDisposition: 'attachment; filename="acceptance.txt"',
-            ResponseContentEncoding: 'gzip',
+            ResponseContentEncoding: 'identity',
             ResponseContentLanguage: 'en-US',
             ResponseContentType: 'application/octet-stream',
             ResponseExpires: expires,
@@ -464,7 +464,7 @@ describeAcceptance(
         )
         expect(overridden.CacheControl).toBe('no-cache, no-store')
         expect(overridden.ContentDisposition).toBe('attachment; filename="acceptance.txt"')
-        expect(overridden.ContentEncoding).toBe('gzip')
+        expect(overridden.ContentEncoding).toBe('identity')
         expect(overridden.ContentLanguage).toBe('en-US')
         expect(overridden.ContentType).toBe('application/octet-stream')
         expect(overridden.ExpiresString).toBe(expires.toUTCString())

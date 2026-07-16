@@ -51,7 +51,7 @@ const onePixelPng = new Uint8Array(
   )
 )
 
-const SIGNED_EXPIRES_IN_S = 7
+const SIGNED_EXPIRES_IN_S = 10
 const CACHE_RETRIES = 10
 const TEST_CONFIGS: TestConfig[] = [
   { bucketType: 'public', accessMethods: ['public'] },

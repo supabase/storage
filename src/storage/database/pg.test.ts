@@ -1,4 +1,5 @@
 import { type PgExecutor, PgPoolExecutor, PgTenantConnection } from '@internal/database'
+import { DBMigration } from '@internal/database/migrations'
 import { normalizeRawError } from '@internal/errors'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { EventEmitter } from 'events'
@@ -26,6 +27,27 @@ class TestStoragePgDB extends StoragePgDB {
   }
 }
 
+function createQueryCaptureStorage(latestMigration?: keyof typeof DBMigration) {
+  const transaction = {
+    commit: vi.fn(),
+    rollback: vi.fn(),
+    isCompleted: vi.fn().mockReturnValue(false),
+    query: vi.fn().mockResolvedValue({ rows: [{ id: 'row' }], rowCount: 1 }),
+  }
+  const connection = {
+    getAbortSignal: vi.fn().mockReturnValue(undefined),
+    transaction: vi.fn().mockResolvedValue(transaction),
+    setScope: vi.fn(),
+  } as unknown as PgTenantConnection
+  const storage = new StoragePgDB(connection, {
+    tenantId: 'column-selection-tenant',
+    host: 'localhost',
+    latestMigration,
+  })
+
+  return { storage, transaction }
+}
+
 describe('escapeLike', () => {
   test('escapes SQL wildcard characters', () => {
     expect(escapeLike('%_abc')).toBe('\\%\\_abc')
@@ -36,6 +58,54 @@ describe('escapeLike', () => {
   test('escapes backslashes before SQL wildcard characters', () => {
     expect(escapeLike('path\\name')).toBe(String.raw`path\\name`)
     expect(escapeLike(String.raw`a\%b_c`)).toBe(String.raw`a\\\%b\_c`)
+  })
+})
+
+describe('StoragePgDB column selection', () => {
+  test('keeps all requested object columns when their migrations are available', async () => {
+    const { storage, transaction } = createQueryCaptureStorage()
+
+    await storage.findObject('bucket', 'object', 'id,user_metadata,metadata')
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringContaining('SELECT "id", "user_metadata", "metadata"'),
+    })
+  })
+
+  test('strips unavailable object columns directly while compiling the SELECT list', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('initialmigration')
+
+    await storage.findObject('bucket', 'object', 'id,user_metadata,metadata')
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringContaining('SELECT "id", "metadata"'),
+    })
+    expect((transaction.query.mock.calls[0]?.[0] as { text: string }).text).not.toContain(
+      '"user_metadata"'
+    )
+  })
+
+  test('strips only multipart metadata after custom metadata is available', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('custom-metadata')
+
+    await storage.findMultipartUpload('upload', 'id,user_metadata,metadata')
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringContaining('SELECT "id", "user_metadata"'),
+    })
+    expect((transaction.query.mock.calls[0]?.[0] as { text: string }).text).not.toContain(
+      '"metadata"'
+    )
+  })
+
+  test('preserves listBuckets synthetic type placement', async () => {
+    const { storage, transaction } = createQueryCaptureStorage()
+
+    await storage.listBuckets('type,id,name')
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringContaining('SELECT "id", "name", \'STANDARD\' AS "type"'),
+    })
   })
 })
 

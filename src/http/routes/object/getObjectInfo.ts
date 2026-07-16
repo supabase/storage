@@ -1,4 +1,5 @@
 import { ERRORS } from '@internal/errors'
+import { defineBucketColumns, defineObjectColumns } from '@storage/database'
 import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -8,6 +9,17 @@ import { AuthenticatedRangeRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
+const PUBLIC_BUCKET_COLUMNS = defineBucketColumns('id', 'public')
+const OBJECT_INFO_COLUMNS = defineObjectColumns(
+  'id',
+  'name',
+  'version',
+  'bucket_id',
+  'metadata',
+  'user_metadata',
+  'updated_at',
+  'created_at'
+)
 
 const getObjectParamsSchema = {
   type: 'object',
@@ -45,7 +57,7 @@ async function requestHandler(
     objectName,
   })
 
-  const bucket = await request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
+  const bucket = await request.storage.asSuperUser().findBucket(bucketName, PUBLIC_BUCKET_COLUMNS, {
     dontErrorOnEmpty: true,
   })
 
@@ -67,17 +79,9 @@ async function requestHandler(
     obj = await request.storage
       .asSuperUser()
       .from(bucketName)
-      .findObject(
-        objectName,
-        'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
-      )
+      .findObject(objectName, OBJECT_INFO_COLUMNS)
   } else {
-    obj = await request.storage
-      .from(bucketName)
-      .findObject(
-        objectName,
-        'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
-      )
+    obj = await request.storage.from(bucketName).findObject(objectName, OBJECT_INFO_COLUMNS)
   }
 
   return request.storage.renderer(method).render(request, response, {

@@ -33,7 +33,7 @@ import { wait } from '@internal/concurrency'
 import { getPostgresConnection, getServiceKeyUser, PgTenantConnection } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
-import { StoragePgDB } from '@storage/database'
+import { defineMultipartColumns, StoragePgDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
 import { createHash, createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
@@ -65,6 +65,7 @@ const {
 } = getConfig()
 const STREAMING_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
 const STREAMING_TRAILER_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER'
+const MULTIPART_METADATA_COLUMNS = defineMultipartColumns('id', 'version', 'metadata')
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
   let bucketName: string
   if (!name) {
@@ -3465,13 +3466,13 @@ describe('Migration compatibility', () => {
 
       it('excludes metadata from result when latestMigration is before s3-multipart-uploads-metadata', async () => {
         const db = makeDB('fix-optimized-search-function') // migration 56
-        const result = await db.findMultipartUpload(uploadId, 'id,version,metadata')
+        const result = await db.findMultipartUpload(uploadId, MULTIPART_METADATA_COLUMNS)
         expect(result).not.toHaveProperty('metadata')
       })
 
       it('includes metadata in result when latestMigration is s3-multipart-uploads-metadata', async () => {
         const db = makeDB('s3-multipart-uploads-metadata') // migration 57
-        const result = await db.findMultipartUpload(uploadId, 'id,version,metadata')
+        const result = await db.findMultipartUpload(uploadId, MULTIPART_METADATA_COLUMNS)
         expect(result).toHaveProperty('metadata')
       })
     })

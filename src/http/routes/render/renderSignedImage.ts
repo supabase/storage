@@ -1,5 +1,6 @@
 import { SIGNED_URL_SCOPE_DOWNLOAD } from '@internal/auth'
 import { getTenantConfig } from '@internal/database'
+import { defineObjectColumns } from '@storage/database'
 import { ImageRenderer } from '@storage/renderer'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -7,6 +8,7 @@ import { getConfig } from '../../../config'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket, isMultitenant } = getConfig()
+const OBJECT_RENDER_COLUMNS = defineObjectColumns('id', 'version', 'metadata')
 
 const renderAuthenticatedImageParamsSchema = {
   type: 'object',
@@ -66,7 +68,7 @@ export default async function routes(fastify: FastifyInstance) {
       const obj = await request.storage
         .asSuperUser()
         .from(bucketName)
-        .findObject(objParts.join('/'), 'id,version,metadata')
+        .findObject(objParts.join('/'), OBJECT_RENDER_COLUMNS)
 
       const renderer = request.storage.renderer('image') as ImageRenderer
 

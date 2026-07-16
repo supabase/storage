@@ -1,4 +1,5 @@
 import { getTenantConfig } from '@internal/database'
+import { defineBucketColumns, defineObjectColumns } from '@storage/database'
 import { ImageRenderer } from '@storage/renderer'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -7,6 +8,8 @@ import { transformationOptionsSchema } from '../../schemas/transformations'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket, isMultitenant } = getConfig()
+const PUBLIC_BUCKET_COLUMNS = defineBucketColumns('id', 'public')
+const OBJECT_RENDER_COLUMNS = defineObjectColumns('id', 'version', 'metadata')
 
 const renderPublicImageParamsSchema = {
   type: 'object',
@@ -53,10 +56,10 @@ export default async function routes(fastify: FastifyInstance) {
 
       const bucketRef = request.storage.asSuperUser().from(bucketName)
       const [, obj] = await Promise.all([
-        request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
+        request.storage.asSuperUser().findBucket(bucketName, PUBLIC_BUCKET_COLUMNS, {
           isPublic: true,
         }),
-        bucketRef.findObject(objectName, 'id,version,metadata'),
+        bucketRef.findObject(objectName, OBJECT_RENDER_COLUMNS),
       ])
 
       const s3Key = `${request.tenantId}/${bucketName}/${objectName}`

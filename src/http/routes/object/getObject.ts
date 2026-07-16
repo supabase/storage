@@ -1,4 +1,5 @@
 import { ERRORS } from '@internal/errors'
+import { defineBucketColumns, defineObjectColumns } from '@storage/database'
 import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -7,6 +8,8 @@ import { AuthenticatedRangeRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
+const PUBLIC_BUCKET_COLUMNS = defineBucketColumns('id', 'public')
+const OBJECT_DOWNLOAD_COLUMNS = defineObjectColumns('id', 'version', 'metadata')
 
 const getObjectParamsSchema = {
   type: 'object',
@@ -42,7 +45,7 @@ async function requestHandler(request: GetObjectRequest, response: FastifyReply)
     bucketId: bucketName,
     objectName,
   })
-  const bucket = await request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
+  const bucket = await request.storage.asSuperUser().findBucket(bucketName, PUBLIC_BUCKET_COLUMNS, {
     dontErrorOnEmpty: true,
   })
 
@@ -66,10 +69,10 @@ async function requestHandler(request: GetObjectRequest, response: FastifyReply)
     obj = await request.storage
       .asSuperUser()
       .from(bucketName)
-      .findObject(objectName, 'id, version, metadata')
+      .findObject(objectName, OBJECT_DOWNLOAD_COLUMNS)
   } else {
     // request is authenticated use RLS
-    obj = await request.storage.from(bucketName).findObject(objectName, 'id, version, metadata')
+    obj = await request.storage.from(bucketName).findObject(objectName, OBJECT_DOWNLOAD_COLUMNS)
   }
 
   return request.storage.renderer('asset').render(request, response, {

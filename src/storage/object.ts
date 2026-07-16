@@ -16,7 +16,15 @@ import { StorageObjectLocator } from '@storage/locator'
 import { Obj } from '@storage/schemas'
 import { FastifyRequest } from 'fastify/types/request'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
-import { Database, FindObjectFilters, SearchObjectOption } from './database'
+import {
+  Database,
+  defineBucketColumns,
+  defineObjectColumns,
+  FindObjectFilters,
+  OBJECT_ID_COLUMNS,
+  ObjectColumnSelection,
+  SearchObjectOption,
+} from './database'
 import {
   ObjectAdminDelete,
   ObjectCreatedCopyEvent,
@@ -31,6 +39,20 @@ import {
   mustBeValidKey,
 } from './limits'
 import { CanUploadMetadata, fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
+
+const UPLOAD_BUCKET_COLUMNS = defineBucketColumns('id', 'file_size_limit', 'allowed_mime_types')
+const DELETE_OBJECT_COLUMNS = defineObjectColumns('id', 'version', 'metadata')
+const COPY_SOURCE_COLUMNS = defineObjectColumns('bucket_id', 'metadata', 'user_metadata', 'version')
+const COPY_DESTINATION_COLUMNS = defineObjectColumns(
+  'id',
+  'name',
+  'metadata',
+  'version',
+  'bucket_id'
+)
+const MOVE_SOURCE_COLUMNS = defineObjectColumns('id', 'version', 'user_metadata')
+const MOVE_LOCKED_SOURCE_COLUMNS = defineObjectColumns('id', 'version', 'metadata', 'user_metadata')
+const OBJECT_NAME_COLUMNS = defineObjectColumns('name')
 
 interface CopyObjectParams {
   sourceKey: string
@@ -93,9 +115,7 @@ export class ObjectStorage {
       signal?: AbortSignal
     }
   ) {
-    const bucket = await this.db
-      .asSuperUser()
-      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
+    const bucket = await this.db.asSuperUser().findBucketById(this.bucketId, UPLOAD_BUCKET_COLUMNS)
 
     const uploadRequest = await fileUploadFromRequest(request, {
       objectName: file.objectName,
@@ -140,7 +160,7 @@ export class ObjectStorage {
     const obj = await this.db.withTransaction(async (db) => {
       const obj = await db
         .asSuperUser()
-        .findObject(this.bucketId, objectName, 'id,version,metadata', {
+        .findObject(this.bucketId, objectName, DELETE_OBJECT_COLUMNS, {
           forUpdate: true,
         })
 
@@ -269,7 +289,11 @@ export class ObjectStorage {
    * @param columns
    * @param filters
    */
-  async findObject(objectName: string, columns = 'id', filters?: FindObjectFilters) {
+  async findObject(
+    objectName: string,
+    columns: ObjectColumnSelection = OBJECT_ID_COLUMNS,
+    filters?: FindObjectFilters
+  ) {
     mustBeValidKey(objectName)
 
     return this.db.findObject(this.bucketId, objectName, columns, filters)
@@ -280,7 +304,7 @@ export class ObjectStorage {
    * @param objectNames
    * @param columns
    */
-  async findObjects(objectNames: string[], columns = 'id') {
+  async findObjects(objectNames: string[], columns: ObjectColumnSelection = OBJECT_ID_COLUMNS) {
     return this.db.findObjects(this.bucketId, objectNames, columns)
   }
 
@@ -323,11 +347,7 @@ export class ObjectStorage {
     })
 
     // We check if the user has permission to copy the object to the destination key
-    const originObject = await this.db.findObject(
-      this.bucketId,
-      sourceKey,
-      'bucket_id,metadata,user_metadata,version'
-    )
+    const originObject = await this.db.findObject(this.bucketId, sourceKey, COPY_SOURCE_COLUMNS)
 
     const baseMetadata = originObject.metadata || {}
     const destinationMetadata = copyMetadata
@@ -373,7 +393,7 @@ export class ObjectStorage {
         const existingDestObject = await db.findObject(
           destinationBucket,
           destinationKey,
-          'id,name,metadata,version,bucket_id',
+          COPY_DESTINATION_COLUMNS,
           {
             dontErrorOnEmpty: true,
             forUpdate: true,
@@ -469,7 +489,7 @@ export class ObjectStorage {
 
     await this.db.testPermission((db) => {
       return Promise.all([
-        db.findObject(this.bucketId, sourceObjectName, 'id'),
+        db.findObject(this.bucketId, sourceObjectName, OBJECT_ID_COLUMNS),
         db.updateObject(this.bucketId, sourceObjectName, {
           name: destinationObjectName,
           version: newVersion,
@@ -481,7 +501,7 @@ export class ObjectStorage {
 
     const sourceObj = await this.db
       .asSuperUser()
-      .findObject(this.bucketId, sourceObjectName, 'id, version,user_metadata')
+      .findObject(this.bucketId, sourceObjectName, MOVE_SOURCE_COLUMNS)
 
     if (s3SourceKey === s3DestinationKey) {
       return {
@@ -512,7 +532,7 @@ export class ObjectStorage {
         const sourceObject = await db.findObject(
           this.bucketId,
           sourceObjectName,
-          'id,version,metadata,user_metadata',
+          MOVE_LOCKED_SOURCE_COLUMNS,
           {
             forUpdate: true,
             dontErrorOnEmpty: false,
@@ -771,14 +791,14 @@ export class ObjectStorage {
     let results: { name: string }[]
 
     if (paths.length <= MAX_OBJECTS_PER_LOOKUP_BATCH) {
-      results = await this.findObjects(paths, 'name')
+      results = await this.findObjects(paths, OBJECT_NAME_COLUMNS)
     } else {
       results = []
 
       for (let i = 0; i < paths.length; i += MAX_OBJECTS_PER_LOOKUP_BATCH) {
         const pathsSubset = paths.slice(i, i + MAX_OBJECTS_PER_LOOKUP_BATCH)
 
-        const objects = await this.findObjects(pathsSubset, 'name')
+        const objects = await this.findObjects(pathsSubset, OBJECT_NAME_COLUMNS)
         results.push(...objects)
       }
     }

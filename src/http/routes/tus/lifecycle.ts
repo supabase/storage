@@ -2,6 +2,7 @@ import { SIGNED_URL_SCOPE_UPLOAD } from '@internal/auth'
 import { PgTenantConnection } from '@internal/database'
 import { ERRORS, isRenderableError } from '@internal/errors'
 import { logSchema, RequestLogContext } from '@internal/monitoring'
+import { defineBucketColumns } from '@storage/database'
 import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
 import { Uploader, validateMimeType } from '@storage/uploader'
@@ -14,6 +15,7 @@ import type { ServerRequest as Request } from 'srvx'
 import { getConfig } from '../../../config'
 
 const { storageS3Bucket, tusPath, requestAllowXForwardedPrefix, storagePublicUrl } = getConfig()
+const TUS_BUCKET_COLUMNS = defineBucketColumns('id', 'file_size_limit', 'allowed_mime_types')
 const parsedPublicUrl = storagePublicUrl ? new URL(storagePublicUrl) : undefined
 const reExtractFileID = /([^/]+)\/?$/
 
@@ -272,9 +274,7 @@ export async function onCreate(
 
   const storage = req.upload.storage
 
-  const bucket = await storage
-    .asSuperUser()
-    .findBucket(uploadID.bucket, 'id, file_size_limit, allowed_mime_types')
+  const bucket = await storage.asSuperUser().findBucket(uploadID.bucket, TUS_BUCKET_COLUMNS)
 
   const metadata = {
     ...(upload.metadata ? upload.metadata : {}),

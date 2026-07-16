@@ -19,7 +19,7 @@ const UploadPartInput = {
     type: 'object',
     properties: {
       uploadId: { type: 'string' },
-      partNumber: { type: 'number', minimum: 1, maximum: 10000 },
+      partNumber: { type: 'integer', minimum: 1, maximum: 10000 },
     },
     required: ['uploadId', 'partNumber'],
   },

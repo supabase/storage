@@ -105,7 +105,7 @@ export interface PgTransactionLike extends PgExecutor {
 
 export interface PgTenantConnectionLike extends PgExecutor {
   readonly role: string
-  dispose(): Promise<void>
+  dispose(): void
   setAbortSignal(signal: AbortSignal): void
   getAbortSignal(): AbortSignal | undefined
   beginTransaction(options?: TransactionOptions): Promise<PgTransactionLike>
@@ -151,11 +151,18 @@ export type PgCancelConnectionTarget =
 export class PgPoolStrategy {
   protected pool?: Pool
   protected tlsSession?: TlsSessionSlot
+  private executor?: PgPoolExecutor
+  private executorPool?: Pool
 
   constructor(protected readonly options: PoolStrategySettings) {}
 
   acquire(): PgPoolExecutor {
-    return new PgPoolExecutor(this.getPool())
+    const pool = this.getPool()
+    if (!this.executor || this.executorPool !== pool) {
+      this.executor = new PgPoolExecutor(pool)
+      this.executorPool = pool
+    }
+    return this.executor
   }
 
   async destroy(): Promise<void> {
@@ -165,6 +172,10 @@ export class PgPoolStrategy {
       return
     }
 
+    if (this.executorPool === originalPool) {
+      this.executor = undefined
+      this.executorPool = undefined
+    }
     this.pool = undefined
     await this.drainPool(originalPool, 'destroy')
   }
@@ -627,35 +638,45 @@ export class PgTransaction implements PgTransactionLike {
   }
 }
 
+const serializedJwtPayloads = new WeakMap<object, string>()
+
+function serializeJwtPayload(payload: object): string {
+  let serialized = serializedJwtPayloads.get(payload)
+  if (serialized === undefined) {
+    serialized = JSON.stringify(payload)
+    serializedJwtPayloads.set(payload, serialized)
+  }
+  return serialized
+}
+
 export class PgTenantConnection implements PgTenantConnectionLike {
   static poolManager = new PgPoolManager()
   public readonly role: string
   private abortSignal?: AbortSignal
   private disposed = false
   private readonly headersPayload: string
-  private readonly userPayload: string
+  private userPayload?: string
 
   constructor(
     public readonly pool: PgPoolStrategy,
-    protected readonly options: TenantConnectionOptions
+    protected readonly options: TenantConnectionOptions,
+    headersPayload?: string
   ) {
     this.role = options.user.payload.role || 'anon'
-    this.headersPayload = JSON.stringify(options.headers || {})
-    this.userPayload = JSON.stringify(options.user.payload)
+    this.headersPayload = headersPayload ?? JSON.stringify(options.headers || {})
   }
 
   static stop() {
     return PgTenantConnection.poolManager.destroyAll()
   }
 
-  static async create(options: TenantConnectionOptions) {
+  static create(options: TenantConnectionOptions): PgTenantConnection {
     const pgPool = PgTenantConnection.poolManager.getPool(options)
     return new this(pgPool, options)
   }
 
-  dispose() {
+  dispose(): void {
     this.disposed = true
-    return Promise.resolve()
   }
 
   setAbortSignal(signal: AbortSignal) {
@@ -681,10 +702,14 @@ export class PgTenantConnection implements PgTenantConnectionLike {
   asSuperUser() {
     this.assertNotDisposed()
 
-    const tenantConnection = new PgTenantConnection(this.pool, {
-      ...this.options,
-      user: this.options.superUser,
-    })
+    const tenantConnection = new PgTenantConnection(
+      this.pool,
+      {
+        ...this.options,
+        user: this.options.superUser,
+      },
+      this.headersPayload
+    )
 
     if (this.abortSignal) {
       tenantConnection.setAbortSignal(this.abortSignal)
@@ -795,7 +820,7 @@ export class PgTenantConnection implements PgTenantConnectionLike {
       this.role,
       this.options.user.jwt || '',
       this.options.user.payload.sub || '',
-      this.userPayload,
+      this.getUserPayload(),
       this.headersPayload,
       this.options.method || '',
       this.options.path || '',
@@ -810,6 +835,11 @@ export class PgTenantConnection implements PgTenantConnectionLike {
       text: statementTimeoutMs ? scopeConfigSqlWithStatementTimeout : scopeConfigSql,
       values,
     })
+  }
+
+  private getUserPayload(): string {
+    this.userPayload ??= serializeJwtPayload(this.options.user.payload)
+    return this.userPayload
   }
 }
 

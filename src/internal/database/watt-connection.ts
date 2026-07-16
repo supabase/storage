@@ -51,9 +51,7 @@ class WattPgTenantConnection implements PgTenantConnectionLike {
     this.executor = new DatabaseWattPgExecutor(options.tenantId, options.operation)
   }
 
-  dispose(): Promise<void> {
-    return Promise.resolve()
-  }
+  dispose(): void {}
 
   setAbortSignal(signal: AbortSignal): void {
     this.wattAbortSignal = signal

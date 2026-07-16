@@ -40,7 +40,7 @@ const CompletedMultipartUpload = {
             items: {
               type: 'object',
               properties: {
-                PartNumber: { type: 'integer' },
+                PartNumber: { type: 'integer', minimum: 1, maximum: 10000 },
                 ETag: { type: 'string' },
               },
               required: ['PartNumber', 'ETag'],

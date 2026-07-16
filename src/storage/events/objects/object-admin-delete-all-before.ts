@@ -142,18 +142,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
       throw e
     } finally {
       if (storage) {
-        const tenant = storage.db.tenant()
-        storage.db
-          .destroyConnection()
-          .then(() => {
-            // no-op
-          })
-          .catch((e) => {
-            logger.error(
-              { error: e, sbReqId: job.data.sbReqId },
-              `[Admin]: ObjectAdminDeleteAllBefore ${tenant.ref} - FAILED DISPOSING CONNECTION`
-            )
-          })
+        storage.db.destroyConnection()
       }
     }
   }

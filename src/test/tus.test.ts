@@ -252,7 +252,7 @@ describe.each([
 
   afterEach(async () => {
     vi.useRealTimers()
-    await connection?.dispose()
+    connection?.dispose()
   })
 
   it('advertises TUS protocol headers on OPTIONS preflight', async () => {
@@ -1112,7 +1112,7 @@ describe('File-backed TUS — path traversal', () => {
   })
 
   afterEach(async () => {
-    await connection.dispose()
+    connection.dispose()
   })
 
   it('rejects traversal object names and does not write outside the file-backed TUS root', async () => {

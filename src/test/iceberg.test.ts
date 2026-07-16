@@ -166,7 +166,7 @@ describe('Iceberg Catalog', () => {
       db: {
         ...t.storage.db,
         connection: t.storage.db.connection,
-        destroyConnection: vi.fn().mockResolvedValue(undefined),
+        destroyConnection: vi.fn(),
       },
     } as unknown as typeof t.storage)
 

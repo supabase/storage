@@ -1163,7 +1163,7 @@ describe('testing POST object via binary upload', () => {
       type: 'STANDARD',
     })
     await setupTx.commit()
-    await db.dispose()
+    db.dispose()
 
     const path = './src/test/assets/sadcat.jpg'
     const { size } = fs.statSync(path)

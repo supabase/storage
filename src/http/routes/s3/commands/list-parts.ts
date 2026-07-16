@@ -18,7 +18,7 @@ const ListPartsInput = {
     type: 'object',
     properties: {
       uploadId: { type: 'string' },
-      'max-parts': { type: 'number', minimum: 1, maximum: 1000 },
+      'max-parts': { type: 'integer', minimum: 1, maximum: 1000 },
       'part-number-marker': { type: 'string' },
     },
     required: ['uploadId'],

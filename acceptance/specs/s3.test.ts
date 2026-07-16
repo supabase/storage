@@ -339,6 +339,64 @@ describeAcceptance(
         client.destroy()
       }
     })
+
+    it('correctly handles objects with special characters in key', async () => {
+      const client = createAcceptanceS3Client()
+      const bucketName = uniqueBucketName('s3chars')
+      const keyFullyValid = uniqueObjectKey("test!$&'() *+,:;=@ing", 'bin')
+      const keyInvalid = uniqueObjectKey('test[]^|ing', 'bin')
+
+      const payload = Buffer.from('acceptance-s3-char-key')
+
+      try {
+        await client.send(new CreateBucketCommand({ Bucket: bucketName }))
+
+        // storage api rejects []^| but does not hit a signature rejection due to escaping
+        await expect(
+          client.send(
+            new PutObjectCommand({
+              Body: payload,
+              Bucket: bucketName,
+              ContentType: 'application/octet-stream',
+              Key: keyInvalid,
+            })
+          )
+        ).rejects.toThrow('Invalid key: ' + keyInvalid)
+
+        await client.send(
+          new PutObjectCommand({
+            Body: payload,
+            Bucket: bucketName,
+            ContentType: 'application/octet-stream',
+            Key: keyFullyValid,
+          })
+        )
+
+        const downloaded = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: keyFullyValid,
+          })
+        )
+        expect(await downloaded.Body?.transformToString()).toBe(payload.toString())
+
+        const listed = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucketName,
+            Prefix: keyFullyValid.split('/')[0],
+          })
+        )
+        expect(listed.Contents?.map((object) => object.Key)).toContain(keyFullyValid)
+
+        const deleted = await client.send(
+          new DeleteObjectCommand({ Bucket: bucketName, Key: keyFullyValid })
+        )
+        expect(deleted.$metadata.httpStatusCode).toBe(204)
+      } finally {
+        await cleanupS3Bucket(client, bucketName)
+        client.destroy()
+      }
+    })
   }
 )
 
@@ -456,7 +514,7 @@ describeAcceptance(
             Key: keyA,
             ResponseCacheControl: 'no-cache, no-store',
             ResponseContentDisposition: 'attachment; filename="acceptance.txt"',
-            ResponseContentEncoding: 'gzip',
+            ResponseContentEncoding: 'identity',
             ResponseContentLanguage: 'en-US',
             ResponseContentType: 'application/octet-stream',
             ResponseExpires: expires,
@@ -464,7 +522,7 @@ describeAcceptance(
         )
         expect(overridden.CacheControl).toBe('no-cache, no-store')
         expect(overridden.ContentDisposition).toBe('attachment; filename="acceptance.txt"')
-        expect(overridden.ContentEncoding).toBe('gzip')
+        expect(overridden.ContentEncoding).toBe('identity')
         expect(overridden.ContentLanguage).toBe('en-US')
         expect(overridden.ContentType).toBe('application/octet-stream')
         expect(overridden.ExpiresString).toBe(expires.toUTCString())

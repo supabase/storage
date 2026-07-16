@@ -7,6 +7,7 @@ const CONFIG_ENV_KEYS = [
   'TENANT_POOL_CACHE_HIT_LOG_SAMPLE_RATE',
   'TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE',
   'DATABASE_POOL_DRAIN_TIMEOUT',
+  'DATABASE_HEALTHCHECK_UNSCOPED',
   'REQUEST_HARD_LIMITS_ENABLED',
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
@@ -114,6 +115,24 @@ describe('tenant pool cache config parsing', () => {
     const config = getConfig({ reload: true })
 
     expect(config.databasePoolDrainTimeout).toBe(45_000)
+  })
+
+  test('disables unscoped database healthchecks by default', async () => {
+    setConfigEnv({})
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.databaseHealthcheckUnscoped).toBe(false)
+  })
+
+  test('enables unscoped database healthchecks from env', async () => {
+    setConfigEnv({ DATABASE_HEALTHCHECK_UNSCOPED: 'true' })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.databaseHealthcheckUnscoped).toBe(true)
   })
 
   test.each([

@@ -13,7 +13,7 @@ describe('Database Protection Triggers', () => {
   })
 
   afterAll(async () => {
-    await tHelper.database.connection.dispose()
+    tHelper.database.connection.dispose()
   })
 
   describe('Direct DELETE protection (migration 0050)', () => {

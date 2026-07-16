@@ -23,6 +23,10 @@ const parametricRulesPattern = PARAMETRIC_RULES.join('|')
 const SIMPLE_RULE_REGEX = new RegExp(`^(${simpleRulesPattern})$`)
 const PARAMETRIC_RULE_REGEX = new RegExp(`^(${parametricRulesPattern}):\\s*(.*)$`)
 const PARAMETRIC_RULE_START_REGEX = new RegExp(`^(${parametricRulesPattern}):`)
+const DECIMAL_INTEGER_REGEX = /^-?\d+$/
+const UNAVAILABLE_AFTER_END_REGEX = new RegExp(
+  `^unavailable_after:\\s*(.+?)(?=,\\s*(?:${simpleRulesPattern}|${parametricRulesPattern}|[a-zA-Z0-9_-]+:)|$)`
+)
 const VALID_IMAGE_PREVIEW_VALUES = new Set(['none', 'standard', 'large'])
 
 /**
@@ -100,16 +104,13 @@ function splitRules(value: string): string[] {
 
       // For unavailable_after, extract date value (may contain commas)
       if (ruleName === 'unavailable_after') {
-        // Build regex to find end of date by looking for comma + known rule or user agent
-        const endPattern = new RegExp(
-          `unavailable_after:\\s*(.+?)(?:,\\s*(?:${simpleRulesPattern}|${parametricRulesPattern}|[a-zA-Z0-9_-]+:)|$)`
-        )
-        const dateEndMatch = remaining.match(endPattern)
+        // Find the end of the date by looking for a comma + known rule or user agent
+        const dateEndMatch = remaining.match(UNAVAILABLE_AFTER_END_REGEX)
 
         if (dateEndMatch) {
           const fullRule = `unavailable_after: ${dateEndMatch[1].trim()}`
           parts.push(fullRule)
-          remaining = remaining.substring(fullRule.length).replace(/^,\s*/, '').trim()
+          remaining = remaining.substring(dateEndMatch[0].length).replace(/^,\s*/, '').trim()
         } else {
           parts.push(remaining)
           remaining = ''
@@ -146,10 +147,12 @@ function validateParametricRule(
 
   switch (ruleName) {
     case 'max-snippet': {
-      const num = parseInt(ruleValue, 10)
-      if (isNaN(num) || num < 0) {
+      const num = Number(ruleValue)
+      // -1 ("no limit", the default) and 0 ("no snippet") are both valid per the
+      // robots meta spec, alongside any positive length.
+      if (!DECIMAL_INTEGER_REGEX.test(ruleValue) || !Number.isInteger(num) || num < -1) {
         throw ERRORS.InvalidXRobotsTag(
-          `X-Robots-Tag "max-snippet" value must be a non-negative number, got: "${ruleValue}"`
+          `X-Robots-Tag "max-snippet" value must be an integer >= -1, got: "${ruleValue}"`
         )
       }
       break
@@ -165,10 +168,10 @@ function validateParametricRule(
     }
 
     case 'max-video-preview': {
-      const num = parseInt(ruleValue, 10)
-      if (isNaN(num) || num < -1) {
+      const num = Number(ruleValue)
+      if (!DECIMAL_INTEGER_REGEX.test(ruleValue) || !Number.isInteger(num) || num < -1) {
         throw ERRORS.InvalidXRobotsTag(
-          `X-Robots-Tag "max-video-preview" value must be a number >= -1, got: "${ruleValue}"`
+          `X-Robots-Tag "max-video-preview" value must be an integer >= -1, got: "${ruleValue}"`
         )
       }
       break

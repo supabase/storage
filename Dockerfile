@@ -35,7 +35,9 @@ COPY --from=production-deps /app/node_modules node_modules
 # Copy build artifacts from the build stage
 COPY --from=build /app/dist dist
 COPY --from=build /app/watt.json /app
-
+COPY --from=build /app/watt.only-storage.json /app
+COPY --from=build /app/watt.storage.json /app
+COPY --from=build /app/watt.database.json /app
 
 EXPOSE 5000
 CMD ["node", "dist/start/server.js"]

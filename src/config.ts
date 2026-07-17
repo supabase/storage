@@ -113,6 +113,7 @@ type StorageConfigType = {
   databaseConnectionTimeout: number
   databaseEnableQueryCancellation: boolean
   databaseHealthcheckUnscoped: boolean
+  databaseWattApplicationEnabled: boolean
   databaseStatementTimeout: number
   databaseApplicationName: string
   region: string
@@ -507,6 +508,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('DATABASE_ENABLE_QUERY_CANCELLATION') === 'true',
     databaseHealthcheckUnscoped:
       getOptionalConfigFromEnv('DATABASE_HEALTHCHECK_UNSCOPED') === 'true',
+    databaseWattApplicationEnabled:
+      getOptionalConfigFromEnv('DATABASE_WATT_APPLICATION_ENABLED') !== 'false',
     databaseStatementTimeout: parseInt(
       getOptionalConfigFromEnv('DATABASE_STATEMENT_TIMEOUT') || '30000',
       10

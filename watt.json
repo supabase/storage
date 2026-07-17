@@ -24,6 +24,7 @@
       "id": "database",
       "path": ".",
       "config": "watt.database.json",
+      "enabled": "{DATABASE_WATT_APPLICATION_ENABLED}",
       "workers": 1
     }
   ],

@@ -68,12 +68,13 @@ function validateConnectionOptions(options: ConnectionOptions): void {
 export async function getPostgresConnection(
   options: ConnectionOptions
 ): Promise<PgTenantConnection> {
-  if (!hasField('messaging')) {
+  const { databaseMaxConnections, databaseWattApplicationEnabled } = getConfig()
+
+  if (!databaseWattApplicationEnabled || !hasField('messaging')) {
     return getPgPostgresConnection(options)
   }
 
   validateConnectionOptions(options)
-  const { databaseMaxConnections } = getConfig()
 
   return getWattPostgresConnection({
     ...options,

@@ -157,18 +157,19 @@ function getPoolConfigSignature(config: PoolConfig): string {
 const multitenantPgPoolOwner = new MultitenantPgPoolOwner()
 const multitenantWattExecutor = new DatabaseWattPgExecutor('master', () => 'multitenant-pg')
 
+function getMultitenantPgExecutor(): PgPoolExecutor | DatabaseWattPgExecutor {
+  const { databaseWattApplicationEnabled } = getConfig()
+  return databaseWattApplicationEnabled && hasField('messaging')
+    ? multitenantWattExecutor
+    : multitenantPgPoolOwner.getExecutor()
+}
+
 export const multitenantPgExecutor: PgTransactionalExecutor = {
   async query(statement, options) {
-    const executor = hasField('messaging')
-      ? multitenantWattExecutor
-      : multitenantPgPoolOwner.getExecutor()
-    return executor.query(statement, options)
+    return getMultitenantPgExecutor().query(statement, options)
   },
   async beginTransaction(options) {
-    const executor = hasField('messaging')
-      ? multitenantWattExecutor
-      : multitenantPgPoolOwner.getExecutor()
-    return executor.beginTransaction(options) as Promise<PgTransaction>
+    return getMultitenantPgExecutor().beginTransaction(options) as Promise<PgTransaction>
   },
 }
 

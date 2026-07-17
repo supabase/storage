@@ -18,6 +18,7 @@ serverEnv.UPLOAD_FILE_SIZE_LIMIT = serverEnv.UPLOAD_FILE_SIZE_LIMIT || '52428800
 serverEnv.WORKERS_NUM = serverEnv.WORKERS_NUM || '2'
 serverEnv.PLT_MANAGEMENT_API = serverEnv.PLT_MANAGEMENT_API || 'true'
 serverEnv.WATT_HEALTH_ENABLED = serverEnv.WATT_HEALTH_ENABLED || 'false'
+serverEnv.DATABASE_WATT_APPLICATION_ENABLED ||= 'true'
 
 const serverPort = serverEnv.SERVER_PORT || serverEnv.PORT || '5000'
 const baseUrl = acceptanceEnv('ACCEPTANCE_BASE_URL') ?? `http://127.0.0.1:${serverPort}`

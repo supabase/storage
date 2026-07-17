@@ -8,6 +8,7 @@ const CONFIG_ENV_KEYS = [
   'TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE',
   'DATABASE_POOL_DRAIN_TIMEOUT',
   'DATABASE_HEALTHCHECK_UNSCOPED',
+  'DATABASE_WATT_APPLICATION_ENABLED',
   'REQUEST_HARD_LIMITS_ENABLED',
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
@@ -133,6 +134,24 @@ describe('tenant pool cache config parsing', () => {
     const config = getConfig({ reload: true })
 
     expect(config.databaseHealthcheckUnscoped).toBe(true)
+  })
+
+  test('enables the Database Watt application by default', async () => {
+    setConfigEnv({})
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.databaseWattApplicationEnabled).toBe(true)
+  })
+
+  test('disables the Database Watt application from env', async () => {
+    setConfigEnv({ DATABASE_WATT_APPLICATION_ENABLED: 'false' })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.databaseWattApplicationEnabled).toBe(false)
   })
 
   test.each([

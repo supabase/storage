@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 type LoadClientOptions = {
   isMultitenant?: boolean
   hasWattMessaging?: boolean
+  databaseWattApplicationEnabled?: boolean
   disableHostCheck?: boolean
 }
 
@@ -58,6 +59,27 @@ describe('database connection client', () => {
     )
   })
 
+  it('falls back to direct PostgreSQL when the Database Watt application is disabled', async () => {
+    const { client, getTenantConfig, getWattPostgresConnection, pgConnection, pgCreate } =
+      await loadClient({
+        databaseWattApplicationEnabled: false,
+        hasWattMessaging: true,
+      })
+
+    const connection = await client.getPostgresConnection(createConnectionOptions())
+
+    expect(connection).toBe(pgConnection)
+    expect(getWattPostgresConnection).not.toHaveBeenCalled()
+    expect(getTenantConfig).toHaveBeenCalledWith('tenant-a')
+    expect(pgCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clusterSize: 3,
+        dbUrl: 'postgres://tenant-db',
+        maxConnections: 7,
+      })
+    )
+  })
+
   it('validates multitenant forwarded host before routing to Database Watt', async () => {
     const { client, getWattPostgresConnection } = await loadClient({
       hasWattMessaging: true,
@@ -99,6 +121,7 @@ async function loadClient(options: LoadClientOptions = {}) {
       databaseMaxConnections: 20,
       databasePoolURL: undefined,
       databaseURL: 'postgres://default-db',
+      databaseWattApplicationEnabled: options.databaseWattApplicationEnabled ?? true,
       isMultitenant: options.isMultitenant ?? true,
       requestXForwardedHostRegExp: '^tenant-[a-z]+\\.example\\.test$',
     }),

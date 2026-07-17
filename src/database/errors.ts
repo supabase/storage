@@ -1,30 +1,7 @@
 import { DatabaseError } from 'pg'
+import type { DatabaseErrorCode, DatabaseErrorResponse } from './protocol.js'
 
-export type DatabaseErrorCode =
-  | 'POSTGRES_ERROR'
-  | 'DESTINATION_UNKNOWN'
-  | 'CLIENT_TIMEOUT'
-  | 'SERVER_TIMEOUT'
-  | 'CONNECTION_TIMEOUT'
-  | 'ACQUIRE_TIMEOUT'
-  | 'MESSAGING_TIMEOUT'
-  | 'MESSAGING_ERROR'
-  | 'BUSY'
-  | 'RESULT_TOO_LARGE'
-  | 'PROTOCOL_ERROR'
-  | 'SHUTDOWN'
-
-export type DatabaseErrorResponse = {
-  code: DatabaseErrorCode
-  message: string
-  requestId?: string
-  operationName?: string
-  destination?: string
-  lockId?: string
-  sqlState?: string
-  stack?: string
-  connectionDiscarded?: boolean
-}
+export type { DatabaseErrorCode, DatabaseErrorResponse } from './protocol.js'
 
 export type ErrorContext = {
   requestId?: string

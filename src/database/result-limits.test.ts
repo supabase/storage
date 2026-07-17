@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { readConfig } from '../config.js'
-import { DatabaseWattError } from '../errors.js'
-import { enforceResultLimits } from '../result-limits.js'
+import { readConfig } from './config.js'
+import { DatabaseWattError } from './errors.js'
+import { enforceResultLimits } from './result-limits.js'
 
 describe('database result limits', () => {
   it('returns bounded results unchanged', () => {

@@ -1,39 +1,26 @@
 import { randomUUID } from 'node:crypto'
 import { getMessaging } from '@platformatic/globals'
-import { TransactionOptions } from '@storage/database'
 import { DatabaseError, QueryResult, QueryResultRow } from 'pg'
 import {
-  PgExecutor,
-  PgQueryOptions,
-  PgStatement,
-  PgTenantConnection,
-  PgTenantConnectionLike,
-  PgTransaction,
-  PgTransactionalExecutor,
-  PgTransactionLike,
-} from './pg-connection'
+  DATABASE_APPLICATION_ID,
+  DATABASE_MESSAGES,
+  type DatabaseErrorResponse,
+  type DatabaseMessageName,
+  type DatabaseMessageRequest,
+  type DatabaseMessageResponse,
+  type QueryResponse,
+} from '../../database/protocol'
+import type {
+  DatabaseExecutor,
+  DatabaseQueryArgument,
+  DatabaseStatement,
+  DatabaseTransaction,
+  DatabaseTransactionalExecutor,
+  TenantConnection,
+  TransactionOptions,
+} from './connection'
+import { PgTenantConnection } from './pg-connection'
 import { searchPath, TenantConnectionOptions } from './pool'
-
-type DatabaseErrorResponse = {
-  code: string
-  message: string
-  requestId?: string
-  operationName?: string
-  destination?: string
-  lockId?: string
-  sqlState?: string
-  stack?: string
-  connectionDiscarded?: boolean
-}
-
-type QueryResponse<T extends QueryResultRow = QueryResultRow> = {
-  rows: T[]
-  rowCount: number
-}
-
-type PgQueryArgument = PgQueryOptions | unknown[]
-
-const databaseApplicationId = 'database'
 
 export async function getWattPostgresConnection(
   options: TenantConnectionOptions
@@ -41,7 +28,7 @@ export async function getWattPostgresConnection(
   return new WattPgTenantConnection(options) as unknown as PgTenantConnection
 }
 
-class WattPgTenantConnection implements PgTenantConnectionLike {
+class WattPgTenantConnection implements TenantConnection {
   readonly role: string
   private readonly executor: DatabaseWattPgExecutor
   private wattAbortSignal?: AbortSignal
@@ -62,17 +49,17 @@ class WattPgTenantConnection implements PgTenantConnectionLike {
   }
 
   async query<T extends QueryResultRow = QueryResultRow>(
-    statement: string | PgStatement,
-    options?: PgQueryArgument
+    statement: string | DatabaseStatement,
+    options?: DatabaseQueryArgument
   ): Promise<QueryResult<T>> {
     return this.executor.query<T>(statement, mergeSignalOptions(options, this.wattAbortSignal))
   }
 
-  async beginTransaction(options?: TransactionOptions): Promise<PgTransactionLike> {
+  async beginTransaction(options?: TransactionOptions): Promise<DatabaseTransaction> {
     return this.executor.beginTransaction(options)
   }
 
-  asSuperUser(): PgTenantConnection {
+  asSuperUser(): TenantConnection {
     const connection = new WattPgTenantConnection({
       ...this.options,
       user: this.options.superUser,
@@ -82,14 +69,14 @@ class WattPgTenantConnection implements PgTenantConnectionLike {
       connection.setAbortSignal(this.wattAbortSignal)
     }
 
-    return connection as unknown as PgTenantConnection
+    return connection
   }
 
-  async transaction(opts?: TransactionOptions): Promise<PgTransaction> {
-    return this.beginTransaction(opts) as Promise<PgTransaction>
+  async transaction(options?: TransactionOptions): Promise<DatabaseTransaction> {
+    return this.beginTransaction(options)
   }
 
-  async setScope(tnx: PgExecutor): Promise<void> {
+  async setScope(tnx: DatabaseExecutor): Promise<void> {
     const headers = JSON.stringify(this.options.headers || {})
     await tnx.query({
       text: `
@@ -122,7 +109,7 @@ class WattPgTenantConnection implements PgTenantConnectionLike {
   }
 }
 
-export class DatabaseWattPgExecutor implements PgTransactionalExecutor {
+export class DatabaseWattPgExecutor implements DatabaseTransactionalExecutor {
   private readonly destination: string
   private readonly operation?: () => string | undefined
 
@@ -132,13 +119,13 @@ export class DatabaseWattPgExecutor implements PgTransactionalExecutor {
   }
 
   async query<T extends QueryResultRow = QueryResultRow>(
-    statement: string | PgStatement,
-    options?: PgQueryArgument
+    statement: string | DatabaseStatement,
+    options?: DatabaseQueryArgument
   ): Promise<QueryResult<T>> {
     const query = normalizeStatement(statement, Array.isArray(options) ? options : undefined)
     const signal = Array.isArray(options) ? undefined : options?.signal
-    const response = await sendDatabaseMessage<QueryResponse<T>>(
-      'database.query',
+    const response = await sendDatabaseMessage(
+      DATABASE_MESSAGES.query,
       {
         destination: this.destination,
         operationName: this.operation?.(),
@@ -148,22 +135,22 @@ export class DatabaseWattPgExecutor implements PgTransactionalExecutor {
       signal
     )
 
-    return toPgQueryResult(response)
+    return toPgQueryResult(response as QueryResponse<T>)
   }
 
-  async beginTransaction(options?: TransactionOptions): Promise<PgTransaction> {
-    const response = await sendDatabaseMessage<{ lockId: string }>('database.beginTransaction', {
+  async beginTransaction(options?: TransactionOptions): Promise<DatabaseTransaction> {
+    const response = await sendDatabaseMessage(DATABASE_MESSAGES.beginTransaction, {
       destination: this.destination,
       isolationLevel: options?.isolation,
       operationName: this.operation?.(),
       readOnly: options?.readOnly,
     })
 
-    return new WattPgTransaction(response.lockId, this.operation) as unknown as PgTransaction
+    return new WattPgTransaction(response.lockId, this.operation)
   }
 }
 
-class WattPgTransaction implements PgTransactionLike {
+class WattPgTransaction implements DatabaseTransaction {
   private wattCompleted = false
   private readonly lockId: string
   private readonly operation?: () => string | undefined
@@ -178,8 +165,8 @@ class WattPgTransaction implements PgTransactionLike {
   }
 
   async query<T extends QueryResultRow = QueryResultRow>(
-    statement: string | PgStatement,
-    options?: PgQueryArgument
+    statement: string | DatabaseStatement,
+    options?: DatabaseQueryArgument
   ): Promise<QueryResult<T>> {
     if (this.wattCompleted) {
       throw new Error('Cannot query a completed transaction')
@@ -187,8 +174,8 @@ class WattPgTransaction implements PgTransactionLike {
 
     const query = normalizeStatement(statement, Array.isArray(options) ? options : undefined)
     const signal = Array.isArray(options) ? undefined : options?.signal
-    const response = await sendDatabaseMessage<QueryResponse<T>>(
-      'database.lockedQuery',
+    const response = await sendDatabaseMessage(
+      DATABASE_MESSAGES.lockedQuery,
       {
         lockId: this.lockId,
         operationName: this.operation?.(),
@@ -199,7 +186,7 @@ class WattPgTransaction implements PgTransactionLike {
       this.lockId
     )
 
-    return toPgQueryResult(response)
+    return toPgQueryResult(response as QueryResponse<T>)
   }
 
   async commit(): Promise<void> {
@@ -208,7 +195,7 @@ class WattPgTransaction implements PgTransactionLike {
     }
 
     try {
-      await sendDatabaseMessage('database.commitTransaction', { lockId: this.lockId })
+      await sendDatabaseMessage(DATABASE_MESSAGES.commitTransaction, { lockId: this.lockId })
     } finally {
       this.wattCompleted = true
     }
@@ -220,14 +207,17 @@ class WattPgTransaction implements PgTransactionLike {
     }
 
     try {
-      await sendDatabaseMessage('database.rollbackTransaction', { lockId: this.lockId })
+      await sendDatabaseMessage(DATABASE_MESSAGES.rollbackTransaction, { lockId: this.lockId })
     } finally {
       this.wattCompleted = true
     }
   }
 }
 
-function normalizeStatement(statement: string | PgStatement, values?: unknown[]): PgStatement {
+function normalizeStatement(
+  statement: string | DatabaseStatement,
+  values?: unknown[]
+): DatabaseStatement {
   if (typeof statement === 'string') {
     return { text: statement, values }
   }
@@ -236,9 +226,9 @@ function normalizeStatement(statement: string | PgStatement, values?: unknown[])
 }
 
 function mergeSignalOptions(
-  options: PgQueryArgument | undefined,
+  options: DatabaseQueryArgument | undefined,
   signal: AbortSignal | undefined
-): PgQueryArgument | undefined {
+): DatabaseQueryArgument | undefined {
   if (!signal || Array.isArray(options)) {
     return options
   }
@@ -249,21 +239,21 @@ function mergeSignalOptions(
   }
 }
 
-async function sendDatabaseMessage<T>(
-  message: string,
-  data: Record<string, unknown>,
+async function sendDatabaseMessage<Message extends DatabaseMessageName>(
+  message: Message,
+  data: DatabaseMessageRequest<Message>,
   signal?: AbortSignal,
   lockId?: string
-): Promise<T> {
+): Promise<DatabaseMessageResponse<Message>> {
   assertValidSignal(signal)
 
   const requestId = typeof data.requestId === 'string' ? data.requestId : randomUUID()
   const payload = { ...data, requestId }
-  const request = getMessaging().send(databaseApplicationId, message, payload)
+  const request = getMessaging().send(DATABASE_APPLICATION_ID, message, payload)
 
   if (!signal) {
     const response = await request
-    return parseDatabaseMessageResponse<T>(response)
+    return parseDatabaseMessageResponse<DatabaseMessageResponse<Message>>(response)
   }
 
   let abortListener: (() => void) | undefined
@@ -276,7 +266,7 @@ async function sendDatabaseMessage<T>(
       }
 
       void getMessaging()
-        .send(databaseApplicationId, 'database.cancel', { requestId, lockId })
+        .send(DATABASE_APPLICATION_ID, DATABASE_MESSAGES.cancel, { requestId, lockId })
         .catch(() => undefined)
       reject(createAbortError())
     }
@@ -286,7 +276,7 @@ async function sendDatabaseMessage<T>(
 
   try {
     const response = await Promise.race([request, abortPromise])
-    return parseDatabaseMessageResponse<T>(response)
+    return parseDatabaseMessageResponse<DatabaseMessageResponse<Message>>(response)
   } finally {
     settled = true
     if (abortListener) {

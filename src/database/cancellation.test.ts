@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CancellationRegistry } from '../cancellation.js'
+import { CancellationRegistry } from './cancellation.js'
 
 describe('database cancellation registry', () => {
   it('tracks missing and completed requests', async () => {
@@ -57,7 +57,7 @@ describe('database cancellation registry', () => {
       },
     }))
 
-    const { CancellationRegistry: MockedCancellationRegistry } = await import('../cancellation.js')
+    const { CancellationRegistry: MockedCancellationRegistry } = await import('./cancellation.js')
     const registry = new MockedCancellationRegistry()
     registry.start('req-1', { cancelled: false })
     registry.setClient('req-1', {

@@ -3,7 +3,8 @@ import type { PoolClient, QueryResultRow } from 'pg'
 import type { DatabaseConfig } from './config.js'
 import { DatabaseWattError } from './errors.js'
 import { isConnectionStateError, runQuery, toQueryResponse } from './pools.js'
-import type { DestinationConfig, QueryResponse } from './types.js'
+import type { QueryResponse } from './protocol.js'
+import type { DestinationConfig } from './types.js'
 
 type LockRecord = {
   busy: Promise<unknown>

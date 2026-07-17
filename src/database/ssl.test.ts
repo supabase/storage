@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getSslSettings } from '../ssl.js'
+import { getSslSettings } from './ssl.js'
 
 describe('database SSL settings', () => {
   it('disables SSL when sslmode=disable', () => {

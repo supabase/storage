@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { readConfig } from '../config.js'
-import { DatabaseWattError } from '../errors.js'
+import { readConfig } from './config.js'
+import { DatabaseWattError } from './errors.js'
 import {
   validateCancelRequest,
   validateLockRequestEnvelope,
   validateNonLockRequestEnvelope,
   validateQueryEnvelope,
-} from '../validation.js'
+} from './validation.js'
 
 describe('database request validation', () => {
   const config = readConfig({

@@ -1,7 +1,7 @@
 import { setupLoopbackMessaging } from '@platformatic/runtime'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { DatabaseErrorResponse } from '../errors.js'
-import type { ApplicationContext } from '../index.js'
+import type { DatabaseErrorResponse } from './errors.js'
+import type { ApplicationContext } from './index.js'
 
 type MockClient = {
   queries: Array<{ sql: string; values?: unknown[] }>
@@ -48,6 +48,10 @@ async function loadApp(
     DATABASE_URL: 'postgres://single-tenant',
     ...options.env,
   }
+
+  vi.doMock('@internal/auth', () => ({
+    decrypt: (value: string) => value,
+  }))
 
   vi.doMock('pg', () => {
     class MockDatabaseError extends Error {
@@ -96,7 +100,7 @@ async function loadApp(
   }))
 
   // We need dynamic import due to the mocking of PostgreSQL modules above
-  const { create } = await import('../index.js')
+  const { create } = await import('./index.js')
 
   const messaging = setupLoopbackMessaging('db')
   const app = create()
@@ -106,6 +110,7 @@ async function loadApp(
 const originalEnv = { ...process.env }
 
 afterEach(async () => {
+  vi.doUnmock('@internal/auth')
   vi.doUnmock('pg')
   vi.doUnmock('pg/lib/connection')
   vi.resetModules()

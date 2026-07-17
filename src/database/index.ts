@@ -6,17 +6,18 @@ import { DatabaseWattError, toErrorResponse } from './errors.js'
 import { LockRegistry } from './locks.js'
 import { registerDatabaseWattMetrics } from './metrics.js'
 import { PoolRegistry, runQuery } from './pools.js'
+import {
+  type AcquireConnectionRequest,
+  type BeginTransactionRequest,
+  type CancelRequest,
+  type CommitTransactionRequest,
+  DATABASE_MESSAGES,
+  type LockedQueryRequest,
+  type QueryRequest,
+  type ReleaseConnectionRequest,
+  type RollbackTransactionRequest,
+} from './protocol.js'
 import { enforceResultLimits } from './result-limits.js'
-import type {
-  AcquireConnectionRequest,
-  BeginTransactionRequest,
-  CancelRequest,
-  CommitTransactionRequest,
-  LockedQueryRequest,
-  QueryRequest,
-  ReleaseConnectionRequest,
-  RollbackTransactionRequest,
-} from './types.js'
 import {
   validateCancelRequest,
   validateLockRequestEnvelope,
@@ -73,14 +74,17 @@ export class Application {
       return
     }
 
-    messaging.handle('database.query', this.#handleQuery.bind(this))
-    messaging.handle('database.acquire', this.#handleAcquire.bind(this))
-    messaging.handle('database.lockedQuery', this.#handleLockedQuery.bind(this))
-    messaging.handle('database.release', this.#handleRelease.bind(this))
-    messaging.handle('database.beginTransaction', this.#handleBeginTransaction.bind(this))
-    messaging.handle('database.commitTransaction', this.#handleCommitTransaction.bind(this))
-    messaging.handle('database.rollbackTransaction', this.#handleRollbackTransaction.bind(this))
-    messaging.handle('database.cancel', this.#handleCancel.bind(this))
+    messaging.handle(DATABASE_MESSAGES.query, this.#handleQuery.bind(this))
+    messaging.handle(DATABASE_MESSAGES.acquire, this.#handleAcquire.bind(this))
+    messaging.handle(DATABASE_MESSAGES.lockedQuery, this.#handleLockedQuery.bind(this))
+    messaging.handle(DATABASE_MESSAGES.release, this.#handleRelease.bind(this))
+    messaging.handle(DATABASE_MESSAGES.beginTransaction, this.#handleBeginTransaction.bind(this))
+    messaging.handle(DATABASE_MESSAGES.commitTransaction, this.#handleCommitTransaction.bind(this))
+    messaging.handle(
+      DATABASE_MESSAGES.rollbackTransaction,
+      this.#handleRollbackTransaction.bind(this)
+    )
+    messaging.handle(DATABASE_MESSAGES.cancel, this.#handleCancel.bind(this))
     messaging.handle('database.test.stats', () => ({ ...this.#stats }))
     messaging.handle('database.test.resetStats', this.#handleResetStats.bind(this))
   }

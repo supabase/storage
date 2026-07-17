@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { readConfig } from '../config.js'
-import { DestinationResolver } from '../destinations.js'
+import { readConfig } from './config.js'
+import { DestinationResolver } from './destinations.js'
 
 describe('database destination resolution', () => {
   it('derives single-tenant external pool state from parsed config', async () => {

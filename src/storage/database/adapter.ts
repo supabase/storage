@@ -1,7 +1,9 @@
-import { PgTenantConnection } from '@internal/database'
+import { PgTenantConnection, type TransactionOptions } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import { ObjectMetadata } from '../backend'
 import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
+
+export type { TransactionOptions } from '@internal/database'
 
 export interface SearchObjectOption {
   search?: string
@@ -26,13 +28,6 @@ export interface FindObjectFilters {
   forKeyShare?: boolean
   noWait?: boolean
   dontErrorOnEmpty?: boolean
-}
-
-export interface TransactionOptions {
-  isolation?: string
-  retry?: number
-  readOnly?: boolean
-  timeout?: number
 }
 
 export interface DatabaseOptions<TNX> {

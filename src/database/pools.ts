@@ -1,8 +1,9 @@
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
 import type { DatabaseConfig } from './config.js'
 import { DatabaseWattError } from './errors.js'
+import type { QueryResponse } from './protocol.js'
 import { getSslSettings } from './ssl.js'
-import type { DestinationConfig, QueryResponse } from './types.js'
+import type { DestinationConfig } from './types.js'
 
 type PoolEntry = {
   config: DestinationConfig

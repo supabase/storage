@@ -1,6 +1,6 @@
 import { DatabaseError } from 'pg'
 import { describe, expect, it } from 'vitest'
-import { DatabaseWattError, isErrorResponse, toErrorResponse } from '../errors.js'
+import { DatabaseWattError, isErrorResponse, toErrorResponse } from './errors.js'
 
 describe('database error contract', () => {
   it('serializes DatabaseWattError with safe context', () => {

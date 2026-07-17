@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer'
 import type { DatabaseConfig } from './config.js'
 import { DatabaseWattError } from './errors.js'
-import type { QueryResponse } from './types.js'
+import type { QueryResponse } from './protocol.js'
 
 export function enforceResultLimits<T>(
   response: QueryResponse<T>,

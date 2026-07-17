@@ -1,9 +1,16 @@
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { TransactionOptions } from '@storage/database'
 import pg, { DatabaseError, Pool, PoolClient, QueryResult, QueryResultRow } from 'pg'
 import PgConnection from 'pg/lib/connection'
 import { getConfig } from '../../config'
+import type {
+  DatabaseTransaction,
+  PgExecutor,
+  PgQueryArgument,
+  PgStatement,
+  TenantConnection,
+  TransactionOptions,
+} from './connection'
 import {
   PoolManager,
   PoolRebalanceOptions,
@@ -33,16 +40,22 @@ const {
 
 pg.types.setTypeParser(20, 'text', parseInt)
 
-export interface PgStatement {
-  text: string
-  values?: unknown[]
-}
-
-export interface PgQueryOptions {
-  signal?: AbortSignal
-}
-
-type PgQueryArgument = PgQueryOptions | unknown[]
+export type {
+  DatabaseExecutor,
+  DatabaseQueryArgument,
+  DatabaseQueryOptions,
+  DatabaseStatement,
+  DatabaseTransaction,
+  DatabaseTransactionalExecutor,
+  PgExecutor,
+  PgQueryArgument,
+  PgQueryOptions,
+  PgStatement,
+  PgTenantConnectionLike,
+  PgTransactionLike,
+  TenantConnection,
+  TransactionOptions,
+} from './connection'
 
 interface PgTransactionOptions {
   statementTimeoutMs?: number
@@ -80,13 +93,6 @@ const scopeConfigSqlWithStatementTimeout = `
           set_config('statement_timeout', $10, true);
       `
 
-export interface PgExecutor {
-  query<T extends QueryResultRow = QueryResultRow>(
-    statement: string | PgStatement,
-    options?: PgQueryArgument
-  ): Promise<QueryResult<T>>
-}
-
 export interface PgTransactionalExecutor extends PgExecutor {
   beginTransaction(options?: PgBeginTransactionOptions): Promise<PgTransaction>
 }
@@ -95,23 +101,6 @@ interface PgPoolErrorContext {
   message: string
   tenantId?: string
   project?: string
-}
-
-export interface PgTransactionLike extends PgExecutor {
-  isCompleted(): boolean
-  commit(): Promise<void>
-  rollback(): Promise<void>
-}
-
-export interface PgTenantConnectionLike extends PgExecutor {
-  readonly role: string
-  dispose(): void
-  setAbortSignal(signal: AbortSignal): void
-  getAbortSignal(): AbortSignal | undefined
-  beginTransaction(options?: TransactionOptions): Promise<PgTransactionLike>
-  asSuperUser(): PgTenantConnectionLike
-  transaction(opts?: TransactionOptions): Promise<PgTransactionLike>
-  setScope(tnx: PgExecutor): Promise<void>
 }
 
 type PgClientWithCancel = PoolClient & {
@@ -499,7 +488,7 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
   }
 }
 
-export class PgTransaction implements PgTransactionLike {
+export class PgTransaction implements DatabaseTransaction {
   private completed = false
   private statementTimeoutMs?: number
 
@@ -649,7 +638,7 @@ function serializeJwtPayload(payload: object): string {
   return serialized
 }
 
-export class PgTenantConnection implements PgTenantConnectionLike {
+export class PgTenantConnection implements TenantConnection {
   static poolManager = new PgPoolManager()
   public readonly role: string
   private abortSignal?: AbortSignal

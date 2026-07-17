@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { readConfig } from '../config.js'
-import { DatabaseWattError } from '../errors.js'
-import { LockRegistry } from '../locks.js'
-import type { DestinationConfig } from '../types.js'
+import { readConfig } from './config.js'
+import { DatabaseWattError } from './errors.js'
+import { LockRegistry } from './locks.js'
+import type { DestinationConfig } from './types.js'
 
 type FakeClient = {
   query: ReturnType<typeof vi.fn>

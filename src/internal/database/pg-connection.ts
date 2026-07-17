@@ -4,10 +4,10 @@ import pg, { DatabaseError, Pool, PoolClient, QueryResult, QueryResultRow } from
 import PgConnection from 'pg/lib/connection'
 import { getConfig } from '../../config'
 import type {
+  DatabaseExecutor,
+  DatabaseQueryArgument,
+  DatabaseStatement,
   DatabaseTransaction,
-  PgExecutor,
-  PgQueryArgument,
-  PgStatement,
   TenantConnection,
   TransactionOptions,
 } from './connection'
@@ -40,22 +40,9 @@ const {
 
 pg.types.setTypeParser(20, 'text', parseInt)
 
-export type {
-  DatabaseExecutor,
-  DatabaseQueryArgument,
-  DatabaseQueryOptions,
-  DatabaseStatement,
-  DatabaseTransaction,
-  DatabaseTransactionalExecutor,
-  PgExecutor,
-  PgQueryArgument,
-  PgQueryOptions,
-  PgStatement,
-  PgTenantConnectionLike,
-  PgTransactionLike,
-  TenantConnection,
-  TransactionOptions,
-} from './connection'
+export type PgStatement = DatabaseStatement
+export type PgQueryArgument = DatabaseQueryArgument
+export type PgExecutor = DatabaseExecutor
 
 interface PgTransactionOptions {
   statementTimeoutMs?: number

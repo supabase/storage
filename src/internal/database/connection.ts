@@ -41,22 +41,23 @@ export interface DatabaseTransactionalExecutor extends DatabaseExecutor {
   beginTransaction(options?: TransactionOptions): Promise<DatabaseTransaction>
 }
 
-export interface TenantConnection extends DatabaseExecutor {
+export interface TenantConnection extends DatabaseTransactionalExecutor {
   readonly role: string
   dispose(): void
   setAbortSignal(signal: AbortSignal): void
   getAbortSignal(): AbortSignal | undefined
-  beginTransaction(options?: TransactionOptions): Promise<DatabaseTransaction>
   asSuperUser(): TenantConnection
   transaction(options?: TransactionOptions): Promise<DatabaseTransaction>
   setScope(transaction: DatabaseExecutor): Promise<void>
 }
 
-// Compatibility names for existing PostgreSQL-facing callers. These aliases
-// can be migrated independently without coupling them to the transport split.
-export type PgStatement = DatabaseStatement
-export type PgQueryOptions = DatabaseQueryOptions
-export type PgQueryArgument = DatabaseQueryArgument
-export type PgExecutor = DatabaseExecutor
-export type PgTransactionLike = DatabaseTransaction
-export type PgTenantConnectionLike = TenantConnection
+export function isDatabaseTransaction(executor: DatabaseExecutor): executor is DatabaseTransaction {
+  return (
+    'commit' in executor &&
+    typeof executor.commit === 'function' &&
+    'rollback' in executor &&
+    typeof executor.rollback === 'function' &&
+    'isCompleted' in executor &&
+    typeof executor.isCompleted === 'function'
+  )
+}

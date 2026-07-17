@@ -3,6 +3,7 @@ import { ERRORS } from '@internal/errors'
 import { getXForwardedHostRegExp } from '@internal/http/x-forwarded-host'
 import { hasField } from '@platformatic/globals'
 import { getConfig } from '../../config'
+import type { TenantConnection } from './connection'
 import { PgTenantConnection } from './pg-connection'
 import { User } from './pool'
 import { getTenantConfig } from './tenant'
@@ -65,9 +66,7 @@ function validateConnectionOptions(options: ConnectionOptions): void {
   }
 }
 
-export async function getPostgresConnection(
-  options: ConnectionOptions
-): Promise<PgTenantConnection> {
+export async function getPostgresConnection(options: ConnectionOptions): Promise<TenantConnection> {
   const { databaseMaxConnections, databaseWattApplicationEnabled } = getConfig()
 
   if (!databaseWattApplicationEnabled || !hasField('messaging')) {

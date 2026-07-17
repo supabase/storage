@@ -40,7 +40,7 @@ describe('S3 protocol error code', () => {
   beforeAll(async () => {
     fileBackendPath = await mkdtemp(join(tmpdir(), 'storage-file-backend-'))
     testApp = await createFileBackedApp(fileBackendPath)
-    icebergMetastore = new PgMetastore(t.database.connection.pool.acquire(), {
+    icebergMetastore = new PgMetastore(t.database.connection, {
       multiTenant: false,
       schema: 'storage',
     })

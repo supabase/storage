@@ -62,7 +62,7 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
       }
 
       const metastore = new PgMetastore(
-        isMultitenant ? multitenantPgExecutor : eventStorage!.db.connection.pool.acquire(),
+        isMultitenant ? multitenantPgExecutor : eventStorage!.db.connection,
         {
           multiTenant: isMultitenant,
           schema: isMultitenant ? 'public' : 'storage',

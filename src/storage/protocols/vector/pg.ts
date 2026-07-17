@@ -2,7 +2,12 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { ListVectorBucketsInput } from '@aws-sdk/client-s3vectors'
 import { wait } from '@internal/concurrency'
-import { PgTransaction, PgTransactionalExecutor, quoteIdentifier } from '@internal/database'
+import {
+  type DatabaseTransaction,
+  type DatabaseTransactionalExecutor,
+  isDatabaseTransaction,
+  quoteIdentifier,
+} from '@internal/database'
 import { ERRORS } from '@internal/errors'
 import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
@@ -20,13 +25,13 @@ import {
 } from './metadata'
 
 const vectorTransactionStorage = new AsyncLocalStorage<{
-  root: PgTransactionalExecutor
-  transaction: PgTransaction
+  root: DatabaseTransactionalExecutor | DatabaseTransaction
+  transaction: DatabaseTransaction
 }>()
 
-export function createVectorTransactionPgResolver(db: PgTransactionalExecutor): {
-  resolve: () => PgTransactionalExecutor | PgTransaction
-  root: () => PgTransactionalExecutor
+export function createVectorTransactionPgResolver(db: DatabaseTransactionalExecutor): {
+  resolve: () => DatabaseTransactionalExecutor | DatabaseTransaction
+  root: () => DatabaseTransactionalExecutor | DatabaseTransaction
 } {
   return {
     resolve: () => {
@@ -39,16 +44,17 @@ export function createVectorTransactionPgResolver(db: PgTransactionalExecutor): 
 
 export class PgVectorMetadataDB implements VectorMetadataDB {
   constructor(
-    protected readonly db: PgTransactionalExecutor | PgTransaction,
-    private readonly rootDb: PgTransactionalExecutor = db as PgTransactionalExecutor
+    protected readonly db: DatabaseTransactionalExecutor | DatabaseTransaction,
+    private readonly rootDb: DatabaseTransactionalExecutor | DatabaseTransaction = db
   ) {}
 
   async withTransaction<T>(fn: (db: VectorMetadataDB) => Promise<T> | T): Promise<T> {
     const maxRetries = 3
 
     for (let attempt = 1; ; attempt++) {
-      const trx = this.db instanceof PgTransaction ? this.db : await this.db.beginTransaction()
-      const savepoint = this.db instanceof PgTransaction ? nextSavepointName() : undefined
+      const transactionExists = isDatabaseTransaction(this.db)
+      const trx = transactionExists ? this.db : await this.db.beginTransaction()
+      const savepoint = transactionExists ? nextSavepointName() : undefined
       let savepointEstablished = false
 
       try {
@@ -366,7 +372,7 @@ function nextSavepointName(): string {
   return quoteIdentifier(`vector_metadata_transaction_${randomUUID().replace(/-/g, '_')}`)
 }
 
-async function createSavepoint(trx: PgTransaction, savepoint: string): Promise<void> {
+async function createSavepoint(trx: DatabaseTransaction, savepoint: string): Promise<void> {
   const query = `SAVEPOINT ${savepoint}`
 
   try {
@@ -376,7 +382,7 @@ async function createSavepoint(trx: PgTransaction, savepoint: string): Promise<v
   }
 }
 
-async function rollbackSavepoint(trx: PgTransaction, savepoint: string): Promise<void> {
-  await trx.query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
-  await trx.query(`RELEASE SAVEPOINT ${savepoint}`)
+async function rollbackSavepoint(tnx: DatabaseTransaction, savepoint: string): Promise<void> {
+  await tnx.query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
+  await tnx.query(`RELEASE SAVEPOINT ${savepoint}`)
 }

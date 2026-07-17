@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import {
-  PgStatement,
-  PgTransaction,
-  PgTransactionalExecutor,
+  type DatabaseStatement,
+  type DatabaseTransaction,
+  type DatabaseTransactionalExecutor,
+  isDatabaseTransaction,
   quoteIdentifier,
 } from '@internal/database'
 import { ERRORS, StorageBackendError } from '@internal/errors'
@@ -22,9 +23,9 @@ import {
   TableIndex,
 } from './metastore'
 
-export class PgMetastore implements Metastore<PgTransaction> {
+export class PgMetastore implements Metastore<DatabaseTransaction> {
   constructor(
-    private readonly db: PgTransactionalExecutor | PgTransaction,
+    private readonly db: DatabaseTransactionalExecutor | DatabaseTransaction,
     private readonly ops: { schema: string; multiTenant?: boolean }
   ) {}
 
@@ -33,8 +34,8 @@ export class PgMetastore implements Metastore<PgTransaction> {
     await this.query('SELECT pg_advisory_xact_lock($1::bigint)', [String(lockId)])
   }
 
-  getTnx(): PgTransaction {
-    if (this.db instanceof PgTransaction) {
+  getTnx(): DatabaseTransaction {
+    if (isDatabaseTransaction(this.db)) {
       return this.db
     }
 
@@ -263,7 +264,7 @@ export class PgMetastore implements Metastore<PgTransaction> {
     callback: (trx: PgMetastore) => Promise<T>,
     opts?: TransactionOptions
   ): Promise<T> {
-    if (this.db instanceof PgTransaction) {
+    if (isDatabaseTransaction(this.db)) {
       const savepoint = nextSavepointName()
       let savepointEstablished = false
 
@@ -631,7 +632,7 @@ export class PgMetastore implements Metastore<PgTransaction> {
   }
 
   private queryRaw<T extends QueryResultRow = QueryResultRow>(
-    statement: PgStatement
+    statement: DatabaseStatement
   ): Promise<QueryResult<T>> {
     return this.db.query<T>(statement)
   }
@@ -653,7 +654,7 @@ function nextSavepointName(): string {
   return quoteIdentifier(`iceberg_pg_transaction_${randomUUID().replace(/-/g, '_')}`)
 }
 
-async function createSavepoint(tnx: PgTransaction, savepoint: string): Promise<void> {
+async function createSavepoint(tnx: DatabaseTransaction, savepoint: string): Promise<void> {
   const query = `SAVEPOINT ${savepoint}`
 
   try {
@@ -663,7 +664,7 @@ async function createSavepoint(tnx: PgTransaction, savepoint: string): Promise<v
   }
 }
 
-async function rollbackSavepoint(tnx: PgTransaction, savepoint: string): Promise<void> {
+async function rollbackSavepoint(tnx: DatabaseTransaction, savepoint: string): Promise<void> {
   await tnx.query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
   await tnx.query(`RELEASE SAVEPOINT ${savepoint}`)
 }

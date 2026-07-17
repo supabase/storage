@@ -2,12 +2,8 @@ import { logger, logSchema } from '@internal/monitoring'
 import { hasField } from '@platformatic/globals'
 import { Pool, PoolConfig } from 'pg'
 import { getConfig } from '../../config'
-import {
-  attachPgPoolErrorHandler,
-  PgPoolExecutor,
-  PgTransaction,
-  PgTransactionalExecutor,
-} from './pg-connection'
+import type { DatabaseTransactionalExecutor } from './connection'
+import { attachPgPoolErrorHandler, PgPoolExecutor } from './pg-connection'
 import { DatabaseWattPgExecutor } from './watt-connection'
 
 function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): PoolConfig {
@@ -157,19 +153,19 @@ function getPoolConfigSignature(config: PoolConfig): string {
 const multitenantPgPoolOwner = new MultitenantPgPoolOwner()
 const multitenantWattExecutor = new DatabaseWattPgExecutor('master', () => 'multitenant-pg')
 
-function getMultitenantPgExecutor(): PgPoolExecutor | DatabaseWattPgExecutor {
+function getMultitenantPgExecutor(): DatabaseTransactionalExecutor {
   const { databaseWattApplicationEnabled } = getConfig()
   return databaseWattApplicationEnabled && hasField('messaging')
     ? multitenantWattExecutor
     : multitenantPgPoolOwner.getExecutor()
 }
 
-export const multitenantPgExecutor: PgTransactionalExecutor = {
+export const multitenantPgExecutor: DatabaseTransactionalExecutor = {
   async query(statement, options) {
     return getMultitenantPgExecutor().query(statement, options)
   },
   async beginTransaction(options) {
-    return getMultitenantPgExecutor().beginTransaction(options) as Promise<PgTransaction>
+    return getMultitenantPgExecutor().beginTransaction(options)
   },
 }
 

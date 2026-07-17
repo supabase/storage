@@ -30,7 +30,7 @@ import { Upload } from '@aws-sdk/lib-storage'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { wait } from '@internal/concurrency'
-import { getPostgresConnection, getServiceKeyUser, PgTenantConnection } from '@internal/database'
+import { getPostgresConnection, getServiceKeyUser, type TenantConnection } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
 import { StoragePgDB } from '@storage/database'
@@ -2372,7 +2372,7 @@ describe('S3 Protocol', () => {
           superUser: adminUser,
           host: 'localhost',
         })
-        const db = connection.pool.acquire()
+        const db = connection
         const anonKey = await anonKeyAsync
         const anonClient = new S3Client({
           endpoint: `${baseUrl}/s3`,
@@ -3354,7 +3354,7 @@ describe('S3 Protocol', () => {
 describe('Migration compatibility', () => {
   describe('integration', () => {
     const { tenantId } = getConfig()
-    let connection: PgTenantConnection
+    let connection: TenantConnection
     let bucketId: string
 
     beforeAll(async () => {

@@ -1,6 +1,7 @@
 import { removeGlobals, updateGlobals } from '@platformatic/globals'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TenantConnectionOptions } from './pool'
+import type { DatabaseWattTransport } from './watt-client'
 import { DatabaseWattPgExecutor, getWattPostgresConnection } from './watt-connection'
 
 type SentWattMessage = {
@@ -34,6 +35,32 @@ afterEach(() => {
 })
 
 describe('Watt PostgreSQL connection adapter', () => {
+  it('adapts an injected Watt transport without Platformatic messaging', async () => {
+    const transport: DatabaseWattTransport = {
+      query: vi.fn().mockResolvedValue({ rowCount: 1, rows: [{ id: 1 }] }),
+      acquire: vi.fn(),
+      lockedQuery: vi.fn(),
+      release: vi.fn(),
+      beginTransaction: vi.fn(),
+      commitTransaction: vi.fn(),
+      rollbackTransaction: vi.fn(),
+    }
+    const executor = new DatabaseWattPgExecutor('tenant-a', () => 'operation-a', transport)
+
+    const result = await executor.query<{ id: number }>('SELECT $1::int AS id', [1])
+
+    expect(result).toMatchObject({ rowCount: 1, rows: [{ id: 1 }] })
+    expect(transport.query).toHaveBeenCalledWith(
+      {
+        destination: 'tenant-a',
+        operationName: 'operation-a',
+        sql: 'SELECT $1::int AS id',
+        values: [1],
+      },
+      { signal: undefined }
+    )
+  })
+
   it('sends stateless queries through Database Watt messaging', async () => {
     const { sent } = installWattMessagingMock({
       'database.query': { rowCount: 1, rows: [{ id: 1 }] },

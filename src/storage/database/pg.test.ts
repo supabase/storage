@@ -22,7 +22,10 @@ class TestStoragePgDB extends StoragePgDB {
   }
 
   runUnscopedErrorMappingProbe(): Promise<string> {
-    return this.runUnscopedQuery('CreateS3KeysTempTable', async () => 'ok')
+    return this.runUnscopedQuery('CreateS3KeysTempTable', async (db) => {
+      await db.query('SELECT 1')
+      return 'ok'
+    })
   }
 }
 
@@ -158,6 +161,7 @@ describe('StoragePgDB healthcheck', () => {
     }
     const connection = {
       getAbortSignal: vi.fn().mockReturnValue(requestSignal),
+      query: vi.fn((statement, queryOptions) => executor.query(statement, queryOptions)),
       pool: {
         acquire: vi.fn().mockReturnValue(executor),
       },
@@ -228,7 +232,7 @@ describe('StoragePgDB healthcheck', () => {
     await rejection
     expect(release).toHaveBeenCalledWith(expect.objectContaining(expectedAbortError))
 
-    expect(fixture.connection.pool.acquire).toHaveBeenCalledTimes(1)
+    expect(fixture.connection.query).toHaveBeenCalledTimes(1)
     expect(fixture.connection.transaction).not.toHaveBeenCalled()
     expect(fixture.connection.setScope).not.toHaveBeenCalled()
   })
@@ -276,7 +280,7 @@ describe('StoragePgDB healthcheck', () => {
 
     await expect(fixture.storage.healthcheck()).resolves.toBeUndefined()
 
-    expect(fixture.connection.pool.acquire).not.toHaveBeenCalled()
+    expect(fixture.connection.query).not.toHaveBeenCalled()
     expect(fixture.connection.transaction).toHaveBeenCalledTimes(1)
     expect(fixture.connection.setScope).toHaveBeenCalledWith(fixture.transaction)
     expect(fixture.transaction.query).toHaveBeenCalledWith(probeSql, { signal: undefined })
@@ -373,16 +377,14 @@ describe('StoragePgDB error mapping', () => {
     })
   })
 
-  test('preserves query name for pg errors thrown while acquiring an unscoped executor', async () => {
+  test('preserves query name for pg errors thrown by an unscoped executor', async () => {
     const error = createPgError('08006', 'connection failure')
     error.severity = 'FATAL'
     const connection = {
       getAbortSignal: vi.fn().mockReturnValue(undefined),
-      pool: {
-        acquire: vi.fn(() => {
-          throw error
-        }),
-      },
+      query: vi.fn(() => {
+        throw error
+      }),
     } as unknown as PgTenantConnection
     const storage = new TestStoragePgDB(connection, {
       tenantId: 'tenant-with-unscoped-acquire-error',

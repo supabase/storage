@@ -1,7 +1,12 @@
 import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
 import { DatabaseError, QueryResultRow } from 'pg'
-import { PgExecutor, PgTransaction, PgTransactionalExecutor } from '../database/pg-connection'
+import {
+  type DatabaseExecutor,
+  type DatabaseTransaction,
+  type DatabaseTransactionalExecutor,
+  isDatabaseTransaction,
+} from '../database/connection'
 import {
   ReservationRow,
   ResourceKind,
@@ -12,15 +17,15 @@ import {
   UniqueViolationError,
 } from './store'
 
-export class PgShardStoreFactory implements ShardStoreFactory<PgTransaction> {
-  constructor(private db: PgTransactionalExecutor | PgTransaction) {}
+export class PgShardStoreFactory implements ShardStoreFactory<DatabaseTransaction> {
+  constructor(private db: DatabaseTransactionalExecutor | DatabaseTransaction) {}
 
-  withExistingTransaction(tnx: PgTransaction): ShardStoreFactory<PgTransaction> {
+  withExistingTransaction(tnx: DatabaseTransaction): ShardStoreFactory<DatabaseTransaction> {
     return new PgShardStoreFactory(tnx)
   }
 
   async withTransaction<T>(fn: (store: ShardStore) => Promise<T>): Promise<T> {
-    if (this.db instanceof PgTransaction) {
+    if (isDatabaseTransaction(this.db)) {
       return fn(new PgShardStore(this.db))
     }
 
@@ -49,7 +54,7 @@ export class PgShardStoreFactory implements ShardStoreFactory<PgTransaction> {
 }
 
 class PgShardStore implements ShardStore {
-  constructor(private db: PgExecutor) {}
+  constructor(private db: DatabaseExecutor) {}
 
   private query<T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]) {
     return this.db.query<T>({ text, values })

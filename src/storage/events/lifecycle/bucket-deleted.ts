@@ -37,7 +37,7 @@ export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
       const eventStorage = storage
 
       const metastore = new PgMetastore(
-        isMultitenant ? multitenantPgExecutor : eventStorage.db.connection.pool.acquire(),
+        isMultitenant ? multitenantPgExecutor : eventStorage.db.connection,
         {
           multiTenant: isMultitenant,
           schema: isMultitenant ? 'public' : 'storage',

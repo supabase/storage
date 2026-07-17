@@ -8,7 +8,7 @@ describe('Storage operation helpers', () => {
     bindings: unknown[] = [],
     currentOperation?: string
   ): Promise<boolean> {
-    const db = tHelper.database.connection.pool.acquire()
+    const db = tHelper.database.connection
     const tnx = await db.beginTransaction()
 
     try {

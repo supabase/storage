@@ -1,4 +1,4 @@
-import { PgTenantConnection } from '@internal/database'
+import type { TenantConnection, TransactionOptions } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import { ObjectMetadata } from '../backend'
 import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
@@ -28,13 +28,6 @@ export interface FindObjectFilters {
   dontErrorOnEmpty?: boolean
 }
 
-export interface TransactionOptions {
-  isolation?: string
-  retry?: number
-  readOnly?: boolean
-  timeout?: number
-}
-
 export interface DatabaseOptions<TNX> {
   tenantId: string
   reqId?: string
@@ -43,7 +36,7 @@ export interface DatabaseOptions<TNX> {
   host: string
   tnx?: TNX
   parentTnx?: TNX
-  parentConnection?: PgTenantConnection
+  parentConnection?: TenantConnection
 }
 
 export interface ListBucketOptions {
@@ -65,7 +58,7 @@ export interface Database {
   reqId?: string
   sbReqId?: string
   role?: string
-  connection: PgTenantConnection
+  connection: TenantConnection
 
   tenant(): { ref: string; host: string }
 

@@ -1,6 +1,6 @@
 import { QueryResultRow } from 'pg'
 import { getConfig, JwksConfigKey } from '../../config'
-import { PgExecutor } from './pg-connection'
+import type { DatabaseExecutor } from './connection'
 import { quoteIdentifier } from './sql'
 
 const { multitenantDatabaseQueryTimeout } = getConfig()
@@ -75,7 +75,7 @@ export type TenantConfigRowInput = Partial<Pick<TenantConfigRow, TenantWritableC
 export type TenantCursorRow = Pick<TenantConfigRow, 'id' | 'cursor_id'> & { cursor_id: number }
 
 interface TenantQueryOptions {
-  db?: PgExecutor
+  db?: DatabaseExecutor
   signal?: AbortSignal
   /**
    * Positive values add an internal timeout. Zero or negative values disable
@@ -85,7 +85,7 @@ interface TenantQueryOptions {
 }
 
 export class TenantConfigStorePg {
-  constructor(private db: PgExecutor) {}
+  constructor(private db: DatabaseExecutor) {}
 
   async list(): Promise<TenantConfigRow[]> {
     const result = await this.query<TenantConfigRow>({
@@ -109,7 +109,7 @@ export class TenantConfigStorePg {
     return result.rows[0]
   }
 
-  async insert(tenantInfo: TenantConfigRowInput, db: PgExecutor = this.db): Promise<void> {
+  async insert(tenantInfo: TenantConfigRowInput, db: DatabaseExecutor = this.db): Promise<void> {
     const entries = getTenantEntries(tenantInfo)
     const columns = entries.map(([column]) => quoteIdentifier(column))
     const values = entries.map(([, value]) => value)
@@ -127,7 +127,7 @@ export class TenantConfigStorePg {
     )
   }
 
-  async upsert(tenantInfo: TenantConfigRowInput, db: PgExecutor = this.db): Promise<void> {
+  async upsert(tenantInfo: TenantConfigRowInput, db: DatabaseExecutor = this.db): Promise<void> {
     const entries = getTenantEntries(tenantInfo)
     const columns = entries.map(([column]) => quoteIdentifier(column))
     const values = entries.map(([, value]) => value)
@@ -156,7 +156,7 @@ export class TenantConfigStorePg {
   async update(
     tenantId: string,
     tenantInfo: TenantConfigRowInput,
-    db: PgExecutor = this.db
+    db: DatabaseExecutor = this.db
   ): Promise<number> {
     const entries = getTenantEntries(tenantInfo).filter(([column]) => column !== 'id')
     if (entries.length === 0) {
@@ -289,7 +289,7 @@ export class TenantConfigStorePg {
   }
 
   private query<T extends QueryResultRow = QueryResultRow>(
-    statement: Parameters<PgExecutor['query']>[0],
+    statement: Parameters<DatabaseExecutor['query']>[0],
     options: TenantQueryOptions = {}
   ) {
     const db = options.db ?? this.db

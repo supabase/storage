@@ -11,7 +11,11 @@ import {
   signJWT,
   verifyJWT,
 } from '@internal/auth'
-import { getPostgresConnection, getServiceKeyUser, PgTransaction } from '@internal/database'
+import {
+  type DatabaseTransaction,
+  getPostgresConnection,
+  getServiceKeyUser,
+} from '@internal/database'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import { randomUUID } from 'crypto'
@@ -36,7 +40,7 @@ type SignedUrlResult = {
   signedURL: string | null
 }
 
-let tnx: PgTransaction | undefined
+let tnx: DatabaseTransaction | undefined
 async function getSuperuserPostgrestClient() {
   const superUser = await getServiceKeyUser(tenantId)
 
@@ -52,7 +56,7 @@ async function getSuperuserPostgrestClient() {
 }
 
 async function findObject(
-  db: PgTransaction,
+  db: DatabaseTransaction,
   bucketId: string,
   name: string
 ): Promise<Obj | undefined> {
@@ -71,7 +75,7 @@ async function findObject(
 }
 
 async function insertObjects(
-  db: PgTransaction,
+  db: DatabaseTransaction,
   objects:
     | Array<Partial<Obj> & { bucket_id: string; name: string }>
     | (Partial<Obj> & { bucket_id: string; name: string })
@@ -90,7 +94,11 @@ async function insertObjects(
   }
 }
 
-async function deleteObjectsByName(db: PgTransaction, bucketId: string, names: string | string[]) {
+async function deleteObjectsByName(
+  db: DatabaseTransaction,
+  bucketId: string,
+  names: string | string[]
+) {
   await db.query({
     text: `
       DELETE FROM objects
@@ -101,7 +109,7 @@ async function deleteObjectsByName(db: PgTransaction, bucketId: string, names: s
   })
 }
 
-async function insertObjectNames(db: PgTransaction, bucketId: string, names: string[]) {
+async function insertObjectNames(db: DatabaseTransaction, bucketId: string, names: string[]) {
   const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
   const versions = names.map((_, index) => `test-version-${randomUUID()}-${index}`)
 
@@ -116,7 +124,7 @@ async function insertObjectNames(db: PgTransaction, bucketId: string, names: str
 }
 
 async function insertBucket(
-  db: PgTransaction,
+  db: DatabaseTransaction,
   bucket: {
     id: string
     name: string
@@ -1778,7 +1786,7 @@ describe('testing copy object', () => {
     })
     await seedTx.commit()
     tnx = undefined
-    let verificationTx: PgTransaction | undefined
+    let verificationTx: DatabaseTransaction | undefined
 
     try {
       const response = await appInstance.inject({

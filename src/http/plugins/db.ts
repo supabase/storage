@@ -3,7 +3,7 @@ import {
   getPostgresConnection,
   getServiceKeyUser,
   getTenantConfig,
-  PgTenantConnection,
+  type TenantConnection,
 } from '@internal/database'
 import {
   areMigrationsUpToDate,
@@ -19,7 +19,7 @@ import { getConfig, MultitenantMigrationStrategy } from '../../config'
 
 declare module 'fastify' {
   interface FastifyRequest {
-    db: PgTenantConnection
+    db: TenantConnection
     latestMigration?: keyof typeof DBMigration
   }
 }

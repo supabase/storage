@@ -1,10 +1,11 @@
 import { CreateBucketCommand, HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import {
+  type DatabaseTransaction,
+  type DatabaseTransactionalExecutor,
   getPostgresConnection,
   getServiceKeyUser,
-  PgPoolExecutor,
-  PgTenantConnection,
-  PgTransaction,
+  isDatabaseTransaction,
+  type TenantConnection,
 } from '@internal/database'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
 import { isS3Error } from '@internal/errors'
@@ -23,10 +24,10 @@ const { databaseURL, tenantId, storageBackendType, storageS3Bucket } = getConfig
  * This is needed because raw queries bypass the normal connection scope setting
  */
 export async function withDeleteEnabled<T>(
-  db: PgPoolExecutor | PgTransaction,
-  fn: (db: PgTransaction) => Promise<T>
+  db: DatabaseTransactionalExecutor | DatabaseTransaction,
+  fn: (db: DatabaseTransaction) => Promise<T>
 ): Promise<T> {
-  const existingTransaction = db instanceof PgTransaction
+  const existingTransaction = isDatabaseTransaction(db)
   const tnx = existingTransaction ? db : await db.beginTransaction()
   try {
     await tnx.query(`SELECT set_config('storage.allow_delete_query', 'true', true)`)
@@ -44,7 +45,7 @@ export async function withDeleteEnabled<T>(
 }
 
 export function useStorage(options: { ensureMigrations?: boolean } = {}) {
-  let connection: PgTenantConnection
+  let connection: TenantConnection
   let storage: Storage
   let adapter: StorageBackendAdapter
   let database: Database
@@ -75,7 +76,7 @@ export function useStorage(options: { ensureMigrations?: boolean } = {}) {
       tenantId,
       host: 'localhost',
     }
-    database = new StoragePgDB(connection, databaseOptions) as unknown as Database
+    database = new StoragePgDB(connection, databaseOptions)
     location = new TenantLocation(storageS3Bucket)
     adapter = createStorageBackend(storageBackendType)
     storage = new Storage(adapter, database, location)

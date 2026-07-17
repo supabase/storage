@@ -1,4 +1,4 @@
-import { PgTenantConnection } from '@internal/database'
+import type { TenantConnection } from '@internal/database'
 import { getConfig, mergeConfig } from '../config'
 
 vi.hoisted(() => {
@@ -26,7 +26,7 @@ import { mockQueue, useMockObject } from './common'
 describe('Webhooks', () => {
   useMockObject()
 
-  let pg: PgTenantConnection
+  let pg: TenantConnection
   beforeAll(async () => {
     const superUser = await getServiceKeyUser(tenantId)
     pg = await getPostgresConnection({
@@ -679,7 +679,7 @@ describe('Webhooks', () => {
   })
 })
 
-async function createObject(pg: PgTenantConnection, bucketId: string, createdAt?: Date) {
+async function createObject(pg: TenantConnection, bucketId: string, createdAt?: Date) {
   const objectName = randomUUID()
   const tnx = await pg.transaction()
   const createdAtIso = createdAt?.toISOString()

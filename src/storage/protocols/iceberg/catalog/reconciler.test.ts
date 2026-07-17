@@ -19,7 +19,7 @@ function getLastStatement(query: ReturnType<typeof vi.fn>): string {
   const [statement] = query.mock.calls.at(-1) || []
 
   if (!statement || typeof statement === 'string') {
-    throw new Error('Expected a PgStatement query')
+    throw new Error('Expected a DatabaseStatement query')
   }
 
   return String((statement as { text: string }).text)

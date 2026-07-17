@@ -1,5 +1,4 @@
-import { getTenantConfig } from '@internal/database'
-import { PgExecutor } from '@internal/database/pg-connection'
+import { type DatabaseExecutor, getTenantConfig } from '@internal/database'
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { queueJobScheduled, queueJobSchedulingTime } from '@internal/monitoring/metrics'
@@ -22,7 +21,7 @@ export interface BasePayload {
 }
 
 const { pgQueueEnable, region, isMultitenant } = getConfig()
-type TransactionalQueueDb = PgExecutor
+type TransactionalQueueDb = DatabaseExecutor
 
 function withPayloadVersion<TPayload extends BasePayload>(
   payload: TPayload,

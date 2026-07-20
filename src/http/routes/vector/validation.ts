@@ -9,6 +9,7 @@ export function compileNoCoercionValidator(
     allErrors: true,
     coerceTypes: false,
     removeAdditional: false,
+    strictNumbers: true,
     useDefaults: true,
   })
 

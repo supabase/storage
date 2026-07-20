@@ -6,6 +6,7 @@ import { getGlobal } from '@platformatic/globals'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, setErrorHandler } from './http'
+import { finiteSwaggerTransform, withFiniteAjv } from './http/finite'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -14,12 +15,13 @@ interface buildOpts extends FastifyServerOptions {
 const { version, prometheusMetricsEnabled } = getConfig()
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
-  const app = fastify(opts)
+  const app = fastify(withFiniteAjv(opts))
   const isRunningUnderWatt = typeof getGlobal()?.applicationId === 'string'
 
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {
       exposeHeadRoutes: true,
+      transform: finiteSwaggerTransform,
       openapi: {
         info: {
           title: 'Supabase Storage Admin API',

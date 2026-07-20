@@ -11,6 +11,7 @@ import {
   StringTable,
 } from 'pprof-format'
 import { vi } from 'vitest'
+import { withFiniteAjv } from '../../finite'
 import { signals } from '../../plugins/signals'
 
 const runtimeApiClient = vi.hoisted(() => ({
@@ -176,7 +177,7 @@ function buildProfile(functionName: string, sampleValue: number) {
 }
 
 async function buildApp(options?: { onPreHandlerReply?: (reply: FastifyReply) => void }) {
-  const app = fastify()
+  const app = fastify(withFiniteAjv({}))
   app.register(signals)
   if (options?.onPreHandlerReply) {
     app.addHook('preHandler', async (_request, reply) => {
@@ -318,6 +319,27 @@ describe('admin pprof routes', () => {
     )
     runtimeApiClient.close.mockResolvedValue(undefined)
     installMultipartWindowMock()
+  })
+
+  it.each([
+    '/profile?seconds=Infinity',
+    '/profile?seconds=1e999',
+    '/profile?workerId=-Infinity',
+    '/heap?seconds=-1e999',
+    '/heap-snapshot?workerId=Infinity',
+  ])('rejects non-finite numeric query values: %s', async (url) => {
+    const app = await buildApp()
+
+    try {
+      const response = await app.inject({ method: 'GET', url })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json().message).toContain('finite')
+      expect(runtimeApiClient.startApplicationProfiling).not.toHaveBeenCalled()
+      expect(runtimeApiClient.takeApplicationHeapSnapshot).not.toHaveBeenCalled()
+    } finally {
+      await app.close()
+    }
   })
 
   it('captures a cpu profile for the requested worker via Watt control', async () => {

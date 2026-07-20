@@ -45,4 +45,25 @@ describe('compileNoCoercionValidator', () => {
       ]),
     })
   })
+
+  it.each([
+    ['$gt', { $gt: JSON.parse('1e999') }, '/$gt'],
+    ['$lt', { $lt: JSON.parse('1e999') }, '/$lt'],
+    ['float32 item', { float32: [JSON.parse('1e999')] }, '/float32/0'],
+  ])('rejects JSON numeric overflow for %s', (_name, body, instancePath) => {
+    const schema = {
+      type: 'object',
+      properties: {
+        $gt: { type: 'number' },
+        $lt: { type: 'number' },
+        float32: { type: 'array', items: { type: 'number' } },
+      },
+      additionalProperties: false,
+    } as const
+    const validate = compileNoCoercionValidator(schema)({ schema } as never)
+
+    expect(validate(body)).toEqual({
+      error: expect.arrayContaining([expect.objectContaining({ instancePath, keyword: 'type' })]),
+    })
+  })
 })

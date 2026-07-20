@@ -3063,18 +3063,35 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const copyPart = new UploadPartCopyCommand({
-          Bucket: bucket,
-          Key: newKey,
-          UploadId: resp.UploadId,
-          PartNumber: 1,
-          CopySource: `${bucket}/${sourceKey}`,
-          CopySourceRange: `bytes=0-${1024 * 4}`,
+        const copySource = `${bucket}/${sourceKey}`
+        const copySourceRange = `bytes=0-${1024 * 4}`
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${newKey}`,
+          method: 'PUT',
+          query: {
+            partNumber: '1',
+            uploadId: resp.UploadId!,
+          },
+          headers: {
+            'x-amz-copy-source': copySource,
+            'x-amz-copy-source-range': copySourceRange,
+          },
         })
+        const rawResponse = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            accept: 'application/xml',
+          },
+        })
+        const rawBody = (await rawResponse.text()).replace(/^<\?xml[^>]*\?>/, '')
 
-        const copyResp = await client.send(copyPart)
-        expect(copyResp.CopyPartResult?.ETag).toBeTruthy()
-        expect(copyResp.CopyPartResult?.LastModified).toBeTruthy()
+        expect(rawResponse.status).toBe(200)
+        expect(rawBody).toMatch(/^<CopyPartResult(?:\s[^>]*)?>/)
+        expect(rawBody).toContain('<ETag>')
+        expect(rawBody).toContain('<LastModified>')
+        expect(rawBody).toMatch(/<\/CopyPartResult>$/)
 
         const listPartsCmd = new ListPartsCommand({
           Bucket: bucket,

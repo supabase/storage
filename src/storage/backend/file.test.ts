@@ -14,6 +14,7 @@ import { FileBackend } from './file'
 vi.mock('fs-xattr', () => ({
   set: vi.fn(() => Promise.resolve()),
   get: vi.fn(() => Promise.resolve(undefined)),
+  remove: vi.fn(() => Promise.resolve()),
 }))
 
 describe('FileBackend xattr metadata', () => {
@@ -307,6 +308,240 @@ describe('FileBackend traversal protection', () => {
     ).rejects.toMatchObject({
       code: 'InvalidKey',
     })
+  })
+})
+
+describe('FileBackend copy metadata options', () => {
+  let tmpDir: string
+  let backend: FileBackend
+  let originalStoragePath: string | undefined
+  let originalFilePath: string | undefined
+  let originalPlatformDescriptor: PropertyDescriptor | undefined
+
+  beforeEach(async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
+    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
+    originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+    })
+    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
+    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
+    getConfig({ reload: true })
+    backend = new FileBackend()
+
+    const xattrGet = xattr.get as unknown as Mock
+    xattrGet.mockReset()
+    xattrGet.mockImplementation((_file: string, attribute: string) => {
+      if (attribute === 'user.supabase.cache-control') {
+        return Promise.resolve(Buffer.from('max-age=60'))
+      }
+      if (attribute === 'user.supabase.content-type') {
+        return Promise.resolve(Buffer.from('text/plain'))
+      }
+      return Promise.resolve(undefined)
+    })
+    ;(xattr.set as unknown as Mock).mockReset().mockResolvedValue(undefined)
+    ;(xattr.remove as unknown as Mock).mockReset().mockResolvedValue(undefined)
+
+    await backend.uploadObject(
+      'bucket',
+      'source.txt',
+      'v1',
+      Readable.from('source-body'),
+      'text/plain',
+      'max-age=60'
+    )
+    ;(xattr.set as unknown as Mock).mockClear()
+    ;(xattr.remove as unknown as Mock).mockClear()
+  })
+
+  afterEach(async () => {
+    ;(xattr.get as unknown as Mock).mockReset().mockResolvedValue(undefined)
+    ;(xattr.set as unknown as Mock).mockReset().mockResolvedValue(undefined)
+    ;(xattr.remove as unknown as Mock).mockReset().mockResolvedValue(undefined)
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor)
+    }
+    if (originalStoragePath === undefined) {
+      delete process.env.STORAGE_FILE_BACKEND_PATH
+    } else {
+      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
+    }
+    if (originalFilePath === undefined) {
+      delete process.env.FILE_STORAGE_BACKEND_PATH
+    } else {
+      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
+    }
+    await removePath(tmpDir)
+  })
+
+  it('preserves source metadata when copyMetadata is true', async () => {
+    const setMetadataSpy = vi.spyOn(backend, 'setFileMetadata')
+
+    await backend.copyObject(
+      'bucket',
+      'source.txt',
+      'v1',
+      'copy-preserve.txt',
+      undefined,
+      {
+        cacheControl: 'max-age=999',
+        mimetype: 'image/gif',
+      },
+      undefined,
+      { copyMetadata: true }
+    )
+
+    expect(setMetadataSpy).toHaveBeenCalledWith(expect.any(String), {
+      cacheControl: 'max-age=60',
+      contentType: 'text/plain',
+    })
+  })
+
+  it('overwrites file metadata when copyMetadata is false', async () => {
+    const setMetadataSpy = vi.spyOn(backend, 'setFileMetadata')
+
+    await backend.copyObject(
+      'bucket',
+      'source.txt',
+      'v1',
+      'copy-replace.txt',
+      undefined,
+      {
+        cacheControl: 'max-age=999',
+        mimetype: 'image/gif',
+      },
+      undefined,
+      { copyMetadata: false }
+    )
+
+    expect(setMetadataSpy).toHaveBeenCalledWith(expect.any(String), {
+      cacheControl: 'max-age=999',
+      contentType: 'image/gif',
+    })
+  })
+
+  it('removes omitted metadata when copyMetadata is false', async () => {
+    const setMetadataSpy = vi.spyOn(backend, 'setFileMetadata')
+
+    await backend.copyObject(
+      'bucket',
+      'source.txt',
+      'v1',
+      'copy-partial-replace.txt',
+      undefined,
+      {
+        cacheControl: 'max-age=999',
+      },
+      undefined,
+      { copyMetadata: false }
+    )
+
+    expect(setMetadataSpy).toHaveBeenCalledWith(expect.any(String), {
+      cacheControl: 'max-age=999',
+      contentType: undefined,
+    })
+    expect(xattr.set).toHaveBeenCalledWith(
+      expect.any(String),
+      'user.supabase.cache-control',
+      'max-age=999'
+    )
+    expect(xattr.remove).toHaveBeenCalledWith(expect.any(String), 'user.supabase.content-type')
+  })
+
+  it('removes all metadata when replacement metadata is empty', async () => {
+    await backend.copyObject(
+      'bucket',
+      'source.txt',
+      'v1',
+      'copy-empty-replace.txt',
+      undefined,
+      {},
+      undefined,
+      { copyMetadata: false }
+    )
+
+    expect(xattr.set).not.toHaveBeenCalled()
+    expect(xattr.remove).toHaveBeenCalledTimes(2)
+    expect(xattr.remove).toHaveBeenCalledWith(expect.any(String), 'user.supabase.cache-control')
+    expect(xattr.remove).toHaveBeenCalledWith(expect.any(String), 'user.supabase.content-type')
+  })
+
+  it('preserves absent source metadata when copyMetadata is true', async () => {
+    const missingXattr = Object.assign(new Error('missing xattr'), { code: 'ENODATA' })
+    ;(xattr.get as unknown as Mock).mockRejectedValue(missingXattr)
+
+    await expect(
+      backend.copyObject(
+        'bucket',
+        'source.txt',
+        'v1',
+        'copy-without-metadata.txt',
+        undefined,
+        undefined,
+        undefined,
+        { copyMetadata: true }
+      )
+    ).resolves.toMatchObject({ httpStatusCode: 200 })
+
+    expect(xattr.remove).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores already absent destination metadata', async () => {
+    const missingXattr = Object.assign(new Error('missing xattr'), { code: 'ENOATTR' })
+    ;(xattr.remove as unknown as Mock).mockRejectedValue(missingXattr)
+
+    await expect(
+      backend.copyObject(
+        'bucket',
+        'source.txt',
+        'v1',
+        'copy-empty-replace.txt',
+        undefined,
+        {},
+        undefined,
+        { copyMetadata: false }
+      )
+    ).resolves.toMatchObject({ httpStatusCode: 200 })
+  })
+
+  it('propagates genuine source metadata read errors', async () => {
+    const readError = Object.assign(new Error('xattr read failed'), { code: 'EIO' })
+    ;(xattr.get as unknown as Mock).mockRejectedValue(readError)
+
+    await expect(
+      backend.copyObject(
+        'bucket',
+        'source.txt',
+        'v1',
+        'copy-read-failure.txt',
+        undefined,
+        undefined,
+        undefined,
+        { copyMetadata: true }
+      )
+    ).rejects.toBe(readError)
+  })
+
+  it('propagates genuine destination metadata removal errors', async () => {
+    const removeError = Object.assign(new Error('xattr removal failed'), { code: 'EIO' })
+    ;(xattr.remove as unknown as Mock).mockRejectedValue(removeError)
+
+    await expect(
+      backend.copyObject(
+        'bucket',
+        'source.txt',
+        'v1',
+        'copy-remove-failure.txt',
+        undefined,
+        {},
+        undefined,
+        { copyMetadata: false }
+      )
+    ).rejects.toBe(removeError)
   })
 })
 

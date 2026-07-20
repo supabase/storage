@@ -44,6 +44,10 @@ export type UploadPart = {
   ChecksumSHA256?: string
 }
 
+export type CopyObjectOptions = {
+  copyMetadata?: boolean
+}
+
 /**
  * A generic storage Adapter to interact with files
  */
@@ -135,7 +139,8 @@ export abstract class StorageBackendAdapter {
       ifNoneMatch?: string
       ifModifiedSince?: Date
       ifUnmodifiedSince?: Date
-    }
+    },
+    options?: CopyObjectOptions
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     throw new Error('copyObject not implemented')
   }

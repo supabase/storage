@@ -7,12 +7,13 @@ import { FastifyRequest } from 'fastify'
 import { PassThrough, Readable } from 'stream'
 import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
-import { Database } from './database'
+import { Database, defineObjectColumns } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
+const CURRENT_OBJECT_COLUMNS = defineObjectColumns('id', 'version', 'metadata')
 
 type UploadType = 'standard' | 's3' | 'resumable'
 
@@ -213,7 +214,7 @@ export class Uploader {
           timeout: 5000,
         })
 
-        const currentObj = await db.findObject(bucketId, objectName, 'id, version, metadata', {
+        const currentObj = await db.findObject(bucketId, objectName, CURRENT_OBJECT_COLUMNS, {
           forUpdate: true,
           dontErrorOnEmpty: true,
         })

@@ -7,7 +7,17 @@ import { StorageObjectLocator } from '@storage/locator'
 import { InfoRenderer } from '@storage/renderer/info'
 import { getConfig } from '../config'
 import { StorageBackendAdapter } from './backend'
-import { Database, FindBucketFilters, ListBucketOptions } from './database'
+import {
+  ANALYTICS_NAME_COLUMNS,
+  AnalyticsColumnSelection,
+  BUCKET_ID_COLUMNS,
+  BucketColumnSelection,
+  Database,
+  defineBucketColumns,
+  defineObjectColumns,
+  FindBucketFilters,
+  ListBucketOptions,
+} from './database'
 import { ObjectAdminDeleteAllBefore } from './events'
 import {
   BucketType,
@@ -20,6 +30,8 @@ import { ObjectStorage } from './object'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 
 const { emptyBucketMax } = getConfig()
+const BUCKET_NAME_COLUMNS = defineBucketColumns('name')
+const EMPTY_BUCKET_OBJECT_COLUMNS = defineObjectColumns('id', 'name')
 
 function assertNever(value: never): never {
   throw new Error(`Unexpected renderer type: ${String(value)}`)
@@ -80,7 +92,11 @@ export class Storage {
    * @param columns
    * @param filters
    */
-  findBucket(id: string, columns = 'id', filters?: FindBucketFilters) {
+  findBucket(
+    id: string,
+    columns: BucketColumnSelection = BUCKET_ID_COLUMNS,
+    filters?: FindBucketFilters
+  ) {
     return this.db.findBucketById(id, columns, filters)
   }
 
@@ -89,11 +105,14 @@ export class Storage {
    * @param columns
    * @param options
    */
-  listBuckets(columns = 'id', options?: ListBucketOptions) {
+  listBuckets(columns: BucketColumnSelection = BUCKET_ID_COLUMNS, options?: ListBucketOptions) {
     return this.db.listBuckets(columns, options)
   }
 
-  listAnalyticsBuckets(columns = 'name', options?: ListBucketOptions) {
+  listAnalyticsBuckets(
+    columns: AnalyticsColumnSelection = ANALYTICS_NAME_COLUMNS,
+    options?: ListBucketOptions
+  ) {
     return this.db.listAnalyticsBuckets(columns, options)
   }
 
@@ -242,7 +261,7 @@ export class Storage {
    */
   async deleteBucket(id: string) {
     return this.db.withTransaction(async (db) => {
-      await db.asSuperUser().findBucketById(id, 'id', {
+      await db.asSuperUser().findBucketById(id, BUCKET_ID_COLUMNS, {
         forUpdate: true,
       })
 
@@ -292,7 +311,7 @@ export class Storage {
    * @param before limit to files before the specified time (defaults to now)
    */
   async emptyBucket(bucketId: string, before: Date = new Date()) {
-    await this.findBucket(bucketId, 'name')
+    await this.findBucket(bucketId, BUCKET_NAME_COLUMNS)
 
     const count = await this.db.countObjectsInBucket(bucketId, emptyBucketMax + 1)
     if (count > emptyBucketMax) {
@@ -302,7 +321,7 @@ export class Storage {
       )
     }
 
-    const objects = await this.db.listObjects(bucketId, 'id, name', 1, before)
+    const objects = await this.db.listObjects(bucketId, EMPTY_BUCKET_OBJECT_COLUMNS, 1, before)
     if (!objects || objects.length < 1) {
       // the bucket is already empty
       return

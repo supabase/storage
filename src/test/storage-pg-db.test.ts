@@ -10,13 +10,73 @@ import { runMigrationsOnTenant } from '@internal/database/migrations'
 import type { TenantConnectionOptions } from '@internal/database/pool'
 import { logger, logSchema } from '@internal/monitoring'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
-import { StoragePgDB } from '@storage/database'
+import {
+  BUCKET_ID_COLUMNS,
+  defineAnalyticsColumns,
+  defineBucketColumns,
+  defineMultipartColumns,
+  defineObjectColumns,
+  MULTIPART_ID_COLUMNS,
+  OBJECT_ID_COLUMNS,
+  StoragePgDB,
+} from '@storage/database'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { randomUUID } from 'crypto'
 import { DatabaseError, type PoolClient } from 'pg'
 import { getConfig } from '../config'
 
 const { databaseURL, tenantId } = getConfig()
+const BUCKET_DETAILS_COLUMNS = defineBucketColumns(
+  'id',
+  'name',
+  'owner',
+  'owner_id',
+  'public',
+  'file_size_limit',
+  'allowed_mime_types',
+  'type'
+)
+const BUCKET_LIST_COLUMNS = defineBucketColumns(
+  'id',
+  'name',
+  'public',
+  'file_size_limit',
+  'allowed_mime_types',
+  'type'
+)
+const BUCKET_TYPE_COLUMNS = defineBucketColumns('type')
+const BUCKET_UPDATE_COLUMNS = defineBucketColumns(
+  'id',
+  'public',
+  'file_size_limit',
+  'allowed_mime_types'
+)
+const OBJECT_DETAILS_COLUMNS = defineObjectColumns(
+  'name',
+  'bucket_id',
+  'owner',
+  'owner_id',
+  'metadata',
+  'user_metadata',
+  'version'
+)
+const OBJECT_NAME_COLUMNS = defineObjectColumns('name')
+const OBJECT_NAME_VERSION_COLUMNS = defineObjectColumns('name', 'version')
+const MULTIPART_DETAILS_COLUMNS = defineMultipartColumns(
+  'id',
+  'key',
+  'version',
+  'upload_signature',
+  'user_metadata',
+  'metadata'
+)
+const MULTIPART_PROGRESS_COLUMNS = defineMultipartColumns('id', 'in_progress_size')
+const MULTIPART_SIGNATURE_COLUMNS = defineMultipartColumns(
+  'id',
+  'in_progress_size',
+  'upload_signature'
+)
+const ANALYTICS_DETAILS_COLUMNS = defineAnalyticsColumns('id', 'name', 'created_at', 'updated_at')
 
 describe('StoragePgDB bucket metadata', () => {
   let pool: PgPoolStrategy
@@ -89,12 +149,7 @@ describe('StoragePgDB bucket metadata', () => {
       type: 'STANDARD',
     })
 
-    await expect(
-      db.findBucketById(
-        bucketId,
-        'id, name, owner, owner_id, public, file_size_limit, allowed_mime_types, type'
-      )
-    ).resolves.toMatchObject({
+    await expect(db.findBucketById(bucketId, BUCKET_DETAILS_COLUMNS)).resolves.toMatchObject({
       id: bucketId,
       name: bucketId,
       owner,
@@ -106,7 +161,7 @@ describe('StoragePgDB bucket metadata', () => {
     })
 
     await expect(
-      db.listBuckets('id, name, public, file_size_limit, allowed_mime_types, type', {
+      db.listBuckets(BUCKET_LIST_COLUMNS, {
         search: runId,
         sortColumn: 'name',
         sortOrder: 'asc',
@@ -122,7 +177,7 @@ describe('StoragePgDB bucket metadata', () => {
     ])
 
     await expect(
-      db.listBuckets('type', {
+      db.listBuckets(BUCKET_TYPE_COLUMNS, {
         search: runId,
         limit: 1,
       })
@@ -133,7 +188,9 @@ describe('StoragePgDB bucket metadata', () => {
     ])
 
     await db.withTransaction(async (tx) => {
-      await expect(tx.findBucketById(bucketId, 'id', { forUpdate: true })).resolves.toEqual({
+      await expect(
+        tx.findBucketById(bucketId, BUCKET_ID_COLUMNS, { forUpdate: true })
+      ).resolves.toEqual({
         id: bucketId,
       })
     })
@@ -144,9 +201,7 @@ describe('StoragePgDB bucket metadata', () => {
       allowed_mime_types: ['image/jpeg'],
     })
 
-    await expect(
-      db.findBucketById(bucketId, 'id, public, file_size_limit, allowed_mime_types')
-    ).resolves.toMatchObject({
+    await expect(db.findBucketById(bucketId, BUCKET_UPDATE_COLUMNS)).resolves.toMatchObject({
       id: bucketId,
       public: true,
       file_size_limit: null,
@@ -162,7 +217,7 @@ describe('StoragePgDB bucket metadata', () => {
     await deleteObjects(bucketId)
     await expect(db.deleteBucket(bucketId)).resolves.toBe(1)
     await expect(
-      db.findBucketById(bucketId, 'id', { dontErrorOnEmpty: true })
+      db.findBucketById(bucketId, BUCKET_ID_COLUMNS, { dontErrorOnEmpty: true })
     ).resolves.toBeUndefined()
   })
 
@@ -198,7 +253,9 @@ describe('StoragePgDB bucket metadata', () => {
       })
 
       expect(Date.now() - start).toBeLessThan(2_000)
-      await expect(db.listBuckets('id', { limit: 1 })).resolves.toEqual(expect.any(Array))
+      await expect(db.listBuckets(BUCKET_ID_COLUMNS, { limit: 1 })).resolves.toEqual(
+        expect.any(Array)
+      )
     } finally {
       clearTimeout(releaseTimer)
       releaseLock?.()
@@ -321,7 +378,7 @@ describe('StoragePgDB bucket metadata', () => {
     ).rejects.toThrow('rollback pg bucket transaction')
 
     await expect(
-      db.findBucketById(bucketId, 'id', { dontErrorOnEmpty: true })
+      db.findBucketById(bucketId, BUCKET_ID_COLUMNS, { dontErrorOnEmpty: true })
     ).resolves.toBeUndefined()
   })
 
@@ -338,7 +395,7 @@ describe('StoragePgDB bucket metadata', () => {
           })
         })
 
-        await expect(tx.findBucketById(bucketId, 'id')).resolves.toEqual({
+        await expect(tx.findBucketById(bucketId, BUCKET_ID_COLUMNS)).resolves.toEqual({
           id: bucketId,
         })
 
@@ -347,7 +404,7 @@ describe('StoragePgDB bucket metadata', () => {
     ).rejects.toThrow('rollback parent transaction')
 
     await expect(
-      db.findBucketById(bucketId, 'id', { dontErrorOnEmpty: true })
+      db.findBucketById(bucketId, BUCKET_ID_COLUMNS, { dontErrorOnEmpty: true })
     ).resolves.toBeUndefined()
   })
 
@@ -1172,13 +1229,7 @@ describe('StoragePgDB bucket metadata', () => {
       version: 'v1',
     })
 
-    await expect(
-      db.findObject(
-        bucketId,
-        objectA,
-        'name,bucket_id,owner,owner_id,metadata,user_metadata,version'
-      )
-    ).resolves.toMatchObject({
+    await expect(db.findObject(bucketId, objectA, OBJECT_DETAILS_COLUMNS)).resolves.toMatchObject({
       bucket_id: bucketId,
       name: objectA,
       owner,
@@ -1189,9 +1240,9 @@ describe('StoragePgDB bucket metadata', () => {
     })
 
     await db.withTransaction(async (tx) => {
-      await expect(tx.findObject(bucketId, objectA, 'name', { forShare: true })).resolves.toEqual({
-        name: objectA,
-      })
+      await expect(
+        tx.findObject(bucketId, objectA, OBJECT_NAME_COLUMNS, { forShare: true })
+      ).resolves.toEqual({ name: objectA })
       await expect(tx.waitObjectLock(bucketId, `${runId}-wait-lock`)).resolves.toBe(true)
     })
 
@@ -1262,7 +1313,7 @@ describe('StoragePgDB bucket metadata', () => {
     })
 
     await expect(
-      db.findObjects(bucketId, [objectARenamed, objectB], 'name,version')
+      db.findObjects(bucketId, [objectARenamed, objectB], OBJECT_NAME_VERSION_COLUMNS)
     ).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: objectARenamed, version: 'v2' }),
@@ -1282,10 +1333,10 @@ describe('StoragePgDB bucket metadata', () => {
       ])
     )
 
-    const firstPage = await db.listObjects(bucketId, 'name', 2)
+    const firstPage = await db.listObjects(bucketId, OBJECT_NAME_COLUMNS, 2)
     expect(firstPage).toHaveLength(2)
     await expect(
-      db.listObjects(bucketId, 'name', 10, undefined, firstPage[1].name)
+      db.listObjects(bucketId, OBJECT_NAME_COLUMNS, 10, undefined, firstPage[1].name)
     ).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ name: objectC })]))
 
     await expect(
@@ -1340,7 +1391,7 @@ describe('StoragePgDB bucket metadata', () => {
     )
 
     await expect(
-      db.findObject(bucketId, objectARenamed, 'id', { dontErrorOnEmpty: true })
+      db.findObject(bucketId, objectARenamed, OBJECT_ID_COLUMNS, { dontErrorOnEmpty: true })
     ).resolves.toBeUndefined()
   })
 
@@ -1383,7 +1434,7 @@ describe('StoragePgDB bucket metadata', () => {
     await db.createMultipartUpload(uploadIdB, bucketId, keyB, 'version-b', 'signature-b', owner)
 
     await expect(
-      db.findMultipartUpload(uploadIdA, 'id,key,version,upload_signature,user_metadata,metadata')
+      db.findMultipartUpload(uploadIdA, MULTIPART_DETAILS_COLUMNS)
     ).resolves.toMatchObject({
       id: uploadIdA,
       key: keyA,
@@ -1395,7 +1446,7 @@ describe('StoragePgDB bucket metadata', () => {
 
     await db.withTransaction(async (tx) => {
       await expect(
-        tx.findMultipartUpload(uploadIdA, 'id,in_progress_size', { forUpdate: true })
+        tx.findMultipartUpload(uploadIdA, MULTIPART_PROGRESS_COLUMNS, { forUpdate: true })
       ).resolves.toMatchObject({
         id: uploadIdA,
         in_progress_size: 0,
@@ -1405,7 +1456,7 @@ describe('StoragePgDB bucket metadata', () => {
     })
 
     await expect(
-      db.findMultipartUpload(uploadIdA, 'id,in_progress_size,upload_signature')
+      db.findMultipartUpload(uploadIdA, MULTIPART_SIGNATURE_COLUMNS)
     ).resolves.toMatchObject({
       id: uploadIdA,
       in_progress_size: 33,
@@ -1466,7 +1517,7 @@ describe('StoragePgDB bucket metadata', () => {
     ])
 
     await db.deleteMultipartUpload(uploadIdA)
-    await expect(db.findMultipartUpload(uploadIdA, 'id')).rejects.toMatchObject({
+    await expect(db.findMultipartUpload(uploadIdA, MULTIPART_ID_COLUMNS)).rejects.toMatchObject({
       code: 'NoSuchUpload',
     })
     await expect(db.listParts(uploadIdA, { maxParts: 10 })).resolves.toEqual([])
@@ -1550,7 +1601,7 @@ describe('StoragePgDB bucket metadata', () => {
     })
 
     await expect(
-      db.listAnalyticsBuckets('id, name, created_at, updated_at', {
+      db.listAnalyticsBuckets(ANALYTICS_DETAILS_COLUMNS, {
         search: runId,
         sortColumn: 'name',
         sortOrder: 'asc',

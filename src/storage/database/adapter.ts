@@ -2,6 +2,12 @@ import { PgTenantConnection } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import { ObjectMetadata } from '../backend'
 import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
+import {
+  AnalyticsColumnSelection,
+  BucketColumnSelection,
+  MultipartColumnSelection,
+  ObjectColumnSelection,
+} from './columns'
 
 export interface SearchObjectOption {
   search?: string
@@ -89,7 +95,7 @@ export interface Database {
 
   findBucketById<Filters extends FindBucketFilters = FindObjectFilters>(
     bucketId: string,
-    columns: string,
+    columns: BucketColumnSelection,
     filters?: Filters
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Bucket | undefined : Bucket>
 
@@ -99,7 +105,7 @@ export interface Database {
 
   listObjects(
     bucketId: string,
-    columns: string,
+    columns: ObjectColumnSelection,
     limit: number,
     before?: Date,
     nextToken?: string
@@ -132,7 +138,7 @@ export interface Database {
     }
   ): Promise<S3MultipartUpload[]>
 
-  listBuckets(columns: string, options?: ListBucketOptions): Promise<Bucket[]>
+  listBuckets(columns: BucketColumnSelection, options?: ListBucketOptions): Promise<Bucket[]>
   mustLockObject(bucketId: string, objectName: string, version?: string): Promise<boolean>
 
   waitObjectLock(
@@ -173,18 +179,21 @@ export interface Database {
 
   updateObjectOwner(bucketId: string, objectName: string, owner?: string): Promise<Obj>
 
-  findObjects(bucketId: string, objectNames: string[], columns: string): Promise<Obj[]>
+  findObjects(
+    bucketId: string,
+    objectNames: string[],
+    columns: ObjectColumnSelection
+  ): Promise<Obj[]>
 
   findObjectVersions(
     bucketId: string,
-    objectNames: { name: string; version: string }[],
-    columns: string
+    objectNames: { name: string; version: string }[]
   ): Promise<Obj[]>
 
   findObject<Filters extends FindObjectFilters = FindObjectFilters>(
     bucketId: string,
     objectName: string,
-    columns: string,
+    columns: ObjectColumnSelection,
     filters?: Filters
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Obj | undefined : Obj>
 
@@ -207,7 +216,7 @@ export interface Database {
 
   findMultipartUpload(
     uploadId: string,
-    columns: string,
+    columns: MultipartColumnSelection,
     options?: { forUpdate?: boolean }
   ): Promise<S3MultipartUpload>
 
@@ -228,7 +237,7 @@ export interface Database {
 
   deleteAnalyticsBucket(id: string, opts?: { soft: boolean }): Promise<IcebergCatalog>
   listAnalyticsBuckets(
-    columns: string,
+    columns: AnalyticsColumnSelection,
     options: ListBucketOptions | undefined
   ): Promise<IcebergCatalog[]>
   findAnalyticsBucketByName(name: string): Promise<IcebergCatalog>

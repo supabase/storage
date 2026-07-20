@@ -1,4 +1,5 @@
 import { MAX_HEADER_NAME_LENGTH } from '@internal/http/header'
+import { resolveColumns } from '@storage/database'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 
 describe('S3ProtocolHandler.dbHeadObject', () => {
@@ -245,7 +246,10 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
     })
 
     expect(response).toEqual({})
-    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, 'id,version,user_metadata,metadata')
+    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, expect.anything())
+    expect(resolveColumns(findMultipartUpload.mock.calls[0][1])).toBe(
+      '"id", "version", "user_metadata", "metadata"'
+    )
     expect(abortMultipartUpload).toHaveBeenCalled()
     expect(deleteMultipartUpload).toHaveBeenCalledWith(uploadId)
   })
@@ -294,7 +298,10 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
     })
 
     expect(response).toEqual({})
-    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, 'id,version,user_metadata,metadata')
+    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, expect.anything())
+    expect(resolveColumns(findMultipartUpload.mock.calls[0][1])).toBe(
+      '"id", "version", "user_metadata", "metadata"'
+    )
     expect(abortMultipartUpload).toHaveBeenCalled()
     expect(deleteMultipartUpload).toHaveBeenCalledWith(uploadId)
   })
@@ -344,7 +351,10 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
       })
     ).rejects.toEqual(otherError)
 
-    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, 'id,version,user_metadata,metadata')
+    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, expect.anything())
+    expect(resolveColumns(findMultipartUpload.mock.calls[0][1])).toBe(
+      '"id", "version", "user_metadata", "metadata"'
+    )
     expect(abortMultipartUpload).toHaveBeenCalled()
     expect(deleteMultipartUpload).not.toHaveBeenCalled()
   })

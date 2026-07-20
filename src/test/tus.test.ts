@@ -10,6 +10,7 @@ import {
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { pathExists, removePath } from '@internal/fs'
 import { logger } from '@internal/monitoring'
+import { OBJECT_ALL_COLUMNS } from '@storage/database'
 import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import fs from 'fs'
@@ -310,7 +311,7 @@ describe.each([
 
     expect(result).toEqual(true)
 
-    const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+    const dbAsset = await storage.from(bucket.id).findObject(objectName, OBJECT_ALL_COLUMNS)
     expect(dbAsset).toEqual({
       bucket_id: bucket.id,
       created_at: expect.any(Date),
@@ -405,7 +406,7 @@ describe.each([
       },
     ])
 
-    const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+    const dbAsset = await storage.from(bucket.id).findObject(objectName, OBJECT_ALL_COLUMNS)
     expect(dbAsset).toEqual({
       bucket_id: bucket.id,
       created_at: expect.any(Date),
@@ -560,7 +561,7 @@ describe.each([
       upload.start()
     })
 
-    const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+    const dbAsset = await storage.from(bucket.id).findObject(objectName, OBJECT_ALL_COLUMNS)
     expect(dbAsset).toEqual({
       bucket_id: bucket.id,
       created_at: expect.any(Date),
@@ -830,7 +831,7 @@ describe.each([
 
       expect(result).toEqual(true)
 
-      const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+      const dbAsset = await storage.from(bucket.id).findObject(objectName, OBJECT_ALL_COLUMNS)
       expect(dbAsset).toEqual({
         bucket_id: bucket.id,
         created_at: expect.any(Date),
@@ -899,7 +900,7 @@ describe.each([
 
       expect(result).toEqual(true)
 
-      const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+      const dbAsset = await storage.from(bucket.id).findObject(objectName, OBJECT_ALL_COLUMNS)
       expect(dbAsset).toEqual({
         bucket_id: bucket.id,
         created_at: expect.any(Date),

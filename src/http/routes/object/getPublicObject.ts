@@ -1,9 +1,12 @@
+import { defineBucketColumns, defineObjectColumns } from '@storage/database'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
+const PUBLIC_BUCKET_COLUMNS = defineBucketColumns('id', 'public')
+const OBJECT_DOWNLOAD_COLUMNS = defineObjectColumns('id', 'version', 'metadata')
 
 const getPublicObjectParamsSchema = {
   type: 'object',
@@ -54,10 +57,10 @@ export default async function routes(fastify: FastifyInstance) {
 
       const bucketRef = request.storage.asSuperUser().from(bucketName)
       const [, obj] = await Promise.all([
-        request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
+        request.storage.asSuperUser().findBucket(bucketName, PUBLIC_BUCKET_COLUMNS, {
           isPublic: true,
         }),
-        bucketRef.findObject(objectName, 'id,version,metadata'),
+        bucketRef.findObject(objectName, OBJECT_DOWNLOAD_COLUMNS),
       ])
 
       // send the object from s3

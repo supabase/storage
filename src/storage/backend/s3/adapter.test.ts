@@ -27,6 +27,9 @@ vi.mock('@aws-sdk/client-s3', async () => {
     ...originalModule,
     S3Client: vi.fn(function () {
       return {
+        middlewareStack: {
+          remove: vi.fn(),
+        },
         send: vi.fn(),
       }
     }),
@@ -85,6 +88,9 @@ describe('S3Backend', () => {
 
     ;(S3Client as unknown as Mock).mockImplementation(function () {
       return {
+        middlewareStack: {
+          remove: vi.fn(),
+        },
         send: mockSend,
       }
     })
@@ -123,6 +129,21 @@ describe('S3Backend', () => {
   }
 
   describe('client config', () => {
+    test('removes the no-op logger middleware from every AWS client', () => {
+      new S3Backend({
+        region: 'us-east-1',
+        endpoint: 'http://127.0.0.1:9000',
+        privateAssetEndpoint: 'http://minio:9000',
+      })
+
+      const s3ClientMock = S3Client as unknown as Mock
+      expect(s3ClientMock).toHaveBeenCalledTimes(2)
+
+      for (const result of s3ClientMock.mock.results) {
+        expect(result.value.middlewareStack.remove).toHaveBeenCalledWith('loggerMiddleware')
+      }
+    })
+
     test('passes split checksum settings independently to the AWS client', async () => {
       const originalRequestChecksum = process.env.STORAGE_S3_REQUEST_CHECKSUM_CALCULATION
       const originalResponseChecksum = process.env.STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION

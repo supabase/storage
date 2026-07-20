@@ -92,6 +92,7 @@ function createTusServer(
           forcePathStyle: storageS3ForcePathStyle,
         })
       : undefined
+  sharedS3Client?.middlewareStack.remove('loggerMiddleware')
   const serverOptions: ServerOptions & {
     datastore: DataStore
   } = {

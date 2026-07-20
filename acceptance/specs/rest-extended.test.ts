@@ -767,7 +767,7 @@ describeAcceptance(
           { expectedStatus: 200, token }
         )
         expect(beforeCopy.body).toBe(payload)
-        expect(beforeCopy.headers.get('cache-control')).toBe(initialCacheControl)
+        expect(cacheControlDirectives(beforeCopy.headers)).toContain(initialCacheControl)
 
         await client.request('POST', '/object/copy', {
           body: {
@@ -792,7 +792,7 @@ describeAcceptance(
           { expectedStatus: 200, token }
         )
         expect(afterCopy.body).toBe(payload)
-        expect(afterCopy.headers.get('cache-control')).toBe(updatedCacheControl)
+        expect(cacheControlDirectives(afterCopy.headers)).toContain(updatedCacheControl)
         expect(afterCopy.headers.get('content-type')).toBe('text/plain')
 
         const info = await client.request<ObjectInfoResponse>(
@@ -900,4 +900,14 @@ describeAcceptance(
 
 function encodeMetadata(metadata: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(metadata)).toString('base64')
+}
+
+// Gateway may prepend directives such as `public` to the origin value.
+function cacheControlDirectives(headers: Headers): string[] {
+  return (
+    headers
+      .get('cache-control')
+      ?.split(',')
+      .map((directive) => directive.trim()) ?? []
+  )
 }

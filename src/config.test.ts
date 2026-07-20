@@ -215,3 +215,53 @@ describe('tenant pool cache config parsing', () => {
     expect(config.tenantPoolCacheMissLogSampleRate).toBe(0)
   })
 })
+
+describe('vectorS3Buckets config parsing', () => {
+  const originalValue = process.env.VECTOR_S3_BUCKETS
+
+  afterEach(() => {
+    if (originalValue === undefined) {
+      delete process.env.VECTOR_S3_BUCKETS
+    } else {
+      process.env.VECTOR_S3_BUCKETS = originalValue
+    }
+
+    vi.resetModules()
+  })
+
+  test('defaults to an empty array when VECTOR_S3_BUCKETS is unset', async () => {
+    delete process.env.VECTOR_S3_BUCKETS
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.vectorS3Buckets).toEqual([])
+  })
+
+  test('defaults to an empty array when VECTOR_S3_BUCKETS is an empty string', async () => {
+    process.env.VECTOR_S3_BUCKETS = ''
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.vectorS3Buckets).toEqual([])
+  })
+
+  test('parses a comma-separated list of bucket names', async () => {
+    process.env.VECTOR_S3_BUCKETS = 'bucket-0,bucket-1,bucket-2'
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.vectorS3Buckets).toEqual(['bucket-0', 'bucket-1', 'bucket-2'])
+  })
+
+  test('ignores a trailing comma', async () => {
+    process.env.VECTOR_S3_BUCKETS = 'bucket-0,bucket-1,'
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.vectorS3Buckets).toEqual(['bucket-0', 'bucket-1'])
+  })
+})

@@ -675,7 +675,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     vectorEnabled: getOptionalConfigFromEnv('VECTOR_ENABLED') === 'true',
     vectorBucketProvider: (getOptionalConfigFromEnv('VECTOR_BUCKET_PROVIDER') ||
       's3') as VectorBucketProvider,
-    vectorS3Buckets: getOptionalConfigFromEnv('VECTOR_S3_BUCKETS')?.trim()?.split(',') || [],
+    vectorS3Buckets:
+      getOptionalConfigFromEnv('VECTOR_S3_BUCKETS')?.trim()?.split(',').filter(Boolean) || [],
     vectorBucketRegion: getOptionalConfigFromEnv('VECTOR_BUCKET_REGION') || undefined,
     vectorDatabaseURL: getOptionalConfigFromEnv('VECTOR_DATABASE_URL') || undefined,
     vectorDatabaseCreate: getOptionalConfigFromEnv('VECTOR_DATABASE_CREATE') !== 'false',

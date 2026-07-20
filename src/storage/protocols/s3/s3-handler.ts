@@ -1382,8 +1382,10 @@ export class S3ProtocolHandler {
 
     return {
       responseBody: {
-        ETag: uploadPart.eTag || '',
-        LastModified: uploadPart.lastModified ? uploadPart.lastModified.toISOString() : undefined,
+        CopyPartResult: {
+          ETag: uploadPart.eTag || '',
+          LastModified: uploadPart.lastModified ? uploadPart.lastModified.toISOString() : undefined,
+        },
       },
     }
   }

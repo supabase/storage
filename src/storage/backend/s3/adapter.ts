@@ -737,6 +737,8 @@ export class S3Backend implements StorageBackendAdapter {
     if (storageS3ResponseChecksumValidation) {
       params.responseChecksumValidation = storageS3ResponseChecksumValidation
     }
-    return new S3Client(params)
+    const client = new S3Client(params)
+    client.middlewareStack.remove('loggerMiddleware')
+    return client
   }
 }

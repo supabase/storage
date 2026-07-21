@@ -17,7 +17,7 @@ const ListMultipartUploadsInput = {
       uploads: { type: 'string' },
       delimiter: { type: 'string' },
       'encoding-type': { type: 'string', enum: ['url'] },
-      'max-uploads': { type: 'integer', minimum: 1, maximum: 1000 },
+      'max-uploads': { type: 'integer', minimum: 1, maximum: 1000, finite: true },
       'key-marker': { type: 'string' },
       'upload-id-marker': { type: 'string' },
       prefix: { type: 'string' },

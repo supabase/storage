@@ -27,7 +27,7 @@ const createTableSchema = {
                   type: 'object',
                   required: ['id', 'name', 'type', 'required'],
                   properties: {
-                    id: { type: 'integer' },
+                    id: { type: 'integer', finite: true },
                     name: { type: 'string' },
                     // A field’s type can be a primitive or any nested container
                     type: {
@@ -49,7 +49,7 @@ const createTableSchema = {
                           required: ['type', 'element-id', 'element', 'element-required'],
                           properties: {
                             type: { type: 'string', enum: ['list'] },
-                            'element-id': { type: 'integer' },
+                            'element-id': { type: 'integer', finite: true },
                             element: { $comment: 'Type object (recurse)' },
                             'element-required': { type: 'boolean' },
                           },
@@ -66,9 +66,9 @@ const createTableSchema = {
                           ],
                           properties: {
                             type: { type: 'string', enum: ['map'] },
-                            'key-id': { type: 'integer' },
+                            'key-id': { type: 'integer', finite: true },
                             key: { $comment: 'Type object (recurse)' },
-                            'value-id': { type: 'integer' },
+                            'value-id': { type: 'integer', finite: true },
                             value: { $comment: 'Type object (recurse)' },
                             'value-required': { type: 'boolean' },
                           },
@@ -85,10 +85,10 @@ const createTableSchema = {
           {
             type: 'object',
             properties: {
-              'schema-id': { type: 'integer', readOnly: true },
+              'schema-id': { type: 'integer', finite: true, readOnly: true },
               'identifier-field-ids': {
                 type: 'array',
-                items: { type: 'integer' },
+                items: { type: 'integer', finite: true },
               },
             },
           },
@@ -99,15 +99,15 @@ const createTableSchema = {
         type: 'object',
         required: ['fields'],
         properties: {
-          'spec-id': { type: 'integer', readOnly: true },
+          'spec-id': { type: 'integer', finite: true, readOnly: true },
           fields: {
             type: 'array',
             items: {
               type: 'object',
               required: ['source-id', 'transform', 'name'],
               properties: {
-                'field-id': { type: 'integer' },
-                'source-id': { type: 'integer' },
+                'field-id': { type: 'integer', finite: true },
+                'source-id': { type: 'integer', finite: true },
                 name: { type: 'string' },
                 transform: { type: 'string' },
               },
@@ -125,14 +125,14 @@ const createTableSchema = {
         nullable: true,
         required: ['fields'],
         properties: {
-          'order-id': { type: 'integer', readOnly: true },
+          'order-id': { type: 'integer', finite: true, readOnly: true },
           fields: {
             type: 'array',
             items: {
               type: 'object',
               required: ['source-id', 'transform', 'direction', 'null-order'],
               properties: {
-                'source-id': { type: 'integer' },
+                'source-id': { type: 'integer', finite: true },
                 transform: { type: 'string' },
                 direction: { type: 'string', enum: ['asc', 'desc'] },
                 'null-order': { type: 'string', enum: ['nulls-first', 'nulls-last'] },
@@ -160,7 +160,7 @@ const listTableSchema = {
     type: 'object',
     properties: {
       pageToken: { type: 'string' },
-      pageSize: { type: 'number' },
+      pageSize: { type: 'integer', finite: true, minimum: 0 },
       parent: { type: 'string' },
     },
   },
@@ -278,8 +278,8 @@ const commitTransactionSchema = {
                 //   bigint: true,
                 //   nullable: true,
                 // },
-                'sequence-number': { type: 'integer' },
-                'timestamp-ms': { type: 'integer' },
+                'sequence-number': { type: 'integer', finite: true },
+                'timestamp-ms': { type: 'integer', finite: true },
                 'manifest-list': { type: 'string' },
                 summary: {
                   type: 'object',
@@ -295,7 +295,7 @@ const commitTransactionSchema = {
                     'total-equality-deletes': { type: 'string' },
                   },
                 },
-                'schema-id': { type: 'integer' },
+                'schema-id': { type: 'integer', finite: true },
               },
               additionalProperties: true,
             },

@@ -7,6 +7,7 @@ import CompleteMultipartUpload from './commands/complete-multipart-upload'
 import ListMultipartUploads from './commands/list-multipart-uploads'
 import ListObjects from './commands/list-objects'
 import ListParts from './commands/list-parts'
+import PutObject from './commands/put-object'
 import UploadPart from './commands/upload-part'
 import UploadPartCopy from './commands/upload-part-copy'
 import { getRouter, type RouteQuery, Router, type S3Router } from './router'
@@ -674,6 +675,9 @@ describe('CompleteMultipartUpload route mapping', () => {
     ['', false],
     [0, false],
     [1, true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
     [10_000, true],
     [10_001, false],
   ])('validates body PartNumber %s against the S3 range', (partNumber, expected) => {
@@ -767,11 +771,39 @@ describe('CompleteMultipartUpload route mapping', () => {
   })
 })
 
+describe('PutObject route validation', () => {
+  it.each([
+    ['0', true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
+  ])('validates content-length %s as a finite integer', (contentLength, expected) => {
+    const router = new Router()
+    PutObject(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === undefined)
+
+    expect(route).toBeDefined()
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Headers: { 'content-length': contentLength },
+      })
+    ).toBe(expected)
+  })
+})
+
 describe('UploadPart route validation', () => {
   it.each([
     [0, false],
     [1, true],
     ['1', true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
     [1.5, false],
     ['1.5', false],
     [10_000, true],
@@ -793,6 +825,35 @@ describe('UploadPart route validation', () => {
       })
     ).toBe(expected)
   })
+
+  it.each([
+    'content-length',
+    'x-amz-decoded-content-length',
+  ])('validates %s as a finite integer', (header) => {
+    const router = new Router()
+    UploadPart(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === undefined)
+
+    expect(route).toBeDefined()
+    for (const [value, expected] of [
+      ['0', true],
+      ['Infinity', false],
+      ['-Infinity', false],
+      ['1e999', false],
+    ] as const) {
+      expect(
+        route!.validate({
+          Params: { Bucket: 'bucket', '*': 'object' },
+          Querystring: { uploadId: 'upload-id', partNumber: 1 },
+          Headers: { [header]: value },
+        })
+      ).toBe(expected)
+    }
+  })
 })
 
 describe('UploadPartCopy route validation', () => {
@@ -800,6 +861,9 @@ describe('UploadPartCopy route validation', () => {
     [0, false],
     [1, true],
     ['1', true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
     [1.5, false],
     ['1.5', false],
     [10_000, true],
@@ -826,6 +890,9 @@ describe('ListParts route validation', () => {
     [0, false],
     [1, true],
     ['1', true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
     [1.5, false],
     ['1.5', false],
     [1_000, true],
@@ -853,6 +920,9 @@ describe('ListMultipartUploads route validation', () => {
   it.each([
     [0, false],
     [1, true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
     [1.5, false],
     [1_000, true],
     [1_001, false],
@@ -881,6 +951,9 @@ describe.each([
     [0, true],
     [1, true],
     ['1', true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
     [1.5, false],
     ['1.5', false],
   ])('validates max-keys %s as a non-negative integer', (maxKeys, expected) => {

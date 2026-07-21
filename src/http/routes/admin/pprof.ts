@@ -49,6 +49,7 @@ const cpuProfileSchema = {
     properties: {
       seconds: {
         type: 'integer',
+        finite: true,
         minimum: 1,
         maximum: PPROF_SECONDS_MAX,
         default: CPU_PROFILE_SECONDS_DEFAULT,
@@ -74,6 +75,7 @@ const cpuProfileSchema = {
       },
       workerId: {
         type: 'integer',
+        finite: true,
         minimum: 0,
       },
     },
@@ -89,6 +91,7 @@ const heapProfileSchema = {
     properties: {
       seconds: {
         type: 'integer',
+        finite: true,
         minimum: 1,
         maximum: PPROF_SECONDS_MAX,
         default: HEAP_PROFILE_SECONDS_DEFAULT,
@@ -114,6 +117,7 @@ const heapProfileSchema = {
       },
       workerId: {
         type: 'integer',
+        finite: true,
         minimum: 0,
       },
     },
@@ -138,6 +142,7 @@ const heapSnapshotSchema = {
     properties: {
       workerId: {
         type: 'integer',
+        finite: true,
         minimum: 0,
       },
     },

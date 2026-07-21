@@ -257,7 +257,7 @@ describe('vectorS3Buckets config parsing', () => {
   })
 
   test('ignores a trailing comma', async () => {
-    process.env.VECTOR_S3_BUCKETS = 'bucket-0,bucket-1,'
+    process.env.VECTOR_S3_BUCKETS = 'bucket-0, bucket-1,'
 
     const { getConfig } = await import('./config')
     const config = getConfig({ reload: true })

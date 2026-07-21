@@ -86,6 +86,10 @@ class TestPermissionRollbackError extends Error {
   }
 }
 
+const testPermissionRollbackError = new TestPermissionRollbackError()
+testPermissionRollbackError.stack = undefined
+Object.freeze(testPermissionRollbackError)
+
 /**
  * Pg-backed storage metadata adapter.
  */
@@ -205,10 +209,10 @@ export class StoragePgDB implements Database {
     try {
       await this.withTransaction(async (db) => {
         result = await fn(db)
-        throw new TestPermissionRollbackError()
+        throw testPermissionRollbackError
       })
     } catch (e) {
-      if (e instanceof TestPermissionRollbackError) {
+      if (e === testPermissionRollbackError) {
         return result!
       }
       throw e

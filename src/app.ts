@@ -35,7 +35,8 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
 
     app.register(fastifySwagger, {
       exposeHeadRoutes: true,
-      transform: (params) => finiteSwaggerTransform({ ...params, ...transformOpenApiSchema(params) }),
+      transform: (params) =>
+        finiteSwaggerTransform({ ...params, ...transformOpenApiSchema(params) }),
       transformObject: dedupeTrailingSlashPaths,
       refResolver: { buildLocalReference: nameSchemaByDollarId },
       openapi: {

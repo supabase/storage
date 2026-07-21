@@ -1,4 +1,5 @@
 export * from './client'
+export * from './connection'
 export * from './migration-admin-store-pg'
 export * from './multitenant-pg'
 export * from './pg-connection'

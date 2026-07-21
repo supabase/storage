@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import {
-  PgExecutor,
-  PgStatement,
-  PgTenantConnection,
-  PgTransaction,
+  type DatabaseExecutor,
+  type DatabaseStatement,
+  type DatabaseTransaction,
   quoteIdentifier,
   quoteQualifiedIdentifier,
+  type TenantConnection,
+  type TransactionOptions,
 } from '@internal/database'
 import { DBMigration, tenantHasMigrations } from '@internal/database/migrations'
 import { ERRORS, ErrorCode, isStorageError, StorageBackendError } from '@internal/errors'
@@ -24,7 +25,6 @@ import {
   ListBucketOptions,
   ScannerS3Key,
   SearchObjectOption,
-  TransactionOptions,
 } from './adapter'
 import { DBError, mapPgTransactionAbortedError, PgErrorContext } from './errors'
 
@@ -48,9 +48,9 @@ interface PgDatabaseOptions {
   latestMigration?: keyof typeof DBMigration
   databaseEngine?: DatabaseEngine
   host: string
-  tnx?: PgTransaction
-  parentTnx?: PgTransaction
-  parentConnection?: PgTenantConnection
+  tnx?: DatabaseTransaction
+  parentTnx?: DatabaseTransaction
+  parentConnection?: TenantConnection
 }
 
 interface UnscopedQueryOptions {
@@ -63,8 +63,8 @@ const HEALTHCHECK_QUERY_OPTIONS: UnscopedQueryOptions = Object.freeze({
 })
 
 async function executeQuery<T extends QueryResultRow = QueryResultRow>(
-  db: PgExecutor,
-  statement: string | PgStatement,
+  db: DatabaseExecutor,
+  statement: string | DatabaseStatement,
   signal?: AbortSignal
 ) {
   try {
@@ -74,7 +74,7 @@ async function executeQuery<T extends QueryResultRow = QueryResultRow>(
   }
 }
 
-function healthcheckProbe(db: PgExecutor, signal?: AbortSignal) {
+function healthcheckProbe(db: DatabaseExecutor, signal?: AbortSignal) {
   return executeQuery(db, HEALTHCHECK_SQL, signal)
 }
 
@@ -102,7 +102,7 @@ export class StoragePgDB implements Database {
   public readonly latestMigration?: keyof typeof DBMigration
 
   constructor(
-    public readonly connection: PgTenantConnection,
+    public readonly connection: TenantConnection,
     private readonly options: PgDatabaseOptions
   ) {
     this.tenantHost = options.host
@@ -1302,7 +1302,7 @@ export class StoragePgDB implements Database {
   }
 
   private async waitObjectLockWithTopLevelLockTimeout(
-    db: PgExecutor,
+    db: DatabaseExecutor,
     hash: number,
     lockTimeout: number,
     signal?: AbortSignal
@@ -1567,7 +1567,10 @@ export class StoragePgDB implements Database {
     })
   }
 
-  private async dropStaleS3KeysScratchTables(db: PgExecutor, signal?: AbortSignal): Promise<void> {
+  private async dropStaleS3KeysScratchTables(
+    db: DatabaseExecutor,
+    signal?: AbortSignal
+  ): Promise<void> {
     const staleBefore = Date.now() - S3_KEYS_SCRATCH_TABLE_MAX_AGE_MS
     const result = await this.query<{ table_name: string }>(
       db,
@@ -1784,7 +1787,7 @@ export class StoragePgDB implements Database {
 
   protected async runQuery<T>(
     queryName: string,
-    fn: (db: PgExecutor, signal?: AbortSignal) => Promise<T>
+    fn: (db: DatabaseExecutor, signal?: AbortSignal) => Promise<T>
   ): Promise<T> {
     const startTime = performance.now()
     const abortSignal = this.connection.getAbortSignal()
@@ -1915,7 +1918,7 @@ export class StoragePgDB implements Database {
 
   protected async runUnscopedQuery<T>(
     queryName: string,
-    fn: (db: PgExecutor, signal?: AbortSignal) => Promise<T>,
+    fn: (db: DatabaseExecutor, signal?: AbortSignal) => Promise<T>,
     options?: UnscopedQueryOptions
   ): Promise<T> {
     const startTime = performance.now()
@@ -1942,7 +1945,7 @@ export class StoragePgDB implements Database {
     }
 
     try {
-      return await fn(this.connection.pool.acquire(), controller?.signal ?? requestAbortSignal)
+      return await fn(this.connection, controller?.signal ?? requestAbortSignal)
     } catch (e) {
       throw mapPgErrorWithQueryName(e, queryName)
     } finally {
@@ -1957,8 +1960,8 @@ export class StoragePgDB implements Database {
   }
 
   protected query<T extends QueryResultRow = QueryResultRow>(
-    db: PgExecutor,
-    statement: string | PgStatement,
+    db: DatabaseExecutor,
+    statement: string | DatabaseStatement,
     signal?: AbortSignal
   ) {
     return executeQuery<T>(db, statement, signal)
@@ -2187,7 +2190,7 @@ function nextSavepointName(): string {
   return quoteIdentifier(`storage_pg_query_${randomUUID().replace(/-/g, '_')}`)
 }
 
-async function createSavepoint(tnx: PgTransaction, savepoint: string): Promise<void> {
+async function createSavepoint(tnx: DatabaseTransaction, savepoint: string): Promise<void> {
   const query = `SAVEPOINT ${savepoint}`
 
   try {
@@ -2197,7 +2200,7 @@ async function createSavepoint(tnx: PgTransaction, savepoint: string): Promise<v
   }
 }
 
-async function rollbackSavepoint(tnx: PgTransaction, savepoint: string): Promise<void> {
+async function rollbackSavepoint(tnx: DatabaseTransaction, savepoint: string): Promise<void> {
   await tnx.query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
   await tnx.query(`RELEASE SAVEPOINT ${savepoint}`)
 }

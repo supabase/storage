@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import type { PgExecutor, PgStatement } from '@internal/database'
+import type { DatabaseExecutor, DatabaseStatement } from '@internal/database'
 import { PgQueueDB } from './database'
 
 const loadCjs = createRequire(__filename)
@@ -158,7 +158,7 @@ describe('PgQueueDB', () => {
     const query = vi.fn().mockResolvedValue({
       rows: [{ ok: true }],
     })
-    const db = new PgQueueDB({ query } as unknown as PgExecutor)
+    const db = new PgQueueDB({ query } as unknown as DatabaseExecutor)
 
     await expect(db.executeSql('SELECT $1, $2, $3', ['queue-name', undefined, 3])).resolves.toEqual(
       {
@@ -169,7 +169,7 @@ describe('PgQueueDB', () => {
     expect(query).toHaveBeenCalledWith({
       text: 'SELECT $1, $2, $3',
       values: ['queue-name', null, 3],
-    } satisfies PgStatement)
+    } satisfies DatabaseStatement)
   })
 
   it('covers pg-boss v10 generated SQL with only pg-compatible placeholders', () => {

@@ -5,9 +5,9 @@ import { DatabaseError, Pool as PgPool, type Pool, type PoolClient } from 'pg'
 // the same class to keep cancellation pending without opening real sockets.
 import PgConnection from 'pg/lib/connection'
 import { vi } from 'vitest'
+import type { DatabaseExecutor } from './connection'
 import {
   getPgCancelConnectionTarget,
-  type PgExecutor,
   PgPoolExecutor,
   PgPoolManager,
   PgPoolStrategy,
@@ -1536,7 +1536,7 @@ describe('PgTenantConnection', () => {
     )
     const executor = {
       query: vi.fn().mockResolvedValue({ rows: [] }),
-    } as unknown as PgExecutor
+    } as unknown as DatabaseExecutor
     const stringifySpy = vi.spyOn(JSON, 'stringify')
 
     try {
@@ -2081,7 +2081,7 @@ describe('PgTenantConnection payload serialization', () => {
     expect(superUserToJSON).not.toHaveBeenCalled()
 
     const query = vi.fn().mockResolvedValue({ rows: [] })
-    await superUser.setScope({ query } as unknown as PgExecutor)
+    await superUser.setScope({ query } as unknown as DatabaseExecutor)
 
     expect(userToJSON).not.toHaveBeenCalled()
     expect(superUserToJSON).toHaveBeenCalledTimes(1)
@@ -2119,17 +2119,19 @@ describe('PgTenantConnection payload serialization', () => {
       expect(stringifySpy.mock.calls.length).toBe(afterSuperUser)
 
       const parentQuery = vi.fn().mockResolvedValue({ rows: [] })
-      await parent.setScope({ query: parentQuery } as unknown as PgExecutor)
+      await parent.setScope({ query: parentQuery } as unknown as DatabaseExecutor)
       const afterParentScope = stringifySpy.mock.calls.length
       const siblingQuery = vi.fn().mockResolvedValue({ rows: [] })
-      await sibling.setScope({ query: siblingQuery } as unknown as PgExecutor)
+      await sibling.setScope({ query: siblingQuery } as unknown as DatabaseExecutor)
       expect(stringifySpy.mock.calls.length).toBe(afterParentScope)
 
       const superUserQuery = vi.fn().mockResolvedValue({ rows: [] })
-      await superUser.setScope({ query: superUserQuery } as unknown as PgExecutor)
+      await superUser.setScope({ query: superUserQuery } as unknown as DatabaseExecutor)
       const afterSuperUserScope = stringifySpy.mock.calls.length
       const secondSuperUserQuery = vi.fn().mockResolvedValue({ rows: [] })
-      await secondSuperUser.setScope({ query: secondSuperUserQuery } as unknown as PgExecutor)
+      await secondSuperUser.setScope({
+        query: secondSuperUserQuery,
+      } as unknown as DatabaseExecutor)
       expect(stringifySpy.mock.calls.length).toBe(afterSuperUserScope)
       expect(stringifySpy).toHaveBeenCalledWith(userPayload)
       expect(stringifySpy).toHaveBeenCalledWith(superPayload)

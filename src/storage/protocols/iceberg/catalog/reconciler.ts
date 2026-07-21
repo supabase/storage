@@ -1,4 +1,4 @@
-import { multitenantPgExecutor, PgTransaction } from '@internal/database'
+import { type DatabaseTransaction, multitenantPgExecutor } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import { PgShardStoreFactory, ShardCatalog, ShardRow } from '@internal/sharding'
 import {
@@ -10,7 +10,7 @@ import { IcebergCatalog } from '@storage/schemas'
 
 type NamespaceWithShardInfo = TableIndex & { shard_id?: string; shard_key?: string }
 type CatalogRow = Pick<IcebergCatalog, 'id' | 'name'>
-type ReconcilerTransaction = PgTransaction
+type ReconcilerTransaction = DatabaseTransaction
 
 /**
  * Highly experimental reconciler for iceberg catalogs

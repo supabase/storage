@@ -8,8 +8,8 @@ import { validateMigrationHashes } from 'postgres-migrations/dist/validation'
 import SQL from 'sql-template-strings'
 import { getConfig, MultitenantMigrationStrategy } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
+import type { DatabaseExecutor, DatabaseTransaction } from '../connection'
 import { multitenantPgExecutor } from '../multitenant-pg'
-import { PgExecutor, PgTransaction } from '../pg-connection'
 import { searchPath } from '../pool'
 import { getSslSettings } from '../ssl'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
@@ -163,7 +163,7 @@ export async function updateTenantMigrationsState(
   options?: {
     migration?: keyof typeof DBMigration
     state: TenantMigrationStatus
-    tnx?: PgExecutor
+    tnx?: DatabaseExecutor
   }
 ) {
   const migrationVersion = options?.migration || (await lastLocalMigrationName())
@@ -196,7 +196,7 @@ export async function areMigrationsUpToDate(tenantId: string) {
 }
 
 export async function obtainLockOnMultitenantDB<T>(
-  fn: (tnx: PgTransaction) => Promise<T>,
+  fn: (tnx: DatabaseTransaction) => Promise<T>,
   options?: { sbReqId?: string }
 ) {
   const trx = await multitenantPgExecutor.beginTransaction()

@@ -1,8 +1,8 @@
 import {
-  type PgExecutor,
+  type DatabaseExecutor,
+  type DatabaseTransaction,
   PgPoolExecutor,
   PgTenantConnection,
-  type PgTransaction,
 } from '@internal/database'
 import { normalizeRawError } from '@internal/errors'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
@@ -27,7 +27,10 @@ class TestStoragePgDB extends StoragePgDB {
   }
 
   runUnscopedErrorMappingProbe(): Promise<string> {
-    return this.runUnscopedQuery('CreateS3KeysTempTable', async () => 'ok')
+    return this.runUnscopedQuery('CreateS3KeysTempTable', async (db) => {
+      await db.query('SELECT 1')
+      return 'ok'
+    })
   }
 }
 
@@ -78,7 +81,7 @@ function createNestedTestPermissionFixture() {
   const storage = new StoragePgDB(connection, {
     tenantId: 'nested-test-permission-tenant',
     host: 'localhost',
-    tnx: transaction as unknown as PgTransaction,
+    tnx: transaction as unknown as DatabaseTransaction,
   })
 
   return { connection, storage, transaction }
@@ -298,7 +301,7 @@ describe('StoragePgDB healthcheck', () => {
   })
 
   function createHealthcheckFixture(
-    executor: PgExecutor,
+    executor: DatabaseExecutor,
     options: {
       requestSignal?: AbortSignal
       StorageClass?: typeof StoragePgDB
@@ -313,6 +316,7 @@ describe('StoragePgDB healthcheck', () => {
     }
     const connection = {
       getAbortSignal: vi.fn().mockReturnValue(requestSignal),
+      query: vi.fn((statement, queryOptions) => executor.query(statement, queryOptions)),
       pool: {
         acquire: vi.fn().mockReturnValue(executor),
       },
@@ -383,7 +387,7 @@ describe('StoragePgDB healthcheck', () => {
     await rejection
     expect(release).toHaveBeenCalledWith(expect.objectContaining(expectedAbortError))
 
-    expect(fixture.connection.pool.acquire).toHaveBeenCalledTimes(1)
+    expect(fixture.connection.query).toHaveBeenCalledTimes(1)
     expect(fixture.connection.transaction).not.toHaveBeenCalled()
     expect(fixture.connection.setScope).not.toHaveBeenCalled()
   })
@@ -426,12 +430,12 @@ describe('StoragePgDB healthcheck', () => {
   test('uses the scoped readiness probe by default', async () => {
     const executor = {
       query: vi.fn().mockResolvedValue({ rows: [] }),
-    } as unknown as PgExecutor
+    } as unknown as DatabaseExecutor
     const fixture = createHealthcheckFixture(executor)
 
     await expect(fixture.storage.healthcheck()).resolves.toBeUndefined()
 
-    expect(fixture.connection.pool.acquire).not.toHaveBeenCalled()
+    expect(fixture.connection.query).not.toHaveBeenCalled()
     expect(fixture.connection.transaction).toHaveBeenCalledTimes(1)
     expect(fixture.connection.setScope).toHaveBeenCalledWith(fixture.transaction)
     expect(fixture.transaction.query).toHaveBeenCalledWith(probeSql, { signal: undefined })
@@ -528,16 +532,14 @@ describe('StoragePgDB error mapping', () => {
     })
   })
 
-  test('preserves query name for pg errors thrown while acquiring an unscoped executor', async () => {
+  test('preserves query name for pg errors thrown by an unscoped executor', async () => {
     const error = createPgError('08006', 'connection failure')
     error.severity = 'FATAL'
     const connection = {
       getAbortSignal: vi.fn().mockReturnValue(undefined),
-      pool: {
-        acquire: vi.fn(() => {
-          throw error
-        }),
-      },
+      query: vi.fn(() => {
+        throw error
+      }),
     } as unknown as PgTenantConnection
     const storage = new TestStoragePgDB(connection, {
       tenantId: 'tenant-with-unscoped-acquire-error',

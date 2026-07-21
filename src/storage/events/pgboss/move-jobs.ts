@@ -1,4 +1,4 @@
-import { multitenantPgExecutor, PgTransaction } from '@internal/database'
+import { type DatabaseTransaction, multitenantPgExecutor } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload, PG_BOSS_SCHEMA, Queue, SYSTEM_TENANT_REF } from '@internal/queue'
 import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
@@ -137,7 +137,7 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
   }
 }
 
-async function withPgTransaction<T>(fn: (tnx: PgTransaction) => Promise<T>): Promise<T> {
+async function withPgTransaction<T>(fn: (tnx: DatabaseTransaction) => Promise<T>): Promise<T> {
   const tnx = await multitenantPgExecutor.beginTransaction()
 
   try {

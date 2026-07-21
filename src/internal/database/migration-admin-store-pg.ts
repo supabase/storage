@@ -1,5 +1,5 @@
 import { QueryResultRow } from 'pg'
-import { PgExecutor } from './pg-connection'
+import type { DatabaseExecutor } from './connection'
 import { quoteIdentifier } from './sql'
 import { TenantCursorRow } from './tenant-store-pg'
 
@@ -9,7 +9,7 @@ export class MigrationAdminStorePg {
   private readonly jobTable: string
 
   constructor(
-    private db: PgExecutor,
+    private db: DatabaseExecutor,
     pgBossSchema: string
   ) {
     this.jobTable = `${quoteIdentifier(pgBossSchema)}.job`
@@ -112,7 +112,7 @@ export class MigrationAdminStorePg {
   }
 
   private query<T extends QueryResultRow = QueryResultRow>(
-    statement: Parameters<PgExecutor['query']>[0]
+    statement: Parameters<DatabaseExecutor['query']>[0]
   ) {
     return this.db.query<T>(statement)
   }

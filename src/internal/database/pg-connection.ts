@@ -1,9 +1,17 @@
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { TransactionOptions } from '@storage/database'
 import pg, { DatabaseError, Pool, PoolClient, QueryResult, QueryResultRow } from 'pg'
 import PgConnection from 'pg/lib/connection'
 import { getConfig } from '../../config'
+import type {
+  DatabaseExecutor,
+  DatabaseQueryArgument,
+  DatabaseStatement,
+  DatabaseTransaction,
+  DatabaseTransactionalExecutor,
+  TenantConnection,
+  TransactionOptions,
+} from './connection'
 import {
   PoolManager,
   PoolRebalanceOptions,
@@ -32,17 +40,6 @@ const {
 } = getConfig()
 
 pg.types.setTypeParser(20, 'text', parseInt)
-
-export interface PgStatement {
-  text: string
-  values?: unknown[]
-}
-
-export interface PgQueryOptions {
-  signal?: AbortSignal
-}
-
-type PgQueryArgument = PgQueryOptions | unknown[]
 
 interface PgTransactionOptions {
   statementTimeoutMs?: number
@@ -79,17 +76,6 @@ const scopeConfigSqlWithStatementTimeout = `
           ${scopeConfigSetters},
           set_config('statement_timeout', $10, true);
       `
-
-export interface PgExecutor {
-  query<T extends QueryResultRow = QueryResultRow>(
-    statement: string | PgStatement,
-    options?: PgQueryArgument
-  ): Promise<QueryResult<T>>
-}
-
-export interface PgTransactionalExecutor extends PgExecutor {
-  beginTransaction(options?: PgBeginTransactionOptions): Promise<PgTransaction>
-}
 
 interface PgPoolErrorContext {
   message: string
@@ -406,12 +392,12 @@ class PgClientErrorTracker {
   }
 }
 
-export class PgPoolExecutor implements PgTransactionalExecutor {
+export class PgPoolExecutor implements DatabaseTransactionalExecutor {
   constructor(private readonly pool: Pool) {}
 
   async query<T extends QueryResultRow = QueryResultRow>(
-    statement: string | PgStatement,
-    options?: PgQueryArgument
+    statement: string | DatabaseStatement,
+    options?: DatabaseQueryArgument
   ): Promise<QueryResult<T>> {
     assertValidSignal(getQuerySignal(options))
 
@@ -482,7 +468,7 @@ export class PgPoolExecutor implements PgTransactionalExecutor {
   }
 }
 
-export class PgTransaction implements PgExecutor {
+export class PgTransaction implements DatabaseTransaction {
   private completed = false
   private statementTimeoutMs?: number
 
@@ -499,15 +485,15 @@ export class PgTransaction implements PgExecutor {
   }
 
   async query<T extends QueryResultRow = QueryResultRow>(
-    statement: string | PgStatement,
-    options?: PgQueryArgument
+    statement: string | DatabaseStatement,
+    options?: DatabaseQueryArgument
   ): Promise<QueryResult<T>> {
     return this.runQuery(statement, options, true)
   }
 
   async runSetupQuery<T extends QueryResultRow = QueryResultRow>(
-    statement: string | PgStatement,
-    options?: PgQueryArgument
+    statement: string | DatabaseStatement,
+    options?: DatabaseQueryArgument
   ): Promise<QueryResult<T>> {
     // Setup statements must not consume a deferred timeout before scope can fold it in.
     return this.runQuery(statement, options, false)
@@ -522,8 +508,8 @@ export class PgTransaction implements PgExecutor {
   }
 
   private async runQuery<T extends QueryResultRow = QueryResultRow>(
-    statement: string | PgStatement,
-    options: PgQueryArgument | undefined,
+    statement: string | DatabaseStatement,
+    options: DatabaseQueryArgument | undefined,
     applyPendingStatementTimeout: boolean
   ): Promise<QueryResult<T>> {
     if (this.completed) {
@@ -632,7 +618,7 @@ function serializeJwtPayload(payload: object): string {
   return serialized
 }
 
-export class PgTenantConnection {
+export class PgTenantConnection implements TenantConnection {
   static poolManager = new PgPoolManager()
   public readonly role: string
   private abortSignal?: AbortSignal
@@ -671,8 +657,8 @@ export class PgTenantConnection {
   }
 
   async query<T extends QueryResultRow = QueryResultRow>(
-    statement: string | PgStatement,
-    options?: PgQueryArgument
+    statement: string | DatabaseStatement,
+    options?: DatabaseQueryArgument
   ): Promise<QueryResult<T>> {
     this.assertNotDisposed()
     return this.pool.acquire().query<T>(statement, options)
@@ -794,7 +780,7 @@ export class PgTenantConnection {
     }
   }
 
-  async setScope(tnx: PgExecutor) {
+  async setScope(tnx: DatabaseExecutor) {
     const statementTimeoutMs =
       tnx instanceof PgTransaction ? tnx.takePendingStatementTimeoutMs() : undefined
 
@@ -867,8 +853,8 @@ export function createAbortError(): Error & { code: string } {
 
 async function runPgQuery<T extends QueryResultRow = QueryResultRow>(
   client: PoolClient,
-  statement: string | PgStatement,
-  options?: PgQueryArgument
+  statement: string | DatabaseStatement,
+  options?: DatabaseQueryArgument
 ): Promise<QueryResult<T>> {
   const signal = Array.isArray(options) ? undefined : options?.signal
   assertValidSignal(signal)
@@ -920,7 +906,10 @@ async function runPgQuery<T extends QueryResultRow = QueryResultRow>(
   }
 }
 
-function normalizeStatement(statement: string | PgStatement, values?: unknown[]): PgStatement {
+function normalizeStatement(
+  statement: string | DatabaseStatement,
+  values?: unknown[]
+): DatabaseStatement {
   if (typeof statement === 'string') {
     return { text: statement, values }
   }
@@ -942,7 +931,7 @@ function assertValidSignal(signal?: AbortSignal): void {
   }
 }
 
-function getQuerySignal(options?: PgQueryArgument): AbortSignal | undefined {
+function getQuerySignal(options?: DatabaseQueryArgument): AbortSignal | undefined {
   return Array.isArray(options) ? undefined : options?.signal
 }
 

@@ -1,8 +1,8 @@
 import EventEmitter from 'node:events'
+import type { DatabaseExecutor } from '@internal/database/connection'
 import { ERRORS } from '@internal/errors'
 import pg from 'pg'
 import { Db } from 'pg-boss'
-import { PgExecutor } from '../database/pg-connection'
 
 export { quoteIdentifier } from '../database/sql'
 
@@ -91,7 +91,7 @@ export class PgQueueDB extends EventEmitter implements Db {
     error: 'error',
   }
 
-  constructor(protected readonly db: PgExecutor) {
+  constructor(protected readonly db: DatabaseExecutor) {
     super()
   }
 

@@ -23,7 +23,7 @@ function getLastStatement(query: ReturnType<typeof vi.fn>): string {
     return String(statement.text)
   }
 
-  throw new Error('Expected a PgStatement query with text property')
+  throw new Error('Expected a DatabaseStatement query with text property')
 }
 
 describe('PgMetastore.countCatalogs', () => {

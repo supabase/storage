@@ -37,7 +37,7 @@ function parseJsonBody<Body>(body: string): Body {
 }
 
 async function findVectorIndex(bucketId: string, name: string) {
-  const result = await storageTest.database.connection.pool.acquire().query<{
+  const result = await storageTest.database.connection.query<{
     data_type: string
     dimension: number
     distance_metric: string
@@ -57,7 +57,7 @@ async function findVectorIndex(bucketId: string, name: string) {
 }
 
 async function findVectorBucket(bucketId: string) {
-  const result = await storageTest.database.connection.pool.acquire().query<{
+  const result = await storageTest.database.connection.query<{
     id: string
     created_at: Date
   }>({
@@ -114,7 +114,7 @@ describe('Vectors API', () => {
       shardKey: 'test-bucket',
       capacity: 1000,
     })
-    const mockVectorDB = new PgVectorMetadataDB(storageTest.database.connection.pool.acquire())
+    const mockVectorDB = new PgVectorMetadataDB(storageTest.database.connection)
     s3Vector = new VectorStoreManager(mockVectorStore, mockVectorDB, shard, {
       tenantId: 'test-tenant',
       maxBucketCount: Infinity,

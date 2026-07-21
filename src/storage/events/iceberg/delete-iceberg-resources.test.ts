@@ -96,9 +96,7 @@ const sharder = { freeByResource: vi.fn() }
 
 const db = {
   connection: {
-    pool: {
-      acquire: vi.fn(),
-    },
+    query: vi.fn(),
   },
   deleteAnalyticsBucket: vi.fn(),
   destroyConnection: vi.fn(),
@@ -107,7 +105,7 @@ const db = {
 function expectIcebergCleanup({ multitenant }: { multitenant: boolean }) {
   expect(mockCreateStorage).toHaveBeenCalledWith(jobData)
   expect(MockPgMetastore).toHaveBeenCalledWith(
-    multitenant ? mockMultitenantPgExecutor : 'mock-db-connection',
+    multitenant ? mockMultitenantPgExecutor : db.connection,
     {
       multiTenant: multitenant,
       schema: multitenant ? 'public' : 'storage',
@@ -201,8 +199,6 @@ describe('DeleteIcebergResources.handle', () => {
     metastore.transaction.mockImplementation(async (fn) => fn(store))
     store.getTnx.mockReturnValue('mock-transaction')
     shardCatalog.withTnx.mockReturnValue(sharder)
-    db.connection.pool.acquire.mockReturnValue('mock-db-connection')
-
     store.findCatalogById.mockResolvedValue({ id: 'catalog-123', deleted_at: new Date() })
     store.listNamespaces.mockResolvedValue([{ id: 'ns-1', name: 'namespace-1' }])
     store.listTables.mockResolvedValue([
@@ -255,7 +251,7 @@ describe('DeleteIcebergResources.handle', () => {
       expect(metastore.transaction).not.toHaveBeenCalled()
       expect(store.lockResource).not.toHaveBeenCalled()
       expect(store.dropCatalog).not.toHaveBeenCalled()
-      expect(db.connection.pool.acquire).not.toHaveBeenCalled()
+      expect(db.connection.query).not.toHaveBeenCalled()
       expect(db.deleteAnalyticsBucket).not.toHaveBeenCalled()
       expect(db.destroyConnection).not.toHaveBeenCalled()
     })
@@ -265,7 +261,6 @@ describe('DeleteIcebergResources.handle', () => {
 
       await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
 
-      expect(db.connection.pool.acquire).toHaveBeenCalled()
       expectIcebergCleanup({ multitenant: false })
       expect(db.deleteAnalyticsBucket).not.toHaveBeenCalled()
       expect(db.destroyConnection).toHaveBeenCalled()

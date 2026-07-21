@@ -21,7 +21,7 @@ const searchRequestBodySchema = {
   type: 'object',
   properties: {
     prefix: { type: 'string', examples: ['folder/subfolder'] },
-    limit: { type: 'integer', minimum: 1, examples: [10] },
+    limit: { type: 'integer', finite: true, minimum: 1, examples: [10] },
     cursor: { type: 'string' },
     with_delimiter: { type: 'boolean' },
     sortBy: {

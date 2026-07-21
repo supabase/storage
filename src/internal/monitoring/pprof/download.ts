@@ -1,6 +1,10 @@
+import { once } from 'events'
 import fs from 'fs'
 import { mkdir } from 'fs/promises'
 import path from 'path'
+import { PassThrough } from 'stream'
+import { pipeline } from 'stream/promises'
+import type { PprofRequestTargetType } from './types'
 
 export interface MultipartPprofStartedEvent {
   applicationId: string
@@ -11,6 +15,11 @@ export interface MultipartPprofStartedEvent {
   type: 'cpu' | 'heap'
   workerCount?: number
   workerId?: number
+}
+
+export interface PprofCaptureFileResult {
+  outputPath: string
+  startedEvent?: MultipartPprofStartedEvent
 }
 
 export interface MultipartPprofPingEvent {
@@ -42,6 +51,7 @@ enum MultipartState {
 }
 
 const DEFAULT_PPROF_FILENAME = 'profile.pprof'
+const DEFAULT_HEAP_SNAPSHOT_FILENAME = 'heap-snapshot.heapsnapshot'
 
 export function extractMultipartBoundary(contentType: string | undefined) {
   if (!contentType) {
@@ -107,11 +117,11 @@ function parseMultipartFilename(headers: MultipartHeaders) {
   return plainMatch?.[1]?.trim()
 }
 
-function sanitizeMultipartFilename(filename: string) {
+function sanitizeMultipartFilename(filename: string, fallback = DEFAULT_PPROF_FILENAME) {
   const sanitized = path.posix.basename(filename.trim().replaceAll('\\', '/'))
 
   if (!sanitized || sanitized === '.' || sanitized === '..') {
-    return DEFAULT_PPROF_FILENAME
+    return fallback
   }
 
   return sanitized
@@ -122,16 +132,84 @@ async function openOutputFile(filePath: string) {
   return fs.createWriteStream(filePath)
 }
 
-async function closeOutputFile(stream: fs.WriteStream | undefined) {
-  if (!stream) {
-    return
+function isJsonWhitespace(byte: number) {
+  return byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d
+}
+
+type HeapSnapshotChunk = Buffer | string | Uint8Array
+
+function getChunkByteLength(chunk: HeapSnapshotChunk) {
+  return typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength
+}
+
+function getChunkLength(chunk: HeapSnapshotChunk) {
+  return chunk.length
+}
+
+function getChunkByte(chunk: HeapSnapshotChunk, index: number) {
+  return typeof chunk === 'string' ? chunk.charCodeAt(index) : chunk[index]
+}
+
+function findFirstNonWhitespaceByte(chunk: HeapSnapshotChunk) {
+  for (let index = 0; index < getChunkLength(chunk); index += 1) {
+    const byte = getChunkByte(chunk, index)
+    if (!isJsonWhitespace(byte)) {
+      return byte
+    }
   }
 
-  await new Promise<void>((resolve, reject) => {
-    stream.once('finish', resolve)
-    stream.once('error', reject)
-    stream.end()
-  })
+  return undefined
+}
+
+function findLastNonWhitespaceByte(chunk: HeapSnapshotChunk) {
+  for (let index = getChunkLength(chunk) - 1; index >= 0; index -= 1) {
+    const byte = getChunkByte(chunk, index)
+    if (!isJsonWhitespace(byte)) {
+      return byte
+    }
+  }
+
+  return undefined
+}
+
+async function* validateHeapSnapshotChunks(source: AsyncIterable<Buffer | string | Uint8Array>) {
+  let bytes = 0
+  let firstNonWhitespace: number | undefined
+  let lastNonWhitespace: number | undefined
+
+  for await (const chunk of source) {
+    const byteLength = getChunkByteLength(chunk)
+    bytes += byteLength
+
+    if (byteLength > 0) {
+      if (firstNonWhitespace === undefined) {
+        firstNonWhitespace = findFirstNonWhitespaceByte(chunk)
+      }
+
+      const chunkLastNonWhitespace = findLastNonWhitespaceByte(chunk)
+      if (chunkLastNonWhitespace !== undefined) {
+        lastNonWhitespace = chunkLastNonWhitespace
+      }
+    }
+
+    yield chunk
+  }
+
+  if (bytes === 0) {
+    throw new Error('Heap snapshot response was empty.')
+  }
+
+  if (firstNonWhitespace !== 0x7b || lastNonWhitespace !== 0x7d) {
+    throw new Error('Heap snapshot response is not a complete JSON object.')
+  }
+}
+
+async function writeHeapSnapshotStreamToFile(stream: NodeJS.ReadableStream, outputPath: string) {
+  await pipeline(
+    stream as AsyncIterable<Buffer | string | Uint8Array>,
+    validateHeapSnapshotChunks,
+    fs.createWriteStream(outputPath)
+  )
 }
 
 function getErrorCause(error: unknown) {
@@ -218,7 +296,7 @@ export async function writeMultipartPprofToFile(
   options?: {
     outputPath?: string
   }
-) {
+): Promise<PprofCaptureFileResult> {
   const boundary = extractMultipartBoundary(contentType)
   if (!boundary) {
     throw new Error('Expected a multipart/mixed pprof response with a boundary parameter.')
@@ -230,8 +308,9 @@ export async function writeMultipartPprofToFile(
   let currentHeaders: MultipartHeaders = {}
   let currentLength = 0
   let jsonChunks: Buffer[] = []
-  let outputFile: fs.WriteStream | undefined
   let outputPath = options?.outputPath ? path.resolve(options.outputPath) : undefined
+  let profileBodyStream: PassThrough | undefined
+  let profileOutputPipeline: Promise<void> | undefined
   let receivedProfile = false
   let startedEvent: MultipartPprofStartedEvent | undefined
   let lastHeartbeatAt: string | undefined
@@ -265,8 +344,8 @@ export async function writeMultipartPprofToFile(
   }
 
   const openProfileOutput = async () => {
-    if (outputFile) {
-      return outputFile
+    if (profileBodyStream) {
+      return profileBodyStream
     }
 
     const filename = sanitizeMultipartFilename(
@@ -274,8 +353,53 @@ export async function writeMultipartPprofToFile(
     )
 
     outputPath ??= path.resolve(process.cwd(), 'dist', filename)
-    outputFile = await openOutputFile(outputPath)
-    return outputFile
+    const outputFile = await openOutputFile(outputPath)
+    profileBodyStream = new PassThrough()
+    profileOutputPipeline = pipeline(profileBodyStream, outputFile)
+    void profileOutputPipeline.catch(() => {})
+    return profileBodyStream
+  }
+
+  const getProfileOutputPipeline = () => {
+    if (!profileOutputPipeline) {
+      throw new Error('Profile output pipeline was not initialized.')
+    }
+
+    return profileOutputPipeline
+  }
+
+  const writeProfileChunk = async (chunk: Buffer) => {
+    const profileBody = await openProfileOutput()
+    if (profileBody.write(chunk)) {
+      return
+    }
+
+    await Promise.race([
+      once(profileBody, 'drain').then(() => undefined),
+      getProfileOutputPipeline(),
+    ])
+  }
+
+  const finishProfileOutput = async () => {
+    if (!profileBodyStream) {
+      return
+    }
+
+    profileBodyStream.end()
+    await getProfileOutputPipeline()
+    profileBodyStream = undefined
+    profileOutputPipeline = undefined
+  }
+
+  const abortProfileOutput = async () => {
+    if (!profileBodyStream) {
+      return
+    }
+
+    profileBodyStream.destroy()
+    await profileOutputPipeline?.catch(() => {})
+    profileBodyStream = undefined
+    profileOutputPipeline = undefined
   }
 
   const consumeBoundaryLine = () => {
@@ -331,20 +455,13 @@ export async function writeMultipartPprofToFile(
   }
 
   const consumeProfileBody = async () => {
-    const file = await openProfileOutput()
     const bytesToWrite = Math.min(currentLength, buffer.length)
 
     if (bytesToWrite > 0) {
       const chunk = buffer.subarray(0, bytesToWrite)
       buffer = buffer.subarray(bytesToWrite)
       currentLength -= bytesToWrite
-
-      if (!file.write(chunk)) {
-        await new Promise<void>((resolve, reject) => {
-          file.once('drain', resolve)
-          file.once('error', reject)
-        })
-      }
+      await writeProfileChunk(chunk)
     }
 
     if (currentLength > 0) {
@@ -360,6 +477,7 @@ export async function writeMultipartPprofToFile(
     }
 
     buffer = buffer.subarray(2)
+    await finishProfileOutput()
     receivedProfile = true
     parserState.value = MultipartState.Boundary
     return true
@@ -423,7 +541,7 @@ export async function writeMultipartPprofToFile(
       throw error
     }
   } finally {
-    await closeOutputFile(outputFile)
+    await abortProfileOutput()
   }
 
   if (parserState.value !== MultipartState.Done) {
@@ -446,5 +564,39 @@ export async function writeMultipartPprofToFile(
   return {
     outputPath,
     startedEvent,
+  }
+}
+
+export async function writePprofCaptureToFile(
+  stream: NodeJS.ReadableStream,
+  response: {
+    contentDisposition?: string
+    contentType?: string
+    type: PprofRequestTargetType
+  },
+  options?: {
+    outputPath?: string
+  }
+): Promise<PprofCaptureFileResult> {
+  if (response.type !== 'heap-snapshot') {
+    return writeMultipartPprofToFile(stream, response.contentType, options)
+  }
+
+  const filename = sanitizeMultipartFilename(
+    parseMultipartFilename({
+      'content-disposition': response.contentDisposition ?? '',
+    }) ?? DEFAULT_HEAP_SNAPSHOT_FILENAME,
+    DEFAULT_HEAP_SNAPSHOT_FILENAME
+  )
+  const outputPath = options?.outputPath
+    ? path.resolve(options.outputPath)
+    : path.resolve(process.cwd(), 'dist', filename)
+
+  await mkdir(path.dirname(outputPath), { recursive: true })
+  await writeHeapSnapshotStreamToFile(stream, outputPath)
+  console.log(`Saved pprof capture to ${outputPath}.`)
+
+  return {
+    outputPath,
   }
 }

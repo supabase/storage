@@ -13,6 +13,7 @@ import { FailedToStartProfiling } from '@platformatic/control'
 import { WorkerNotFoundError } from '@platformatic/runtime/lib/errors.js'
 import {
   asProfilingRuntimeApiClient,
+  buildHeapSnapshotFilename,
   buildPprofFilename,
   buildPprofResponseHeaders,
   buildPprofSessionKey,
@@ -40,6 +41,7 @@ function createClient(overrides?: {
   getRuntimeApplications?: ProfilingRuntimeApiClient['getRuntimeApplications']
   startApplicationProfiling?: ProfilingRuntimeApiClient['startApplicationProfiling']
   stopApplicationProfiling?: ProfilingRuntimeApiClient['stopApplicationProfiling']
+  takeApplicationHeapSnapshot?: ProfilingRuntimeApiClient['takeApplicationHeapSnapshot']
 }) {
   return {
     close: overrides?.close ?? vi.fn().mockResolvedValue(undefined),
@@ -52,6 +54,8 @@ function createClient(overrides?: {
       overrides?.startApplicationProfiling ?? vi.fn().mockResolvedValue(undefined),
     stopApplicationProfiling:
       overrides?.stopApplicationProfiling ?? vi.fn().mockResolvedValue(new ArrayBuffer(0)),
+    takeApplicationHeapSnapshot:
+      overrides?.takeApplicationHeapSnapshot ?? vi.fn().mockResolvedValue(undefined),
   } satisfies ProfilingRuntimeApiClient
 }
 
@@ -87,6 +91,19 @@ describe('pprof runtime helpers', () => {
           'cpu'
         )
       ).toBe('storage-api-v1-worker-3-cpu.pprof')
+    })
+  })
+
+  describe('buildHeapSnapshotFilename', () => {
+    it('sanitizes application ids and includes worker ids when present', () => {
+      expect(
+        buildHeapSnapshotFilename({
+          applicationId: 'storage/api v1',
+          runtimePid: process.pid,
+          targetApplicationId: 'storage/api v1:3',
+          workerId: 3,
+        })
+      ).toBe('storage-api-v1-worker-3.heapsnapshot')
     })
   })
 
@@ -220,6 +237,18 @@ describe('pprof runtime helpers', () => {
       ).toEqual({
         code: PPROF_CONTROL_ERROR_CODES.failedToStart,
         message: 'missing @platformatic/wattpm-pprof-capture dependency',
+        statusCode: 502,
+      })
+
+      expect(
+        getKnownPprofError(
+          Object.assign(new Error('snapshot failed'), {
+            code: PPROF_CONTROL_ERROR_CODES.failedToTakeHeapSnapshot,
+          })
+        )
+      ).toEqual({
+        code: PPROF_CONTROL_ERROR_CODES.failedToTakeHeapSnapshot,
+        message: 'snapshot failed',
         statusCode: 502,
       })
 
@@ -646,7 +675,7 @@ describe('pprof runtime helpers', () => {
 
       expect(failedToStart.message).toBe(
         'Failed to start profiling for service "storage:0": ' +
-          'Worker 0 of application storage not found. Available applications are: 4, 5'
+          'Worker 0 of application storage not found. Available workers are: 4, 5'
       )
       expect(resolveRuntimeWorkerIdsFromError(failedToStart)).toEqual([4, 5])
     })

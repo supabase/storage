@@ -41,7 +41,11 @@ export function createTlsSessionSlot(): TlsSessionSlot {
 }
 
 export function storeTlsSession(slot: TlsSessionSlot, session: Buffer): void {
-  slot.session = session
+  // Copy the ticket out of the pooled arena to avoid pinning the pool's memory.
+  const copy = Buffer.allocUnsafeSlow(session.byteLength)
+  session.copy(copy)
+
+  slot.session = copy
   slot.storedAt = Date.now()
 }
 

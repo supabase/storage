@@ -15,6 +15,7 @@ export const PPROF_CONTROL_ERROR_CODES = {
   applicationNotFound: 'PLT_CTR_APPLICATION_NOT_FOUND',
   failedToStart: 'PLT_CTR_FAILED_TO_START_PROFILING',
   failedToStop: 'PLT_CTR_FAILED_TO_STOP_PROFILING',
+  failedToTakeHeapSnapshot: 'PLT_CTR_FAILED_TO_TAKE_HEAP_SNAPSHOT',
   profilingAlreadyStarted: 'PLT_CTR_PROFILING_ALREADY_STARTED',
   profilingNotStarted: 'PLT_CTR_PROFILING_NOT_STARTED',
   runtimeNotFound: 'PLT_CTR_RUNTIME_NOT_FOUND',
@@ -171,6 +172,13 @@ export function buildPprofFilename(target: WattPprofTarget, type: PprofCaptureTy
   return `${safeApplicationId}${workerSuffix}-${type}.pprof`
 }
 
+export function buildHeapSnapshotFilename(target: WattPprofTarget) {
+  const safeApplicationId = target.applicationId.replace(/[^A-Za-z0-9._-]+/g, '-')
+  const workerSuffix = target.workerId === undefined ? '' : `-worker-${target.workerId}`
+
+  return `${safeApplicationId}${workerSuffix}.heapsnapshot`
+}
+
 export function resolvePprofFilenameTarget(selection: WattPprofSelection) {
   return selection.requestedWorkerId === undefined
     ? { ...selection.targets[0], workerId: undefined }
@@ -185,6 +193,19 @@ export function buildPprofResponseHeaders(selection: WattPprofSelection, content
     ...(selection.requestedWorkerId !== undefined
       ? { 'x-platformatic-worker-id': `${selection.requestedWorkerId}` }
       : { 'x-platformatic-worker-count': `${selection.targets.length}` }),
+  }
+}
+
+export function buildHeapSnapshotResponseHeaders(
+  selection: WattPprofSelection,
+  target: WattPprofTarget
+) {
+  return {
+    'cache-control': 'no-store',
+    'content-disposition': `attachment; filename="${buildHeapSnapshotFilename(target)}"`,
+    'content-type': 'application/octet-stream',
+    'x-platformatic-application-id': selection.applicationId,
+    ...(target.workerId !== undefined ? { 'x-platformatic-worker-id': `${target.workerId}` } : {}),
   }
 }
 
@@ -314,6 +335,12 @@ export function getKnownPprofError(error: unknown): PprofKnownError | undefined 
         message,
         statusCode: isMissingPprofCaptureDependency(error) ? 501 : 502,
       }
+    case PPROF_CONTROL_ERROR_CODES.failedToTakeHeapSnapshot:
+      return {
+        code,
+        message,
+        statusCode: 502,
+      }
     default:
       return undefined
   }
@@ -330,7 +357,9 @@ export function asProfilingRuntimeApiClient(value: unknown): ProfilingRuntimeApi
     'startApplicationProfiling' in value &&
     typeof value.startApplicationProfiling === 'function' &&
     'stopApplicationProfiling' in value &&
-    typeof value.stopApplicationProfiling === 'function'
+    typeof value.stopApplicationProfiling === 'function' &&
+    'takeApplicationHeapSnapshot' in value &&
+    typeof value.takeApplicationHeapSnapshot === 'function'
   ) {
     return value as ProfilingRuntimeApiClient
   }

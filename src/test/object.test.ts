@@ -11,7 +11,11 @@ import {
   signJWT,
   verifyJWT,
 } from '@internal/auth'
-import { getPostgresConnection, getServiceKeyUser, PgTransaction } from '@internal/database'
+import {
+  type DatabaseTransaction,
+  getPostgresConnection,
+  getServiceKeyUser,
+} from '@internal/database'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import { randomUUID } from 'crypto'
@@ -36,7 +40,7 @@ type SignedUrlResult = {
   signedURL: string | null
 }
 
-let tnx: PgTransaction | undefined
+let tnx: DatabaseTransaction | undefined
 async function getSuperuserPostgrestClient() {
   const superUser = await getServiceKeyUser(tenantId)
 
@@ -52,7 +56,7 @@ async function getSuperuserPostgrestClient() {
 }
 
 async function findObject(
-  db: PgTransaction,
+  db: DatabaseTransaction,
   bucketId: string,
   name: string
 ): Promise<Obj | undefined> {
@@ -71,7 +75,7 @@ async function findObject(
 }
 
 async function insertObjects(
-  db: PgTransaction,
+  db: DatabaseTransaction,
   objects:
     | Array<Partial<Obj> & { bucket_id: string; name: string }>
     | (Partial<Obj> & { bucket_id: string; name: string })
@@ -90,7 +94,11 @@ async function insertObjects(
   }
 }
 
-async function deleteObjectsByName(db: PgTransaction, bucketId: string, names: string | string[]) {
+async function deleteObjectsByName(
+  db: DatabaseTransaction,
+  bucketId: string,
+  names: string | string[]
+) {
   await db.query({
     text: `
       DELETE FROM objects
@@ -101,7 +109,7 @@ async function deleteObjectsByName(db: PgTransaction, bucketId: string, names: s
   })
 }
 
-async function insertObjectNames(db: PgTransaction, bucketId: string, names: string[]) {
+async function insertObjectNames(db: DatabaseTransaction, bucketId: string, names: string[]) {
   const owner = '317eadce-631a-4429-a0bb-f19a7a517b4a'
   const versions = names.map((_, index) => `test-version-${randomUUID()}-${index}`)
 
@@ -116,7 +124,7 @@ async function insertObjectNames(db: PgTransaction, bucketId: string, names: str
 }
 
 async function insertBucket(
-  db: PgTransaction,
+  db: DatabaseTransaction,
   bucket: {
     id: string
     name: string
@@ -1163,7 +1171,7 @@ describe('testing POST object via binary upload', () => {
       type: 'STANDARD',
     })
     await setupTx.commit()
-    await db.dispose()
+    db.dispose()
 
     const path = './src/test/assets/sadcat.jpg'
     const { size } = fs.statSync(path)
@@ -1531,6 +1539,59 @@ describe('testing PUT object via binary upload', () => {
  * POST /copy
  */
 describe('testing copy object', () => {
+  const storageTest = useStorage()
+
+  test('defaults omitted copyMetadata to preserving source metadata', async () => {
+    const runId = randomUUID()
+    const sourceKey = `authenticated/copy-default-source-${runId}.png`
+    const destinationKey = `authenticated/copy-default-destination-${runId}.png`
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: sourceKey,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version: `copy-default-source-version-${runId}`,
+      metadata: {
+        cacheControl: 'max-age=60',
+        eTag: `source-${runId}`,
+        mimetype: 'image/png',
+        size: 1234,
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      await storageTest.storage.from('bucket2').copyObject({
+        sourceKey,
+        destinationBucket: 'bucket2',
+        destinationKey,
+        uploadType: 'standard',
+      })
+
+      expect(S3Backend.prototype.copyObject).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.objectContaining({
+          cacheControl: 'max-age=60',
+          mimetype: 'image/png',
+        }),
+        undefined,
+        { copyMetadata: true }
+      )
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [sourceKey, destinationKey])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
   test('check if RLS policies are respected: authenticated user is able to copy authenticated resource', async () => {
     const response = await appInstance.inject({
       method: 'POST',
@@ -1588,6 +1649,18 @@ describe('testing copy object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(String),
+      null,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({
+        cacheControl: 'no-cache',
+      }),
+      undefined,
+      { copyMetadata: true }
+    )
     const jsonResponse = response.json()
     expect(jsonResponse.Key).toBe(`bucket2/authenticated/${copiedKey}`)
 
@@ -1627,6 +1700,19 @@ describe('testing copy object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({
+        cacheControl: 'max-age=999',
+        mimetype: 'image/gif',
+      }),
+      undefined,
+      { copyMetadata: false }
+    )
     const parsedBody = JSON.parse(response.body)
 
     expect(parsedBody.Key).toBe(`bucket2/authenticated/${copiedKey}`)
@@ -1679,6 +1765,85 @@ describe('testing copy object', () => {
 
     expect(object).not.toBeFalsy()
     expect(object!.user_metadata).toBeNull()
+  })
+
+  test('preserves omitted replaceable metadata fields for REST copies', async () => {
+    const runId = randomUUID()
+    const sourceKey = `authenticated/copy-replace-source-${runId}.png`
+    const destinationKey = `authenticated/copy-replace-destination-${runId}.png`
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: sourceKey,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version: `copy-replace-source-version-${runId}`,
+      metadata: {
+        cacheControl: 'max-age=60',
+        eTag: `source-${runId}`,
+        mimetype: 'image/png',
+        size: 1234,
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+    let verificationTx: DatabaseTransaction | undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/copy',
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+        payload: {
+          bucketId: 'bucket2',
+          sourceKey,
+          destinationKey,
+          metadata: {
+            cacheControl: 'max-age=999',
+          },
+          copyMetadata: false,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(S3Backend.prototype.copyObject).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.objectContaining({
+          cacheControl: 'max-age=999',
+          mimetype: 'image/png',
+        }),
+        undefined,
+        { copyMetadata: false }
+      )
+
+      verificationTx = await getSuperuserPostgrestClient()
+      const object = await findObject(verificationTx, 'bucket2', destinationKey)
+
+      expect(object).not.toBeFalsy()
+      expect(object!.metadata).toEqual(
+        expect.objectContaining({
+          cacheControl: 'max-age=999',
+          mimetype: 'image/png',
+        })
+      )
+    } finally {
+      if (verificationTx) {
+        await verificationTx.commit()
+        verificationTx = undefined
+        tnx = undefined
+      }
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [sourceKey, destinationKey])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
   })
 
   test('cannot copy objects across buckets when RLS dont allow it', async () => {

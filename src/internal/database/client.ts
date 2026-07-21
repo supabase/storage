@@ -27,7 +27,7 @@ export async function getPgPostgresConnection(
     disableHostCheck: options.disableHostCheck,
   })
 
-  return await PgTenantConnection.create({
+  return PgTenantConnection.create({
     ...dbCredentials,
     ...options,
     clusterSize: Cluster.size,

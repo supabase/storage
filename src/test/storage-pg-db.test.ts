@@ -1,8 +1,8 @@
 import {
+  type DatabaseExecutor,
+  type DatabaseStatement,
   getServiceKeyUser,
-  type PgExecutor,
   PgPoolStrategy,
-  type PgStatement,
   PgTenantConnection,
   PgTransaction,
 } from '@internal/database'
@@ -352,28 +352,7 @@ describe('StoragePgDB bucket metadata', () => {
   })
 
   it('restores parent transaction scope after failed super-user queries', async () => {
-    const authenticatedUser = {
-      jwt: 'storage-pg-db-authenticated-jwt',
-      payload: {
-        role: 'authenticated',
-        sub: randomUUID(),
-      },
-    }
-    const authenticatedSettings = {
-      ...connectionSettings,
-      user: authenticatedUser,
-      superUser,
-    }
-    const authenticatedPool = new PgPoolStrategy(authenticatedSettings)
-    const authenticatedDb = new StoragePgDB(
-      new PgTenantConnection(authenticatedPool, authenticatedSettings),
-      {
-        tenantId,
-        host: 'localhost',
-      }
-    )
-
-    try {
+    await withAuthenticatedDb('storage-pg-db-authenticated-jwt', async (authenticatedDb) => {
       await authenticatedDb.withTransaction(async (tx) => {
         await expect(readCurrentRole(tx)).resolves.toBe('authenticated')
 
@@ -409,9 +388,62 @@ describe('StoragePgDB bucket metadata', () => {
         )
         expect(result.rows[0].n).toBe(1)
       })
-    } finally {
-      await authenticatedPool.destroy()
-    }
+    })
+  })
+
+  it('preserves custom statement timeout after nested super-user scope restores', async () => {
+    await withAuthenticatedDb('storage-pg-db-timeout-jwt', async (authenticatedDb) => {
+      await authenticatedDb.withTransaction(
+        async (tx) => {
+          await expect(readCurrentRole(tx)).resolves.toBe('authenticated')
+          await expect(readCurrentStatementTimeoutMs(tx)).resolves.toBe(4321)
+
+          await expect(
+            runStorageQuery(
+              tx.asSuperUser() as StoragePgDB,
+              'ReadSuperUserStatementTimeout',
+              async (pg) => {
+                await expect(readCurrentRoleFromExecutor(pg)).resolves.toBe(superUser.payload.role)
+                await expect(readStatementTimeoutMs(pg)).resolves.toBe(4321)
+              }
+            )
+          ).resolves.toBeUndefined()
+
+          await expect(readCurrentRole(tx)).resolves.toBe('authenticated')
+          await expect(readCurrentStatementTimeoutMs(tx)).resolves.toBe(4321)
+        },
+        { timeout: 4321 }
+      )
+    })
+  })
+
+  it('preserves custom statement timeout after failed nested super-user scope rolls back', async () => {
+    await withAuthenticatedDb('storage-pg-db-timeout-rollback-jwt', async (authenticatedDb) => {
+      await authenticatedDb.withTransaction(
+        async (tx) => {
+          await expect(readCurrentRole(tx)).resolves.toBe('authenticated')
+          await expect(readCurrentStatementTimeoutMs(tx)).resolves.toBe(4321)
+
+          await expect(
+            runStorageQuery(
+              tx.asSuperUser() as StoragePgDB,
+              'FailSuperUserStatementTimeout',
+              async (pg) => {
+                await expect(readCurrentRoleFromExecutor(pg)).resolves.toBe(superUser.payload.role)
+                await expect(readStatementTimeoutMs(pg)).resolves.toBe(4321)
+                await pg.query("SELECT set_config('statement_timeout', '30s', true)")
+                await expect(readStatementTimeoutMs(pg)).resolves.toBe(30000)
+                throw new Error('failed nested super-user timeout query')
+              }
+            )
+          ).rejects.toThrow('failed nested super-user timeout query')
+
+          await expect(readCurrentRole(tx)).resolves.toBe('authenticated')
+          await expect(readCurrentStatementTimeoutMs(tx)).resolves.toBe(4321)
+        },
+        { timeout: 4321 }
+      )
+    })
   })
 
   it('preserves original errors when best-effort parent scope restoration fails', async () => {
@@ -722,9 +754,9 @@ describe('StoragePgDB bucket metadata', () => {
 
   it('maps PostgreSQL lock_timeout from waitObjectLock to LockTimeout', async () => {
     const lockTimeoutError = createPgError('55P03', 'canceling statement due to lock timeout')
-    const queries: Array<string | PgStatement> = []
+    const queries: Array<string | DatabaseStatement> = []
     const transaction = {
-      query: vi.fn(async (statement: string | PgStatement) => {
+      query: vi.fn(async (statement: string | DatabaseStatement) => {
         queries.push(statement)
 
         const text = typeof statement === 'string' ? statement : statement.text
@@ -771,9 +803,9 @@ describe('StoragePgDB bucket metadata', () => {
   })
 
   it('restores the prior transaction-local lock_timeout after waitObjectLock succeeds', async () => {
-    const queries: Array<string | PgStatement> = []
+    const queries: Array<string | DatabaseStatement> = []
     const transaction = {
-      query: vi.fn(async (statement: string | PgStatement) => {
+      query: vi.fn(async (statement: string | DatabaseStatement) => {
         queries.push(statement)
 
         const text = typeof statement === 'string' ? statement : statement.text
@@ -815,9 +847,9 @@ describe('StoragePgDB bucket metadata', () => {
   })
 
   it('uses top-level lock_timeout statements for Multigres waitObjectLock', async () => {
-    const queries: Array<string | PgStatement> = []
+    const queries: Array<string | DatabaseStatement> = []
     const transaction = {
-      query: vi.fn(async (statement: string | PgStatement) => {
+      query: vi.fn(async (statement: string | DatabaseStatement) => {
         queries.push(statement)
 
         const text = typeof statement === 'string' ? statement : statement.text
@@ -1710,23 +1742,23 @@ describe('StoragePgDB bucket metadata', () => {
   function runStorageQuery<T>(
     storage: StoragePgDB,
     queryName: string,
-    fn: (db: PgExecutor, signal?: AbortSignal) => Promise<T>
+    fn: (db: DatabaseExecutor, signal?: AbortSignal) => Promise<T>
   ): Promise<T> {
     return (
       storage as unknown as {
         runQuery<T>(
           queryName: string,
-          fn: (db: PgExecutor, signal?: AbortSignal) => Promise<T>
+          fn: (db: DatabaseExecutor, signal?: AbortSignal) => Promise<T>
         ): Promise<T>
       }
     ).runQuery(queryName, fn)
   }
 
-  function statementText(statement: string | PgStatement): string {
+  function statementText(statement: string | DatabaseStatement): string {
     return typeof statement === 'string' ? statement : statement.text
   }
 
-  function statementValues(statement: string | PgStatement): unknown[] | undefined {
+  function statementValues(statement: string | DatabaseStatement): unknown[] | undefined {
     return typeof statement === 'string' ? undefined : statement.values
   }
 
@@ -1740,12 +1772,82 @@ describe('StoragePgDB bucket metadata', () => {
     return runStorageQuery(storage, 'ReadCurrentRole', (pg) => readCurrentRoleFromExecutor(pg))
   }
 
-  async function readCurrentRoleFromExecutor(pg: PgExecutor): Promise<string> {
+  async function readCurrentRoleFromExecutor(pg: DatabaseExecutor): Promise<string> {
     const result = await pg.query<{ role: string }>(`
       SELECT current_setting('role', true) AS role
     `)
 
     return result.rows[0].role
+  }
+
+  function readCurrentStatementTimeoutMs(storage: StoragePgDB): Promise<number> {
+    return runStorageQuery(storage, 'ReadCurrentStatementTimeout', (pg) =>
+      readStatementTimeoutMs(pg)
+    )
+  }
+
+  async function readStatementTimeoutMs(pg: DatabaseExecutor): Promise<number> {
+    const result = await pg.query<{ statement_timeout: string }>(`
+      SELECT current_setting('statement_timeout') AS statement_timeout
+    `)
+
+    return parseStatementTimeoutMs(result.rows[0].statement_timeout)
+  }
+
+  function parseStatementTimeoutMs(statementTimeout: string): number {
+    const value = statementTimeout.trim()
+    if (value === '0') {
+      return 0
+    }
+
+    const match = /^(\d+(?:\.\d+)?)\s*(ms|s|min|h|d)?$/.exec(value)
+    if (!match) {
+      throw new Error(`Unexpected statement_timeout value: ${statementTimeout}`)
+    }
+
+    const multipliers = {
+      ms: 1,
+      s: 1000,
+      min: 60 * 1000,
+      h: 60 * 60 * 1000,
+      d: 24 * 60 * 60 * 1000,
+    }
+    const amount = Number(match[1])
+    const unit = (match[2] ?? 'ms') as keyof typeof multipliers
+
+    return Math.round(amount * multipliers[unit])
+  }
+
+  async function withAuthenticatedDb(
+    jwt: string,
+    fn: (authenticatedDb: StoragePgDB) => Promise<void>
+  ): Promise<void> {
+    const authenticatedUser = {
+      jwt,
+      payload: {
+        role: 'authenticated',
+        sub: randomUUID(),
+      },
+    }
+    const authenticatedSettings = {
+      ...connectionSettings,
+      user: authenticatedUser,
+      superUser,
+    }
+    const authenticatedPool = new PgPoolStrategy(authenticatedSettings)
+    const authenticatedDb = new StoragePgDB(
+      new PgTenantConnection(authenticatedPool, authenticatedSettings),
+      {
+        tenantId,
+        host: 'localhost',
+      }
+    )
+
+    try {
+      await fn(authenticatedDb)
+    } finally {
+      await authenticatedPool.destroy()
+    }
   }
 
   async function tableExists(tableName: string): Promise<boolean> {

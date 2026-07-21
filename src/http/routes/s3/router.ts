@@ -5,6 +5,7 @@ import { JTDDataType } from 'ajv/dist/jtd'
 import fastUri from 'fast-uri'
 import { FastifyRequest } from 'fastify'
 import { FromSchema, JSONSchema } from 'json-schema-to-ts'
+import { finiteKeyword } from '../../finite'
 import { default as AbortMultiPartUpload } from './commands/abort-multipart-upload'
 import { default as CompleteMultipartUpload } from './commands/complete-multipart-upload'
 import { default as CopyObject } from './commands/copy-object'
@@ -152,7 +153,7 @@ export class Router<Context = unknown> {
     uriResolver: fastUri,
     addUsedSchema: false,
     allErrors: false,
-  })
+  }).addKeyword(finiteKeyword)
 
   registerRoute(
     method: HTTPMethod,

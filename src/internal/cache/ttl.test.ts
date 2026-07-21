@@ -20,6 +20,21 @@ describe('ttl cache wrapper', () => {
     vi.useRealTimers()
   })
 
+  test('plain get returns the value while fresh and undefined after ttl elapses', async () => {
+    const cache = createTtlCache<string, { bytes: number }>({
+      max: 10,
+      ttl: 20,
+    })
+
+    cache.set('entry', { bytes: 4 })
+
+    expect(cache.get('entry')).toEqual({ bytes: 4 })
+
+    await vi.advanceTimersByTimeAsync(40)
+
+    expect(cache.get('entry')).toBeUndefined()
+  })
+
   test('purges stale entries from stats and iteration after ttl elapses', async () => {
     const cache = createTtlCache<string, { bytes: number }>({
       max: 10,

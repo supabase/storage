@@ -17,10 +17,11 @@ import {
   QueryVectorsOutput,
 } from '@aws-sdk/client-s3vectors'
 import {
-  PgExecutor,
+  type DatabaseExecutor,
+  type DatabaseTransaction,
+  type DatabaseTransactionalExecutor,
+  isDatabaseTransaction,
   PgTenantConnection,
-  PgTransaction,
-  PgTransactionalExecutor,
   quoteIdentifier,
 } from '@internal/database'
 import { ERRORS } from '@internal/errors'
@@ -152,7 +153,7 @@ function tableCapabilityCache(db: object): Map<string, Promise<PgVectorTableCapa
   return cache
 }
 
-function tableCapabilityCacheKey(db: PgTransactionalExecutor | PgTransaction): object {
+function tableCapabilityCacheKey(db: DatabaseExecutor): object {
   if (db instanceof PgTenantConnection) {
     return db.pool
   }
@@ -173,9 +174,9 @@ function forgetTableCapability(db: object, table: string): void {
 }
 
 async function resolveTableCapability(
-  db: PgExecutor,
+  db: DatabaseExecutor,
   table: string,
-  cacheKey: object = tableCapabilityCacheKey(db as PgTransactionalExecutor | PgTransaction)
+  cacheKey: object = tableCapabilityCacheKey(db)
 ): Promise<PgVectorTableCapability> {
   const cache = tableCapabilityCache(cacheKey)
   let capability = cache.get(table)
@@ -216,25 +217,29 @@ async function resolveTableCapability(
 }
 
 export type PgExecutorResolver =
-  | PgTransactionalExecutor
-  | PgTransaction
+  | DatabaseTransactionalExecutor
+  | DatabaseTransaction
   | {
-      resolve: () => PgTransactionalExecutor | PgTransaction
-      root?: () => PgTransactionalExecutor | PgTransaction
+      resolve: () => DatabaseTransactionalExecutor | DatabaseTransaction
+      root?: () => DatabaseTransactionalExecutor | DatabaseTransaction
     }
 
 function isPgExecutorProvider(r: PgExecutorResolver): r is {
-  resolve: () => PgTransactionalExecutor | PgTransaction
-  root?: () => PgTransactionalExecutor | PgTransaction
+  resolve: () => DatabaseTransactionalExecutor | DatabaseTransaction
+  root?: () => DatabaseTransactionalExecutor | DatabaseTransaction
 } {
-  return typeof (r as { resolve?: unknown }).resolve === 'function'
+  return 'resolve' in r && typeof r.resolve === 'function'
 }
 
-function resolvePgExecutor(r: PgExecutorResolver): PgTransactionalExecutor | PgTransaction {
+function resolvePgExecutor(
+  r: PgExecutorResolver
+): DatabaseTransactionalExecutor | DatabaseTransaction {
   return isPgExecutorProvider(r) ? r.resolve() : r
 }
 
-function resolveRootPgExecutor(r: PgExecutorResolver): PgTransactionalExecutor | PgTransaction {
+function resolveRootPgExecutor(
+  r: PgExecutorResolver
+): DatabaseTransactionalExecutor | DatabaseTransaction {
   return isPgExecutorProvider(r) ? (r.root?.() ?? r.resolve()) : r
 }
 
@@ -243,10 +248,10 @@ function hasRootPgResolver(r: PgExecutorResolver): boolean {
 }
 
 async function withPgTransaction<T>(
-  db: PgTransactionalExecutor | PgTransaction,
-  fn: (trx: PgTransaction) => Promise<T>
+  db: DatabaseTransactionalExecutor | DatabaseTransaction,
+  fn: (trx: DatabaseTransaction) => Promise<T>
 ): Promise<T> {
-  if (db instanceof PgTransaction) {
+  if (isDatabaseTransaction(db)) {
     const savepoint = nextSavepointName()
     await db.query(`SAVEPOINT ${savepoint}`)
     try {
@@ -377,11 +382,11 @@ export class PgVectorStore implements VectorStore {
     this.transactionalIndexOperations = hasRootPgResolver(executor)
   }
 
-  private db(): PgTransactionalExecutor | PgTransaction {
+  private db(): DatabaseTransactionalExecutor | DatabaseTransaction {
     return resolvePgExecutor(this.executor)
   }
 
-  private rootDb(): PgTransactionalExecutor | PgTransaction {
+  private rootDb(): DatabaseTransactionalExecutor | DatabaseTransaction {
     return resolveRootPgExecutor(this.executor)
   }
 
@@ -536,7 +541,7 @@ export class PgVectorStore implements VectorStore {
   }
 
   private async putVectorsManually(
-    db: PgTransactionalExecutor | PgTransaction,
+    db: DatabaseTransactionalExecutor | DatabaseTransaction,
     table: string,
     serializedRows: string
   ): Promise<void> {
@@ -604,7 +609,7 @@ export class PgVectorStore implements VectorStore {
   }
 
   private async queryVectorsRaw(
-    db: PgTransactionalExecutor | PgTransaction,
+    db: DatabaseTransactionalExecutor | DatabaseTransaction,
     table: string,
     sql: string,
     params: unknown[],

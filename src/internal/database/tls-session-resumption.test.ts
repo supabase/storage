@@ -32,10 +32,25 @@ describe('tls session slot', () => {
     expect(peekTlsSession(slot)).toBeUndefined()
 
     storeTlsSession(slot, first)
-    expect(peekTlsSession(slot)).toBe(first)
+    expect(peekTlsSession(slot)).toEqual(first)
 
     storeTlsSession(slot, second)
-    expect(peekTlsSession(slot)).toBe(second)
+    expect(peekTlsSession(slot)).toEqual(second)
+  })
+
+  test('copies tickets out of pooled buffers so slots never pin pool arenas', () => {
+    const slot = createTlsSessionSlot()
+    // simulate a big pooled buffer arena (256k)
+    const arena = Buffer.allocUnsafeSlow(256 * 1024)
+    const ticket = arena.subarray(0, 1068)
+    ticket.fill(7)
+
+    storeTlsSession(slot, ticket)
+
+    const stored = peekTlsSession(slot)
+    expect(stored).toEqual(ticket)
+    expect(stored!.buffer).not.toBe(arena.buffer)
+    expect(stored!.buffer.byteLength).toBe(ticket.byteLength)
   })
 
   test('expires sessions after the max age', () => {
@@ -64,11 +79,11 @@ describe('tls session slot', () => {
 
     const first = Buffer.from('first')
     storeTlsSession(slot, first)
-    expect(Object.assign({}, ssl).session).toBe(first)
+    expect(Object.assign({}, ssl).session).toEqual(first)
 
     const second = Buffer.from('second')
     storeTlsSession(slot, second)
-    expect(Object.assign({}, ssl).session).toBe(second)
+    expect(Object.assign({}, ssl).session).toEqual(second)
   })
 
   test('slot reference does not leak into tls.connect options', () => {
@@ -104,10 +119,10 @@ describe('tls session slot', () => {
     const first = Buffer.from('first')
     const second = Buffer.from('second')
     socket.emit('session', first)
-    expect(peekTlsSession(slot)).toBe(first)
+    expect(peekTlsSession(slot)).toEqual(first)
 
     socket.emit('session', second)
-    expect(peekTlsSession(slot)).toBe(second)
+    expect(peekTlsSession(slot)).toEqual(second)
   })
 
   test('capture tolerates streams without listener support', () => {
@@ -220,9 +235,9 @@ describe('TlsSessionResumptionClient pg wiring', () => {
 
     const session = Buffer.from('ticket')
     stream.emit('session', session)
-    expect(peekTlsSession(slot)).toBe(session)
+    expect(peekTlsSession(slot)).toEqual(session)
 
-    expect(Object.assign({}, ssl).session).toBe(session)
+    expect(Object.assign({}, ssl).session).toEqual(session)
 
     stream.emit('secureConnect')
     expect(recordSpy).toHaveBeenCalledWith('uncached')

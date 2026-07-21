@@ -80,6 +80,39 @@ describe('fetchPprofStream', () => {
     expect(await readStream(response.stream)).toBe('profile-data')
   })
 
+  it('requests full heap snapshots as raw binary output without pprof query params', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response('{"snapshot":true}', {
+        headers: {
+          'content-disposition': 'attachment; filename="storage-worker-7.heapsnapshot"',
+          'content-type': 'application/octet-stream',
+        },
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await fetchPprofStream({
+      adminUrl: 'https://example.com/admin',
+      apiKey: 'secret',
+      type: 'heap-snapshot',
+      workerId: 7,
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://example.com/admin/debug/pprof/heap-snapshot?workerId=7',
+      {
+        headers: {
+          Accept: 'application/octet-stream',
+          ApiKey: 'secret',
+        },
+        method: 'GET',
+      }
+    )
+    expect(response.contentDisposition).toBe('attachment; filename="storage-worker-7.heapsnapshot"')
+    expect(response.contentType).toBe('application/octet-stream')
+    expect(await readStream(response.stream)).toBe('{"snapshot":true}')
+  })
+
   it('surfaces non-2xx responses with the response body', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('upstream failure', {

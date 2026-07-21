@@ -157,6 +157,56 @@ describe('S3ProtocolHandler.getObject', () => {
   })
 })
 
+describe('S3ProtocolHandler.listMultipartUploads', () => {
+  it('defaults MaxUploads to the S3 limit of 1000', async () => {
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
+    const listMultipartUploads = vi.fn().mockResolvedValue([])
+    const storage = {
+      asSuperUser: vi.fn(() => ({ findBucket })),
+      db: { listMultipartUploads },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.listMultipartUploads({ Bucket: 'bucket' })
+
+    expect(listMultipartUploads).toHaveBeenCalledWith('bucket', {
+      prefix: '',
+      deltimeter: undefined,
+      maxKeys: 1001,
+      nextUploadKeyToken: undefined,
+      nextUploadToken: undefined,
+    })
+    expect(response.responseBody.ListMultipartUploadsResult.MaxUploads).toBe(1000)
+  })
+
+  it.each([
+    0,
+    -1,
+    1.5,
+    1001,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+  ])('rejects invalid MaxUploads %s before querying storage', async (maxUploads) => {
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
+    const listMultipartUploads = vi.fn().mockResolvedValue([])
+    const storage = {
+      asSuperUser: vi.fn(() => ({ findBucket })),
+      db: { listMultipartUploads },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(
+      handler.listMultipartUploads({ Bucket: 'bucket', MaxUploads: maxUploads })
+    ).rejects.toMatchObject({
+      code: 'InvalidParameter',
+      message: 'Invalid Parameter MaxUploads',
+    })
+    expect(findBucket).not.toHaveBeenCalled()
+    expect(listMultipartUploads).not.toHaveBeenCalled()
+  })
+})
+
 describe('S3ProtocolHandler.abortMultipartUpload', () => {
   it('aborts multipart upload and deletes from database when backend succeeds', async () => {
     const uploadId = 'test-upload-id'

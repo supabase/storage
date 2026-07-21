@@ -30,7 +30,7 @@ import { Upload } from '@aws-sdk/lib-storage'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { wait } from '@internal/concurrency'
-import { getPostgresConnection, getServiceKeyUser, PgTenantConnection } from '@internal/database'
+import { getPostgresConnection, getServiceKeyUser, type TenantConnection } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
 import { StoragePgDB } from '@storage/database'
@@ -931,6 +931,23 @@ describe('S3 Protocol', () => {
     }
 
     describe('MultiPart Form Data Upload', () => {
+      // Hand-signs a POST policy with the server's S3 credentials, returning the
+      // form fields a client would submit. Lets us craft conditions the AWS SDK
+      // won't generate on its own
+      function signPostPolicy(policy: Record<string, unknown>) {
+        const shortDate = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+        const policyB64 = Buffer.from(JSON.stringify(policy)).toString('base64')
+        const hmac = (key: Buffer | string, data: string) =>
+          createHmac('sha256', key).update(data, 'utf-8').digest()
+        const kDate = hmac('AWS4' + s3ProtocolAccessKeySecret!, shortDate)
+        const kRegion = hmac(kDate, storageS3Region)
+        const kService = hmac(kRegion, 's3')
+        const kSigning = hmac(kService, 'aws4_request')
+        const signature = hmac(kSigning, policyB64).toString('hex')
+        const credential = `${s3ProtocolAccessKeyId}/${shortDate}/${storageS3Region}/s3/aws4_request`
+        return { policyB64, signature, credential }
+      }
+
       it('can upload using multipart/form-data', async () => {
         const webhookSpy = vi
           .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
@@ -1005,6 +1022,169 @@ describe('S3 Protocol', () => {
 
         expect(resp.status).toBe(413)
         expect(resp.statusText).toBe('Payload Too Large')
+      })
+
+      it('rejects a presigned POST replayed against a different bucket', async () => {
+        const signedBucket = await createBucket(client)
+        const otherBucket = await createBucket(client)
+
+        const signedURL = await createPresignedPost(client, {
+          Bucket: signedBucket,
+          Key: 'allowed/test.jpg',
+          Expires: 5000,
+          Fields: { 'Content-Type': 'image/jpg' },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'object.txt')
+
+        const otherUrl = signedURL.url.replace(`/s3/${signedBucket}`, `/s3/${otherBucket}`)
+        const resp = await fetch(otherUrl, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(403)
+      })
+
+      it('rejects a presigned POST whose key violates the signed starts-with condition', async () => {
+        const bucketName = await createBucket(client)
+
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          // ${filename} produces a `["starts-with", "$key", "allowed/"]` condition
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: AWS POST uses a literal ${filename} token
+          Key: 'allowed/${filename}',
+          Expires: 5000,
+          Fields: { 'Content-Type': 'image/jpg' },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        formData.set('key', 'outside/object.txt')
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'object.txt')
+
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(403)
+      })
+
+      it('rejects an expired policy even with a far-future X-Amz-Date', async () => {
+        const bucketName = await createBucket(client)
+
+        const { policyB64, signature, credential } = signPostPolicy({
+          expiration: '2020-01-01T00:00:00Z',
+          conditions: [{ bucket: bucketName }, ['starts-with', '$key', '']],
+        })
+
+        const formData = new FormData()
+        formData.set('key', 'some-key.txt')
+        formData.set('Policy', policyB64)
+        formData.set('X-Amz-Algorithm', 'AWS4-HMAC-SHA256')
+        formData.set('X-Amz-Credential', credential)
+        formData.set('X-Amz-Date', '99991231T235959Z')
+        formData.set('X-Amz-Signature', signature)
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'some-key.txt')
+
+        const resp = await fetch(`${baseUrl}/s3/${bucketName}`, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(400)
+      })
+
+      it('rejects a key that violates an "eq" key condition', async () => {
+        const bucketName = await createBucket(client)
+
+        const { policyB64, signature, credential } = signPostPolicy({
+          expiration: '2099-01-01T00:00:00Z',
+          conditions: [{ bucket: bucketName }, ['eq', '$key', 'allowed/exact.txt']],
+        })
+
+        const formData = new FormData()
+        formData.set('key', 'allowed/different.txt')
+        formData.set('Policy', policyB64)
+        formData.set('X-Amz-Algorithm', 'AWS4-HMAC-SHA256')
+        formData.set('X-Amz-Credential', credential)
+        formData.set('X-Amz-Date', '99991231T235959Z')
+        formData.set('X-Amz-Signature', signature)
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'object.txt')
+
+        const resp = await fetch(`${baseUrl}/s3/${bucketName}`, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(403)
+      })
+
+      it('accepts (and ignores) a field Storage does not act on, when covered by a condition', async () => {
+        const bucketName = await createBucket(client)
+
+        // `acl` is a valid AWS POST field that Storage does not implement. As long
+        // as it is covered by a condition (the SDK adds one for every Fields
+        // entry) it is accepted and ignored, matching AWS-compatible behavior.
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          Key: 'test.jpg',
+          Expires: 5000,
+          Fields: { acl: 'public-read' },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'test.jpg')
+
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(200)
+      })
+
+      it('rejects a submitted field that is not covered by any policy condition', async () => {
+        const bucketName = await createBucket(client)
+
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          Key: 'test.jpg',
+          Expires: 5000,
+          Fields: { 'Content-Type': 'image/jpg' },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        // An extra field the signed policy never constrained with a condition.
+        formData.set('x-amz-meta-extra', 'value')
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'test.jpg')
+
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(403)
+      })
+
+      it('allows an uncovered x-ignore- field (AWS exemption)', async () => {
+        // AWS exempts fields prefixed with `x-ignore-` from the "every field must
+        // be covered by a condition" rule, so an uncovered x-ignore-* field must
+        // NOT be rejected (contrast the x-amz-meta-* case above).
+        const bucketName = await createBucket(client)
+
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          Key: 'test.jpg',
+          Expires: 5000,
+          Fields: { 'Content-Type': 'image/jpg' },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        formData.set('x-ignore-toolkit-field', 'anything')
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'test.jpg')
+
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(200)
       })
     })
 
@@ -2192,7 +2372,7 @@ describe('S3 Protocol', () => {
           superUser: adminUser,
           host: 'localhost',
         })
-        const db = connection.pool.acquire()
+        const db = connection
         const anonKey = await anonKeyAsync
         const anonClient = new S3Client({
           endpoint: `${baseUrl}/s3`,
@@ -2265,7 +2445,7 @@ describe('S3 Protocol', () => {
           anonClient.destroy()
           await db.query(`DROP POLICY IF EXISTS "${policyName}_select" ON storage.objects`)
           await db.query(`DROP POLICY IF EXISTS "${policyName}_delete" ON storage.objects`)
-          await connection.dispose()
+          connection.dispose()
           await client
             .send(
               new DeleteObjectsCommand({
@@ -2344,6 +2524,9 @@ describe('S3 Protocol', () => {
           CopySource: `${bucketName}/test-copy-1.jpg`,
           ContentType: 'image/png',
           CacheControl: 'max-age=2009',
+          Metadata: {
+            color: 'blue',
+          },
           MetadataDirective: 'REPLACE',
         })
 
@@ -2358,6 +2541,33 @@ describe('S3 Protocol', () => {
         const headObj = await client.send(headObjectCommand)
         expect(headObj.ContentType).toBe('image/png')
         expect(headObj.CacheControl).toBe('max-age=2009')
+        expect(headObj.Metadata).toMatchObject({ color: 'blue' })
+      })
+
+      it('will not preserve omitted metadata when replacing it', async () => {
+        const bucketName = await createBucket(client)
+        await uploadFile(client, bucketName, 'test-copy-1.jpg', 1)
+
+        await client.send(
+          new CopyObjectCommand({
+            Bucket: bucketName,
+            Key: 'test-copied-2.jpg',
+            CopySource: `${bucketName}/test-copy-1.jpg`,
+            CacheControl: 'max-age=2009',
+            MetadataDirective: 'REPLACE',
+          })
+        )
+
+        const copiedObject = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: 'test-copied-2.jpg',
+          })
+        )
+        await copiedObject.Body?.transformToByteArray()
+
+        expect(copiedObject.CacheControl).toBe('max-age=2009')
+        expect(copiedObject.ContentType).toBe('binary/octet-stream')
       })
 
       it('will allow copying an object in the same path, just altering its metadata', async () => {
@@ -2853,18 +3063,35 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const copyPart = new UploadPartCopyCommand({
-          Bucket: bucket,
-          Key: newKey,
-          UploadId: resp.UploadId,
-          PartNumber: 1,
-          CopySource: `${bucket}/${sourceKey}`,
-          CopySourceRange: `bytes=0-${1024 * 4}`,
+        const copySource = `${bucket}/${sourceKey}`
+        const copySourceRange = `bytes=0-${1024 * 4}`
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${newKey}`,
+          method: 'PUT',
+          query: {
+            partNumber: '1',
+            uploadId: resp.UploadId!,
+          },
+          headers: {
+            'x-amz-copy-source': copySource,
+            'x-amz-copy-source-range': copySourceRange,
+          },
         })
+        const rawResponse = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            accept: 'application/xml',
+          },
+        })
+        const rawBody = (await rawResponse.text()).replace(/^<\?xml[^>]*\?>/, '')
 
-        const copyResp = await client.send(copyPart)
-        expect(copyResp.CopyPartResult?.ETag).toBeTruthy()
-        expect(copyResp.CopyPartResult?.LastModified).toBeTruthy()
+        expect(rawResponse.status).toBe(200)
+        expect(rawBody).toMatch(/^<CopyPartResult(?:\s[^>]*)?>/)
+        expect(rawBody).toContain('<ETag>')
+        expect(rawBody).toContain('<LastModified>')
+        expect(rawBody).toMatch(/<\/CopyPartResult>$/)
 
         const listPartsCmd = new ListPartsCommand({
           Bucket: bucket,
@@ -3174,7 +3401,7 @@ describe('S3 Protocol', () => {
 describe('Migration compatibility', () => {
   describe('integration', () => {
     const { tenantId } = getConfig()
-    let connection: PgTenantConnection
+    let connection: TenantConnection
     let bucketId: string
 
     beforeAll(async () => {
@@ -3194,7 +3421,7 @@ describe('Migration compatibility', () => {
     afterAll(async () => {
       const db = new StoragePgDB(connection, { tenantId, host: 'localhost' })
       await db.deleteBucket(bucketId)
-      await connection.dispose()
+      connection.dispose()
     })
 
     const makeDB = (latestMigration?: keyof typeof DBMigration) =>

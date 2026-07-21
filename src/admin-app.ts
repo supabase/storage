@@ -1,10 +1,12 @@
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
+import { lastLocalMigrationName } from '@internal/database/migrations'
 import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'
 import { getGlobal } from '@platformatic/globals'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, schemas, setErrorHandler } from './http'
+import { finiteSwaggerTransform, withFiniteAjv } from './http/finite'
 import {
   createOpenApiTransform,
   dedupeTrailingSlashPaths,
@@ -18,13 +20,15 @@ interface buildOpts extends FastifyServerOptions {
 const { version, prometheusMetricsEnabled } = getConfig()
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
-  const app = fastify(opts)
+  const app = fastify(withFiniteAjv(opts))
   const isRunningUnderWatt = typeof getGlobal()?.applicationId === 'string'
 
   if (opts.exposeDocs) {
+    const transformOpenApiSchema = createOpenApiTransform()
+
     app.register(fastifySwagger, {
       exposeHeadRoutes: true,
-      transform: createOpenApiTransform(),
+      transform: (params) => finiteSwaggerTransform({ ...params, ...transformOpenApiSchema(params) }),
       transformObject: dedupeTrailingSlashPaths,
       refResolver: { buildLocalReference: nameSchemaByDollarId },
       openapi: {
@@ -66,10 +70,15 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(plugins.requestContext)
   app.register(plugins.signals)
   app.register(plugins.adminTenantId)
-  app.register(plugins.logRequest({ excludeUrls: ['/status', '/metrics', '/health', '/version'] }))
+  app.register(
+    plugins.logRequest({
+      excludeUrls: new Set(['/status', '/metrics', '/health', '/version', '/migration-version']),
+    })
+  )
   app.register(routes.tenants, { prefix: 'tenants' })
   app.register(routes.objects, { prefix: 'tenants' })
   app.register(routes.jwks, { prefix: 'tenants' })
+  app.register(routes.icebergAdmin, { prefix: 'tenants' })
   app.register(routes.migrations, { prefix: 'migrations' })
   if (isRunningUnderWatt) {
     app.register(routes.pprof, { prefix: 'debug/pprof' })
@@ -84,6 +93,16 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
 
   app.get('/version', (_, reply) => {
     reply.send(version)
+  })
+  app.register(async (protectedRoutes) => {
+    plugins.registerApiKeyAuth(protectedRoutes)
+    protectedRoutes.get(
+      '/migration-version',
+      { schema: { tags: ['migration'] } },
+      async (_, reply) => {
+        reply.send({ migrationVersion: await lastLocalMigrationName() })
+      }
+    )
   })
   app.get('/status', async (_, response) => response.status(200).send())
 

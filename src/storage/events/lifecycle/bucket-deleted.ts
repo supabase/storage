@@ -1,6 +1,5 @@
 import { multitenantPgExecutor } from '@internal/database'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
-import { logger } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import { DeleteIcebergResources } from '@storage/events/iceberg/delete-iceberg-resources'
 import { BucketType } from '@storage/limits'
@@ -38,7 +37,7 @@ export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
       const eventStorage = storage
 
       const metastore = new PgMetastore(
-        isMultitenant ? multitenantPgExecutor : eventStorage.db.connection.pool.acquire(),
+        isMultitenant ? multitenantPgExecutor : eventStorage.db.connection,
         {
           multiTenant: isMultitenant,
           schema: isMultitenant ? 'public' : 'storage',
@@ -85,12 +84,7 @@ export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
       })
     } finally {
       if (storage) {
-        await storage.db.destroyConnection().catch((e) => {
-          logger.error(
-            { error: e, sbReqId: job.data.sbReqId },
-            `[BucketDeleted] ${job.data.tenant.ref} - FAILED DISPOSING CONNECTION`
-          )
-        })
+        storage.db.destroyConnection()
       }
     }
   }

@@ -97,51 +97,35 @@ describe('validateXRobotsTag', () => {
     })
   })
 
-  describe('max-snippet parametric rule', () => {
-    it('should accept valid max-snippet with number', () => {
-      expect(() => validateXRobotsTag('max-snippet: 50')).not.toThrow()
+  describe.each(['max-snippet', 'max-video-preview'])('%s parametric rule', (ruleName) => {
+    it.each(['50', '0', '-1'])('should accept integer value "%s"', (value) => {
+      expect(() => validateXRobotsTag(`${ruleName}: ${value}`)).not.toThrow()
     })
 
-    it('should accept max-snippet with 0', () => {
-      expect(() => validateXRobotsTag('max-snippet: 0')).not.toThrow()
-    })
-
-    it('should throw for max-snippet with negative number', () => {
-      expect(() => validateXRobotsTag('max-snippet: -5')).toThrow(
-        'X-Robots-Tag "max-snippet" value must be a non-negative number'
+    it.each([
+      '-2',
+      'abc',
+      '-0.5',
+      '-1.5',
+      '50a',
+      '0x10',
+      '1e3',
+    ])('should throw for invalid integer value "%s"', (value) => {
+      expect(() => validateXRobotsTag(`${ruleName}: ${value}`)).toThrow(
+        `X-Robots-Tag "${ruleName}" value must be an integer >= -1`
       )
     })
 
-    it('should throw for max-snippet with non-numeric value', () => {
-      expect(() => validateXRobotsTag('max-snippet: abc')).toThrow(
-        'X-Robots-Tag "max-snippet" value must be a non-negative number'
-      )
-    })
-
-    it('should throw for max-snippet without value', () => {
-      expect(() => validateXRobotsTag('max-snippet:')).toThrow(
-        'X-Robots-Tag rule "max-snippet" requires a value'
-      )
-    })
-
-    it('should throw for max-snippet with whitespace-only value', () => {
-      expect(() => validateXRobotsTag('max-snippet:   ')).toThrow(
-        'X-Robots-Tag rule "max-snippet" requires a value'
+    it.each(['', '   '])('should throw for missing value "%s"', (value) => {
+      expect(() => validateXRobotsTag(`${ruleName}: ${value}`)).toThrow(
+        `X-Robots-Tag rule "${ruleName}" requires a value`
       )
     })
   })
 
   describe('max-image-preview parametric rule', () => {
-    it('should accept "none"', () => {
-      expect(() => validateXRobotsTag('max-image-preview: none')).not.toThrow()
-    })
-
-    it('should accept "standard"', () => {
-      expect(() => validateXRobotsTag('max-image-preview: standard')).not.toThrow()
-    })
-
-    it('should accept "large"', () => {
-      expect(() => validateXRobotsTag('max-image-preview: large')).not.toThrow()
+    it.each(['none', 'standard', 'large'])('should accept "%s"', (value) => {
+      expect(() => validateXRobotsTag(`max-image-preview: ${value}`)).not.toThrow()
     })
 
     it('should throw for invalid value', () => {
@@ -153,38 +137,6 @@ describe('validateXRobotsTag', () => {
     it('should throw for missing value', () => {
       expect(() => validateXRobotsTag('max-image-preview:')).toThrow(
         'X-Robots-Tag rule "max-image-preview" requires a value'
-      )
-    })
-  })
-
-  describe('max-video-preview parametric rule', () => {
-    it('should accept positive number', () => {
-      expect(() => validateXRobotsTag('max-video-preview: 30')).not.toThrow()
-    })
-
-    it('should accept 0', () => {
-      expect(() => validateXRobotsTag('max-video-preview: 0')).not.toThrow()
-    })
-
-    it('should accept -1 (no limit)', () => {
-      expect(() => validateXRobotsTag('max-video-preview: -1')).not.toThrow()
-    })
-
-    it('should throw for number less than -1', () => {
-      expect(() => validateXRobotsTag('max-video-preview: -2')).toThrow(
-        'X-Robots-Tag "max-video-preview" value must be a number >= -1'
-      )
-    })
-
-    it('should throw for non-numeric value', () => {
-      expect(() => validateXRobotsTag('max-video-preview: abc')).toThrow(
-        'X-Robots-Tag "max-video-preview" value must be a number >= -1'
-      )
-    })
-
-    it('should throw for missing value', () => {
-      expect(() => validateXRobotsTag('max-video-preview:')).toThrow(
-        'X-Robots-Tag rule "max-video-preview" requires a value'
       )
     })
   })
@@ -207,6 +159,12 @@ describe('validateXRobotsTag', () => {
     it('should accept RFC 822 date followed by another rule', () => {
       expect(() =>
         validateXRobotsTag('unavailable_after: Wed, 03 Dec 2025 13:09:53 GMT, noindex')
+      ).not.toThrow()
+    })
+
+    it('should accept extra whitespace before an RFC 822 date followed by another rule', () => {
+      expect(() =>
+        validateXRobotsTag('unavailable_after:  Wed, 03 Dec 2025 13:09:53 GMT, noindex')
       ).not.toThrow()
     })
 

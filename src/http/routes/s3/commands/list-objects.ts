@@ -17,7 +17,7 @@ const ListObjectsV2Input = {
       'list-type': { type: 'string', enum: ['2'] },
       delimiter: { type: 'string' },
       'encoding-type': { type: 'string', enum: ['url'] },
-      'max-keys': { type: 'number' },
+      'max-keys': { type: 'integer', minimum: 0, finite: true },
       prefix: { type: 'string' },
       'continuation-token': { type: 'string' },
       'start-after': { type: 'string' },
@@ -40,7 +40,7 @@ const ListObjectsInput = {
     properties: {
       delimiter: { type: 'string' },
       'encoding-type': { type: 'string', enum: ['url'] },
-      'max-keys': { type: 'number' },
+      'max-keys': { type: 'integer', minimum: 0, finite: true },
       prefix: { type: 'string' },
       marker: { type: 'string' },
     },

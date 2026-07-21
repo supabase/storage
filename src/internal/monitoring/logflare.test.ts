@@ -20,7 +20,7 @@ describe('logflare helpers', () => {
     vi.resetModules()
   })
 
-  it('promotes project and sbReqId (as request_id) onto the prepared payload', async () => {
+  it('promotes project, sbReqId, traceId, and spanId onto the prepared payload', async () => {
     defaultPreparePayloadMock.mockReturnValue({
       log_entry: 'hello',
       metadata: { level: 'info' },
@@ -31,6 +31,8 @@ describe('logflare helpers', () => {
     const payload = {
       project: 'tenant-a',
       sbReqId: 'sb-req-123',
+      traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
+      spanId: '00f067aa0ba902b7',
       msg: { text: 'hello' },
     }
 
@@ -39,11 +41,13 @@ describe('logflare helpers', () => {
       metadata: { level: 'info' },
       project: 'tenant-a',
       request_id: 'sb-req-123',
+      trace_id: '4bf92f3577b34da6a3ce929d0e0e4736',
+      span_id: '00f067aa0ba902b7',
     })
     expect(defaultPreparePayloadMock).toHaveBeenCalledWith(payload, meta)
   })
 
-  it('leaves project and request_id undefined when they are missing', async () => {
+  it('leaves project, request_id, trace_id, and span_id undefined when they are missing', async () => {
     defaultPreparePayloadMock.mockReturnValue({
       log_entry: 'hello',
       metadata: {},
@@ -59,6 +63,8 @@ describe('logflare helpers', () => {
       metadata: {},
       project: undefined,
       request_id: undefined,
+      trace_id: undefined,
+      span_id: undefined,
     })
   })
 
@@ -71,5 +77,47 @@ describe('logflare helpers', () => {
     onError({}, err)
 
     expect(errorSpy).toHaveBeenCalledWith('[Logflare][Error] boom - stack-trace')
+  })
+
+  it('includes response diagnostics without logging the full batch', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { onError } = await import('./logflare')
+    const err = Object.assign(new Error('boom'), {
+      response: { status: 422 },
+      data: { error: 'invalid payload' },
+    })
+    err.stack = 'stack-trace'
+
+    onError(
+      {
+        batch: [
+          { metadata: { context: { type: 'request' } }, sensitive: 'hidden' },
+          { metadata: { context: { type: 'event' } } },
+        ],
+      },
+      err
+    )
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[Logflare][Error] boom (status=422 data={"error":"invalid payload"} batchSize=2 batchTypes=request,event) - stack-trace'
+    )
+    expect(errorSpy.mock.calls[0]?.[0]).not.toContain('hidden')
+  })
+
+  it('does not throw when response diagnostics are not serializable', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { onError } = await import('./logflare')
+    const data: { self?: unknown } = {}
+    data.self = data
+    const err = Object.assign(new Error('boom'), {
+      response: { status: 422 },
+      data,
+    })
+    err.stack = 'stack-trace'
+
+    expect(() => onError({}, err)).not.toThrow()
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[Logflare][Error] boom (status=422 data=[unserializable]) - stack-trace'
+    )
   })
 })

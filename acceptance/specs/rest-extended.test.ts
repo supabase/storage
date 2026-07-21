@@ -24,6 +24,8 @@ interface BucketResponse {
 
 interface ObjectInfoResponse {
   bucket_id?: string
+  cache_control?: string | null
+  content_type?: string | null
   metadata?: Record<string, unknown> | null
   name?: string
 }
@@ -241,6 +243,7 @@ describeAcceptance(
       const updatedPayload = `${payload}-updated`
       const signedPayload = `${payload}-signed`
       const trackedKeys = [objectKey, signedUploadKey, copyKey, movedKey]
+      const httpRetries = config.target === 'remote' ? 10 : 0
 
       try {
         await createRestBucket(bucketName, { isPublic: false })
@@ -456,7 +459,7 @@ describeAcceptance(
         await client.request(
           'GET',
           `/object/authenticated/${bucketName}/${encodePathSegments(copyKey)}`,
-          { expectedStatus: [400, 404], token }
+          { expectedStatus: [400, 404], token, retries: httpRetries }
         )
 
         const deleted = await client.request<unknown[]>('DELETE', `/object/${bucketName}`, {
@@ -476,7 +479,7 @@ describeAcceptance(
         await client.request(
           'GET',
           `/object/authenticated/${bucketName}/${encodePathSegments(objectKey)}`,
-          { expectedStatus: [400, 404], token }
+          { expectedStatus: [400, 404], token, retries: httpRetries }
         )
 
         const missingHead = await client.request(
@@ -510,6 +513,7 @@ describeAcceptance(
         runId: config.runId,
         nested: { value: 'alpha' },
       }
+      const httpRetries = config.target === 'remote' ? 10 : 0
 
       try {
         await createRestBucket(sourceBucket, { isPublic: false })
@@ -719,7 +723,7 @@ describeAcceptance(
         await client.request(
           'GET',
           `/object/authenticated/${sourceBucket}/${encodePathSegments(bravoKey)}`,
-          { expectedStatus: [400, 404], token }
+          { expectedStatus: [400, 404], token, retries: httpRetries }
         )
 
         const moved = await client.request(
@@ -731,6 +735,75 @@ describeAcceptance(
       } finally {
         await cleanupRestResources(sourceBucket, sourceKeys, client)
         await cleanupRestResources(destinationBucket, destinationKeys, client)
+      }
+    })
+
+    it('serves updated cache-control after copy overwrites object metadata', async () => {
+      const client = createRestClient()
+      const token = requireServiceKey()
+      const bucketName = uniqueBucketName('copycache')
+      const objectKey = uniqueObjectKey('copy-cache')
+      const initialCacheControl = 'max-age=60'
+      const updatedCacheControl = 'max-age=604800'
+      const payload = 'cache-control-copy-body'
+
+      try {
+        await createRestBucket(bucketName, { isPublic: false })
+
+        await client.request('POST', `/object/${bucketName}/${encodePathSegments(objectKey)}`, {
+          body: payload,
+          expectedStatus: 200,
+          headers: {
+            'cache-control': initialCacheControl,
+            'content-type': 'text/plain',
+            'x-upsert': 'true',
+          },
+          token,
+        })
+
+        const beforeCopy = await client.request(
+          'GET',
+          `/object/authenticated/${bucketName}/${encodePathSegments(objectKey)}`,
+          { expectedStatus: 200, token }
+        )
+        expect(beforeCopy.body).toBe(payload)
+        expect(cacheControlDirectives(beforeCopy.headers)).toContain(initialCacheControl)
+
+        await client.request('POST', '/object/copy', {
+          body: {
+            bucketId: bucketName,
+            copyMetadata: false,
+            destinationKey: objectKey,
+            metadata: {
+              cacheControl: updatedCacheControl,
+            },
+            sourceKey: objectKey,
+          },
+          expectedStatus: 200,
+          headers: {
+            'x-upsert': 'true',
+          },
+          token,
+        })
+
+        const afterCopy = await client.request(
+          'GET',
+          `/object/authenticated/${bucketName}/${encodePathSegments(objectKey)}`,
+          { expectedStatus: 200, token }
+        )
+        expect(afterCopy.body).toBe(payload)
+        expect(cacheControlDirectives(afterCopy.headers)).toContain(updatedCacheControl)
+        expect(afterCopy.headers.get('content-type')).toBe('text/plain')
+
+        const info = await client.request<ObjectInfoResponse>(
+          'GET',
+          `/object/info/authenticated/${bucketName}/${encodePathSegments(objectKey)}`,
+          { expectedStatus: 200, token }
+        )
+        expect(info.json?.cache_control).toBe(updatedCacheControl)
+        expect(info.json?.content_type).toBe('text/plain')
+      } finally {
+        await cleanupRestResources(bucketName, [objectKey], client)
       }
     })
 
@@ -827,4 +900,14 @@ describeAcceptance(
 
 function encodeMetadata(metadata: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(metadata)).toString('base64')
+}
+
+// Gateway may prepend directives such as `public` to the origin value.
+function cacheControlDirectives(headers: Headers): string[] {
+  return (
+    headers
+      .get('cache-control')
+      ?.split(',')
+      .map((directive) => directive.trim()) ?? []
+  )
 }

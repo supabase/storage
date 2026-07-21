@@ -75,6 +75,7 @@ export default async function routes(fastify: FastifyInstance) {
           typeof userMetadata === 'string' ? parseUserMetadata(userMetadata) : undefined,
         metadata,
         copyMetadata: request.body.copyMetadata ?? true,
+        preserveUnspecifiedFileMetadata: true,
         upsert: request.headers['x-upsert'] === 'true',
         uploadType: 'standard',
       })

@@ -4,7 +4,7 @@ import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 
 interface HeaderValidatorOptions {
-  excludeUrls?: string[]
+  excludeUrls?: Set<string>
 }
 
 /**
@@ -16,8 +16,10 @@ interface HeaderValidatorOptions {
 export const headerValidator = (options: HeaderValidatorOptions = {}) =>
   fastifyPlugin(
     async function headerValidatorPlugin(fastify: FastifyInstance) {
+      const excludeUrls = options.excludeUrls?.size ? options.excludeUrls : undefined
+
       fastify.addHook('onSend', (request: FastifyRequest, reply: FastifyReply, payload, done) => {
-        if (options.excludeUrls?.includes(request.url.toLowerCase())) {
+        if (excludeUrls?.has(request.url)) {
           done(null, payload)
           return
         }

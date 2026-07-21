@@ -29,7 +29,7 @@ const PutObjectInput = {
       'x-amz-content-sha256': { type: 'string' },
       'x-amz-date': { type: 'string' },
       'content-type': { type: 'string' },
-      'content-length': { type: 'integer' },
+      'content-length': { type: 'integer', finite: true },
       'cache-control': { type: 'string' },
       'content-disposition': { type: 'string' },
       'content-encoding': { type: 'string' },

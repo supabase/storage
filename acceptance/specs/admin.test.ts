@@ -36,7 +36,6 @@ interface TenantFeatures {
 interface TenantDetailResponse {
   anonKey?: string
   capabilities?: Record<string, unknown>
-  databasePoolMode?: string | null
   databasePoolUrl?: string | null
   databaseUrl?: string
   fileSizeLimit?: number
@@ -321,8 +320,23 @@ describeAcceptance(
       const tenantIdsToCleanup = new Set<string>()
 
       try {
+        const createTenantOverrides = config.adminReturnSensitiveData
+          ? {
+              fileSizeLimit: 1_048_576,
+            }
+          : {
+              fileSizeLimit: 1_048_576,
+              anonKey: 'abc',
+              databaseUrl: config.adminDatabaseUrlOverride ?? 'def',
+              jwtSecret: 'ghi',
+              serviceKey: 'jkl',
+            }
         await client.request('POST', `/tenants/${createdTenantId}`, {
-          body: buildTenantProvisionBody(sourceTenant.json, 1_048_576),
+          body: buildTenantProvisionBody(
+            sourceTenant.json,
+            createTenantOverrides,
+            config.adminReturnSensitiveData
+          ),
           expectedStatus: 201,
           headers,
         })
@@ -398,15 +412,45 @@ describeAcceptance(
           expect(reset.json?.message).toBe('Migrations reset')
         }
 
+        const putTenantOverrides = config.adminReturnSensitiveData
+          ? {
+              fileSizeLimit: 3_145_728,
+            }
+          : {
+              fileSizeLimit: 3_145_728,
+              anonKey: 'abc',
+              databaseUrl: config.adminDatabaseUrlOverride ?? 'def',
+              jwtSecret: 'ghi',
+              serviceKey: 'jkl',
+            }
         await client.request('PUT', `/tenants/${upsertedTenantId}`, {
-          body: buildTenantProvisionBody(sourceTenant.json, 3_145_728),
+          body: buildTenantProvisionBody(
+            sourceTenant.json,
+            putTenantOverrides,
+            config.adminReturnSensitiveData
+          ),
           expectedStatus: 204,
           headers,
         })
         tenantIdsToCleanup.add(upsertedTenantId)
 
+        const putTenantOverride2 = config.adminReturnSensitiveData
+          ? {
+              fileSizeLimit: 4_194_304,
+            }
+          : {
+              fileSizeLimit: 4_194_304,
+              anonKey: 'abc',
+              databaseUrl: config.adminDatabaseUrlOverride ?? 'def',
+              jwtSecret: 'ghi',
+              serviceKey: 'jkl',
+            }
         await client.request('PUT', `/tenants/${upsertedTenantId}`, {
-          body: buildTenantProvisionBody(sourceTenant.json, 4_194_304),
+          body: buildTenantProvisionBody(
+            sourceTenant.json,
+            putTenantOverride2,
+            config.adminReturnSensitiveData
+          ),
           expectedStatus: 204,
           headers,
         })
@@ -563,19 +607,17 @@ function uniqueTenantId(): string {
 
 function buildTenantProvisionBody(
   sourceTenant: TenantDetailResponse | undefined,
-  fileSizeLimit: number
+  overrides: Partial<TenantDetailResponse>,
+  returnSensitiveData: boolean
 ): Record<string, unknown> {
+  const checkExpectedSensitiveData = returnSensitiveData ? requireString : requireUndefined
   const body: Record<string, unknown> = {
-    anonKey: requireString(sourceTenant?.anonKey, 'anonKey'),
-    databaseUrl: requireString(sourceTenant?.databaseUrl, 'databaseUrl'),
+    anonKey: checkExpectedSensitiveData(sourceTenant?.anonKey, 'anonKey'),
+    databaseUrl: checkExpectedSensitiveData(sourceTenant?.databaseUrl, 'databaseUrl'),
     features: normalizeTenantFeatures(sourceTenant?.features),
-    fileSizeLimit,
-    jwtSecret: requireString(sourceTenant?.jwtSecret, 'jwtSecret'),
-    serviceKey: requireString(sourceTenant?.serviceKey, 'serviceKey'),
-  }
-
-  if (typeof sourceTenant?.databasePoolMode === 'string') {
-    body.databasePoolMode = sourceTenant.databasePoolMode
+    jwtSecret: checkExpectedSensitiveData(sourceTenant?.jwtSecret, 'jwtSecret'),
+    serviceKey: checkExpectedSensitiveData(sourceTenant?.serviceKey, 'serviceKey'),
+    ...overrides,
   }
 
   if (typeof sourceTenant?.databasePoolUrl === 'string') {
@@ -620,5 +662,12 @@ function requireString(value: unknown, name: string): string {
     throw new Error(`Admin tenant response did not include ${name}`)
   }
 
+  return value
+}
+
+function requireUndefined(value: unknown, name: string): unknown {
+  if (typeof value !== 'undefined') {
+    throw new Error(`Admin tenant response unexpectedly included ${name}`)
+  }
   return value
 }

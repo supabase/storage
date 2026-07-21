@@ -36,7 +36,7 @@ describe('Iceberg Catalog', () => {
 
     const { default: makeApp } = await import('../app')
     app = makeApp()
-    icebergMetastore = new PgMetastore(t.database.connection.pool.acquire(), {
+    icebergMetastore = new PgMetastore(t.database.connection, {
       multiTenant: false,
       schema: 'storage',
     })
@@ -48,7 +48,7 @@ describe('Iceberg Catalog', () => {
 
   afterAll(async () => {
     await app.close()
-    await t.database.connection.pool.destroy()
+    t.database.connection.dispose()
   })
 
   it('can create an analytic bucket', async () => {
@@ -108,7 +108,7 @@ describe('Iceberg Catalog', () => {
 
     expect(response.statusCode).toBe(200)
 
-    const deletedCatalog = await t.database.connection.pool.acquire().query<{
+    const deletedCatalog = await t.database.connection.query<{
       deleted_at: Date | string | null
     }>({
       text: `
@@ -166,7 +166,7 @@ describe('Iceberg Catalog', () => {
       db: {
         ...t.storage.db,
         connection: t.storage.db.connection,
-        destroyConnection: vi.fn().mockResolvedValue(undefined),
+        destroyConnection: vi.fn(),
       },
     } as unknown as typeof t.storage)
 

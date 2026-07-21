@@ -1,5 +1,5 @@
 import { fetchPprofStream } from '@internal/monitoring/pprof/client-http'
-import { writeMultipartPprofToFile } from '@internal/monitoring/pprof/download'
+import { writePprofCaptureToFile } from '@internal/monitoring/pprof/download'
 import { generateFlameArtifacts, resolveFlameMdFormat } from '@internal/monitoring/pprof/flame'
 import type { PprofRequestTargetType } from '@internal/monitoring/pprof/types'
 import path from 'path'
@@ -13,6 +13,8 @@ const PPROF_WORKER_ID = process.env.PPROF_WORKER_ID
 const PPROF_SOURCE_MAPS = process.env.PPROF_SOURCE_MAPS
 const PPROF_NODE_MODULES_SOURCE_MAPS = process.env.PPROF_NODE_MODULES_SOURCE_MAPS
 const PPROF_OUTPUT = process.env.PPROF_OUTPUT
+const PPROF_USAGE =
+  'Usage: tsx src/scripts/pprof-client.ts <profile[:seconds]|heap[:seconds]|heap-snapshot> [output-file]'
 
 export function parseBooleanEnv(value: string | undefined) {
   if (value === undefined) {
@@ -82,19 +84,29 @@ export function parseNonNegativeIntegerEnv(value: string | undefined, envName: s
 export function parsePprofTarget(
   value: string | undefined,
   defaultSeconds: number
-): { seconds: number; type: PprofRequestTargetType } {
+):
+  | { seconds: number; type: Exclude<PprofRequestTargetType, 'heap-snapshot'> }
+  | {
+      type: 'heap-snapshot'
+    } {
   if (!value) {
-    throw new Error(
-      'Usage: tsx src/scripts/pprof-client.ts <profile[:seconds]|heap[:seconds]> [output-file]'
-    )
+    throw new Error(PPROF_USAGE)
   }
 
   const [type, secondsValue, ...rest] = value.split(':')
 
-  if (rest.length > 0 || (type !== 'profile' && type !== 'heap')) {
-    throw new Error(
-      'Usage: tsx src/scripts/pprof-client.ts <profile[:seconds]|heap[:seconds]> [output-file]'
-    )
+  if (rest.length > 0 || (type !== 'profile' && type !== 'heap' && type !== 'heap-snapshot')) {
+    throw new Error(PPROF_USAGE)
+  }
+
+  if (type === 'heap-snapshot') {
+    if (secondsValue !== undefined) {
+      throw new Error(PPROF_USAGE)
+    }
+
+    return {
+      type,
+    }
   }
 
   if (secondsValue === undefined || secondsValue === '') {
@@ -113,6 +125,18 @@ export function parsePprofTarget(
     seconds,
     type,
   }
+}
+
+export function resolvePprofClientFlameMdFormat(
+  generateFlame: boolean,
+  target: ReturnType<typeof parsePprofTarget>,
+  value: string | undefined
+) {
+  if (!generateFlame || target.type === 'heap-snapshot') {
+    return undefined
+  }
+
+  return resolveFlameMdFormat(value)
 }
 
 function fail(message: string) {
@@ -151,17 +175,29 @@ async function main() {
     return
   }
 
-  const flameMdFormat = resolveFlameMdFormat(PPROF_FLAME_MD_FORMAT)
+  const flameMdFormat = resolvePprofClientFlameMdFormat(
+    generateFlame,
+    parsedTarget,
+    PPROF_FLAME_MD_FORMAT
+  )
 
-  const response = await fetchPprofStream({
-    adminUrl: ADMIN_URL,
-    apiKey: ADMIN_API_KEY,
-    nodeModulesSourceMaps: PPROF_NODE_MODULES_SOURCE_MAPS || undefined,
-    seconds: parsedTarget.seconds,
-    sourceMaps,
-    type: parsedTarget.type,
-    workerId,
-  })
+  const response =
+    parsedTarget.type === 'heap-snapshot'
+      ? await fetchPprofStream({
+          adminUrl: ADMIN_URL,
+          apiKey: ADMIN_API_KEY,
+          type: 'heap-snapshot',
+          workerId,
+        })
+      : await fetchPprofStream({
+          adminUrl: ADMIN_URL,
+          apiKey: ADMIN_API_KEY,
+          nodeModulesSourceMaps: PPROF_NODE_MODULES_SOURCE_MAPS || undefined,
+          seconds: parsedTarget.seconds,
+          sourceMaps,
+          type: parsedTarget.type,
+          workerId,
+        })
 
   const outputPath = outputArg
     ? path.resolve(outputArg)
@@ -169,15 +205,19 @@ async function main() {
       ? path.resolve(PPROF_OUTPUT)
       : undefined
 
-  const { outputPath: capturedProfilePath } = await writeMultipartPprofToFile(
+  const { outputPath: capturedProfilePath } = await writePprofCaptureToFile(
     response.stream,
-    response.contentType,
+    {
+      contentDisposition: response.contentDisposition,
+      contentType: response.contentType,
+      type: parsedTarget.type,
+    },
     {
       outputPath,
     }
   )
 
-  if (!generateFlame) {
+  if (!generateFlame || parsedTarget.type === 'heap-snapshot') {
     return
   }
 

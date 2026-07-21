@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import {
-  PgExecutor,
-  PgStatement,
-  PgTenantConnection,
-  PgTransaction,
+  type DatabaseExecutor,
+  type DatabaseStatement,
+  type DatabaseTransaction,
   quoteIdentifier,
   quoteQualifiedIdentifier,
+  type TenantConnection,
+  type TransactionOptions,
 } from '@internal/database'
 import { DBMigration, tenantHasMigrations } from '@internal/database/migrations'
 import { ERRORS, ErrorCode, isStorageError, StorageBackendError } from '@internal/errors'
@@ -24,11 +25,11 @@ import {
   ListBucketOptions,
   ScannerS3Key,
   SearchObjectOption,
-  TransactionOptions,
 } from './adapter'
 import { DBError, mapPgTransactionAbortedError, PgErrorContext } from './errors'
 
-const { databaseEngine, isMultitenant } = getConfig()
+const { databaseEngine, databaseStatementTimeout, isMultitenant, databaseHealthcheckUnscoped } =
+  getConfig()
 // Scanner cache tables are unlogged scratch tables, not session temp tables.
 // They must survive across pooled pg clients used by separate unscoped queries.
 const S3_KEYS_SCRATCH_TABLE_SCHEMA = 'storage'
@@ -47,9 +48,34 @@ interface PgDatabaseOptions {
   latestMigration?: keyof typeof DBMigration
   databaseEngine?: DatabaseEngine
   host: string
-  tnx?: PgTransaction
-  parentTnx?: PgTransaction
-  parentConnection?: PgTenantConnection
+  tnx?: DatabaseTransaction
+  parentTnx?: DatabaseTransaction
+  parentConnection?: TenantConnection
+}
+
+interface UnscopedQueryOptions {
+  readonly timeoutMs?: number
+}
+
+const HEALTHCHECK_SQL = 'SELECT id from storage.buckets limit 1'
+const HEALTHCHECK_QUERY_OPTIONS: UnscopedQueryOptions = Object.freeze({
+  timeoutMs: databaseStatementTimeout,
+})
+
+async function executeQuery<T extends QueryResultRow = QueryResultRow>(
+  db: DatabaseExecutor,
+  statement: string | DatabaseStatement,
+  signal?: AbortSignal
+) {
+  try {
+    return await db.query<T>(statement, { signal })
+  } catch (error) {
+    throw mapPgError(error, typeof statement === 'string' ? statement : statement.text)
+  }
+}
+
+function healthcheckProbe(db: DatabaseExecutor, signal?: AbortSignal) {
+  return executeQuery(db, HEALTHCHECK_SQL, signal)
 }
 
 class TestPermissionRollbackError extends Error {
@@ -59,6 +85,10 @@ class TestPermissionRollbackError extends Error {
     Object.setPrototypeOf(this, TestPermissionRollbackError.prototype)
   }
 }
+
+const testPermissionRollbackError = new TestPermissionRollbackError()
+testPermissionRollbackError.stack = undefined
+Object.freeze(testPermissionRollbackError)
 
 /**
  * Pg-backed storage metadata adapter.
@@ -72,7 +102,7 @@ export class StoragePgDB implements Database {
   public readonly latestMigration?: keyof typeof DBMigration
 
   constructor(
-    public readonly connection: PgTenantConnection,
+    public readonly connection: TenantConnection,
     private readonly options: PgDatabaseOptions
   ) {
     this.tenantHost = options.host
@@ -179,10 +209,10 @@ export class StoragePgDB implements Database {
     try {
       await this.withTransaction(async (db) => {
         result = await fn(db)
-        throw new TestPermissionRollbackError()
+        throw testPermissionRollbackError
       })
     } catch (e) {
-      if (e instanceof TestPermissionRollbackError) {
+      if (e === testPermissionRollbackError) {
         return result!
       }
       throw e
@@ -1272,7 +1302,7 @@ export class StoragePgDB implements Database {
   }
 
   private async waitObjectLockWithTopLevelLockTimeout(
-    db: PgExecutor,
+    db: DatabaseExecutor,
     hash: number,
     lockTimeout: number,
     signal?: AbortSignal
@@ -1537,7 +1567,10 @@ export class StoragePgDB implements Database {
     })
   }
 
-  private async dropStaleS3KeysScratchTables(db: PgExecutor, signal?: AbortSignal): Promise<void> {
+  private async dropStaleS3KeysScratchTables(
+    db: DatabaseExecutor,
+    signal?: AbortSignal
+  ): Promise<void> {
     const staleBefore = Date.now() - S3_KEYS_SCRATCH_TABLE_MAX_AGE_MS
     const result = await this.query<{ table_name: string }>(
       db,
@@ -1666,13 +1699,15 @@ export class StoragePgDB implements Database {
   }
 
   async healthcheck() {
-    await this.runQuery('Healthcheck', (db, signal) => {
-      return this.query(db, 'SELECT id from storage.buckets limit 1', signal)
-    })
+    if (databaseHealthcheckUnscoped) {
+      await this.runUnscopedQuery('Healthcheck', healthcheckProbe, HEALTHCHECK_QUERY_OPTIONS)
+    } else {
+      await this.runQuery('Healthcheck', healthcheckProbe)
+    }
   }
 
-  destroyConnection() {
-    return this.connection.dispose()
+  destroyConnection(): void {
+    this.connection.dispose()
   }
 
   /**
@@ -1752,7 +1787,7 @@ export class StoragePgDB implements Database {
 
   protected async runQuery<T>(
     queryName: string,
-    fn: (db: PgExecutor, signal?: AbortSignal) => Promise<T>
+    fn: (db: DatabaseExecutor, signal?: AbortSignal) => Promise<T>
   ): Promise<T> {
     const startTime = performance.now()
     const abortSignal = this.connection.getAbortSignal()
@@ -1883,31 +1918,53 @@ export class StoragePgDB implements Database {
 
   protected async runUnscopedQuery<T>(
     queryName: string,
-    fn: (db: PgExecutor, signal?: AbortSignal) => Promise<T>
+    fn: (db: DatabaseExecutor, signal?: AbortSignal) => Promise<T>,
+    options?: UnscopedQueryOptions
   ): Promise<T> {
     const startTime = performance.now()
-    const abortSignal = this.connection.getAbortSignal()
-    const recordDuration = this.createDurationRecorder(queryName, startTime, abortSignal)
+    const requestAbortSignal = this.connection.getAbortSignal()
+    const recordDuration = this.createDurationRecorder(queryName, startTime, requestAbortSignal)
+    const timeoutMs = normalizeTimeoutMs(options?.timeoutMs)
+
+    let controller: AbortController | undefined
+    let timer: NodeJS.Timeout | undefined
+    let onRequestAbort: (() => void) | undefined
+
+    if (timeoutMs !== undefined) {
+      controller = new AbortController()
+      timer = setTimeout(abortFromTimer, timeoutMs, controller)
+      timer.unref()
+
+      if (requestAbortSignal?.aborted) {
+        controller.abort()
+      } else if (requestAbortSignal) {
+        const timedController = controller
+        onRequestAbort = () => timedController.abort()
+        requestAbortSignal.addEventListener('abort', onRequestAbort, { once: true })
+      }
+    }
 
     try {
-      return await fn(this.connection.pool.acquire(), abortSignal)
+      return await fn(this.connection, controller?.signal ?? requestAbortSignal)
     } catch (e) {
       throw mapPgErrorWithQueryName(e, queryName)
     } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer)
+      }
+      if (onRequestAbort) {
+        requestAbortSignal?.removeEventListener('abort', onRequestAbort)
+      }
       recordDuration()
     }
   }
 
-  protected async query<T extends QueryResultRow = QueryResultRow>(
-    db: PgExecutor,
-    statement: string | PgStatement,
+  protected query<T extends QueryResultRow = QueryResultRow>(
+    db: DatabaseExecutor,
+    statement: string | DatabaseStatement,
     signal?: AbortSignal
   ) {
-    try {
-      return await db.query<T>(statement, { signal })
-    } catch (e) {
-      throw mapPgError(e, typeof statement === 'string' ? statement : statement.text)
-    }
+    return executeQuery<T>(db, statement, signal)
   }
 
   private createDurationRecorder(
@@ -1932,6 +1989,20 @@ export class StoragePgDB implements Database {
       })
     }
   }
+}
+
+function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined
+  }
+
+  return timeoutMs
+}
+
+// Static setTimeout callback taking the controller as an argument
+// so arming the deadline allocates no closure.
+function abortFromTimer(controller: AbortController): void {
+  controller.abort()
 }
 
 function selectColumns(columns: string | string[]): string {
@@ -2119,7 +2190,7 @@ function nextSavepointName(): string {
   return quoteIdentifier(`storage_pg_query_${randomUUID().replace(/-/g, '_')}`)
 }
 
-async function createSavepoint(tnx: PgTransaction, savepoint: string): Promise<void> {
+async function createSavepoint(tnx: DatabaseTransaction, savepoint: string): Promise<void> {
   const query = `SAVEPOINT ${savepoint}`
 
   try {
@@ -2129,7 +2200,7 @@ async function createSavepoint(tnx: PgTransaction, savepoint: string): Promise<v
   }
 }
 
-async function rollbackSavepoint(tnx: PgTransaction, savepoint: string): Promise<void> {
+async function rollbackSavepoint(tnx: DatabaseTransaction, savepoint: string): Promise<void> {
   await tnx.query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
   await tnx.query(`RELEASE SAVEPOINT ${savepoint}`)
 }

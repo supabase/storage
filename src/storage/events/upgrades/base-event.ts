@@ -1,4 +1,4 @@
-import { multitenantPgExecutor, PgTransaction } from '@internal/database'
+import { type DatabaseTransaction, multitenantPgExecutor } from '@internal/database'
 import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload } from '@internal/queue'
@@ -9,7 +9,7 @@ import { getConfig } from '../../../config'
 const { isMultitenant } = getConfig()
 
 export type UpgradeBaseEventPayload = BasePayload
-export type UpgradeTransaction = PgTransaction
+export type UpgradeTransaction = DatabaseTransaction
 
 export abstract class UpgradeBaseEvent<T extends UpgradeBaseEventPayload> extends BaseEvent<T> {
   static getQueueOptions(): PgBossQueue {

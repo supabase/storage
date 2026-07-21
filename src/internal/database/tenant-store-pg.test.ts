@@ -1,5 +1,5 @@
 import { spyOnAbortSignalAny, spyOnAbortSignalTimeout } from '../../test/utils/abort-signal'
-import type { PgExecutor, PgStatement } from './pg-connection'
+import type { DatabaseExecutor, DatabaseStatement } from './connection'
 import { TenantConfigStorePg } from './tenant-store-pg'
 
 function createTenantStore() {
@@ -7,16 +7,16 @@ function createTenantStore() {
     rows: [],
     rowCount: 1,
   })
-  const store = new TenantConfigStorePg({ query } as unknown as PgExecutor)
+  const store = new TenantConfigStorePg({ query } as unknown as DatabaseExecutor)
 
   return { query, store }
 }
 
-function getLastStatement(query: ReturnType<typeof vi.fn>): PgStatement {
+function getLastStatement(query: ReturnType<typeof vi.fn>): DatabaseStatement {
   const [statement] = query.mock.calls.at(-1) || []
 
   if (!statement || typeof statement === 'string') {
-    throw new Error('Expected a PgStatement query')
+    throw new Error('Expected a DatabaseStatement query')
   }
 
   return statement
@@ -113,7 +113,7 @@ describe('TenantConfigStorePg', () => {
     await (
       store as unknown as {
         query(
-          statement: PgStatement,
+          statement: DatabaseStatement,
           options: { signal: AbortSignal; timeoutMs: number }
         ): Promise<unknown>
       }
@@ -133,7 +133,9 @@ describe('TenantConfigStorePg', () => {
       rows: [],
       rowCount: 1,
     })
-    const store = new ConfiguredTenantConfigStorePg({ query } as unknown as PgExecutor)
+    const store = new ConfiguredTenantConfigStorePg({
+      query,
+    } as unknown as DatabaseExecutor)
     const { timeoutSignal, timeoutSpy } = spyOnAbortSignalTimeout()
 
     try {

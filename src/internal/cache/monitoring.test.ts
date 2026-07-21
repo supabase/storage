@@ -54,6 +54,27 @@ describe('cache telemetry helpers', () => {
     expect(recordSpy).not.toHaveBeenCalled()
   })
 
+  test('recordMetrics false uses plain get without outcome lookup', () => {
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
+    const inner = createLruCache<string, { ok: boolean }>({
+      max: 2,
+    })
+    const outcomeSpy = vi.spyOn(inner, 'getWithOutcome')
+    const cache = monitorCache(TENANT_CONFIG_CACHE_NAME, inner)
+
+    cache.set('hit', { ok: true })
+
+    expect(cache.get('hit', { recordMetrics: false })).toEqual({ ok: true })
+    expect(outcomeSpy).not.toHaveBeenCalled()
+    expect(recordSpy).not.toHaveBeenCalled()
+
+    expect(cache.get('hit')).toEqual({ ok: true })
+    expect(outcomeSpy).toHaveBeenCalledTimes(1)
+    expect(recordSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME, 'hit')
+
+    cache.dispose()
+  })
+
   test('records stale cache reads when allowStale is enabled', () => {
     const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {

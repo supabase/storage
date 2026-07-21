@@ -128,6 +128,7 @@ describe('Pg database foundation', () => {
         request_path: string
         storage_operation: string
         allow_delete: string
+        statement_timeout: string
       }>({
         text: `
           SELECT
@@ -135,14 +136,10 @@ describe('Pg database foundation', () => {
             current_setting('request.jwt.claim.role', true) as jwt_role,
             current_setting('request.path', true) as request_path,
             current_setting('storage.operation', true) as storage_operation,
-            current_setting('storage.allow_delete_query', true) as allow_delete
+            current_setting('storage.allow_delete_query', true) as allow_delete,
+            current_setting('statement_timeout') as statement_timeout
         `,
       })
-      // Multigres enforces statement_timeout here, but current_setting still
-      // reports 0; SHOW reflects the effective transaction-local GUC.
-      const timeout = await transaction.query<{ statement_timeout: string }>(
-        'SHOW statement_timeout'
-      )
 
       expect(result.rows[0]).toEqual(
         expect.objectContaining({
@@ -151,9 +148,9 @@ describe('Pg database foundation', () => {
           request_path: '/pg-foundation',
           storage_operation: 'pg-foundation-test',
           allow_delete: 'true',
+          statement_timeout: '1234ms',
         })
       )
-      expect(timeout.rows[0].statement_timeout).toBe('1234ms')
 
       await transaction.commit()
     } catch (e) {
@@ -216,8 +213,8 @@ describe('Pg database foundation', () => {
       isExternalPool: false,
     })
 
-    const first = await PgTenantConnection.create(settings)
-    const second = await PgTenantConnection.create(settings)
+    const first = PgTenantConnection.create(settings)
+    const second = PgTenantConnection.create(settings)
 
     expect(second.pool).toBe(first.pool)
 
@@ -237,15 +234,15 @@ describe('Pg database foundation', () => {
       isExternalPool: true,
     })
 
-    const first = await PgTenantConnection.create(settings)
-    const second = await PgTenantConnection.create(settings)
+    const first = PgTenantConnection.create(settings)
+    const second = PgTenantConnection.create(settings)
 
     expect(second.pool).toBe(first.pool)
 
     await first.pool.acquire().query('SELECT 1')
     expect(first.pool.getPoolStats()).not.toBeNull()
 
-    await first.dispose()
+    first.dispose()
     expect(first.pool.getPoolStats()).not.toBeNull()
     await expect(first.query('SELECT 1')).rejects.toThrow(
       'Cannot use a disposed PgTenantConnection'
@@ -253,7 +250,7 @@ describe('Pg database foundation', () => {
 
     // The shared pool stays usable for connections that were not disposed.
     await second.pool.acquire().query('SELECT 1')
-    await second.dispose()
+    second.dispose()
     await PgTenantConnection.poolManager.destroy('pg-foundation-external-pool')
   })
 
@@ -270,7 +267,44 @@ describe('Pg database foundation', () => {
       const result = await connection.pool.acquire().query<{ n: number }>('SELECT 1 AS n')
       expect(result.rows[0].n).toBe(1)
     } finally {
-      await connection.dispose()
+      connection.dispose()
+    }
+  })
+
+  it('reuses the single-tenant pool after disposing a request-scoped connection', async () => {
+    expect(getConfig().isMultitenant).toBe(false)
+
+    const superUser = await getServiceKeyUser(tenantId)
+    const createRequestConnection = () =>
+      getPgPostgresConnection({
+        tenantId,
+        host: 'localhost',
+        user: superUser,
+        superUser,
+      })
+
+    const first = await createRequestConnection()
+    await first.query('SELECT 1')
+    expect(first.pool.getPoolStats()).toEqual({ total: 1, used: 0 })
+
+    first.dispose()
+    expect(first.pool.getPoolStats()).toEqual({ total: 1, used: 0 })
+
+    const second = await createRequestConnection()
+
+    try {
+      expect(second).not.toBe(first)
+      expect(second.pool).toBe(first.pool)
+      expect(second.pool.getPoolStats()).toEqual({ total: 1, used: 0 })
+      await expect(first.query('SELECT 1')).rejects.toThrow(
+        'Cannot use a disposed PgTenantConnection'
+      )
+      await expect(second.query<{ n: number }>('SELECT 2 AS n')).resolves.toMatchObject({
+        rows: [{ n: 2 }],
+      })
+      expect(second.pool.getPoolStats()).toEqual({ total: 1, used: 0 })
+    } finally {
+      second.dispose()
     }
   })
 })

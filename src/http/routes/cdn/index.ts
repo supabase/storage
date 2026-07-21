@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
-import { db, registerJwtAuth, requireTenantFeature, storage } from '../../plugins'
+import { registerJwtAuth, requireTenantFeature } from '../../plugins'
 import purgeCache from './purgeCache'
 
 const { dbServiceRole } = getConfig()
@@ -11,9 +11,6 @@ export default async function routes(fastify: FastifyInstance) {
       enforceJwtRoles: [dbServiceRole],
     })
     fastify.register(requireTenantFeature('purgeCache'))
-
-    fastify.register(db)
-    fastify.register(storage)
 
     fastify.register(purgeCache)
   })

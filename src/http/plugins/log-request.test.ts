@@ -111,6 +111,66 @@ describe('log-request plugin', () => {
     expect(requestLogLine).not.toContain('"request_id"')
   })
 
+  it('threads traceId and spanId from a valid traceparent header into the request log data', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/request-log',
+      headers: {
+        traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const requestLogLine = lines.find((line) => line.includes('"type":"request"'))
+    expect(requestLogLine).toBeDefined()
+
+    const requestLog = JSON.parse(requestLogLine ?? '{}')
+    expect(requestLog.traceId).toBe('4bf92f3577b34da6a3ce929d0e0e4736')
+    expect(requestLog.spanId).toBe('00f067aa0ba902b7')
+    expect(requestLog).not.toHaveProperty('trace_id')
+    expect(requestLog).not.toHaveProperty('span_id')
+  })
+
+  it('logs empty traceId and spanId values when traceparent is malformed', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/request-log',
+      headers: {
+        traceparent: 'malformed-value',
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const requestLogLine = lines.find((line) => line.includes('"type":"request"'))
+    expect(requestLogLine).toBeDefined()
+
+    const requestLog = JSON.parse(requestLogLine ?? '{}')
+    expect(requestLog.traceId).toBe('')
+    expect(requestLog.spanId).toBe('')
+    expect(requestLog).not.toHaveProperty('trace_id')
+    expect(requestLog).not.toHaveProperty('span_id')
+  })
+
+  it('logs empty traceId and spanId values when traceparent is missing', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/request-log',
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const requestLogLine = lines.find((line) => line.includes('"type":"request"'))
+    expect(requestLogLine).toBeDefined()
+
+    const requestLog = JSON.parse(requestLogLine ?? '{}')
+    expect(requestLog.traceId).toBe('')
+    expect(requestLog.spanId).toBe('')
+    expect(requestLog).not.toHaveProperty('trace_id')
+    expect(requestLog).not.toHaveProperty('span_id')
+  })
+
   it('threads tenant context into the request log data', async () => {
     const response = await app.inject({
       method: 'GET',
@@ -158,6 +218,31 @@ describe('log-request plugin', () => {
       bucketId: 'bucket-a',
       objectName: 'file.txt',
     })
+  })
+
+  it('logs executionTime as integer milliseconds', async () => {
+    let now = 100.25
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => {
+      now += 0.501
+      return now
+    })
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/request-log',
+    })
+
+    expect(response.statusCode).toBe(200)
+
+    const requestLogLine = lines.find((line) => line.includes('"type":"request"'))
+    expect(requestLogLine).toBeDefined()
+
+    const requestLog = JSON.parse(requestLogLine ?? '{}')
+
+    expect(requestLog.executionTime).toBeGreaterThan(0)
+    expect(Number.isInteger(requestLog.executionTime)).toBe(true)
+
+    nowSpy.mockRestore()
   })
 
   it('logs redacted urls without leaking sensitive request data', async () => {

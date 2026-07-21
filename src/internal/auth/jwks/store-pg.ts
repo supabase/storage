@@ -1,14 +1,14 @@
 import { getConfig } from '../../../config'
-import { PgTransaction, PgTransactionalExecutor } from '../../database/pg-connection'
+import type { DatabaseTransaction, DatabaseTransactionalExecutor } from '../../database/connection'
 import { logger, logSchema } from '../../monitoring'
 import { JWKSManagerStore, JWKStoreItem, PaginatedTenantItem } from './store'
 
 const { multitenantDatabaseQueryTimeout } = getConfig()
 
-export class JWKSManagerStorePg implements JWKSManagerStore<PgTransaction> {
-  constructor(private db: PgTransactionalExecutor) {}
+export class JWKSManagerStorePg implements JWKSManagerStore<DatabaseTransaction> {
+  constructor(private db: DatabaseTransactionalExecutor) {}
 
-  async transaction<T>(callback: (trx: PgTransaction) => Promise<T>): Promise<T> {
+  async transaction<T>(callback: (trx: DatabaseTransaction) => Promise<T>): Promise<T> {
     const trx = await this.db.beginTransaction()
 
     try {
@@ -34,7 +34,7 @@ export class JWKSManagerStorePg implements JWKSManagerStore<PgTransaction> {
     encryptedJwk: string,
     kind: string,
     idempotent = false,
-    trx?: PgTransaction
+    trx?: DatabaseTransaction
   ): Promise<string> {
     const db = trx || this.db
     const insertResult = await db.query<{ id: string }>(
@@ -89,7 +89,7 @@ export class JWKSManagerStorePg implements JWKSManagerStore<PgTransaction> {
     tenantId: string,
     id: string,
     newState: boolean,
-    trx?: PgTransaction
+    trx?: DatabaseTransaction
   ): Promise<boolean> {
     const db = trx || this.db
     const result = await db.query(
@@ -109,7 +109,11 @@ export class JWKSManagerStorePg implements JWKSManagerStore<PgTransaction> {
     return Boolean(result.rowCount && result.rowCount > 0)
   }
 
-  async listActive(tenantId: string, kind?: string, trx?: PgTransaction): Promise<JWKStoreItem[]> {
+  async listActive(
+    tenantId: string,
+    kind?: string,
+    trx?: DatabaseTransaction
+  ): Promise<JWKStoreItem[]> {
     const db = trx || this.db
     const result = await db.query<JWKStoreItem>(
       {

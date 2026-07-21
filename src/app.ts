@@ -4,6 +4,7 @@ import { bucketSchema, objectSchema } from '@storage/schemas'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, schemas, setErrorHandler } from './http'
+import { finiteSwaggerTransform, withFiniteAjv } from './http/finite'
 import {
   createOpenApiTransform,
   dedupeTrailingSlashPaths,
@@ -17,7 +18,7 @@ interface buildOpts extends FastifyServerOptions {
 const { version, keepAliveTimeout, headersTimeout, isMultitenant } = getConfig()
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
-  const app = fastify(opts)
+  const app = fastify(withFiniteAjv(opts))
 
   app.addContentTypeParser('*', function (request, payload, done) {
     done(null)
@@ -30,9 +31,11 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   // app.register(fastifyCors)
 
   if (opts.exposeDocs) {
+    const transformOpenApiSchema = createOpenApiTransform()
+
     app.register(fastifySwagger, {
       exposeHeadRoutes: true,
-      transform: createOpenApiTransform(),
+      transform: (params) => finiteSwaggerTransform({ ...params, ...transformOpenApiSchema(params) }),
       transformObject: dedupeTrailingSlashPaths,
       refResolver: { buildLocalReference: nameSchemaByDollarId },
       openapi: {
@@ -76,14 +79,14 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
     })
   }
 
-  const excludedRoutesFromMonitoring = [
+  const excludedRoutesFromMonitoring = new Set([
     '/status',
     '/metrics',
     '/health',
     '/healthcheck',
     '/version',
     '/documentation',
-  ]
+  ])
 
   // add in common schemas
   app.addSchema(schemas.authSchema)

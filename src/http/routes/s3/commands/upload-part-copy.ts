@@ -16,7 +16,7 @@ const UploadPartCopyInput = {
     type: 'object',
     properties: {
       uploadId: { type: 'string' },
-      partNumber: { type: 'number', minimum: 1, maximum: 1000 },
+      partNumber: { type: 'integer', minimum: 1, maximum: 10000, finite: true },
     },
     required: ['uploadId', 'partNumber'],
   },

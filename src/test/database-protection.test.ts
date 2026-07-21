@@ -13,12 +13,12 @@ describe('Database Protection Triggers', () => {
   })
 
   afterAll(async () => {
-    await tHelper.database.connection.dispose()
+    tHelper.database.connection.dispose()
   })
 
   describe('Direct DELETE protection (migration 0050)', () => {
     it('should prevent direct DELETE on storage.buckets without storage.allow_delete_query', async () => {
-      const db = tHelper.database.connection.pool.acquire()
+      const db = tHelper.database.connection
       const testBucket = `temp-bucket-${Date.now()}`
 
       // Create a test bucket
@@ -48,7 +48,7 @@ describe('Database Protection Triggers', () => {
     })
 
     it('should prevent direct DELETE on storage.objects without storage.allow_delete_query', async () => {
-      const db = tHelper.database.connection.pool.acquire()
+      const db = tHelper.database.connection
       const testObjectName = `test-object-${Date.now()}.txt`
 
       // Create a test object
@@ -87,7 +87,7 @@ describe('Database Protection Triggers', () => {
     })
 
     it('should allow DELETE on storage.buckets when storage.allow_delete_query is set', async () => {
-      const db = tHelper.database.connection.pool.acquire()
+      const db = tHelper.database.connection
       const testBucket = `temp-bucket-allow-${Date.now()}`
 
       await withDeleteEnabled(db, async (db) => {
@@ -107,7 +107,7 @@ describe('Database Protection Triggers', () => {
     })
 
     it('should allow DELETE on storage.objects when storage.allow_delete_query is set', async () => {
-      const db = tHelper.database.connection.pool.acquire()
+      const db = tHelper.database.connection
       const testObjectName = `test-object-allow-${Date.now()}.txt`
 
       await withDeleteEnabled(db, async (db) => {

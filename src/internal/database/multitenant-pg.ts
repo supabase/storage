@@ -1,7 +1,8 @@
 import { logger, logSchema } from '@internal/monitoring'
 import { Pool, PoolConfig } from 'pg'
 import { getConfig } from '../../config'
-import { attachPgPoolErrorHandler, PgPoolExecutor, PgTransactionalExecutor } from './pg-connection'
+import type { DatabaseTransactionalExecutor } from './connection'
+import { attachPgPoolErrorHandler, PgPoolExecutor } from './pg-connection'
 
 function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): PoolConfig {
   const {
@@ -149,7 +150,7 @@ function getPoolConfigSignature(config: PoolConfig): string {
 
 const multitenantPgPoolOwner = new MultitenantPgPoolOwner()
 
-export const multitenantPgExecutor: PgTransactionalExecutor = {
+export const multitenantPgExecutor: DatabaseTransactionalExecutor = {
   async query(statement, options) {
     return multitenantPgPoolOwner.getExecutor().query(statement, options)
   },

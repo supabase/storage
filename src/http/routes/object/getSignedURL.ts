@@ -21,6 +21,7 @@ const getSignedURLBodySchema = {
   properties: {
     expiresIn: {
       type: 'integer',
+      finite: true,
       minimum: 1,
       examples: [60000],
     },

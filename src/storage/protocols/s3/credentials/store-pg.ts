@@ -1,5 +1,5 @@
+import type { DatabaseExecutor } from '@internal/database'
 import { getConfig } from '../../../../config'
-import { PgExecutor } from '../../../../internal/database/pg-connection'
 import {
   S3Credentials,
   S3CredentialsManagerStore,
@@ -10,7 +10,7 @@ import {
 const { multitenantDatabaseQueryTimeout } = getConfig()
 
 export class S3CredentialsManagerStorePg implements S3CredentialsManagerStore {
-  constructor(private db: PgExecutor) {}
+  constructor(private db: DatabaseExecutor) {}
 
   async insert(tenantId: string, credential: S3CredentialWithDescription): Promise<string> {
     const credentials = await this.db.query<{ id: string }>(

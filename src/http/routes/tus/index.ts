@@ -6,9 +6,15 @@ import { createAgent } from '@internal/http'
 import { logSchema } from '@internal/monitoring'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { getFileSizeLimit } from '@storage/limits'
-import { AlsMemoryKV, FileStore, LockNotifier, PgLocker, UploadId } from '@storage/protocols/tus'
+import {
+  AlsMemoryKV,
+  FileStore,
+  LockNotifier,
+  PgLocker,
+  S3Store,
+  UploadId,
+} from '@storage/protocols/tus'
 import { S3Locker } from '@storage/protocols/tus/s3-locker'
-import { S3Store } from '@tus/s3-store'
 import { DataStore, Server, ServerOptions } from '@tus/server'
 import { FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
@@ -74,25 +80,27 @@ function createTusStore(agent: { httpsAgent: https.Agent; httpAgent: http.Agent 
   })
 }
 
+export function createTusLockS3Client(agent: { httpsAgent: https.Agent; httpAgent: http.Agent }) {
+  const client = new S3Client({
+    requestHandler: new NodeHttpHandler({
+      ...agent,
+      connectionTimeout: 5000,
+      requestTimeout: storageS3ClientTimeout,
+    }),
+    region: storageS3Region,
+    endpoint: storageS3Endpoint,
+    forcePathStyle: storageS3ForcePathStyle,
+  })
+  client.middlewareStack.remove('loggerMiddleware')
+  return client
+}
+
 function createTusServer(
   lockNotifier: LockNotifier,
   agent: { httpsAgent: https.Agent; httpAgent: http.Agent }
 ) {
   const datastore = createTusStore(agent)
-  const sharedS3Client =
-    tusLockType === 's3'
-      ? new S3Client({
-          requestHandler: new NodeHttpHandler({
-            ...agent,
-            connectionTimeout: 5000,
-            requestTimeout: storageS3ClientTimeout,
-          }),
-          region: storageS3Region,
-          endpoint: storageS3Endpoint,
-          forcePathStyle: storageS3ForcePathStyle,
-        })
-      : undefined
-  sharedS3Client?.middlewareStack.remove('loggerMiddleware')
+  const sharedS3Client = tusLockType === 's3' ? createTusLockS3Client(agent) : undefined
   const serverOptions: ServerOptions & {
     datastore: DataStore
   } = {

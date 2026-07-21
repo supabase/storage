@@ -1,8 +1,30 @@
+import * as http from 'node:http'
+import * as https from 'node:https'
 import type { Server } from '@tus/server'
 import Fastify, { FastifyInstance } from 'fastify'
 import { requestContext } from '../../plugins/request-context'
-import { publicRoutes } from './index'
+import { createTusLockS3Client, publicRoutes } from './index'
 import type { MultiPartRequest } from './lifecycle'
+
+describe('TUS S3 clients', () => {
+  test('removes the no-op logger middleware from the lock client', () => {
+    const httpAgent = new http.Agent()
+    const httpsAgent = new https.Agent()
+    const client = createTusLockS3Client({ httpAgent, httpsAgent })
+
+    try {
+      expect(
+        client.middlewareStack
+          .identify()
+          .some((middleware) => middleware.includes('loggerMiddleware'))
+      ).toBe(false)
+    } finally {
+      client.destroy()
+      httpAgent.destroy()
+      httpsAgent.destroy()
+    }
+  })
+})
 
 describe('public tus route request context', () => {
   let app: FastifyInstance

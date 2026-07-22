@@ -1,4 +1,3 @@
-import { getTenantConfig } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import { FastifyInstance } from 'fastify'
 import { FastifyRequest } from 'fastify/types/request'
@@ -62,13 +61,15 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      if (isMultitenant) {
-        const { migrationVersion } = await getTenantConfig(request.tenantId)
-        if (migrationVersion && DBMigration[migrationVersion] < DBMigration['search-v2']) {
-          return response.status(400).send({
-            message: 'This feature is not available for your tenant',
-          })
-        }
+      const latestMigration = request.latestMigration
+      if (
+        isMultitenant &&
+        latestMigration &&
+        DBMigration[latestMigration] < DBMigration['search-v2']
+      ) {
+        return response.status(400).send({
+          message: 'This feature is not available for your tenant',
+        })
       }
 
       const { bucketName } = request.params

@@ -58,9 +58,12 @@ export interface Database {
   reqId?: string
   sbReqId?: string
   role?: string
+  latestMigration?: keyof typeof DBMigration
   connection: TenantConnection
 
   tenant(): { ref: string; host: string }
+
+  hasMigration(migration: keyof typeof DBMigration): Promise<boolean>
 
   asSuperUser(): Database
 

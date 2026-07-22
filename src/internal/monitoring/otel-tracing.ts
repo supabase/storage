@@ -93,7 +93,6 @@ if (tracingEnabled && endpoint) {
   traceExporter = new OTLPTraceExporter({
     url: endpoint,
     compression: process.env.OTEL_EXPORTER_OTLP_COMPRESSION as CompressionAlgorithm,
-    headers: exporterHeaders,
     metadata: grpcMetadata,
   })
 }

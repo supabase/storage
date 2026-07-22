@@ -608,7 +608,7 @@ export class FileBackend implements StorageBackendAdapter {
 
   protected async getMetadataAttr(file: string, attribute: string): Promise<string | undefined> {
     try {
-      const value = await xattr.get(file, attribute)
+      const value = await xattr.getAttribute(file, attribute)
       return value?.toString() ?? undefined
     } catch (error) {
       if (isMissingXattrError(error)) {
@@ -619,7 +619,7 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   protected setMetadataAttr(file: string, attribute: string, value: string): Promise<void> {
-    return xattr.set(file, attribute, value)
+    return xattr.setAttribute(file, attribute, value)
   }
 
   protected async setOrRemoveMetadataAttr(
@@ -633,7 +633,7 @@ export class FileBackend implements StorageBackendAdapter {
     }
 
     try {
-      await xattr.remove(file, attribute)
+      await xattr.removeAttribute(file, attribute)
     } catch (error) {
       if (!isMissingXattrError(error)) {
         throw error

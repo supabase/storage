@@ -74,7 +74,7 @@
     "@opentelemetry/instrumentation-pg": "^0.64.0",
     "@opentelemetry/instrumentation-runtime-node": "^0.25.0",
     "@opentelemetry/sdk-metrics": "^2.6.1",
-    "@opentelemetry/sdk-node": "^0.213.0",
+    "@opentelemetry/sdk-node": "^0.220.0",
     "@platformatic/control": "^3.62.2",
     "@platformatic/flame": "^1.7.0",
     "@platformatic/globals": "^3.62.2",

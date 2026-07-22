@@ -29,6 +29,20 @@ const { databaseEnableQueryCancellation, dbMigrationStrategy, isMultitenant, dbM
 
 const migrationSingleFlight = createSingleFlightByKey<void>()
 
+function resolveLatestMigration(
+  localLatest: keyof typeof DBMigration,
+  applied: keyof typeof DBMigration | undefined
+): keyof typeof DBMigration {
+  if (
+    applied &&
+    DBMigration[applied] !== undefined &&
+    DBMigration[applied] > DBMigration[localLatest]
+  ) {
+    return applied
+  }
+  return localLatest
+}
+
 export const db = fastifyPlugin(
   async function db(fastify) {
     fastify.register(migrations)
@@ -149,7 +163,10 @@ export const migrations = fastifyPlugin(
 
         const tenant = await getTenantConfig(request.tenantId)
         if (tenant.syncMigrationsDone) {
-          request.latestMigration = await lastLocalMigrationName()
+          request.latestMigration = resolveLatestMigration(
+            await lastLocalMigrationName(),
+            tenant.migrationVersion
+          )
           return
         }
 
@@ -168,7 +185,10 @@ export const migrations = fastifyPlugin(
           tenant.syncMigrationsDone = true
         })
 
-        request.latestMigration = await lastLocalMigrationName()
+        request.latestMigration = resolveLatestMigration(
+          await lastLocalMigrationName(),
+          tenant.migrationVersion
+        )
       })
     }
 

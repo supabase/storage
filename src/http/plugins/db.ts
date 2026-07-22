@@ -149,6 +149,7 @@ export const migrations = fastifyPlugin(
 
         const tenant = await getTenantConfig(request.tenantId)
         if (tenant.syncMigrationsDone) {
+          request.latestMigration = await lastLocalMigrationName()
           return
         }
 
@@ -166,6 +167,8 @@ export const migrations = fastifyPlugin(
           await updateTenantMigrationsState(request.tenantId)
           tenant.syncMigrationsDone = true
         })
+
+        request.latestMigration = await lastLocalMigrationName()
       })
     }
 

@@ -195,6 +195,14 @@ export class StoragePgDB implements Database {
     }
   }
 
+  async hasMigration(migration: keyof typeof DBMigration): Promise<boolean> {
+    if (this.latestMigration !== undefined) {
+      return DBMigration[this.latestMigration] >= DBMigration[migration]
+    }
+
+    return tenantHasMigrations(this.tenantId, migration)
+  }
+
   asSuperUser() {
     return new StoragePgDB(this.connection.asSuperUser(), {
       ...this.options,
@@ -373,7 +381,7 @@ export class StoragePgDB implements Database {
       file_size_limit: data.file_size_limit,
     }
 
-    if (await tenantHasMigrations(this.tenantId, 'iceberg-catalog-flag-on-buckets')) {
+    if (await this.hasMigration('iceberg-catalog-flag-on-buckets')) {
       bucketData.type = 'STANDARD'
     }
 
@@ -408,10 +416,12 @@ export class StoragePgDB implements Database {
   }
 
   async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
+    const hasBucketType = await this.hasMigration('iceberg-catalog-flag-on-buckets')
+
     const result = await this.runQuery('FindBucketById', async (db, signal) => {
       let columnNames = columns.split(',').map((column) => column.trim())
 
-      if (!(await tenantHasMigrations(this.tenantId, 'iceberg-catalog-flag-on-buckets'))) {
+      if (!hasBucketType) {
         columnNames = columnNames.filter((name) => name !== 'type')
       }
 
@@ -544,6 +554,21 @@ export class StoragePgDB implements Database {
       }
     }
   ) {
+    let useNewSearchVersion2 = true
+    let hasSortSupport = false
+
+    if (options?.delimiter) {
+      if (isMultitenant) {
+        useNewSearchVersion2 = await this.hasMigration('search-v2')
+      }
+
+      if (useNewSearchVersion2 && options.delimiter === '/') {
+        hasSortSupport =
+          (await this.hasMigration('add-search-v2-sort-support')) ||
+          (await this.hasMigration('search-v2-optimised'))
+      }
+    }
+
     return this.runQuery('ListObjectsV2', async (db, signal) => {
       if (!options?.delimiter) {
         const values: unknown[] = [bucketId, options?.maxKeys || 100]
@@ -606,18 +631,9 @@ export class StoragePgDB implements Database {
         return result.rows
       }
 
-      let useNewSearchVersion2 = true
-
-      if (isMultitenant) {
-        useNewSearchVersion2 = await tenantHasMigrations(this.tenantId, 'search-v2')
-      }
-
       if (useNewSearchVersion2 && options?.delimiter === '/') {
         let paramPlaceholders = '$1,$2,$3,$4,$5'
         const sortParams: (string | null)[] = []
-        const hasSortSupport =
-          (await tenantHasMigrations(this.tenantId, 'add-search-v2-sort-support')) ||
-          (await tenantHasMigrations(this.tenantId, 'search-v2-optimised'))
 
         if (hasSortSupport) {
           paramPlaceholders += ',$6,$7,$8'

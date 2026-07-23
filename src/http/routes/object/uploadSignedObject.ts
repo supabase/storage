@@ -2,6 +2,7 @@ import fastifyMultipart from '@fastify/multipart'
 import { SIGNED_URL_SCOPE_UPLOAD } from '@internal/auth'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
+import { sharedErrorResponseSchemas } from '../../schemas/error'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const uploadSignedObjectParamsSchema = {
@@ -72,7 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
           'Verifies the token query parameter instead of requiring an authorization header, and does not need the caller to have direct bucket access',
         response: {
           200: { description: 'Successful response', ...successResponseSchema },
-          '4xx': { $ref: 'errorSchema#', description: 'Error response' },
+          ...sharedErrorResponseSchemas,
         },
         tags: ['object'],
       },

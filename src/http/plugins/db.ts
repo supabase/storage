@@ -4,6 +4,7 @@ import {
   getServiceKeyUser,
   getTenantConfig,
   type TenantConnection,
+  TenantMigrationStatus,
 } from '@internal/database'
 import {
   areMigrationsUpToDate,
@@ -27,7 +28,21 @@ declare module 'fastify' {
 const { databaseEnableQueryCancellation, dbMigrationStrategy, isMultitenant, dbMigrationFreezeAt } =
   getConfig()
 
-const migrationSingleFlight = createSingleFlightByKey<void>()
+const migrationSingleFlight = createSingleFlightByKey<keyof typeof DBMigration>()
+
+function resolveLatestMigration(
+  localLatest: keyof typeof DBMigration,
+  applied: keyof typeof DBMigration | undefined
+): keyof typeof DBMigration {
+  if (
+    applied &&
+    DBMigration[applied] !== undefined &&
+    DBMigration[applied] > DBMigration[localLatest]
+  ) {
+    return applied
+  }
+  return localLatest
+}
 
 export const db = fastifyPlugin(
   async function db(fastify) {
@@ -149,23 +164,49 @@ export const migrations = fastifyPlugin(
 
         const tenant = await getTenantConfig(request.tenantId)
         if (tenant.syncMigrationsDone) {
+          request.latestMigration = resolveLatestMigration(
+            await lastLocalMigrationName(),
+            tenant.migrationVersion
+          )
           return
         }
 
-        await migrationSingleFlight(request.tenantId, async () => {
-          if (await areMigrationsUpToDate(request.tenantId)) {
-            tenant.syncMigrationsDone = true
-            return
+        const latestMigration = await migrationSingleFlight(request.tenantId, async () => {
+          const localLatest = await lastLocalMigrationName()
+          const migrationsUpToDate = await areMigrationsUpToDate(request.tenantId)
+
+          if (!migrationsUpToDate) {
+            await runMigrationsOnTenant({
+              databaseUrl: tenant.databaseUrl,
+              tenantId: request.tenantId,
+              upToMigration: dbMigrationFreezeAt,
+            })
           }
 
-          await runMigrationsOnTenant({
-            databaseUrl: tenant.databaseUrl,
-            tenantId: request.tenantId,
-            upToMigration: dbMigrationFreezeAt,
-          })
-          await updateTenantMigrationsState(request.tenantId)
-          tenant.syncMigrationsDone = true
+          const refreshedTenant = await getTenantConfig(request.tenantId)
+          const resolvedMigration = resolveLatestMigration(
+            resolveLatestMigration(localLatest, tenant.migrationVersion),
+            refreshedTenant.migrationVersion
+          )
+
+          if (!migrationsUpToDate) {
+            await updateTenantMigrationsState(request.tenantId, {
+              migration: resolvedMigration,
+              state: TenantMigrationStatus.COMPLETED,
+            })
+          }
+
+          refreshedTenant.migrationVersion = resolvedMigration
+          refreshedTenant.migrationStatus = TenantMigrationStatus.COMPLETED
+          refreshedTenant.syncMigrationsDone = true
+
+          return resolvedMigration
         })
+
+        tenant.migrationVersion = latestMigration
+        tenant.migrationStatus = TenantMigrationStatus.COMPLETED
+        tenant.syncMigrationsDone = true
+        request.latestMigration = latestMigration
       })
     }
 

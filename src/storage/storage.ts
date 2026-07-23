@@ -1,5 +1,4 @@
 import { tenantHasFeature } from '@internal/database'
-import { tenantHasMigrations } from '@internal/database/migrations'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { BucketCreatedEvent, BucketDeleted } from '@storage/events'
@@ -121,7 +120,7 @@ export class Storage {
 
     if (data.type === 'ANALYTICS') {
       if (
-        !(await tenantHasMigrations(this.db.tenantId, 'iceberg-catalog-flag-on-buckets')) ||
+        !(await this.db.hasMigration('iceberg-catalog-flag-on-buckets')) ||
         !(await tenantHasFeature(this.db.tenantId, 'icebergCatalog'))
       ) {
         throw ERRORS.FeatureNotEnabled(
@@ -264,7 +263,7 @@ export class Storage {
 
   async deleteIcebergBucket(name: string) {
     if (
-      !(await tenantHasMigrations(this.db.tenantId, 'iceberg-catalog-flag-on-buckets')) ||
+      !(await this.db.hasMigration('iceberg-catalog-flag-on-buckets')) ||
       !(await tenantHasFeature(this.db.tenantId, 'icebergCatalog'))
     ) {
       throw ERRORS.FeatureNotEnabled(

@@ -3,6 +3,7 @@ import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
+import { sharedErrorResponseSchemas } from '../../schemas/error'
 import { transformationOptionsSchema } from '../../schemas/transformations'
 import { AuthenticatedRangeRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
@@ -98,7 +99,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
         summary: 'Get object info',
         description: 'returns object info',
         tags: ['object'],
-        response: { '4xx': { $ref: 'errorSchema#' } },
+        response: sharedErrorResponseSchemas,
       },
       config: {
         operation: ROUTE_OPERATIONS.INFO_PUBLIC_OBJECT,
@@ -119,7 +120,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
         summary: 'Get object info',
         description: 'returns object info',
         tags: ['object'],
-        response: { '4xx': { $ref: 'errorSchema#' } },
+        response: sharedErrorResponseSchemas,
       },
       config: {
         operation: ROUTE_OPERATIONS.INFO_PUBLIC_OBJECT,
@@ -143,7 +144,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         summary,
         description:
           'Returns object metadata in headers only, with no body, and requires a valid auth token even for public buckets',
-        response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
+        response: sharedErrorResponseSchemas,
         tags: ['object'],
       },
       config: {
@@ -165,7 +166,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         summary,
         description:
           'Returns object metadata as a JSON body rather than headers only, and requires a valid auth token even for public buckets',
-        response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
+        response: sharedErrorResponseSchemas,
         tags: ['object'],
       },
       config: {
@@ -186,7 +187,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         summary,
         description: 'Object Info',
         tags: ['object'],
-        response: { '4xx': { $ref: 'errorSchema#' } },
+        response: sharedErrorResponseSchemas,
       },
       config: {
         operation: ROUTE_OPERATIONS.GET_AUTH_OBJECT_INFO,
@@ -207,7 +208,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
         summary,
         description: 'Head object info',
         tags: ['object'],
-        response: { '4xx': { $ref: 'errorSchema#' } },
+        response: sharedErrorResponseSchemas,
       },
       config: {
         operation: ROUTE_OPERATIONS.HEAD_AUTH_OBJECT_INFO,

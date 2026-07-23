@@ -47,6 +47,21 @@ describe('escapeLike', () => {
   })
 })
 
+describe('StoragePgDB migration context', () => {
+  const connection = {} as PgTenantConnection
+
+  test('uses the supplied request migration version', async () => {
+    const storage = new StoragePgDB(connection, {
+      tenantId: 'tenant-with-request-context',
+      host: 'localhost',
+      latestMigration: 'search-v2',
+    })
+
+    await expect(storage.hasMigration('custom-metadata')).resolves.toBe(true)
+    await expect(storage.hasMigration('add-search-v2-sort-support')).resolves.toBe(false)
+  })
+})
+
 function createTestPermissionFixture() {
   const transaction = {
     commit: vi.fn().mockResolvedValue(undefined),

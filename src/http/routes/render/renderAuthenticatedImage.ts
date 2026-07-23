@@ -3,6 +3,7 @@ import { ImageRenderer } from '@storage/renderer'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
+import { sharedErrorResponseSchemas } from '../../schemas/error'
 import { transformationOptionsSchema } from '../../schemas/transformations'
 import { ROUTE_OPERATIONS } from '../operations'
 
@@ -41,7 +42,7 @@ export default async function routes(fastify: FastifyInstance) {
         summary,
         description:
           'Requires a valid auth token and checks RLS access to the object, with transformation options passed directly as query parameters',
-        response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
+        response: sharedErrorResponseSchemas,
         tags: ['transformation'],
       },
       config: {

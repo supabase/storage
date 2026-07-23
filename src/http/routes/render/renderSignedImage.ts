@@ -4,6 +4,7 @@ import { ImageRenderer } from '@storage/renderer'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
+import { sharedErrorResponseSchemas } from '../../schemas/error'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket, isMultitenant } = getConfig()
@@ -47,7 +48,7 @@ export default async function routes(fastify: FastifyInstance) {
         summary,
         description:
           'Requires no authorization header, verifying the token query parameter instead, with the transformations already encoded in the signed token rather than passed as separate query parameters',
-        response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
+        response: sharedErrorResponseSchemas,
         tags: ['transformation'],
       },
       config: {

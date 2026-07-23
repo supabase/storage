@@ -265,6 +265,7 @@ describe('testing GET object', () => {
       statusCode: '404',
       error: 'not_found',
       message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
     })
     expect(S3Backend.prototype.headObject).not.toHaveBeenCalled()
   })
@@ -456,6 +457,7 @@ describe('testing POST object via multipart upload', () => {
         statusCode: '403',
         error: 'Unauthorized',
         message: 'new row violates row-level security policy',
+        code: ErrorCode.AccessDenied,
       })
     )
   })
@@ -545,6 +547,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'Payload too large',
       message: 'The object exceeded the maximum allowed size',
       statusCode: '413',
+      code: ErrorCode.EntityTooLarge,
     })
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
   })
@@ -735,6 +738,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'invalid_mime_type',
       message: `mime type image/png is not supported`,
       statusCode: '415',
+      code: ErrorCode.InvalidMimeType,
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -759,6 +763,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'invalid_mime_type',
       message: `mime type image/png is not supported`,
       statusCode: '415',
+      code: ErrorCode.InvalidMimeType,
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -808,6 +813,7 @@ describe('testing POST object via multipart upload', () => {
         error: 'invalid_mime_type',
         message: `mime type image/png is not supported`,
         statusCode: '415',
+        code: ErrorCode.InvalidMimeType,
       })
       expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
     } finally {
@@ -845,6 +851,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'invalid_mime_type',
       message: 'Invalid Content-Type header',
       statusCode: '415',
+      code: ErrorCode.InvalidMimeType,
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -869,6 +876,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'invalid_mime_type',
       message: 'Invalid Content-Type header',
       statusCode: '415',
+      code: ErrorCode.InvalidMimeType,
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -914,6 +922,7 @@ describe('testing POST object via multipart upload', () => {
         statusCode: '413',
         error: 'Payload too large',
         message: 'The object exceeded the maximum allowed size',
+        code: ErrorCode.EntityTooLarge,
       })
     )
   })
@@ -1035,6 +1044,7 @@ describe('testing POST object via binary upload', () => {
         statusCode: '403',
         error: 'Unauthorized',
         message: 'new row violates row-level security policy',
+        code: ErrorCode.AccessDenied,
       })
     )
   })
@@ -1144,6 +1154,7 @@ describe('testing POST object via binary upload', () => {
         statusCode: '413',
         error: 'Payload too large',
         message: 'The object exceeded the maximum allowed size',
+        code: ErrorCode.EntityTooLarge,
       })
     )
   })
@@ -1195,6 +1206,7 @@ describe('testing POST object via binary upload', () => {
         statusCode: '413',
         error: 'Payload too large',
         message: 'The object exceeded the maximum allowed size',
+        code: ErrorCode.EntityTooLarge,
       })
     )
     // Early size check in fileUploadFromRequest rejects before reaching the backend
@@ -2316,6 +2328,7 @@ describe('testing generating signed URL for upload', () => {
         statusCode: '403',
         error: 'Unauthorized',
         message: 'new row violates row-level security policy',
+        code: ErrorCode.AccessDenied,
       })
     )
     // Ensure that row does not exist in database.
